@@ -82,11 +82,10 @@ const { rows, columns } = await db.exec(
 
 ## Schema Design Guidance
 
-- Plan the schema from the app's PURPOSE before writing app code, and apply it with the
-  host's schema-apply tool when it is available — the host registers the schema so every
-  future conversation about the app sees it. Keep the app's startup
-  `CREATE TABLE IF NOT EXISTS` statements in the code as well (idempotent, and they make
-  the app self-healing on a fresh database).
+- Plan the schema from the app's PURPOSE before writing app code, and register it with the
+  host's schema registry where one is offered — every future conversation about the app
+  then sees it. Keep the app's startup `CREATE TABLE IF NOT EXISTS` statements in the code
+  as well (idempotent, and they make the app self-healing on a fresh database).
 - Prefer a few narrow tables with real columns over one JSON-blob column — real columns are
   what make the agent-SQL pattern below work.
 - Table and index names: lowercase snake_case matching `{{appObjectNameRule}}`, never

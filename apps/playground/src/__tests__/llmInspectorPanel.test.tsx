@@ -11,6 +11,7 @@ import {
   llmInspectorReduce,
   type LlmInspectorState,
 } from '../run/llmInspector.js';
+import { hostPlatform } from './fixtures/hostPlatform.js';
 
 declare global {
   // eslint-disable-next-line no-var
@@ -384,3 +385,14 @@ describe('newest first (TASK-20260903 AC13)', () => {
   });
 });
 
+
+describe('the empty state under the host kit on the demo brain (T4 AC12)', () => {
+  it('names the demo brain and the missing host brain — never a wire the kit does not have', async () => {
+    const { setPlatform } = await import('../platform/platform.js');
+    setPlatform(hostPlatform());
+    const el = mount(<LlmInspectorPanel state={state([])} mode="byok" />);
+    expect(el.textContent).toContain('no host brain was found in this page');
+    expect(el.textContent).toContain('demo brain');
+    expect(el.textContent).not.toContain('your browser calls the model directly');
+  });
+});

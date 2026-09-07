@@ -14,6 +14,8 @@ import { endpointsNeedConfirm, getByokKey, type ByokProvider } from '../state/mo
 import { adapterKindFor, createTurnAdapter, routeOf, type AdapterKind, type DirectMode } from './adapter.js';
 import type { ArtifactSink } from './artifactSink.js';
 import { buildByokTools } from './tools.js';
+import { knowledgeDeliveryFor } from './knowledgeDelivery.js';
+import { PROMPT_TOO_LARGE_CODE, fitHostTurn, promptTooLargeMessage } from './promptBudget.js';
 import { extractAppHtml, WEBLLM_BUILD_SUFFIX } from './webllm/appHtml.js';
 
 export interface ArtifactEvent {
@@ -222,13 +224,22 @@ export function createDirectBuilder(options: DirectBuilderOptions): BuilderAgent
   const isWebllm = options.mode === 'webllm';
   // A platform-pinned host brain that cannot call tools builds tool-free too — the
   // webllm arm generalised (TASK-20260905-host-kit P2 / A5: `PlatformBrain.tools`).
+  // THE one derivation (ADR-0066, `knowledgeDelivery.ts`): the same function the build
+  // view uses to pick the user-message template, so the two slots cannot disagree.
   const pinnedBrain = getPlatform().brain;
-  const toolFree = isWebllm || (options.mode === 'host' && pinnedBrain?.kind === 'host' && !pinnedBrain.tools);
+  const knowledge = knowledgeDeliveryFor(
+    isWebllm ? { kind: 'webllm' } : options.mode === 'host' && pinnedBrain !== undefined ? pinnedBrain : { kind: 'settings' },
+  );
+  const toolFree = knowledge !== 'tool';
   // webllm builds run TOOL-FREE (web-llm 0.2.84 function calling is 8B-Hermes-only and
   // forbids custom system prompts — see webllmAdapter.ts): the file-creation layer is
   // replaced by the fenced-HTML instruction, and the artifact is extracted from the
   // reply text after the turn. Blast radius (no KB consult round trip, no
   // schema_apply/app_doc_write) is documented in the task file.
+  //
+  // TASK-20260906-tool-free-kb-inlining (ADR-0066): the suffix replaces the WRITE
+  // mechanism, never the KNOWLEDGE consult — see `KnowledgeDelivery` in the knowledge
+  // package for the three deliveries and `knowledgeDeliveryFor` for who gets which.
   //
   // TASK-20260812-desktop-auth-awareness P2 (AC1): the assembly is told which shell it
   // serves — on desktop the 95-platform-desktop layer is appended LAST; on web (or with
@@ -240,7 +251,7 @@ export function createDirectBuilder(options: DirectBuilderOptions): BuilderAgent
   // so this is their platform decision altitude too.
   const platform = getPlatform().kind;
   const system = toolFree
-    ? `${buildHostSystemPrompt({ appBuilder: true, artifacts: false, platform })}${CONTEXT_SEPARATOR}${WEBLLM_BUILD_SUFFIX}`
+    ? `${buildHostSystemPrompt({ appBuilder: true, artifacts: false, platform, knowledge })}${CONTEXT_SEPARATOR}${WEBLLM_BUILD_SUFFIX}`
     : buildHostSystemPrompt({ appBuilder: true, artifacts: true, platform });
   return {
     async send(turn, handlers, signal) {
@@ -301,12 +312,32 @@ export function createDirectBuilder(options: DirectBuilderOptions): BuilderAgent
         schema_apply: 'designing the app’s database…',
         app_doc_write: 'updating the app’s docs…',
       };
+      // The app-attached context (code, schema, docs) rides as a per-turn system
+      // suffix; the base layers stay byte-stable for the golden assembly tests.
+      const turnSystem = contextBlock !== undefined ? `${system}${CONTEXT_SEPARATOR}${contextBlock}` : system;
+      // Budget or refuse under a capped host brain (TASK-20260905-binding-a-artifacts
+      // AC3): measured on the identical string the host adapter sends (the seat's own
+      // ruler), history dropped oldest-first, the app's html never cut — a named refusal
+      // with zero adapter calls when nothing fits. No ruler on the seat → no budget.
+      const fitted =
+        options.mode === 'host' && pinnedBrain?.kind === 'host' && pinnedBrain.maxPromptBytes !== undefined && pinnedBrain.promptBytes !== undefined
+          ? fitHostTurn(
+              { system: turnSystem, history: history ?? [], message },
+              { maxPromptBytes: pinnedBrain.maxPromptBytes, promptBytes: pinnedBrain.promptBytes },
+            )
+          : undefined;
+      if (fitted !== undefined && !fitted.ok) {
+        return {
+          ok: false,
+          code: PROMPT_TOO_LARGE_CODE,
+          message: promptTooLargeMessage(fitted.bytes, fitted.maxPromptBytes),
+          retryable: false,
+        };
+      }
       const result = await runAgentTurn({
         adapter,
-        // The app-attached context (code, schema, docs) rides as a per-turn system
-        // suffix; the base layers stay byte-stable for the golden assembly tests.
-        system: contextBlock !== undefined ? `${system}${CONTEXT_SEPARATOR}${contextBlock}` : system,
-        messages: [...(history ?? []), { role: 'user', content: message }],
+        system: turnSystem,
+        messages: fitted !== undefined ? fitted.messages : [...(history ?? []), { role: 'user', content: message }],
         tools,
         // AC12's direct-mode half: this is the BUILDER turn — a large system prompt plus
         // a fixed tool list, repeated across a build. The app-frame transport (the other

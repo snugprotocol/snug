@@ -18,6 +18,8 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { externalCssRefs, tokenizeTopLevel } from './lib/page-blocks.mjs';
+
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const KIT_DIST_DIR = path.join(ROOT, 'apps/host/dist');
 export const KIT_FILE_NAME = 'snug-host.html';
@@ -28,89 +30,11 @@ export const KIT_SIZE_CEILING_BYTES = 2_750_000;
 export const STAMP_SHAPE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)? [0-9a-f]{7,40}(?:-dirty)?$/;
 
 // ---------------------------------------------------------------------------- tokenizer
-
-const RAW_TEXT = new Set(['script', 'style']);
-
-/** Parse one start tag's attributes from `pos` (just after the tag name). Quoted values may contain `>`. */
-function readAttributes(html, pos) {
-  const attrs = {};
-  let i = pos;
-  const n = html.length;
-  for (;;) {
-    while (i < n && /\s/.test(html[i])) i++;
-    if (i >= n) return { attrs, end: n, selfClosing: false };
-    if (html[i] === '>') return { attrs, end: i + 1, selfClosing: false };
-    if (html[i] === '/' && html[i + 1] === '>') return { attrs, end: i + 2, selfClosing: true };
-    let name = '';
-    while (i < n && !/[\s=>/]/.test(html[i])) name += html[i++];
-    if (name === '') {
-      i++;
-      continue;
-    }
-    while (i < n && /\s/.test(html[i])) i++;
-    let value = '';
-    if (html[i] === '=') {
-      i++;
-      while (i < n && /\s/.test(html[i])) i++;
-      const quote = html[i];
-      if (quote === '"' || quote === "'") {
-        const close = html.indexOf(quote, i + 1);
-        value = html.slice(i + 1, close === -1 ? n : close);
-        i = close === -1 ? n : close + 1;
-      } else {
-        while (i < n && !/[\s>]/.test(html[i])) value += html[i++];
-      }
-    }
-    attrs[name.toLowerCase()] = value;
-  }
-}
-
-/**
- * The top-level elements of a document: `{ name, attrs, body? }` per start tag, with the
- * bodies of `<script>` and `<style>` captured whole and NEVER tokenized (raw text elements
- * end only at their own end tag — the inliner guarantees no `</script` inside a body).
- */
-export function tokenizeTopLevel(html) {
-  const elements = [];
-  let i = 0;
-  const n = html.length;
-  while (i < n) {
-    const lt = html.indexOf('<', i);
-    if (lt === -1) break;
-    if (html.startsWith('<!--', lt)) {
-      const end = html.indexOf('-->', lt + 4);
-      i = end === -1 ? n : end + 3;
-      continue;
-    }
-    const next = html[lt + 1];
-    if (next === '!' || next === '?' || next === '/') {
-      const end = html.indexOf('>', lt);
-      i = end === -1 ? n : end + 1;
-      continue;
-    }
-    const nameMatch = /^[a-zA-Z][a-zA-Z0-9-]*/.exec(html.slice(lt + 1, lt + 64));
-    if (nameMatch === null) {
-      i = lt + 1;
-      continue;
-    }
-    const name = nameMatch[0].toLowerCase();
-    const { attrs, end } = readAttributes(html, lt + 1 + name.length);
-    const element = { name, attrs, index: lt };
-    if (RAW_TEXT.has(name)) {
-      const closer = new RegExp(`</${name}\\b`, 'i');
-      const rest = html.slice(end);
-      const m = closer.exec(rest);
-      element.body = m === null ? rest : rest.slice(0, m.index);
-      const after = m === null ? n : end + m.index;
-      const gt = html.indexOf('>', after);
-      i = gt === -1 ? n : gt + 1;
-    } else {
-      i = end;
-    }
-    elements.push(element);
-  }
-  return elements;
-}
+//
+// The tokenizer lives in scripts/lib/page-blocks.mjs (TASK-20260905-binding-a-artifacts):
+// the kit's artifact record, the hand-in, snug-embed and this gate all read a page through
+// the SAME top-level tokenizer. Re-exported here for this script's own test.
+export { tokenizeTopLevel } from './lib/page-blocks.mjs';
 
 // -------------------------------------------------------------------------------- rules
 
@@ -143,10 +67,8 @@ export function checkHostKitPage(html, { sizeBytes = Buffer.byteLength(html, 'ut
   }
 
   for (const st of elements.filter((e) => e.name === 'style')) {
-    const css = st.body ?? '';
-    if (/@import\b/i.test(css)) problems.push('top-level <style> uses @import — every stylesheet is inline');
-    for (const m of css.matchAll(/url\(\s*(['"]?)([^'")]+)\1\s*\)/gi)) {
-      if (!isDataUrl(m[2])) problems.push(`top-level <style> references url(${m[2]}) — every asset is a data: URL`);
+    for (const ref of externalCssRefs(st.body ?? '')) {
+      problems.push(ref.kind === 'import' ? 'top-level <style> uses @import — every stylesheet is inline' : `top-level <style> references url(${ref.url}) — every asset is a data: URL`);
     }
   }
 

@@ -45,6 +45,7 @@ import { ReportErrorLink } from './feedback/ReportErrorLink.js';
 import { Skeleton } from './ui/Skeleton.js';
 import { useDismissableMenu } from './ui/useDismissableMenu.js';
 import { BrainChip } from './views/BrainChip.js';
+import { YourFileChip } from './views/YourFileChip.js';
 import { BuilderView } from './views/BuilderView.js';
 import { DownloadView } from './views/DownloadView.js';
 import { HubView } from './views/HubView.js';
@@ -206,6 +207,9 @@ export function App(): ReactElement {
               never active without saying so, on any route. Sits by the gear because
               the chip's menu routes to Settings for every switch that needs config. */}
           <BrainChip />
+          {/* D8 / ADR-0065 §5: beside the brain, where the user's FILE lives in this host —
+              renders only where the platform carries a custody seat (the host kit). */}
+          <YourFileChip />
           {/* ADR-0052: the ONE persistent feedback affordance — quiet, no badge. */}
           <FeedbackMenu />
           {/* ADR-0047 §9: a header WHISPER when a shell update is in play — desktop

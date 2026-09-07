@@ -25,18 +25,24 @@ describe('buildHostSystemPrompt gating matrix', () => {
     // TASK-20260811 P1 (ADR-0018 D1): the RUNTIME branch — what an installed app's turn
     // gets instead of the builder assembly.
     { appBuilder: false, artifacts: false, appRuntime: true },
+    // TASK-20260906-tool-free-kb-inlining (D1): the two tool-free deliveries of the
+    // builder branch — the inline five-file core (host brain) and the unaided layer
+    // (webllm). The four combos above keep their bytes: `knowledge` defaults to 'tool'.
+    { appBuilder: true, artifacts: false, knowledge: 'inline' },
+    { appBuilder: true, artifacts: false, knowledge: 'none' },
   ] as const;
 
   for (const combo of combos) {
     it(`golden: appBuilder=${combo.appBuilder} artifacts=${combo.artifacts}${
       'appRuntime' in combo ? ' appRuntime=true' : ''
-    }`, () => {
+    }${'knowledge' in combo ? ` knowledge=${combo.knowledge}` : ''}`, () => {
       expect(buildHostSystemPrompt(combo)).toMatchSnapshot();
     });
   }
 
   it('layer count and order follow the gates (10 always; 20 iff artifacts; 30+40 iff appBuilder)', () => {
-    for (const combo of combos.filter((c) => !('appRuntime' in c))) {
+    // The two tool-free combos are pinned block-by-block in tool-free-assembly.test.ts.
+    for (const combo of combos.filter((c) => !('appRuntime' in c) && !('knowledge' in c))) {
       const prompt = buildHostSystemPrompt(combo);
       const parts = prompt.split(SEPARATOR);
       const expected = 1 + (combo.artifacts ? 1 : 0) + (combo.appBuilder ? 2 : 0);

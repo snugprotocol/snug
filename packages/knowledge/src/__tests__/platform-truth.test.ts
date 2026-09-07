@@ -39,6 +39,9 @@ const WEB_COMBOS: HostSystemPromptOptions[] = [
   { appBuilder: true, artifacts: false },
   { appBuilder: true, artifacts: true },
   { appBuilder: false, artifacts: false, appRuntime: true },
+  // TASK-20260906 (ADR-0066): the two tool-free deliveries walk the same platform guards.
+  { appBuilder: true, artifacts: false, knowledge: 'inline' },
+  { appBuilder: true, artifacts: false, knowledge: 'none' },
 ];
 
 describe('stale-claim truth test — the falsified copy is gone from the prompt sources', () => {

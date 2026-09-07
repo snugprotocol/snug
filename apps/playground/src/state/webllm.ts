@@ -151,6 +151,7 @@ export function useTurnMode(): TurnMode {
   return resolveTurnMode(brain, mode);
 }
 
+
 export interface InitWebllmOptions {
   /** Defaults to the page's location.search. */
   search?: string;

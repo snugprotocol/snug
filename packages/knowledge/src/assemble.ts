@@ -4,6 +4,7 @@
 import type { RuntimeContract } from '@snugprotocol/protocol';
 
 import {
+  getInlineKnowledgeCore,
   getKnowledgeSummary,
   getSkillBuilderPreamble,
   getSkillCreatorFile,
@@ -32,8 +33,28 @@ export const SYSTEM_BLOCK_SEPARATOR = SEPARATOR;
  */
 export type HostPlatform = 'web' | 'desktop' | 'host';
 
+/**
+ * How the app-authoring knowledge reaches the model on a BUILDER turn
+ * (TASK-20260906-tool-free-kb-inlining, ADR-0066).
+ *
+ * - `'tool'` (default): today's bytes — the 30 summary layer + the KB blurb, which tell the
+ *   model to CALL the app-builder tool for the rules. Right for every brain that has it.
+ * - `'inline'`: the 35 layer + the five-file core (`INLINE_KNOWLEDGE_CORE_FILES`) as their
+ *   own blocks. For a brain that CANNOT call tools but can carry ~41 KB of system text —
+ *   a Claude artifact's `sample` (65,536-byte input cap). The rules ride in the prompt.
+ * - `'none'`: the 36 layer alone — honest that no knowledge base is reachable here. For a
+ *   tool-free brain whose window cannot carry the core either (webllm at 4,096 tokens).
+ *
+ * The defect this seat fixes: a tool-free brain told to fetch the rules with a tool it
+ * did not have, and forbidden to proceed without them, built a `localStorage` app with no
+ * bridge hooks — a white page (T4's hosted walk, 2026-09-06). Which adapter a turn routes
+ * to and what its prompt actually says are different questions; this seat answers the
+ * second one explicitly.
+ */
+export type KnowledgeDelivery = 'tool' | 'inline' | 'none';
+
 export interface HostSystemPromptOptions {
-  /** Include the app-builder layers (30-summary + 40-response-format). */
+  /** Include the app-builder layers (the 30-slot + 40-response-format). */
   appBuilder: boolean;
   /** Include the file-creation capability layer (20-capability-file-creation). */
   artifacts: boolean;
@@ -62,14 +83,23 @@ export interface HostSystemPromptOptions {
    * client the prefix stays byte-stable and the cached-prefix discipline holds.
    */
   platform?: HostPlatform;
+  /**
+   * The knowledge delivery of the 30-slot on the builder branch — see {@link KnowledgeDelivery}.
+   * Absent or `'tool'` assembles BYTE-IDENTICALLY to before the seat existed (every golden
+   * and every tooled caller rests on that default). Ignored on the runtime branch and when
+   * `appBuilder` is off: it is a builder-turn seat only. Like `platform`, a brain's delivery
+   * never changes mid-session, so the ADR-0012 cached-prefix discipline holds per client.
+   */
+  knowledge?: KnowledgeDelivery;
 }
 
 /**
  * Assemble the host system prompt: system layers joined in numeric file order.
- * 10-host-identity is unconditional; 20 gates on `artifacts`; 30 + 40 gate on
- * `appBuilder` (ancestor triple-gate pattern, simplified to config). The KB summary
- * (knowledge-base/app-authoring/00-summary.md) is appended DIRECTLY beneath the
- * 30-app-builder-summary layer so that layer's "summary below" sentence is true.
+ * 10-host-identity is unconditional; 20 gates on `artifacts`; the 30-slot + 40 gate on
+ * `appBuilder` (ancestor triple-gate pattern, simplified to config). The 30-slot has one
+ * occupant per `knowledge` delivery: 30 + the KB summary (appended DIRECTLY beneath so that
+ * layer's "summary below" sentence is true), or 35 + the five core KB files each as its own
+ * block (so 35's "the sections that follow" is literally true), or 36 alone.
  */
 export function buildHostSystemPrompt(opts: HostSystemPromptOptions): string {
   // The runtime branch is checked FIRST and returns: an app's own turn must never carry
@@ -82,10 +112,34 @@ export function buildHostSystemPrompt(opts: HostSystemPromptOptions): string {
   const layers: string[] = [getSystemLayer('host-identity')];
   if (opts.artifacts) layers.push(getSystemLayer('capability-file-creation'));
   if (opts.appBuilder) {
-    layers.push(
-      `${getSystemLayer('app-builder-summary').trimEnd()}\n\n${getKnowledgeSummary()}`,
-      getSystemLayer('app-response-format'),
-    );
+    const knowledge: KnowledgeDelivery = opts.knowledge ?? 'tool';
+    // A tool-free delivery under the 20 layer ("call the artifact write tool") would ship
+    // the very citation the seat removes — refuse the combination rather than assemble it
+    // (Gate-5 review: the next caller that keeps `artifacts: true` while switching to a
+    // tool-free brain must fail here, not on a viewer's screen).
+    if (opts.artifacts && knowledge !== 'tool') {
+      throw new Error(`buildHostSystemPrompt: knowledge '${knowledge}' is a tool-free delivery and cannot ride with artifacts: true (the file-creation layer cites the artifact write tool)`);
+    }
+    switch (knowledge) {
+      case 'tool':
+        layers.push(`${getSystemLayer('app-builder-summary').trimEnd()}\n\n${getKnowledgeSummary()}`);
+        break;
+      case 'inline':
+        // Each core file is its own block: the same separator as every other layer, so the
+        // forging guards cover them and a block count in a test reads the truth.
+        layers.push(getSystemLayer('app-builder-inline'), ...getInlineKnowledgeCore());
+        break;
+      case 'none':
+        layers.push(getSystemLayer('app-builder-unaided'));
+        break;
+      default: {
+        // A fourth member of the union must be assembled on purpose, never degraded to
+        // the unaided layer by a trailing else (a silently thinner prompt is this task's bug).
+        const exhaustive: never = knowledge;
+        throw new Error(`buildHostSystemPrompt: unknown knowledge delivery ${String(exhaustive)}`);
+      }
+    }
+    layers.push(getSystemLayer('app-response-format'));
   }
   // Desktop truth rides LAST on every branch (TASK-20260812 P2): after the byte-stable
   // web layers so a web assembly is a strict PREFIX of its desktop sibling, and through

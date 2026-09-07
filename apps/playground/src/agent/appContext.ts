@@ -48,13 +48,26 @@ export async function buildAppTurnContext(
   db: UserDb,
   appId: string | undefined,
   threadId: string,
+  /**
+   * Per-call caps (TASK-20260905-binding-a-artifacts AC3): the host kit passes
+   * `HOST_CONTEXT_CAPS` (html unbounded — it rides whole or the builder refuses; the rest
+   * shrunk under 64 KiB). Absent or partial → the defaults, byte for byte.
+   */
+  capsOverride?: Partial<Record<keyof typeof CONTEXT_CAPS, number>>,
+  /**
+   * TASK-20260906 (ADR-0066, Gate-5 fold): the block's two "use the tool" sentences have a
+   * tool-free wording for a brain that has none (the pinned host brain, webllm) — an edit
+   * turn under such a brain was still told to "write the file via the artifact write tool".
+   */
+  options: { toolFree?: boolean } = {},
 ): Promise<AppTurnContext> {
+  const caps: Record<keyof typeof CONTEXT_CAPS, number> = { ...CONTEXT_CAPS, ...capsOverride };
   const history: TurnHistoryMessage[] = [];
   const persisted = db.listChatMessages(threadId).filter((m) => m.role === 'user' || m.role === 'assistant');
   let used = 0;
   for (let i = persisted.length - 1; i >= 0; i--) {
     const message = persisted[i]!;
-    if (used + message.content.length > CONTEXT_CAPS.history) break;
+    if (used + message.content.length > caps.history) break;
     used += message.content.length;
     history.unshift({ role: message.role === 'user' ? 'user' : 'assistant', content: message.content });
   }
@@ -78,21 +91,25 @@ export async function buildAppTurnContext(
   parts.push(
     '### Registered data schema',
     schema !== undefined && schema.objects.length > 0
-      ? capText(schema.objects.map((o) => o.ddl).join(';\n'), CONTEXT_CAPS.schema)
-      : '(none registered yet — design one with the schema tool before writing data-backed code)',
+      ? capText(schema.objects.map((o) => o.ddl).join(';\n'), caps.schema)
+      : options.toolFree === true
+        ? "(none registered — create the app's tables in its own startup DDL, as the persistence rules describe)"
+        : '(none registered yet — design one with the schema tool before writing data-backed code)',
   );
 
   if (docs.length > 0) {
     const rendered = docs.map((doc) => `#### ${doc.title ?? doc.slug}\n${doc.content}`).join('\n\n');
-    parts.push('### App knowledge docs', capText(rendered, CONTEXT_CAPS.docs));
+    parts.push('### App knowledge docs', capText(rendered, caps.docs));
   }
 
   const html = app !== undefined ? db.getAppHtml(appId) : undefined;
   if (html !== undefined) {
     parts.push(
       `### Current app code (v${app!.currentVersion})`,
-      '```html\n' + capText(html, CONTEXT_CAPS.html) + '\n```',
-      'When changing the app, write the ENTIRE updated file via the artifact write tool — it lands as the next version of THIS app.',
+      '```html\n' + capText(html, caps.html) + '\n```',
+      options.toolFree === true
+        ? 'When changing the app, reply with the ENTIRE updated file as one complete HTML document — it lands as the next version of THIS app.'
+        : 'When changing the app, write the ENTIRE updated file via the artifact write tool — it lands as the next version of THIS app.',
     );
   }
 

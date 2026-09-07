@@ -17,6 +17,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ReactElement } from 'react';
 
+import { allows } from '../platform/platform.js';
 import { getUserDb } from '../state/userdb.js';
 import { Button } from '../ui/Button.js';
 import { ConfirmOverlay } from '../ui/ConfirmOverlay.js';
@@ -224,7 +225,9 @@ export function ShareSheet({ appId, displayName, onClose }: ShareSheetProps): Re
           </div>
         ) : null}
 
-        {shareLinksAvailable() && prepared !== undefined ? (
+        {/* The LINK acts need the relay AND a host that can reach it (`share`); a host with
+            `appExport` alone gets the download-only sheet (T4 AC6). */}
+        {shareLinksAvailable() && allows('share') && prepared !== undefined ? (
           <ShareLinkPanel appId={appId} prepared={prepared} disabled={blocked} />
         ) : null}
       </div>

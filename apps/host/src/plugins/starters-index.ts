@@ -10,15 +10,15 @@ import { existsSync, readFileSync } from 'node:fs';
 
 import type { Plugin } from 'vite';
 
+import { escapeForInlineScript } from '../../../../scripts/lib/page-blocks.mjs';
+
 import { STARTERS_INDEX_FORMAT } from '../starterLoader.js';
 
 export const STARTERS_INDEX_MODULE = 'virtual:snug-starters-index';
 const RESOLVED_ID = `\0${STARTERS_INDEX_MODULE}`;
 
-/** JSON text → JS-safe text with no `<` at all (still valid JSON). Twin of the script's `escapeForInlineScript`. */
-export function escapeForInlineScript(json: string): string {
-  return json.replace(/</g, '\\u003c');
-}
+// The ONE escape — scripts/lib/page-blocks.mjs (T4: the twin this file used to carry is gone).
+export { escapeForInlineScript };
 
 export function startersIndexPlugin(indexPath: string): Plugin {
   return {

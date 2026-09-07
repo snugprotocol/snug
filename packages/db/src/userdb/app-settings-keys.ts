@@ -149,6 +149,41 @@ export function shareLinkSettingPrefixFor(appId: string): string {
   return `${SHARE_LINK_SETTING_PREFIX}${appId}:`;
 }
 
+/**
+ * The AGENT install-source prefix (TASK-20260905-binding-a-artifacts AC8, ADR-0065 §6): an
+ * app the user's own agent handed in as a bundle block embedded in a Claude artifact.
+ * `agent:<lineage>` cannot spell `share:` or `starter:` (the lineage is a UUID). Homed here
+ * — beside the tombstone key — because `deleteApp` (userdb.ts) needs it and userdb.ts
+ * cannot import app-bundle.ts (which imports userdb.ts); app-bundle.ts re-exports it.
+ */
+export const AGENT_INSTALL_SOURCE_PREFIX = 'agent:';
+
+export function agentInstallSource(lineage: string): string {
+  return `${AGENT_INSTALL_SOURCE_PREFIX}${lineage}`;
+}
+
+/** The `agentDismissed:` namespace prefix (TASK-20260905-binding-a-artifacts AC8). */
+export const AGENT_DISMISSED_SETTING_PREFIX = 'agentDismissed:';
+
+/**
+ * `agentDismissed:<lineage>` — the bundle id an `agent:`-installed app reflected when the
+ * user DELETED it. Keyed by LINEAGE, not app id (the app row is gone), and written inside
+ * `deleteApp`'s transaction: without it the block still embedded in the artifact page would
+ * re-install the app on the next boot (plan review A6). A NEW bundle id from the agent
+ * installs again — the user deleted an app, not their agent's right to hand one in.
+ */
+export function agentDismissedSettingKey(lineage: string): string {
+  if (lineage.length === 0) throw new Error('lineage must be non-empty');
+  return `${AGENT_DISMISSED_SETTING_PREFIX}${lineage}`;
+}
+
+/** The lineage a settings key names, or `undefined` if the key is not a tombstone. */
+export function lineageFromAgentDismissedSettingKey(key: string): string | undefined {
+  if (!key.startsWith(AGENT_DISMISSED_SETTING_PREFIX)) return undefined;
+  const lineage = key.slice(AGENT_DISMISSED_SETTING_PREFIX.length);
+  return lineage.length === 0 ? undefined : lineage;
+}
+
 /** The `sharedApp:` namespace prefix — the "shared with you" shelf (NOT app-scoped). */
 export const SHARED_APP_SETTING_PREFIX = 'sharedApp:';
 

@@ -145,7 +145,10 @@ test('cross-pin: the kit loader and its index plugin spell the SAME protocol lit
   assert.ok(loader.includes(`export const STARTER_PAYLOAD_FORMAT = '${STARTER_PAYLOAD_FORMAT}';`), 'payload format literal drifted');
   assert.ok(loader.includes(`export const STARTER_REGISTER_GLOBAL = '${STARTER_REGISTER_GLOBAL}';`), 'register global drifted');
   assert.equal(escapeForInlineScript('<'), '\\u003c');
-  assert.ok(plugin.includes("json.replace(/</g, '\\\\u003c')"), 'the plugin escaper drifted from escapeForInlineScript');
+  assert.ok(
+    plugin.includes('scripts/lib/page-blocks.mjs') && !/export function escapeForInlineScript/.test(plugin),
+    'the plugin must IMPORT escapeForInlineScript from scripts/lib/page-blocks.mjs, never restate it',
+  );
 });
 
 test('cross-pin: the package catalogue equals the examples validator’s curated APPS list', () => {

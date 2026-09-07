@@ -16,7 +16,7 @@
 // it before any confirm; a user file starts with a byte that is not `{`.
 
 import { importUserFile } from '../state/sync.js';
-import { isEncryptedContainer, sniffSnugFile } from '@snugprotocol/db';
+import { isEncryptedContainer, sniffSnugFile, unwrapUserFile } from '@snugprotocol/db';
 import { receiveSharedBundle, sharedInboxNoteStore, sharedOpenRequestStore } from '../share/sharedInbox.js';
 import { receiveShareLinkUrl, type ShareLinkFailure } from '../share/receiveShareLink.js';
 
@@ -48,8 +48,10 @@ const isUserFilePayload = (bytes: Uint8Array): boolean => hasSqliteMagic(bytes) 
  * A plausible user-file path: not flag-shaped, not URL-shaped, and named `.snug`
  * (desktop convention) or `.sqlite` (the web export's name).
  */
+// `.snug.json` (T4 AC6): the artifact export wrapper — the artifact `downloads` allowlist
+// has no `.snug`, so a file exported from a Claude artifact arrives under this name.
 const looksLikeUserFilePath = (path: string): boolean =>
-  !path.startsWith('-') && !/^[a-z][a-z0-9+.-]*:\/\//i.test(path) && /\.(snug|sqlite)$/i.test(path);
+  !path.startsWith('-') && !/^[a-z][a-z0-9+.-]*:\/\//i.test(path) && /\.(snug|sqlite|snug\.json)$/i.test(path);
 
 /**
  * Routes an opened file into the import flow — gates first, confirm second, F15 arms
@@ -162,15 +164,50 @@ export async function handleOpenedBundle(bytes: Uint8Array, path: string): Promi
   sharedOpenRequestStore.set(result.entry.bundleId);
 }
 
-/** The kind-dispatcher above both handlers — the ONE place a `.snug` file is told apart. */
+/**
+ * An opened `snug-user-file/1` WRAPPER (TASK-20260905-binding-a-artifacts AC6): the artifact
+ * export. Unwrapped by the db package's one reader — sha verified AND the payload re-sniffed
+ * as a user file (a wrapper around a bundle or around arbitrary bytes is refused by name,
+ * never handed to the replace confirm) — then the unwrapped bytes take the unchanged
+ * confirm-then-replace flow.
+ */
+export async function handleOpenedWrapper(
+  bytes: Uint8Array,
+  path: string,
+  confirm: (info: { path: string; needsRestore: boolean }) => Promise<boolean>,
+): Promise<void> {
+  if (!looksLikeUserFilePath(path)) return;
+  let unwrapped: Uint8Array;
+  try {
+    unwrapped = await unwrapOpenedWrapper(bytes);
+  } catch (err) {
+    openUserFileErrorStore.set(err instanceof Error ? err.message : String(err));
+    return;
+  }
+  await handleOpenedUserFile(unwrapped, path, confirm);
+}
+
+/**
+ * The ONE unwrap for an opened export wrapper, shared by the open-file route and the
+ * settings importer: the db package's reader (sha verified, payload re-sniffed as a user
+ * file), a refusal turned into the one readable sentence both surfaces show.
+ */
+export async function unwrapOpenedWrapper(bytes: Uint8Array): Promise<Uint8Array> {
+  const result = await unwrapUserFile(new TextDecoder().decode(bytes));
+  if (!result.ok) throw new Error(`that Snug export could not be opened — ${result.detail}`);
+  return result.bytes;
+}
+
+/** The kind-dispatcher above the handlers — the ONE place a `.snug` file is told apart. */
 export function dispatchOpenedSnugFile(
   bytes: Uint8Array,
   path: string,
   confirm: (info: { path: string; needsRestore: boolean }) => Promise<boolean>,
 ): Promise<void> {
-  return sniffSnugFile(bytes) === 'app-bundle'
-    ? handleOpenedBundle(bytes, path)
-    : handleOpenedUserFile(bytes, path, confirm);
+  const kind = sniffSnugFile(bytes);
+  if (kind === 'app-bundle') return handleOpenedBundle(bytes, path);
+  if (kind === 'user-file-wrapper') return handleOpenedWrapper(bytes, path, confirm);
+  return handleOpenedUserFile(bytes, path, confirm);
 }
 
 /** App boot: route the platform's open-file events through the sniff, the gates and the confirm dialog. Web: no seam, no-op. */

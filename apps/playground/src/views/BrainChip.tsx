@@ -18,9 +18,11 @@
 // reader who catches an overclaim stops believing the honest claims too.
 
 import type { ReactElement } from 'react';
+import { useSyncExternalStore } from 'react';
 import { Link } from 'react-router-dom';
 
-import { allows, getPlatform } from '../platform/platform.js';
+import { tierAutoLabel, tierLabel, tierSubstitutionNote } from '../platform/copy.js';
+import { allows, getPlatform, type TierChoice } from '../platform/platform.js';
 import { setMode } from '../state/mode.js';
 import { useActiveBrain, type ActiveBrainKind } from '../state/activeBrain.js';
 import { useOllama } from '../state/ollama.js';
@@ -102,6 +104,9 @@ function copyFor(brain: ActiveBrainKind): { label: string; aria: string; headlin
   return BRAINS[brain];
 }
 
+/** One stable no-op for the seatless render (a fresh closure per render would resubscribe on every render). */
+const noSubscription = (): (() => void) => () => undefined;
+
 export function BrainChip(): ReactElement {
   const brain = useActiveBrain();
   const ollama = useOllama();
@@ -111,9 +116,21 @@ export function BrainChip(): ReactElement {
   // rule; Gate-5 review). The settings door stays: config edits remain meaningful.
   const overrideArmed = useBrain().kind !== 'settings';
   const { open, toggle, close, triggerRef, menuRef } = useDismissableMenu();
+  // The thinking level (ADR-0067 — D15 amended narrowly): a seat exists ONLY on a host brain
+  // whose contract offers tiers (the artifact's `sample`); its state is subscribed like the
+  // custody seat's, and the control renders nowhere else. Never a call: `set` changes what
+  // the NEXT call carries.
+  const pinned = getPlatform().brain;
+  const tierSeat = brain === 'host' && pinned?.kind === 'host' ? pinned.tiers : undefined;
+  const tierState = useSyncExternalStore(
+    tierSeat?.state.subscribe ?? noSubscription,
+    () => tierSeat?.state.get(),
+    () => tierSeat?.state.get(),
+  );
 
   const copy = copyFor(brain);
   const models = ollama !== 'unknown' && ollama.running ? ollama.models : [];
+  const tierNote = tierSubstitutionNote(tierState?.applied);
 
   return (
     <div className="identity-menu-wrap">
@@ -127,6 +144,7 @@ export function BrainChip(): ReactElement {
         aria-expanded={open}
         aria-label={copy.aria}
         title={copy.aria}
+        {...(tierState !== undefined ? { 'data-tier': tierState.choice } : {})}
         onClick={toggle}
       >
         <span className="brain-dot" aria-hidden="true" />
@@ -147,8 +165,32 @@ export function BrainChip(): ReactElement {
         <div className="identity-menu brain-menu" data-testid="brain-menu" ref={menuRef} aria-label="what’s thinking">
           <span className="identity-menu-label">{copy.headline}</span>
           <span className="brain-menu-body">{copy.body}</span>
-          {/* The switch affordances exist only where a brain can be chosen (D15): under the
-              host kit the brain is the host's and the chip stays disclosure-only. */}
+          {tierSeat !== undefined && tierState !== undefined ? (
+            <label className="brain-menu-tier">
+              <span className="brain-menu-tier-label">thinking level</span>
+              <select
+                aria-label="thinking level"
+                data-testid="brain-menu-tier"
+                value={tierState.choice}
+                onChange={(event) => tierSeat.set(event.currentTarget.value as TierChoice)}
+              >
+                <option value="auto">{tierAutoLabel(tierSeat, tierState)}</option>
+                {tierSeat.options.map((tier) => (
+                  <option key={tier} value={tier} disabled={tierState.unavailable[tier] !== undefined}>
+                    {tierLabel(tier, tierSeat, tierState)}
+                  </option>
+                ))}
+              </select>
+              {tierNote !== undefined ? (
+                <span className="brain-menu-hint" data-testid="brain-menu-tier-note">
+                  {tierNote}
+                </span>
+              ) : null}
+            </label>
+          ) : null}
+          {/* The BRAIN switch affordances exist only where a brain can be chosen (D15): under
+              the host kit the brain is the host's; the thinking level above is the one control
+              the chip carries there (ADR-0067). */}
           {allows('brainSettings') ? (
             <Link
               to="/settings"

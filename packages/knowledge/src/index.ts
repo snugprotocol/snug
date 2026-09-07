@@ -13,6 +13,7 @@ export {
 } from './render.js';
 
 export {
+  getInlineKnowledgeCore,
   getKnowledgeBase,
   getKnowledgeSummary,
   getSkillBuilderPreamble,
@@ -22,6 +23,7 @@ export {
   getToolPrompt,
   getUiPrompt,
   getUserIdentityTemplate,
+  INLINE_KNOWLEDGE_CORE_FILES,
   listSkillCreatorFiles,
   listSkillModes,
   type KnowledgeSection,
@@ -44,6 +46,7 @@ export {
   type ConnectionRequirementInferrerPromptInput,
   type HostPlatform,
   type HostSystemPromptOptions,
+  type KnowledgeDelivery,
   type SkillBuilderContext,
 } from './assemble.js';
 

@@ -4,7 +4,7 @@
 // module stays dependency-light on purpose (types from the packages, nothing from
 // state/): it is imported before React boot, ahead of any store.
 
-import type { AgentAdapter } from '@snugprotocol/adapters';
+import type { AdapterMessage, AgentAdapter } from '@snugprotocol/adapters';
 import type { DesktopRedirectPosture } from '@snugprotocol/auth';
 import type { PersistenceBackend } from '@snugprotocol/db';
 
@@ -23,13 +23,115 @@ import type { PersistenceBackend } from '@snugprotocol/db';
  * (a brain that cannot call tools builds tool-free — the webllm arm generalised), and
  * `maxPromptBytes` (the transport's input cap; T4 budgets the app-attached context to it).
  * Absent = today's behavior: the file decides.
+ *
+ * TASK-20260905-binding-a-artifacts AC1/AC3: `chatAdapter` is the adapter for the
+ * 'chat' purpose (the builder and the inferrer — the artifact runtime's `default` tier);
+ * `adapter` answers 'app' turns (envelopes — `quick`). Absent → `adapter` serves both. One
+ * host decision per purpose, never a control (D15). `promptBytes` is the RULER the host's
+ * adapters send with; with `maxPromptBytes` it lets the builder budget-or-refuse a turn on
+ * the identical string (agent/promptBudget.ts). A brain with a cap but no ruler is never
+ * budgeted (the T2 seat, unchanged).
  */
 export type PlatformBrain =
   | { kind: 'demo' }
-  | { kind: 'host'; label: string; adapter: AgentAdapter; streaming: boolean; tools: boolean; maxPromptBytes?: number };
+  | {
+      kind: 'host';
+      label: string;
+      adapter: AgentAdapter;
+      chatAdapter?: AgentAdapter;
+      streaming: boolean;
+      tools: boolean;
+      maxPromptBytes?: number;
+      promptBytes?: (system: string, messages: AdapterMessage[]) => number;
+      /** The thinking-level seat (ADR-0067). Absent → no control anywhere (the chat brain, the demo brain, web, desktop). */
+      tiers?: TierSeat;
+    };
 
-/** The surfaces a host may switch off; `allows()` is the ONE reader. */
-export type HostSurface = 'brainSettings' | 'account' | 'sync' | 'connections' | 'share';
+/**
+ * The thinking levels a host brain's contract offers (TASK-20260906-host-brain-tier-control,
+ * ADR-0067 — D15 amended narrowly: the BRAIN stays the host's; the TIER is the user's). The
+ * artifact runtime's `sample` has exactly these three (`sample.d.ts` 0.2.41), and the tier IS
+ * the thinking level: `quick` does not think first; `default` (the viewer's default) and
+ * `complex` think before writing. The playground owns the seat types (the `CustodyState`
+ * precedent); the kit's store implements them.
+ */
+export type HostModelTier = 'quick' | 'default' | 'complex';
+/** `auto` = the kit's per-purpose pins (app replies `quick`, building `default`); a tier overrides every purpose. */
+export type TierChoice = 'auto' | HostModelTier;
+export interface TierState {
+  choice: TierChoice;
+  /** The last call whose answering tier differed from the ask (`modelTierApplied`) — the chip's substitution note. */
+  applied?: { asked: HostModelTier; answered: HostModelTier };
+  /** Tiers this view's plan answered on another tier, keyed by the tier asked for: listed but disabled, annotated with what answered. Per boot. */
+  unavailable: Partial<Record<HostModelTier, HostModelTier>>;
+}
+export interface TierSeat {
+  options: readonly HostModelTier[];
+  viewerDefault: HostModelTier;
+  /** The `auto` entry's per-purpose pins (app replies / building) — the chip derives the label from these and the marks, so it never claims a pin the plan overrode (review C3). */
+  auto: Readonly<Record<'app' | 'chat', HostModelTier>>;
+  state: { get(): TierState; subscribe(listener: () => void): () => void };
+  /** Changes what the NEXT call carries. Never calls the model. */
+  set(choice: TierChoice): void;
+}
+
+/**
+ * Where the user's file stands relative to its durable copy (TASK-20260905-binding-a-artifacts
+ * AC5/AC7). The host kit's storage record writes it; the "your file" chip renders it. ONE
+ * home for the shape — the kit's store imports it from here.
+ */
+export interface CustodyState {
+  /** The working copy has changes the durable copy does not (a save is owed). */
+  dirty: boolean;
+  /** No durable write is possible in this view (no `artifact` namespace, or the first refusal came back). */
+  readOnly: boolean;
+  /** The browser's copy and the page's copy differ; which is the more recent by the save counter. */
+  divergence?: 'newer' | 'older';
+  /** The last outcome worth telling the user (a refusal, a conflict, an export result). */
+  note?: string;
+  /** The durable copy's counter and instant, when known. */
+  saved?: { saved: number; savedAt: string };
+  /** The WORKING copy's rung when it is memory only (Safari denies third-party storage): gone with the tab, so the chip says so. */
+  workingCopy?: 'memory';
+}
+
+/**
+ * The custody seat a host platform may carry: the state the chip renders and the acts it
+ * offers. Every act is optional — an act that is absent is never rendered (no dead control).
+ */
+export interface CustodySeat {
+  state: { get(): CustodyState; subscribe(listener: () => void): () => void };
+  /** The explicit durable save ("save to this artifact"). Absent → no save act. */
+  save?: () => Promise<{ ok: boolean; message: string }>;
+  /** Whether a save can be attempted right now (a namespace exists and no refusal came back). */
+  canSave?: () => boolean;
+  /** The two divergence acts. */
+  loadPageCopy?: () => Promise<void>;
+  keepBrowserCopy?: () => void;
+  /** Clear the note. */
+  dismissNote?: () => void;
+}
+
+/** A newer version the user's agent handed in for an app the user EDITED — offered, never applied silently (T4 AC8, ADR-0045 §7). */
+export interface PendingAgentUpdate {
+  appId: string;
+  displayName: string;
+  bundleId: string;
+}
+
+/** The hand-in seat a host platform may carry: what is pending, and the act that takes it after the confirm. */
+export interface AgentHandInSeat {
+  pending: { get(): readonly PendingAgentUpdate[]; subscribe(listener: () => void): () => void };
+  apply(appId: string): Promise<{ version: number }>;
+}
+
+/**
+ * The surfaces a host may switch off; `allows()` is the ONE reader. `appExport` (T4 AC6)
+ * is the per-app bundle download — the share sheet's download-only mode; `share` gates the
+ * LINK acts. The kit keeps `appExport` on while `share` is off, so a kit-edited app can be
+ * handed back to the agent.
+ */
+export type HostSurface = 'brainSettings' | 'account' | 'sync' | 'connections' | 'share' | 'appExport';
 
 /**
  * Structurally identical to connectionWizard's `ConnectionChannelLike`, defined
@@ -47,7 +149,7 @@ export interface SnugPlatform {
    * Which host the kit woke up in (TASK-20260905-host-kit P6) — disclosure and the
    * per-binding recipes read it; nothing routes on it (feature flags do). Host kit only.
    */
-  binding?: 'artifact' | 'artifact-chat' | 'local-host' | 'file';
+  binding?: 'artifact' | 'artifact-static' | 'artifact-chat' | 'local-host' | 'file';
   /** The pinned brain — see `PlatformBrain`. Absent → the user file decides (web, desktop). */
   brain?: PlatformBrain;
   /**
@@ -153,6 +255,10 @@ export interface SnugPlatform {
   helperInstall?: (name: string, onProgress?: (p: HelperInstallProgressSeat) => void) => Promise<HelperStatusSeat>;
   /** Userdb + sync-sidecar backend. Web: undefined → detectPersistenceBackend(USERDB_OPFS_DIR). */
   userdbBackend?: PersistenceBackend;
+  /** Where the file stands and the acts on it (T4 AC5/AC7). Host kit only; the chip renders nothing without it. */
+  custody?: CustodySeat;
+  /** Offered agent hand-ins for edited copies (T4 AC8). Host kit only; the run header renders nothing without it. */
+  agentHandIns?: AgentHandInSeat;
   /** OAuth transport. Web: undefined → popup + BroadcastChannel + `${origin}/oauth/callback`. */
   oauth?: {
     /** Recorded-string lifecycle: byte-identical across both OAuthService call sites. */
@@ -256,6 +362,7 @@ export interface SnugPlatform {
     sync?: boolean;
     connections?: boolean;
     share?: boolean;
+    appExport?: boolean;
   };
 }
 

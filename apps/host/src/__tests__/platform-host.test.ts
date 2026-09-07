@@ -30,7 +30,7 @@ describe('createHostPlatform', () => {
     expect(platform.sqlJsWasmBinary).toBe(wasm);
   });
 
-  it('sets the four launch booleans explicitly false and every host surface flag false', () => {
+  it('sets the four launch booleans explicitly false and every host surface flag false — except appExport, which stays ON (T4 AC6: the bundle download is how a kit-edited app goes back to the agent)', () => {
     const { capabilities } = createHostPlatform(probe(), wasm);
     expect(capabilities).toEqual({
       subscriptionMode: false,
@@ -42,6 +42,7 @@ describe('createHostPlatform', () => {
       sync: false,
       connections: false,
       share: false,
+      appExport: true,
     });
   });
 
@@ -72,6 +73,7 @@ describe('createHostPlatform', () => {
     for (const surface of ['brainSettings', 'account', 'sync', 'connections', 'share'] as const) {
       expect(mod.allows(surface), surface).toBe(false);
     }
+    expect(mod.allows('appExport')).toBe(true);
     expect(mod.secretsUsable()).toBe(false);
   });
 

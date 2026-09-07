@@ -3,7 +3,16 @@
 // All backends store whole serialized SQLite files keyed by sanitized filename.
 import { CONTAINER } from '@snugprotocol/protocol';
 
-export type PersistenceKind = 'opfs' | 'idb' | 'file' | 'memory';
+/**
+ * Where a backend keeps its bytes. An APPEND-ONLY union (lesson 2026-09-04: widening a
+ * persisted enum is an append with a `never` arm, never a version bump). The two artifact
+ * kinds (TASK-20260905-binding-a-artifacts, ADR-0065 §2): `'window-storage'` is the chat
+ * artifact's page storage (`window.storage`, per view); `'artifact-html'` is the hosted
+ * artifact's RECORD over the browser bucket — the working copy stays in OPFS/IDB, the
+ * durable copy is the page's own html republish. Every reader that switches on this type
+ * names both arms.
+ */
+export type PersistenceKind = 'opfs' | 'idb' | 'file' | 'memory' | 'window-storage' | 'artifact-html';
 
 /**
  * Envelope prefix for non-SQLite files stored through a backend (the sync sidecar).

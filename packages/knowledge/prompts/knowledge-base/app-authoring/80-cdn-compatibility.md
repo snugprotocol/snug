@@ -14,6 +14,34 @@ images/SVGs. This list is never widened at runtime. Notably NOT available: the T
 play CDN and Google Fonts (style with plain CSS and the system font stack instead), and any
 other origin. A script tag pointing anywhere else silently fails to load.
 
+## Inside a Claude Artifact: a Narrower Allowlist
+
+When the app will run inside a Claude artifact (the Snug host kit published as an artifact,
+or a chat artifact), the artifact viewer's own policy sits above Snug's and admits LESS.
+Measured on both viewers: scripts load ONLY from `https://cdn.jsdelivr.net/npm/` and
+`https://cdnjs.cloudflare.com/`; jsDelivr `/gh/…` and unpkg are blocked; NO CDN stylesheet
+or font loads at all. So for an artifact-bound app:
+
+- load libraries from jsDelivr `/npm/` or cdnjs only — never unpkg, never `/gh/`;
+- put every style in a `<style>` block and use the system font stack — no `<link
+  rel="stylesheet">`, no `@import`, no `url(https://…)` for fonts or images (a `data:` URL
+  is fine);
+- `snug-embed --strict` refuses a bundle that breaks these rules; without `--strict` it warns.
+
+This is about whether the app LOADS, not whether it is safe: the sandbox and Snug's own
+allowlist are unchanged, and a script that passes this rule is exactly as untrusted as
+any other.
+
+## Never Think on a Timer
+
+Every agent call an app makes is a USER act — a click, a submitted move, a question typed.
+Never send a `{{frameType:appMessage}}` from `setInterval`, `setTimeout`, an animation frame, or
+on load. A host may bill the person viewing the app for every call (inside a Claude
+artifact the viewer's own Claude answers, and the first call asks their consent), and a
+page that spends usage on load or on a clock is the defect the shared-preview rule already
+guards against. Poll your own state locally as often as you like; ask the agent only when
+the user did something.
+
 ## UMD vs ESM: Why Libraries Break
 
 There is no bundler and no Node in the iframe — `<script src>` tags need

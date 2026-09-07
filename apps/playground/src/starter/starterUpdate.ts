@@ -104,10 +104,12 @@ function recordedVersion(db: UserDb, appId: string): number | undefined {
 export async function starterUpdateStatus(db: UserDb, appId: string): Promise<StarterUpdateStatus | undefined> {
   const folder = starterFolderOf(db, appId);
   if (folder === undefined) return undefined;
+  // The catalogue (`starter.json`) answers "still bundled?" — a folder IS a starter iff it
+  // has an `app.html`, so its metadata being present is the fact. The html is NOT read
+  // here (T4 AC12): in the host kit that was one wrapper fetch from the CDN per installed
+  // starter at every hub paint, for a question the catalogue already answers.
   const meta = await starterMetaFor(folder);
   if (meta === undefined) return undefined;
-  const bundle = await bundledHtml(folder);
-  if (bundle === undefined) return undefined;
 
   const factory = newestPinnedHtml(db, appId);
   const running = db.getAppHtml(appId);

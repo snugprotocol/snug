@@ -1,0 +1,147 @@
+// user-file-wrapper.test.ts — TASK-20260905-binding-a-artifacts AC6 (ADR-0065 §5).
+//
+// The artifact `downloads` allowlist has no `.snug`, so a user file leaves a Claude
+// artifact as `snug-user.snug.json`: `{"format":"snug-user-file/1","sha256":…,"bytesBase64":…}`
+// with `format` as the FIRST key — the sniff is a byte-prefix check, never a JSON.parse of
+// an 85 MB string. `unwrapUserFile` verifies the sha AND re-sniffs the payload (plan review
+// S4: a wrapper's sha proves only self-consistency — a wrapper around a bundle or around
+// arbitrary bytes must be refused before any confirm or import).
+
+import { CONTAINER } from '@snugprotocol/protocol';
+import { beforeEach, describe, expect, it } from 'vitest';
+
+import { locateWasm } from '../../__tests__/helpers.js';
+import { bytesToBase64 } from '../../base64.js';
+import { createMemoryBackend } from '../../persistence.js';
+import { sniffSnugFile } from '../app-bundle.js';
+import {
+  USER_FILE_WRAPPER_FILE_NAME,
+  USER_FILE_WRAPPER_FORMAT,
+  USER_FILE_WRAPPER_MAX_BYTES,
+  USER_FILE_WRAPPER_PREFIX,
+  unwrapUserFile,
+  wrapUserFile,
+} from '../user-file-wrapper.js';
+import { USERDB_ERROR_CODES, UserDbError, openUserDb, type UserDb } from '../userdb.js';
+
+const enc = (text: string): Uint8Array => new TextEncoder().encode(text);
+
+let db: UserDb;
+let userFile: Uint8Array;
+
+beforeEach(async () => {
+  const result = await openUserDb({ backend: createMemoryBackend(), locateWasm, persistDebounceMs: 1 });
+  if (result.status !== 'ok') throw new Error('open failed');
+  db = result.userDb;
+  db.installApp({ displayName: 'Wrapped', html: '<!doctype html><html><body>wrapped</body></html>' });
+  userFile = await db.exportUserDb({ includeSecrets: false });
+});
+
+describe('wrapUserFile — the export shape', () => {
+  it('emits format FIRST, a 64-hex sha256 and the base64 of the exact bytes; the file name is the wrapper name', async () => {
+    const text = await wrapUserFile(userFile);
+    expect(text.startsWith(USER_FILE_WRAPPER_PREFIX)).toBe(true);
+    const parsed = JSON.parse(text) as Record<string, unknown>;
+    expect(Object.keys(parsed)).toEqual(['format', 'sha256', 'bytesBase64']);
+    expect(parsed.format).toBe(USER_FILE_WRAPPER_FORMAT);
+    expect(parsed.sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(parsed.bytesBase64).toBe(bytesToBase64(userFile));
+    expect(USER_FILE_WRAPPER_FILE_NAME).toBe('snug-user.snug.json');
+  });
+
+  it('wraps a protected container (SNUGENC1) too — the sniff, not the cipher, decides', async () => {
+    const container = enc(`${CONTAINER.MAGIC}rest-of-container-bytes`);
+    const text = await wrapUserFile(container);
+    const back = await unwrapUserFile(text);
+    expect(back.ok).toBe(true);
+    if (back.ok) expect(back.bytes).toEqual(container);
+  });
+
+  it('(N) refuses to wrap bytes that are not a user file — a bundle, garbage, empty', async () => {
+    for (const bytes of [enc('{"format":"snug-app-bundle/1"}'), enc('hello world'), new Uint8Array(0)]) {
+      await expect(wrapUserFile(bytes)).rejects.toMatchObject({ code: USERDB_ERROR_CODES.BAD_IMPORT });
+    }
+    await expect(wrapUserFile(enc('hello'))).rejects.toBeInstanceOf(UserDbError);
+  });
+});
+
+describe('unwrapUserFile — the import boundary', () => {
+  it('round-trips a real user file byte for byte and reports the sha', async () => {
+    const text = await wrapUserFile(userFile);
+    const back = await unwrapUserFile(text);
+    expect(back.ok).toBe(true);
+    if (!back.ok) return;
+    expect(back.bytes).toEqual(userFile);
+    expect(back.sha256).toBe((JSON.parse(text) as { sha256: string }).sha256);
+  });
+
+  it('tolerates a BOM and surrounding whitespace (mail clients add them)', async () => {
+    const text = await wrapUserFile(userFile);
+    const back = await unwrapUserFile(`\uFEFF  \n${text}\n\n`);
+    expect(back.ok).toBe(true);
+  });
+
+  it('(N) a sha that does not match the bytes is CORRUPT — never "fresh", never adopted', async () => {
+    const text = await wrapUserFile(userFile);
+    const parsed = JSON.parse(text) as { format: string; sha256: string; bytesBase64: string };
+    const tampered = JSON.stringify({ ...parsed, sha256: parsed.sha256.replace(/^./, (c) => (c === '0' ? '1' : '0')) });
+    const back = await unwrapUserFile(tampered);
+    expect(back).toMatchObject({ ok: false, reason: 'corrupt' });
+  });
+
+  it('(N, S4) a self-consistent wrapper around NON-user-file bytes is refused by name — a bundle, arbitrary bytes', async () => {
+    for (const payload of [enc('{"format":"snug-app-bundle/1","lineage":"x"}'), enc('not a database at all'), new Uint8Array([0, 1, 2, 3])]) {
+      const sha = await sha256Hex(payload);
+      const text = JSON.stringify({ format: USER_FILE_WRAPPER_FORMAT, sha256: sha, bytesBase64: bytesToBase64(payload) });
+      const back = await unwrapUserFile(text);
+      expect(back).toMatchObject({ ok: false, reason: 'not-a-user-file' });
+    }
+  });
+
+  it('(N) not JSON, not a wrapper, malformed fields, bad base64 — each a named reason', async () => {
+    expect(await unwrapUserFile('SQLite format 3')).toMatchObject({ ok: false, reason: 'not-json' });
+    expect(await unwrapUserFile('{"format":"snug-app-bundle/1"}')).toMatchObject({ ok: false, reason: 'not-a-wrapper' });
+    expect(await unwrapUserFile('[]')).toMatchObject({ ok: false, reason: 'not-a-wrapper' });
+    expect(await unwrapUserFile(`{"format":"${USER_FILE_WRAPPER_FORMAT}"}`)).toMatchObject({ ok: false, reason: 'invalid' });
+    expect(await unwrapUserFile(`{"format":"${USER_FILE_WRAPPER_FORMAT}","sha256":"zz","bytesBase64":"AAAA"}`)).toMatchObject({
+      ok: false,
+      reason: 'invalid',
+    });
+    expect(
+      await unwrapUserFile(`{"format":"${USER_FILE_WRAPPER_FORMAT}","sha256":"${'0'.repeat(64)}","bytesBase64":"@@not base64@@"}`),
+    ).toMatchObject({ ok: false, reason: 'invalid' });
+  });
+
+  it('(N) refuses an oversized text before parsing it', async () => {
+    const huge = `${USER_FILE_WRAPPER_PREFIX},"sha256":"${'0'.repeat(64)}","bytesBase64":"${'A'.repeat(USER_FILE_WRAPPER_MAX_BYTES)}"}`;
+    expect(await unwrapUserFile(huge)).toMatchObject({ ok: false, reason: 'too-large' });
+  });
+});
+
+describe('sniffSnugFile learns the wrapper (a head-bytes check, never a parse)', () => {
+  it('a wrapper is `user-file-wrapper`; a bundle stays `app-bundle`; a user file stays `user-file`', async () => {
+    const text = await wrapUserFile(userFile);
+    expect(sniffSnugFile(enc(text))).toBe('user-file-wrapper');
+    expect(sniffSnugFile(enc(`\uFEFF \n${text}`))).toBe('user-file-wrapper');
+    expect(sniffSnugFile(enc('{"format":"snug-app-bundle/1"}'))).toBe('app-bundle');
+    expect(sniffSnugFile(userFile)).toBe('user-file');
+    // Only the head is read: the prefix followed by anything at all still classifies.
+    expect(sniffSnugFile(enc(`${USER_FILE_WRAPPER_PREFIX}\0garbage`))).toBe('user-file-wrapper');
+    // A different key order is NOT a wrapper at the sniff — the contract says format first.
+    expect(sniffSnugFile(enc(`{"sha256":"x","format":"${USER_FILE_WRAPPER_FORMAT}"}`))).toBe('app-bundle');
+  });
+
+  it('a wrapper re-saved through a pretty-printing editor is still the wrapper (JSON whitespace inside the head), and unwraps', async () => {
+    const text = await wrapUserFile(userFile);
+    const pretty = JSON.stringify(JSON.parse(text), null, 2);
+    expect(pretty.startsWith('{\n  "format": ')).toBe(true);
+    expect(sniffSnugFile(enc(pretty))).toBe('user-file-wrapper');
+    const back = await unwrapUserFile(pretty);
+    expect(back.ok && back.bytes).toEqual(userFile);
+  });
+});
+
+async function sha256Hex(bytes: Uint8Array): Promise<string> {
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes.slice()));
+  return [...digest].map((b) => b.toString(16).padStart(2, '0')).join('');
+}

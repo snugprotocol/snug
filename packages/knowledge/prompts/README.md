@@ -13,7 +13,9 @@ prompts/
 ├── system/                          ← host system prompt blocks, numbered by injection order
 │   ├── 10-host-identity.md          ← always on
 │   ├── 20-capability-file-creation.md  ← iff artifacts capability
-│   ├── 30-app-builder-summary.md    ← iff app-builder capability (KB summary appended below it)
+│   ├── 30-app-builder-summary.md    ← iff app-builder capability, knowledge 'tool' (default) — KB summary appended below it
+│   ├── 35-app-builder-inline.md     ← iff app-builder capability, knowledge 'inline' (ADR-0066) — the 30-slot's tool-free twin; the five core KB files follow as blocks
+│   ├── 36-app-builder-unaided.md    ← iff app-builder capability, knowledge 'none' (ADR-0066) — the honest layer for a brain that can carry neither (webllm)
 │   ├── 40-app-response-format.md    ← iff app-builder capability
 │   ├── 45-app-runtime.md            ← runtime branch only (ADR-0018 D1) — replaces 30 on an installed app's turn
 │   └── 95-platform-desktop.md       ← iff platform 'desktop' (TASK-20260812 P2) — appended LAST on both branches
@@ -21,14 +23,17 @@ prompts/
 │   └── app-authoring/               ← the app-builder KB, section-searchable
 │       ├── 00-summary.md            ← ~600-char blurb injected into the system prompt; NOT part
 │       │                               of the searchable KB/search corpus (it duplicates content)
-│       ├── 10-overview-and-contract.md
-│       ├── 20-html-template.md      ← mandatory skeleton + copy-exactly SDK hooks
-│       ├── 30-bridge-protocol.md
-│       ├── 40-persistence-and-db.md
+│       ├── 10-overview-and-contract.md      ★
+│       ├── 20-html-template.md      ← mandatory skeleton + copy-exactly SDK hooks   ★
+│       ├── 30-bridge-protocol.md                                                    ★
+│       ├── 40-persistence-and-db.md                                                 ★
 │       ├── 50-app-catalog.md        ← app types + worked chess example
 │       ├── 60-design-quality.md
 │       ├── 70-defensive-coding.md
-│       ├── 80-cdn-compatibility.md  ← incl. pinned known-good CDN table (DATA section)
+│       ├── 80-cdn-compatibility.md  ← incl. pinned known-good CDN table (DATA section)      ★
+│       │                               ★ = the INLINE CORE (ADR-0066): these five, and only these, ride whole as
+│       │                                   system blocks to a tool-free brain (knowledge 'inline'; pinned by name in
+│       │                                   `INLINE_KNOWLEDGE_CORE_FILES`)
 │       └── 90-auth-and-connected-apis.md  ← connected APIs: useConnectedFetch design + the connection_requirement directive contract, completeness bar, edit skip-rules (AL-05, rewritten by Dynamic Auth v2 P2; headings are retrieval-tested)
 ├── tools/                           ← tool + parameter descriptions
 │   ├── app-builder.md
@@ -45,15 +50,15 @@ prompts/
 ├── templates/
 │   └── user-identity.md             ← tenant template; runtime {{{triple-brace}}} placeholders only
 └── ui/
-    └── build-app-prompt.md          ← Playground user-message template + suggestion chips
+    └── build-app-prompt.md          ← Playground user-message templates, one per knowledge delivery (tool / inline / unaided, ADR-0066) + suggestion chips
 ```
 
 ## Layers
 
 | Layer | Reaches the LLM as | Typed loader |
 |---|---|---|
-| `system` | Blocks of the host system prompt, in numeric order, capability-gated | `buildHostSystemPrompt({appBuilder, artifacts})` |
-| `knowledge-base` | Tool results from `{{appBuilderToolName}}`; `00-summary.md` inline in the system prompt (excluded from search) | `searchKnowledge(query)` / `getKnowledgeSummary()` |
+| `system` | Blocks of the host system prompt, in numeric order, capability-gated | `buildHostSystemPrompt({appBuilder, artifacts, knowledge?})` |
+| `knowledge-base` | Tool results from `{{appBuilderToolName}}`; `00-summary.md` inline in the system prompt (excluded from search); the five-file core inline as system blocks for a tool-free brain (ADR-0066) | `searchKnowledge(query)` / `getKnowledgeSummary()` / `getInlineKnowledgeCore()` |
 | `tool` | Tool + parameter descriptions in the request's tool list | per-tool exports |
 | `skill` | Skill-builder prompts and the vendored skill-creator | `buildSkillBuilderPrompt(mode, ctx?)` |
 | `template` | Tenant-rendered blocks (runtime data filled by the host) | template export + runtime render |
@@ -63,10 +68,19 @@ prompts/
 
 1. `system/10-host-identity.md` — always.
 2. `system/20-capability-file-creation.md` — iff artifacts enabled.
-3. `system/30-app-builder-summary.md` + `knowledge-base/app-authoring/00-summary.md`
-   (appended directly below, same block) — iff app-builder enabled. `00-summary.md` is
-   served ONLY here: it is excluded from `getKnowledgeBase()` and the `searchKnowledge`
-   corpus because it duplicates KB content and would pollute retrieval.
+3. The 30-slot — iff app-builder enabled; ONE occupant per `knowledge` delivery (ADR-0066):
+   - `'tool'` (default, byte-identical to before the seat): `system/30-app-builder-summary.md`
+     + `knowledge-base/app-authoring/00-summary.md` (appended directly below, same block).
+     `00-summary.md` is served ONLY here: it is excluded from `getKnowledgeBase()` and the
+     `searchKnowledge` corpus because it duplicates KB content and would pollute retrieval.
+   - `'inline'` (a pinned host brain that cannot call tools): `system/35-app-builder-inline.md`,
+     then the five core KB files (`INLINE_KNOWLEDGE_CORE_FILES`: 10, 20, 30, 40, 80) each as
+     its own block through the same separator. The WHOLE inline assembly plus the builder's
+     fenced-HTML suffix (not just the core) must measure under `HOST_BUILDER_SYSTEM_MAX_BYTES`
+     (44 KiB) on the host kit's own ruler — its `brains.test.ts` pins that and prints the
+     measured bytes; the current figures live in `packages/knowledge/src/layers.ts`.
+   - `'none'` (webllm — a 4,096-token window): `system/36-app-builder-unaided.md` alone.
+   Neither tool-free layer names a tool; a test asserts it against the tool-name constants.
 4. `system/40-app-response-format.md` — iff app-builder enabled.
 5. `system/95-platform-desktop.md` — iff the caller passes `platform: 'desktop'`
    (TASK-20260812 P2). Appended LAST so a web assembly is a strict prefix of its desktop
@@ -74,8 +88,9 @@ prompts/
    a client's platform never changes mid-session, so the cached prefix stays stable).
 6. Tenant blocks rendered from `templates/` (e.g. user identity) — runtime, optional.
 
-Golden snapshots cover the 4-combination gating matrix; any edit to these files shows up in
-the golden diff — that diff IS the blast radius review.
+Golden snapshots cover the gating matrix (the four capability combinations, the runtime
+branch, and the two tool-free deliveries); any edit to these files shows up in the golden
+diff — that diff IS the blast radius review.
 
 ## Editing safely
 

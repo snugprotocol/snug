@@ -9,8 +9,13 @@
 // tool path is documented in the task file (no KB consult round trip, no
 // schema_apply/app_doc_write in webllm mode).
 
-/** Appended to the builder system prompt in webllm mode ONLY (after the base layers). */
-export const WEBLLM_BUILD_SUFFIX = `## Building Apps Without Tools (in-browser model)
+/**
+ * Appended to the builder system prompt on EVERY tool-free arm (after the base layers):
+ * webllm, and since TASK-20260906 the pinned host brain too — so the heading names the
+ * situation (no file tools), never the brain (Gate-5 review: "in-browser model" was
+ * riding into a Claude artifact's prompt).
+ */
+export const WEBLLM_BUILD_SUFFIX = `## Building Apps Without File Tools
 
 File-creation tools are not available in this mode. When the user asks you to build
 or change an app, reply with the COMPLETE single-file HTML document — starting with

@@ -7,7 +7,7 @@
 // bundle on the shelf (ADR-0045's act with a bundle as source). The hub never writes;
 // these are called from the run header, the same place the starter acts live.
 
-import { installAppFromBundle, sharedBundleSettingKey, shareInstallSource, updateAppFromBundle } from '@snugprotocol/db';
+import { installAppFromBundle, sharedBundleSettingKey, shareInstallSource, updateAppFromBundle, isEditedCopy } from '@snugprotocol/db';
 import type { UserDb } from '@snugprotocol/db';
 
 import { refreshAppMeta } from '../state/appMeta.js';
@@ -50,12 +50,7 @@ export function sharedUpdateStatus(db: UserDb, appId: string): SharedUpdateStatu
   if (entry === undefined) return undefined;
   if (db.getSetting(sharedBundleSettingKey(appId)) === entry.bundleId) return undefined;
   if (shareInstallSource(lineage) !== source) return undefined;
-  const versions = db.listAppVersions(appId);
-  const newestPinned = versions.filter((v) => v.pinned).sort((a, b) => b.version - a.version)[0];
-  const edited = newestPinned !== undefined && newestPinned.version !== app.currentVersion
-    ? db.getAppHtml(appId) !== db.getAppHtml(appId, newestPinned.version)
-    : false;
-  return { entry, edited };
+  return { entry, edited: isEditedCopy(db, appId) };
 }
 
 export interface InstalledCopyForBundle {
@@ -79,12 +74,7 @@ export function installedCopyForBundle(db: UserDb, entry: SharedEntry): Installe
   const app = db.getAppByInstallSource(shareInstallSource(entry.bundle.lineage));
   if (app === undefined) return undefined;
   const current = db.getSetting(sharedBundleSettingKey(app.appId)) === entry.bundleId;
-  const versions = db.listAppVersions(app.appId);
-  const newestPinned = versions.filter((v) => v.pinned).sort((a, b) => b.version - a.version)[0];
-  const edited =
-    newestPinned !== undefined && newestPinned.version !== app.currentVersion
-      ? db.getAppHtml(app.appId) !== db.getAppHtml(app.appId, newestPinned.version)
-      : false;
+  const edited = isEditedCopy(db, app.appId);
   const approvedProviders = db
     .listConnections(app.appId)
     .filter((row) => row.status === 'approved')

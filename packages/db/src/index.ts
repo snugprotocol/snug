@@ -25,6 +25,7 @@ export {
   createMemoryBackend,
   createOpfsBackend,
   detectPersistenceBackend,
+  SYNC_SIDECAR_MAGIC,
   type MemoryBackend,
   type PersistenceBackend,
   type PersistenceKind,
@@ -110,15 +111,21 @@ export {
   shareLinkSettingPrefixFor,
   sharedAppSettingKey,
   sharedBundleSettingKey,
+  AGENT_DISMISSED_SETTING_PREFIX,
+  agentDismissedSettingKey,
+  lineageFromAgentDismissedSettingKey,
 } from './userdb/app-settings-keys.js';
 
 // App sharing (TASK-20260904, ADR-0063): build / install / update one app as a bundle, and
 // the first-bytes sniff that tells a bundle from a user file.
 export {
+  AGENT_INSTALL_SOURCE_PREFIX,
   SHARE_INSTALL_SOURCE_PREFIX,
+  agentInstallSource,
   buildAppBundle,
   declareSharedConnections,
   installAppFromBundle,
+  isEditedCopy,
   seedDocsAbsentOnly,
   shareInstallSource,
   sniffSnugFile,
@@ -128,9 +135,22 @@ export {
   type AppBundleInstallResult,
   type AppBundleUpdateResult,
   type BuildAppBundleOptions,
+  type BundleProvenance,
   type RefusedSlot,
   type SnugFileKind,
 } from './userdb/app-bundle.js';
+
+// The artifact export wrapper (TASK-20260905-binding-a-artifacts AC6, ADR-0065 §5): a user
+// file as `snug-user.snug.json`, sniffed by prefix, verified by sha AND re-sniffed on the way in.
+export {
+  USER_FILE_WRAPPER_FILE_NAME,
+  USER_FILE_WRAPPER_FORMAT,
+  USER_FILE_WRAPPER_MAX_BYTES,
+  USER_FILE_WRAPPER_PREFIX,
+  unwrapUserFile,
+  wrapUserFile,
+  type UserFileUnwrap,
+} from './userdb/user-file-wrapper.js';
 
 export { SIDECAR_IDENTITY_DIRECTORY_SETTING_KEY } from './userdb/sidecar-identity-keys.js';
 export {

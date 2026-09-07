@@ -52,6 +52,7 @@ import { installStarterConnections, starterDeclarationForStarterId } from '../st
 import { installStarterRuntimeContract } from '../starter/starterRuntimeContract.js';
 import { installStarterDocs } from '../starter/starterDocs.js';
 import { starterMetaFor } from '../starter/starterMeta.js';
+import { AgentUpdateControls } from './AgentUpdateControls.js';
 import { StarterUpdateControls } from './StarterUpdateControls.js';
 import { Button } from '../ui/Button.js';
 import { EmptyState } from '../ui/EmptyState.js';
@@ -1006,6 +1007,8 @@ export default function RunView(): ReactElement {
                   onUpdated={() => setContentEpoch((epoch) => epoch + 1)}
                 />
                 <SharedUpdateControls appId={id} refreshToken={contentEpoch} />
+                {/* T4 AC8: an agent hand-in for an EDITED copy is offered here, never applied at boot. */}
+                <AgentUpdateControls appId={id} onUpdated={() => setContentEpoch((epoch) => epoch + 1)} />
               </>
             ) : null}
             {/*
