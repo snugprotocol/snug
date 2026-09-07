@@ -59,3 +59,11 @@
 **Shared shelf** — the hub's "shared with you" section between "your apps" and "starter apps". Memory-first: a received bundle persists only after an explicit act (opening an attachment, or "keep" on a link preview), and is inert until install.
 
 **Blind relay** — the one hosted endpoint (ADR-0064): a Worker + R2 bucket that stores app bundles already encrypted in the sharer's browser, with the key carried only in the link's URL fragment. It can neither read what it holds nor substitute it.
+
+**Local host process** — the Node process the agent's host spawns over stdio when the `snug`
+plugin is installed (ADR-0068). It serves the host kit's `local-host` build on `127.0.0.1`,
+acts as the network side of the page's connected-fetch executor, and offers the agent four
+control-plane tools. It is Snug Desktop's native side written in Node; it is not a server, a
+service, or something Snug is "built on" — MCP is only the spawn channel. Never called an
+"MCP server" in product copy.
+

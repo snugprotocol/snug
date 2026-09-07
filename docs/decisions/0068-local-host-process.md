@@ -1,6 +1,6 @@
 # 0068 — Binding B is a plugin-bundled local process: the desktop's native side, in Node, on loopback
 
-- **Status:** proposed (drafted at Gate 2 of TASK-20260907-binding-b-plugin-host; becomes `accepted` with the owner's plan approval and answers to Q1–Q5; amends ADR-0065 §2 B when it lands)
+- **Status:** accepted (the owner approved the plan on 2026-09-07 with the recommended defaults for Q1–Q5; amended in the same session by the plan review's six blocking findings, folded as D-B13–D-B33 in the task file). Amends ADR-0065 §2 B.
 - **Date:** 2026-09-07
 - **Task:** TASK-20260907-binding-b-plugin-host (re-scopes T3 of TASK-20260904-skill-only-snug)
 
