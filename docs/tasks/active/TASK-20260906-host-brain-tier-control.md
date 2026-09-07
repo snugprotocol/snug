@@ -96,3 +96,7 @@
 - State: **Gate 5 review folded and republished; the owner's walk leg (AC7) is the one open Gate-5 item.** Branch NOT pushed (10 commits over T4's tip).
 - Next step: republish → the owner's walk leg → Gate 6 → PR stacked on T4.
 - Open questions: none.
+
+### 2026-09-06 — Jeetu (owner) — AC7 walked; PR asked
+- Owner: "tested all" on the artifact at version `f690356` ("tier control: f690356 (review folded)") — the thinking-level leg (AC7) walked; **the specifics were not journaled by the owner** (whether `complex` was honoured or answered on `default`; the inspector's `claude (<tier>)` line; the reload holding the choice). Recorded as walked-by-the-owner, details unrecorded.
+- Owner asked: open the PR and merge it. → Gate 6 done-move rides in the PR.

@@ -230,3 +230,7 @@ Three things the review changed after your Q1–Q4 answers, none of them widenin
 
 ### 2026-09-06 — Jeetu (via Claude Code) — note: the artifact now carries a stacked task
 - The owner asked for a thinking-level control on the runner (D15's "not a control" clause reversed narrowly — ADR-0067, `TASK-20260906-host-brain-tier-control`, branch off this branch's tip `340a7de`). Its build `92ec486` (= this branch at `340a7de` + the control) was published to the SAME artifact as version "tier control: 92ec486 (ADR-0067)". **The AC13 legs above are unchanged and can be walked on that version** (the control adds a select to the brain chip's popover; `auto` keeps AC1's pins). Journal the version id you walked.
+
+### 2026-09-06 — Jeetu (owner) — AC13 walked; PR asked
+- Owner: "tested all" on the artifact at version `f690356` (this branch at `340a7de` + the stacked tier task) — the AC13 legs walked (build an app, save to this artifact, export/import, hand-in, Safari) **as reported by the owner; the specifics were not journaled** (the save leg's fetch shape — whether `fetch(location.href)` returned the stored wrapped form; the seed after reload; the Safari memory rung; `document.scripts` at boot). The residual (does the viewer answer a nested frame's runtime-shaped postMessage?) stays unanswered in writing.
+- Owner asked: open the PR and merge it. → ONE PR from the tier branch carries this task, `TASK-20260906-tool-free-kb-inlining` and `TASK-20260906-host-brain-tier-control`; Gate 6 done-moves ride in it.
