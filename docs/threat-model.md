@@ -749,7 +749,7 @@ cannot fail a hash check). Its content is not new; the record is.
 | `docs/security/threat-model-delta-desktop-update-channel.md` | `2f6321918cce` | §5 C2 + authoring · R-28, R-29, R-30, R-33 |
 | `docs/security/threat-model-delta-app-sharing.md` | `806ca935aa18` | §4 boundary 5 · §5 C1 + C2 + authoring · R-34, R-35, R-36, R-37, R-38, R-39 |
 
-| `docs/security/threat-model-delta-local-host-process.md` | `e6d4681c6c24` | §6 R-40 · R-41 · R-42 |
+| `docs/security/threat-model-delta-local-host-process.md` | `0505106aa0c0` | §6 R-40 · R-41 · R-42 |
 <!-- DELTA-LEDGER:END -->
 
 ---
