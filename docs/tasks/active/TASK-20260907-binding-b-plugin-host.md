@@ -1,6 +1,6 @@
 # TASK-20260907-binding-b-plugin-host: Binding B as a plugin-bundled local process — the network executor for the host kit
 
-- **Status**: in-progress — **plan APPROVED by the owner 2026-09-07 ("yes go ahead"; Q1–Q5 = the recommended defaults)**; plan review before Gate 4, then Gate 3
+- **Status**: in-progress — **Gate 6**; PR #177 open (28 commits). Gates 1–5 complete; the real-home guard (D-B34), the brain readiness probe (D-B35) and the AC3/AC4/AC5 e2e legs landed 2026-09-08. **Remaining: the owner's Ledger walk and Cowork AC10 — both owner acts — then `/close-session`.**
 - **Owner**: Jeetu
 - **Risk tier**: **high** — threads a new `fetchImpl`, `oauth` and `userdbBackend` into the platform seam `connectedFetchDepsFor` consumes (C1 paths); a loopback data plane in front of the credential executor; a spawned child that runs the user's own `claude` CLI. Auto-escalated per PROCESS.md; plan review with finder angles before Gate 4; explicit self-sign-off at Gate 5.
 - **Branch**: `feat/TASK-20260907-binding-b-plugin-host` off `main` `6d9feda`
@@ -240,3 +240,11 @@ ADR-0065 amendment (§2 B → "delivered as the plugin-bundled process; the proc
 - State: **Gate 6. Items (1), (2), (3) done.** `host-mcp` 208 green, `host` 223 green, e2e 10/10 (3/3 stable), `check-host-mcp` ok, `check-host-kit` ok at 2,274,526 B (artifact kit untouched), 19 script tests green, playground journey 4 still green.
 - Next step: the owner's Ledger walk (needs the owner's SimpleFIN credentials) and Cowork AC10 — both owner acts; then lessons + `/close-session`. Root `pnpm test` before the PR update.
 - Open questions: unchanged.
+
+### 2026-09-08 21:20 UTC — Jeetu (via Claude Code) — Gate 6 docs
+- Done: **D-B34 and D-B35 written into the decision list** (they were journaled when built; now they sit with the other 33 where a reader looks for them). **Two threat-model rows added** — the open `/oauth/callback` (unauthenticated by necessity: a provider's redirect carries only what the provider put in the query, and the route serves the same document as `/`, so reaching it buys an attacker HTML they could already fetch) and the store's default target (now a refusal, recorded as the repair it is). No new residual: the callback grants nothing beyond `/`, and the home guard only removes risk, so R-40/R-41/R-42 stand unchanged — re-read before deciding that, per the ledger's own instruction. Ledger hash re-pinned; `check-threat-model` **235/235**.
+- **The ledger caught the edit before I re-pinned it** — `TM3` failed with the old hash the moment the delta changed, which is the discipline working rather than a chore.
+- Five lessons written, each with the measurement behind it; `next-steps.md` carries the two owner walks, the AC5 scope limit stated honestly, the cold-start question, the `packages/db` persist seam, the shared holder marker and the T3 remainder.
+- State: **Gate 6 — everything code-side and docs-side is done. 28 commits, PR #177 body rewritten** to carry the four defects found after the first review pass, the honest AC-coverage note, and the two owner walks still owed.
+- Next step: **the owner's Ledger walk and Cowork AC10** — both need a person. Then `/close-session`.
+- Open questions for the owner: the `packages/db` `onPersistError` seam (the artifact binding shares the blind spot); whether the ~5.8 s per-round cold start warrants a warm child before 1.0.
