@@ -64,6 +64,12 @@ const origin = typeof location === 'undefined' ? 'http://127.0.0.1:43127' : loca
  * CLI works: the plain label is what the seat has always said, and the chip corrects
  * itself a moment later when the `status` event arrives.
  */
+/**
+ * Where the brain probe's late verdict lands (D-B35). The platform is composed once and set
+ * once; this holder is what the `status` event writes so the chip's getter can see it.
+ */
+export const brainState: { current?: { state: string; detail?: string } } = {};
+
 export function brainLabel(brain: { state: string; detail?: string } | undefined): string {
   switch (brain?.state) {
     case 'logged-out':
@@ -127,7 +133,15 @@ export function composeLocalPlatform(
         ? {
             brain: {
               kind: 'host' as const,
-              label: brainLabel(status.brain),
+              // A GETTER, not a value. The probe answers after boot (it spawns the user's
+              // CLI), and the platform is set ONCE — `setPlatform` throws on a second call
+              // and on any call after `getPlatform` has been read, so a page cannot swap in
+              // a recomposed platform to update this. The chip reads `label` at render, so
+              // a getter over a mutable holder lets a late verdict reach the user without
+              // touching the singleton.
+              get label(): string {
+                return brainLabel(brainState.current ?? status.brain);
+              },
               adapter: localAdapter({ baseUrl: `${origin}/v1`, apiKey: token, model: 'claude' }),
               streaming: false,
               tools: false,

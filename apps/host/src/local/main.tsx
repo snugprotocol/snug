@@ -17,7 +17,7 @@ import { refreshAppMeta } from '@playground/state/appMeta';
 import { applyHandInEvent } from './handinEvents.js';
 import { claimTokenFromFragment, createLocalClient } from './client.js';
 import { sqlJsWasmBinary } from '../wasmBytes.js';
-import { composeLocalPlatform } from './compose-local.js';
+import { brainState, composeLocalPlatform } from './compose-local.js';
 import { LocalRefusal } from './LocalRefusal.js';
 
 import { App } from '@playground/App';
@@ -70,8 +70,12 @@ async function boot(): Promise<void> {
     if (name === 'status') {
       const brain = (data as { brain?: { state: string; detail?: string } } | undefined)?.brain;
       if (brain !== undefined) {
-        const { platform: next } = composeLocalPlatform(client, { ...status, brain }, sqlJsWasmBinary(), undefined, token);
-        setPlatform(next);
+        // Write the holder the seat's `label` getter reads — NOT a recomposed platform.
+        // `setPlatform` throws on a second call and on any call after `getPlatform` has
+        // been read (`platform.ts:432-439`): the platform is set once, before boot, and a
+        // swap here would crash the page at exactly the moment this feature exists to
+        // improve. The chip re-reads `label` when it renders.
+        brainState.current = brain;
         window.dispatchEvent(new CustomEvent('snug:brain-changed', { detail: brain }));
       }
       return;

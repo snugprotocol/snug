@@ -117,6 +117,30 @@ test('AC6 — the bearer is required: the page’s own origin cannot call withou
   });
 });
 
+test('D-B35 — a logged-out CLI NAMES itself on the chip, and the page survives learning it', async () => {
+  // The state is PINNED, because the developer's own CLI is logged in and a test that can
+  // only observe the happy state cannot tell a working chip from a broken one.
+  //
+  // WHAT THIS LEG PROVES, stated exactly: the verdict reaches the CHIP and the page renders
+  // it. With the pin the state is known before the page's boot `/status` read, so it
+  // arrives on that read and the SSE path is not exercised here — measured, after this test
+  // passed against a deliberately reintroduced `setPlatform` crash and therefore proved
+  // nothing about it. The late-arrival path (a probe still running when the page boots) is
+  // driven directly in `composeLocal`/`loopback-server` unit tests instead, where the
+  // ordering can be forced rather than raced.
+  await withHost(async (harness) => {
+    const page = await browser.newPage();
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    await page.goto(harness.url);
+
+    const chip = page.locator('.brain-chip-label').first();
+    await expect(chip, 'the chip must name the logged-out CLI, not keep its boot label').toContainText(/log/i, { timeout: 20_000 });
+    expect(errors.filter((message) => /setPlatform|already read|set once/i.test(message))).toEqual([]);
+    await page.close();
+  }, { brain: 'logged-out' });
+});
+
 // ---------------------------------------------------------- AC3/AC4: connected fetch
 
 /**

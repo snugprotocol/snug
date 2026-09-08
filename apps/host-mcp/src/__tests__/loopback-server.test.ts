@@ -79,6 +79,24 @@ describe('binding', () => {
   });
 });
 
+describe('a late subscriber still learns the brain state (D-B35)', () => {
+  it('replays the current status to a page that subscribes AFTER the probe answered', async () => {
+    // MEASURED: the probe is kicked off by `runner.start()`, before any browser exists, so
+    // its `emit` can land in ZERO subscribers and a fire-and-forget event is simply lost —
+    // the chip would keep its boot label forever. A page that arrives later must be told
+    // what is already known, so `/events` opens with the current status rather than only
+    // promising future ones.
+    await server.close();
+    await start({ store: createUserFileStore(home), brainState: () => ({ state: 'logged-out' as const, detail: 'run `/login`' }) });
+
+    const response = await call('/events');
+    const reader = response.body!.getReader();
+    const first = new TextDecoder().decode((await reader.read()).value!);
+    await reader.cancel();
+    expect(first, 'the stream must open with what is already known').toContain('logged-out');
+  });
+});
+
 describe('/oauth/callback (D-B14)', () => {
   it('serves the PAGE at the registered redirect URI, so the popup can deliver its code', async () => {
     // D-B14 puts the web popup path on this binding: the redirect URI is

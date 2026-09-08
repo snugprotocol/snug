@@ -40,6 +40,8 @@ export function resolverFromEnv(spec: string | undefined): LookupFn | undefined 
 
 export const TEST_RESOLVE_ENV = 'SNUG_MCP_TEST_RESOLVE';
 export const TEST_HOLDER_ENV = 'SNUG_MCP_TEST_HOLDER';
+/** Pins the brain probe's verdict so the e2e can see a state this machine's CLI is not in. */
+export const TEST_BRAIN_ENV = 'SNUG_MCP_TEST_BRAIN';
 
 /* c8 ignore start — the entry half, exercised by the e2e rather than by unit tests */
 if (process.env.SNUG_MCP_TEST_ENTRY === '1') {
@@ -55,6 +57,7 @@ if (process.env.SNUG_MCP_TEST_ENTRY === '1') {
   const here = nodePath.dirname(fileURLToPath(import.meta.url));
   const page = (): string => readFileSync(nodePath.join(here, 'snug-host-local.html'), 'utf8');
   const holder = process.env[TEST_HOLDER_ENV];
+  const pinnedBrain = process.env[TEST_BRAIN_ENV];
   const runner = createRunner({
     // The TEST build never gets the real home, not even on an opt-in (D-B34): this is the
     // binary the e2e spawns, and it is the one that once wrote over the owner's user file.
@@ -62,6 +65,12 @@ if (process.env.SNUG_MCP_TEST_ENTRY === '1') {
     page,
     openBrowser: async () => {},
     ...(holder !== undefined && holder !== '' ? { heldBy: () => holder } : {}),
+    // A real `claude` on the developer's machine is logged IN, so the interesting states
+    // are unreachable without a pin — and a test that can only observe the happy state
+    // cannot tell a working chip from a broken one.
+    ...(pinnedBrain !== undefined && pinnedBrain !== ''
+      ? { brainState: async () => ({ state: pinnedBrain, detail: `pinned by ${TEST_BRAIN_ENV}` }) }
+      : {}),
     proxy: createFetchProxy({ send: createNodeHttpsSend(resolverFromEnv(process.env[TEST_RESOLVE_ENV])) }),
   });
   const started = await runner.start();

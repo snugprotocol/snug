@@ -1,8 +1,8 @@
 // The local page's platform (ADR-0068 D-B14, D-B24).
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
-import { composeLocalPlatform } from '../local/compose-local.js';
+import { brainState, composeLocalPlatform } from '../local/compose-local.js';
 import type { LocalClient, LocalStatus } from '../local/client.js';
 
 const client = {
@@ -19,6 +19,11 @@ const labelOf = (brain: { kind: string } | undefined): string | undefined =>
   brain !== undefined && brain.kind === 'host' ? (brain as unknown as { label: string }).label : undefined;
 
 describe('the brain chip names what the CLI can actually do (D-B35)', () => {
+  // The holder is module state; a leak between cases would make these prove each other.
+  afterEach(() => {
+    brainState.current = undefined;
+  });
+
   it('says "Claude · your CLI" when the CLI is ready', () => {
     const { platform } = composeLocalPlatform(client, status({ brain: { state: 'ready' } }), undefined, undefined, 't');
     expect(labelOf(platform.brain)).toBe('Claude · your CLI');
@@ -40,14 +45,16 @@ describe('the brain chip names what the CLI can actually do (D-B35)', () => {
     expect(labelOf(platform.brain) ?? 'demo brain — no host brain found').toMatch(/demo|no .*brain|not found/i);
   });
 
-  it('the label is recomputed from a later status, so a probe that answers after boot corrects the chip', () => {
+  it('the label is a LIVE getter, so a probe answering after boot corrects the chip in place', () => {
     // The probe runs in the background — the kit must open even if the CLI is wedged — so
-    // the chip's first value is the boot one and the `status` event carries the answer.
-    // Composing again with the newer status is what the page does with it.
-    const before = composeLocalPlatform(client, status(), undefined, undefined, 't').platform;
-    const after = composeLocalPlatform(client, status({ brain: { state: 'logged-out' } }), undefined, undefined, 't').platform;
-    expect(labelOf(before.brain)).toBe('Claude · your CLI');
-    expect(labelOf(after.brain)).toMatch(/log/i);
+    // the chip's first value is the boot one and the `status` event carries the verdict.
+    // It CANNOT arrive by recomposing: the platform is set once and `setPlatform` throws on
+    // a second call (see localBrainEvent.test.ts), so the seat reads a holder at render.
+    const { platform } = composeLocalPlatform(client, status(), undefined, undefined, 't');
+    expect(labelOf(platform.brain)).toBe('Claude · your CLI');
+    brainState.current = { state: 'logged-out', detail: 'run `claude` and `/login`' };
+    expect(labelOf(platform.brain), 'the SAME platform object must now read the new label').toMatch(/log/i);
+    brainState.current = undefined;
   });
 
   it('does not claim the CLI is ready before the probe has answered', () => {

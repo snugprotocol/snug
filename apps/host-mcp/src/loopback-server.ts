@@ -147,6 +147,14 @@ export function createLoopbackServer(options: LoopbackServerOptions): LoopbackSe
         connection: 'keep-alive',
       });
       response.write(': open\n\n');
+      // REPLAY WHAT IS ALREADY KNOWN. The brain probe is kicked off at `runner.start()`,
+      // before any browser exists, so its emit can land in zero subscribers and a
+      // fire-and-forget event is simply lost — the chip would keep its boot label forever.
+      // A page that subscribes later is told the current state immediately.
+      const known = options.brainState?.();
+      if (known !== undefined) {
+        response.write(`event: status\ndata: ${JSON.stringify({ brain: known })}\n\n`);
+      }
       subscribers.add(response);
       request.on('close', () => subscribers.delete(response));
       return;

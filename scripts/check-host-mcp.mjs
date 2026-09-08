@@ -25,7 +25,7 @@ export const PLUGIN_DIR = path.join(REPO, 'dist/plugin');
  * and injects a resolver; the release build passes neither, and this is what proves it
  * rather than a comment claiming it.
  */
-export const FORBIDDEN_IN_RELEASE = ['SNUG_MCP_TEST_RESOLVE', 'SNUG_MCP_TEST_HOLDER'];
+export const FORBIDDEN_IN_RELEASE = ['SNUG_MCP_TEST_RESOLVE', 'SNUG_MCP_TEST_HOLDER', 'SNUG_MCP_TEST_BRAIN'];
 
 /** Every env var the process may read. Anything else is a hook or a surprise. */
 export const ALLOWED_ENV_READS = ['HOME', 'PATH', 'SHELL', 'USER', 'LANG', 'LC_ALL', 'TMPDIR', 'TERM', 'SNUG_HOME', 'NODE_EXTRA_CA_CERTS'];
