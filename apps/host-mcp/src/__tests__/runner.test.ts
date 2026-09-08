@@ -43,6 +43,15 @@ const bundle = (displayName = 'Chess', connections: unknown[] = []) => ({
   connections,
 });
 
+describe('the real-home guard (D-B34)', () => {
+  it('refuses to construct without a home, rather than defaulting to the live ~/Snug', () => {
+    // A runner built by a forgetful caller used to lock, serve and WRITE the owner's real
+    // user file. Omission is now a refusal — the only failure mode a data-loss defect may
+    // have is one that happens before anything is opened.
+    expect(() => createRunner({ page: () => 'kit' } as Parameters<typeof createRunner>[0])).toThrow(/home/i);
+  });
+});
+
 describe('starting', () => {
   it('becomes the primary and serves the page', async () => {
     const runner = make();

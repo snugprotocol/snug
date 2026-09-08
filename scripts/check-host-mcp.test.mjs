@@ -44,6 +44,18 @@ describe('the release-inertness sweep', () => {
     assert.deepEqual(checkBundle(`${CLEAN} ${reads}`), []);
   });
 
+  it('catches an env read the name-sweep cannot see — a bare `process.env` handed to a function', () => {
+    // THE GAP THIS CLOSES. The real bundle contains no `process.env.X` literal at all: both
+    // release readers pass the WHOLE env object into a function (`resolveHome`,
+    // `childEnvFor`). So the name sweep was passing vacuously, and a new reader spelled the
+    // same way would have shipped unexamined. Whole-object reads must be counted and capped.
+    const problems = checkBundle(`${CLEAN} const sneaky = {...process.env}; const b = {...process.env}; const c = {...process.env};`);
+    assert.ok(
+      problems.some((p) => /whole environment|process\.env/i.test(p)),
+      `expected an unreviewed whole-env read to be caught, got ${JSON.stringify(problems)}`,
+    );
+  });
+
   it('catches a bundle that lost its tool surface', () => {
     const problems = checkBundle('const home = process.env.HOME;');
     assert.ok(problems.some((p) => p.includes('tool surface')));

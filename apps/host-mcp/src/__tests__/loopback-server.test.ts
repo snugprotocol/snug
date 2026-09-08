@@ -21,10 +21,11 @@ let server: LoopbackServer;
 let origin: string;
 let home: string;
 
-const start = async (over: Parameters<typeof createLoopbackServer>[0] = {}): Promise<void> => {
-  // ALWAYS an isolated store. The default is the real `~/Snug`, and the first run of this
-  // file read the developer's own user file and failed the absence case — a test that can
-  // touch real data is a test that can destroy it.
+const start = async (over: Partial<Parameters<typeof createLoopbackServer>[0]> = {}): Promise<void> => {
+  // ALWAYS an isolated store — and since D-B34 there is no other kind: omitting `store`
+  // REFUSES rather than defaulting to the real `~/Snug`. The first run of this file read
+  // the developer's own user file and failed the absence case; a later test wrote 2 MiB of
+  // zeros over it. A test that can touch real data is a test that can destroy it.
   server = createLoopbackServer({ token: TOKEN, page: () => PAGE, store: createUserFileStore(home), ...over });
   const { port } = await server.listen(0);
   origin = `http://127.0.0.1:${port}`;
@@ -45,6 +46,16 @@ const call = (path: string, init: RequestInit = {}): Promise<Response> =>
     ...init,
     headers: { authorization: `Bearer ${TOKEN}`, origin, ...(init.headers as Record<string, string> | undefined) },
   });
+
+describe('the real-home guard (D-B34)', () => {
+  it('refuses to construct without a store, rather than defaulting to the live ~/Snug', () => {
+    // The incident path, closed at its narrowest point: the oversize-body test reached the
+    // owner's real user file by passing no store at all. There is now no such call.
+    // Cast: the type already refuses this call, so what is under test is the RUNTIME half
+    // of the guard — a JS caller, a stale build, an `as any`.
+    expect(() => createLoopbackServer({ token: TOKEN, page: () => PAGE } as Parameters<typeof createLoopbackServer>[0])).toThrow(/store/i);
+  });
+});
 
 describe('binding', () => {
   it('binds loopback only — never 0.0.0.0', async () => {

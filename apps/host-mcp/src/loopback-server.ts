@@ -15,7 +15,8 @@ import type { AddressInfo } from 'node:net';
 
 import { admitDataPlaneRequest } from './loopback-gates.js';
 import type { FetchProxy, ProxyRequest, ProxyResult } from './fetch-proxy.js';
-import { createUserFileStore, validUserFileName, type UserFileStore } from './userdb-fs.js';
+import { validUserFileName, type UserFileStore } from './userdb-fs.js';
+import { RealHomeRefusedError } from './home.js';
 
 /** A user file is not a provider response: the proxy's 1 MiB cap must not reach this route. */
 const MAX_USERDB_BODY_BYTES = 64 * 1024 * 1024;
@@ -29,7 +30,11 @@ export interface LoopbackServerOptions {
   /** The kit page's bytes. A function so a rebuild is picked up without a restart in dev. */
   page?: () => string;
   proxy?: Pick<FetchProxy, 'handle'>;
-  store?: UserFileStore;
+  /**
+   * Where user files live. REQUIRED (D-B34) — the default was the real `~/Snug`, and that is
+   * how a test destroyed the owner's user file.
+   */
+  store: UserFileStore;
   /** Names the other product holding the user file, when one is (D-B10). */
   heldBy?: () => string | undefined;
   /** The `claude -p` shim. Absent → `/v1/chat/completions` answers a named refusal. */
@@ -59,10 +64,16 @@ const readBody = async (request: IncomingMessage, cap: number): Promise<Buffer |
   return Buffer.concat(chunks);
 };
 
-export function createLoopbackServer(options: LoopbackServerOptions = {}): LoopbackServer {
+export function createLoopbackServer(options: LoopbackServerOptions): LoopbackServer {
   const token = options.token ?? '';
   const page = options.page ?? (() => '<!doctype html><title>Snug</title>');
-  const store = options.store ?? createUserFileStore(`${process.env.HOME ?? '.'}/Snug`);
+  // REQUIRED (D-B34). This line used to read `?? createUserFileStore(~/Snug)`, and that
+  // default is how the oversize-body test wrote 2 MiB of zeros over the owner's real user
+  // file. An omitted store is now a refusal at construction, before a listener exists.
+  const store = options.store;
+  if (store === undefined) {
+    throw new RealHomeRefusedError('createLoopbackServer needs an explicit store; it no longer defaults to the real ~/Snug (D-B34)');
+  }
   const heldBy = options.heldBy ?? (() => undefined);
 
   const subscribers = new Set<ServerResponse>();

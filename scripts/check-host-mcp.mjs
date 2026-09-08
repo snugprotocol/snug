@@ -30,6 +30,20 @@ export const FORBIDDEN_IN_RELEASE = ['SNUG_MCP_TEST_RESOLVE', 'SNUG_MCP_TEST_HOL
 /** Every env var the process may read. Anything else is a hook or a surprise. */
 export const ALLOWED_ENV_READS = ['HOME', 'PATH', 'SHELL', 'USER', 'LANG', 'LC_ALL', 'TMPDIR', 'TERM', 'SNUG_HOME', 'NODE_EXTRA_CA_CERTS'];
 
+/**
+ * How many times the release bundle may read the WHOLE environment object rather than a
+ * named variable (D-B34).
+ *
+ * The name sweep below can only see `process.env.X`, and the release bundle contains no such
+ * literal: both readers hand the entire object to a function that decides — `resolveHome`
+ * (which env names a home) and `childEnvFor` (which builds the child's env by ALLOWLIST).
+ * That is the right design in both cases, and it is exactly why the name sweep alone proved
+ * nothing. Counting the whole-object reads and pinning the count is what keeps a THIRD one
+ * from arriving unreviewed: adding a reader is fine, but it must be a deliberate edit here
+ * with a reason, not a silent pass.
+ */
+export const ALLOWED_WHOLE_ENV_READS = 2;
+
 export function checkBundle(source) {
   const problems = [];
   for (const name of FORBIDDEN_IN_RELEASE) {
@@ -42,6 +56,15 @@ export function checkBundle(source) {
   }
   for (const name of read) {
     if (!ALLOWED_ENV_READS.includes(name)) problems.push(`the bundle reads an unexpected environment variable: ${name}`);
+  }
+  // Whole-object reads: `process.env` NOT followed by a `.NAME` or `['NAME']` access. These
+  // are invisible to the sweep above, so they are counted rather than named.
+  const whole = source.match(/process\.env(?!\s*(?:\.[A-Za-z_$]|\[["'`]))/g)?.length ?? 0;
+  if (whole > ALLOWED_WHOLE_ENV_READS) {
+    problems.push(
+      `the bundle reads the whole environment ${whole} times, but only ${ALLOWED_WHOLE_ENV_READS} are declared ` +
+        '(resolveHome, childEnvFor) — a new whole-env reader must be reviewed and the count raised deliberately',
+    );
   }
   if (!source.includes('snug_status')) problems.push('the bundle does not carry the tool surface — did the entry change?');
   return problems;

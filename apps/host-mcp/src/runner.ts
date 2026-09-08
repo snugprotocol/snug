@@ -15,6 +15,7 @@ import { parseAppBundle } from '@snugprotocol/protocol';
 import { createClaudeBrain } from './brain-claude.js';
 import { createControlSocket, probeControlSocket, type ControlSocket } from './control-socket.js';
 import { createFetchProxy, type FetchProxy } from './fetch-proxy.js';
+import { RealHomeRefusedError } from './home.js';
 import { acquireLock, releaseLock, type LockDeps } from './lock.js';
 import { createLoopbackServer, type LoopbackServer } from './loopback-server.js';
 import { nodeHttpsSend } from './node-transport.js';
@@ -35,7 +36,12 @@ export interface ToolCallResult {
 }
 
 export interface RunnerOptions {
-  home?: string;
+  /**
+   * Where this runner keeps its state. REQUIRED (D-B34): it used to default to the live
+   * `~/Snug`, which is how a test destroyed the owner's user file. A caller that wants the
+   * real home resolves it deliberately with `resolveHome({ allowRealHome: true })`.
+   */
+  home: string;
   /** The kit page's bytes. */
   page: () => string;
   /** Opens a URL in the user's browser. Injected so tests never launch one. */
@@ -69,7 +75,12 @@ export interface Runner {
 const text = (value: string, isError = false): ToolCallResult => ({ content: [{ type: 'text', text: value }], ...(isError ? { isError: true } : {}) });
 
 export function createRunner(options: RunnerOptions): Runner {
-  const home = options.home ?? path.join(process.env.HOME ?? '.', 'Snug');
+  // Types stop a caller inside this repo; this stops a JS caller, a stale build and a
+  // `as any` — the guard has to hold at runtime because the failure it prevents is silent.
+  const home = options.home;
+  if (typeof home !== 'string' || home === '') {
+    throw new RealHomeRefusedError('createRunner needs an explicit home; it no longer defaults to the real ~/Snug (D-B34)');
+  }
   const hostDir = path.join(home, 'host');
   const graceMs = options.graceMs ?? 3_000;
 

@@ -41,12 +41,15 @@ if (process.env.SNUG_MCP_TEST_ENTRY === '1') {
   const { fileURLToPath } = await import('node:url');
   const { createFetchProxy } = await import('./fetch-proxy.js');
   const { createNodeHttpsSend } = await import('./node-transport.js');
+  const { resolveHome } = await import('./home.js');
 
   const here = nodePath.dirname(fileURLToPath(import.meta.url));
   const page = (): string => readFileSync(nodePath.join(here, 'snug-host-local.html'), 'utf8');
   const holder = process.env[TEST_HOLDER_ENV];
   const runner = createRunner({
-    home: process.env.SNUG_HOME ?? nodePath.join(process.env.HOME ?? '.', 'Snug'),
+    // The TEST build never gets the real home, not even on an opt-in (D-B34): this is the
+    // binary the e2e spawns, and it is the one that once wrote over the owner's user file.
+    home: resolveHome(),
     page,
     openBrowser: async () => {},
     ...(holder !== undefined && holder !== '' ? { heldBy: () => holder } : {}),

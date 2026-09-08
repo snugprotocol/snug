@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 
 import { createMcpServer } from './mcp/server.js';
 import { createRunner } from './runner.js';
+import { resolveHome } from './home.js';
 import { probeControlSocket } from './control-socket.js';
 import { watchParent } from './parent-watch.js';
 import { detectHolder } from './holder.js';
@@ -45,7 +46,8 @@ async function openBrowser(url: string): Promise<void> {
 }
 
 async function runCli(command: string): Promise<number> {
-  const home = process.env.SNUG_HOME ?? path.join(process.env.HOME ?? '.', 'Snug');
+  // The shipped process is the ONE caller that may reach the user's real home (D-B34).
+  const home = resolveHome({ allowRealHome: true });
   const socket = path.join(home, 'host', 'ctl.sock');
   const answer = await probeControlSocket(socket);
   if (answer === undefined) {
@@ -85,7 +87,7 @@ async function main(): Promise<void> {
     process.exit(await runCli(command));
   }
 
-  const home = process.env.SNUG_HOME ?? path.join(process.env.HOME ?? '.', 'Snug');
+  const home = resolveHome({ allowRealHome: true });
   const runner = createRunner({ home, page: readPage, openBrowser, heldBy: detectHolder });
   await runner.start();
 
