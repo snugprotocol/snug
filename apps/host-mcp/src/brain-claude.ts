@@ -256,3 +256,76 @@ export function createClaudeBrain(deps: BrainDeps = {}): Brain {
     },
   };
 }
+
+// ------------------------------------------------------- the readiness probe (D-B35)
+
+/**
+ * What the user's own CLI can actually do, decided at boot rather than at the first think.
+ *
+ * WHY. The owner's walk on 2026-09-08 found the CLI logged out. The child answered
+ * `Not logged in · Please run /login`, which reached the page as a generic HTTP 502 the
+ * first time the user asked an app to think — no remedy, no hint that the BRAIN was the
+ * problem rather than the app. A chip reading "Claude · your CLI" while the CLI cannot
+ * answer is a promise the product does not keep.
+ *
+ * `ready` — the CLI answered. `logged-out` — it is installed but has no session; the
+ * remedy is `claude` then `/login`. `absent` — no binary on PATH; the page falls back to
+ * the demo brain, which is a different story with a different remedy, so conflating the two
+ * would send the user to log into a CLI they do not have. `unknown` — it answered
+ * something unreadable; the honest state, and never reported as ready.
+ */
+export type BrainState = 'ready' | 'logged-out' | 'absent' | 'unknown';
+
+export interface BrainReadiness {
+  state: BrainState;
+  /** One sentence for the chip: what is wrong and what to do. Never a stack trace. */
+  detail?: string;
+}
+
+/**
+ * MEASURED 2026-09-08 against CLI 2.1.211: a logged-out `claude -p` returns
+ * `is_error: true`, `result: "Not logged in · Please run /login"`, `duration_api_ms: 0` and
+ * `total_cost_usd: 0` — it fails before any API call. So probing down the REAL path costs
+ * nothing in the case that matters, and proves what `--version` cannot: that the brain can
+ * actually answer, not merely that a binary exists.
+ */
+const PROBE_PROMPT = 'ok';
+
+export async function probeBrain(deps: BrainDeps = {}): Promise<BrainReadiness> {
+  const binary = deps.binary ?? 'claude';
+  const run = deps.run ?? spawnClaude(binary);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), deps.timeoutMs ?? 20_000);
+  timer.unref?.();
+
+  try {
+    const stdout = await run(
+      buildClaudeArgs({ system: 'Answer with the single word ok.' }),
+      childEnvFor(process.env),
+      PROBE_PROMPT,
+      controller.signal,
+    );
+    try {
+      parseClaudeOutput(stdout);
+      return { state: 'ready' };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      // The CLI's own words carry the remedy ("Please run /login"), so they are passed
+      // through rather than replaced with a sentence of ours that says less.
+      if (/not logged in|\/login|authenticat/i.test(message)) {
+        return { state: 'logged-out', detail: `Your Claude CLI is not logged in — run \`claude\` and \`/login\`, then reopen Snug. (${message})` };
+      }
+      return { state: 'unknown', detail: message };
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (controller.signal.aborted) return { state: 'unknown', detail: 'your Claude CLI did not answer the startup check in time' };
+    // A missing binary is not a logged-out one.
+    if (/ENOENT|could not start/i.test(message)) {
+      return { state: 'absent', detail: 'No `claude` CLI found on PATH — Snug is using its demo brain.' };
+    }
+    return { state: 'unknown', detail: message };
+  } finally {
+    clearTimeout(timer);
+  }
+}

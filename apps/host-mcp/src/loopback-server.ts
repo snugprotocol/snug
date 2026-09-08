@@ -37,6 +37,12 @@ export interface LoopbackServerOptions {
   store: UserFileStore;
   /** Names the other product holding the user file, when one is (D-B10). */
   heldBy?: () => string | undefined;
+  /**
+   * What the user's own CLI can do, probed at boot (D-B35). Reported on `/status` so the
+   * page's brain chip can NAME a logged-out or missing CLI, rather than letting it surface
+   * as a generic 502 at the first think with no remedy shown.
+   */
+  brainState?: () => { state: string; detail?: string } | undefined;
   /** The `claude -p` shim. Absent → `/v1/chat/completions` answers a named refusal. */
   brain?: { complete(request: { messages: Array<{ role: string; content: string | Array<{ type?: string; text?: string }> }>; model?: string }): Promise<string> };
 }
@@ -115,11 +121,13 @@ export function createLoopbackServer(options: LoopbackServerOptions): LoopbackSe
 
     if (path === '/status') {
       const held = heldBy();
+      const brain = options.brainState?.();
       json(response, 200, {
         binding: 'local-host',
         port: boundPort,
         pages: subscribers.size,
         ...(held !== undefined ? { heldBy: held } : {}),
+        ...(brain !== undefined ? { brain } : {}),
       });
       return;
     }

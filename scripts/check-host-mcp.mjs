@@ -38,11 +38,18 @@ export const ALLOWED_ENV_READS = ['HOME', 'PATH', 'SHELL', 'USER', 'LANG', 'LC_A
  * literal: both readers hand the entire object to a function that decides — `resolveHome`
  * (which env names a home) and `childEnvFor` (which builds the child's env by ALLOWLIST).
  * That is the right design in both cases, and it is exactly why the name sweep alone proved
- * nothing. Counting the whole-object reads and pinning the count is what keeps a THIRD one
+ * nothing. Counting the whole-object reads and pinning the count is what keeps a further one
  * from arriving unreviewed: adding a reader is fine, but it must be a deliberate edit here
  * with a reason, not a silent pass.
+ *
+ * The declared three (raise this ONLY with a reason, and only after checking the new reader
+ * cannot leak the parent's environment to a child):
+ *   1. `resolveHome`            — reads which env names a home (D-B34).
+ *   2. `createClaudeBrain`      — `childEnvFor(process.env)`, the child env by ALLOWLIST.
+ *   3. `probeBrain`             — the same allowlist, for the boot readiness probe (D-B35).
+ * This gate caught #3 the moment it was written, which is the review working.
  */
-export const ALLOWED_WHOLE_ENV_READS = 2;
+export const ALLOWED_WHOLE_ENV_READS = 3;
 
 export function checkBundle(source) {
   const problems = [];
@@ -63,7 +70,7 @@ export function checkBundle(source) {
   if (whole > ALLOWED_WHOLE_ENV_READS) {
     problems.push(
       `the bundle reads the whole environment ${whole} times, but only ${ALLOWED_WHOLE_ENV_READS} are declared ` +
-        '(resolveHome, childEnvFor) — a new whole-env reader must be reviewed and the count raised deliberately',
+        '(resolveHome, childEnvFor, probeBrain) — a new whole-env reader must be reviewed and the count raised deliberately',
     );
   }
   if (!source.includes('snug_status')) problems.push('the bundle does not carry the tool surface — did the entry change?');

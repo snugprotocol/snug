@@ -113,6 +113,21 @@ describe('/status', () => {
   it('never includes the bearer', async () => {
     expect(await (await call('/status')).text()).not.toContain(TOKEN);
   });
+
+  it('reports the BRAIN’s state, so the page can name it instead of failing at the first think (D-B35)', async () => {
+    await server.close();
+    await start({ store: createUserFileStore(home), brainState: () => ({ state: 'logged-out' as const, detail: 'run `claude` and `/login`' }) });
+    const body = (await (await call('/status')).json()) as { brain?: { state: string; detail?: string } };
+    expect(body.brain?.state).toBe('logged-out');
+    expect(body.brain?.detail).toMatch(/login/i);
+  });
+
+  it('reports a ready brain plainly', async () => {
+    await server.close();
+    await start({ store: createUserFileStore(home), brainState: () => ({ state: 'ready' as const }) });
+    const body = (await (await call('/status')).json()) as { brain?: { state: string } };
+    expect(body.brain?.state).toBe('ready');
+  });
 });
 
 describe('/fetch', () => {

@@ -53,6 +53,31 @@ export function createLocalCustodyStore(initial: CustodyState = { dirty: false, 
 
 const origin = typeof location === 'undefined' ? 'http://127.0.0.1:43127' : location.origin;
 
+/**
+ * What the brain chip says (D-B35).
+ *
+ * The owner's walk found a logged-out CLI surfacing as a bare HTTP 502 the first time an
+ * app tried to think — no remedy, and no sign that the BRAIN was the problem rather than
+ * the app. The chip is where that belongs, before the user asks for anything.
+ *
+ * An absent `brain` means the probe has not answered yet, which is NOT a claim that the
+ * CLI works: the plain label is what the seat has always said, and the chip corrects
+ * itself a moment later when the `status` event arrives.
+ */
+export function brainLabel(brain: { state: string; detail?: string } | undefined): string {
+  switch (brain?.state) {
+    case 'logged-out':
+      // The remedy IS the label: a chip that only says "unavailable" makes the user hunt.
+      return 'Claude · your CLI — not logged in, run `claude` then `/login`';
+    case 'absent':
+      return 'demo brain — no host brain found';
+    case 'unknown':
+      return 'Claude · your CLI — could not check';
+    default:
+      return 'Claude · your CLI';
+  }
+}
+
 export function composeLocalPlatform(
   client: LocalClient,
   status: LocalStatus,
@@ -102,7 +127,7 @@ export function composeLocalPlatform(
         ? {
             brain: {
               kind: 'host' as const,
-              label: 'Claude · your CLI',
+              label: brainLabel(status.brain),
               adapter: localAdapter({ baseUrl: `${origin}/v1`, apiKey: token, model: 'claude' }),
               streaming: false,
               tools: false,

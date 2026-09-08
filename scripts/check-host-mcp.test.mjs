@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 
-import { ALLOWED_ENV_READS, checkBundle, checkInstructions, checkPluginTree, FORBIDDEN_IN_RELEASE } from './check-host-mcp.mjs';
+import { ALLOWED_ENV_READS, ALLOWED_WHOLE_ENV_READS, checkBundle, checkInstructions, checkPluginTree, FORBIDDEN_IN_RELEASE } from './check-host-mcp.mjs';
 import { claudeMcpConfig, claudePluginManifest, marketplaceManifest } from './lib/plugin-manifests.mjs';
 
 const CLEAN = `const home = process.env.HOME; const t = process.env.TMPDIR; export const tools = ['snug_status'];`;
@@ -49,7 +49,8 @@ describe('the release-inertness sweep', () => {
     // release readers pass the WHOLE env object into a function (`resolveHome`,
     // `childEnvFor`). So the name sweep was passing vacuously, and a new reader spelled the
     // same way would have shipped unexamined. Whole-object reads must be counted and capped.
-    const problems = checkBundle(`${CLEAN} const sneaky = {...process.env}; const b = {...process.env}; const c = {...process.env};`);
+    const reads = Array.from({ length: ALLOWED_WHOLE_ENV_READS + 1 }, () => '{...process.env}').join(';');
+    const problems = checkBundle(`${CLEAN} ${reads};`);
     assert.ok(
       problems.some((p) => /whole environment|process\.env/i.test(p)),
       `expected an unreviewed whole-env read to be caught, got ${JSON.stringify(problems)}`,

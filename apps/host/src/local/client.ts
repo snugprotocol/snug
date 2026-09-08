@@ -24,6 +24,12 @@ export interface LocalStatus {
   port: number;
   pages: number;
   heldBy?: string;
+  /**
+   * What the user's own `claude` CLI can do, probed by the process at boot (D-B35).
+   * ABSENT until the probe answers — the page must read that as "not known yet" rather
+   * than as a claim either way.
+   */
+  brain?: { state: string; detail?: string };
 }
 
 /**

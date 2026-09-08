@@ -19,7 +19,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { buildClaudeArgs, childEnvFor, CHILD_ENV_ALLOWLIST, completionToSseBody, createClaudeBrain, parseClaudeOutput, SHIM_TIMEOUT_MS, splitChatRequest } from '../brain-claude.js';
+import { buildClaudeArgs, childEnvFor, CHILD_ENV_ALLOWLIST, completionToSseBody, createClaudeBrain, parseClaudeOutput, SHIM_TIMEOUT_MS, splitChatRequest, probeBrain } from '../brain-claude.js';
 
 /** The names measured in a live Claude Code session — none may reach the child. */
 const MEASURED_INHERITED = [
@@ -242,5 +242,56 @@ describe('the brain end to end, with a fake CLI', () => {
   it('surfaces a CLI that could not start, with its reason', async () => {
     const brain = createClaudeBrain({ run: async () => { throw new Error('could not start claude: ENOENT'); } });
     await expect(brain.complete({ messages: [{ role: 'user', content: 'x' }] })).rejects.toThrow(/ENOENT/);
+  });
+});
+
+// ------------------------------------------------------- the readiness probe (D-B35)
+
+describe('probeBrain — is the user’s CLI actually able to answer?', () => {
+  // WHY THIS EXISTS. The owner's walk found the CLI logged out: the child answered
+  // `Not logged in · Please run /login`, which reached the page as a generic HTTP 502 at
+  // the FIRST THINK, with no remedy shown and no hint that the brain was the problem. A
+  // brain chip that says "Claude · your CLI" while the CLI cannot answer is a lie the user
+  // pays for with a confusing failure — so the state is probed at boot and named.
+
+  it('reports ready when the CLI answers normally', async () => {
+    const state = await probeBrain({ run: async () => JSON.stringify({ is_error: false, result: 'ok' }) });
+    expect(state).toMatchObject({ state: 'ready' });
+  });
+
+  it('names a LOGGED-OUT cli, with the remedy — the exact string the owner’s walk hit', async () => {
+    // Measured 2026-09-08 against the real CLI, not invented.
+    const state = await probeBrain({
+      run: async () => JSON.stringify({ is_error: true, result: 'Not logged in · Please run /login' }),
+    });
+    expect(state.state).toBe('logged-out');
+    // The remedy must be in the words the user reads, not only in a log.
+    expect(state.detail).toMatch(/login/i);
+  });
+
+  it('names a MISSING binary rather than reporting a logged-out CLI', async () => {
+    // A machine with no `claude` at all is a different story with a different remedy, and
+    // conflating the two sends the user to run /login on a CLI they do not have.
+    const state = await probeBrain({ run: async () => { throw new Error('could not start claude: ENOENT'); } });
+    expect(state.state).toBe('absent');
+  });
+
+  it('does not spend the user’s quota — the logged-out answer costs nothing', async () => {
+    // MEASURED 2026-09-08 against the real CLI: a logged-out `claude -p` returns
+    // `duration_api_ms: 0` and `total_cost_usd: 0` — it fails BEFORE any API call. So the
+    // probe can use the real code path (the only thing that proves the brain can actually
+    // answer) without spending anything when it is going to fail, and a logged-IN CLI pays
+    // for one trivial prompt once per boot.
+    const calls: string[][] = [];
+    await probeBrain({ run: async (args) => { calls.push(args); return JSON.stringify({ is_error: false, result: 'ok' }); } });
+    // The probe must run the SAME shape the brain does — a probe down a different path
+    // proves the wrong thing — and must carry no tools.
+    expect(calls[0]).toContain('-p');
+    expect(calls[0]).toEqual(expect.arrayContaining(['--tools', '']));
+  });
+
+  it('treats an unreadable answer as unknown rather than claiming the brain is ready', async () => {
+    const state = await probeBrain({ run: async () => 'not json at all' });
+    expect(state.state).not.toBe('ready');
   });
 });

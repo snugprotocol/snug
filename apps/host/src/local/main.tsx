@@ -62,6 +62,20 @@ async function boot(): Promise<void> {
   // APPLIED (not merely noticed), and the surfaces are told — the hub reads its library once
   // at mount, so without that an arriving app is invisible until a reload.
   client.events((name, data) => {
+    // The brain probe answers AFTER boot (it spawns the user's CLI, and a wedged one must
+    // not hold the kit shut), so its verdict arrives here. Recomposing the platform is what
+    // turns "Claude · your CLI" into the sentence naming a logged-out or missing CLI —
+    // without this the chip keeps its boot value and the user meets the failure at the
+    // first think instead, which is the gap the owner's walk found (D-B35).
+    if (name === 'status') {
+      const brain = (data as { brain?: { state: string; detail?: string } } | undefined)?.brain;
+      if (brain !== undefined) {
+        const { platform: next } = composeLocalPlatform(client, { ...status, brain }, sqlJsWasmBinary(), undefined, token);
+        setPlatform(next);
+        window.dispatchEvent(new CustomEvent('snug:brain-changed', { detail: brain }));
+      }
+      return;
+    }
     if (name !== 'hand-in') return;
     void applyHandInEvent(data as { bundle: unknown }, {
       getDb: getUserDb,

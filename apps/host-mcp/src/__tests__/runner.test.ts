@@ -70,6 +70,26 @@ describe('starting', () => {
   });
 });
 
+describe('the brain readiness probe (D-B35)', () => {
+  it('probes at boot and reports the state on /status — not at the first think', async () => {
+    // The owner's walk hit a logged-out CLI as a bare 502 the first time an app thought.
+    // Probing at boot is what lets the page name it before the user asks for anything.
+    const runner = make({ brainState: async () => ({ state: 'logged-out' as const, detail: 'run `claude` and `/login`' }) });
+    const { port } = await runner.start();
+    const status = (await (await fetch(`http://127.0.0.1:${port}/status`, {
+      headers: { authorization: `Bearer ${new URL(runner.launchUrl()).hash.replace('#token=', '')}` },
+    })).json()) as { brain?: { state: string } };
+    expect(status.brain?.state).toBe('logged-out');
+  });
+
+  it('a brain probe that throws does not stop the runner from starting', async () => {
+    // The kit must open even when the brain cannot be reached: an app that only stores
+    // data still works, and a page that refuses to boot teaches the user nothing.
+    const runner = make({ brainState: async () => { throw new Error('probe blew up'); } });
+    await expect(runner.start()).resolves.toMatchObject({ role: 'primary' });
+  });
+});
+
 describe('two sessions, one Snug (D-B9)', () => {
   it('the second attaches to the first rather than spawning a rival', async () => {
     const first = make();

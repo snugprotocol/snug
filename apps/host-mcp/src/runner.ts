@@ -58,6 +58,12 @@ export interface RunnerOptions {
   proxy?: { handle: FetchProxy['handle'] };
   /** The brain, injected in tests so no CLI is ever spawned. */
   brain?: { complete(request: never): Promise<string> };
+  /**
+   * The boot-time brain probe (D-B35). Injected so tests never spawn a CLI. Its answer is
+   * reported on `/status` and named by the page's chip, so a logged-out or missing CLI is
+   * a sentence the user can act on rather than a 502 at the first think.
+   */
+  brainState?: () => Promise<{ state: string; detail?: string }>;
   /** How long after the last session leaves before exiting. */
   graceMs?: number;
 }
@@ -94,6 +100,9 @@ export function createRunner(options: RunnerOptions): Runner {
   let port = 0;
   let role: 'primary' | 'attached' = 'primary';
   let graceTimer: ReturnType<typeof setTimeout> | undefined;
+  // Undefined until the probe answers; `/status` simply omits the field until then, which
+  // the page reads as "not known yet" rather than as a claim either way.
+  let brainReadiness: { state: string; detail?: string } | undefined;
 
   const socketPath = path.join(hostDir, 'ctl.sock');
   const url = (): string => `http://127.0.0.1:${port}/#token=${token}`;
@@ -138,6 +147,7 @@ export function createRunner(options: RunnerOptions): Runner {
         page: options.page,
         proxy: options.proxy ?? createFetchProxy({ send: nodeHttpsSend }),
         store,
+        brainState: () => brainReadiness,
         ...(options.heldBy !== undefined ? { heldBy: options.heldBy } : {}),
         // The user's OWN CLI, on their own subscription (D5). Absent binary → the route
         // answers a named refusal and the page falls back to the demo brain.
@@ -172,6 +182,19 @@ export function createRunner(options: RunnerOptions): Runner {
         },
       });
       await control.listen(socketPath);
+
+      // The probe runs in the BACKGROUND: it spawns the user's CLI, and a slow or wedged
+      // one must not hold up the kit opening. A page that cannot boot teaches nothing; a
+      // chip that fills in a moment later teaches the user exactly what is wrong.
+      const probe = options.brainState ?? (async () => (await import('./brain-claude.js')).probeBrain());
+      void probe().then(
+        (state) => {
+          brainReadiness = state;
+          server?.emit('status', { brain: state });
+        },
+        // A probe that throws leaves the state unknown rather than taking the runner down.
+        () => {},
+      );
 
       return { role, port, url: url() };
     },

@@ -14,6 +14,46 @@ const client = {
 
 const status = (over: Partial<LocalStatus> = {}): LocalStatus => ({ binding: 'local-host', port: 43127, pages: 1, ...over });
 
+describe('the brain chip names what the CLI can actually do (D-B35)', () => {
+  it('says "Claude · your CLI" when the CLI is ready', () => {
+    const { platform } = composeLocalPlatform(client, status({ brain: { state: 'ready' } }), undefined, undefined, 't');
+    expect(platform.brain?.label).toBe('Claude · your CLI');
+  });
+
+  it('NAMES a logged-out CLI on the chip, with the remedy', () => {
+    // The owner's walk: a logged-out CLI surfaced as a bare HTTP 502 at the first think,
+    // with no remedy and no sign the brain was the problem. The chip must say so before
+    // the user asks an app to think.
+    const { platform } = composeLocalPlatform(client, status({ brain: { state: 'logged-out', detail: 'run `claude` and `/login`' } }), undefined, undefined, 't');
+    expect(platform.brain?.label).toMatch(/log/i);
+    expect(platform.brain?.label).not.toBe('Claude · your CLI');
+  });
+
+  it('falls back to the demo brain’s wording when no CLI is installed', () => {
+    // A machine with no `claude` gets a different sentence: telling that user to /login
+    // sends them to a CLI they do not have.
+    const { platform } = composeLocalPlatform(client, status({ brain: { state: 'absent' } }), undefined, undefined, 't');
+    expect(platform.brain?.label ?? 'demo brain — no host brain found').toMatch(/demo|no .*brain|not found/i);
+  });
+
+  it('the label is recomputed from a later status, so a probe that answers after boot corrects the chip', () => {
+    // The probe runs in the background — the kit must open even if the CLI is wedged — so
+    // the chip's first value is the boot one and the `status` event carries the answer.
+    // Composing again with the newer status is what the page does with it.
+    const before = composeLocalPlatform(client, status(), undefined, undefined, 't').platform;
+    const after = composeLocalPlatform(client, status({ brain: { state: 'logged-out' } }), undefined, undefined, 't').platform;
+    expect(before.brain?.label).toBe('Claude · your CLI');
+    expect(after.brain?.label).toMatch(/log/i);
+  });
+
+  it('does not claim the CLI is ready before the probe has answered', () => {
+    // `/status` omits `brain` until the probe returns. Reporting "ready" during that
+    // window would be a guess that is wrong exactly when it matters.
+    const { platform } = composeLocalPlatform(client, status(), undefined, undefined, 't');
+    expect(platform.brain?.label).not.toMatch(/logged out/i);
+  });
+});
+
 describe('the platform this binding carries', () => {
   it('turns connections ON — the one binding with connected apps', () => {
     // RunView keys its net handler on this, so host-ready.net becomes true structurally.
