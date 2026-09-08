@@ -20,7 +20,14 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 
 /** The kit page ships beside the bundle; read lazily so a rebuild needs no restart. */
 function readPage(): string {
-  for (const candidate of ['snug-host-local.html', '../dist-local/snug-host-local.html']) {
+  // Two homes, in order of how the process is actually run:
+  //   1. beside the bundle — how the PLUGIN ships it (build-plugin.mjs puts them together);
+  //   2. the sibling app's build output — how a developer runs `dist/snug-mcp.mjs` straight
+  //      out of the repo, where nothing has copied the page anywhere.
+  // The second path is relative to `apps/host-mcp/dist/`, so it climbs TWO levels, not one.
+  // Getting that wrong is silent: the process serves its placeholder and looks like it
+  // booted fine, which is exactly how it was found.
+  for (const candidate of ['snug-host-local.html', '../../host/dist-local/snug-host-local.html']) {
     try {
       return readFileSync(path.join(here, candidate), 'utf8');
     } catch {

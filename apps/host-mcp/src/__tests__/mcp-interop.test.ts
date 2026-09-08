@@ -11,13 +11,14 @@
 // a source-level test).
 
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const BUNDLE = path.resolve(here, '../../dist/snug-mcp.mjs');
@@ -30,9 +31,26 @@ if (!built) {
   console.warn(`[mcp-interop] ${BUNDLE} is missing — run \`pnpm --filter host-mcp build\` first`);
 }
 
+/**
+ * An ISOLATED home for every spawn. Without it these tests inherit the developer's real
+ * `~/Snug` — where a runner they started by hand already holds the lock, so the process
+ * exits at boot and every case fails as "Connection closed", pointing nowhere near the
+ * cause. A test that can collide with a real running product is a test that will.
+ */
+function isolatedEnv(): Record<string, string> {
+  const home = mkdtempSync(path.join(tmpdir(), 'snug-interop-'));
+  homes.push(home);
+  return { ...process.env, SNUG_HOME: home } as Record<string, string>;
+}
+
+const homes: string[] = [];
+afterAll(() => {
+  for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true });
+});
+
 async function connected(): Promise<Client> {
   const client = new Client({ name: 'interop-test', version: '0.0.0' });
-  await client.connect(new StdioClientTransport({ command: process.execPath, args: [BUNDLE] }));
+  await client.connect(new StdioClientTransport({ command: process.execPath, args: [BUNDLE], env: isolatedEnv() }));
   return client;
 }
 
@@ -83,7 +101,7 @@ describeBuilt('the official MCP client against the shipped bundle', () => {
 
 describeBuilt('lifecycle', () => {
   it('exits when its stdin closes — the host closing the pipe is how a session ends', async () => {
-    const child = spawn(process.execPath, [BUNDLE], { stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, [BUNDLE], { stdio: ['pipe', 'pipe', 'pipe'], env: isolatedEnv() });
     const exited = new Promise<number | null>((resolve) => child.on('exit', (code) => resolve(code)));
     child.stdin.end();
     const code = await Promise.race([exited, new Promise<'timeout'>((r) => setTimeout(() => r('timeout'), 10_000))]);
@@ -94,7 +112,7 @@ describeBuilt('lifecycle', () => {
   it('writes nothing to stdout before it is spoken to — stdout is the transport', async () => {
     // A banner or a log line on stdout corrupts the JSON-RPC stream; diagnostics belong on
     // stderr. This is the cheapest test that catches a stray console.log in the entry.
-    const child = spawn(process.execPath, [BUNDLE], { stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, [BUNDLE], { stdio: ['pipe', 'pipe', 'pipe'], env: isolatedEnv() });
     let out = '';
     child.stdout.on('data', (c: Buffer) => (out += c.toString()));
     await new Promise((r) => setTimeout(r, 700));

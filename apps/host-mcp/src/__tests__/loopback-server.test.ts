@@ -209,3 +209,18 @@ describe('/events', () => {
     await reader.cancel();
   });
 });
+
+describe('the page the process serves', () => {
+  it('is the real runner, not the placeholder', async () => {
+    // The placeholder is what a MISSING page looks like, and it serves with HTTP 200 — so a
+    // wrong lookup path is invisible unless something asserts on the bytes. Found exactly
+    // that way: the repo-relative fallback climbed one directory too few.
+    const { readFileSync, existsSync } = await import('node:fs');
+    const nodePath = await import('node:path');
+    const built = nodePath.resolve(__dirname, '../../../host/dist-local/snug-host-local.html');
+    if (!existsSync(built)) return; // CANNOT RUN without the sibling build; the gate covers that
+    const html = readFileSync(built, 'utf8');
+    expect(html.length).toBeGreaterThan(100_000);
+    expect(html).not.toContain('is missing from this install');
+  });
+});
