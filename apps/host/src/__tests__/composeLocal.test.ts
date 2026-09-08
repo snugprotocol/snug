@@ -14,10 +14,14 @@ const client = {
 
 const status = (over: Partial<LocalStatus> = {}): LocalStatus => ({ binding: 'local-host', port: 43127, pages: 1, ...over });
 
+/** `PlatformBrain` is a union and only its `host` arm carries a label — narrow, don't cast. */
+const labelOf = (brain: { kind: string } | undefined): string | undefined =>
+  brain !== undefined && brain.kind === 'host' ? (brain as unknown as { label: string }).label : undefined;
+
 describe('the brain chip names what the CLI can actually do (D-B35)', () => {
   it('says "Claude · your CLI" when the CLI is ready', () => {
     const { platform } = composeLocalPlatform(client, status({ brain: { state: 'ready' } }), undefined, undefined, 't');
-    expect(platform.brain?.label).toBe('Claude · your CLI');
+    expect(labelOf(platform.brain)).toBe('Claude · your CLI');
   });
 
   it('NAMES a logged-out CLI on the chip, with the remedy', () => {
@@ -25,15 +29,15 @@ describe('the brain chip names what the CLI can actually do (D-B35)', () => {
     // with no remedy and no sign the brain was the problem. The chip must say so before
     // the user asks an app to think.
     const { platform } = composeLocalPlatform(client, status({ brain: { state: 'logged-out', detail: 'run `claude` and `/login`' } }), undefined, undefined, 't');
-    expect(platform.brain?.label).toMatch(/log/i);
-    expect(platform.brain?.label).not.toBe('Claude · your CLI');
+    expect(labelOf(platform.brain)).toMatch(/log/i);
+    expect(labelOf(platform.brain)).not.toBe('Claude · your CLI');
   });
 
   it('falls back to the demo brain’s wording when no CLI is installed', () => {
     // A machine with no `claude` gets a different sentence: telling that user to /login
     // sends them to a CLI they do not have.
     const { platform } = composeLocalPlatform(client, status({ brain: { state: 'absent' } }), undefined, undefined, 't');
-    expect(platform.brain?.label ?? 'demo brain — no host brain found').toMatch(/demo|no .*brain|not found/i);
+    expect(labelOf(platform.brain) ?? 'demo brain — no host brain found').toMatch(/demo|no .*brain|not found/i);
   });
 
   it('the label is recomputed from a later status, so a probe that answers after boot corrects the chip', () => {
@@ -42,15 +46,15 @@ describe('the brain chip names what the CLI can actually do (D-B35)', () => {
     // Composing again with the newer status is what the page does with it.
     const before = composeLocalPlatform(client, status(), undefined, undefined, 't').platform;
     const after = composeLocalPlatform(client, status({ brain: { state: 'logged-out' } }), undefined, undefined, 't').platform;
-    expect(before.brain?.label).toBe('Claude · your CLI');
-    expect(after.brain?.label).toMatch(/log/i);
+    expect(labelOf(before.brain)).toBe('Claude · your CLI');
+    expect(labelOf(after.brain)).toMatch(/log/i);
   });
 
   it('does not claim the CLI is ready before the probe has answered', () => {
     // `/status` omits `brain` until the probe returns. Reporting "ready" during that
     // window would be a guess that is wrong exactly when it matters.
     const { platform } = composeLocalPlatform(client, status(), undefined, undefined, 't');
-    expect(platform.brain?.label).not.toMatch(/logged out/i);
+    expect(labelOf(platform.brain)).not.toMatch(/logged out/i);
   });
 });
 

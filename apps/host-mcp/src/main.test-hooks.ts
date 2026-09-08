@@ -19,13 +19,22 @@ export function resolverFromEnv(spec: string | undefined): LookupFn | undefined 
     const [host, ip] = entry.split('=');
     if (host !== undefined && ip !== undefined) table.set(host.trim(), ip.trim());
   }
-  return ((hostname: string, _options: unknown, callback: (err: Error | null, address: string, family: number) => void) => {
+  return ((hostname: string, options: { all?: boolean } | undefined, callback: (err: Error | null, address: unknown, family?: number) => void) => {
     const mapped = table.get(hostname);
-    if (mapped !== undefined) {
-      callback(null, mapped, 4);
+    if (mapped === undefined) {
+      callback(new Error(`no test mapping for ${hostname}`), '', 4);
       return;
     }
-    callback(new Error(`no test mapping for ${hostname}`), '', 4);
+    // NODE'S ACTUAL CONTRACT. `node:https` calls a custom lookup with `{ all: true }` and
+    // expects an ARRAY of `{address, family}`. Answering with a bare string made every
+    // request through the test build fail as `Invalid IP address: undefined` — which is
+    // why the AC3/AC4 legs could not reach the stub. Both forms are answered because the
+    // single-address form is still the documented one when `all` is not set.
+    if (options?.all === true) {
+      callback(null, [{ address: mapped, family: 4 }]);
+      return;
+    }
+    callback(null, mapped, 4);
   }) as unknown as LookupFn;
 }
 

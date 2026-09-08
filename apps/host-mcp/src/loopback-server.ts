@@ -103,7 +103,15 @@ export function createLoopbackServer(options: LoopbackServerOptions): LoopbackSe
     const path = url.pathname;
 
     // The document, open by construction (see the header note).
-    if (path === '/' && request.method === 'GET') {
+    //
+    // `/oauth/callback` serves the SAME document (D-B14). The web popup path makes the
+    // registered redirect URI `${origin}/oauth/callback` — a PATH, not a hash route
+    // (connectionWizard.ts:2351) — so the provider sends the user's browser here and the
+    // page's own HashRouter takes over once it loads, delivering the code over
+    // BroadcastChannel. It is open for the same reason `/` is, and for one more: the
+    // redirect arrives carrying only what the PROVIDER put in the query, so there is no
+    // bearer to present and gating it would 401 every real callback.
+    if ((path === '/' || path === '/oauth/callback') && request.method === 'GET') {
       end(response, 200, page(), { 'content-type': 'text/html; charset=utf-8' });
       return;
     }

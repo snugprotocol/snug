@@ -79,6 +79,27 @@ describe('binding', () => {
   });
 });
 
+describe('/oauth/callback (D-B14)', () => {
+  it('serves the PAGE at the registered redirect URI, so the popup can deliver its code', async () => {
+    // D-B14 puts the web popup path on this binding: the redirect URI is
+    // `${origin}/oauth/callback` — a PATH, not a hash route (connectionWizard.ts:2351) —
+    // and the provider sends the user's browser there. Without this route the process
+    // 404s the popup and every OAuth connection dies at the last step. The page's own
+    // HashRouter takes over once the document loads.
+    const response = await fetch(`${origin}/oauth/callback?code=abc&state=xyz`);
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toMatch(/text\/html/);
+    expect(await response.text()).toBe(PAGE);
+  });
+
+  it('needs no bearer — the provider’s redirect cannot carry one', async () => {
+    // The popup arrives from the IdP with only the query the provider put there. Gating
+    // this on the bearer would 401 every real callback.
+    const response = await fetch(`${origin}/oauth/callback?code=abc`);
+    expect(response.status).toBe(200);
+  });
+});
+
 describe('the gate is actually wired to every data-plane route', () => {
   it.each(['/status', '/events', '/userdb/user.snug'])('401s %s without a bearer', async (path) => {
     const response = await fetch(`${origin}${path}`, { headers: { origin } });

@@ -14,7 +14,7 @@
 //   POST /token   (authorization_code + PKCE verifier)       → token JSON (CORS open)
 //   GET  /healthz                                            → 200
 import { execFileSync } from 'node:child_process';
-import { readFileSync, mkdtempSync } from 'node:fs';
+import { readFileSync, mkdtempSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import https from 'node:https';
 import os from 'node:os';
@@ -40,6 +40,13 @@ function selfSignedCert() {
     ],
     { stdio: 'ignore' },
   );
+  // Opt-in cert EXPORT (ADR-0068 D-B29), the twin of net-stub's. The browser trusts this
+  // IdP because Playwright is launched with --ignore-certificate-errors; the local host
+  // PROCESS has no such flag, so a Binding-B leg where the process must reach the IdP —
+  // the token and refresh POSTs — needs the CA on disk for NODE_EXTRA_CA_CERTS. Absent the
+  // env var, nothing changes for every existing caller.
+  const exportTo = process.env.SNUG_E2E_CERT_OUT_IDP;
+  if (exportTo !== undefined && exportTo !== '') writeFileSync(exportTo, readFileSync(certPath));
   return { key: readFileSync(keyPath), cert: readFileSync(certPath) };
 }
 
