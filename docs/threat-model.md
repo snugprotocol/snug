@@ -73,7 +73,7 @@ personal sync origin the user connected — that is [ADR-0014](decisions/0014-cr
 custody working as designed; denial of service against the user's own browser tab or own
 self-hosted server; and third-party self-hosted infrastructure misconfiguration.
 
-**This document consolidates thirteen per-change threat-model deltas** (§8). A delta is written
+**This document consolidates fourteen per-change threat-model deltas** (§8). A delta is written
 for someone who already knows the system and is reading one change; this is written for a
 stranger deciding whether to trust the whole thing. Where a delta's residual is restated
 here it is marked as inherited, because a model that re-sells an old residual as new is as
@@ -390,6 +390,30 @@ confirm that names the inherited grants; not mitigated by any authentication of 
 (bundle signing is a v1 non-goal). Demoting approved rows on a shared update is a sixth
 `snug_connections` writer — a spec change queued in next-steps, not done here.
 *Full surface:* `docs/security/threat-model-delta-app-sharing.md` §S12 / R-i.
+
+**R-40 — The local host process's loopback data plane is reachable by any process running as this user.**
+The bearer is the only guard against a non-browser client: `Host` and `Origin` bind
+browsers, not `curl`. Against a browser the defences hold — a 256-bit bearer the page
+receives in a URL fragment, `Host` equal to the served origin (which refuses a DNS rebind,
+measured), the literal `same-origin` for `Sec-Fetch-Site`, no CORS headers, and a
+preflight-forcing shape on every route — but a same-user process needs none of that. This is
+the standard desktop trust boundary and is not improvable at the app layer. See
+`docs/security/threat-model-delta-local-host-process.md`.
+
+**R-41 — The local host process has no capability belt beneath its own gates.**
+Snug Desktop's outbound fetch sits behind a Tauri capability scope baked in at build time, a
+ceiling no runtime bug can widen. The Node process has `node:https` and the proxy's
+re-checks, and nothing under them — so those gates are the whole story here, where on the
+desktop they are the inner of two layers. Accepted for a process the user's own agent spawns
+on their own machine; revisit if the process ever accepts a request it did not originate.
+
+**R-42 — The launch URL's fragment outlives the tab.**
+The bearer reaches the page in a URL fragment so it need never touch disk. The cost is that
+it persists in browser history, is readable by an extension with tab access, and lands in
+terminal scrollback when the CLI fallback prints it. The token dies with the process, which
+bounds the exposure to one session; a token file on disk was the alternative and was judged
+worse.
+
 
 **R-38 — Shared docs may carry the sharer's personal data.** `memory` is off by default
 and every doc is a per-doc choice with a first-line preview, but the share scan looks for
@@ -725,6 +749,7 @@ cannot fail a hash check). Its content is not new; the record is.
 | `docs/security/threat-model-delta-desktop-update-channel.md` | `2f6321918cce` | §5 C2 + authoring · R-28, R-29, R-30, R-33 |
 | `docs/security/threat-model-delta-app-sharing.md` | `806ca935aa18` | §4 boundary 5 · §5 C1 + C2 + authoring · R-34, R-35, R-36, R-37, R-38, R-39 |
 
+| `docs/security/threat-model-delta-local-host-process.md` | `0505106aa0c0` | §6 R-40 · R-41 · R-42 |
 <!-- DELTA-LEDGER:END -->
 
 ---

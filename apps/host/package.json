@@ -3,13 +3,14 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Snug host kit — the playground built as ONE self-contained page (snug-host.html) for foreign hosts (TASK-20260905-host-kit, ADR-0065)",
+  "description": "Snug host kit \u2014 the playground built as ONE self-contained page (snug-host.html) for foreign hosts (TASK-20260905-host-kit, ADR-0065)",
   "license": "MIT",
   "scripts": {
     "build:starters": "node ../../scripts/build-starters-pkg.mjs",
-    "build": "pnpm build:starters && tsc -p tsconfig.json --noEmit && vite build",
+    "build": "pnpm build:starters && tsc -p tsconfig.json --noEmit && vite build && pnpm build:local",
     "test": "tsc -p tsconfig.test.json && vitest run",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "build:local": "vite build --config vite.local.config.ts"
   },
   "dependencies": {
     "@snugprotocol/adapters": "workspace:*",
