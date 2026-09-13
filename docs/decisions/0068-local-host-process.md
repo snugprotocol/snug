@@ -3,6 +3,21 @@
 - **Status:** accepted (the owner approved the plan on 2026-09-07 with the recommended defaults for Q1–Q5; amended in the same session by the plan review's six blocking findings, folded as D-B13–D-B33 in the task file). Amends ADR-0065 §2 B.
 - **Date:** 2026-09-07
 - **Task:** TASK-20260907-binding-b-plugin-host (re-scopes T3 of TASK-20260904-skill-only-snug)
+- **Amended 2026-09-08** (same task, append-only per `docs/conventions.md`): (a) point 1 says
+  `127.0.0.1:<ephemeral>`; the port is **fixed at 43127** (D-B13) because the OAuth redirect
+  URI is `${origin}/oauth/callback` and a user registers that exact string with a provider —
+  an ephemeral port would silently invalidate it on restart; a busy 43127 falls back to an
+  ephemeral port and DISABLES the OAuth rows with a named reason rather than changing a
+  registered URI. (b) **D-B34** — reaching the real `~/Snug` requires an explicit act:
+  `resolveHome()` refuses unless `SNUG_HOME` is set or `allowRealHome` is passed, which only
+  the shipped entry passes and the test-hooks build never does. Added after a `/userdb` test
+  wrote 2 MiB of zeros over the owner's live user file. (c) **D-B35** — the `claude` CLI's
+  state is probed at boot on the real `-p` path and NAMED on the brain chip
+  (`ready|logged-out|absent|unknown`), because a logged-out CLI otherwise surfaced as a bare
+  HTTP 502 at the first think with no remedy. (d) point 1's `/oauth/callback` claim was
+  **not implemented** until 2026-09-08 — the route did not exist, so every real OAuth
+  connection would have 404'd at the last step; it now serves the page document, open,
+  because a provider's redirect carries no bearer.
 
 ## Context
 

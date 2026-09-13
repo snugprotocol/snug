@@ -7,6 +7,7 @@ Dated backlog of OPEN work only (ADR-0027: shipped/superseded history lives in g
 ## Now / next
 
 - **2026-09-08 — From TASK-20260907-binding-b-plugin-host (PR #177, open). Carried forward, none blocking the PR:**
+  - **e2e WALKED by the owner 2026-09-13 ("i tested e2e and looks good to me")** — the 11 Binding-B specs and the local page. The two walks below still need a person.
   - **🔑 OWNER: the Ledger walk** — the wizard through to live SimpleFIN data on the local page. Needs the owner's own credentials, so it cannot be automated. AC4's canary is proven against the e2e stub; this is the leg that proves a real provider.
   - **🔑 OWNER: Cowork (AC10)** — where the process runs under Cowork desktop, and whether `open` works there. Codex when installed.
   - **AC5 is covered for what D-B14 changed, NOT for the wizard's full journey.** `resolveAppTransport` returns on `brain.kind === 'host'` (`agent/transport.ts:254`) before any demo arm, and Binding B pins a host brain by construction — so `?demoreq=oauth` is structurally unreachable on the local page and the builder always calls the real CLI. The e2e asserts the undefined `oauth` seat, the `/oauth/callback` route on our origin, and the token POST crossing the process under PKCE. If the wizard's own state machine is ever to be walked on THIS binding, it needs a seam that does not mean weakening production precedence for a fixture.
