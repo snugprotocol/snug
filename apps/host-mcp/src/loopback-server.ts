@@ -43,8 +43,17 @@ export interface LoopbackServerOptions {
    * as a generic 502 at the first think with no remedy shown.
    */
   brainState?: () => { state: string; detail?: string } | undefined;
-  /** The `claude -p` shim. Absent → `/v1/chat/completions` answers a named refusal. */
-  brain?: { complete(request: { messages: Array<{ role: string; content: string | Array<{ type?: string; text?: string }> }>; model?: string }): Promise<string> };
+  /**
+   * The brain shim (ADR-0069 §5). Absent → `/v1/chat/completions` answers a named refusal.
+   * It STREAMS: chunks reach the response as the child's deltas arrive, so a long build shows
+   * its tokens instead of a silent wait.
+   */
+  brain?: {
+    stream(
+      request: { messages: Array<{ role: string; content: string | Array<{ type?: string; text?: string }> }>; model?: string },
+      sink: { write(chunk: string): void; signal?: AbortSignal },
+    ): Promise<void>;
+  };
 }
 
 export interface LoopbackServer {
@@ -196,12 +205,42 @@ export function createLoopbackServer(options: LoopbackServerOptions): LoopbackSe
         end(response, 413);
         return;
       }
+      let parsed: { messages?: unknown; model?: string };
       try {
-        const parsed = JSON.parse(body.toString('utf8')) as { messages?: unknown; model?: string };
+        parsed = JSON.parse(body.toString('utf8')) as { messages?: unknown; model?: string };
         if (!Array.isArray(parsed.messages)) throw new Error('messages must be an array');
-        const sse = await options.brain.complete(parsed as never);
-        end(response, 200, sse, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
       } catch (error) {
+        json(response, 400, { error: { message: error instanceof Error ? error.message : String(error) } });
+        return;
+      }
+      // The stream: headers go out with the FIRST chunk, so a failure before any delta can
+      // still be a 502 the page reads; after a delta the stream simply ends with no finish,
+      // which the page's adapter reports as dropped — never as a complete answer.
+      const controller = new AbortController();
+      let headersSent = false;
+      const sink = {
+        write: (chunk: string): void => {
+          if (!headersSent) {
+            headersSent = true;
+            response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff' });
+          }
+          response.write(chunk);
+        },
+        signal: controller.signal,
+      };
+      // The page giving up (a closed tab, an aborted fetch) reaps the child: `close` fires
+      // on a normal end too, so only an unfinished response counts.
+      response.on('close', () => {
+        if (!response.writableFinished) controller.abort();
+      });
+      try {
+        await options.brain.stream(parsed as never, sink);
+        response.end();
+      } catch (error) {
+        if (headersSent) {
+          response.end();
+          return;
+        }
         // The reason reaches the page: a usage limit or a missing CLI is something the
         // user can act on, and an opaque failure would read as "the model said nothing".
         json(response, 502, { error: { message: error instanceof Error ? error.message : String(error) } });

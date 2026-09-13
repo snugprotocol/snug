@@ -3,7 +3,10 @@
 // third-party login is offered and no key of ours exists — the usage is the user's, on
 // their own subscription, which is what the brain chip's "Claude · your CLI" promises.
 
+import { spawn } from 'node:child_process';
+
 import { defaultResolveDeps, resolveBinary } from './brain-resolve.js';
+import { SessionPool, type ChildLike, type SpawnChild } from './brain-session.js';
 
 /**
  * The child's environment, built from NOTHING (D-B21).
@@ -83,6 +86,41 @@ export function buildClaudeArgs(options: ClaudeArgsOptions): string[] {
   if (options.model !== undefined) args.push('--model', options.model);
   return args;
 }
+
+/**
+ * The pre-warmed child's argv (ADR-0069 §5): the same posture, on the streaming wire.
+ * `--input-format stream-json` is what lets a child start BEFORE its request arrives (measured
+ * 2026-09-13: 1.7 s to answer after a five-second idle, against ~5 s cold); `--verbose` is
+ * what the CLI requires for stream-json output; `--include-partial-messages` is the token
+ * stream the page shows. `--max-turns 1` is exact here — every child serves one request.
+ */
+export function buildStreamArgs(options: ClaudeArgsOptions): string[] {
+  const args = [
+    '-p',
+    '--input-format',
+    'stream-json',
+    '--output-format',
+    'stream-json',
+    '--verbose',
+    '--include-partial-messages',
+    '--system-prompt',
+    options.system,
+    '--tools',
+    '',
+    '--disallowedTools',
+    '*',
+    '--max-turns',
+    '1',
+    '--no-session-persistence',
+  ];
+  if (options.model !== undefined) args.push('--model', options.model);
+  return args;
+}
+
+/** How long a child may go without a first delta (the cold-start bound) … */
+export const SHIM_FIRST_DELTA_MS = SHIM_TIMEOUT_MS;
+/** … and, once it is answering, without the next one. Both name themselves when they fire. */
+export const SHIM_IDLE_MS = 60_000;
 
 export interface CliCompletion {
   text: string;
@@ -188,13 +226,20 @@ export function parseClaudeOutput(stdout: string): { text: string; stopReason: s
 // ------------------------------------------------------------------- the spawn
 
 export interface BrainDeps {
-  /** Injected so tests never launch a real CLI. The fifth argument is the resolved binary. */
+  /** The PROBE's runner (the cold, one-shot path). Injected so tests never launch a real CLI. */
   run?(args: string[], env: Record<string, string>, prompt: string, signal: AbortSignal, binary?: string): Promise<string>;
+  /** The BRAIN's spawn of a resolved binary. Injected so tests never launch a real CLI. */
+  spawnBinary?(binary: string, args: string[], env: Record<string, string>): ChildLike;
+  /** The cold-start bound for a request's first delta. */
   timeoutMs?: number;
+  /** The bound between deltas once a child is answering. */
+  idleMs?: number;
   /** A fixed path, which skips resolution entirely. */
   binary?: string;
   /** Where the CLI is; injected so tests never touch the real filesystem. */
   resolveBinary?(): string | undefined;
+  /** The pool's bounds; the defaults are the measured ones. */
+  pool?: { maxWarm?: number; idleMs?: number };
 }
 
 /** The binary to spawn: a fixed one, else the resolver's answer, else nothing. */
@@ -203,9 +248,35 @@ function binaryFor(deps: BrainDeps): string | undefined {
   return (deps.resolveBinary ?? resolveClaudeBinary)();
 }
 
+/** Where a streamed answer goes: the route's response, or a string in tests. */
+export interface StreamSink {
+  write(chunk: string): void;
+  /** The page giving up on the request (the route's `close`); the child is reaped. */
+  signal?: AbortSignal;
+}
+
+/**
+ * A failed stream, and whether any of it reached the sink. The route answers a failure
+ * BEFORE the first delta with a 502 the page can read; after it, the only honest move is
+ * to close the stream with no finish, which the page's adapter reports as dropped.
+ */
+export class BrainStreamError extends Error {
+  constructor(
+    message: string,
+    readonly partial: boolean,
+  ) {
+    super(message);
+    this.name = 'BrainStreamError';
+  }
+}
+
 export interface Brain {
-  /** Answer one OpenAI-shaped chat request as an SSE body. */
+  /** Answer one OpenAI-shaped chat request, writing SSE chunks as the deltas arrive. */
+  stream(request: ChatRequest, sink: StreamSink): Promise<void>;
+  /** The same answer as one SSE body — the buffered form, for the probe and for tests. */
   complete(request: ChatRequest): Promise<string>;
+  /** Reap every child, warm or busy. */
+  stop(): void;
 }
 
 /** The default runner: spawn the user's own CLI (by resolved path), feed the prompt on stdin, read stdout. */
@@ -250,41 +321,84 @@ function spawnClaude() {
 }
 
 export function createClaudeBrain(deps: BrainDeps = {}): Brain {
-  const timeoutMs = deps.timeoutMs ?? SHIM_TIMEOUT_MS;
-  const run = deps.run ?? spawnClaude();
+  const timeoutMs = deps.timeoutMs ?? SHIM_FIRST_DELTA_MS;
+  const idleMs = deps.idleMs ?? SHIM_IDLE_MS;
+  // The ONE whole-environment read of the brain (the release gate counts them): the child
+  // env by allowlist, built once and handed to every child.
+  const env = childEnvFor(process.env);
+  const spawnBinary = deps.spawnBinary ?? ((binary, args, childEnv) => spawn(binary, args, { env: childEnv, stdio: ['pipe', 'pipe', 'pipe'] }));
+  // Resolved PER SPAWN, so a CLI installed after boot answers the next think without a
+  // restart (the chip stays on its boot verdict until then — a known, smaller gap).
+  const spawnChild: SpawnChild = (args, childEnv) => {
+    const binary = binaryFor(deps);
+    if (binary === undefined) throw new Error(INSTALL_REMEDY);
+    return spawnBinary(binary, args, childEnv);
+  };
+  const pool = new SessionPool({ spawnChild, argsFor: (system) => buildStreamArgs({ system }), env, ...(deps.pool ?? {}) });
 
-  return {
-    async complete(request: ChatRequest): Promise<string> {
+  const brain: Brain = {
+    async stream(request, sink) {
       const { system, prompt } = splitChatRequest(request);
-      // Resolved PER CALL, so a CLI installed after boot answers the next think without a
-      // restart (the chip stays on its boot verdict until then — a known, smaller gap).
-      const binary = binaryFor(deps);
-      if (binary === undefined) throw new Error(INSTALL_REMEDY);
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      const model = request.model ?? 'claude';
+      // A different model would be a different child; the page sends none today (it always
+      // says `claude`), so the key is the system prompt alone.
+      const session = pool.acquire(system);
+      const id = `chatcmpl-snug-${Date.now().toString(36)}`;
+      const base = { id, object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model };
+      // EVERY FRAME IS ONE JSON.stringify OF THE WHOLE PAYLOAD: a delta's text is a string
+      // value inside it, so a delta containing "\n\ndata:" rides inside its frame and can
+      // never forge a second (pinned by a test with exactly that text).
+      const frame = (payload: unknown): string => `data: ${JSON.stringify(payload)}\n\n`;
+
+      let deltas = 0;
+      let abortReason: string | undefined;
+      const abort = (why: string): void => {
+        abortReason = why;
+        session.kill();
+      };
+      // THE BOUND THAT FIRED NAMES ITSELF (lesson 2026-08-18): the cold-start bound until the
+      // first delta, then the idle bound between deltas.
+      let timer = setTimeout(() => abort(`did not answer within ${Math.round(timeoutMs / 1000)}s`), timeoutMs);
       timer.unref?.();
+      const onClientAbort = (): void => abort('stopped — the page closed the request');
+      sink.signal?.addEventListener('abort', onClientAbort, { once: true });
       try {
-        const stdout = await run(
-          buildClaudeArgs({ system, ...(request.model !== undefined && request.model !== 'claude' ? { model: request.model } : {}) }),
-          childEnvFor(process.env),
-          prompt,
-          controller.signal,
-          binary,
-        );
-        const { text, stopReason } = parseClaudeOutput(stdout);
-        return completionToSseBody({ text, stopReason, model: request.model ?? 'claude' });
-      } catch (error) {
-        // THE BOUND THAT FIRED NAMES ITSELF (lesson 2026-08-18): an aborted spawn spells
-        // itself differently on every platform, and that spelling points nowhere.
-        if (controller.signal.aborted) {
-          throw new Error(`your Claude CLI did not answer within ${Math.round(timeoutMs / 1000)}s`);
+        const result = await session.send(prompt, {
+          onDelta(text) {
+            deltas += 1;
+            clearTimeout(timer);
+            timer = setTimeout(() => abort(`stopped answering for ${Math.round(idleMs / 1000)}s`), idleMs);
+            timer.unref?.();
+            sink.write(frame({ ...base, choices: [{ index: 0, delta: { role: 'assistant', content: text }, finish_reason: null }] }));
+          },
+        });
+        // A CLI that streamed nothing still answered: its text rides as the one delta.
+        if (deltas === 0 && result.text !== '') {
+          sink.write(frame({ ...base, choices: [{ index: 0, delta: { role: 'assistant', content: result.text }, finish_reason: null }] }));
         }
-        throw error;
+        sink.write(frame({ ...base, choices: [{ index: 0, delta: {}, finish_reason: finishReasonFor(result.stopReason) }] }));
+        sink.write('data: [DONE]\n\n');
+      } catch (error) {
+        const message = abortReason !== undefined ? `your Claude CLI ${abortReason}` : error instanceof Error ? error.message : String(error);
+        throw new BrainStreamError(message, deltas > 0);
       } finally {
         clearTimeout(timer);
+        sink.signal?.removeEventListener('abort', onClientAbort);
+        pool.release(session);
       }
     },
+
+    async complete(request) {
+      let body = '';
+      await brain.stream(request, { write: (chunk) => (body += chunk) });
+      return body;
+    },
+
+    stop() {
+      pool.stop();
+    },
   };
+  return brain;
 }
 
 // ------------------------------------------------------- the readiness probe (D-B35)

@@ -57,7 +57,7 @@ export interface RunnerOptions {
    */
   proxy?: { handle: FetchProxy['handle'] };
   /** The brain, injected in tests so no CLI is ever spawned. */
-  brain?: { complete(request: never): Promise<string> };
+  brain?: { stream(request: never, sink: never): Promise<void>; stop?(): void };
   /**
    * The boot-time brain probe (D-B35). Injected so tests never spawn a CLI. Its answer is
    * reported on `/status` and named by the page's chip, so a logged-out or missing CLI is
@@ -103,6 +103,8 @@ export function createRunner(options: RunnerOptions): Runner {
   // Undefined until the probe answers; `/status` simply omits the field until then, which
   // the page reads as "not known yet" rather than as a claim either way.
   let brainReadiness: { state: string; detail?: string } | undefined;
+  // Created lazily by the primary, held so `stop()` can reap its children (ADR-0069 §5).
+  let brain: { stream(request: never, sink: never): Promise<void>; stop?(): void } | undefined;
 
   const socketPath = path.join(hostDir, 'ctl.sock');
   const url = (): string => `http://127.0.0.1:${port}/#token=${token}`;
@@ -151,7 +153,7 @@ export function createRunner(options: RunnerOptions): Runner {
         ...(options.heldBy !== undefined ? { heldBy: options.heldBy } : {}),
         // The user's OWN CLI, on their own subscription (D5). Absent binary → the route
         // answers a named refusal and the page falls back to the demo brain.
-        brain: options.brain ?? createClaudeBrain(),
+        brain: (brain = options.brain ?? createClaudeBrain()),
       });
 
       // The fixed port first; an ephemeral fallback keeps the runner usable, and the page
@@ -305,6 +307,9 @@ export function createRunner(options: RunnerOptions): Runner {
 
     async stop() {
       if (graceTimer !== undefined) clearTimeout(graceTimer);
+      // EVERY SPAWN OWES A REAP (lessons 2026-08-18/19): the pre-warmed children go first,
+      // before the listener that could hand out another.
+      brain?.stop?.();
       server?.emit('shutdown', {});
       await control?.close();
       await server?.close();
