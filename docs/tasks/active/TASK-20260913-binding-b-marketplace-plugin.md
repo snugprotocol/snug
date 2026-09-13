@@ -135,3 +135,4 @@
 - **Live, on the owner's CLI after the isolation:** the probe on the stream wire → ready; first think **2,117 ms** cold (down from 4,626 — the user's memory file and hooks no longer load), second **950 ms** pre-warmed.
 - The gate's own verdict stands as journaled above (workspace PASS; e2e's six playground reds proven identical on clean `main`; host e2e 29/29 on its own).
 - State: PR #181 (draft → ready), 11 commits. Next: the owner's walks (AC9) and Q1–Q8; the merge is theirs.
+- **CI on PR #181 (run 34781846001): `workspace` PASS (7m47s), `desktop-shell (macos-latest)` PASS (3m09s)** — both required checks green on `9de8805`. Nothing about this session's state exists only in this chat.
