@@ -205,6 +205,12 @@ export function createLoopbackServer(options: LoopbackServerOptions): LoopbackSe
       try {
         parsed = JSON.parse(body.toString('utf8')) as { messages?: unknown; model?: string };
         if (!Array.isArray(parsed.messages)) throw new Error('messages must be an array');
+        for (const message of parsed.messages as unknown[]) {
+          const m = message as { role?: unknown; content?: unknown } | null;
+          if (m === null || typeof m !== 'object' || typeof m.role !== 'string' || !(typeof m.content === 'string' || Array.isArray(m.content))) {
+            throw new Error('every message needs a string role and a string or array content');
+          }
+        }
       } catch (error) {
         json(response, 400, { error: { message: error instanceof Error ? error.message : String(error) } });
         return;

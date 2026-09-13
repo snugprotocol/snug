@@ -5,6 +5,7 @@
 // which is what the brain chip's "Claude · your CLI" promises.
 
 import { spawn } from 'node:child_process';
+import path from 'node:path';
 
 import { ChildPool, ClaudeChild, type ChildLike, type SpawnChild } from './brain-child.js';
 import { defaultResolveDeps, resolveBinary } from './brain-resolve.js';
@@ -23,11 +24,20 @@ import { defaultResolveDeps, resolveBinary } from './brain-resolve.js';
  */
 export const CHILD_ENV_ALLOWLIST = ['HOME', 'PATH', 'SHELL', 'USER', 'LANG', 'LC_ALL', 'TMPDIR', 'TERM'] as const;
 
-export function childEnvFor(parent: Record<string, string | undefined>): Record<string, string> {
+/**
+ * @param execDir the directory of the Node running this process, prepended to the child's
+ *   PATH: under a desktop host PATH is empty, and an npm-installed `claude` is a
+ *   `#!/usr/bin/env node` shim that would exit 127 without one (measured). The launcher
+ *   found this Node; the child inherits the find.
+ */
+export function childEnvFor(parent: Record<string, string | undefined>, execDir?: string): Record<string, string> {
   const env: Record<string, string> = {};
   for (const name of CHILD_ENV_ALLOWLIST) {
     const value = parent[name];
     if (typeof value === 'string') env[name] = value;
+  }
+  if (execDir !== undefined && execDir !== '') {
+    env.PATH = env.PATH === undefined || env.PATH === '' ? execDir : `${execDir}${path.delimiter}${env.PATH}`;
   }
   return env;
 }
@@ -45,7 +55,7 @@ export function resolveClaudeBinary(): string | undefined {
 
 /** The remedy when there is no CLI at all — a page to visit, then two commands. Never a curl pipe. */
 export const INSTALL_REMEDY =
-  'No `claude` CLI found on this Mac — Snug is using its demo brain. Install Claude Code (https://code.claude.com/docs/en/quickstart), then run `claude` and `/login`, and reopen Snug.';
+  'No `claude` CLI found on this machine — Snug is using its demo brain. Install Claude Code (https://code.claude.com/docs/en/quickstart), then run `claude` and `/login`, and reopen Snug.';
 
 /**
  * The posture every child runs with (program D5): no tools — which makes a single turn by
@@ -54,7 +64,26 @@ export const INSTALL_REMEDY =
  * would skip the hooks and settings the user's own CLI runs with and make this a different
  * brain than the one the chip names.
  */
-const POSTURE = ['--tools', '', '--disallowedTools', '*', '--max-turns', '1', '--no-session-persistence'] as const;
+const POSTURE = [
+  '--tools',
+  '',
+  '--disallowedTools',
+  '*',
+  '--max-turns',
+  '1',
+  '--no-session-persistence',
+  // ONLY the child's own working directory's settings — which is a neutral, empty dir under
+  // the Snug home — so neither the project the agent happened to be in NOR the user's own
+  // CLAUDE.md, hooks and MCP servers reach an app's think. MEASURED 2026-09-13: with
+  // `user` the owner's ~/.claude/CLAUDE.md rode into every think (1,319 input tokens for a
+  // one-word answer; "PINEAPPLE" from a project CLAUDE.md); with `local` it does not
+  // (446 tokens) and the keychain login still works. `--bare` would also skip the keychain
+  // (measured: "Not logged in"), which is why D5 forbids it. The login is what "the user's
+  // own CLI" means here; the settings are not.
+  '--setting-sources',
+  'local',
+  '--strict-mcp-config',
+] as const;
 
 /**
  * The one argv (ADR-0069 §5). `--input-format stream-json` is what lets a child start
@@ -131,15 +160,23 @@ function finishReasonFor(stopReason: string): string {
 // ------------------------------------------------------------------- the spawn
 
 /** The spawn of a RESOLVED binary; injected so tests never launch a real CLI. */
-export type SpawnBinary = (binary: string, args: string[], env: Record<string, string>) => ChildLike;
+export type SpawnBinary = (binary: string, args: string[], env: Record<string, string>, cwd?: string) => ChildLike;
 
-const nodeSpawn: SpawnBinary = (binary, args, env) => spawn(binary, args, { env, stdio: ['pipe', 'pipe', 'pipe'] });
+const nodeSpawn: SpawnBinary = (binary, args, env, cwd) => spawn(binary, args, { env, stdio: ['pipe', 'pipe', 'pipe'], ...(cwd !== undefined ? { cwd } : {}) });
+
+/** Where the Node running this process lives — what the launcher found, handed on. */
+const EXEC_DIR = path.dirname(process.execPath);
 
 interface BinaryDeps {
   /** A fixed path, which skips resolution entirely. */
   binary?: string;
   /** Where the CLI is; injected so tests never touch the real filesystem. */
   resolveBinary?(): string | undefined;
+  /**
+   * The child's working directory — a neutral one under the Snug home, never the agent
+   * host's project (whose CLAUDE.md and settings would otherwise be discovered).
+   */
+  cwd?: string;
 }
 
 /** The binary to spawn: a fixed one, else the resolver's answer, else nothing. */
@@ -157,7 +194,7 @@ function spawnChildWith(deps: BinaryDeps & { spawnBinary?: SpawnBinary }): Spawn
   return (args, env) => {
     const binary = binaryFor(deps);
     if (binary === undefined) throw new Error(INSTALL_REMEDY);
-    return spawnBinary(binary, args, env);
+    return spawnBinary(binary, args, env, deps.cwd);
   };
 }
 
@@ -207,7 +244,7 @@ export function createClaudeBrain(deps: BrainDeps = {}): Brain {
   const idleMs = deps.idleMs ?? SHIM_IDLE_MS;
   // The ONE whole-environment read of the brain (the release gate counts them): the child
   // env by allowlist, built once and handed to every child.
-  const env = childEnvFor(process.env);
+  const env = childEnvFor(process.env, EXEC_DIR);
   const pool = new ChildPool({ spawnChild: spawnChildWith(deps), argsFor: buildStreamArgs, env });
 
   const brain: Brain = {
@@ -312,7 +349,7 @@ export interface BrainReadiness {
  * touching Snug. The old probe called this `unknown`; the CLI's own sentence names the
  * remedy, so the state does too.
  */
-const OUTDATED_RE = /or newer is required|run 'claude update'|claude update/i;
+const OUTDATED_RE = /or newer is required|run 'claude update'/i;
 
 export interface ProbeDeps extends BinaryDeps {
   spawnBinary?: SpawnBinary;
@@ -337,7 +374,7 @@ export async function probeBrain(deps: ProbeDeps = {}): Promise<BrainReadiness> 
   }, deps.timeoutMs ?? 20_000);
   timer.unref?.();
   try {
-    child = new ClaudeChild((deps.spawnBinary ?? nodeSpawn)(binary, buildStreamArgs(PROBE_SYSTEM), childEnvFor(process.env)));
+    child = new ClaudeChild((deps.spawnBinary ?? nodeSpawn)(binary, buildStreamArgs(PROBE_SYSTEM), childEnvFor(process.env, EXEC_DIR), deps.cwd));
     await child.send(PROBE_PROMPT, { onDelta() {} });
     return { state: 'ready' };
   } catch (error) {

@@ -20,6 +20,7 @@
 
 import { createHash } from 'node:crypto';
 import type { Readable, Writable } from 'node:stream';
+import { StringDecoder } from 'node:string_decoder';
 
 /** What the pool needs of a child process — `node:child_process`'s shape, and a fake's. */
 export interface ChildLike {
@@ -29,6 +30,8 @@ export interface ChildLike {
   pid?: number | undefined;
   kill(signal?: NodeJS.Signals): boolean;
   on(event: 'exit', listener: (code: number | null, signal: NodeJS.Signals | null) => void): unknown;
+  /** After `exit` AND after stdio has drained — the only event after which no line is still in flight. */
+  on(event: 'close', listener: (code: number | null, signal: NodeJS.Signals | null) => void): unknown;
   on(event: 'error', listener: (error: Error) => void): unknown;
 }
 
@@ -62,11 +65,17 @@ export function userMessageLine(text: string): string {
 /** SIGTERM first so the CLI can exit cleanly; SIGKILL only if it ignores us. */
 const KILL_GRACE_MS = 2_000;
 
+/** A stream-json line longer than this is not an answer. */
+const MAX_LINE_CHARS = 16 * 1024 * 1024;
+
 export class ClaudeChild {
   /** Set once `send` is called; a child never takes a second request. */
   used = false;
 
   private buffer = '';
+  /** Stateful: a pipe read ends on a BYTE boundary, and an em dash cut in two must not become U+FFFD ×3. */
+  private readonly decoder = new StringDecoder('utf8');
+  private readonly stderrDecoder = new StringDecoder('utf8');
   private text = '';
   private deltas = 0;
   private stderrTail = '';
@@ -74,17 +83,29 @@ export class ClaudeChild {
   private pending: { resolve(result: TurnResult): void; reject(error: Error): void; sink: TurnSink } | undefined;
 
   constructor(readonly process: ChildLike) {
-    process.stdout.on('data', (chunk: Buffer | string) => this.onData(chunk.toString()));
+    process.stdout.on('data', (chunk: Buffer | string) => this.onData(typeof chunk === 'string' ? chunk : this.decoder.write(chunk)));
     process.stderr?.on('data', (chunk: Buffer | string) => {
-      this.stderrTail = (this.stderrTail + chunk.toString()).slice(-300);
+      this.stderrTail = (this.stderrTail + (typeof chunk === 'string' ? chunk : this.stderrDecoder.write(chunk))).slice(-300);
     });
-    process.on('exit', (code) => {
+    process.on('exit', () => {
+      this.exited = true;
+    });
+    // FAIL ON `close`, NOT `exit`: Node may fire `exit` while the last stdout read is still
+    // in flight, and a CLI that prints its error result and exits at once would lose the one
+    // line that names the remedy ("Please run /login") — the probe would say `unknown`.
+    process.on('close', (code) => {
       this.exited = true;
       // A child that dies before its result is an answer of its own: the stderr tail is the
       // only thing that says why, so it must reach the user.
       this.fail(new Error(`the Claude CLI exited (${code ?? 'signal'}) before answering${this.stderrTail.trim() !== '' ? `: ${this.stderrTail.trim()}` : ''}`));
     });
-    process.on('error', (error) => this.fail(new Error(`could not start the Claude CLI: ${error.message}`)));
+    process.on('error', (error) => {
+      // A spawn failure emits `error` and `close`, never `exit` (verified): without this the
+      // child would read as alive, be handed out, and its request would die at the cold-start
+      // bound with the wrong message.
+      this.exited = true;
+      this.fail(new Error(`could not start the Claude CLI: ${error.message}`));
+    });
   }
 
   /** Send the one request; resolves on the CLI's `result`, streaming text deltas meanwhile. */
@@ -125,6 +146,13 @@ export class ClaudeChild {
 
   private onData(chunk: string): void {
     this.buffer += chunk;
+    if (this.buffer.length > MAX_LINE_CHARS) {
+      // The source is the user's own CLI, whose output is bounded by its output cap — this is
+      // a ceiling on a runaway, not a defence against an attacker.
+      this.fail(new Error('the Claude CLI wrote an unreadable line'));
+      this.kill();
+      return;
+    }
     let newline: number;
     while ((newline = this.buffer.indexOf('\n')) !== -1) {
       const line = this.buffer.slice(0, newline).trim();
@@ -180,6 +208,8 @@ export interface ChildPoolOptions {
   env: Record<string, string>;
   /** Pre-warmed keys kept at once; the least recently used is evicted beyond it. */
   maxWarm?: number;
+  /** Children answering at once; a request beyond it is refused by name, never queued. */
+  maxLive?: number;
   /** How long a unused child may sit unused before it is reaped. */
   idleMs?: number;
   now?: () => number;
@@ -187,6 +217,8 @@ export interface ChildPoolOptions {
 
 /** The defaults, sized from the measurement: ~257 MB idle per child. */
 export const POOL_MAX_WARM = 2;
+/** An app looping its thinks must not fan out a process — and an API call on the user's subscription — per loop. */
+export const POOL_MAX_LIVE = 4;
 export const POOL_IDLE_MS = 5 * 60_000;
 
 export function poolKey(system: string): string {
@@ -199,11 +231,13 @@ export class ChildPool {
   /** Children serving a request right now. */
   private readonly live = new Set<ClaudeChild>();
   private readonly maxWarm: number;
+  private readonly maxLive: number;
   private readonly idleMs: number;
   private stopped = false;
 
   constructor(private readonly options: ChildPoolOptions) {
     this.maxWarm = options.maxWarm ?? POOL_MAX_WARM;
+    this.maxLive = options.maxLive ?? POOL_MAX_LIVE;
     this.idleMs = options.idleMs ?? POOL_IDLE_MS;
   }
 
@@ -214,15 +248,24 @@ export class ChildPool {
    */
   acquire(system: string): ClaudeChild {
     if (this.stopped) throw new Error('the runner is stopping');
+    // The cap counts what is ANSWERING, whether the child came warm or fresh: an app looping
+    // its thinks must not fan out a process — and an API call on the user's subscription —
+    // per loop. Refused by name, never queued.
+    if (this.live.size >= this.maxLive) {
+      throw new Error(`Snug is already answering ${this.maxLive} thinks — try again in a moment`);
+    }
     const key = poolKey(system);
     const entry = this.warm.get(key);
     let child: ClaudeChild;
-    if (entry !== undefined && entry.child.alive) {
+    if (entry !== undefined) {
+      // A dead entry's timer must go too: it targets the KEY, and would otherwise reap the
+      // replacement that takes the key.
       this.warm.delete(key);
       clearTimeout(entry.timer);
+    }
+    if (entry !== undefined && entry.child.alive) {
       child = entry.child;
     } else {
-      if (entry !== undefined) this.warm.delete(key);
       child = this.spawn(system);
     }
     this.live.add(child);
@@ -244,7 +287,7 @@ export class ChildPool {
 
   /** Start a unused child for this key now, unless one is already waiting. */
   prewarm(key: string, system: string): void {
-    if (this.stopped) return;
+    if (this.stopped || this.maxWarm === 0) return;
     const existing = this.warm.get(key);
     if (existing !== undefined && existing.child.alive) {
       // Touch: most recently used moves to the end of the LRU order.
@@ -252,13 +295,17 @@ export class ChildPool {
       this.warm.set(key, existing);
       return;
     }
-    if (existing !== undefined) this.warm.delete(key);
+    if (existing !== undefined) {
+      this.warm.delete(key);
+      clearTimeout(existing.timer);
+    }
+    // Spawn FIRST: a spawn that throws (no binary) must not have cost another key its child.
+    const child = this.spawn(system);
     while (this.warm.size >= this.maxWarm) {
       const oldest = this.warm.keys().next().value;
       if (oldest === undefined) break;
       this.evict(oldest);
     }
-    const child = this.spawn(system);
     const timer = setTimeout(() => this.evict(key), this.idleMs);
     timer.unref?.();
     this.warm.set(key, { child, timer });

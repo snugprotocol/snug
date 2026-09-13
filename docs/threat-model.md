@@ -420,9 +420,12 @@ nothing else — it serves exactly one request and is reaped, so no transcript i
 and a child can hold nothing another caller did not send. The idle lifetime is bounded (five
 minutes, two keys, reaped on stop / abort / error / exit; their stdin is a pipe from the
 runner, so the runner's death ends them). Accepted for the ~3 s saved on every think after
-the first, measured 2026-09-13. The launcher's and the resolver's search of the user's own
-install directories is the user's shell's trust (R-40's boundary). See
-`docs/security/threat-model-delta-local-host-process.md` (the 2026-09-13 amendment).
+the first, measured 2026-09-13. Every child runs in a neutral directory under the Snug home
+with `--setting-sources local --strict-mcp-config`, so neither the agent host's project nor
+the user's own `CLAUDE.md`, hooks or MCP servers reach an app's think (measured: they did
+before). The launcher's and the resolver's search of the user's own install directories is
+the user's shell's trust (R-40's boundary). See
+`docs/security/threat-model-delta-local-host-process.md` (the 2026-09-13 amendments).
 
 
 **R-38 — Shared docs may carry the sharer's personal data.** `memory` is off by default
@@ -759,7 +762,7 @@ cannot fail a hash check). Its content is not new; the record is.
 | `docs/security/threat-model-delta-desktop-update-channel.md` | `2f6321918cce` | §5 C2 + authoring · R-28, R-29, R-30, R-33 |
 | `docs/security/threat-model-delta-app-sharing.md` | `806ca935aa18` | §4 boundary 5 · §5 C1 + C2 + authoring · R-34, R-35, R-36, R-37, R-38, R-39 |
 
-| `docs/security/threat-model-delta-local-host-process.md` | `434fbf7618f3` | §6 R-40 · R-41 · R-42 · R-43 |
+| `docs/security/threat-model-delta-local-host-process.md` | `ee2aa56ff3cc` | §6 R-40 · R-41 · R-42 · R-43 |
 <!-- DELTA-LEDGER:END -->
 
 ---

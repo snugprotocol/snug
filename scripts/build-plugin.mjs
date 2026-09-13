@@ -88,7 +88,7 @@ export function readme() {
     `- \`${BUNDLE_PATH}\` — the local host process.`,
     '- `scripts/snug-host-local.html` — the runner page it serves.',
     `- \`${SKILL_DIR}/\` — the skill: what a Snug app is, how to launch the runner, the authoring references.`,
-    '- `PROVENANCE.json` — the monorepo commit this tree was built from, and every file’s sha256.',
+    '- `../PROVENANCE.json` (the marketplace root) — the monorepo commit this tree was built from, and every file’s sha256.',
     '',
     `Source: ${PLUGIN.repository} · ${PLUGIN.homepage} · ${PLUGIN.license}`,
     '',
@@ -107,37 +107,58 @@ function walk(dir, base = dir) {
 
 const sha256 = (file) => createHash('sha256').update(readFileSync(file)).digest('hex');
 
-/** The provenance document for a finished plugin dir: every file's sha256, the commit, the time. */
-export function provenance(pluginDir, commit) {
+/**
+ * The provenance document for a finished MARKETPLACE tree (the distribution repo's root):
+ * every shipped file's sha256 — the plugin's AND the root marketplace manifest's — the
+ * commit, the time.
+ */
+export function provenance(treeDir, commit) {
   const files = {};
-  for (const rel of walk(pluginDir)) {
+  for (const rel of walk(treeDir)) {
     if (rel === 'PROVENANCE.json') continue;
-    files[rel] = sha256(path.join(pluginDir, rel));
+    files[rel] = sha256(path.join(treeDir, rel));
   }
   return { format: 'snug-plugin-provenance/1', commit, builtAt: new Date().toISOString(), files };
 }
 
 /** Which files a provenance document no longer describes (or describes wrongly). */
-export function checkProvenance(pluginDir) {
-  const file = path.join(pluginDir, 'PROVENANCE.json');
+export function checkProvenance(treeDir) {
+  const file = path.join(treeDir, 'PROVENANCE.json');
   if (!existsSync(file)) return ['PROVENANCE.json is missing'];
-  const doc = JSON.parse(readFileSync(file, 'utf8'));
+  let doc;
+  try {
+    doc = JSON.parse(readFileSync(file, 'utf8'));
+  } catch (error) {
+    return [`PROVENANCE.json is not JSON: ${error instanceof Error ? error.message : String(error)}`];
+  }
   const problems = [];
   if (typeof doc.commit !== 'string' || doc.commit === '') problems.push('PROVENANCE.json names no commit');
   const listed = new Set(Object.keys(doc.files ?? {}));
-  for (const rel of walk(pluginDir)) {
+  for (const rel of walk(treeDir)) {
     if (rel === 'PROVENANCE.json') continue;
     if (!listed.has(rel)) problems.push(`PROVENANCE.json does not list ${rel}`);
-    else if (doc.files[rel] !== sha256(path.join(pluginDir, rel))) problems.push(`PROVENANCE.json's hash for ${rel} does not match the file`);
+    else if (doc.files[rel] !== sha256(path.join(treeDir, rel))) problems.push(`PROVENANCE.json's hash for ${rel} does not match the file`);
     listed.delete(rel);
   }
   for (const rel of listed) problems.push(`PROVENANCE.json lists ${rel}, which is not in the tree`);
   return problems;
 }
 
+/**
+ * The commit a provenance names: HEAD, suffixed `-dirty` when the working tree differs
+ * from it — a clean SHA must reproduce the hashes, and a dirty one cannot. The owner's
+ * push step refuses a `-dirty` provenance (next-steps); the gate accepts it, because a
+ * developer's tree is dirty by definition.
+ */
+export function commitLabel(sha, porcelain) {
+  return porcelain.trim() === '' ? sha : `${sha}-dirty`;
+}
+
 function currentCommit() {
   try {
-    return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: REPO, encoding: 'utf8' }).trim();
+    const sha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: REPO, encoding: 'utf8' }).trim();
+    const porcelain = execFileSync('git', ['status', '--porcelain'], { cwd: REPO, encoding: 'utf8' });
+    return commitLabel(sha, porcelain);
   } catch {
     return 'unknown';
   }
@@ -204,8 +225,8 @@ export async function buildPlugin(outDir = PLUGIN_OUT_DIR, sources = SOURCES, op
   writeFileSync(path.join(outDir, '.claude-plugin', 'marketplace.json'), json(marketplaceManifest()));
   cpSync(sources.license, path.join(pluginDir, 'LICENSE'));
   writeFileSync(path.join(pluginDir, 'README.md'), readme());
-  // Last, over everything above.
-  writeFileSync(path.join(pluginDir, 'PROVENANCE.json'), json(provenance(pluginDir, options.commit ?? currentCommit())));
+  // Last, over everything above — at the MARKETPLACE root, so the root manifest is covered too.
+  writeFileSync(path.join(outDir, 'PROVENANCE.json'), json(provenance(outDir, options.commit ?? currentCommit())));
   return [];
 }
 

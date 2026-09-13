@@ -16,6 +16,10 @@ export interface FakeChildScript {
   silent?: boolean;
   /** Exit with this code as soon as spawned. */
   exitAtOnce?: number;
+  /** Emit `error` (and `close`, never `exit`) as soon as spawned — Node's shape for a failed spawn. */
+  errorAtOnce?: string;
+  /** Ignore SIGTERM; only SIGKILL ends it. */
+  ignoresTerm?: boolean;
 }
 
 export const line = (value: unknown): string => `${JSON.stringify(value)}\n`;
@@ -60,6 +64,14 @@ export class FakeClaudeChild extends EventEmitter implements ChildLike {
       const code = this.script.exitAtOnce;
       queueMicrotask(() => this.exit(code));
     }
+    if (this.script.errorAtOnce !== undefined) {
+      const message = this.script.errorAtOnce;
+      queueMicrotask(() => {
+        this.stdin.destroy();
+        this.emit('error', new Error(message));
+        this.emit('close', -2, null);
+      });
+    }
   }
 
   /** The user messages this child received, parsed. */
@@ -73,17 +85,28 @@ export class FakeClaudeChild extends EventEmitter implements ChildLike {
 
   kill(signal: NodeJS.Signals = 'SIGTERM'): boolean {
     this.kills.push(signal);
+    if (this.script.ignoresTerm && signal === 'SIGTERM') return true;
     if (!this.exited) this.exit(null, signal);
     return true;
   }
 
+  /** Node's order: `exit`, then `close` once stdio has drained (here: at once). */
   exit(code: number | null, signal: NodeJS.Signals | null = null): void {
     if (this.exited) return;
     this.exited = true;
     this.emit('exit', code, signal);
+    this.emit('close', code, signal);
+  }
+
+  /** `exit` alone — the last stdout line still in flight; `close` follows when the caller says. */
+  exitOnly(code: number | null): void {
+    if (this.exited) return;
+    this.exited = true;
+    this.emit('exit', code, null);
   }
 
   override on(event: 'exit', listener: (code: number | null, signal: NodeJS.Signals | null) => void): this;
+  override on(event: 'close', listener: (code: number | null, signal: NodeJS.Signals | null) => void): this;
   override on(event: 'error', listener: (error: Error) => void): this;
   override on(event: string, listener: (...args: never[]) => void): this {
     return super.on(event, listener as (...args: unknown[]) => void);

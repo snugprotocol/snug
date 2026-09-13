@@ -62,6 +62,9 @@ export const ALLOWED_ENV_READS = ['HOME', 'PATH', 'SHELL', 'USER', 'LANG', 'LC_A
  */
 export const ALLOWED_WHOLE_ENV_READS = 3;
 
+/** The Agent Skills reference validator the gate runs, pinned (supply chain at gate time). */
+export const SKILLS_REF_VERSION = '0.1.1';
+
 export function checkBundle(source) {
   const problems = [];
   for (const name of FORBIDDEN_IN_RELEASE) {
@@ -69,7 +72,7 @@ export function checkBundle(source) {
   }
   // Every `process.env.X` / `process.env['X']` the bundle actually reads.
   const read = new Set();
-  for (const match of source.matchAll(/process\.env(?:\.([A-Z_][A-Z0-9_]*)|\[["']([A-Z_][A-Z0-9_]*)["']\])/g)) {
+  for (const match of source.matchAll(/process\.env(?:\.([A-Za-z_$][\w$]*)|\[["']([A-Za-z_$][\w$]*)["']\])/g)) {
     read.add(match[1] ?? match[2]);
   }
   for (const name of read) {
@@ -111,7 +114,12 @@ export async function checkPluginTree(dir, options = {}) {
       problems.push(`the plugin tree is missing ${rel}`);
       return undefined;
     }
-    return JSON.parse(readFileSync(file, 'utf8'));
+    try {
+      return JSON.parse(readFileSync(file, 'utf8'));
+    } catch (error) {
+      problems.push(`${rel} is not JSON: ${error instanceof Error ? error.message : String(error)}`);
+      return undefined;
+    }
   };
   const same = (rel, actual, expected) => {
     if (actual !== undefined && JSON.stringify(actual) !== JSON.stringify(expected)) {
@@ -150,7 +158,7 @@ export async function checkPluginTree(dir, options = {}) {
   if (existsSync(path.join(pluginDir, 'hooks'))) problems.push('the plugin ships a hooks/ directory — it must ship no hooks (ADR-0069)');
   if (manifest !== undefined && 'hooks' in manifest) problems.push('plugin.json declares hooks — it must ship no hooks (ADR-0069)');
 
-  if (existsSync(pluginDir)) problems.push(...checkProvenance(pluginDir));
+  if (existsSync(dir)) problems.push(...checkProvenance(dir));
   return problems;
 }
 
@@ -174,7 +182,8 @@ export function runValidators(dir, exec = execFileSync) {
   return [
     run('claude plugin validate --strict (marketplace)', 'claude', ['plugin', 'validate', '--strict', dir]),
     run('claude plugin validate --strict (plugin)', 'claude', ['plugin', 'validate', '--strict', path.join(dir, PLUGIN.name)]),
-    run('agentskills validate (skill)', 'uvx', ['--from', 'skills-ref', 'agentskills', 'validate', path.join(dir, PLUGIN.name, SKILL_DIR)]),
+    // Pinned: the gate must not execute whatever PyPI serves today.
+    run('agentskills validate (skill)', 'uvx', ['--from', `skills-ref==${SKILLS_REF_VERSION}`, 'agentskills', 'validate', path.join(dir, PLUGIN.name, SKILL_DIR)]),
   ];
 }
 
@@ -188,9 +197,11 @@ async function main() {
   problems.push(...checkBundle(source));
   problems.push(...checkInstructions(source, readFileSync(INSTRUCTIONS_FILE, 'utf8')));
 
-  // The tree is built HERE, every run: a missing input is CANNOT RUN by name.
+  // The tree is built HERE, every run: a missing input is CANNOT RUN by name — and the
+  // bundle's own problems, found above, are printed first rather than lost with the exit.
   const buildProblems = await buildPlugin();
   if (buildProblems.length > 0) {
+    for (const problem of problems) console.error(`check-host-mcp: ${problem}`);
     for (const problem of buildProblems) console.error(`check-host-mcp: CANNOT RUN — ${problem}`);
     process.exit(1);
   }

@@ -383,3 +383,15 @@ describe('the chat route STREAMS (ADR-0069 §5, AC6)', () => {
     expect(aborted).toBe(true);
   });
 });
+
+describe('the chat route refuses a malformed message entry before anything is spawned', () => {
+  it('a message with no role, or a numeric content, is a 400', async () => {
+    let spawned = false;
+    await start({ store: createUserFileStore(home), brain: { async stream() { spawned = true; } } });
+    for (const messages of [[null], [{ role: 'user', content: 42 }], [{ content: 'x' }]]) {
+      const response = await call('/v1/chat/completions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ messages }) });
+      expect(response.status, JSON.stringify(messages)).toBe(400);
+    }
+    expect(spawned).toBe(false);
+  });
+});

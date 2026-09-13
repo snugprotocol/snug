@@ -102,7 +102,8 @@ export function validateSkill(text) {
   if (text.includes(LAUNCH_MARKER)) problems.push('the launch-protocol marker was not replaced');
   if (/\{\{[^{}]+\}\}/.test(parts.body)) problems.push('the body carries an unrendered {{placeholder}}');
   if (parts.body.split('\n').length > 500) problems.push('the body is over 500 lines (skill-creator: add a layer instead)');
-  if (/built on MCP|MCP server/i.test(parts.body.replace(/^.*\bnever\b.*$/gim, ''))) problems.push('the body describes Snug through MCP outside the never-list (ADR-0061)');
+  // Outside the `## Never` section, Snug is never described through MCP (ADR-0061).
+  if (/built on MCP|MCP server/i.test(parts.body.split(/^## Never\b/m)[0] ?? '')) problems.push('the body describes Snug through MCP outside the never-list (ADR-0061)');
   // One contract, two artifacts (conventions.md): the install line and the repository the
   // skill names are the manifests' values, byte-compared here rather than typed twice.
   if (!parts.body.includes(`${PLUGIN.name}@${MARKETPLACE.name}`)) problems.push(`the install line does not name ${PLUGIN.name}@${MARKETPLACE.name} (plugin-manifests.mjs)`);

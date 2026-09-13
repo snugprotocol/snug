@@ -358,3 +358,42 @@ describe('probeBrain — is the user’s CLI actually able to answer, on the bra
     expect(children[0]?.exited).toBe(true);
   });
 });
+
+describe('the child is isolated from the agent host’s project and the user’s memory (security review, measured 2026-09-13)', () => {
+  it('runs with --setting-sources local and --strict-mcp-config', () => {
+    const args = buildStreamArgs('s');
+    expect(args[args.indexOf('--setting-sources') + 1]).toBe('local');
+    expect(args).toContain('--strict-mcp-config');
+  });
+
+  it('spawns every child in the neutral cwd the runner hands it — never the agent host’s project', async () => {
+    const cwds: Array<string | undefined> = [];
+    const { spawnChild } = fakeSpawner();
+    const brain = createClaudeBrain({ cwd: '/Users/x/Snug/host/brain', resolveBinary: () => '/x/claude', spawnBinary: (_b, args, env, cwd) => { cwds.push(cwd); return spawnChild(args, env); } });
+    await brain.complete({ messages: [{ role: 'user', content: 'x' }] });
+    brain.stop();
+    expect(cwds.length).toBeGreaterThanOrEqual(2); // the request's child and the pre-warmed one
+    expect(new Set(cwds)).toEqual(new Set(['/Users/x/Snug/host/brain']));
+  });
+
+  it('the probe runs in the same cwd', async () => {
+    const cwds: Array<string | undefined> = [];
+    const { spawnChild } = fakeSpawner();
+    await probeBrain({ cwd: '/Users/x/Snug/host/brain', resolveBinary: () => '/x/claude', spawnBinary: (_b, args, env, cwd) => { cwds.push(cwd); return spawnChild(args, env); } });
+    expect(cwds).toEqual(['/Users/x/Snug/host/brain']);
+  });
+
+  it('the child’s PATH starts with the Node that runs the host — an npm-installed `claude` is a `#!/usr/bin/env node` shim', () => {
+    expect(childEnvFor({ HOME: '/h', PATH: '/usr/bin' }, '/opt/node/bin').PATH).toBe('/opt/node/bin:/usr/bin');
+    expect(childEnvFor({ HOME: '/h' }, '/opt/node/bin').PATH).toBe('/opt/node/bin');
+    expect(childEnvFor({ HOME: '/h', PATH: '/usr/bin' }).PATH).toBe('/usr/bin');
+    // and it adds no other name
+    expect(Object.keys(childEnvFor({ HOME: '/h' }, '/opt/node/bin')).sort()).toEqual(['HOME', 'PATH']);
+  });
+
+  it('the outdated regex matches the CLI’s sentence and not a passing mention of an update', async () => {
+    const { spawnChild } = fakeSpawner({ lines: [result('Not logged in · Please run /login (tip: claude update is available)', { is_error: true })] });
+    const state = await probeBrain({ resolveBinary: () => '/x/claude', spawnBinary: (_b, args, env) => spawnChild(args, env), timeoutMs: 200 });
+    expect(state.state).toBe('logged-out');
+  });
+});

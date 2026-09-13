@@ -97,3 +97,11 @@ describe('defaultResolveDeps reads the environment by NAME', () => {
     expect(defaultResolveDeps({}).env).toEqual({});
   });
 });
+
+describe('relative PATH entries (review, 2026-09-13)', () => {
+  it('never resolves `bin`, `./bin` or `../x` against the working directory', () => {
+    const dirs = candidateDirs({ env: { HOME, PATH: 'bin:./bin:../x:/usr/bin' }, ...fakeFs([]) });
+    expect(dirs[0]).toBe('/usr/bin');
+    expect(dirs.some((d) => !d.startsWith('/'))).toBe(false);
+  });
+});

@@ -88,6 +88,10 @@ export function createRunner(options: RunnerOptions): Runner {
     throw new RealHomeRefusedError('createRunner needs an explicit home; it no longer defaults to the real ~/Snug (D-B34)');
   }
   const hostDir = path.join(home, 'host');
+  // The children's working directory (ADR-0069 §5, security review): a neutral one under
+  // the Snug home, so no project's CLAUDE.md, hooks or MCP servers are discovered by a
+  // child answering an app.
+  const brainDir = path.join(hostDir, 'brain');
   const graceMs = options.graceMs ?? 3_000;
 
   // 256 bits, memory only. It reaches the page in the launch URL's fragment and is written
@@ -111,7 +115,7 @@ export function createRunner(options: RunnerOptions): Runner {
 
   const runner: Runner = {
     async start() {
-      mkdirSync(hostDir, { recursive: true });
+      mkdirSync(brainDir, { recursive: true });
 
       const deps: LockDeps = {
         pid: process.pid,
@@ -153,7 +157,7 @@ export function createRunner(options: RunnerOptions): Runner {
         ...(options.heldBy !== undefined ? { heldBy: options.heldBy } : {}),
         // The user's OWN CLI, on their own subscription (D5). Absent binary → the route
         // answers a named refusal and the page falls back to the demo brain.
-        brain: (brain = options.brain ?? createClaudeBrain()),
+        brain: (brain = options.brain ?? createClaudeBrain({ cwd: brainDir })),
       });
 
       // The fixed port first; an ephemeral fallback keeps the runner usable, and the page
@@ -188,7 +192,7 @@ export function createRunner(options: RunnerOptions): Runner {
       // The probe runs in the BACKGROUND: it spawns the user's CLI, and a slow or wedged
       // one must not hold up the kit opening. A page that cannot boot teaches nothing; a
       // chip that fills in a moment later teaches the user exactly what is wrong.
-      const probe = options.brainState ?? (async () => (await import('./brain-claude.js')).probeBrain());
+      const probe = options.brainState ?? (async () => (await import('./brain-claude.js')).probeBrain({ cwd: brainDir }));
       void probe().then(
         (state) => {
           brainReadiness = state;

@@ -149,3 +149,21 @@ describe('against the REAL knowledge base', () => {
     }
   });
 });
+
+describe('the MCP rule exempts the never-list SECTION, not any line with the word (review, 2026-09-13)', () => {
+  it('catches "Snug is an MCP server" above the never-list even on a line that also says never', () => {
+    const good = renderSkill({ source, instructions });
+    const bad = good.replace('## Build the app', 'Snug is an MCP server, never forget.\n\n## Build the app');
+    assert.ok(validateSkill(bad).some((p) => p.includes('MCP')));
+  });
+
+  it('accepts the never-list’s own mention', () => {
+    assert.deepEqual(validateSkill(renderSkill({ source, instructions })), []);
+  });
+
+  it('refuses an install line or repository that drifted from plugin-manifests.mjs', () => {
+    const good = renderSkill({ source, instructions });
+    assert.ok(validateSkill(good.replace('snug@snug-skill', 'snug@elsewhere')).some((p) => p.includes('install line')));
+    assert.ok(validateSkill(good.replace('https://github.com/snugprotocol/snug-skill', 'https://example.com/x')).some((p) => p.includes('repository')));
+  });
+});

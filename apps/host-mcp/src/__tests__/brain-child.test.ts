@@ -7,7 +7,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { ClaudeChild, POOL_IDLE_MS, POOL_MAX_WARM, poolKey, ChildPool, userMessageLine } from '../brain-child.js';
+import { ClaudeChild, POOL_IDLE_MS, POOL_MAX_LIVE, POOL_MAX_WARM, poolKey, ChildPool, userMessageLine } from '../brain-child.js';
 import { delta, fakeSpawner, FakeClaudeChild, line, result, thinkingDelta } from './fixtures/fake-claude-child.js';
 
 const argsFor = (system: string): string[] => ['-p', '--system-prompt', system];
@@ -216,5 +216,120 @@ describe('ChildPool — pre-warmed, single-use, bounded', () => {
     // A's replacement was not taken by B.
     expect(children.filter((c) => c.args.includes('contract A') && !c.exited)).toHaveLength(2);
     p.stop();
+  });
+});
+
+describe('the review’s findings, each with its mutant (2026-09-13)', () => {
+  it('a multibyte character split across two stdout reads reaches the sink intact', async () => {
+    // A pipe read ends on a BYTE boundary; a naive per-chunk toString() turns an em dash cut
+    // in two into U+FFFD ×3 and the JSON still parses — the corruption reaches the page.
+    const fake = new FakeClaudeChild([], ENV, { silent: true });
+    const child = new ClaudeChild(fake);
+    const seen: string[] = [];
+    const pending = child.send('x', { onDelta: (t) => seen.push(t) });
+    const bytes = Buffer.from(delta('a—b') + result('a—b'));
+    const cut = Buffer.from(delta('a—b')).indexOf(Buffer.from('—')) + 1;
+    fake.stdout.write(bytes.subarray(0, cut));
+    await new Promise((r) => setTimeout(r, 0));
+    fake.stdout.write(bytes.subarray(cut));
+    expect((await pending).text).toBe('a—b');
+    expect(seen).toEqual(['a—b']);
+  });
+
+  it('the result line wins when `exit` fires before the last stdout read — the remedy is never lost', async () => {
+    // Node may fire `exit` while the final read is in flight; failing on `exit` would turn a
+    // logged-out CLI's result into "exited (1) before answering" and the probe into `unknown`.
+    const fake = new FakeClaudeChild([], ENV, { silent: true });
+    const child = new ClaudeChild(fake);
+    const pending = child.send('x', { onDelta: () => {} });
+    fake.stdout.write(result('Not logged in · Please run /login', { is_error: true }));
+    fake.exitOnly(1); // exit first, the data still queued
+    await expect(pending).rejects.toThrow(/login/);
+  });
+
+  it('a spawn that fails (error, no exit) is dead: never handed out, and a request on it fails at once', async () => {
+    const { spawnChild, children } = fakeSpawner({ errorAtOnce: 'spawn claude EACCES' });
+    const p = new ChildPool({ spawnChild, argsFor, env: ENV });
+    p.prewarm(poolKey('S'), 'S');
+    await new Promise((r) => setTimeout(r, 0));
+    expect(children[0]?.exited).toBe(false); // the FAKE never exits — the class must not need it to
+    const child = p.acquire('S');
+    expect(child.process).not.toBe(children[0]);
+    p.stop();
+  });
+
+  it('a request sent to a child whose spawn failed rejects with the spawn error, not a bound', async () => {
+    const fake = new FakeClaudeChild([], ENV, { errorAtOnce: 'spawn claude EACCES' });
+    const child = new ClaudeChild(fake);
+    await new Promise((r) => setTimeout(r, 0));
+    await expect(child.send('x', { onDelta: () => {} })).rejects.toThrow(/exited before the request|could not start/);
+  });
+
+  it('the SIGKILL fallback fires when the child ignores SIGTERM', () => {
+    vi.useFakeTimers();
+    try {
+      const fake = new FakeClaudeChild([], ENV, { ignoresTerm: true });
+      const child = new ClaudeChild(fake);
+      child.kill();
+      expect(fake.kills).toEqual(['SIGTERM']);
+      vi.advanceTimersByTime(2_001);
+      expect(fake.kills).toEqual(['SIGTERM', 'SIGKILL']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a line that never ends is not an answer: the child is reaped past the cap', async () => {
+    const fake = new FakeClaudeChild([], ENV, { silent: true });
+    const child = new ClaudeChild(fake);
+    const pending = child.send('x', { onDelta: () => {} });
+    fake.stdout.write('x'.repeat(17 * 1024 * 1024));
+    await expect(pending).rejects.toThrow(/unreadable line/);
+    expect(fake.exited).toBe(true);
+  });
+});
+
+describe('the pool’s bounds, each with its mutant (2026-09-13)', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it('a dead warm entry’s timer is cleared, so it cannot reap the replacement at that key', () => {
+    const { spawnChild, children } = fakeSpawner();
+    const p = new ChildPool({ spawnChild, argsFor, env: ENV, idleMs: 1_000 });
+    p.prewarm(poolKey('S'), 'S'); // timer → t=1000
+    vi.advanceTimersByTime(500);
+    children[0]?.exit(1); // dies on its own
+    p.acquire('S'); // drops the dead entry, spawns for the request, pre-warms a replacement (timer → t=1500)
+    vi.advanceTimersByTime(501); // t=1001: the OLD timer would fire here
+    const replacement = children[2];
+    expect(replacement?.exited, 'the stale timer must not have reaped the replacement').toBe(false);
+    vi.advanceTimersByTime(500); // t=1501: the replacement's own TTL
+    expect(replacement?.exited).toBe(true);
+    p.stop();
+  });
+
+  it('a pre-warm whose spawn throws costs no other key its child', () => {
+    let fail = false;
+    const { spawnChild, children } = fakeSpawner();
+    const p = new ChildPool({ spawnChild: (args, env) => { if (fail) throw new Error('no binary'); return spawnChild(args, env); }, argsFor, env: ENV, maxWarm: 1 });
+    p.prewarm(poolKey('A'), 'A');
+    fail = true;
+    expect(() => p.prewarm(poolKey('B'), 'B')).toThrow(/no binary/);
+    expect(children[0]?.exited, 'A must still be warm').toBe(false);
+    expect(p.stats().warm).toBe(1);
+    p.stop();
+  });
+
+  it('refuses a request beyond maxLive by name, never queues it', () => {
+    const { spawnChild } = fakeSpawner();
+    const p = new ChildPool({ spawnChild, argsFor, env: ENV, maxLive: 2, maxWarm: 0 });
+    p.acquire('S');
+    p.acquire('S');
+    expect(() => p.acquire('S')).toThrow(/already answering 2/);
+    p.stop();
+  });
+
+  it('the live cap is a named constant', () => {
+    expect(POOL_MAX_LIVE).toBe(4);
   });
 });

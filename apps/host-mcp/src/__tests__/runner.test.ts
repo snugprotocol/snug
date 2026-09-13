@@ -201,3 +201,13 @@ describe('the exit grace', () => {
     await vi.waitFor(() => expect(onExit).toHaveBeenCalled(), { timeout: 2_000 });
   });
 });
+
+describe('the runner reaps the brain’s children (ADR-0069 §5)', () => {
+  it('stop() calls the brain’s stop() — reverting the wire would leave pre-warmed children behind', async () => {
+    const stop = vi.fn();
+    const runner = make({ brain: { stream: async () => {}, stop } });
+    await runner.start();
+    await runner.stop();
+    expect(stop).toHaveBeenCalledTimes(1);
+  });
+});

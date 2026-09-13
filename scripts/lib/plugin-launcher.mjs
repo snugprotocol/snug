@@ -35,7 +35,8 @@ export const NODE_MIN_MAJOR = 20;
 
 /** `~/x` → `"$HOME/x"` (a quoted sh word); an absolute path → itself, quoted. */
 function shDir(dir) {
-  if (dir.startsWith('~/')) return `"$HOME/${dir.slice(2)}"`;
+  // `${HOME:-}` so an unset HOME (a bare GUI spawn) is an empty prefix under `set -u`, not an error.
+  if (dir.startsWith('~/')) return `"\${HOME:-}/${dir.slice(2)}"`;
   return `"${dir}"`;
 }
 
@@ -77,15 +78,17 @@ if [ -n "\${PATH:-}" ]; then
   IFS=:
   for d in $PATH; do
     IFS=$oldifs
-    if [ -n "$d" ] && [ "$d" != "." ] && usable "$d/node"; then found="$d/node"; break; fi
+    case $d in /*) ;; *) IFS=:; continue ;; esac
+    if usable "$d/node"; then found="$d/node"; break; fi
     IFS=:
   done
   IFS=$oldifs
 fi
 
-# 2. The fixed directories.
-if [ -z "$found" ] && [ -n "\${HOME:-}" ]; then
+# 2. The fixed directories (the absolute ones need no HOME; a home-relative one with no HOME is skipped).
+if [ -z "$found" ]; then
   for d in ${binDirs}; do
+    case $d in /*) ;; *) continue ;; esac
     if usable "$d/node"; then found="$d/node"; break; fi
   done
 fi

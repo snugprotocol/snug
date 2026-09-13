@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 
-import { buildPlugin, checkProvenance, readme, SKILL_DIR } from './build-plugin.mjs';
+import { buildPlugin, checkProvenance, commitLabel, readme, SKILL_DIR } from './build-plugin.mjs';
 
 export const FAKE_SKILL = { 'SKILL.md': '---\nname: snug\n---\n# fake', 'references/10-x.md': '# x' };
 
@@ -52,7 +52,7 @@ describe('buildPlugin', () => {
         `snug/${SKILL_DIR}/scripts/lib/page-blocks.mjs`,
         'snug/README.md',
         'snug/LICENSE',
-        'snug/PROVENANCE.json',
+        'PROVENANCE.json',
       ]) {
         assert.ok(existsSync(path.join(out, rel)), `missing ${rel}`);
       }
@@ -99,18 +99,22 @@ describe('buildPlugin', () => {
     try {
       await build(out, sources);
       const pluginDir = path.join(out, 'snug');
-      assert.deepEqual(checkProvenance(pluginDir), []);
-      const doc = JSON.parse(readFileSync(path.join(pluginDir, 'PROVENANCE.json'), 'utf8'));
+      assert.deepEqual(checkProvenance(out), []);
+      const doc = JSON.parse(readFileSync(path.join(out, 'PROVENANCE.json'), 'utf8'));
       assert.equal(doc.commit, 'abc123');
-      assert.ok(Object.keys(doc.files).includes('scripts/snug-mcp.mjs'));
+      assert.ok(Object.keys(doc.files).includes('snug/scripts/snug-mcp.mjs'));
+      // The root marketplace manifest ships in the verbatim copy, so it is covered too.
+      assert.ok(Object.keys(doc.files).includes('.claude-plugin/marketplace.json'));
       assert.ok(!Object.keys(doc.files).includes('PROVENANCE.json'));
       // The mutants: a file edited after the build; a file added; a file removed.
       writeFileSync(path.join(pluginDir, 'README.md'), 'edited');
-      assert.ok(checkProvenance(pluginDir).some((p) => p.includes('README.md')));
+      assert.ok(checkProvenance(out).some((p) => p.includes('README.md')));
       writeFileSync(path.join(pluginDir, 'extra.txt'), 'x');
-      assert.ok(checkProvenance(pluginDir).some((p) => p.includes('extra.txt')));
+      assert.ok(checkProvenance(out).some((p) => p.includes('extra.txt')));
       rmSync(path.join(pluginDir, 'LICENSE'));
-      assert.ok(checkProvenance(pluginDir).some((p) => p.includes('LICENSE')));
+      assert.ok(checkProvenance(out).some((p) => p.includes('LICENSE')));
+      writeFileSync(path.join(out, 'PROVENANCE.json'), '{not json');
+      assert.ok(checkProvenance(out).some((p) => p.includes('not JSON')));
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -156,5 +160,13 @@ describe('the tree carries no path from the machine that built it', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('the commit a provenance names', () => {
+  it('is the bare SHA for a clean tree and SHA-dirty for a tree that differs from it', () => {
+    assert.equal(commitLabel('abc', ''), 'abc');
+    assert.equal(commitLabel('abc', '\n'), 'abc');
+    assert.equal(commitLabel('abc', ' M scripts/x.mjs\n'), 'abc-dirty');
   });
 });

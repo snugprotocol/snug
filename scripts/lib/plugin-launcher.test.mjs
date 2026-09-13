@@ -69,8 +69,8 @@ describe('the generated launcher', () => {
 
   it('is templated from the one install-roots list, not a second copy', () => {
     const text = launcherScript({ bundleBasename: 'x.mjs', roots });
-    for (const dir of roots.binDirs) assert.ok(text.includes(dir.replace('~/', '$HOME/')), `missing ${dir}`);
-    for (const { root, bin } of roots.versionedRoots) assert.ok(text.includes(`${root.replace('~/', '$HOME/')}"/*/${bin}`), `missing ${root}`);
+    for (const dir of roots.binDirs) assert.ok(text.includes(dir.replace('~/', '${HOME:-}/')), `missing ${dir}`);
+    for (const { root, bin } of roots.versionedRoots) assert.ok(text.includes(`${root.replace('~/', '${HOME:-}/')}"/*/${bin}`), `missing ${root}`);
     assert.ok(text.includes(`-ge ${NODE_MIN_MAJOR}`));
   });
 
@@ -171,6 +171,34 @@ describe('the generated launcher', () => {
     try {
       const result = run(launcher, { HOME: home, PATH: '' });
       assert.equal(result.status, 1);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('the launcher’s two walks agree with the resolver (review, 2026-09-13)', () => {
+  it('searches the absolute install dirs even with NO HOME at all', () => {
+    const { base, launcher } = plugin();
+    const record = path.join(base, 'argv');
+    // The isolated roots put /opt/homebrew/bin under base/root; a fake node lives there.
+    fakeNode(path.join(base, 'root', 'opt/homebrew/bin'), '22.0.0', record);
+    try {
+      const result = spawnSync('/bin/sh', [launcher], { env: { PATH: '' }, encoding: 'utf8' });
+      assert.equal(result.status, 0, result.stderr);
+      assert.ok(readFileSync(record, 'utf8').includes('snug-mcp.mjs'));
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it('never resolves a RELATIVE PATH entry against the working directory', () => {
+    const { base, launcher } = plugin();
+    const cwd = path.join(base, 'cwd');
+    fakeNode(path.join(cwd, 'bin'), '22.0.0', path.join(base, 'argv'));
+    try {
+      const result = spawnSync('/bin/sh', [launcher], { env: { HOME: path.join(base, 'home'), PATH: 'bin:./bin' }, cwd, encoding: 'utf8' });
+      assert.equal(result.status, 1, 'a node under a relative PATH entry must not be found');
     } finally {
       rmSync(base, { recursive: true, force: true });
     }

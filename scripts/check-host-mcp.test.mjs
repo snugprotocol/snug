@@ -35,6 +35,10 @@ describe('the release-inertness sweep', () => {
     assert.ok(problems.some((p) => p.includes('ANTHROPIC_API_KEY')));
   });
 
+  it('catches a lowercase or mixed-case name — the sweep is not uppercase-only', () => {
+    assert.ok(checkBundle(`${CLEAN} process.env.snugDebug;`).some((p) => p.includes('snugDebug')));
+  });
+
   it('catches the bracket spelling too', () => {
     const problems = checkBundle(`${CLEAN} process.env['SOME_DEBUG_FLAG'];`);
     assert.ok(problems.some((p) => p.includes('SOME_DEBUG_FLAG')));
@@ -161,6 +165,16 @@ describe('the plugin tree', () => {
     writeFileSync(path.join(out, 'snug/hooks/hooks.json'), '{}');
     try {
       assert.ok((await check(out)).some((p) => p.includes('hooks')));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('catches a manifest that is not JSON, by name', async () => {
+    const { dir, out } = await built();
+    writeFileSync(path.join(out, 'snug/.mcp.json'), '{nope');
+    try {
+      assert.ok((await check(out)).some((p) => p.includes('.mcp.json') && p.includes('not JSON')));
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

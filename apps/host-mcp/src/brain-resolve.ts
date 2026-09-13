@@ -95,7 +95,9 @@ function byVersionDesc(a: string, b: string): number {
 export function candidateDirs(deps: ResolveDeps, installRoots: InstallRoots = INSTALL_ROOTS): string[] {
   const dirs: string[] = [];
   for (const entry of (deps.env.PATH ?? '').split(path.delimiter)) {
-    if (entry !== '' && entry !== '.') dirs.push(entry);
+    // Absolute only: a relative entry (`.`, `bin`, `../x`) resolves against the working
+    // directory, and a binary resolver must never do that.
+    if (path.isAbsolute(entry)) dirs.push(entry);
   }
   for (const dir of installRoots.binDirs) {
     const expanded = expandHome(dir, deps.env.HOME);
