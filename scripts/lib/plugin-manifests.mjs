@@ -21,7 +21,7 @@ export const PLUGIN = {
 };
 
 export const MARKETPLACE = {
-  name: 'snug-local',
+  name: 'snug-skill',
   description: 'Snug — user-owned micro apps built by your agent.',
   owner: { name: 'TechVoyage LLC', email: 'hello@snugprotocol.org' },
 };

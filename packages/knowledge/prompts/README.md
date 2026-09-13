@@ -45,6 +45,11 @@ prompts/
 ├── skills/                          ← skill-builder prompts (workstream B)
 │   ├── skill-creator/               ← VENDORED Anthropic skill-creator — verbatim, commit-pinned,
 │   │                                   Apache-2.0 (LICENSE.txt + NOTICE.md); NO header comments here
+│   ├── snug/SKILL.md                ← the Snug plugin's skill SOURCE (ADR-0069 §7): store header, then
+│   │                                   the frontmatter; EXCLUDED from content.ts (gen-content's
+│   │                                   EXCLUDED_FROM_CONTENT) — read only by scripts/lib/skill-build.mjs,
+│   │                                   which strips the header, inserts the launch protocol from
+│   │                                   apps/host-mcp/src/instructions.md and renders the KB as references/
 │   ├── builder-preamble.md
 │   └── modes/
 ├── templates/

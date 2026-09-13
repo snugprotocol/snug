@@ -1,4 +1,5 @@
-// The plugin assembly: a missing input must be CANNOT RUN by name, never a smaller plugin.
+// The plugin assembly: a missing input must be CANNOT RUN by name, never a smaller plugin;
+// the tree carries the process, the launcher, the skill and its provenance.
 
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -6,25 +7,37 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 
-import { buildPlugin } from './build-plugin.mjs';
+import { buildPlugin, checkProvenance, readme, SKILL_DIR } from './build-plugin.mjs';
 
-const fixtures = () => {
+export const FAKE_SKILL = { 'SKILL.md': '---\nname: snug\n---\n# fake', 'references/10-x.md': '# x' };
+
+export const fixtures = () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'snugsrc-'));
   mkdirSync(path.join(dir, 'in'), { recursive: true });
-  const bundle = path.join(dir, 'in/snug-mcp.mjs');
-  const page = path.join(dir, 'in/snug-host-local.html');
-  const installRoots = path.join(dir, 'in/install-roots.json');
-  writeFileSync(bundle, '// bundle');
-  writeFileSync(page, '<!doctype html><title>Snug</title>');
-  writeFileSync(installRoots, JSON.stringify({ binDirs: ['~/.local/bin'], versionedRoots: [{ root: '~/.nvm/versions/node', bin: 'bin' }] }));
-  return { dir, out: path.join(dir, 'out'), sources: { bundle, page, installRoots } };
+  const write = (name, text) => {
+    const file = path.join(dir, 'in', name);
+    writeFileSync(file, text);
+    return file;
+  };
+  const sources = {
+    bundle: write('snug-mcp.mjs', '// bundle'),
+    page: write('snug-host-local.html', '<!doctype html><title>Snug</title>'),
+    installRoots: write('install-roots.json', JSON.stringify({ binDirs: ['~/.local/bin'], versionedRoots: [{ root: '~/.nvm/versions/node', bin: 'bin' }] })),
+    kit: write('snug-host.html', '<!doctype html><title>Snug kit</title>'),
+    embed: write('snug-embed.mjs', '// embed'),
+    pageBlocks: write('page-blocks.mjs', '// blocks'),
+    license: write('LICENSE', 'MIT License'),
+  };
+  return { dir, out: path.join(dir, 'out'), sources };
 };
 
+const build = (out, sources) => buildPlugin(out, sources, { skill: FAKE_SKILL, commit: 'abc123' });
+
 describe('buildPlugin', () => {
-  it('writes the whole installable tree', () => {
+  it('writes the whole installable tree', async () => {
     const { dir, out, sources } = fixtures();
     try {
-      assert.deepEqual(buildPlugin(out, sources), []);
+      assert.deepEqual(await build(out, sources), []);
       for (const rel of [
         '.claude-plugin/marketplace.json',
         'snug/.claude-plugin/plugin.json',
@@ -33,6 +46,14 @@ describe('buildPlugin', () => {
         'snug/scripts/snug-mcp.mjs',
         'snug/scripts/snug-host-local.html',
         'snug/scripts/snug',
+        `snug/${SKILL_DIR}/SKILL.md`,
+        `snug/${SKILL_DIR}/references/10-x.md`,
+        `snug/${SKILL_DIR}/assets/snug-host.html`,
+        `snug/${SKILL_DIR}/scripts/snug-embed.mjs`,
+        `snug/${SKILL_DIR}/scripts/lib/page-blocks.mjs`,
+        'snug/README.md',
+        'snug/LICENSE',
+        'snug/PROVENANCE.json',
       ]) {
         assert.ok(existsSync(path.join(out, rel)), `missing ${rel}`);
       }
@@ -42,16 +63,18 @@ describe('buildPlugin', () => {
       assert.ok(readFileSync(launcher, 'utf8').startsWith('#!/bin/sh'));
       const mcp = JSON.parse(readFileSync(path.join(out, 'snug/.mcp.json'), 'utf8'));
       assert.deepEqual(mcp.mcpServers.snug, { command: '/bin/sh', args: ['${CLAUDE_PLUGIN_ROOT}/scripts/snug'] });
+      // The skill is the pre-built tree, byte for byte.
+      assert.equal(readFileSync(path.join(out, `snug/${SKILL_DIR}/SKILL.md`), 'utf8'), FAKE_SKILL['SKILL.md']);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it('REFUSES by name when the bundle has not been built', () => {
+  it('REFUSES by name when the bundle has not been built', async () => {
     const { dir, out, sources } = fixtures();
     rmSync(sources.bundle);
     try {
-      const problems = buildPlugin(out, sources);
+      const problems = await build(out, sources);
       assert.ok(problems.some((p) => p.includes('bundle')), JSON.stringify(problems));
       // and writes nothing: a partial plugin is worse than none
       assert.ok(!existsSync(out));
@@ -60,26 +83,50 @@ describe('buildPlugin', () => {
     }
   });
 
-  it('REFUSES by name when the runner page has not been built', () => {
+  it('REFUSES by name when the artifact kit is missing — the skill would cite an asset it does not have', async () => {
     const { dir, out, sources } = fixtures();
-    rmSync(sources.page);
+    rmSync(sources.kit);
     try {
-      assert.ok(buildPlugin(out, sources).some((p) => p.includes('page')));
+      const problems = await build(out, sources);
+      assert.ok(problems.some((p) => p.includes('kit')), JSON.stringify(problems));
+      assert.ok(!existsSync(out));
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it('tells the reader that a rebuild does not reach an installed plugin', () => {
-    // Measured: the install is a version-keyed copy, and neither `install` nor `update`
-    // refreshes it — so the README must say so or the next walk tests a stale bundle.
+  it('writes a provenance the tree verifies against, and catches a changed file', async () => {
     const { dir, out, sources } = fixtures();
     try {
-      buildPlugin(out, sources);
-      const readme = readFileSync(path.join(out, 'snug/README.md'), 'utf8');
-      assert.match(readme, /Uninstall/);
+      await build(out, sources);
+      const pluginDir = path.join(out, 'snug');
+      assert.deepEqual(checkProvenance(pluginDir), []);
+      const doc = JSON.parse(readFileSync(path.join(pluginDir, 'PROVENANCE.json'), 'utf8'));
+      assert.equal(doc.commit, 'abc123');
+      assert.ok(Object.keys(doc.files).includes('scripts/snug-mcp.mjs'));
+      assert.ok(!Object.keys(doc.files).includes('PROVENANCE.json'));
+      // The mutants: a file edited after the build; a file added; a file removed.
+      writeFileSync(path.join(pluginDir, 'README.md'), 'edited');
+      assert.ok(checkProvenance(pluginDir).some((p) => p.includes('README.md')));
+      writeFileSync(path.join(pluginDir, 'extra.txt'), 'x');
+      assert.ok(checkProvenance(pluginDir).some((p) => p.includes('extra.txt')));
+      rmSync(path.join(pluginDir, 'LICENSE'));
+      assert.ok(checkProvenance(pluginDir).some((p) => p.includes('LICENSE')));
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('the README a marketplace reviewer reads', () => {
+  it('names the two prerequisites and the install, and ships no hooks', () => {
+    const text = readme();
+    assert.match(text, /Node\.js 20/);
+    assert.match(text, /Claude Code/);
+    assert.match(text, /\/login/);
+    assert.match(text, /claude plugin install snug@snug-skill/);
+    assert.match(text, /no hooks/);
+    assert.match(text, /PROVENANCE\.json/);
+    assert.doesNotMatch(text, /curl .*\| *bash/);
   });
 });

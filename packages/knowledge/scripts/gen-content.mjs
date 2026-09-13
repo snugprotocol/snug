@@ -19,6 +19,16 @@ import { fileURLToPath } from 'node:url';
 
 const PROMPT_EXTENSIONS = new Set(['.md', '.txt', '.py', '.html', '.json']);
 
+/**
+ * Prompt-store paths that are NOT compiled into content.ts (ADR-0069 §7, ADR-0065 D6).
+ *
+ * `skills/snug/` is the Snug skill's SOURCE — it lives here because every LLM-bound prompt
+ * does (ADR-0004), but it is read by `scripts/lib/skill-build.mjs` into the plugin tree and
+ * by nothing at runtime. Compiling it would put marketplace-only text into the playground,
+ * the desktop and both host kits. Posix prefixes, relative to prompts/.
+ */
+export const EXCLUDED_FROM_CONTENT = ['skills/snug/'];
+
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const defaultPromptsDir = path.join(packageRoot, 'prompts');
 const generatedDir = path.join(packageRoot, 'src', 'generated');
@@ -42,6 +52,7 @@ export function collectPromptFiles(promptsDir = defaultPromptsDir) {
   return walk(promptsDir)
     .filter((abs) => PROMPT_EXTENSIONS.has(path.extname(abs).toLowerCase()))
     .map((abs) => ({ rel: toPosix(path.relative(promptsDir, abs)), abs }))
+    .filter(({ rel }) => !EXCLUDED_FROM_CONTENT.some((prefix) => rel.startsWith(prefix)))
     .sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0));
 }
 

@@ -6,13 +6,14 @@
 // scripts/ is vitest-run).
 
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 
-import { ALLOWED_ENV_READS, ALLOWED_WHOLE_ENV_READS, checkBundle, checkInstructions, checkPluginTree, FORBIDDEN_IN_RELEASE } from './check-host-mcp.mjs';
-import { claudeMcpConfig, claudePluginManifest, marketplaceManifest } from './lib/plugin-manifests.mjs';
+import { buildPlugin } from './build-plugin.mjs';
+import { FAKE_SKILL, fixtures } from './build-plugin.test.mjs';
+import { ALLOWED_ENV_READS, ALLOWED_WHOLE_ENV_READS, checkBundle, checkInstructions, checkPluginTree, FORBIDDEN_IN_RELEASE, runValidators } from './check-host-mcp.mjs';
 
 const CLEAN = `const home = process.env.HOME; const t = process.env.TMPDIR; export const tools = ['snug_status'];`;
 
@@ -85,70 +86,123 @@ describe('the instructions byte-compare (D-B12)', () => {
 });
 
 describe('the plugin tree', () => {
-  const tree = (mutate = (files) => files) => {
-    const dir = mkdtempSync(path.join(tmpdir(), 'snugplug-'));
-    const files = {
-      'snug/.claude-plugin/plugin.json': claudePluginManifest(),
-      'snug/.mcp.json': claudeMcpConfig(),
-      '.claude-plugin/marketplace.json': marketplaceManifest(),
-    };
-    const mutated = mutate(files);
-    for (const [rel, value] of Object.entries(mutated)) {
-      mkdirSync(path.join(dir, path.dirname(rel)), { recursive: true });
-      writeFileSync(path.join(dir, rel), JSON.stringify(value, null, 2));
-    }
-    mkdirSync(path.join(dir, 'snug/scripts'), { recursive: true });
-    writeFileSync(path.join(dir, 'snug/scripts/snug-mcp.mjs'), '// bundle');
-    writeFileSync(path.join(dir, 'snug/scripts/snug-host-local.html'), '<!doctype html>');
-    writeFileSync(path.join(dir, 'snug/scripts/snug'), '#!/bin/sh\nexit 0\n');
-    return dir;
+  /** A real build over fake inputs, then a mutation — the gate must see it. */
+  const built = async () => {
+    const { dir, out, sources } = fixtures();
+    assert.deepEqual(await buildPlugin(out, sources, { skill: FAKE_SKILL, commit: 'abc123' }), []);
+    return { dir, out };
   };
+  const check = (out) => checkPluginTree(out, { skill: FAKE_SKILL });
 
-  it('passes a tree written from the constants module', () => {
-    const dir = tree();
+  it('passes a tree the builder wrote', async () => {
+    const { dir, out } = await built();
     try {
-      assert.deepEqual(checkPluginTree(dir), []);
+      assert.deepEqual(await check(out), []);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it('catches a hand-edited manifest', () => {
+  it('catches a hand-edited manifest', async () => {
     // The mutant: the "one contract, two artifacts" defect this module exists to prevent.
-    const dir = tree((files) => ({ ...files, 'snug/.claude-plugin/plugin.json': { ...files['snug/.claude-plugin/plugin.json'], version: '9.9.9' } }));
+    const { dir, out } = await built();
+    const file = path.join(out, 'snug/.claude-plugin/plugin.json');
+    writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, 'utf8')), version: '9.9.9' }));
     try {
-      assert.equal(checkPluginTree(dir).length, 1);
+      assert.ok((await check(out)).some((p) => p.includes('plugin.json') && p.includes('plugin-manifests')));
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it('catches a server command pointed somewhere else', () => {
-    const dir = tree((files) => ({ ...files, 'snug/.mcp.json': { mcpServers: { snug: { command: 'node', args: ['/tmp/whatever.mjs'] } } } }));
+  it('catches a server command pointed somewhere else', async () => {
+    const { dir, out } = await built();
+    writeFileSync(path.join(out, 'snug/.mcp.json'), JSON.stringify({ mcpServers: { snug: { command: 'node', args: ['/tmp/whatever.mjs'] } } }));
     try {
-      assert.ok(checkPluginTree(dir).some((p) => p.includes('.mcp.json')));
+      assert.ok((await check(out)).some((p) => p.includes('.mcp.json')));
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it('catches a missing launcher — the manifest runs it, so a tree without it starts nothing (AC3)', () => {
-    const dir = tree();
-    rmSync(path.join(dir, 'snug/scripts/snug'));
+  it('catches a missing launcher — the manifest runs it, so a tree without it starts nothing (AC3)', async () => {
+    const { dir, out } = await built();
+    rmSync(path.join(out, 'snug/scripts/snug'));
     try {
-      assert.ok(checkPluginTree(dir).some((p) => p.includes('launcher')));
+      assert.ok((await check(out)).some((p) => p.includes('launcher')));
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it('catches a missing runner page', () => {
-    const dir = tree();
-    rmSync(path.join(dir, 'snug/scripts/snug-host-local.html'));
+  it('catches a missing runner page', async () => {
+    const { dir, out } = await built();
+    rmSync(path.join(out, 'snug/scripts/snug-host-local.html'));
     try {
-      assert.ok(checkPluginTree(dir).some((p) => p.includes('runner page')));
+      assert.ok((await check(out)).some((p) => p.includes('runner page')));
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it('catches a SKILL.md edited in the tree rather than in its source (AC1)', async () => {
+    const { dir, out } = await built();
+    writeFileSync(path.join(out, 'snug/skills/snug/SKILL.md'), '---\nname: snug\n---\n# edited by hand');
+    try {
+      assert.ok((await check(out)).some((p) => p.includes('SKILL.md') && p.includes('fresh render')));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('catches a plugin that grew a hooks/ directory (ADR-0069: no hooks)', async () => {
+    const { dir, out } = await built();
+    mkdirSync(path.join(out, 'snug/hooks'), { recursive: true });
+    writeFileSync(path.join(out, 'snug/hooks/hooks.json'), '{}');
+    try {
+      assert.ok((await check(out)).some((p) => p.includes('hooks')));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('catches a file changed after the provenance was written', async () => {
+    const { dir, out } = await built();
+    writeFileSync(path.join(out, 'snug/scripts/snug-mcp.mjs'), '// replaced');
+    try {
+      assert.ok((await check(out)).some((p) => p.includes('PROVENANCE') && p.includes('snug-mcp.mjs')));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('the external validators', () => {
+  it('reports an absent validator as NOT VERIFIED, never as a pass', () => {
+    const exec = () => {
+      const error = new Error('spawn claude ENOENT');
+      error.code = 'ENOENT';
+      throw error;
+    };
+    const results = runValidators('/nowhere', exec);
+    assert.equal(results.length, 3);
+    assert.ok(results.every((r) => r.status === 'not verified'));
+  });
+
+  it('reports a refusal as failed, with the validator’s own words', () => {
+    const exec = () => {
+      const error = new Error('exit 1');
+      error.status = 1;
+      error.stdout = '';
+      error.stderr = 'x Validation failed: description too long';
+      throw error;
+    };
+    const results = runValidators('/nowhere', exec);
+    assert.ok(results.every((r) => r.status === 'failed' && r.detail.includes('description too long')));
+  });
+
+  it('reports a pass as ok', () => {
+    const results = runValidators('/nowhere', () => '✔ Validation passed\n');
+    assert.ok(results.every((r) => r.status === 'ok'));
   });
 });

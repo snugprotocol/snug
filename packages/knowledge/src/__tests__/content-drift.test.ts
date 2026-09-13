@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 // Scripts are plain .mjs (no d.ts); vitest executes them fine.
 // eslint-disable-next-line import/no-relative-packages
 // @ts-ignore — untyped codegen module (test layer only)
-import { buildChecksumManifestSource, buildContentModuleSource } from '../../scripts/gen-content.mjs';
+import { buildChecksumManifestSource, buildContentModuleSource, collectPromptFiles, EXCLUDED_FROM_CONTENT } from '../../scripts/gen-content.mjs';
 
 import { generatedDir } from './helpers.js';
 
@@ -27,5 +27,20 @@ describe('generated content drift', () => {
     ).toBe(true);
     const committed = readFileSync(committedPath, 'utf8');
     expect(committed).toBe(buildChecksumManifestSource());
+  });
+});
+
+describe('the Snug skill source stays OUT of content.ts (ADR-0069 §7)', () => {
+  it('names the exclusion, and the exclusion is the skill', () => {
+    expect(EXCLUDED_FROM_CONTENT).toContain('skills/snug/');
+  });
+
+  it('the skill SOURCE exists on disk — the exclusion must hide a real file, not vouch for nothing', () => {
+    expect(existsSync(path.join(generatedDir, '..', '..', 'prompts', 'skills', 'snug', 'SKILL.md'))).toBe(true);
+  });
+
+  it('a fresh regeneration carries no skills/snug/ key, so no runtime bundle can import it', () => {
+    expect(collectPromptFiles().some((f: { rel: string }) => f.rel.startsWith('skills/snug/'))).toBe(false);
+    expect(buildContentModuleSource()).not.toContain('skills/snug/');
   });
 });
