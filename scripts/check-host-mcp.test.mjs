@@ -100,6 +100,7 @@ describe('the plugin tree', () => {
     mkdirSync(path.join(dir, 'snug/scripts'), { recursive: true });
     writeFileSync(path.join(dir, 'snug/scripts/snug-mcp.mjs'), '// bundle');
     writeFileSync(path.join(dir, 'snug/scripts/snug-host-local.html'), '<!doctype html>');
+    writeFileSync(path.join(dir, 'snug/scripts/snug'), '#!/bin/sh\nexit 0\n');
     return dir;
   };
 
@@ -126,6 +127,16 @@ describe('the plugin tree', () => {
     const dir = tree((files) => ({ ...files, 'snug/.mcp.json': { mcpServers: { snug: { command: 'node', args: ['/tmp/whatever.mjs'] } } } }));
     try {
       assert.ok(checkPluginTree(dir).some((p) => p.includes('.mcp.json')));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('catches a missing launcher — the manifest runs it, so a tree without it starts nothing (AC3)', () => {
+    const dir = tree();
+    rmSync(path.join(dir, 'snug/scripts/snug'));
+    try {
+      assert.ok(checkPluginTree(dir).some((p) => p.includes('launcher')));
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

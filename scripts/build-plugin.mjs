@@ -12,7 +12,8 @@ import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { BUNDLE_PATH, claudeMcpConfig, claudePluginManifest, codexMcpConfig, codexPluginManifest, marketplaceManifest, PLUGIN } from './lib/plugin-manifests.mjs';
+import { launcherScript, readInstallRoots } from './lib/plugin-launcher.mjs';
+import { BUNDLE_PATH, claudeMcpConfig, claudePluginManifest, codexMcpConfig, codexPluginManifest, LAUNCHER_PATH, marketplaceManifest, PLUGIN } from './lib/plugin-manifests.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const PLUGIN_OUT_DIR = path.join(REPO, 'dist', 'plugin');
@@ -20,6 +21,7 @@ export const PLUGIN_OUT_DIR = path.join(REPO, 'dist', 'plugin');
 const SOURCES = {
   bundle: path.join(REPO, 'apps/host-mcp/dist/snug-mcp.mjs'),
   page: path.join(REPO, 'apps/host/dist-local/snug-host-local.html'),
+  installRoots: path.join(REPO, 'apps/host-mcp/src/install-roots.json'),
 };
 
 const json = (value) => `${JSON.stringify(value, null, 2)}\n`;
@@ -44,13 +46,20 @@ export function buildPlugin(outDir = PLUGIN_OUT_DIR, sources = SOURCES) {
   // The page ships BESIDE the bundle: the process reads it relative to its own location,
   // so the pair moves together or not at all.
   cpSync(sources.page, path.join(pluginDir, 'scripts', 'snug-host-local.html'));
+  // The launcher, beside both (AC3): generated from the one install-roots list, executable
+  // by mode AND run through `/bin/sh` by the manifest, so a lost mode bit cannot break it.
+  writeFileSync(
+    path.join(pluginDir, LAUNCHER_PATH),
+    launcherScript({ bundleBasename: path.basename(BUNDLE_PATH), roots: readInstallRoots(sources.installRoots) }),
+    { mode: 0o755 },
+  );
 
   writeFileSync(path.join(pluginDir, '.claude-plugin', 'plugin.json'), json(claudePluginManifest()));
   writeFileSync(path.join(pluginDir, '.mcp.json'), json(claudeMcpConfig()));
   writeFileSync(path.join(pluginDir, '.codex-plugin', 'plugin.json'), json(codexPluginManifest()));
   writeFileSync(
     path.join(pluginDir, '.codex-plugin', '.mcp.json'),
-    json(codexMcpConfig({ absolutePath: path.join(pluginDir, BUNDLE_PATH) })),
+    json(codexMcpConfig({ absolutePath: path.join(pluginDir, LAUNCHER_PATH) })),
   );
   writeFileSync(path.join(outDir, '.claude-plugin', 'marketplace.json'), json(marketplaceManifest()));
   writeFileSync(

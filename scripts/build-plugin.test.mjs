@@ -1,7 +1,7 @@
 // The plugin assembly: a missing input must be CANNOT RUN by name, never a smaller plugin.
 
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
@@ -13,9 +13,11 @@ const fixtures = () => {
   mkdirSync(path.join(dir, 'in'), { recursive: true });
   const bundle = path.join(dir, 'in/snug-mcp.mjs');
   const page = path.join(dir, 'in/snug-host-local.html');
+  const installRoots = path.join(dir, 'in/install-roots.json');
   writeFileSync(bundle, '// bundle');
   writeFileSync(page, '<!doctype html><title>Snug</title>');
-  return { dir, out: path.join(dir, 'out'), sources: { bundle, page } };
+  writeFileSync(installRoots, JSON.stringify({ binDirs: ['~/.local/bin'], versionedRoots: [{ root: '~/.nvm/versions/node', bin: 'bin' }] }));
+  return { dir, out: path.join(dir, 'out'), sources: { bundle, page, installRoots } };
 };
 
 describe('buildPlugin', () => {
@@ -30,9 +32,16 @@ describe('buildPlugin', () => {
         'snug/.codex-plugin/plugin.json',
         'snug/scripts/snug-mcp.mjs',
         'snug/scripts/snug-host-local.html',
+        'snug/scripts/snug',
       ]) {
         assert.ok(existsSync(path.join(out, rel)), `missing ${rel}`);
       }
+      // The launcher is what the manifest runs (AC3): sh, executable, pointing beside itself.
+      const launcher = path.join(out, 'snug/scripts/snug');
+      assert.ok(statSync(launcher).mode & 0o100, 'the launcher must be executable');
+      assert.ok(readFileSync(launcher, 'utf8').startsWith('#!/bin/sh'));
+      const mcp = JSON.parse(readFileSync(path.join(out, 'snug/.mcp.json'), 'utf8'));
+      assert.deepEqual(mcp.mcpServers.snug, { command: '/bin/sh', args: ['${CLAUDE_PLUGIN_ROOT}/scripts/snug'] });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

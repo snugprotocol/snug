@@ -12,7 +12,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { BUNDLE_PATH, claudeMcpConfig, claudePluginManifest, marketplaceManifest } from './lib/plugin-manifests.mjs';
+import { BUNDLE_PATH, claudeMcpConfig, claudePluginManifest, LAUNCHER_PATH, marketplaceManifest } from './lib/plugin-manifests.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -103,6 +103,7 @@ export function checkPluginTree(dir) {
   same('snug/.mcp.json', read('snug/.mcp.json'), claudeMcpConfig());
   same('.claude-plugin/marketplace.json', read('.claude-plugin/marketplace.json'), marketplaceManifest());
   if (!existsSync(path.join(dir, 'snug', BUNDLE_PATH))) problems.push(`the plugin tree is missing ${BUNDLE_PATH}`);
+  if (!existsSync(path.join(dir, 'snug', LAUNCHER_PATH))) problems.push(`the plugin tree is missing the launcher ${LAUNCHER_PATH} (AC3)`);
   if (!existsSync(path.join(dir, 'snug/scripts/snug-host-local.html'))) problems.push('the plugin tree is missing the runner page');
   return problems;
 }
