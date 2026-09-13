@@ -414,6 +414,16 @@ terminal scrollback when the CLI fallback prints it. The token dies with the pro
 bounds the exposure to one session; a token file on disk was the alternative and was judged
 worse.
 
+**R-43 — The child-CLI brain keeps up to two idle `claude` processes per user (ADR-0069).**
+Each pre-warmed child is ~257 MB of memory holding one system prompt in `ps`-visible argv and
+nothing else — it serves exactly one request and is reaped, so no transcript is ever reused
+and a child can hold nothing another caller did not send. The idle lifetime is bounded (five
+minutes, two keys, reaped on stop / abort / error / exit; their stdin is a pipe from the
+runner, so the runner's death ends them). Accepted for the ~3 s saved on every think after
+the first, measured 2026-09-13. The launcher's and the resolver's search of the user's own
+install directories is the user's shell's trust (R-40's boundary). See
+`docs/security/threat-model-delta-local-host-process.md` (the 2026-09-13 amendment).
+
 
 **R-38 — Shared docs may carry the sharer's personal data.** `memory` is off by default
 and every doc is a per-doc choice with a first-line preview, but the share scan looks for
@@ -749,7 +759,7 @@ cannot fail a hash check). Its content is not new; the record is.
 | `docs/security/threat-model-delta-desktop-update-channel.md` | `2f6321918cce` | §5 C2 + authoring · R-28, R-29, R-30, R-33 |
 | `docs/security/threat-model-delta-app-sharing.md` | `806ca935aa18` | §4 boundary 5 · §5 C1 + C2 + authoring · R-34, R-35, R-36, R-37, R-38, R-39 |
 
-| `docs/security/threat-model-delta-local-host-process.md` | `0505106aa0c0` | §6 R-40 · R-41 · R-42 |
+| `docs/security/threat-model-delta-local-host-process.md` | `434fbf7618f3` | §6 R-40 · R-41 · R-42 · R-43 |
 <!-- DELTA-LEDGER:END -->
 
 ---

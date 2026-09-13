@@ -57,3 +57,18 @@ survive.
 - It does not claim the LAN rungs are covered. The page carries neither `lanFetch` nor
   `lanHttpPrivate`, so a LAN row gets the executor's own named refusal.
 - It does not claim anything about Windows. This process is macOS-only, as the desktop is.
+
+## Amendment — 2026-09-13 (TASK-20260913-binding-b-marketplace-plugin, ADR-0069)
+
+| Surface | The threat | What holds |
+|---|---|---|
+| **The pre-warmed child** (`brain-session.ts`) | Up to two idle `claude` processes per user, each ~257 MB, holding a system prompt in argv; a request answered from the WRONG child; a child outliving the runner | A child holds nothing but its system prompt until its ONE request arrives, answers it, and is reaped — no transcript is ever reused, so a child can hold nothing another caller did not send. The pool is keyed by `sha256(system prompt)` and a busy child is never shared. Bounds are named constants: two pre-warmed keys (LRU), a five-minute idle TTL, a reap on `stop()`, on abort (the page closing its request), on error, on exit; the children's stdin is a pipe from the runner, so the runner's death (even SIGKILL) ends them on EOF. **Measured 2026-09-13:** a child idle five seconds answers its first message in 1.7 s against ~5 s cold. The argv is `ps`-visible as before (residual 5), now for up to two idle children. |
+| **The streaming chat route** | A delta forging an SSE frame boundary; a partial answer read as a complete one | Every frame is one `JSON.stringify` of the whole payload — a delta's text is a string VALUE, so `\n\ndata:` inside it stays inside its frame (pinned by a test with exactly that text). A failure before any delta is a 502 the page reads; after a delta the stream ends with **no finish**, which the page's adapter reports as a dropped stream, never a complete answer. |
+| **The launcher's PATH walk and the binary resolution** (`scripts/snug`, `brain-resolve.ts`) | Executing a `node` or `claude` an attacker placed first in a search directory | The same trust as the user's shell (residual 1: any same-user process): PATH first, then the installers' directories under the user's own home and the two system prefixes, from ONE list. Nothing is downloaded; with no Node the launcher prints one line and exits 1. The manifest's `args` array is passed by the hosts as literal argv, never through a shell, so a plugin root with a space is one argument; `/bin/sh` is named by absolute path. HOME and PATH are read by NAME (the release gate's whole-env count stays at three). |
+| **The plugin tree as a distribution** | A marketplace clone whose generated files a reviewer cannot tie to a source | `PROVENANCE.json` names the monorepo commit and the sha256 of every shipped file; the gate rebuilds the tree from sources and refuses a SKILL.md, reference, launcher, README or provenance that drifted; the distribution repo is a verbatim copy of that tree. The plugin ships no hooks and no data-plane tool (both gated). |
+
+**Residuals added:** (7) two idle `claude` processes per user for up to five minutes after a
+think — memory, and a `ps`-visible system prompt, accepted for the ~3 s saved on every think
+after the first; (8) the system prompt on argv would hit Linux's 128 KiB per-argument limit
+for a very large app — moot on macOS, noted for the Codex phase (`--system-prompt-file` is the
+remedy); (9) the page advertises an 8,192-token output cap the CLI does not enforce.

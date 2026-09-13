@@ -74,3 +74,18 @@ binding may CLAIM and DO, never what its bundle contains.
 - Positive: zero-install Snug on every Agent-Skills host; the knowledge base travels with the skill; every invariant stays where it is (sandbox, file, credential boundary); one React tree serves the Playground, Snug Desktop and the kit (parity by construction).
 - Negative / residuals: data custody ranges from a file on disk (B) to Anthropic-hosted page storage (A1: every save is a version and a reload; A2: per-view `window.storage`, copy-only export) — disclosed, not hidden; the embedder's CSP narrows what artifact-bound apps may load (a skill rule + lint, and a contract-vs-schema finding that the `quick` tier follows contract prose over the envelope's schema 28/30); the widget floor is 149 KB, so 4 of 12 starters need the compact variant; the chat binding depends on an npm publish; the runtime contract rides as a user turn on `sample`/`complete` (an authority downgrade versus the system slot); viewer-billed inference and its rate limits belong to the host; a public hosted artifact cannot save; nesting the runner inside a foreign sandbox is unproven until spike S1 and has an in-page fallback that must be disclosed; the widget binding is turn-based only and approval-bound; marketplace supply-chain posture (ClawHub's history) makes a skill that generates HTML a scrutiny target; the commercial terms of viewer-billed inference are a professional question, not an engineering one.
 - Docs owed (T7): a non-normative "Host bindings" appendix in the spec draft (spec-sync, owner push), `threat-model-delta-host-bindings.md` + its ledger row, architecture / code-map / glossary / product-vision claims discipline, positioning tests extended to every new surface.
+
+### Amendment — 2026-09-13 (TASK-20260913-binding-b-marketplace-plugin, ADR-0069)
+
+- **§2 gains its second axis.** A binding is where the body runs; a **brain** is what answers
+  the thinks (ADR-0069 §1). Binding B is the primary path for Claude Code, Claude Desktop and
+  Cowork; Binding A is the zero-install demo and the fallback when no local process can run.
+- **"The runtime contract rides as a leading user turn on both host brains" is true of Binding
+  A only.** On Binding B the page reaches the shim through `localAdapter`, which has a system
+  slot, so the contract rides as the **system** prompt — measured at the plan review, and the
+  reason an app's pool key is stable across its thinks.
+- **D6's committed `skills/snug/` staging tree and D11's Release-asset fetch are superseded for
+  now** (ADR-0069 §7): the plugin tree is a gitignored build output the gate rebuilds and
+  validates on every run, tied to a commit by `PROVENANCE.json`; both kits ride inside it.
+- **§8's launch protocol (D12) is rewritten in the program record**: the plugin's tools first,
+  the artifact route as the fallback, the install line when neither exists.
