@@ -1,4 +1,4 @@
-// AC9 — the `claude -p` shim (program D5, ADR-0068 §5).
+// The `claude` brain shim (program D5, ADR-0068 §5, ADR-0069 §5).
 //
 // Two things this file exists to hold still.
 //
@@ -11,15 +11,13 @@
 //    falls back to the user's own keychain — which is what the brain chip's "your CLI"
 //    promises.
 //
-// 2. THE SHIM SPEAKS SSE (D-B15). `openaiAdapter` writes `stream: true` unconditionally
-//    and parses with `parseSse`; a plain-JSON answer yields no events, `finishReason`
-//    stays null, and EVERY turn comes back as a dropped stream. The CLI underneath is
-//    non-streaming (`--output-format json`), so the shim buffers the child and then emits
-//    a single-chunk stream.
+// 2. ONE WIRE. The brain and the boot probe both run `--input-format stream-json` through
+//    the same child class (ADR-0069 §5): the probe proves the path the brain uses, each
+//    delta is its own SSE frame, and every frame is one JSON.stringify of the whole payload.
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { buildClaudeArgs, buildStreamArgs, childEnvFor, CHILD_ENV_ALLOWLIST, completionToSseBody, createClaudeBrain, parseClaudeOutput, SHIM_TIMEOUT_MS, splitChatRequest, probeBrain } from '../brain-claude.js';
+import { buildStreamArgs, childEnvFor, CHILD_ENV_ALLOWLIST, createClaudeBrain, INSTALL_REMEDY, probeBrain, SHIM_FIRST_DELTA_MS, SHIM_IDLE_MS, splitChatRequest } from '../brain-claude.js';
 import { delta, fakeSpawner, result } from './fixtures/fake-claude-child.js';
 
 /** The names measured in a live Claude Code session — none may reach the child. */
@@ -76,65 +74,31 @@ describe('the child environment', () => {
   });
 });
 
-describe('the pinned argv', () => {
-  const args = () => buildClaudeArgs({ system: 'you are a brain', maxTokens: 1024 });
-
-  it('runs headless with a JSON result', () => {
-    expect(args()).toEqual(expect.arrayContaining(['-p', '--output-format', 'json']));
+describe('the one argv (ADR-0069 §5)', () => {
+  const args = buildStreamArgs('you are a brain');
+  it('speaks stream-json both ways, verbose, with partial messages', () => {
+    expect(args).toEqual(expect.arrayContaining(['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages']));
   });
-
-  it('disables every tool, which is what forces a single turn', () => {
-    // Verified on the installed CLI: `--tools ""` is the documented spelling for "disable
-    // all tools", and a run with no tools reported num_turns 1 / stop_reason end_turn.
-    const a = args();
-    expect(a[a.indexOf('--tools') + 1]).toBe('');
-    expect(a).toEqual(expect.arrayContaining(['--disallowedTools', '*']));
+  it('disables every tool, which is what forces a single turn, with --max-turns 1 as belt and braces', () => {
+    expect(args).toEqual(expect.arrayContaining(['--tools', '', '--disallowedTools', '*', '--max-turns', '1']));
   });
-
   it('never passes --bare (program D5)', () => {
-    expect(args()).not.toContain('--bare');
+    expect(args).not.toContain('--bare');
   });
-
   it('does not persist a session', () => {
-    expect(args()).toContain('--no-session-persistence');
+    expect(args).toContain('--no-session-persistence');
   });
-
   it('carries the system prompt as an argument, never as an env var', () => {
-    expect(args()).toEqual(expect.arrayContaining(['--system-prompt', 'you are a brain']));
+    expect(args[args.indexOf('--system-prompt') + 1]).toBe('you are a brain');
   });
 });
 
-describe('the shim answers as a stream', () => {
-  it('emits SSE with a content delta, a finish reason and a terminator', () => {
-    const body = completionToSseBody({ text: 'hello', stopReason: 'end_turn', model: 'claude' });
-    expect(body).toMatch(/^data: /m);
-    expect(body).toContain('"content":"hello"');
-    expect(body).toContain('"finish_reason"');
-    expect(body.trimEnd().endsWith('data: [DONE]')).toBe(true);
+describe('the bounds name themselves and are sized from measurement', () => {
+  it('the cold-start bound is well above a cold `claude -p` (lesson 2026-08-18)', () => {
+    expect(SHIM_FIRST_DELTA_MS).toBeGreaterThanOrEqual(120_000);
   });
-
-  it('maps the CLI’s stop_reason onto an OpenAI finish_reason', () => {
-    expect(completionToSseBody({ text: 'x', stopReason: 'end_turn', model: 'claude' })).toContain('"finish_reason":"stop"');
-    expect(completionToSseBody({ text: 'x', stopReason: 'max_tokens', model: 'claude' })).toContain('"finish_reason":"length"');
-  });
-
-  it('emits a finish_reason even for an empty answer, so the adapter never reports a dropped stream', () => {
-    const body = completionToSseBody({ text: '', stopReason: 'end_turn', model: 'claude' });
-    expect(body).toContain('"finish_reason"');
-    expect(body.trimEnd().endsWith('data: [DONE]')).toBe(true);
-  });
-
-  it('escapes a payload that would otherwise break the framing', () => {
-    const body = completionToSseBody({ text: 'line\n\ndata: not-a-frame', stopReason: 'end_turn', model: 'claude' });
-    const frames = body.split('\n').filter((l) => l.startsWith('data: '));
-    // The newline rides inside the JSON string, so it never becomes a second frame.
-    expect(frames.some((f) => f.includes('not-a-frame') && f.includes('\\n'))).toBe(true);
-  });
-});
-
-describe('the timeout names itself and is sized from a cold start', () => {
-  it('is well above a cold `claude -p` (lesson 2026-08-18)', () => {
-    expect(SHIM_TIMEOUT_MS).toBeGreaterThanOrEqual(120_000);
+  it('the idle bound is shorter than the cold-start bound — a child that started answering has no start-up left to do', () => {
+    expect(SHIM_IDLE_MS).toBeLessThan(SHIM_FIRST_DELTA_MS);
   });
 });
 
@@ -142,73 +106,49 @@ describe('the OpenAI-shaped request the page sends', () => {
   it('flattens system and user turns into one prompt, system first', () => {
     const { system, prompt } = splitChatRequest({
       messages: [
-        { role: 'system', content: 'you are a brain' },
+        { role: 'system', content: 'be a brain' },
         { role: 'user', content: 'hello' },
       ],
     });
-    expect(system).toBe('you are a brain');
+    expect(system).toBe('be a brain');
     expect(prompt).toBe('hello');
   });
 
   it('keeps a multi-turn conversation in order, labelled', () => {
     const { prompt } = splitChatRequest({
       messages: [
-        { role: 'user', content: 'first' },
-        { role: 'assistant', content: 'answer' },
-        { role: 'user', content: 'second' },
+        { role: 'user', content: 'a' },
+        { role: 'assistant', content: 'b' },
+        { role: 'user', content: 'c' },
       ],
     });
-    // The CLI takes ONE prompt, so a conversation has to be rendered into it; losing the
-    // assistant turns would make every follow-up read as a fresh question.
-    expect(prompt).toMatch(/first[\s\S]*answer[\s\S]*second/);
+    expect(prompt).toBe('User: a\n\nAssistant: b\n\nUser: c');
   });
 
   it('joins multiple system messages rather than dropping all but one', () => {
     const { system } = splitChatRequest({
       messages: [
-        { role: 'system', content: 'rule one' },
-        { role: 'system', content: 'rule two' },
-        { role: 'user', content: 'go' },
+        { role: 'system', content: 'one' },
+        { role: 'system', content: 'two' },
+        { role: 'user', content: 'x' },
       ],
     });
-    expect(system).toContain('rule one');
-    expect(system).toContain('rule two');
+    expect(system).toBe('one\n\ntwo');
   });
 
   it('refuses a request with no user turn, by name', () => {
-    expect(() => splitChatRequest({ messages: [{ role: 'system', content: 'only rules' }] })).toThrow(/no user/i);
+    expect(() => splitChatRequest({ messages: [{ role: 'system', content: 'x' }] })).toThrow(/no user turn/);
   });
 
   it('reads array-shaped content (the OpenAI content-parts form)', () => {
     const { prompt } = splitChatRequest({
-      messages: [{ role: 'user', content: [{ type: 'text', text: 'part one' }, { type: 'text', text: 'part two' }] as never }],
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'part one' }, { type: 'text', text: 'part two' }] }],
     });
-    expect(prompt).toContain('part one');
-    expect(prompt).toContain('part two');
+    expect(prompt).toBe('part one\npart two');
   });
 });
 
-describe('reading the CLI’s answer', () => {
-  it('takes the result field and the stop reason', () => {
-    const parsed = parseClaudeOutput(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'pong', stop_reason: 'end_turn' }));
-    expect(parsed).toEqual({ text: 'pong', stopReason: 'end_turn' });
-  });
-
-  it('surfaces an is_error result as an error rather than as an empty answer', () => {
-    // An empty answer would look to the page like a model that had nothing to say.
-    expect(() => parseClaudeOutput(JSON.stringify({ type: 'result', is_error: true, result: 'usage limit reached' }))).toThrow(/usage limit reached/);
-  });
-
-  it('refuses output that is not the CLI’s JSON at all', () => {
-    expect(() => parseClaudeOutput('command not found: claude')).toThrow(/could not read/i);
-  });
-
-  it('defaults a missing stop_reason rather than throwing', () => {
-    expect(parseClaudeOutput(JSON.stringify({ result: 'hi' })).stopReason).toBe('end_turn');
-  });
-});
-
-describe('the brain end to end, with a fake CLI (ADR-0069 §5: a pre-warmed child, one request each)', () => {
+describe('the brain end to end, with a fake CLI (a pre-warmed child, one request each)', () => {
   const brainWith = (script?: Parameters<typeof fakeSpawner>[0], over: Parameters<typeof createClaudeBrain>[0] = {}) => {
     const { spawnChild, children } = fakeSpawner(script);
     const brain = createClaudeBrain({ resolveBinary: () => '/Users/x/.local/bin/claude', spawnBinary: (_binary, args, env) => spawnChild(args, env), ...over });
@@ -219,6 +159,20 @@ describe('the brain end to end, with a fake CLI (ADR-0069 §5: a pre-warmed chil
     const { brain } = brainWith();
     const body = await brain.complete({ messages: [{ role: 'user', content: 'ping' }] });
     expect(body).toContain('"content":"pong"');
+    expect(body).toContain('"finish_reason":"stop"');
+    expect(body.trimEnd().endsWith('data: [DONE]')).toBe(true);
+    brain.stop();
+  });
+
+  it('maps the CLI’s stop_reason onto an OpenAI finish_reason', async () => {
+    const { brain } = brainWith({ lines: [delta('cut'), result('cut', { stop_reason: 'max_tokens' })] });
+    expect(await brain.complete({ messages: [{ role: 'user', content: 'x' }] })).toContain('"finish_reason":"length"');
+    brain.stop();
+  });
+
+  it('emits a finish_reason even for an empty answer, so the adapter never reports a dropped stream', async () => {
+    const { brain } = brainWith({ lines: [result('')] });
+    const body = await brain.complete({ messages: [{ role: 'user', content: 'x' }] });
     expect(body).toContain('"finish_reason":"stop"');
     expect(body.trimEnd().endsWith('data: [DONE]')).toBe(true);
     brain.stop();
@@ -274,13 +228,13 @@ describe('the brain end to end, with a fake CLI (ADR-0069 §5: a pre-warmed chil
   });
 
   it('names its own cold-start bound rather than passing on the transport’s spelling', async () => {
-    const { brain } = brainWith({ silent: true }, { timeoutMs: 20 });
+    const { brain } = brainWith({ silent: true }, { firstDeltaMs: 20 });
     await expect(brain.complete({ messages: [{ role: 'user', content: 'x' }] })).rejects.toThrow(/did not answer within/);
     brain.stop();
   });
 
   it('names the idle bound once the child was answering', async () => {
-    const { brain } = brainWith({ lines: [delta('partial')] }, { timeoutMs: 5_000, idleMs: 20 });
+    const { brain } = brainWith({ lines: [delta('partial')] }, { firstDeltaMs: 5_000, idleMs: 20 });
     const chunks: string[] = [];
     await expect(brain.stream({ messages: [{ role: 'user', content: 'x' }] }, { write: (c) => chunks.push(c) })).rejects.toMatchObject({ partial: true, message: expect.stringMatching(/stopped answering/) });
     expect(chunks).toHaveLength(1);
@@ -333,101 +287,74 @@ describe('the brain end to end, with a fake CLI (ADR-0069 §5: a pre-warmed chil
 
 // ------------------------------------------------------- the readiness probe (D-B35)
 
-describe('probeBrain — is the user’s CLI actually able to answer?', () => {
+describe('probeBrain — is the user’s CLI actually able to answer, on the brain’s own wire?', () => {
   // WHY THIS EXISTS. The owner's walk found the CLI logged out: the child answered
   // `Not logged in · Please run /login`, which reached the page as a generic HTTP 502 at
   // the FIRST THINK, with no remedy shown and no hint that the brain was the problem. A
   // brain chip that says "Claude · your CLI" while the CLI cannot answer is a lie the user
   // pays for with a confusing failure — so the state is probed at boot and named.
+  const probeWith = (script?: Parameters<typeof fakeSpawner>[0], over: Parameters<typeof probeBrain>[0] = {}) => {
+    const { spawnChild, children } = fakeSpawner(script);
+    return { state: probeBrain({ resolveBinary: () => '/Users/x/.local/bin/claude', spawnBinary: (_b, args, env) => spawnChild(args, env), timeoutMs: 200, ...over }), children };
+  };
 
   it('reports ready when the CLI answers normally', async () => {
-    const state = await probeBrain({ run: async () => JSON.stringify({ is_error: false, result: 'ok' }) });
-    expect(state).toMatchObject({ state: 'ready' });
+    expect(await probeWith().state).toMatchObject({ state: 'ready' });
   });
 
   it('names a LOGGED-OUT cli, with the remedy — the exact string the owner’s walk hit', async () => {
     // Measured 2026-09-08 against the real CLI, not invented.
-    const state = await probeBrain({
-      run: async () => JSON.stringify({ is_error: true, result: 'Not logged in · Please run /login' }),
-    });
+    const state = await probeWith({ lines: [result('Not logged in · Please run /login', { is_error: true })] }).state;
     expect(state.state).toBe('logged-out');
     // The remedy must be in the words the user reads, not only in a log.
     expect(state.detail).toMatch(/login/i);
   });
 
-  it('names a MISSING binary rather than reporting a logged-out CLI', async () => {
-    // A machine with no `claude` at all is a different story with a different remedy, and
-    // conflating the two sends the user to run /login on a CLI they do not have.
-    const state = await probeBrain({ run: async () => { throw new Error('could not start claude: ENOENT'); } });
-    expect(state.state).toBe('absent');
-  });
-
-  it('does not spend the user’s quota — the logged-out answer costs nothing', async () => {
-    // MEASURED 2026-09-08 against the real CLI: a logged-out `claude -p` returns
-    // `duration_api_ms: 0` and `total_cost_usd: 0` — it fails BEFORE any API call. So the
-    // probe can use the real code path (the only thing that proves the brain can actually
-    // answer) without spending anything when it is going to fail, and a logged-IN CLI pays
-    // for one trivial prompt once per boot.
-    const calls: string[][] = [];
-    await probeBrain({ run: async (args) => { calls.push(args); return JSON.stringify({ is_error: false, result: 'ok' }); } });
-    // The probe must run the SAME shape the brain does — a probe down a different path
-    // proves the wrong thing — and must carry no tools.
-    expect(calls[0]).toContain('-p');
-    expect(calls[0]).toEqual(expect.arrayContaining(['--tools', '']));
-  });
-
-  it('treats an unreadable answer as unknown rather than claiming the brain is ready', async () => {
-    const state = await probeBrain({ run: async () => 'not json at all' });
-    expect(state.state).not.toBe('ready');
-  });
-});
-
-// ------------------------------------------------ the five states (ADR-0069 §6, AC4)
-
-describe('probeBrain — the two states the owner’s machine taught us on 2026-09-13', () => {
-  // MEASURED. The owner's CLI (2.1.211) answered EVERY `-p` call with this, `is_error: true`,
-  // `duration_api_ms: 0`. The old probe read it as `unknown` — true, and useless: the CLI's
-  // own sentence names the remedy, so the state does too.
-  const OUTDATED =
-    "API Error: 400 Claude Code 2.1.211 does not support this model; version 2.1.251 or newer is required. Run 'claude update', or update the Claude desktop app, then try again.";
-
-  it('names an OUTDATED cli, with `claude update` as the remedy', async () => {
-    const state = await probeBrain({ run: async () => JSON.stringify({ is_error: true, result: OUTDATED }) });
+  it('names an OUTDATED cli, with `claude update` as the remedy — and never mistakes it for logged-out', async () => {
+    // MEASURED 2026-09-13: the owner's CLI (2.1.211) answered EVERY call with this.
+    const OUTDATED =
+      "API Error: 400 Claude Code 2.1.211 does not support this model; version 2.1.251 or newer is required. Run 'claude update', or update the Claude desktop app, then try again.";
+    const state = await probeWith({ lines: [result(OUTDATED, { is_error: true })] }).state;
     expect(state.state).toBe('outdated');
     expect(state.detail).toMatch(/claude update/);
   });
 
-  it('does not mistake the outdated sentence for a logged-out one', async () => {
-    const state = await probeBrain({ run: async () => JSON.stringify({ is_error: true, result: OUTDATED }) });
-    expect(state.state).not.toBe('logged-out');
-  });
-
   it('reports ABSENT without spawning anything when no binary resolves — a GUI-spawned process has no user PATH', async () => {
-    const run = vi.fn(async () => 'never called');
-    const state = await probeBrain({ run, resolveBinary: () => undefined });
+    const spawnBinary = vi.fn(() => { throw new Error('never called'); });
+    const state = await probeBrain({ resolveBinary: () => undefined, spawnBinary });
     expect(state.state).toBe('absent');
-    expect(run).not.toHaveBeenCalled();
+    expect(spawnBinary).not.toHaveBeenCalled();
   });
 
   it('the absent remedy sends a non-technical user to the install page, never to pipe curl into bash', async () => {
-    const state = await probeBrain({ run: async () => 'x', resolveBinary: () => undefined });
-    expect(state.detail).toMatch(/code\.claude\.com|install/i);
+    const state = await probeBrain({ resolveBinary: () => undefined });
+    expect(state.detail).toBe(INSTALL_REMEDY);
+    expect(state.detail).toMatch(/code\.claude\.com/);
     expect(state.detail).not.toMatch(/curl|\| *bash/);
-    // and the second half of the remedy — a fresh install is logged out.
     expect(state.detail).toMatch(/\/login/);
   });
-});
 
-describe('the streaming argv (ADR-0069 §5)', () => {
-  const args = buildStreamArgs({ system: 'you are a brain' });
-  it('speaks stream-json both ways, verbose, with partial messages', () => {
-    expect(args).toEqual(expect.arrayContaining(['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages']));
+  it('names a resolved binary that still cannot start as absent, not logged-out', async () => {
+    const state = await probeBrain({ resolveBinary: () => '/x/claude', spawnBinary: () => { throw new Error('could not start claude: ENOENT'); } });
+    expect(state.state).toBe('absent');
   });
-  it('keeps the cold path’s posture: no tools, one turn, no persistence, never --bare', () => {
-    expect(args).toEqual(expect.arrayContaining(['--tools', '', '--disallowedTools', '*', '--max-turns', '1', '--no-session-persistence']));
-    expect(args).not.toContain('--bare');
+
+  it('runs the SAME wire the brain does, with no tools — a probe down a different path proves the wrong thing', async () => {
+    const { state, children } = probeWith();
+    await state;
+    expect(children[0]?.args).toEqual(buildStreamArgs('Answer with the single word ok.'));
+    expect(children[0]?.args).toEqual(expect.arrayContaining(['--tools', '', '--input-format', 'stream-json']));
   });
-  it('carries the system prompt as an argument', () => {
-    expect(args[args.indexOf('--system-prompt') + 1]).toBe('you are a brain');
+
+  it('treats a CLI that never answers as unknown rather than claiming the brain is ready, and reaps it', async () => {
+    const { state, children } = probeWith({ silent: true }, { timeoutMs: 20 });
+    expect((await state).state).toBe('unknown');
+    expect(children[0]?.exited).toBe(true);
+  });
+
+  it('reaps the probe’s child after a ready answer — it is not the brain’s pre-warmed one', async () => {
+    const { state, children } = probeWith();
+    await state;
+    expect(children[0]?.exited).toBe(true);
   });
 });

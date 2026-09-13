@@ -12,7 +12,7 @@ import path from 'node:path';
 
 import { parseAppBundle } from '@snugprotocol/protocol';
 
-import { createClaudeBrain } from './brain-claude.js';
+import { createClaudeBrain, type Brain } from './brain-claude.js';
 import { createControlSocket, probeControlSocket, type ControlSocket } from './control-socket.js';
 import { createFetchProxy, type FetchProxy } from './fetch-proxy.js';
 import { RealHomeRefusedError } from './home.js';
@@ -57,7 +57,7 @@ export interface RunnerOptions {
    */
   proxy?: { handle: FetchProxy['handle'] };
   /** The brain, injected in tests so no CLI is ever spawned. */
-  brain?: { stream(request: never, sink: never): Promise<void>; stop?(): void };
+  brain?: Pick<Brain, 'stream'> & Partial<Pick<Brain, 'stop'>>;
   /**
    * The boot-time brain probe (D-B35). Injected so tests never spawn a CLI. Its answer is
    * reported on `/status` and named by the page's chip, so a logged-out or missing CLI is
@@ -104,7 +104,7 @@ export function createRunner(options: RunnerOptions): Runner {
   // the page reads as "not known yet" rather than as a claim either way.
   let brainReadiness: { state: string; detail?: string } | undefined;
   // Created lazily by the primary, held so `stop()` can reap its children (ADR-0069 §5).
-  let brain: { stream(request: never, sink: never): Promise<void>; stop?(): void } | undefined;
+  let brain: RunnerOptions['brain'];
 
   const socketPath = path.join(hostDir, 'ctl.sock');
   const url = (): string => `http://127.0.0.1:${port}/#token=${token}`;
@@ -250,7 +250,7 @@ export function createRunner(options: RunnerOptions): Runner {
             return text(`Snug is open at http://127.0.0.1:${port}/`);
           } catch {
             return text(
-              `could not open a browser here. Ask the user to run: node <plugin>/scripts/snug-mcp.mjs open`,
+              `could not open a browser here. Ask the user to run: sh <plugin>/scripts/snug open`,
               true,
             );
           }

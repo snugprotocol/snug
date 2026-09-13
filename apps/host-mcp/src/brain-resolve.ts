@@ -10,7 +10,7 @@
 // The trust boundary is the user's own home: executing the first `claude` found under it
 // is the same trust as the user's shell (threat-model residual 1 — any same-user process).
 
-import { accessSync, constants, existsSync, readdirSync } from 'node:fs';
+import { accessSync, constants, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 
 import roots from './install-roots.json';
@@ -45,16 +45,18 @@ export function defaultResolveDeps(env: Record<string, string | undefined>): Res
   return {
     env: named,
     exists: (file) => {
+      // A FILE that is executable — a directory named `claude` is executable too, and is
+      // not a binary.
       try {
         accessSync(file, constants.X_OK);
-        return true;
+        return statSync(file).isFile();
       } catch {
         return false;
       }
     },
     readdir: (dir) => {
       try {
-        return existsSync(dir) ? readdirSync(dir) : [];
+        return readdirSync(dir);
       } catch {
         return [];
       }

@@ -143,7 +143,7 @@ describe('tools', () => {
     await runner.start();
     const result = await runner.callTool('snug_open', {});
     expect(result.isError).toBe(true);
-    expect(result.content[0]!.text).toMatch(/snug-mcp\.mjs open/);
+    expect(result.content[0]!.text).toMatch(/scripts\/snug open/);
   });
 
   it('snug_hand_in refuses a bundle asking for a connection, and says who grants one', async () => {

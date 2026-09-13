@@ -1,92 +1,92 @@
 // AC5 — pre-warmed, single-use children (ADR-0069 §5).
 //
-// Every rule the pool promises has a case here that fails without it: a virgin child gets
+// Every rule the pool promises has a case here that fails without it: a unused child gets
 // nothing until it is acquired; a child answers exactly one request and is reaped; the next
 // request for the same system prompt finds a warm child; the count is capped by LRU; an
-// idle virgin is reaped; stop reaps everything; only text deltas are forwarded.
+// idle unused is reaped; stop reaps everything; only text deltas are forwarded.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { ClaudeSession, POOL_IDLE_MS, POOL_MAX_WARM, poolKey, SessionPool, userMessageLine } from '../brain-session.js';
+import { ClaudeChild, POOL_IDLE_MS, POOL_MAX_WARM, poolKey, ChildPool, userMessageLine } from '../brain-child.js';
 import { delta, fakeSpawner, FakeClaudeChild, line, result, thinkingDelta } from './fixtures/fake-claude-child.js';
 
 const argsFor = (system: string): string[] => ['-p', '--system-prompt', system];
 const ENV = { HOME: '/Users/x', PATH: '/usr/bin' };
 
-const pool = (spawnChild: ReturnType<typeof fakeSpawner>['spawnChild'], over: Partial<ConstructorParameters<typeof SessionPool>[0]> = {}) =>
-  new SessionPool({ spawnChild, argsFor, env: ENV, ...over });
+const pool = (spawnChild: ReturnType<typeof fakeSpawner>['spawnChild'], over: Partial<ConstructorParameters<typeof ChildPool>[0]> = {}) =>
+  new ChildPool({ spawnChild, argsFor, env: ENV, ...over });
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-describe('ClaudeSession — one child, one request', () => {
+describe('ClaudeChild — one child, one request', () => {
   it('sends ONE stream-json user message and resolves on the result, streaming the deltas in order', async () => {
-    const child = new FakeClaudeChild([], ENV);
-    const session = new ClaudeSession(child);
+    const fake = new FakeClaudeChild([], ENV);
+    const child = new ClaudeChild(fake);
     const seen: string[] = [];
-    const answer = await session.send('ping', { onDelta: (t) => seen.push(t) });
-    expect(child.messages()).toHaveLength(1);
-    expect(child.messages()[0]?.message.content[0]?.text).toBe('ping');
+    const answer = await child.send('ping', { onDelta: (t) => seen.push(t) });
+    expect(fake.messages()).toHaveLength(1);
+    expect(fake.messages()[0]?.message.content[0]?.text).toBe('ping');
     expect(seen).toEqual(['pong']);
     expect(answer).toEqual({ text: 'pong', stopReason: 'end_turn' });
   });
 
   it('forwards text deltas ONLY — a thinking delta stays private, and the assistant echo is not repeated', async () => {
-    const child = new FakeClaudeChild([], ENV, {
+    const fake = new FakeClaudeChild([], ENV, {
       lines: [thinkingDelta('let me think'), delta('a'), delta('b'), line({ type: 'assistant', message: { content: [{ type: 'text', text: 'ab' }] } }), result('ab')],
     });
     const seen: string[] = [];
-    const answer = await new ClaudeSession(child).send('x', { onDelta: (t) => seen.push(t) });
+    const answer = await new ClaudeChild(fake).send('x', { onDelta: (t) => seen.push(t) });
     expect(seen).toEqual(['a', 'b']);
     expect(seen.join('')).not.toContain('think');
     expect(answer.text).toBe('ab');
   });
 
   it('falls back to the result text when the CLI streamed no deltas', async () => {
-    const child = new FakeClaudeChild([], ENV, { lines: [result('whole answer')] });
-    const answer = await new ClaudeSession(child).send('x', { onDelta: () => {} });
+    const fake = new FakeClaudeChild([], ENV, { lines: [result('whole answer')] });
+    const answer = await new ClaudeChild(fake).send('x', { onDelta: () => {} });
     expect(answer.text).toBe('whole answer');
   });
 
   it('rejects an is_error result with the CLI’s own words', async () => {
-    const child = new FakeClaudeChild([], ENV, { lines: [result('Not logged in · Please run /login', { is_error: true })] });
-    await expect(new ClaudeSession(child).send('x', { onDelta: () => {} })).rejects.toThrow(/login/);
+    const fake = new FakeClaudeChild([], ENV, { lines: [result('Not logged in · Please run /login', { is_error: true })] });
+    await expect(new ClaudeChild(fake).send('x', { onDelta: () => {} })).rejects.toThrow(/login/);
   });
 
   it('rejects when the child exits before answering, with the stderr tail', async () => {
-    const child = new FakeClaudeChild([], ENV, { silent: true });
-    const session = new ClaudeSession(child);
-    const pending = session.send('x', { onDelta: () => {} });
-    child.stderr.write('boom: quota exhausted');
+    const fake = new FakeClaudeChild([], ENV, { silent: true });
+    const child = new ClaudeChild(fake);
+    const pending = child.send('x', { onDelta: () => {} });
+    fake.stderr.write('boom: quota exhausted');
     await flush();
-    child.exit(1);
+    fake.exit(1);
     await expect(pending).rejects.toThrow(/exited.*quota exhausted/);
   });
 
-  it('refuses a second request — a session is single-use by contract', async () => {
-    const child = new FakeClaudeChild([], ENV);
-    const session = new ClaudeSession(child);
-    await session.send('one', { onDelta: () => {} });
-    await expect(session.send('two', { onDelta: () => {} })).rejects.toThrow(/exactly one/);
+  it('refuses a second request — a child is single-use by contract', async () => {
+    const fake = new FakeClaudeChild([], ENV);
+    const child = new ClaudeChild(fake);
+    await child.send('one', { onDelta: () => {} });
+    await expect(child.send('two', { onDelta: () => {} })).rejects.toThrow(/exactly one/);
   });
 
   it('kill() TERMs the child and fails a pending request as aborted', async () => {
-    const child = new FakeClaudeChild([], ENV, { silent: true });
-    const session = new ClaudeSession(child);
-    const pending = session.send('x', { onDelta: () => {} });
-    session.kill();
+    const fake = new FakeClaudeChild([], ENV, { silent: true });
+    const child = new ClaudeChild(fake);
+    const pending = child.send('x', { onDelta: () => {} });
+    child.kill();
     await expect(pending).rejects.toThrow(/aborted/);
-    expect(child.kills[0]).toBe('SIGTERM');
+    expect(fake.kills[0]).toBe('SIGTERM');
   });
 
   it('reads a line split across chunks', async () => {
-    const child = new FakeClaudeChild([], ENV, { silent: true });
-    const session = new ClaudeSession(child);
+    const fake = new FakeClaudeChild([], ENV, { silent: true });
+    const child = new ClaudeChild(fake);
     const seen: string[] = [];
-    const pending = session.send('x', { onDelta: (t) => seen.push(t) });
+    const pending = child.send('x', { onDelta: (t) => seen.push(t) });
     const whole = delta('hello') + result('hello');
-    child.stdout.write(whole.slice(0, 20));
+    fake.stdout.write(whole.slice(0, 20));
     await flush();
-    child.stdout.write(whole.slice(20));
+    fake.stdout.write(whole.slice(20));
     await expect(pending).resolves.toEqual({ text: 'hello', stopReason: 'end_turn' });
     expect(seen).toEqual(['hello']);
   });
@@ -99,11 +99,11 @@ describe('ClaudeSession — one child, one request', () => {
   });
 });
 
-describe('SessionPool — pre-warmed, single-use, bounded', () => {
+describe('ChildPool — pre-warmed, single-use, bounded', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
-  it('a virgin child receives NOTHING until it is acquired — pre-warming costs no tokens', () => {
+  it('a unused child receives NOTHING until it is acquired — pre-warming costs no tokens', () => {
     const { spawnChild, children } = fakeSpawner();
     const p = pool(spawnChild);
     p.prewarm(poolKey('S'), 'S');
@@ -118,25 +118,25 @@ describe('SessionPool — pre-warmed, single-use, bounded', () => {
     const first = p.acquire('S');
     // One spawn for the request, one pre-warmed replacement.
     expect(children).toHaveLength(2);
-    expect(first.child).toBe(children[0]);
+    expect(first.process).toBe(children[0]);
     await first.send('ping', { onDelta: () => {} });
     p.release(first);
     const second = p.acquire('S');
     // The replacement was taken — no third spawn at acquire time…
-    expect(second.child).toBe(children[1]);
+    expect(second.process).toBe(children[1]);
     // …but a replacement for IT is pre-warmed at once.
     expect(children).toHaveLength(3);
-    expect((second.child as FakeClaudeChild).written).toEqual([]);
+    expect((second.process as FakeClaudeChild).written).toEqual([]);
     p.stop();
   });
 
   it('a released child is killed — nothing is ever reused after its one request', async () => {
     const { spawnChild, children } = fakeSpawner();
     const p = pool(spawnChild);
-    const session = p.acquire('S');
-    await session.send('ping', { onDelta: () => {} });
-    p.release(session);
-    expect((session.child as FakeClaudeChild).kills).toEqual(['SIGTERM']);
+    const child = p.acquire('S');
+    await child.send('ping', { onDelta: () => {} });
+    p.release(child);
+    expect((child.process as FakeClaudeChild).kills).toEqual(['SIGTERM']);
     expect(children[0]?.exited).toBe(true);
     expect(p.stats().live).toBe(0);
     p.stop();
@@ -148,7 +148,7 @@ describe('SessionPool — pre-warmed, single-use, bounded', () => {
     const a = p.acquire('S');
     const b = p.acquire('S');
     expect(a).not.toBe(b);
-    expect(a.child).not.toBe(b.child);
+    expect(a.process).not.toBe(b.process);
     p.stop();
   });
 
@@ -169,7 +169,7 @@ describe('SessionPool — pre-warmed, single-use, bounded', () => {
     p.stop();
   });
 
-  it('reaps a virgin child that idles past the TTL', () => {
+  it('reaps a unused child that idles past the TTL', () => {
     const { spawnChild, children } = fakeSpawner();
     const p = pool(spawnChild, { idleMs: 1_000 });
     p.prewarm(poolKey('S'), 'S');
@@ -196,9 +196,9 @@ describe('SessionPool — pre-warmed, single-use, bounded', () => {
     const p = pool(spawnChild);
     p.prewarm(poolKey('S'), 'S');
     children[0]?.exit(1);
-    const session = p.acquire('S');
-    expect(session.child).not.toBe(children[0]);
-    expect(session.alive).toBe(true);
+    const child = p.acquire('S');
+    expect(child.process).not.toBe(children[0]);
+    expect(child.alive).toBe(true);
     p.stop();
   });
 
@@ -212,7 +212,7 @@ describe('SessionPool — pre-warmed, single-use, bounded', () => {
     const p = pool(spawnChild);
     p.acquire('contract A');
     const b = p.acquire('contract B');
-    expect((b.child as FakeClaudeChild).args).toContain('contract B');
+    expect((b.process as FakeClaudeChild).args).toContain('contract B');
     // A's replacement was not taken by B.
     expect(children.filter((c) => c.args.includes('contract A') && !c.exited)).toHaveLength(2);
     p.stop();

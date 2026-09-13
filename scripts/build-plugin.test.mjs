@@ -2,7 +2,7 @@
 // the tree carries the process, the launcher, the skill and its provenance.
 
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
@@ -42,7 +42,6 @@ describe('buildPlugin', () => {
         '.claude-plugin/marketplace.json',
         'snug/.claude-plugin/plugin.json',
         'snug/.mcp.json',
-        'snug/.codex-plugin/plugin.json',
         'snug/scripts/snug-mcp.mjs',
         'snug/scripts/snug-host-local.html',
         'snug/scripts/snug',
@@ -128,5 +127,34 @@ describe('the README a marketplace reviewer reads', () => {
     assert.match(text, /no hooks/);
     assert.match(text, /PROVENANCE\.json/);
     assert.doesNotMatch(text, /curl .*\| *bash/);
+  });
+});
+
+describe('the tree carries no path from the machine that built it', () => {
+  it('writes no .codex-plugin interim and no absolute path anywhere (the distribution repo is a verbatim copy)', async () => {
+    const { dir, out, sources } = fixtures();
+    try {
+      await buildPlugin(out, sources, { skill: FAKE_SKILL, commit: 'abc123' });
+      assert.ok(!existsSync(path.join(out, 'snug/.codex-plugin')));
+      const walk = (d) => readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(d, e.name)) : [path.join(d, e.name)]));
+      for (const file of walk(path.join(out, 'snug'))) {
+        if (/\.(html|mjs)$/.test(file) && !file.endsWith('scripts/snug')) continue; // the built inputs are fixtures here
+        assert.ok(!readFileSync(file, 'utf8').includes(out), `${path.relative(out, file)} names the build machine's path`);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('names a skill that cannot ship as a problem, never as a stack', async () => {
+    const { dir, out, sources } = fixtures();
+    try {
+      const problems = await buildPlugin(out, sources, { skill: undefined, commit: 'abc123', ...{ } });
+      // With no pre-built skill the real sources render; this fixture cannot reach the knowledge dist
+      // in every environment, so the only claim is the SHAPE: a string list, never a throw.
+      assert.ok(Array.isArray(problems));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

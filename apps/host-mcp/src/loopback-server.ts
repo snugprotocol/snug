@@ -14,6 +14,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from 'node:net';
 
 import { admitDataPlaneRequest } from './loopback-gates.js';
+import type { Brain } from './brain-claude.js';
 import type { FetchProxy, ProxyRequest, ProxyResult } from './fetch-proxy.js';
 import { validUserFileName, type UserFileStore } from './userdb-fs.js';
 import { RealHomeRefusedError } from './home.js';
@@ -48,12 +49,7 @@ export interface LoopbackServerOptions {
    * It STREAMS: chunks reach the response as the child's deltas arrive, so a long build shows
    * its tokens instead of a silent wait.
    */
-  brain?: {
-    stream(
-      request: { messages: Array<{ role: string; content: string | Array<{ type?: string; text?: string }> }>; model?: string },
-      sink: { write(chunk: string): void; signal?: AbortSignal },
-    ): Promise<void>;
-  };
+  brain?: Pick<Brain, 'stream'>;
 }
 
 export interface LoopbackServer {

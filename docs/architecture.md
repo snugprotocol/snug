@@ -307,7 +307,7 @@ no name says "mcp" for a thing whose identity is not MCP.
 Measured 2026-09-13 on CLI 2.1.270: a cold `claude -p` costs ~3.5 s of process overhead on
 top of the model's time; a `--input-format stream-json` child left idle for five seconds
 answers its first message in 1.7 s wall — the CLI does its start-up before any input, at
-~257 MB of idle memory. So `apps/host-mcp/src/brain-session.ts` keeps a `SessionPool` keyed
+~257 MB of idle memory. So `apps/host-mcp/src/brain-child.ts` keeps a `ChildPool` keyed
 by `sha256(system prompt)` (an app's runtime contract rides as the **system** prompt on this
 binding, so its key is stable across thinks): a request takes the pre-warmed virgin child
 for its key or spawns one, sends its whole rendered conversation as ONE stream-json user

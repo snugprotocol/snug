@@ -67,7 +67,7 @@ acts as the network side of the page's connected-fetch executor, and offers the 
 control-plane tools. It is Snug Desktop's native side written in Node; it is not a server, a
 service, or something Snug is "built on" — MCP is only the spawn channel. Never called an
 "MCP server" in product copy. Since ADR-0069 it also keeps the child-CLI brain's pre-warmed
-single-use children (`brain-session.ts`), finds the user's `claude` off an empty GUI PATH
+single-use children (`brain-child.ts`), finds the user's `claude` off an empty GUI PATH
 (`install-roots.json`), and is started by the plugin's `/bin/sh scripts/snug` launcher; its
 package and bundle are being renamed `local-host` in a follow-up PR.
 

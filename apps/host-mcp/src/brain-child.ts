@@ -16,7 +16,7 @@
 // already started.
 //
 // BOUNDS, all named: at most `maxWarm` pre-warmed keys (least recently used evicted), an
-// idle TTL on a virgin child, and a reap on stop, on abort, on error, on exit.
+// idle TTL on a unused child, and a reap on stop, on abort, on error, on exit.
 
 import { createHash } from 'node:crypto';
 import type { Readable, Writable } from 'node:stream';
@@ -44,7 +44,7 @@ export interface TurnResult {
   stopReason: string;
 }
 
-/** The one stream-json line shape the session reads; everything else is ignored. */
+/** The one stream-json line shape the child reads; everything else is ignored. */
 interface CliEvent {
   type?: unknown;
   subtype?: unknown;
@@ -62,10 +62,9 @@ export function userMessageLine(text: string): string {
 /** SIGTERM first so the CLI can exit cleanly; SIGKILL only if it ignores us. */
 const KILL_GRACE_MS = 2_000;
 
-export class ClaudeSession {
-  /** Set once `send` is called; a session never takes a second request. */
+export class ClaudeChild {
+  /** Set once `send` is called; a child never takes a second request. */
   used = false;
-  readonly startedAt: number;
 
   private buffer = '';
   private text = '';
@@ -74,32 +73,28 @@ export class ClaudeSession {
   private exited = false;
   private pending: { resolve(result: TurnResult): void; reject(error: Error): void; sink: TurnSink } | undefined;
 
-  constructor(
-    readonly child: ChildLike,
-    private readonly now: () => number = Date.now,
-  ) {
-    this.startedAt = now();
-    child.stdout.on('data', (chunk: Buffer | string) => this.onData(chunk.toString()));
-    child.stderr?.on('data', (chunk: Buffer | string) => {
+  constructor(readonly process: ChildLike) {
+    process.stdout.on('data', (chunk: Buffer | string) => this.onData(chunk.toString()));
+    process.stderr?.on('data', (chunk: Buffer | string) => {
       this.stderrTail = (this.stderrTail + chunk.toString()).slice(-300);
     });
-    child.on('exit', (code) => {
+    process.on('exit', (code) => {
       this.exited = true;
       // A child that dies before its result is an answer of its own: the stderr tail is the
       // only thing that says why, so it must reach the user.
       this.fail(new Error(`the Claude CLI exited (${code ?? 'signal'}) before answering${this.stderrTail.trim() !== '' ? `: ${this.stderrTail.trim()}` : ''}`));
     });
-    child.on('error', (error) => this.fail(new Error(`could not start the Claude CLI: ${error.message}`)));
+    process.on('error', (error) => this.fail(new Error(`could not start the Claude CLI: ${error.message}`)));
   }
 
   /** Send the one request; resolves on the CLI's `result`, streaming text deltas meanwhile. */
   send(prompt: string, sink: TurnSink): Promise<TurnResult> {
-    if (this.used) return Promise.reject(new Error('a session answers exactly one request'));
+    if (this.used) return Promise.reject(new Error('a child answers exactly one request'));
     this.used = true;
     if (this.exited) return Promise.reject(new Error('the Claude CLI exited before the request was sent'));
     return new Promise<TurnResult>((resolve, reject) => {
       this.pending = { resolve, reject, sink };
-      this.child.stdin.write(userMessageLine(prompt));
+      this.process.stdin.write(userMessageLine(prompt));
     });
   }
 
@@ -109,9 +104,9 @@ export class ClaudeSession {
     // must read "aborted", not "the CLI exited".
     this.fail(new Error('aborted'));
     if (!this.exited) {
-      this.child.kill('SIGTERM');
+      this.process.kill('SIGTERM');
       const timer = setTimeout(() => {
-        if (!this.exited) this.child.kill('SIGKILL');
+        if (!this.exited) this.process.kill('SIGKILL');
       }, KILL_GRACE_MS);
       timer.unref?.();
     }
@@ -177,7 +172,7 @@ export class ClaudeSession {
   }
 }
 
-export interface SessionPoolOptions {
+export interface ChildPoolOptions {
   spawnChild: SpawnChild;
   /** The argv for a child serving this system prompt. */
   argsFor(system: string): string[];
@@ -185,7 +180,7 @@ export interface SessionPoolOptions {
   env: Record<string, string>;
   /** Pre-warmed keys kept at once; the least recently used is evicted beyond it. */
   maxWarm?: number;
-  /** How long a virgin child may sit unused before it is reaped. */
+  /** How long a unused child may sit unused before it is reaped. */
   idleMs?: number;
   now?: () => number;
 }
@@ -198,20 +193,18 @@ export function poolKey(system: string): string {
   return createHash('sha256').update(system).digest('hex');
 }
 
-export class SessionPool {
+export class ChildPool {
   /** Virgin children by key; Map order is the LRU order (oldest first). */
-  private readonly warm = new Map<string, { session: ClaudeSession; timer: ReturnType<typeof setTimeout> }>();
+  private readonly warm = new Map<string, { child: ClaudeChild; timer: ReturnType<typeof setTimeout> }>();
   /** Children serving a request right now. */
-  private readonly live = new Set<ClaudeSession>();
+  private readonly live = new Set<ClaudeChild>();
   private readonly maxWarm: number;
   private readonly idleMs: number;
-  private readonly now: () => number;
   private stopped = false;
 
-  constructor(private readonly options: SessionPoolOptions) {
+  constructor(private readonly options: ChildPoolOptions) {
     this.maxWarm = options.maxWarm ?? POOL_MAX_WARM;
     this.idleMs = options.idleMs ?? POOL_IDLE_MS;
-    this.now = options.now ?? Date.now;
   }
 
   /**
@@ -219,20 +212,20 @@ export class SessionPool {
    * Either way a replacement is pre-warmed at once, so the next request for the same prompt
    * skips the start-up.
    */
-  acquire(system: string): ClaudeSession {
+  acquire(system: string): ClaudeChild {
     if (this.stopped) throw new Error('the runner is stopping');
     const key = poolKey(system);
     const entry = this.warm.get(key);
-    let session: ClaudeSession;
-    if (entry !== undefined && entry.session.alive) {
+    let child: ClaudeChild;
+    if (entry !== undefined && entry.child.alive) {
       this.warm.delete(key);
       clearTimeout(entry.timer);
-      session = entry.session;
+      child = entry.child;
     } else {
       if (entry !== undefined) this.warm.delete(key);
-      session = this.spawn(system);
+      child = this.spawn(system);
     }
-    this.live.add(session);
+    this.live.add(child);
     // A replacement that cannot start is not this request's failure; the next request
     // will spawn for itself and name the problem then.
     try {
@@ -240,20 +233,20 @@ export class SessionPool {
     } catch {
       /* named by the next acquire */
     }
-    return session;
+    return child;
   }
 
   /** Every child serves exactly one request: releasing it reaps it. */
-  release(session: ClaudeSession): void {
-    this.live.delete(session);
-    session.kill();
+  release(child: ClaudeChild): void {
+    this.live.delete(child);
+    child.kill();
   }
 
-  /** Start a virgin child for this key now, unless one is already waiting. */
+  /** Start a unused child for this key now, unless one is already waiting. */
   prewarm(key: string, system: string): void {
     if (this.stopped) return;
     const existing = this.warm.get(key);
-    if (existing !== undefined && existing.session.alive) {
+    if (existing !== undefined && existing.child.alive) {
       // Touch: most recently used moves to the end of the LRU order.
       this.warm.delete(key);
       this.warm.set(key, existing);
@@ -265,17 +258,17 @@ export class SessionPool {
       if (oldest === undefined) break;
       this.evict(oldest);
     }
-    const session = this.spawn(system);
+    const child = this.spawn(system);
     const timer = setTimeout(() => this.evict(key), this.idleMs);
     timer.unref?.();
-    this.warm.set(key, { session, timer });
+    this.warm.set(key, { child, timer });
   }
 
   /** Reap everything — the runner is stopping, or its parent went away. */
   stop(): void {
     this.stopped = true;
     for (const key of [...this.warm.keys()]) this.evict(key);
-    for (const session of [...this.live]) this.release(session);
+    for (const child of [...this.live]) this.release(child);
   }
 
   stats(): { warm: number; live: number } {
@@ -287,10 +280,10 @@ export class SessionPool {
     if (entry === undefined) return;
     this.warm.delete(key);
     clearTimeout(entry.timer);
-    entry.session.kill();
+    entry.child.kill();
   }
 
-  private spawn(system: string): ClaudeSession {
-    return new ClaudeSession(this.options.spawnChild(this.options.argsFor(system), this.options.env), this.now);
+  private spawn(system: string): ClaudeChild {
+    return new ClaudeChild(this.options.spawnChild(this.options.argsFor(system), this.options.env));
   }
 }

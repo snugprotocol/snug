@@ -18,6 +18,8 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+import { MARKETPLACE, PLUGIN } from './plugin-manifests.mjs';
+
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 export const SKILL_SOURCE = path.join(REPO, 'packages/knowledge/prompts/skills/snug/SKILL.md');
@@ -100,7 +102,11 @@ export function validateSkill(text) {
   if (text.includes(LAUNCH_MARKER)) problems.push('the launch-protocol marker was not replaced');
   if (/\{\{[^{}]+\}\}/.test(parts.body)) problems.push('the body carries an unrendered {{placeholder}}');
   if (parts.body.split('\n').length > 500) problems.push('the body is over 500 lines (skill-creator: add a layer instead)');
-  if (/built on MCP|MCP server/i.test(parts.body.replace(/never .*$/gim, ''))) problems.push('the body describes Snug through MCP outside the never-list (ADR-0061)');
+  if (/built on MCP|MCP server/i.test(parts.body.replace(/^.*\bnever\b.*$/gim, ''))) problems.push('the body describes Snug through MCP outside the never-list (ADR-0061)');
+  // One contract, two artifacts (conventions.md): the install line and the repository the
+  // skill names are the manifests' values, byte-compared here rather than typed twice.
+  if (!parts.body.includes(`${PLUGIN.name}@${MARKETPLACE.name}`)) problems.push(`the install line does not name ${PLUGIN.name}@${MARKETPLACE.name} (plugin-manifests.mjs)`);
+  if (!parts.frontmatter.includes(PLUGIN.repository)) problems.push(`the frontmatter does not name the repository ${PLUGIN.repository} (plugin-manifests.mjs)`);
   return problems;
 }
 
@@ -113,7 +119,7 @@ export function renderSkill({ source, instructions }) {
   if (!body.includes(LAUNCH_MARKER)) throw new Error(`the skill source has no ${LAUNCH_MARKER}`);
   // The instructions are the process's OWN text; under the skill's H3 they sit at H4.
   const launch = demoteHeadings(instructions.trim(), 2);
-  const text = body.replace(LAUNCH_MARKER, launch);
+  const text = body.replace(LAUNCH_MARKER, () => launch);
   const problems = validateSkill(text);
   if (problems.length > 0) throw new Error(`SKILL.md cannot ship:\n  - ${problems.join('\n  - ')}`);
   return text;

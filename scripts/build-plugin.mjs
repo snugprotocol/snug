@@ -20,8 +20,8 @@ import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statS
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { launcherScript, readInstallRoots } from './lib/plugin-launcher.mjs';
-import { BUNDLE_PATH, claudeMcpConfig, claudePluginManifest, codexMcpConfig, codexPluginManifest, LAUNCHER_PATH, MARKETPLACE, marketplaceManifest, PLUGIN } from './lib/plugin-manifests.mjs';
+import { INSTALL_ROOTS_FILE, launcherScript, readInstallRoots } from './lib/plugin-launcher.mjs';
+import { BUNDLE_PATH, claudeMcpConfig, claudePluginManifest, LAUNCHER_PATH, MARKETPLACE, marketplaceManifest, PLUGIN } from './lib/plugin-manifests.mjs';
 import { buildSkillTree, SKILL_NAME } from './lib/skill-build.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -33,7 +33,7 @@ export const SKILL_DIR = `skills/${SKILL_NAME}`;
 export const SOURCES = {
   bundle: path.join(REPO, 'apps/host-mcp/dist/snug-mcp.mjs'),
   page: path.join(REPO, 'apps/host/dist-local/snug-host-local.html'),
-  installRoots: path.join(REPO, 'apps/host-mcp/src/install-roots.json'),
+  installRoots: INSTALL_ROOTS_FILE,
   // The artifact runner's kit and its hand-in script: the skill folder carries the artifact
   // route on its own, so the folder alone uploads to claude.ai and still works.
   kit: path.join(REPO, 'apps/host/dist/snug-host.html'),
@@ -158,14 +158,19 @@ export async function buildPlugin(outDir = PLUGIN_OUT_DIR, sources = SOURCES, op
     if (!existsSync(file)) problems.push(`missing ${name}: ${path.relative(REPO, file)} — build it first`);
   }
   if (problems.length > 0) return problems;
-  // The skill renders BEFORE anything is written, so a skill that cannot ship leaves no tree.
-  const skill = options.skill ?? (await buildSkillTree());
+  // The skill renders BEFORE anything is written, so a skill that cannot ship leaves no tree —
+  // and its refusal is a named problem, not a stack.
+  let skill;
+  try {
+    skill = options.skill ?? (await buildSkillTree());
+  } catch (error) {
+    return [error instanceof Error ? error.message : String(error)];
+  }
 
   const pluginDir = path.join(outDir, PLUGIN.name);
   rmSync(outDir, { recursive: true, force: true });
   mkdirSync(path.join(pluginDir, 'scripts'), { recursive: true });
   mkdirSync(path.join(pluginDir, '.claude-plugin'), { recursive: true });
-  mkdirSync(path.join(pluginDir, '.codex-plugin'), { recursive: true });
   mkdirSync(path.join(outDir, '.claude-plugin'), { recursive: true });
 
   // The process: bundle, page and launcher, side by side — the process reads the page
@@ -193,8 +198,9 @@ export async function buildPlugin(outDir = PLUGIN_OUT_DIR, sources = SOURCES, op
 
   writeFileSync(path.join(pluginDir, '.claude-plugin', 'plugin.json'), json(claudePluginManifest()));
   writeFileSync(path.join(pluginDir, '.mcp.json'), json(claudeMcpConfig()));
-  writeFileSync(path.join(pluginDir, '.codex-plugin', 'plugin.json'), json(codexPluginManifest()));
-  writeFileSync(path.join(pluginDir, '.codex-plugin', '.mcp.json'), json(codexMcpConfig({ absolutePath: path.join(pluginDir, LAUNCHER_PATH) })));
+  // No `.codex-plugin/` here: its interim form carried an ABSOLUTE path to this machine's
+  // launcher, and this tree is copied verbatim into the distribution repo. T9 adds the
+  // published-package form (`codexMcpConfig()` in the manifests module) when it exists.
   writeFileSync(path.join(outDir, '.claude-plugin', 'marketplace.json'), json(marketplaceManifest()));
   cpSync(sources.license, path.join(pluginDir, 'LICENSE'));
   writeFileSync(path.join(pluginDir, 'README.md'), readme());

@@ -21,14 +21,13 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { buildPlugin, checkProvenance, PLUGIN_OUT_DIR, SKILL_DIR } from './build-plugin.mjs';
+import { buildPlugin, checkProvenance, PLUGIN_OUT_DIR, SKILL_DIR, SOURCES } from './build-plugin.mjs';
 import { BUNDLE_PATH, claudeMcpConfig, claudePluginManifest, LAUNCHER_PATH, marketplaceManifest, PLUGIN } from './lib/plugin-manifests.mjs';
-import { buildSkillTree } from './lib/skill-build.mjs';
+import { buildSkillTree, INSTRUCTIONS_SOURCE } from './lib/skill-build.mjs';
 
-const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-
-export const BUNDLE_FILE = path.join(REPO, 'apps/host-mcp/dist/snug-mcp.mjs');
-export const INSTRUCTIONS_FILE = path.join(REPO, 'apps/host-mcp/src/instructions.md');
+// One path per artifact: the bundle is the builder's input, the instructions the skill's source.
+export const BUNDLE_FILE = SOURCES.bundle;
+export const INSTRUCTIONS_FILE = INSTRUCTIONS_SOURCE;
 export const PLUGIN_DIR = PLUGIN_OUT_DIR;
 
 /**
