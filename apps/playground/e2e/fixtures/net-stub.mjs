@@ -96,6 +96,12 @@ function selfSignedCert() {
     // a provider it is entitled to author.
     '-addext', 'subjectAltName=IP:127.0.0.1,DNS:localhost,DNS:stub.snug.test,DNS:api.meridian-exchange.example',
   ], { stdio: 'ignore' });
+  // Opt-in cert EXPORT (ADR-0068 D-B29). The browser trusts this stub because Playwright
+  // is launched with --ignore-certificate-errors; a NODE process has no such flag, so the
+  // Binding-B e2e — where the local host process is the one making the request — needs the
+  // CA on disk to point NODE_EXTRA_CA_CERTS at. Absent env var, nothing changes.
+  const exportTo = process.env.SNUG_E2E_CERT_OUT;
+  if (exportTo !== undefined && exportTo !== '') writeFileSync(exportTo, readFileSync(certPath));
   return { key: readFileSync(keyPath), cert: readFileSync(certPath) };
 }
 

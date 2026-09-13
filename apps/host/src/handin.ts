@@ -72,7 +72,16 @@ export function readBundleBlocksFromDocument(doc: { querySelectorAll(selector: s
 
 const message = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
-export async function handInFromPage(db: UserDb, blocks: readonly HandInBlock[]): Promise<HandInOutcome> {
+export interface HandInOptions {
+  /**
+   * How a bundle asking for connections is refused. Under Binding A connected apps do not
+   * exist at all; under Binding B they DO — but the user grants them in the wizard, never a
+   * bundle. The refusal stands in both, and only its sentence differs (ADR-0068 D-B26).
+   */
+  binding?: 'artifact' | 'local-host';
+}
+
+export async function handInFromPage(db: UserDb, blocks: readonly HandInBlock[], options: HandInOptions = {}): Promise<HandInOutcome> {
   const outcome: HandInOutcome = { installed: [], updated: [], pending: [], skipped: [], refused: [] };
   for (const block of blocks) {
     const parsed = parseAppBundle(block.json);
@@ -91,7 +100,10 @@ export async function handInFromPage(db: UserDb, blocks: readonly HandInBlock[])
     if (bundle.connections.length > 0) {
       outcome.refused.push({
         lineage,
-        reason: `"${bundle.app.displayName}" asks for ${bundle.connections.length} connection(s) — connected apps are not available inside an artifact, so this hand-in was refused`,
+        reason:
+          options.binding === 'local-host'
+            ? `"${bundle.app.displayName}" asks for ${bundle.connections.length} connection(s) — connect it yourself in Snug, from the app's own connections door. A bundle cannot bring a connection.`
+            : `"${bundle.app.displayName}" asks for ${bundle.connections.length} connection(s) — connected apps are not available inside an artifact, so this hand-in was refused`,
       });
       continue;
     }

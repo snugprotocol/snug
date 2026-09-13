@@ -51,9 +51,11 @@ export interface CustodyCopy {
 export function custodyDisclosure(
   binding: SnugPlatform['binding'],
   kind: PersistenceKind | undefined,
-  state: Pick<CustodyState, 'dirty' | 'readOnly' | 'divergence' | 'workingCopy'>,
+  state: Pick<CustodyState, 'dirty' | 'readOnly' | 'divergence' | 'workingCopy' | 'heldBy'>,
 ): CustodyCopy {
-  const status = state.readOnly
+  const status = state.heldBy !== undefined
+    ? `${state.heldBy} has your file open — close it to use Snug here.`
+    : state.readOnly
     ? 'read-only view — export to keep a copy.'
     : state.divergence === 'newer'
       ? 'this browser’s copy is newer than the page’s saved copy.'
@@ -90,6 +92,14 @@ export function custodyDisclosure(
         body: 'this view only — the published link keeps its own copy. copy the export to move or keep it.',
       });
     case 'local-host':
+      // The file is a real file on this Mac, served by the local host process — NOT the
+      // browser storage the default arm describes. Saying "in this browser" here would be
+      // false and would make the export look like the only way to keep anything.
+      return withStatus({
+        label: 'your file: on this Mac',
+        headline: 'on this Mac',
+        body: 'in ~/Snug/user.snug, saved as you work. the same file Snug for Mac uses.',
+      });
     case 'file':
     case undefined:
     default:

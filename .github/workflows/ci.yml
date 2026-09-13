@@ -105,6 +105,7 @@ jobs:
       # self-contained page (structural DOM rules, size caps, build stamp) and two clean
       # builds at this commit are byte-identical. Runs after `turbo run test`, which built it.
       - run: pnpm run check-host-kit
+      - run: pnpm run check-host-mcp
 
   desktop-shell:
     strategy:

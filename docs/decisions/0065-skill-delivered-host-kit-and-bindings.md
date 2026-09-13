@@ -27,6 +27,28 @@ The Agent Skills standard (a `SKILL.md` folder with `references/`, `assets/`, `s
 10. **Naming.** Kits `snug-host.html` / `snug-host-micro.html`; runner artifact title `Snug`, favicon 🔥; skill `snug`; CLIs `snug-host`, `snug-db`; npm `@snugprotocol/host` — required by the chat binding (S2, 2026-09-05; the `@snugprotocol` scope must be registered first, an owner act). Copy: "Snug apps run inside Claude / Hermes / OpenClaw" — never "built on MCP", never "Claude Code" in product names (ADR-0061).
 11. **Order.** A1 → A2 → the skill on Claude → B (Claude Code local + Hermes) → C (OpenClaw) → docs → Claude marketplace packaging → ChatGPT/Codex packaging. Every publish, release, deploy and submission is an owner act, prepared and printed by the session, never performed by it.
 
+### Amendment — 2026-09-07 (TASK-20260907-binding-b-plugin-host, ADR-0068)
+
+**§2 B is re-scoped.** Binding B is no longer "the playground served by a script the user
+runs by hand" — it is a **plugin-bundled local process** the agent's host spawns over stdio
+(`apps/host-mcp` → one `dist/snug-mcp.mjs`), serving a second build of `apps/host` and
+filling the three seams Snug Desktop fills natively. The launcher, its boot config, and the
+`local`-mode bearer that D5/T3 specified are superseded for this binding: the T2 brain seat
+already routes around `local` mode, and `localAdapter` already accepts a key. The
+`codex`/`hermes`/`openclaw`/`ollama` shims remain T3's remainder.
+
+**The "an MCP server as the host" alternative stands, and is annotated.** It was rejected
+because it would define Snug through MCP (ADR-0061), need a server in every deployment, and
+serve nothing the surfaces need. None of that is true of a process the plugin ships and the
+host spawns, whose only external interface is a four-tool control plane with no data-plane
+tool. MCP is the spawn channel; the proxy and the file are plumbing. Product copy stays
+"Snug apps run inside Claude Code / Cowork / Codex" and never says "Snug MCP server".
+
+**D4 (point 3) is restated precisely.** `connections: false` in bindings A and C is a
+RUNTIME flag, not a build-time exclusion: the executor and wizard bytes are in every build
+of the kit (measured — the artifact and local pages are the same size). D4 governs what a
+binding may CLAIM and DO, never what its bundle contains.
+
 ### Amendments — 2026-09-05/06 (TASK-20260905-binding-a-artifacts, plan review + owner approval as amended)
 
 > **Owner direction, 2026-09-06 (recorded here as a pointer; the decision itself will be its own ADR):** point 3 — "nothing in A or C claims connected apps" — is to be superseded for Binding A by an **MCP-connector binding on the page** (the artifact runtime's `mcp` capability: the page calls the viewer's own connected connectors with the viewer's credentials). Queued in `docs/next-steps.md` with the design questions and the spike it owes; ordered after the page-tools task (ADR-0066 A9).

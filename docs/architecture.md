@@ -247,6 +247,50 @@ file before adoption — C1), the runner's `host-ready` advertising `streaming` 
 `starter/starterSource.ts` owning the five `examples/` globs, a storage disclosure in the
 "your file" card under host, and a named reason on a failed app load.
 
+## The local host process — Binding B (TASK-20260907-binding-b-plugin-host, ADR-0068)
+
+`apps/host-mcp` builds **one `dist/snug-mcp.mjs`** that the agent's host (Claude Code,
+Cowork, Codex) spawns over stdio when the `snug` plugin is installed. It is Snug Desktop's
+native side written in Node and reached over `127.0.0.1` — nothing more ambitious than that.
+It has three jobs.
+
+- **Serve the kit.** A SECOND build of `apps/host` (`vite.local.config.ts` →
+  `dist-local/snug-host-local.html`) with `connections` on. A second *input* in the kit's own
+  config is impossible — `inlineDynamicImports` refuses multiple inputs, `inline-single-file`
+  throws on more than one page, and `check-host-kit` requires exactly one file in `dist/` — so
+  it is a second CONFIG derived from the kit's, differing only in entry, output name and
+  directory. `turbo.json` declares `dist-local/**` as a build output; without that a cache hit
+  restored the artifact kit and left the local page missing.
+- **Be the network side of the executor.** The page's `connected-fetch.ts` stays THE seat that
+  reads a credential and calls fetch, with all ten gates. What crosses to the process is the
+  platform's raw `fetchImpl` (`/fetch`), the user file (`/userdb/*`, `createFileBackend` over
+  an HTTP `FileBackendFs`), and the OAuth callback route the wizard's WEB path already uses.
+  `src/fetch-proxy.ts` re-runs the executor's own gates on the far side of a socket anything
+  local can open: https-only, the IMPORTED `isForbiddenNetHost`, a 3xx returned as data,
+  `Set-Cookie` dropped, the 1 MiB cap enforced while reading, and a 75 s clock — strictly
+  above the executor's 60 s, so the executor's own self-naming timeout is what the user
+  reads. It is **transit-only, not value-blind**: it handles injected values because
+  forwarding them is the job, and never logs, persists, echoes or retains them.
+- **Expose four control-plane tools.** `snug_status`, `snug_open`, `snug_hand_in`,
+  `snug_list_apps`, frozen by an allowlist test. There is no data-plane tool, as a rule: an
+  agent that could fetch with the user's credentials would be a network principal, which C1
+  forbids. The bearer appears in no tool result — `snug_open` makes the process open the
+  browser, and the CLI fallback prints the URL into the user's own terminal.
+
+**Inbound trust.** `Host` must equal the served `127.0.0.1:<port>`. Measured: after a DNS
+rebind an attacker's page is same-origin to the browser and sends no `Origin` and no
+`Sec-Fetch-Site`, so `Host` is the only header naming it. `Sec-Fetch-Site` must be the
+literal `same-origin` — a different loopback PORT reads as `same-site`. Every route requires
+the bearer header, which forces a CORS preflight that is answered without CORS headers.
+
+**One process, one file.** `~/Snug/host/lock.json` with `O_EXCL`, a `0600` control socket for
+attached sessions and the CLI, and a lifetime that is the union of attached sessions — two
+agent windows are one Snug, and the first to leave does not take it away. If Snug Desktop
+holds the file the page **refuses to open** and names the holder rather than running
+read-only, because both of `packages/db`'s save paths swallow a failed write.
+
+Threat surface: `docs/security/threat-model-delta-local-host-process.md`.
+
 ## Desktop shell (TASK-20260812-desktop-hub-scaffold, ADR-0021)
 
 `apps/desktop` wraps the SAME playground source (vite alias, `HashRouter`, desktop entry)
@@ -568,6 +612,7 @@ Until 2026-09-03 every piece of a builder turn — messages, busy flag, step tim
 - `runner` ← `playground`, `server`; `adapters`/`db`/`sdk` dev-depend on it (their suites exercise it)
 - `auth` depends on `protocol` + `db` (CredentialStore seats on the user DB); `playground` now consumes it (AL-03 wires the connected-fetch executor into the runner's NetHandler seam) — change `auth` → run `auth` + `playground`. `runner` does NOT depend on `auth` (value-blind by lint, R4).
 - `desktop` (apps/desktop) consumes the playground SOURCE (vite alias) + ALL seven @snugprotocol packages (protocol/runner/sdk/db/knowledge/adapters/auth per its package.json) — change any of those → run `desktop` too (`pnpm --filter desktop test`, plus `test:rust` and the `gate` script for shell-level changes).
+- `host-mcp` (apps/host-mcp, TASK-20260907-binding-b-plugin-host) consumes `@snugprotocol/auth` (DEEP-imported: `dist/net-guards.js` + `dist/scrub.js`, because the barrel reaches `db` and drags in sql.js and the provider registry — 4,368 B against 329,902 B measured) and `@snugprotocol/protocol` (the bundle parser). It serves `apps/host`'s second build → change either package, or the local page, and run `host-mcp` too (`pnpm --filter host-mcp test`, then `pnpm --filter host-mcp build`); root `check-host-mcp` sweeps the release bundle for test hooks.
 - `host` (apps/host, TASK-20260905-host-kit) consumes the playground SOURCE (vite alias, two modules swapped by resolved path) + ALL seven @snugprotocol packages, like `desktop` — change any of those, or playground source, → run `host` too (`pnpm --filter host test`, then `pnpm --filter host build` + `test:e2e` on the built page); root `check-host-kit` rebuilds the page twice and reads the runner's built `dist/csp.js` in the e2e.
 - `share-relay` (apps/share-relay, ADR-0064) is a standalone Worker with NO workspace dependencies — plain `.mjs`, tested with `node:test`; its only contract with the playground is the HTTP shape in `handler.mjs` and the id/key grammar restated in `apps/playground/src/share/relayClient.ts` (a change to either → run both).
 - `website` (apps/website, ADR-0048) is the public marketing + docs/spec site — a static Astro build OUTSIDE the runtime product. It reads the playground source read-only via the same `@playground` alias (`releaseChannel.ts` constants, theme tokens) and derives its docs pages from `docs/spec-drafts/` + `packages/protocol/schemas/` + the whitepaper; drift is gated by root `check-website-sync` (manifest `apps/website/docs-sync.json`, remedy `/sync-website`). Change `releaseChannel.ts`, the spec draft, the schemas, `docs/product-vision.md`, or the whitepaper → the gate names the website pages owed an update. Both the website and the playground deploy to Cloudflare Pages as static direct uploads via `scripts/deploy-web.mjs` (ADR-0054; runbook `docs/runbooks/deploy-web.md`) — production only from merged `main`, hosted-posture invariants (ADR-0013) enforced by the script. **Live since 2026-08-24**: `snugprotocol.org` (project `snug-website`, whose `pages.dev` subdomain is `snug-website-c7z.pages.dev` — Cloudflare suffixed it) and `playground.snugprotocol.org` (project `snug-playground`). The zone's script-injecting features are OFF and read back from the API, which is how ADR-0013's no-telemetry claim is actually falsified — the `cdn-cgi` response grep alone does not prove it.

@@ -73,6 +73,7 @@ export const LEGS = [
       // self-contained page, reproducible. Needs the kit's dist, which `turbo run build`
       // above produces.
       'pnpm run check-host-kit',
+      'pnpm run check-host-mcp',
       // The gate's own tests. Deliberately self-referential: this script is now
       // the only merge gate, so "the gate is still wired to ci.yml correctly"
       // (AC3) has to be a property the gate itself checks on every run. Note it
@@ -107,6 +108,16 @@ export const LEGS = [
       if (!present) return 'appIsPresent() is false — 10 of 15 e2e specs would silently skip';
       if (!existsSync(join(REPO, 'apps', 'host', 'dist', 'snug-host.html'))) {
         return 'apps/host/dist/snug-host.html missing — the kit e2e opens the built page (pnpm --filter host build)';
+      }
+      // The local page and the process are the SAME shape of precondition (ADR-0068): the
+      // Binding-B specs drive a real process serving the real page, so a missing build is
+      // CANNOT RUN by name. Without this a turbo cache miss on the second output would
+      // have shown up as a spec failure rather than an un-runnable leg.
+      if (!existsSync(join(REPO, 'apps', 'host', 'dist-local', 'snug-host-local.html'))) {
+        return 'apps/host/dist-local/snug-host-local.html missing — the local e2e opens the built page (pnpm --filter host build)';
+      }
+      if (!existsSync(join(REPO, 'apps', 'host-mcp', 'dist', 'snug-mcp.mjs'))) {
+        return 'apps/host-mcp/dist/snug-mcp.mjs missing — the local e2e drives the real process (pnpm --filter host-mcp build)';
       }
       return null;
     },

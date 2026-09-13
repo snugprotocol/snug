@@ -31,5 +31,12 @@ export default defineConfig({
     reuseExistingServer: false,
     timeout: 30_000,
   },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+  projects: [
+    // The kit's own suite: nothing outside the page's origin may be reachable.
+    { name: 'chromium', use: { ...devices['Desktop Chrome'] }, testIgnore: /local\.spec\.ts/ },
+    // Binding B (ADR-0068): its own project because it launches its OWN browser with a
+    // self-signed allowance for the stub — an allowance that must never leak into the
+    // project above, whose whole assertion is that nothing else is reachable.
+    { name: 'local-host', use: { ...devices['Desktop Chrome'] }, testMatch: /local\.spec\.ts/ },
+  ],
 });

@@ -48,7 +48,23 @@ describe('custodyDisclosure — the "your file" chip, one arm per binding × sta
     expect(custodyDisclosure('artifact-chat', 'window-storage', clean)).toMatchObject({ label: 'your file: in this chat', headline: 'in this chat’s page storage' });
     expect(custodyDisclosure('artifact-chat', 'window-storage', clean).body).toContain('published link keeps its own');
     expect(custodyDisclosure('file', 'opfs', clean)).toMatchObject({ label: 'your file: in this browser', body: storageDisclosure('opfs') });
-    expect(custodyDisclosure('local-host', 'idb', clean)).toMatchObject({ label: 'your file: in this browser', body: storageDisclosure('idb') });
+    // CHANGED for Binding B (ADR-0068): under `local-host` the file is a real file on disk
+    // served by the local host process, so the old fall-through label ("in this browser")
+    // was false for this binding. `file` and the default keep the browser wording.
+    expect(custodyDisclosure('local-host', 'file', clean)).toMatchObject({
+      label: 'your file: on this Mac',
+      headline: 'on this Mac',
+    });
+    expect(custodyDisclosure('local-host', 'file', clean).body).toMatch(/~\/Snug\/user\.snug/);
+    // The holder line names WHO, because "close the other app" is the whole remedy and an
+    // unnamed refusal leaves the user guessing (ADR-0068 D-B10).
+    expect(custodyDisclosure('local-host', 'file', { ...clean, heldBy: 'Snug for Mac' }).status).toBe(
+      'Snug for Mac has your file open — close it to use Snug here.',
+    );
+    // It outranks the generic read-only line: both are true, only one is actionable.
+    expect(custodyDisclosure('local-host', 'file', { ...clean, readOnly: true, heldBy: 'Snug for Mac' }).status).toMatch(/Snug for Mac/);
+    // The positive twin: a plain file: page is still "in this browser".
+    expect(custodyDisclosure('file', 'idb', clean)).toMatchObject({ label: 'your file: in this browser', body: storageDisclosure('idb') });
     expect(custodyDisclosure('file', 'memory', clean)).toMatchObject({ label: 'your file: in memory', body: storageDisclosure('memory') });
   });
   it('S2 — a memory-only WORKING copy under an artifact says the tab holds it, on every arm, and never without the flag', () => {

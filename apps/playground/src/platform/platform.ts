@@ -93,6 +93,13 @@ export interface CustodyState {
   saved?: { saved: number; savedAt: string };
   /** The WORKING copy's rung when it is memory only (Safari denies third-party storage): gone with the tab, so the chip says so. */
   workingCopy?: 'memory';
+  /**
+   * Another product holding the user's file (ADR-0068 D-B10) — the local host process
+   * names Snug for Mac here. The chip says WHO rather than only that the view is
+   * read-only, because "close the other app" is the whole remedy and an unnamed refusal
+   * leaves the user guessing.
+   */
+  heldBy?: string;
 }
 
 /**
