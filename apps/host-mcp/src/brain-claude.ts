@@ -3,6 +3,8 @@
 // third-party login is offered and no key of ours exists — the usage is the user's, on
 // their own subscription, which is what the brain chip's "Claude · your CLI" promises.
 
+import { defaultResolveDeps, resolveBinary } from './brain-resolve.js';
+
 /**
  * The child's environment, built from NOTHING (D-B21).
  *
@@ -16,6 +18,21 @@
  * Passing HOME is what lets the CLI find the user's own credentials, which is the point.
  */
 export const CHILD_ENV_ALLOWLIST = ['HOME', 'PATH', 'SHELL', 'USER', 'LANG', 'LC_ALL', 'TMPDIR', 'TERM'] as const;
+
+/**
+ * Where the CLI is (ADR-0069 §6). A GUI-spawned process has no user PATH (measured
+ * 2026-09-13: `launchctl getenv PATH` is empty on the owner's Mac), so the bare name is
+ * resolved against PATH AND the installers' known directories, from the one list in
+ * `install-roots.json`. HOME and PATH are read by NAME — the release gate counts whole-env
+ * reads and this must not add one.
+ */
+export function resolveClaudeBinary(): string | undefined {
+  return resolveBinary('claude', defaultResolveDeps({ HOME: process.env.HOME, PATH: process.env.PATH }));
+}
+
+/** The remedy when there is no CLI at all — a page to visit, then two commands. Never a curl pipe. */
+export const INSTALL_REMEDY =
+  'No `claude` CLI found on this Mac — Snug is using its demo brain. Install Claude Code (https://code.claude.com/docs/en/quickstart), then run `claude` and `/login`, and reopen Snug.';
 
 export function childEnvFor(parent: Record<string, string | undefined>): Record<string, string> {
   const env: Record<string, string> = {};
@@ -171,10 +188,19 @@ export function parseClaudeOutput(stdout: string): { text: string; stopReason: s
 // ------------------------------------------------------------------- the spawn
 
 export interface BrainDeps {
-  /** Injected so tests never launch a real CLI. */
-  run?(args: string[], env: Record<string, string>, prompt: string, signal: AbortSignal): Promise<string>;
+  /** Injected so tests never launch a real CLI. The fifth argument is the resolved binary. */
+  run?(args: string[], env: Record<string, string>, prompt: string, signal: AbortSignal, binary?: string): Promise<string>;
   timeoutMs?: number;
+  /** A fixed path, which skips resolution entirely. */
   binary?: string;
+  /** Where the CLI is; injected so tests never touch the real filesystem. */
+  resolveBinary?(): string | undefined;
+}
+
+/** The binary to spawn: a fixed one, else the resolver's answer, else nothing. */
+function binaryFor(deps: BrainDeps): string | undefined {
+  if (deps.binary !== undefined) return deps.binary;
+  return (deps.resolveBinary ?? resolveClaudeBinary)();
 }
 
 export interface Brain {
@@ -182,9 +208,9 @@ export interface Brain {
   complete(request: ChatRequest): Promise<string>;
 }
 
-/** The default runner: spawn the user's own CLI, feed the prompt on stdin, read stdout. */
-function spawnClaude(binary: string) {
-  return async function run(args: string[], env: Record<string, string>, prompt: string, signal: AbortSignal): Promise<string> {
+/** The default runner: spawn the user's own CLI (by resolved path), feed the prompt on stdin, read stdout. */
+function spawnClaude() {
+  return async function run(args: string[], env: Record<string, string>, prompt: string, signal: AbortSignal, binary = 'claude'): Promise<string> {
     const { spawn } = await import('node:child_process');
     return new Promise<string>((resolve, reject) => {
       const child = spawn(binary, args, { env, stdio: ['pipe', 'pipe', 'pipe'] });
@@ -225,12 +251,15 @@ function spawnClaude(binary: string) {
 
 export function createClaudeBrain(deps: BrainDeps = {}): Brain {
   const timeoutMs = deps.timeoutMs ?? SHIM_TIMEOUT_MS;
-  const binary = deps.binary ?? 'claude';
-  const run = deps.run ?? spawnClaude(binary);
+  const run = deps.run ?? spawnClaude();
 
   return {
     async complete(request: ChatRequest): Promise<string> {
       const { system, prompt } = splitChatRequest(request);
+      // Resolved PER CALL, so a CLI installed after boot answers the next think without a
+      // restart (the chip stays on its boot verdict until then — a known, smaller gap).
+      const binary = binaryFor(deps);
+      if (binary === undefined) throw new Error(INSTALL_REMEDY);
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
       timer.unref?.();
@@ -240,6 +269,7 @@ export function createClaudeBrain(deps: BrainDeps = {}): Brain {
           childEnvFor(process.env),
           prompt,
           controller.signal,
+          binary,
         );
         const { text, stopReason } = parseClaudeOutput(stdout);
         return completionToSseBody({ text, stopReason, model: request.model ?? 'claude' });
@@ -274,7 +304,17 @@ export function createClaudeBrain(deps: BrainDeps = {}): Brain {
  * would send the user to log into a CLI they do not have. `unknown` — it answered
  * something unreadable; the honest state, and never reported as ready.
  */
-export type BrainState = 'ready' | 'logged-out' | 'absent' | 'unknown';
+export type BrainState = 'ready' | 'logged-out' | 'outdated' | 'absent' | 'unknown';
+
+/**
+ * MEASURED 2026-09-13 on the owner's Mac: CLI 2.1.211 answered EVERY `-p` call with
+ * `API Error: 400 Claude Code 2.1.211 does not support this model; version 2.1.251 or newer
+ * is required. Run 'claude update' …`, `is_error: true`, `duration_api_ms: 0`. A CLI's
+ * default model moves under a pinned CLI version, so a brain that worked last week can be
+ * a 400 today with nobody touching Snug. The old probe called this `unknown`; the CLI's own
+ * sentence names the remedy, so the state does too.
+ */
+const OUTDATED_RE = /or newer is required|run 'claude update'|claude update/i;
 
 export interface BrainReadiness {
   state: BrainState;
@@ -292,8 +332,11 @@ export interface BrainReadiness {
 const PROBE_PROMPT = 'ok';
 
 export async function probeBrain(deps: BrainDeps = {}): Promise<BrainReadiness> {
-  const binary = deps.binary ?? 'claude';
-  const run = deps.run ?? spawnClaude(binary);
+  // No binary anywhere is decided WITHOUT a spawn: it is the cheapest answer and the one a
+  // GUI-spawned process with no user PATH would otherwise get wrong (ADR-0069 §6).
+  const binary = binaryFor(deps);
+  if (binary === undefined) return { state: 'absent', detail: INSTALL_REMEDY };
+  const run = deps.run ?? spawnClaude();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), deps.timeoutMs ?? 20_000);
   timer.unref?.();
@@ -304,12 +347,17 @@ export async function probeBrain(deps: BrainDeps = {}): Promise<BrainReadiness> 
       childEnvFor(process.env),
       PROBE_PROMPT,
       controller.signal,
+      binary,
     );
     try {
       parseClaudeOutput(stdout);
       return { state: 'ready' };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      // Checked FIRST: the outdated sentence names a version, never a login.
+      if (OUTDATED_RE.test(message)) {
+        return { state: 'outdated', detail: `Your Claude CLI is out of date — run \`claude update\`, then reopen Snug. (${message})` };
+      }
       // The CLI's own words carry the remedy ("Please run /login"), so they are passed
       // through rather than replaced with a sentence of ours that says less.
       if (/not logged in|\/login|authenticat/i.test(message)) {
@@ -320,9 +368,9 @@ export async function probeBrain(deps: BrainDeps = {}): Promise<BrainReadiness> 
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (controller.signal.aborted) return { state: 'unknown', detail: 'your Claude CLI did not answer the startup check in time' };
-    // A missing binary is not a logged-out one.
+    // A resolved path that still cannot start (a half-removed install) reads as absent too.
     if (/ENOENT|could not start/i.test(message)) {
-      return { state: 'absent', detail: 'No `claude` CLI found on PATH — Snug is using its demo brain.' };
+      return { state: 'absent', detail: INSTALL_REMEDY };
     }
     return { state: 'unknown', detail: message };
   } finally {

@@ -1,0 +1,9 @@
+{
+  "$comment": "ONE list of where a user's own CLIs live when PATH does not say (ADR-0069 §6). A process a desktop host spawns gets no user PATH (measured 2026-09-13: `launchctl getenv PATH` is empty on the owner's Mac), so `node` and `claude` are looked for here, in this order, after PATH. Read by src/brain-resolve.ts for `claude` and templated into the plugin's sh launcher for `node` by scripts/build-plugin.mjs — never a second hand-written copy. `~/` means the user's HOME. A versioned root holds one sub-directory per installed version with the binaries under `bin`; the highest version wins.",
+  "binDirs": ["~/.local/bin", "~/.claude/local", "~/.volta/bin", "/opt/homebrew/bin", "/usr/local/bin"],
+  "versionedRoots": [
+    { "root": "~/.nvm/versions/node", "bin": "bin" },
+    { "root": "~/.local/share/fnm/node-versions", "bin": "installation/bin" },
+    { "root": "~/.fnm/node-versions", "bin": "installation/bin" }
+  ]
+}

@@ -295,3 +295,57 @@ describe('probeBrain — is the user’s CLI actually able to answer?', () => {
     expect(state.state).not.toBe('ready');
   });
 });
+
+// ------------------------------------------------ the five states (ADR-0069 §6, AC4)
+
+describe('probeBrain — the two states the owner’s machine taught us on 2026-09-13', () => {
+  // MEASURED. The owner's CLI (2.1.211) answered EVERY `-p` call with this, `is_error: true`,
+  // `duration_api_ms: 0`. The old probe read it as `unknown` — true, and useless: the CLI's
+  // own sentence names the remedy, so the state does too.
+  const OUTDATED =
+    "API Error: 400 Claude Code 2.1.211 does not support this model; version 2.1.251 or newer is required. Run 'claude update', or update the Claude desktop app, then try again.";
+
+  it('names an OUTDATED cli, with `claude update` as the remedy', async () => {
+    const state = await probeBrain({ run: async () => JSON.stringify({ is_error: true, result: OUTDATED }) });
+    expect(state.state).toBe('outdated');
+    expect(state.detail).toMatch(/claude update/);
+  });
+
+  it('does not mistake the outdated sentence for a logged-out one', async () => {
+    const state = await probeBrain({ run: async () => JSON.stringify({ is_error: true, result: OUTDATED }) });
+    expect(state.state).not.toBe('logged-out');
+  });
+
+  it('reports ABSENT without spawning anything when no binary resolves — a GUI-spawned process has no user PATH', async () => {
+    const run = vi.fn(async () => 'never called');
+    const state = await probeBrain({ run, resolveBinary: () => undefined });
+    expect(state.state).toBe('absent');
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it('the absent remedy sends a non-technical user to the install page, never to pipe curl into bash', async () => {
+    const state = await probeBrain({ run: async () => 'x', resolveBinary: () => undefined });
+    expect(state.detail).toMatch(/code\.claude\.com|install/i);
+    expect(state.detail).not.toMatch(/curl|\| *bash/);
+    // and the second half of the remedy — a fresh install is logged out.
+    expect(state.detail).toMatch(/\/login/);
+  });
+
+  it('spawns the RESOLVED path, not the bare name', async () => {
+    const seen: string[] = [];
+    const brain = createClaudeBrain({
+      resolveBinary: () => '/Users/x/.local/bin/claude',
+      run: async (args, _env, _prompt, _signal, binary) => {
+        seen.push(binary ?? '');
+        return JSON.stringify({ is_error: false, result: 'ok' });
+      },
+    });
+    await brain.complete({ messages: [{ role: 'user', content: 'x' }] });
+    expect(seen).toEqual(['/Users/x/.local/bin/claude']);
+  });
+
+  it('a think with no binary fails by name, with the same remedy, rather than ENOENT', async () => {
+    const brain = createClaudeBrain({ resolveBinary: () => undefined, run: async () => 'never' });
+    await expect(brain.complete({ messages: [{ role: 'user', content: 'x' }] })).rejects.toThrow(/install/i);
+  });
+});

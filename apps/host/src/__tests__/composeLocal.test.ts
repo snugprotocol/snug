@@ -118,3 +118,23 @@ describe('when another product holds the file (D-B24)', () => {
     expect(platform.capabilities.connections).toBe(false);
   });
 });
+
+describe('the chip’s two newer states (ADR-0069 §6)', () => {
+  afterEach(() => {
+    brainState.current = undefined;
+  });
+
+  it('names an OUTDATED cli with `claude update` on the chip', () => {
+    const { platform } = composeLocalPlatform(client, status({ brain: { state: 'outdated', detail: 'run `claude update`' } }), undefined, undefined, 't');
+    expect(labelOf(platform.brain)).toMatch(/claude update/);
+    expect(labelOf(platform.brain)).not.toBe('Claude · your CLI');
+  });
+
+  it('tells a user with NO cli how to get one, in words — not a curl pipe', () => {
+    const { platform } = composeLocalPlatform(client, status({ brain: { state: 'absent' } }), undefined, undefined, 't');
+    const label = labelOf(platform.brain) ?? '';
+    expect(label).toMatch(/demo brain/);
+    expect(label).toMatch(/install/i);
+    expect(label).not.toMatch(/curl/);
+  });
+});
