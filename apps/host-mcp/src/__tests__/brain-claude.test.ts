@@ -75,7 +75,7 @@ describe('the child environment', () => {
 });
 
 describe('the one argv (ADR-0069 §5)', () => {
-  const args = buildStreamArgs('you are a brain');
+  const args = buildStreamArgs({ system: 'you are a brain' });
   it('speaks stream-json both ways, verbose, with partial messages', () => {
     expect(args).toEqual(expect.arrayContaining(['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages']));
   });
@@ -90,6 +90,46 @@ describe('the one argv (ADR-0069 §5)', () => {
   });
   it('carries the system prompt as an argument, never as an env var', () => {
     expect(args[args.indexOf('--system-prompt') + 1]).toBe('you are a brain');
+  });
+});
+
+describe('the model and the effort reach argv (TASK-20260922 AC1)', () => {
+  // AC1's proof that the default path is unchanged: a FROZEN literal, not a recomputation
+  // of whatever buildStreamArgs does today — the point is to notice if it ever changes.
+  const ARGV_BEFORE_THIS_TASK = [
+    '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
+    '--system-prompt', 'you are a brain',
+    '--tools', '', '--disallowedTools', '*', '--max-turns', '1', '--no-session-persistence', '--setting-sources', 'local', '--strict-mcp-config',
+  ];
+
+  it('is BYTE-IDENTICAL to the pre-task argv when no model and no effort are chosen', () => {
+    expect(buildStreamArgs({ system: 'you are a brain' })).toEqual(ARGV_BEFORE_THIS_TASK);
+  });
+
+  it('emits --model <id> when a model is chosen, and nothing model-ish when it is not', () => {
+    expect(buildStreamArgs({ system: 's', model: 'haiku' })).toEqual(expect.arrayContaining(['--model', 'haiku']));
+    expect(buildStreamArgs({ system: 's' })).not.toContain('--model');
+  });
+
+  it('emits --effort <level> when an effort is chosen, and nothing effort-ish when it is not', () => {
+    expect(buildStreamArgs({ system: 's', effort: 'low' })).toEqual(expect.arrayContaining(['--effort', 'low']));
+    expect(buildStreamArgs({ system: 's' })).not.toContain('--effort');
+  });
+
+  it('accepts every effort the CLI documents, and no others (measured, claude 2.1.278)', () => {
+    for (const level of ['low', 'medium', 'high', 'xhigh', 'max'] as const) {
+      expect(buildStreamArgs({ system: 's', effort: level })).toEqual(expect.arrayContaining(['--effort', level]));
+    }
+    // An effort that is not one of the five never reaches argv: the child would reject it,
+    // and a rejected flag is a refused think rather than a slower one.
+    expect(buildStreamArgs({ system: 's', effort: 'turbo' as never })).not.toContain('--effort');
+  });
+
+  it('keeps the whole D5 posture with a model AND an effort selected (AC7)', () => {
+    const args = buildStreamArgs({ system: 's', model: 'opus', effort: 'max' });
+    expect(args).toEqual(expect.arrayContaining(['--tools', '', '--disallowedTools', '*', '--max-turns', '1', '--no-session-persistence', '--strict-mcp-config']));
+    expect(args[args.indexOf('--setting-sources') + 1]).toBe('local');
+    expect(args).not.toContain('--bare');
   });
 });
 
@@ -342,7 +382,7 @@ describe('probeBrain — is the user’s CLI actually able to answer, on the bra
   it('runs the SAME wire the brain does, with no tools — a probe down a different path proves the wrong thing', async () => {
     const { state, children } = probeWith();
     await state;
-    expect(children[0]?.args).toEqual(buildStreamArgs('Answer with the single word ok.'));
+    expect(children[0]?.args).toEqual(buildStreamArgs({ system: 'Answer with the single word ok.' }));
     expect(children[0]?.args).toEqual(expect.arrayContaining(['--tools', '', '--input-format', 'stream-json']));
   });
 
@@ -361,7 +401,7 @@ describe('probeBrain — is the user’s CLI actually able to answer, on the bra
 
 describe('the child is isolated from the agent host’s project and the user’s memory (security review, measured 2026-09-13)', () => {
   it('runs with --setting-sources local and --strict-mcp-config', () => {
-    const args = buildStreamArgs('s');
+    const args = buildStreamArgs({ system: 's' });
     expect(args[args.indexOf('--setting-sources') + 1]).toBe('local');
     expect(args).toContain('--strict-mcp-config');
   });

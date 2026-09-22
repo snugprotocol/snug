@@ -200,10 +200,34 @@ export class ClaudeChild {
   }
 }
 
+/**
+ * The thinking levels the user's own CLI documents (`--effort`, measured on 2.1.278). This is
+ * NOT ADR-0067's `quick | default | complex`: that is the artifact runtime's `modelTier`
+ * contract on Binding A, a different axis on a different binding. No mapping between the two
+ * is invented here (TASK-20260922 Q3).
+ */
+export const BRAIN_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+export type BrainEffort = (typeof BRAIN_EFFORTS)[number];
+export const isEffort = (value: unknown): value is BrainEffort => typeof value === 'string' && (BRAIN_EFFORTS as readonly string[]).includes(value);
+
+/**
+ * What a child is spawned to be: its system prompt and the user's choices. ONE value carries
+ * all three, so the argv a child runs with and the pool key that identifies it derive from the
+ * same source and cannot drift apart (AC1 + AC2). The choices are per-machine and global across
+ * apps (Gate 1 Q2) — they never ride the user file, so nothing here reaches `packages/protocol`.
+ */
+export interface BrainSpec {
+  system: string;
+  /** A model id or alias for the user's CLI (`haiku`, `claude-fable-5`). Absent = the CLI's default. */
+  model?: string | undefined;
+  /** Absent = the CLI's own default effort. */
+  effort?: BrainEffort | undefined;
+}
+
 export interface ChildPoolOptions {
   spawnChild: SpawnChild;
-  /** The argv for a child serving this system prompt. */
-  argsFor(system: string): string[];
+  /** The argv for a child serving this spec. */
+  argsFor(spec: BrainSpec): string[];
   /** The child environment, built by allowlist once by the caller (never `process.env`). */
   env: Record<string, string>;
   /** Pre-warmed keys kept at once; the least recently used is evicted beyond it. */
@@ -221,8 +245,17 @@ export const POOL_MAX_WARM = 2;
 export const POOL_MAX_LIVE = 4;
 export const POOL_IDLE_MS = 5 * 60_000;
 
-export function poolKey(system: string): string {
-  return createHash('sha256').update(system).digest('hex');
+/**
+ * A child's identity: the system prompt AND the user's model and effort choices (AC2). A child
+ * is only reusable for a request that would have spawned it identically, so a pre-warmed child
+ * for one model is never handed to a request for another — the bug the pre-task key
+ * (`sha256(system)` alone) would have had the moment a model could be chosen.
+ *
+ * The NUL separator is load-bearing: without it `model:'a' + effort:'b'` and `model:'ab'` would
+ * hash the same, and a NUL cannot occur in any of the three fields.
+ */
+export function poolKey(spec: BrainSpec): string {
+  return createHash('sha256').update(`${spec.system}\u0000${spec.model ?? ''}\u0000${spec.effort ?? ''}`).digest('hex');
 }
 
 export class ChildPool {
@@ -246,7 +279,7 @@ export class ChildPool {
    * Either way a replacement is pre-warmed at once, so the next request for the same prompt
    * skips the start-up.
    */
-  acquire(system: string): ClaudeChild {
+  acquire(spec: BrainSpec): ClaudeChild {
     if (this.stopped) throw new Error('the runner is stopping');
     // The cap counts what is ANSWERING, whether the child came warm or fresh: an app looping
     // its thinks must not fan out a process — and an API call on the user's subscription —
@@ -254,7 +287,7 @@ export class ChildPool {
     if (this.live.size >= this.maxLive) {
       throw new Error(`Snug is already answering ${this.maxLive} thinks — try again in a moment`);
     }
-    const key = poolKey(system);
+    const key = poolKey(spec);
     const entry = this.warm.get(key);
     let child: ClaudeChild;
     if (entry !== undefined) {
@@ -266,13 +299,13 @@ export class ChildPool {
     if (entry !== undefined && entry.child.alive) {
       child = entry.child;
     } else {
-      child = this.spawn(system);
+      child = this.spawn(spec);
     }
     this.live.add(child);
     // A replacement that cannot start is not this request's failure; the next request
     // will spawn for itself and name the problem then.
     try {
-      this.prewarm(key, system);
+      this.prewarm(key, spec);
     } catch {
       /* named by the next acquire */
     }
@@ -286,7 +319,7 @@ export class ChildPool {
   }
 
   /** Start a unused child for this key now, unless one is already waiting. */
-  prewarm(key: string, system: string): void {
+  prewarm(key: string, spec: BrainSpec): void {
     if (this.stopped || this.maxWarm === 0) return;
     const existing = this.warm.get(key);
     if (existing !== undefined && existing.child.alive) {
@@ -300,7 +333,7 @@ export class ChildPool {
       clearTimeout(existing.timer);
     }
     // Spawn FIRST: a spawn that throws (no binary) must not have cost another key its child.
-    const child = this.spawn(system);
+    const child = this.spawn(spec);
     while (this.warm.size >= this.maxWarm) {
       const oldest = this.warm.keys().next().value;
       if (oldest === undefined) break;
@@ -330,7 +363,7 @@ export class ChildPool {
     entry.child.kill();
   }
 
-  private spawn(system: string): ClaudeChild {
-    return new ClaudeChild(this.options.spawnChild(this.options.argsFor(system), this.options.env));
+  private spawn(spec: BrainSpec): ClaudeChild {
+    return new ClaudeChild(this.options.spawnChild(this.options.argsFor(spec), this.options.env));
   }
 }

@@ -7,7 +7,7 @@
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 
-import { ChildPool, ClaudeChild, type ChildLike, type SpawnChild } from './brain-child.js';
+import { ChildPool, ClaudeChild, isEffort, type BrainSpec, type ChildLike, type SpawnChild } from './brain-child.js';
 import { defaultResolveDeps, resolveBinary } from './brain-resolve.js';
 
 /**
@@ -57,6 +57,10 @@ export function resolveClaudeBinary(): string | undefined {
 export const INSTALL_REMEDY =
   'No `claude` CLI found on this machine — Snug is using its demo brain. Install Claude Code (https://code.claude.com/docs/en/quickstart), then run `claude` and `/login`, and reopen Snug.';
 
+export { BRAIN_EFFORTS } from './brain-child.js';
+export { isEffort };
+export type { BrainEffort, BrainSpec } from './brain-child.js';
+
 /**
  * The posture every child runs with (program D5): no tools — which makes a single turn by
  * construction (verified: `num_turns: 1`) — `--max-turns 1` as belt and braces (accepted by
@@ -93,8 +97,20 @@ const POSTURE = [
  * as an argument, never as an environment variable. The probe and the brain share it, so
  * the probe proves the wire the brain uses.
  */
-export function buildStreamArgs(system: string): string[] {
-  return ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--system-prompt', system, ...POSTURE];
+export function buildStreamArgs(spec: BrainSpec): string[] {
+  // The model and the effort are OPTIONAL and additive: with neither chosen the argv is
+  // byte-identical to the one this binding shipped with (AC1, pinned by a frozen literal in
+  // the tests), so the default path is provably unchanged by this task. Both ride BEFORE the
+  // posture, which stays last and whole — neither flag may displace or reorder it (AC7).
+  const choice: string[] = [];
+  // Free text, validated by the CLI itself: it has no machine-readable model list (measured,
+  // 2.1.278) but refuses an unknown model BY NAME rather than answering on another, so the
+  // check that matters happens where the truth is. Empty/blank is "no choice", not a model.
+  if (spec.model !== undefined && spec.model.trim() !== '') choice.push('--model', spec.model.trim());
+  // An effort outside the five the CLI documents never reaches argv: the child would reject
+  // the flag, which would turn a slower think into a refused one.
+  if (spec.effort !== undefined && isEffort(spec.effort)) choice.push('--effort', spec.effort);
+  return ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--system-prompt', spec.system, ...choice, ...POSTURE];
 }
 
 /**
@@ -253,7 +269,7 @@ export function createClaudeBrain(deps: BrainDeps = {}): Brain {
       const model = request.model ?? 'claude';
       // The page sends no model today (it always says `claude`), so the key is the system
       // prompt alone; a different model would be a different child.
-      const child = pool.acquire(system);
+      const child = pool.acquire({ system });
       const base = { id: `chatcmpl-snug-${Date.now().toString(36)}`, object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model };
       // EVERY FRAME IS ONE JSON.stringify OF THE WHOLE PAYLOAD: a delta's text is a string
       // value inside it, so a delta containing "\n\ndata:" rides inside its frame and can
@@ -374,7 +390,7 @@ export async function probeBrain(deps: ProbeDeps = {}): Promise<BrainReadiness> 
   }, deps.timeoutMs ?? 20_000);
   timer.unref?.();
   try {
-    child = new ClaudeChild((deps.spawnBinary ?? nodeSpawn)(binary, buildStreamArgs(PROBE_SYSTEM), childEnvFor(process.env, EXEC_DIR), deps.cwd));
+    child = new ClaudeChild((deps.spawnBinary ?? nodeSpawn)(binary, buildStreamArgs({ system: PROBE_SYSTEM }), childEnvFor(process.env, EXEC_DIR), deps.cwd));
     await child.send(PROBE_PROMPT, { onDelta() {} });
     return { state: 'ready' };
   } catch (error) {

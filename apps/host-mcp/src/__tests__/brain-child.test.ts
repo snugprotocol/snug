@@ -8,15 +8,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ClaudeChild, POOL_IDLE_MS, POOL_MAX_LIVE, POOL_MAX_WARM, poolKey, ChildPool, userMessageLine } from '../brain-child.js';
+import type { BrainSpec } from '../brain-child.js';
+import { createHash } from 'node:crypto';
 import { delta, fakeSpawner, FakeClaudeChild, line, result, thinkingDelta } from './fixtures/fake-claude-child.js';
 
-const argsFor = (system: string): string[] => ['-p', '--system-prompt', system];
+const argsFor = (s: BrainSpec): string[] => ['-p', '--system-prompt', s.system, ...(s.model === undefined ? [] : ['--model', s.model]), ...(s.effort === undefined ? [] : ['--effort', s.effort])];
 const ENV = { HOME: '/Users/x', PATH: '/usr/bin' };
 
 const pool = (spawnChild: ReturnType<typeof fakeSpawner>['spawnChild'], over: Partial<ConstructorParameters<typeof ChildPool>[0]> = {}) =>
   new ChildPool({ spawnChild, argsFor, env: ENV, ...over });
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+/** A spec from a bare system prompt — the shape these pool tests predate (TASK-20260922 S1). */
+const spec = (system: string, over: Partial<BrainSpec> = {}): BrainSpec => ({ system, ...over });
 
 describe('ClaudeChild — one child, one request', () => {
   it('sends ONE stream-json user message and resolves on the result, streaming the deltas in order', async () => {
@@ -106,7 +111,7 @@ describe('ChildPool — pre-warmed, single-use, bounded', () => {
   it('a unused child receives NOTHING until it is acquired — pre-warming costs no tokens', () => {
     const { spawnChild, children } = fakeSpawner();
     const p = pool(spawnChild);
-    p.prewarm(poolKey('S'), 'S');
+    p.prewarm(poolKey(spec('S')), spec('S'));
     expect(children).toHaveLength(1);
     expect(children[0]?.written).toEqual([]);
     p.stop();
@@ -115,13 +120,13 @@ describe('ChildPool — pre-warmed, single-use, bounded', () => {
   it('the first request for a prompt spawns; the next finds the pre-warmed child and skips the spawn', async () => {
     const { spawnChild, children } = fakeSpawner();
     const p = pool(spawnChild);
-    const first = p.acquire('S');
+    const first = p.acquire(spec('S'));
     // One spawn for the request, one pre-warmed replacement.
     expect(children).toHaveLength(2);
     expect(first.process).toBe(children[0]);
     await first.send('ping', { onDelta: () => {} });
     p.release(first);
-    const second = p.acquire('S');
+    const second = p.acquire(spec('S'));
     // The replacement was taken — no third spawn at acquire time…
     expect(second.process).toBe(children[1]);
     // …but a replacement for IT is pre-warmed at once.
@@ -133,7 +138,7 @@ describe('ChildPool — pre-warmed, single-use, bounded', () => {
   it('a released child is killed — nothing is ever reused after its one request', async () => {
     const { spawnChild, children } = fakeSpawner();
     const p = pool(spawnChild);
-    const child = p.acquire('S');
+    const child = p.acquire(spec('S'));
     await child.send('ping', { onDelta: () => {} });
     p.release(child);
     expect((child.process as FakeClaudeChild).kills).toEqual(['SIGTERM']);
@@ -145,8 +150,8 @@ describe('ChildPool — pre-warmed, single-use, bounded', () => {
   it('two concurrent requests for the same prompt get two children — a busy child is never shared', () => {
     const { spawnChild } = fakeSpawner();
     const p = pool(spawnChild);
-    const a = p.acquire('S');
-    const b = p.acquire('S');
+    const a = p.acquire(spec('S'));
+    const b = p.acquire(spec('S'));
     expect(a).not.toBe(b);
     expect(a.process).not.toBe(b.process);
     p.stop();
@@ -155,11 +160,11 @@ describe('ChildPool — pre-warmed, single-use, bounded', () => {
   it('keeps at most maxWarm pre-warmed keys, evicting the least recently used', () => {
     const { spawnChild, children } = fakeSpawner();
     const p = pool(spawnChild, { maxWarm: 2 });
-    p.prewarm(poolKey('A'), 'A');
-    p.prewarm(poolKey('B'), 'B');
+    p.prewarm(poolKey(spec('A')), spec('A'));
+    p.prewarm(poolKey(spec('B')), spec('B'));
     // Touch A so B is the oldest.
-    p.prewarm(poolKey('A'), 'A');
-    p.prewarm(poolKey('C'), 'C');
+    p.prewarm(poolKey(spec('A')), spec('A'));
+    p.prewarm(poolKey(spec('C')), spec('C'));
     expect(p.stats().warm).toBe(2);
     // B (the LRU) was killed; A and C stand.
     expect(children.map((c) => c.args[2])).toEqual(['A', 'B', 'C']);
@@ -172,7 +177,7 @@ describe('ChildPool — pre-warmed, single-use, bounded', () => {
   it('reaps a unused child that idles past the TTL', () => {
     const { spawnChild, children } = fakeSpawner();
     const p = pool(spawnChild, { idleMs: 1_000 });
-    p.prewarm(poolKey('S'), 'S');
+    p.prewarm(poolKey(spec('S')), spec('S'));
     vi.advanceTimersByTime(999);
     expect(children[0]?.exited).toBe(false);
     vi.advanceTimersByTime(2);
@@ -183,20 +188,20 @@ describe('ChildPool — pre-warmed, single-use, bounded', () => {
   it('stop() reaps every child, warm and live, and refuses further acquires', () => {
     const { spawnChild, children } = fakeSpawner();
     const p = pool(spawnChild);
-    p.acquire('S'); // live + a warm replacement
-    p.prewarm(poolKey('T'), 'T');
+    p.acquire(spec('S')); // live + a warm replacement
+    p.prewarm(poolKey(spec('T')), spec('T'));
     p.stop();
     expect(children.every((c) => c.exited)).toBe(true);
     expect(p.stats()).toEqual({ warm: 0, live: 0 });
-    expect(() => p.acquire('S')).toThrow(/stopping/);
+    expect(() => p.acquire(spec('S'))).toThrow(/stopping/);
   });
 
   it('a pre-warmed child that died on its own is not handed out — the request gets a fresh spawn', () => {
     const { spawnChild, children } = fakeSpawner();
     const p = pool(spawnChild);
-    p.prewarm(poolKey('S'), 'S');
+    p.prewarm(poolKey(spec('S')), spec('S'));
     children[0]?.exit(1);
-    const child = p.acquire('S');
+    const child = p.acquire(spec('S'));
     expect(child.process).not.toBe(children[0]);
     expect(child.alive).toBe(true);
     p.stop();
@@ -210,11 +215,62 @@ describe('ChildPool — pre-warmed, single-use, bounded', () => {
   it('keys by the system prompt, so a different contract never finds another app’s child', () => {
     const { spawnChild, children } = fakeSpawner();
     const p = pool(spawnChild);
-    p.acquire('contract A');
-    const b = p.acquire('contract B');
+    p.acquire(spec('contract A'));
+    const b = p.acquire(spec('contract B'));
     expect((b.process as FakeClaudeChild).args).toContain('contract B');
     // A's replacement was not taken by B.
     expect(children.filter((c) => c.args.includes('contract A') && !c.exited)).toHaveLength(2);
+    p.stop();
+  });
+});
+
+describe('the pool key is the child’s whole identity, not just its prompt (TASK-20260922 AC2)', () => {
+  // The MUTANT for every case below is the pre-task key, `sha256(system)` alone. Each
+  // assertion here is one that key would fail — which is what makes them worth having.
+  const OLD_KEY = (system: string): string => createHash('sha256').update(system).digest('hex');
+
+  it('separates two specs that differ ONLY in model — the pre-task key could not', () => {
+    expect(poolKey(spec('S', { model: 'haiku' }))).not.toBe(poolKey(spec('S', { model: 'opus' })));
+    // Proof the mutant fails: under the old key these two collide.
+    expect(OLD_KEY('S')).toBe(OLD_KEY('S'));
+  });
+
+  it('separates two specs that differ ONLY in effort', () => {
+    expect(poolKey(spec('S', { effort: 'low' }))).not.toBe(poolKey(spec('S', { effort: 'max' })));
+  });
+
+  it('still reuses one key for the same spec — the pre-warm win is not lost', () => {
+    expect(poolKey(spec('S', { model: 'haiku', effort: 'low' }))).toBe(poolKey(spec('S', { model: 'haiku', effort: 'low' })));
+  });
+
+  it('cannot be fooled by fields that run together (the NUL separator)', () => {
+    // Without a separator `model:'a' + effort:'b'` would hash as `model:'ab'`.
+    expect(poolKey(spec('S', { model: 'a', effort: 'b' as never }))).not.toBe(poolKey(spec('S', { model: 'ab' })));
+    // And a prompt ending where a model begins must not collide either.
+    expect(poolKey(spec('SX'))).not.toBe(poolKey(spec('S', { model: 'X' })));
+  });
+
+  it('hands a request for model B a FRESH child, never the one pre-warmed for model A', () => {
+    const { spawnChild, children } = fakeSpawner();
+    const p = pool(spawnChild);
+    const a = p.acquire(spec('S', { model: 'haiku' }));
+    p.release(a);
+    // children[1] is the replacement pre-warmed for haiku. A request for opus must not take it.
+    const b = p.acquire(spec('S', { model: 'opus' }));
+    expect(b.process).not.toBe(children[1]);
+    // The fresh child was spawned with opus in its argv — the choice reached the process,
+    // not merely the key.
+    expect(children[children.length - 1]?.args).toEqual(expect.arrayContaining(['--model', 'opus']));
+    p.stop();
+  });
+
+  it('takes the pre-warmed child when the model matches — switching away and back is not a permanent cost', () => {
+    const { spawnChild, children } = fakeSpawner();
+    const p = pool(spawnChild);
+    const first = p.acquire(spec('S', { model: 'haiku' }));
+    p.release(first);
+    const second = p.acquire(spec('S', { model: 'haiku' }));
+    expect(second.process).toBe(children[1]);
     p.stop();
   });
 });
@@ -250,10 +306,10 @@ describe('the review’s findings, each with its mutant (2026-09-13)', () => {
   it('a spawn that fails (error, no exit) is dead: never handed out, and a request on it fails at once', async () => {
     const { spawnChild, children } = fakeSpawner({ errorAtOnce: 'spawn claude EACCES' });
     const p = new ChildPool({ spawnChild, argsFor, env: ENV });
-    p.prewarm(poolKey('S'), 'S');
+    p.prewarm(poolKey(spec('S')), spec('S'));
     await new Promise((r) => setTimeout(r, 0));
     expect(children[0]?.exited).toBe(false); // the FAKE never exits — the class must not need it to
-    const child = p.acquire('S');
+    const child = p.acquire(spec('S'));
     expect(child.process).not.toBe(children[0]);
     p.stop();
   });
@@ -296,10 +352,10 @@ describe('the pool’s bounds, each with its mutant (2026-09-13)', () => {
   it('a dead warm entry’s timer is cleared, so it cannot reap the replacement at that key', () => {
     const { spawnChild, children } = fakeSpawner();
     const p = new ChildPool({ spawnChild, argsFor, env: ENV, idleMs: 1_000 });
-    p.prewarm(poolKey('S'), 'S'); // timer → t=1000
+    p.prewarm(poolKey(spec('S')), spec('S')); // timer → t=1000
     vi.advanceTimersByTime(500);
     children[0]?.exit(1); // dies on its own
-    p.acquire('S'); // drops the dead entry, spawns for the request, pre-warms a replacement (timer → t=1500)
+    p.acquire(spec('S')); // drops the dead entry, spawns for the request, pre-warms a replacement (timer → t=1500)
     vi.advanceTimersByTime(501); // t=1001: the OLD timer would fire here
     const replacement = children[2];
     expect(replacement?.exited, 'the stale timer must not have reaped the replacement').toBe(false);
@@ -312,9 +368,9 @@ describe('the pool’s bounds, each with its mutant (2026-09-13)', () => {
     let fail = false;
     const { spawnChild, children } = fakeSpawner();
     const p = new ChildPool({ spawnChild: (args, env) => { if (fail) throw new Error('no binary'); return spawnChild(args, env); }, argsFor, env: ENV, maxWarm: 1 });
-    p.prewarm(poolKey('A'), 'A');
+    p.prewarm(poolKey(spec('A')), spec('A'));
     fail = true;
-    expect(() => p.prewarm(poolKey('B'), 'B')).toThrow(/no binary/);
+    expect(() => p.prewarm(poolKey(spec('B')), spec('B'))).toThrow(/no binary/);
     expect(children[0]?.exited, 'A must still be warm').toBe(false);
     expect(p.stats().warm).toBe(1);
     p.stop();
@@ -323,9 +379,9 @@ describe('the pool’s bounds, each with its mutant (2026-09-13)', () => {
   it('refuses a request beyond maxLive by name, never queues it', () => {
     const { spawnChild } = fakeSpawner();
     const p = new ChildPool({ spawnChild, argsFor, env: ENV, maxLive: 2, maxWarm: 0 });
-    p.acquire('S');
-    p.acquire('S');
-    expect(() => p.acquire('S')).toThrow(/already answering 2/);
+    p.acquire(spec('S'));
+    p.acquire(spec('S'));
+    expect(() => p.acquire(spec('S'))).toThrow(/already answering 2/);
     p.stop();
   });
 
