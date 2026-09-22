@@ -167,3 +167,13 @@ Tests first at every step. Steps 1–4 are `apps/host-mcp`; step 5 is `apps/host
 - **Plugin rebuilt and verified**: `dist/plugin/snug/scripts/` carries both the new bundle (`--effort` present) and the new page (`brain-menu-effort` present), 07:54.
 - **AC1–AC8 met. AC9 (🔑 owner walk) is now genuinely walkable by clicking the chip.**
 - Next step: the owner walk. Kill the stale runner (PID 47631, from 7 Sep, still on the old dev bundle) and restart Claude Code first.
+
+### 2026-09-22 — Jeetu (via Claude Code) — S8: the chip NAMES the default model (owner ask)
+- Owner on the walk: the chip said "the CLI's default" for BOTH model and level — true but useless. **Measured what the CLI can actually tell us before promising anything:**
+  - **Model: fully knowable.** With no `--model` at all, the `init` frame still reports the real id — measured `claude-opus-5[1m]`. So a default the user never chose CAN be named.
+  - **Effort: not reported anywhere.** No effort/thinking field in `init` (all 22 keys dumped) or in `result`, at any level. The only observable is `thinking_tokens` (0 at `low`, 97 at `max`) — an EFFECT, not a setting, and not invertible into a level name. So the effort half of the ask cannot be honoured without inventing it, and is deliberately left unnamed.
+- **The real bug this surfaced: nothing in production ever called `markAnswered`.** The brain has reported the resolved model since S4 and the store has held it since S5, but no code fed one to the other — so `active.model` was always undefined and the chip could ONLY ever say "default". The seat logic was right all along; the wire was missing. (Four S8 seat tests passed before any change — the giveaway.)
+- Fixed in the per-call adapter: the response body's `model` is read from a CLONE (the adapter still needs the body) and awaited (so the chip is right the moment the think resolves, not a tick later), then `markAnswered`. A non-JSON or streamed body teaches nothing and must never fail the think.
+- Wording now: `the CLI's default (known after the first think)` until one answers, then the real id. Effort says `the CLI's default` with no invented level.
+- A test pins that **no effort level name may appear unless the user chose one** — the guard against exactly the invention the owner's ask could have led to.
+- Tests: host 281, playground 1917, desktop 194. **Root 30/30.** Live-verified: an unchosen model puts `claude-opus-5[1m]` in the envelope.

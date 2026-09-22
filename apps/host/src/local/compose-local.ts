@@ -130,13 +130,14 @@ export function brainChipSeat(input: { brain: { state: string } | undefined; cho
   const { choices } = input;
   const active = choices.active();
   const choice = choices.choice();
-  const model =
-    active.model !== undefined
-      ? active.model
-      : // Chosen but unproven: say the CLI's default rather than name a model that has not
-        // answered. The asked alias appears only once a think comes back on it.
-        'the CLI’s default model';
-  const effort = choice.effort ?? 'the CLI’s default effort';
+  // The CLI reports the model it resolved on EVERY think, chosen or not, so after the first
+  // answer this names the real id — including the default the user never picked. Before that
+  // there is nothing true to say, and a chosen-but-unproven alias is not it (ADR-0059 rule 2).
+  const model = active.model ?? 'the CLI’s default (known after the first think)';
+  // Effort has no such report: the CLI echoes the level back nowhere, in `init` or `result`
+  // (measured 2026-09-22 — only the thinking-token COUNT differs, which is an effect, not a
+  // setting). So an unchosen level is left unnamed rather than guessed at.
+  const effort = choice.effort ?? 'the CLI’s default';
   const refusal = active.refusal === undefined ? '' : ` — ${active.refusal}`;
   return {
     efforts: BRAIN_EFFORT_OPTIONS,
@@ -278,11 +279,31 @@ export function composeLocalPlatform(
               // until a reload — ADR-0036 rule 3, and what makes "switch now, it lands on
               // your next think" true. The effort rides beside it on the same request.
               adapter: {
-                complete: (request) => {
+                complete: async (request) => {
                   const choice = brainChoices.choice();
-                  return localAdapter({ baseUrl: `${origin}/v1`, apiKey: token, model: choice.model ?? 'claude', fetch: (input, init) => client.fetchImpl(input, init) }).complete(
-                    choice.effort === undefined ? request : ({ ...request, effort: choice.effort } as typeof request),
-                  );
+                  const result = await localAdapter({
+                    baseUrl: `${origin}/v1`,
+                    apiKey: token,
+                    model: choice.model ?? 'claude',
+                    // The answer carries the model the CLI RESOLVED, and reading it here is
+                    // the only way the chip can name a default the user never chose — the
+                    // brain knows, but nothing fed it back (S8).
+                    fetch: async (input, init) => {
+                      const response = await client.fetchImpl(input, init);
+                      // Read a CLONE — the adapter still needs the body, and a Response body
+                      // can be consumed only once — and AWAIT it, so the chip is already
+                      // right when the think resolves rather than a tick later.
+                      try {
+                        const body = (await response.clone().json()) as { model?: unknown } | null;
+                        const model = body?.model;
+                        if (typeof model === 'string' && model !== '' && model !== 'claude') brainChoices.markAnswered(model);
+                      } catch {
+                        // A non-JSON or streamed body teaches nothing, and must never fail the think.
+                      }
+                      return response;
+                    },
+                  }).complete(choice.effort === undefined ? request : ({ ...request, effort: choice.effort } as typeof request));
+                  return result;
                 },
               },
               streaming: false,

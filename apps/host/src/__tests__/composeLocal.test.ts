@@ -219,3 +219,34 @@ describe('the seat is stable across renders (S7 — useSyncExternalStore)', () =
     expect(brain.cliModel?.state.get()).toBe(brain.cliModel?.state.get());
   });
 });
+
+describe('the answer teaches the chip what actually ran (S8)', () => {
+  const answeringClient = (model: string) =>
+    ({
+      ...client,
+      fetchImpl: async () =>
+        new Response(JSON.stringify({ choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }], model }), {
+          headers: { 'content-type': 'application/json' },
+        }),
+    }) as unknown as LocalClient;
+
+  const adapterOf = (platform: { brain?: unknown }) =>
+    (platform.brain as { adapter: { complete(r: unknown): Promise<unknown> } }).adapter;
+
+  it('names the model the CLI ran even though the user chose NONE — the whole point of the chip', async () => {
+    const choices = createBrainChoiceStore({ storage: undefined });
+    brainState.current = { state: 'ready' };
+    const { platform } = composeLocalPlatform(answeringClient('claude-opus-5[1m]'), status({}), undefined, undefined, 't', choices);
+    await adapterOf(platform).complete({ system: 's', messages: [{ role: 'user', content: 'hi' }] });
+    expect(choices.active().model).toBe('claude-opus-5[1m]');
+  });
+
+  it('follows a substitution: what answered wins over what was asked', async () => {
+    const choices = createBrainChoiceStore({ storage: undefined });
+    choices.setModel('opus');
+    brainState.current = { state: 'ready' };
+    const { platform } = composeLocalPlatform(answeringClient('claude-opus-5[1m]'), status({}), undefined, undefined, 't', choices);
+    await adapterOf(platform).complete({ system: 's', messages: [{ role: 'user', content: 'hi' }] });
+    expect(choices.active().model).toBe('claude-opus-5[1m]');
+  });
+});

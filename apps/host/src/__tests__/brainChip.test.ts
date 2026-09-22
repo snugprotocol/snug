@@ -87,6 +87,42 @@ describe('the chip shows what is ACTIVE, not what was asked (AC5)', () => {
   });
 });
 
+describe('the default is NAMED once the CLI has told us what it is (S8)', () => {
+  // Measured 2026-09-22: with no --model, `init` still reports the real id
+  // (claude-opus-5[1m]). So "the CLI's default" is a placeholder only until the first
+  // think answers; after that the chip can name the actual model. Effort has no such
+  // report — the CLI echoes it nowhere — so it stays unnamed rather than invented.
+  it('names the model the CLI actually ran, even though the user chose none', () => {
+    const choices = store();
+    choices.markAnswered('claude-opus-5[1m]');
+    const seat = brainChipSeat({ brain: { state: 'ready' }, choices });
+    expect(seat?.activeLabel).toContain('claude-opus-5[1m]');
+    expect(seat?.activeLabel).not.toMatch(/default model/);
+  });
+
+  it('says the default is the CLI\u2019s own, and marks it as not yet known, before any think', () => {
+    const seat = brainChipSeat({ brain: { state: 'ready' }, choices: store() });
+    expect(seat?.activeLabel).toMatch(/default/i);
+  });
+
+  it('still names what ANSWERED over what was chosen, when they differ', () => {
+    const choices = store();
+    choices.setModel('opus');
+    choices.markAnswered('claude-opus-5[1m]');
+    expect(brainChipSeat({ brain: { state: 'ready' }, choices })?.activeLabel).toContain('claude-opus-5[1m]');
+  });
+
+  it('never invents an effort name \u2014 the CLI reports none, so an unchosen level stays unnamed', () => {
+    const choices = store();
+    choices.markAnswered('claude-opus-5[1m]');
+    const label = brainChipSeat({ brain: { state: 'ready' }, choices })?.activeLabel ?? '';
+    // No level word may appear unless the user picked one.
+    for (const level of ['low', 'medium', 'high', 'xhigh', 'max']) {
+      expect(label).not.toMatch(new RegExp(`effort ${level}\\b`));
+    }
+  });
+});
+
 describe('the seat the chip actually renders (S7)', () => {
   it('is undefined wherever the brain cannot think, so the platform carries no dead control', () => {
     for (const state of ['logged-out', 'absent', 'outdated', 'unknown'] as const) {
