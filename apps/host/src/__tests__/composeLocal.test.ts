@@ -221,13 +221,23 @@ describe('the seat is stable across renders (S7 — useSyncExternalStore)', () =
 });
 
 describe('the answer teaches the chip what actually ran (S8)', () => {
+  /**
+   * The shim answers SSE, ALWAYS — `text/event-stream`, never JSON (loopback-server.ts:227,
+   * and compose-local's own note: "the shim answers SSE regardless"). The resolved model rides
+   * in the FINAL frame, after the deltas. An earlier version of this helper returned JSON and
+   * passed while the real path could not work at all; the body shape is the test.
+   */
   const answeringClient = (model: string) =>
     ({
       ...client,
-      fetchImpl: async () =>
-        new Response(JSON.stringify({ choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }], model }), {
-          headers: { 'content-type': 'application/json' },
-        }),
+      fetchImpl: async () => {
+        const base = { id: 'chatcmpl-snug-x', object: 'chat.completion.chunk', created: 1 };
+        const body =
+          `data: ${JSON.stringify({ ...base, model: 'claude', choices: [{ index: 0, delta: { role: 'assistant', content: 'ok' }, finish_reason: null }] })}\n\n` +
+          `data: ${JSON.stringify({ ...base, model, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}\n\n` +
+          'data: [DONE]\n\n';
+        return new Response(body, { headers: { 'content-type': 'text/event-stream' } });
+      },
     }) as unknown as LocalClient;
 
   const adapterOf = (platform: { brain?: unknown }) =>

@@ -42,6 +42,12 @@ export const TEST_RESOLVE_ENV = 'SNUG_MCP_TEST_RESOLVE';
 export const TEST_HOLDER_ENV = 'SNUG_MCP_TEST_HOLDER';
 /** Pins the brain probe's verdict so the e2e can see a state this machine's CLI is not in. */
 export const TEST_BRAIN_ENV = 'SNUG_MCP_TEST_BRAIN';
+/**
+ * A brain that ANSWERS, pinned to one resolved model id (TASK-20260922 S8). The developer's
+ * real CLI answers on whatever it defaults to, so an e2e that used it could not assert which
+ * model the chip names. The value is the id the fake reports as having run.
+ */
+export const TEST_BRAIN_MODEL_ENV = 'SNUG_MCP_TEST_BRAIN_MODEL';
 
 /* c8 ignore start — the entry half, exercised by the e2e rather than by unit tests */
 if (process.env.SNUG_MCP_TEST_ENTRY === '1') {
@@ -58,6 +64,17 @@ if (process.env.SNUG_MCP_TEST_ENTRY === '1') {
   const page = (): string => readFileSync(nodePath.join(here, 'snug-host-local.html'), 'utf8');
   const holder = process.env[TEST_HOLDER_ENV];
   const pinnedBrain = process.env[TEST_BRAIN_ENV];
+  const pinnedModel = process.env[TEST_BRAIN_MODEL_ENV];
+  // The SHAPE the real shim answers: SSE frames, the resolved model on the LAST one after the
+  // deltas. A fake that answered JSON would let a page-side bug pass (it did once).
+  const fakeBrain = {
+    stream: async (_request: unknown, sink: { write(chunk: string): void }): Promise<void> => {
+      const base = { id: 'chatcmpl-snug-e2e', object: 'chat.completion.chunk', created: 1 };
+      sink.write(`data: ${JSON.stringify({ ...base, model: 'claude', choices: [{ index: 0, delta: { role: 'assistant', content: 'ok' }, finish_reason: null }] })}\n\n`);
+      sink.write(`data: ${JSON.stringify({ ...base, model: pinnedModel, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}\n\n`);
+      sink.write('data: [DONE]\n\n');
+    },
+  };
   const runner = createRunner({
     // The TEST build never gets the real home, not even on an opt-in (D-B34): this is the
     // binary the e2e spawns, and it is the one that once wrote over the owner's user file.
@@ -71,6 +88,7 @@ if (process.env.SNUG_MCP_TEST_ENTRY === '1') {
     ...(pinnedBrain !== undefined && pinnedBrain !== ''
       ? { brainState: async () => ({ state: pinnedBrain, detail: `pinned by ${TEST_BRAIN_ENV}` }) }
       : {}),
+    ...(pinnedModel !== undefined && pinnedModel !== '' ? { brain: fakeBrain } : {}),
     proxy: createFetchProxy({ send: createNodeHttpsSend(resolverFromEnv(process.env[TEST_RESOLVE_ENV])) }),
   });
   const started = await runner.start();

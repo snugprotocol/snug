@@ -294,11 +294,20 @@ export function composeLocalPlatform(
                       // can be consumed only once — and AWAIT it, so the chip is already
                       // right when the think resolves rather than a tick later.
                       try {
-                        const body = (await response.clone().json()) as { model?: unknown } | null;
-                        const model = body?.model;
-                        if (typeof model === 'string' && model !== '' && model !== 'claude') brainChoices.markAnswered(model);
+                        // THE SHIM ANSWERS SSE, ALWAYS (loopback-server.ts; the note above says
+                        // so too), and the resolved model rides in the FINAL frame after the
+                        // deltas — so this parses frames rather than calling .json(), which
+                        // would throw on every real answer and silently teach nothing.
+                        for (const line of (await response.clone().text()).split('\n')) {
+                          if (!line.startsWith('data: ')) continue;
+                          const payload = line.slice(6).trim();
+                          if (payload === '' || payload === '[DONE]') continue;
+                          const model = (JSON.parse(payload) as { model?: unknown } | null)?.model;
+                          // The placeholder is not a model id; the last real one wins.
+                          if (typeof model === 'string' && model !== '' && model !== 'claude') brainChoices.markAnswered(model);
+                        }
                       } catch {
-                        // A non-JSON or streamed body teaches nothing, and must never fail the think.
+                        // An unparseable body teaches nothing, and must never fail the think.
                       }
                       return response;
                     },

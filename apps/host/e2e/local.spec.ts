@@ -367,3 +367,29 @@ test('AC5 — the web OAuth path: no oauth seat, a callback on our origin, and t
     await idp.stop();
   }
 });
+
+test('TASK-20260922 AC5 — the chip renders the CLI control, and says nothing it has not learned', async () => {
+  // WHAT THIS LEG PROVES, stated exactly: the control REACHES the built page — the seat rides
+  // the platform, the popover renders it, and before any think it names no model rather than
+  // inventing one. It does NOT drive a think: an app's think goes through the platform's brain
+  // adapter, which has no seam reachable from the browser context, and a raw fetch to
+  // /v1/chat/completions would bypass the very adapter the disclosure lives in — a test that
+  // exercises a path the code is not on proves nothing. The adapter's learning is driven in
+  // composeLocal's unit tests, against the SSE body shape the shim actually answers.
+  await withHost(async (harness) => {
+    const page = await browser.newPage();
+    await page.goto(harness.url);
+
+    await page.locator('[data-testid="brain-chip"]').click();
+    const active = page.locator('[data-testid="brain-menu-active"]');
+    await expect(active).toContainText(/default/i, { timeout: 20_000 });
+    // No model id may be claimed before one has answered.
+    await expect(active).not.toContainText('claude-opus-5');
+    // Both controls are there, with the CLI's own five levels and no invented default level.
+    await expect(page.locator('[data-testid="brain-menu-model"]')).toHaveCount(1);
+    const efforts = page.locator('[data-testid="brain-menu-effort"] option');
+    await expect(efforts).toHaveCount(6);
+    await expect(page.locator('[data-testid="brain-menu-cli-hint"]')).toContainText(/thinking/i);
+    await page.close();
+  }, { brain: 'ready' });
+});

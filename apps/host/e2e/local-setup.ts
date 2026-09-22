@@ -154,7 +154,7 @@ const waitForLine = (child: ChildProcess, match: RegExp, timeoutMs = 20_000): Pr
  * Start the real process against an isolated home, with the page copied where it expects
  * it. A missing build is CANNOT RUN by name — never a skip that reads as a pass.
  */
-export async function startLocalHost(options: { certPath?: string; certPaths?: string[]; holder?: string; brain?: string } = {}): Promise<LocalHarness> {
+export async function startLocalHost(options: { certPath?: string; certPaths?: string[]; holder?: string; brain?: string; brainModel?: string } = {}): Promise<LocalHarness> {
   if (!existsSync(PROCESS_BUNDLE)) throw new Error(`${PROCESS_BUNDLE} missing — run \`pnpm --filter host-mcp build\``);
   if (!existsSync(LOCAL_PAGE)) throw new Error(`${LOCAL_PAGE} missing — run \`pnpm --filter host build\``);
 
@@ -184,6 +184,7 @@ export async function startLocalHost(options: { certPath?: string; certPaths?: s
       SNUG_MCP_TEST_RESOLVE: `${STUB_HOST}=127.0.0.1,${IDP_HOST}=127.0.0.1`,
       ...(options.holder !== undefined ? { SNUG_MCP_TEST_HOLDER: options.holder } : {}),
       ...(options.brain !== undefined ? { SNUG_MCP_TEST_BRAIN: options.brain } : {}),
+      ...(options.brainModel !== undefined ? { SNUG_MCP_TEST_BRAIN_MODEL: options.brainModel } : {}),
       ...(caBundle !== undefined ? { NODE_EXTRA_CA_CERTS: caBundle } : {}),
     },
   });

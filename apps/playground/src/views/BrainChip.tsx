@@ -203,7 +203,11 @@ export function BrainChip(): ReactElement {
               {/* What is RUNNING, not what was asked: the chip's one line of truth (ADR-0059
                   rule 2). A chosen model does not appear here until a think has answered on it. */}
               <span className="brain-menu-cli-active" data-testid="brain-menu-active">
-                {cliSeat.activeLabel}
+                {/* Derived from the LIVE state, not from `activeLabel`: that string is built
+                    when the seat is, and the seat outlives a think — so rendering it showed a
+                    stale "default" even after the model was known. */}
+                {`thinking on ${cliState.activeModel ?? 'the CLI’s default (known after the first think)'}, effort ${cliState.effort ?? 'the CLI’s default'}`}
+                {cliState.refusal === undefined ? '' : ` — ${cliState.refusal}`}
               </span>
               <label className="brain-menu-cli-row">
                 <span className="brain-menu-tier-label">model</span>
