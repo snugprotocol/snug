@@ -17,6 +17,7 @@
 
 import { localAdapter } from '@snugprotocol/adapters';
 import { BRAIN_EFFORT_OPTIONS, createBrainChoiceStore, type BrainChoice, type BrainChoiceStore, type BrainEffortChoice } from '../brains/brainChoiceStore.js';
+import type { CliModelSeat, CliModelState } from '@playground/platform/platform';
 
 /** `localStorage` where the browser allows it; undefined where it throws (the Safari rung). */
 const safeLocalStorage = (): Storage | undefined => {
@@ -149,6 +150,66 @@ export function brainChipSeat(input: { brain: { state: string } | undefined; cho
   };
 }
 
+/**
+ * The seat the chip renders (ADR-0070, S7). `undefined` means NO control: the brain cannot
+ * think, so a picker on it would be dead and the user gets the remedy `brainLabel` carries
+ * and nothing else (AC8 — ADR-0067's rule and ADR-0036 rule 4).
+ *
+ * `state.get()` must return a STABLE reference while nothing changes: the chip reads it
+ * through `useSyncExternalStore`, which re-renders forever on a fresh object each call. The
+ * cache below is that stability, recomputed only when the store actually notifies.
+ */
+/**
+ * ONE snapshot per store, recomputed only when the store notifies. `useSyncExternalStore`
+ * re-renders forever if `getSnapshot` returns a fresh object each call, and the seat itself is
+ * rebuilt on every render (its getter must be, so a late probe verdict reaches the chip) — so
+ * the cache cannot live on the seat. It lives here, keyed by the store the seat wraps.
+ */
+const snapshots = new WeakMap<BrainChoiceStore, { value: CliModelState }>();
+
+function snapshotOf(choices: BrainChoiceStore): CliModelState {
+  const existing = snapshots.get(choices);
+  if (existing !== undefined) return existing.value;
+  const compute = (): CliModelState => {
+    const choice = choices.choice();
+    const active = choices.active();
+    return {
+      ...(choice.model === undefined ? {} : { model: choice.model }),
+      ...(choice.effort === undefined ? {} : { effort: choice.effort }),
+      ...(active.model === undefined ? {} : { activeModel: active.model }),
+      ...(active.refusal === undefined ? {} : { refusal: active.refusal }),
+    };
+  };
+  const cell = { value: compute() };
+  snapshots.set(choices, cell);
+  // Subscribed ONCE per store, not once per render: the seat is rebuilt constantly and a
+  // subscription there would leak a listener on every render.
+  choices.subscribe(() => {
+    cell.value = compute();
+  });
+  return cell.value;
+}
+
+/**
+ * The seat the chip renders (ADR-0070, S7). `undefined` means NO control: the brain cannot
+ * think, so a picker on it would be dead and the user gets the remedy `brainLabel` carries
+ * and nothing else (AC8 — ADR-0067's rule and ADR-0036 rule 4).
+ */
+export function cliModelSeat(input: { brain: { state: string } | undefined; choices: BrainChoiceStore }): CliModelSeat | undefined {
+  const chip = brainChipSeat(input);
+  if (chip === undefined) return undefined;
+  const { choices } = input;
+  snapshotOf(choices);
+  return {
+    efforts: chip.efforts,
+    activeLabel: chip.activeLabel,
+    note: chip.note,
+    state: { get: () => snapshotOf(choices), subscribe: choices.subscribe },
+    setModel: choices.setModel,
+    setEffort: choices.setEffort,
+  };
+}
+
 export function composeLocalPlatform(
   client: LocalClient,
   status: LocalStatus,
@@ -226,6 +287,16 @@ export function composeLocalPlatform(
               },
               streaming: false,
               tools: false,
+              // The model + effort control (ADR-0070). A GETTER for the same reason `label` is
+              // one: the probe answers AFTER boot and the platform is set once, so a value
+              // computed here would be read while the brain state is still unknown and the
+              // control would never appear (caught by a test, not by review). Present only
+              // while the CLI can think — `cliModelSeat` returns undefined for every other
+              // state, so a brain that stops being able to think loses its control rather
+              // than keeping a dead one (AC8).
+              get cliModel(): CliModelSeat | undefined {
+                return cliModelSeat({ brain: brainState.current ?? status.brain, choices: brainChoices });
+              },
             },
           }
         : {}),

@@ -22,7 +22,7 @@ import { useSyncExternalStore } from 'react';
 import { Link } from 'react-router-dom';
 
 import { tierAutoLabel, tierLabel, tierSubstitutionNote } from '../platform/copy.js';
-import { allows, getPlatform, type TierChoice } from '../platform/platform.js';
+import { allows, getPlatform, type CliEffort, type TierChoice } from '../platform/platform.js';
 import { setMode } from '../state/mode.js';
 import { useActiveBrain, type ActiveBrainKind } from '../state/activeBrain.js';
 import { useOllama } from '../state/ollama.js';
@@ -127,6 +127,16 @@ export function BrainChip(): ReactElement {
     () => tierSeat?.state.get(),
     () => tierSeat?.state.get(),
   );
+  // The user's own CLI as the brain (ADR-0070): model + effort. Mutually exclusive with the
+  // tier seat in practice — a Binding B runner has no artifact `sample` contract and a Binding
+  // A one spawns no CLI — and absent entirely wherever the CLI cannot think, so this renders
+  // no dead control (AC8).
+  const cliSeat = brain === 'host' && pinned?.kind === 'host' ? pinned.cliModel : undefined;
+  const cliState = useSyncExternalStore(
+    cliSeat?.state.subscribe ?? noSubscription,
+    () => cliSeat?.state.get(),
+    () => cliSeat?.state.get(),
+  );
 
   const copy = copyFor(brain);
   const models = ollama !== 'unknown' && ollama.running ? ollama.models : [];
@@ -187,6 +197,53 @@ export function BrainChip(): ReactElement {
                 </span>
               ) : null}
             </label>
+          ) : null}
+          {cliSeat !== undefined && cliState !== undefined ? (
+            <div className="brain-menu-cli">
+              {/* What is RUNNING, not what was asked: the chip's one line of truth (ADR-0059
+                  rule 2). A chosen model does not appear here until a think has answered on it. */}
+              <span className="brain-menu-cli-active" data-testid="brain-menu-active">
+                {cliSeat.activeLabel}
+              </span>
+              <label className="brain-menu-cli-row">
+                <span className="brain-menu-tier-label">model</span>
+                <input
+                  type="text"
+                  aria-label="model"
+                  data-testid="brain-menu-model"
+                  className="brain-menu-cli-input"
+                  // Free text: this CLI publishes no machine-readable model list, and refuses
+                  // an unknown model BY NAME rather than answering on another (ADR-0070 §4).
+                  placeholder="the CLI’s default"
+                  defaultValue={cliState.model ?? ''}
+                  onChange={(event) => cliSeat.setModel(event.currentTarget.value)}
+                />
+              </label>
+              <label className="brain-menu-cli-row">
+                <span className="brain-menu-tier-label">thinking level</span>
+                <select
+                  aria-label="thinking level"
+                  data-testid="brain-menu-effort"
+                  value={cliState.effort ?? ''}
+                  onChange={(event) => cliSeat.setEffort(event.currentTarget.value === '' ? undefined : (event.currentTarget.value as CliEffort))}
+                >
+                  <option value="">the CLI’s default</option>
+                  {cliSeat.efforts.map((effort) => (
+                    <option key={effort} value={effort}>
+                      {effort}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {cliState.refusal !== undefined ? (
+                <span className="brain-menu-hint" data-testid="brain-menu-cli-note">
+                  {cliState.refusal}
+                </span>
+              ) : null}
+              <span className="brain-menu-hint" data-testid="brain-menu-cli-hint">
+                {cliSeat.note}
+              </span>
+            </div>
           ) : null}
           {/* The BRAIN switch affordances exist only where a brain can be chosen (D15): under
               the host kit the brain is the host's; the thinking level above is the one control

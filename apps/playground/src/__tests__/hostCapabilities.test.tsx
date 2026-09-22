@@ -19,7 +19,7 @@ import type { AgentAdapter } from '@snugprotocol/adapters';
 import { createStore } from '../state/store.js';
 
 import type { ChatMessage } from '../agent/useBuilderChat.js';
-import type { PlatformBrain, SnugPlatform, TierChoice, TierSeat, TierState } from '../platform/platform.js';
+import type { CliEffort, CliModelSeat, CliModelState, PlatformBrain, SnugPlatform, TierChoice, TierSeat, TierState } from '../platform/platform.js';
 import { hostPlatform as hostFixture } from './fixtures/hostPlatform.js';
 
 declare global {
@@ -292,6 +292,101 @@ describe('the mode-coercion note (its copy points at the hidden brain section)',
     expect(byTestId('mode-coercion-note')).not.toBeNull();
   });
 });
+
+describe('the CLI model + effort control (ADR-0070, TASK-20260922 S7)', () => {
+  function fakeCliSeat(initial: CliModelState): CliModelSeat & { models: (string | undefined)[]; efforts_: (CliEffort | undefined)[] } {
+    const store = createStore<CliModelState>(initial);
+    const models: (string | undefined)[] = [];
+    const efforts_: (CliEffort | undefined)[] = [];
+    return {
+      models,
+      efforts_,
+      efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+      activeLabel: initial.activeModel === undefined ? 'thinking on the CLI’s default model, effort the CLI’s default effort' : `thinking on ${initial.activeModel}, effort ${initial.effort ?? 'the CLI’s default effort'}`,
+      note: 'Thinking itself is never shown. A switch takes effect on your next think and spends nothing, but the ready-and-waiting brain is started again, so that think is a little slower.',
+      state: { get: store.get, subscribe: store.subscribe },
+      setModel: (model) => {
+        models.push(model);
+        store.set({ ...store.get(), model });
+      },
+      setEffort: (effort) => {
+        efforts_.push(effort);
+        store.set({ ...store.get(), effort });
+      },
+    };
+  }
+  const withCli = (seat: CliModelSeat): SnugPlatform => hostPlatform({ kind: 'host', label: HOST_LABEL, adapter: idleAdapter, streaming: false, tools: false, cliModel: seat });
+
+  it('renders the effort select and the model field, and says what is ACTIVE', async () => {
+    const seat = fakeCliSeat({ activeModel: 'claude-haiku-4-5-20251001', effort: 'low' });
+    const g = await fresh(withCli(seat));
+    await render(<g.BrainChip />);
+    await click(byTestId('brain-chip'));
+    const select = byTestId('brain-menu-effort') as HTMLSelectElement;
+    expect(select.value).toBe('low');
+    expect(Array.from(select.options).map((o) => o.value)).toEqual(['', 'low', 'medium', 'high', 'xhigh', 'max']);
+    expect((byTestId('brain-menu-model') as HTMLInputElement).value).toBe('');
+    expect(byTestId('brain-menu-active')?.textContent).toContain('claude-haiku-4-5-20251001');
+  });
+
+  it('a chosen model shows in the field, and the switch reaches the seat', async () => {
+    const seat = fakeCliSeat({ model: 'haiku' });
+    const g = await fresh(withCli(seat));
+    await render(<g.BrainChip />);
+    await click(byTestId('brain-chip'));
+    const field = byTestId('brain-menu-model') as HTMLInputElement;
+    expect(field.value).toBe('haiku');
+    await act(async () => {
+      // The native setter defeats React's value-tracker dedupe on a controlled input.
+      Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!.call(field, 'opus');
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(seat.models).toContain('opus');
+  });
+
+  it('choosing an effort reaches the seat, and the empty option clears it', async () => {
+    const seat = fakeCliSeat({});
+    const g = await fresh(withCli(seat));
+    await render(<g.BrainChip />);
+    await click(byTestId('brain-chip'));
+    const select = byTestId('brain-menu-effort') as HTMLSelectElement;
+    await act(async () => {
+      select.value = 'max';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    expect(seat.efforts_).toContain('max');
+    await act(async () => {
+      select.value = '';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    expect(seat.efforts_).toContain(undefined);
+  });
+
+  it('shows a refusal in the CLI’s own words', async () => {
+    const seat = fakeCliSeat({ refusal: 'There’s an issue with the selected model (nope-not-a-model).' });
+    const g = await fresh(withCli(seat));
+    await render(<g.BrainChip />);
+    await click(byTestId('brain-chip'));
+    expect(byTestId('brain-menu-cli-note')?.textContent).toContain('nope-not-a-model');
+  });
+
+  it('says thinking is never shown and what a switch costs (Q4/Q5)', async () => {
+    const g = await fresh(withCli(fakeCliSeat({})));
+    await render(<g.BrainChip />);
+    await click(byTestId('brain-chip'));
+    expect(byTestId('brain-menu-cli-hint')?.textContent).toMatch(/thinking/i);
+    expect(byTestId('brain-menu-cli-hint')?.textContent).toMatch(/next think/i);
+  });
+
+  it('a host brain with NO cli seat shows no control — the chat brain, and every non-ready CLI (AC8)', async () => {
+    const g = await fresh(hostPlatform({ kind: 'host', label: HOST_LABEL, adapter: idleAdapter, streaming: false, tools: false }));
+    await render(<g.BrainChip />);
+    await click(byTestId('brain-chip'));
+    expect(byTestId('brain-menu-effort')).toBeNull();
+    expect(byTestId('brain-menu-model')).toBeNull();
+  });
+});
+
 
 describe("the chat log's directive card (D4: no connected apps inside an artifact)", () => {
   // The card reads `directive.proposal.providerName` only; the rest of the validated

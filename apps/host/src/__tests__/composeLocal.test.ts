@@ -186,3 +186,36 @@ describe('the choice crosses from the page to the runner (TASK-20260922 S5)', ()
     expect(bodies[0]).not.toContain('effort');
   });
 });
+
+describe('the control survives the probe answering LATE (S7)', () => {
+  it('appears once the probe reports ready, though the platform was composed before it answered', () => {
+    // The real boot order: compose (brain state unknown), then the `status` event lands.
+    brainState.current = undefined;
+    const { platform } = composeLocalPlatform(client, status({}), undefined, undefined, 't', createBrainChoiceStore({ storage: undefined }));
+    const brain = platform.brain as unknown as { cliModel?: unknown };
+    expect(brain.cliModel).toBeUndefined();
+    brainState.current = { state: 'ready' };
+    // The platform is set ONCE and cannot be recomposed, so the seat must be read at render.
+    expect(brain.cliModel).toBeDefined();
+  });
+
+  it('disappears again if the CLI stops being able to think — no dead control, ever', () => {
+    brainState.current = { state: 'ready' };
+    const { platform } = composeLocalPlatform(client, status({}), undefined, undefined, 't', createBrainChoiceStore({ storage: undefined }));
+    const brain = platform.brain as unknown as { cliModel?: unknown };
+    expect(brain.cliModel).toBeDefined();
+    brainState.current = { state: 'logged-out' };
+    expect(brain.cliModel).toBeUndefined();
+  });
+});
+
+describe('the seat is stable across renders (S7 — useSyncExternalStore)', () => {
+  it('returns the SAME state object on two reads of the getter, or the chip re-renders forever', () => {
+    brainState.current = { state: 'ready' };
+    const { platform } = composeLocalPlatform(client, status({}), undefined, undefined, 't', createBrainChoiceStore({ storage: undefined }));
+    const brain = platform.brain as unknown as { cliModel?: { state: { get(): unknown } } };
+    // Two renders read the getter twice; each gets its own seat object, but the STATE
+    // snapshot they hand React must be identical or useSyncExternalStore loops.
+    expect(brain.cliModel?.state.get()).toBe(brain.cliModel?.state.get());
+  });
+});

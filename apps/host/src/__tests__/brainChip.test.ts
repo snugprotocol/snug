@@ -5,7 +5,7 @@
 // the same reason on the other binding).
 import { describe, expect, it } from 'vitest';
 
-import { brainChipSeat, brainLabel } from '../local/compose-local.js';
+import { brainChipSeat, brainLabel, cliModelSeat } from '../local/compose-local.js';
 import { createBrainChoiceStore } from '../brains/brainChoiceStore.js';
 
 const store = () => createBrainChoiceStore({ storage: undefined });
@@ -84,5 +84,52 @@ describe('the chip shows what is ACTIVE, not what was asked (AC5)', () => {
 
   it('says a switch lands on the next think and costs a warm child (Q5)', () => {
     expect(brainChipSeat({ brain: { state: 'ready' }, choices: store() })?.note).toMatch(/next think/i);
+  });
+});
+
+describe('the seat the chip actually renders (S7)', () => {
+  it('is undefined wherever the brain cannot think, so the platform carries no dead control', () => {
+    for (const state of ['logged-out', 'absent', 'outdated', 'unknown'] as const) {
+      expect(cliModelSeat({ brain: { state }, choices: store() })).toBeUndefined();
+    }
+    expect(cliModelSeat({ brain: undefined, choices: store() })).toBeUndefined();
+  });
+
+  it('offers the CLI’s five efforts and the chip’s standing note', () => {
+    const seat = cliModelSeat({ brain: { state: 'ready' }, choices: store() });
+    expect(seat?.efforts).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
+    expect(seat?.note).toMatch(/thinking/i);
+  });
+
+  it('returns a STABLE state reference while nothing changes — useSyncExternalStore loops otherwise', () => {
+    const seat = cliModelSeat({ brain: { state: 'ready' }, choices: store() });
+    expect(seat?.state.get()).toBe(seat?.state.get());
+  });
+
+  it('gives the chip a new state, and notifies, when the user switches', () => {
+    const choices = store();
+    const seat = cliModelSeat({ brain: { state: 'ready' }, choices });
+    let notified = 0;
+    seat?.state.subscribe(() => { notified += 1; });
+    const before = seat?.state.get();
+    seat?.setEffort('max');
+    expect(notified).toBe(1);
+    expect(seat?.state.get()).not.toBe(before);
+    expect(seat?.state.get().effort).toBe('max');
+  });
+
+  it('carries what ANSWERED and any standing refusal, for the chip to show verbatim', () => {
+    const choices = store();
+    choices.markAnswered('claude-haiku-4-5-20251001');
+    const seat = cliModelSeat({ brain: { state: 'ready' }, choices });
+    expect(seat?.state.get().activeModel).toBe('claude-haiku-4-5-20251001');
+    choices.markRefused('bad', 'refused: bad');
+    expect(seat?.state.get().refusal).toMatch(/bad/);
+  });
+
+  it('setModel writes through to the store the brain reads', () => {
+    const choices = store();
+    cliModelSeat({ brain: { state: 'ready' }, choices })?.setModel('opus');
+    expect(choices.choice().model).toBe('opus');
   });
 });
