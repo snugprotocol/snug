@@ -104,6 +104,47 @@ describe('ClaudeChild — one child, one request', () => {
   });
 });
 
+describe('a child remembers the model the CLI resolved for IT (TASK-20260922 AC5)', () => {
+  // The CLI names the resolved model in its `system/init` frame, which it emits at SPAWN.
+  // For a pre-warmed child that is minutes before any request exists — so a child that only
+  // read frames while a request was pending would throw this away on the very path Binding B
+  // is built around. These cases pin that it does not.
+  const init = (model: string): string => line({ type: 'system', subtype: 'init', model, tools: [] });
+
+  it('keeps the resolved model from an init frame that arrived while it was still UNUSED', async () => {
+    // Frames before `send`: exactly the pre-warm case.
+    const fake = new FakeClaudeChild([], ENV);
+    const child = new ClaudeChild(fake);
+    // Straight onto stdout, with nothing pending and nothing yet sent: what a real
+    // pre-warmed child does at spawn, minutes before its request arrives.
+    fake.stdout.write(init('claude-haiku-4-5-20251001'));
+    await flush();
+    const answer = await child.send('x', { onDelta: () => {} });
+    expect(answer.resolvedModel).toBe('claude-haiku-4-5-20251001');
+  });
+
+  it('reports what the CLI RESOLVED, not what was asked — a substitution is visible', async () => {
+    const fake = new FakeClaudeChild([], ENV, { lines: [init('claude-opus-5-some-date'), delta('hi'), result('hi')] });
+    const answer = await new ClaudeChild(fake).send('x', { onDelta: () => {} });
+    // The request asked for `opus`; the chip must name the id that actually answered.
+    expect(answer.resolvedModel).toBe('claude-opus-5-some-date');
+  });
+
+  it('reports NOTHING rather than inventing a disclosure when the CLI sent no init frame', async () => {
+    const fake = new FakeClaudeChild([], ENV, { lines: [delta('hi'), result('hi')] });
+    const answer = await new ClaudeChild(fake).send('x', { onDelta: () => {} });
+    expect(answer.resolvedModel).toBeUndefined();
+  });
+
+  it('still forwards no thinking — the init frame changes what is DISCLOSED, not what is shown', async () => {
+    const fake = new FakeClaudeChild([], ENV, { lines: [init('m'), thinkingDelta('secret'), delta('a'), result('a')] });
+    const seen: string[] = [];
+    const answer = await new ClaudeChild(fake).send('x', { onDelta: (t) => seen.push(t) });
+    expect(seen.join('')).not.toContain('secret');
+    expect(answer.resolvedModel).toBe('m');
+  });
+});
+
 describe('ChildPool — pre-warmed, single-use, bounded', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());

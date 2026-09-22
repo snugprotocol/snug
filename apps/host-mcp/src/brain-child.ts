@@ -45,12 +45,19 @@ export interface TurnSink {
 export interface TurnResult {
   text: string;
   stopReason: string;
+  /**
+   * The model id the CLI reported it actually ran with (`system/init`), or undefined if it
+   * named none. NEVER the model that was asked for: the chip discloses what answered, so a
+   * substitution is visible rather than papered over (AC5, ADR-0059 rules 2 and 4).
+   */
+  resolvedModel?: string | undefined;
 }
 
 /** The one stream-json line shape the child reads; everything else is ignored. */
 interface CliEvent {
   type?: unknown;
   subtype?: unknown;
+  model?: unknown;
   event?: { type?: unknown; delta?: { type?: unknown; text?: unknown } };
   result?: unknown;
   is_error?: unknown;
@@ -119,6 +126,9 @@ export class ClaudeChild {
     });
   }
 
+  /** What the CLI said it resolved this child to, learned at spawn. */
+  private resolvedModel: string | undefined;
+
   /** Reap. Safe to call twice; fails a pending request as aborted. */
   kill(): void {
     // The caller's reason FIRST: the child's exit follows the signal, and a pending request
@@ -169,6 +179,12 @@ export class ClaudeChild {
   }
 
   private onEvent(event: CliEvent): void {
+    // BEFORE the pending check, deliberately: the CLI emits `system/init` at SPAWN, which for
+    // a pre-warmed child is long before its request exists. Reading this only while a request
+    // was pending would drop the resolved model on exactly the path this pool is built around.
+    if (event.type === 'system' && event.subtype === 'init' && typeof event.model === 'string') {
+      this.resolvedModel = event.model;
+    }
     const pending = this.pending;
     if (pending === undefined) return;
     if (event.type === 'stream_event') {
@@ -195,6 +211,7 @@ export class ClaudeChild {
       pending.resolve({
         text: this.deltas > 0 ? this.text : resultText,
         stopReason: typeof event.stop_reason === 'string' ? event.stop_reason : 'end_turn',
+        resolvedModel: this.resolvedModel,
       });
     }
   }
