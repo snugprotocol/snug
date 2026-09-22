@@ -464,6 +464,21 @@ describe('the brain carries the user’s choice and reports what ANSWERED (TASK-
     brain.stop();
   });
 
+  it('takes the choice the PAGE sent, which is how it crosses from the browser to this process', async () => {
+    const { spawnChild, children } = fakeSpawner();
+    const brain = createClaudeBrain({ resolveBinary: () => '/x/claude', spawnBinary: (_b, args, env) => spawnChild(args, env) });
+    await brain.complete({ messages: [{ role: 'user', content: 'ping' }], model: 'opus', effort: 'high' });
+    expect(children[0]?.args).toEqual(expect.arrayContaining(['--model', 'opus', '--effort', 'high']));
+    brain.stop();
+  });
+
+  it('ignores the page\u2019s historical `claude` placeholder \u2014 it was never a model id', async () => {
+    const { brain, children } = brainWithChoice({});
+    await brain.complete({ messages: [{ role: 'user', content: 'ping' }], model: 'claude' });
+    expect(children[0]?.args).not.toContain('--model');
+    brain.stop();
+  });
+
   it('with no choice made, spawns exactly as it did before this task', async () => {
     const { brain, children } = brainWithChoice({});
     await brain.complete({ messages: [{ role: 'user', content: 'ping' }] });

@@ -3,6 +3,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { brainState, composeLocalPlatform } from '../local/compose-local.js';
+import { createBrainChoiceStore } from '../brains/brainChoiceStore.js';
 import type { LocalClient, LocalStatus } from '../local/client.js';
 
 const client = {
@@ -136,5 +137,52 @@ describe('the chip’s two newer states (ADR-0069 §6)', () => {
     expect(label).toMatch(/demo brain/);
     expect(label).toMatch(/install/i);
     expect(label).not.toMatch(/curl/);
+  });
+});
+
+describe('the choice crosses from the page to the runner (TASK-20260922 S5)', () => {
+  /** A client whose fetch records the chat request the adapter actually sent. */
+  const recordingClient = (bodies: string[]) =>
+    ({
+      ...client,
+      fetchImpl: async (_url: string, init?: RequestInit) => {
+        bodies.push(String(init?.body ?? ''));
+        return new Response(JSON.stringify({ choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }] }), { headers: { 'content-type': 'application/json' } });
+      },
+    }) as unknown as LocalClient;
+
+  const brainOf = (platform: { brain?: { kind: string } }) =>
+    (platform.brain as unknown as { adapter: { complete(r: unknown): Promise<unknown> } } | undefined)?.adapter;
+
+  it('sends the chosen model and effort on the request, so the runner can spawn with them', async () => {
+    const bodies: string[] = [];
+    const choices = createBrainChoiceStore({ storage: undefined });
+    choices.setModel('haiku');
+    choices.setEffort('max');
+    const { platform } = composeLocalPlatform(recordingClient(bodies), status({ brain: { state: 'ready' } }), undefined, undefined, 't', choices);
+    await brainOf(platform)?.complete({ system: 's', messages: [{ role: 'user', content: 'hi' }] });
+    expect(bodies[0]).toContain('haiku');
+    expect(bodies[0]).toContain('max');
+  });
+
+  it('reads the choice PER CALL, so a switch lands on the next think without a reload (ADR-0036 rule 3)', async () => {
+    const bodies: string[] = [];
+    const choices = createBrainChoiceStore({ storage: undefined });
+    choices.setModel('haiku');
+    const { platform } = composeLocalPlatform(recordingClient(bodies), status({ brain: { state: 'ready' } }), undefined, undefined, 't', choices);
+    const brain = brainOf(platform);
+    await brain?.complete({ system: 's', messages: [{ role: 'user', content: 'a' }] });
+    choices.setModel('opus');
+    await brain?.complete({ system: 's', messages: [{ role: 'user', content: 'b' }] });
+    expect(bodies[1]).toContain('opus');
+    expect(bodies[1]).not.toContain('haiku');
+  });
+
+  it('sends the placeholder, and no effort, when nothing is chosen — the pre-task wire', async () => {
+    const bodies: string[] = [];
+    const { platform } = composeLocalPlatform(recordingClient(bodies), status({ brain: { state: 'ready' } }), undefined, undefined, 't', createBrainChoiceStore({ storage: undefined }));
+    await brainOf(platform)?.complete({ system: 's', messages: [{ role: 'user', content: 'hi' }] });
+    expect(bodies[0]).toContain('"model":"claude"');
+    expect(bodies[0]).not.toContain('effort');
   });
 });

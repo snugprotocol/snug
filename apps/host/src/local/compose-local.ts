@@ -16,6 +16,16 @@
 //    silent fallback through the ordinary transport.
 
 import { localAdapter } from '@snugprotocol/adapters';
+import { BRAIN_EFFORT_OPTIONS, createBrainChoiceStore, type BrainChoice, type BrainChoiceStore, type BrainEffortChoice } from '../brains/brainChoiceStore.js';
+
+/** `localStorage` where the browser allows it; undefined where it throws (the Safari rung). */
+const safeLocalStorage = (): Storage | undefined => {
+  try {
+    return typeof localStorage === 'undefined' ? undefined : localStorage;
+  } catch {
+    return undefined;
+  }
+};
 import { createFileBackend, type PersistenceBackend } from '@snugprotocol/db';
 
 import type { CustodySeat, CustodyState, SnugPlatform } from '@playground/platform/platform';
@@ -90,6 +100,55 @@ export function brainLabel(brain: { state: string; detail?: string } | undefined
   }
 }
 
+/**
+ * The chip's control (TASK-20260922 AC5/AC8). `undefined` means NO control: the brain cannot
+ * think, so a picker on it would be dead — the user gets the remedy `brainLabel` already
+ * carries and nothing else. This is ADR-0067's rule for Binding A and ADR-0036 rule 4 for the
+ * playground's selector; three surfaces now agree, so it is not re-litigated here.
+ *
+ * `activeLabel` is what ANSWERED, never what was asked (ADR-0059 rule 2). A chosen model does
+ * not appear until a think has come back on it, because until then the chip would be naming a
+ * model that may yet be refused or substituted.
+ */
+export interface BrainChipSeat {
+  /** The thinking levels to offer — the CLI's own `--effort`, not ADR-0067's tiers. */
+  efforts: readonly BrainEffortChoice[];
+  /** What is running right now, in words. */
+  activeLabel: string;
+  /** The standing caveats: what the control does not do, and what a switch costs. */
+  note: string;
+  choice: BrainChoice;
+  setModel(model: string | undefined): void;
+  setEffort(effort: BrainEffortChoice | undefined): void;
+}
+
+export function brainChipSeat(input: { brain: { state: string } | undefined; choices: BrainChoiceStore }): BrainChipSeat | undefined {
+  // Anything but a ready brain — including a probe that has not answered yet, which is NOT a
+  // claim the CLI works — gets no control (AC8). The demo brain gains nothing.
+  if (input.brain?.state !== 'ready') return undefined;
+  const { choices } = input;
+  const active = choices.active();
+  const choice = choices.choice();
+  const model =
+    active.model !== undefined
+      ? active.model
+      : // Chosen but unproven: say the CLI's default rather than name a model that has not
+        // answered. The asked alias appears only once a think comes back on it.
+        'the CLI’s default model';
+  const effort = choice.effort ?? 'the CLI’s default effort';
+  const refusal = active.refusal === undefined ? '' : ` — ${active.refusal}`;
+  return {
+    efforts: BRAIN_EFFORT_OPTIONS,
+    activeLabel: `thinking on ${model}, effort ${effort}${refusal}`,
+    // Honest about what it does NOT do (Q4) and what a switch costs (Q5): no tokens, but the
+    // pre-warmed child for the old choice is thrown away, so the next think starts cold.
+    note: 'Thinking itself is never shown. A switch takes effect on your next think and spends nothing, but the ready-and-waiting brain is started again, so that think is a little slower.',
+    choice,
+    setModel: choices.setModel,
+    setEffort: choices.setEffort,
+  };
+}
+
 export function composeLocalPlatform(
   client: LocalClient,
   status: LocalStatus,
@@ -104,6 +163,11 @@ export function composeLocalPlatform(
   backendOverride?: PersistenceBackend,
   /** The bearer, so the brain adapter can reach the shim on the same origin. */
   token?: string,
+  /**
+   * The user's per-machine model and effort choice (TASK-20260922). Injectable so tests can
+   * drive it; in the page it is one store per boot over `localStorage`.
+   */
+  brainChoices: BrainChoiceStore = createBrainChoiceStore({ storage: safeLocalStorage() }),
 ): LocalComposition {
   // The holder check decides whether we open AT ALL. Both of the db's save paths swallow a
   // failed write with a bare `catch`, and no persist-error seam exists — so a page that
@@ -148,7 +212,18 @@ export function composeLocalPlatform(
               get label(): string {
                 return brainLabel(brainState.current ?? status.brain);
               },
-              adapter: localAdapter({ baseUrl: `${origin}/v1`, apiKey: token, model: 'claude' }),
+              // The adapter is rebuilt PER CALL, not once: `localAdapter` takes a static
+              // model, and a value read at composition time would freeze the user's choice
+              // until a reload — ADR-0036 rule 3, and what makes "switch now, it lands on
+              // your next think" true. The effort rides beside it on the same request.
+              adapter: {
+                complete: (request) => {
+                  const choice = brainChoices.choice();
+                  return localAdapter({ baseUrl: `${origin}/v1`, apiKey: token, model: choice.model ?? 'claude', fetch: (input, init) => client.fetchImpl(input, init) }).complete(
+                    choice.effort === undefined ? request : ({ ...request, effort: choice.effort } as typeof request),
+                  );
+                },
+              },
               streaming: false,
               tools: false,
             },

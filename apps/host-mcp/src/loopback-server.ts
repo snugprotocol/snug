@@ -201,9 +201,9 @@ export function createLoopbackServer(options: LoopbackServerOptions): LoopbackSe
         end(response, 413);
         return;
       }
-      let parsed: { messages?: unknown; model?: string };
+      let parsed: { messages?: unknown; model?: string; effort?: string };
       try {
-        parsed = JSON.parse(body.toString('utf8')) as { messages?: unknown; model?: string };
+        parsed = JSON.parse(body.toString('utf8')) as { messages?: unknown; model?: string; effort?: string };
         if (!Array.isArray(parsed.messages)) throw new Error('messages must be an array');
         for (const message of parsed.messages as unknown[]) {
           const m = message as { role?: unknown; content?: unknown } | null;

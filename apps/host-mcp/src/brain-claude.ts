@@ -130,7 +130,14 @@ export interface ChatMessage {
 
 export interface ChatRequest {
   messages: ChatMessage[];
+  /**
+   * The model the PAGE asked for. Historically always the literal `claude` (a placeholder,
+   * not a choice), so a value equal to it is ignored; anything else is the user's per-machine
+   * choice, which reaches this process through the chat route (TASK-20260922).
+   */
   model?: string;
+  /** The thinking level the page asked for — the CLI's `--effort`. */
+  effort?: string;
 }
 
 /** OpenAI allows content as a string OR as an array of parts; the page's adapter uses both. */
@@ -276,8 +283,13 @@ export function createClaudeBrain(deps: BrainDeps = {}): Brain {
       // The user's choice, read now rather than at construction, so a switch lands on THIS
       // think. The page's own `model` field is not a choice — it has always said `claude` —
       // and is only the envelope's fallback until the CLI tells us what actually answered.
-      const choice = deps.brainChoice?.() ?? {};
-      const child = pool.acquire({ system, model: choice.model, effort: choice.effort });
+      // The page's own choice wins where it sent one; `deps.brainChoice` is the fallback for
+      // callers that hold the choice process-side. `claude` is the page's historical
+      // placeholder, never a model id, so it is not treated as a choice.
+      const fallback = deps.brainChoice?.() ?? {};
+      const asked = request.model !== undefined && request.model !== '' && request.model !== 'claude' ? request.model : fallback.model;
+      const effort = isEffort(request.effort) ? request.effort : fallback.effort;
+      const child = pool.acquire({ system, model: asked, effort });
       let model = request.model ?? 'claude';
       const base = { id: `chatcmpl-snug-${Date.now().toString(36)}`, object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model };
       // EVERY FRAME IS ONE JSON.stringify OF THE WHOLE PAYLOAD: a delta's text is a string
