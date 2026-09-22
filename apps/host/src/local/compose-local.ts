@@ -76,7 +76,13 @@ export function brainLabel(brain: { state: string; detail?: string } | undefined
       // The remedy IS the label: a chip that only says "unavailable" makes the user hunt.
       return 'Claude · your CLI — not logged in, run `claude` then `/login`';
     case 'absent':
-      return 'demo brain — no host brain found';
+      // The remedy in words a non-technical user can follow: a page to visit, then two
+      // commands. Never a curl-into-bash line on a chip (ADR-0069 §6).
+      return 'demo brain — no Claude CLI found; install Claude Code (code.claude.com), then run `claude` and `/login`';
+    case 'outdated':
+      // Measured 2026-09-13: a CLI whose default model moved answers every think with a
+      // 400 until `claude update` — the CLI's own remedy, so it is the chip's.
+      return 'Claude · your CLI — out of date, run `claude update`';
     case 'unknown':
       return 'Claude · your CLI — could not check';
     default:

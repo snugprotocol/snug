@@ -12,7 +12,7 @@ import path from 'node:path';
 
 import { parseAppBundle } from '@snugprotocol/protocol';
 
-import { createClaudeBrain } from './brain-claude.js';
+import { createClaudeBrain, type Brain } from './brain-claude.js';
 import { createControlSocket, probeControlSocket, type ControlSocket } from './control-socket.js';
 import { createFetchProxy, type FetchProxy } from './fetch-proxy.js';
 import { RealHomeRefusedError } from './home.js';
@@ -57,7 +57,7 @@ export interface RunnerOptions {
    */
   proxy?: { handle: FetchProxy['handle'] };
   /** The brain, injected in tests so no CLI is ever spawned. */
-  brain?: { complete(request: never): Promise<string> };
+  brain?: Pick<Brain, 'stream'> & Partial<Pick<Brain, 'stop'>>;
   /**
    * The boot-time brain probe (D-B35). Injected so tests never spawn a CLI. Its answer is
    * reported on `/status` and named by the page's chip, so a logged-out or missing CLI is
@@ -88,6 +88,10 @@ export function createRunner(options: RunnerOptions): Runner {
     throw new RealHomeRefusedError('createRunner needs an explicit home; it no longer defaults to the real ~/Snug (D-B34)');
   }
   const hostDir = path.join(home, 'host');
+  // The children's working directory (ADR-0069 §5, security review): a neutral one under
+  // the Snug home, so no project's CLAUDE.md, hooks or MCP servers are discovered by a
+  // child answering an app.
+  const brainDir = path.join(hostDir, 'brain');
   const graceMs = options.graceMs ?? 3_000;
 
   // 256 bits, memory only. It reaches the page in the launch URL's fragment and is written
@@ -103,13 +107,15 @@ export function createRunner(options: RunnerOptions): Runner {
   // Undefined until the probe answers; `/status` simply omits the field until then, which
   // the page reads as "not known yet" rather than as a claim either way.
   let brainReadiness: { state: string; detail?: string } | undefined;
+  // Created lazily by the primary, held so `stop()` can reap its children (ADR-0069 §5).
+  let brain: RunnerOptions['brain'];
 
   const socketPath = path.join(hostDir, 'ctl.sock');
   const url = (): string => `http://127.0.0.1:${port}/#token=${token}`;
 
   const runner: Runner = {
     async start() {
-      mkdirSync(hostDir, { recursive: true });
+      mkdirSync(brainDir, { recursive: true });
 
       const deps: LockDeps = {
         pid: process.pid,
@@ -151,7 +157,7 @@ export function createRunner(options: RunnerOptions): Runner {
         ...(options.heldBy !== undefined ? { heldBy: options.heldBy } : {}),
         // The user's OWN CLI, on their own subscription (D5). Absent binary → the route
         // answers a named refusal and the page falls back to the demo brain.
-        brain: options.brain ?? createClaudeBrain(),
+        brain: (brain = options.brain ?? createClaudeBrain({ cwd: brainDir })),
       });
 
       // The fixed port first; an ephemeral fallback keeps the runner usable, and the page
@@ -186,7 +192,7 @@ export function createRunner(options: RunnerOptions): Runner {
       // The probe runs in the BACKGROUND: it spawns the user's CLI, and a slow or wedged
       // one must not hold up the kit opening. A page that cannot boot teaches nothing; a
       // chip that fills in a moment later teaches the user exactly what is wrong.
-      const probe = options.brainState ?? (async () => (await import('./brain-claude.js')).probeBrain());
+      const probe = options.brainState ?? (async () => (await import('./brain-claude.js')).probeBrain({ cwd: brainDir }));
       void probe().then(
         (state) => {
           brainReadiness = state;
@@ -248,7 +254,7 @@ export function createRunner(options: RunnerOptions): Runner {
             return text(`Snug is open at http://127.0.0.1:${port}/`);
           } catch {
             return text(
-              `could not open a browser here. Ask the user to run: node <plugin>/scripts/snug-mcp.mjs open`,
+              `could not open a browser here. Ask the user to run: sh <plugin>/scripts/snug open`,
               true,
             );
           }
@@ -305,6 +311,9 @@ export function createRunner(options: RunnerOptions): Runner {
 
     async stop() {
       if (graceTimer !== undefined) clearTimeout(graceTimer);
+      // EVERY SPAWN OWES A REAP (lessons 2026-08-18/19): the pre-warmed children go first,
+      // before the listener that could hand out another.
+      brain?.stop?.();
       server?.emit('shutdown', {});
       await control?.close();
       await server?.close();

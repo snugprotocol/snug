@@ -143,7 +143,7 @@ describe('tools', () => {
     await runner.start();
     const result = await runner.callTool('snug_open', {});
     expect(result.isError).toBe(true);
-    expect(result.content[0]!.text).toMatch(/snug-mcp\.mjs open/);
+    expect(result.content[0]!.text).toMatch(/scripts\/snug open/);
   });
 
   it('snug_hand_in refuses a bundle asking for a connection, and says who grants one', async () => {
@@ -199,5 +199,15 @@ describe('the exit grace', () => {
     const onExit = vi.fn();
     runner.beginGrace(onExit);
     await vi.waitFor(() => expect(onExit).toHaveBeenCalled(), { timeout: 2_000 });
+  });
+});
+
+describe('the runner reaps the brain’s children (ADR-0069 §5)', () => {
+  it('stop() calls the brain’s stop() — reverting the wire would leave pre-warmed children behind', async () => {
+    const stop = vi.fn();
+    const runner = make({ brain: { stream: async () => {}, stop } });
+    await runner.start();
+    await runner.stop();
+    expect(stop).toHaveBeenCalledTimes(1);
   });
 });

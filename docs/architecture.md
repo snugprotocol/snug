@@ -291,6 +291,44 @@ read-only, because both of `packages/db`'s save paths swallow a failed write.
 
 Threat surface: `docs/security/threat-model-delta-local-host-process.md`.
 
+### Bindings and brains are two axes (TASK-20260913-binding-b-marketplace-plugin, ADR-0069)
+
+A **binding** is where the body runs and how the host reaches it: **A** the kit as an
+artifact page, **B** the kit served on loopback by the plugin-spawned local host process,
+**C** a widget. A **brain** is what answers the apps' thinks: the viewer-billed `sample` /
+`window.claude.complete` (A only), **the user's own agent CLI as a child process** (B —
+`claude` today; `codex exec` / Hermes / OpenClaw / Ollama are T3's remainder), or the demo
+brain. MCP is B's spawn-and-control channel and nothing else — never the brain (sampling is
+unsupported) and never the network path (the page's executor calls the process over
+loopback). The process and its artefacts are being renamed `local-host` in a follow-up PR so
+no name says "mcp" for a thing whose identity is not MCP.
+
+**The child-CLI brain pre-warms its children; every child serves exactly one request.**
+Measured 2026-09-13 on CLI 2.1.270: a cold `claude -p` costs ~3.5 s of process overhead on
+top of the model's time; a `--input-format stream-json` child left idle for five seconds
+answers its first message in 1.7 s wall — the CLI does its start-up before any input, at
+~257 MB of idle memory. So `apps/host-mcp/src/brain-child.ts` keeps a `ChildPool` keyed
+by `sha256(system prompt)` (an app's runtime contract rides as the **system** prompt on this
+binding, so its key is stable across thinks): a request takes the pre-warmed virgin child
+for its key or spawns one, sends its whole rendered conversation as ONE stream-json user
+message, and the child is reaped when the request ends while a replacement is pre-warmed.
+No transcript is ever reused — on this binding the builder's system prompt carries the app's
+html and changes every build, so "continue the conversation" would never fire (the plan
+review's finding). Bounds: two pre-warmed keys (LRU), a five-minute idle TTL, a reap on
+stop / parent death / abort / error, a cold-start bound to the first delta then an idle
+bound between deltas. The shim `stream()`s each `text_delta` as its own SSE frame (one
+`JSON.stringify` per frame, so a delta cannot forge a boundary); the chat route writes the
+first chunk with the 200 and each later one as it arrives, answers a failure before any
+delta with a 502 and ends a failure after one with no finish (the adapter reads that as a
+dropped stream, never a complete answer). `probeBrain()` names five states —
+`ready | logged-out | outdated | absent | unknown` — and finds the binary itself
+(`brain-resolve.ts`, from `install-roots.json`: PATH, then the installers' directories),
+because a process a desktop host spawns has **no user PATH** (measured: empty on the
+owner's Mac). The plugin's `.mcp.json` runs `/bin/sh scripts/snug`, a launcher generated
+from the same list that finds a Node ≥ 20 the same way. The skill (`skills/snug/`) is built
+from its prompt-store source by `scripts/lib/skill-build.mjs` into the gitignored plugin
+tree, which `check-host-mcp` builds and validates on every run.
+
 ## Desktop shell (TASK-20260812-desktop-hub-scaffold, ADR-0021)
 
 `apps/desktop` wraps the SAME playground source (vite alias, `HashRouter`, desktop entry)

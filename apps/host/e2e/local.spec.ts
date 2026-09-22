@@ -141,6 +141,19 @@ test('D-B35 — a logged-out CLI NAMES itself on the chip, and the page survives
   }, { brain: 'logged-out' });
 });
 
+test('ADR-0069 — an OUTDATED CLI names itself on the chip with `claude update`', async () => {
+  // Measured 2026-09-13: the owner's 2.1.211 answered every think with a 400 naming a newer
+  // version. Pinned for the same reason the logged-out leg is — this machine's CLI is
+  // current, so the state is unreachable without the pin.
+  await withHost(async (harness) => {
+    const page = await browser.newPage();
+    await page.goto(harness.url);
+    const chip = page.locator('.brain-chip-label').first();
+    await expect(chip, 'the chip must name the outdated CLI and its remedy').toContainText(/claude update/, { timeout: 20_000 });
+    await page.close();
+  }, { brain: 'outdated' });
+});
+
 // ---------------------------------------------------------- AC3/AC4: connected fetch
 
 /**

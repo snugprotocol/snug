@@ -1,6 +1,6 @@
 # 0068 — Binding B is a plugin-bundled local process: the desktop's native side, in Node, on loopback
 
-- **Status:** accepted (the owner approved the plan on 2026-09-07 with the recommended defaults for Q1–Q5; amended in the same session by the plan review's six blocking findings, folded as D-B13–D-B33 in the task file). Amends ADR-0065 §2 B.
+- **Status:** accepted (the owner approved the plan on 2026-09-07 with the recommended defaults for Q1–Q5; amended in the same session by the plan review's six blocking findings, folded as D-B13–D-B33 in the task file). Amends ADR-0065 §2 B. **Amended by [ADR-0069](0069-bindings-and-brains-two-axes.md)** (2026-09-13: bindings and brains as two axes; the `local-host` naming; the warm child; the five readiness states and the binary resolution).
 - **Date:** 2026-09-07
 - **Task:** TASK-20260907-binding-b-plugin-host (re-scopes T3 of TASK-20260904-skill-only-snug)
 - **Amended 2026-09-08** (same task, append-only per `docs/conventions.md`): (a) point 1 says

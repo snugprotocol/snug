@@ -289,3 +289,109 @@ describe('the page the process serves', () => {
     expect(html).not.toContain('is missing from this install');
   });
 });
+
+describe('the chat route STREAMS (ADR-0069 §5, AC6)', () => {
+  type Sink = { write(chunk: string): void; signal?: AbortSignal };
+  const readAll = async (response: Response): Promise<string> => await response.text();
+  const post = (brain: { stream(request: never, sink: Sink): Promise<void> }, init: RequestInit = {}) =>
+    start({ store: createUserFileStore(home), brain }).then(() =>
+      call('/v1/chat/completions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ messages: [{ role: 'user', content: 'x' }] }), ...init }),
+    );
+
+  it('writes each chunk as it arrives and ends after the finish', async () => {
+    const response = await post({
+      async stream(_request, sink) {
+        sink.write('data: {"choices":[{"delta":{"content":"a"},"finish_reason":null}]}\n\n');
+        await new Promise((r) => setTimeout(r, 5));
+        sink.write('data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n');
+        sink.write('data: [DONE]\n\n');
+      },
+    });
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe('text/event-stream');
+    const body = await readAll(response);
+    expect(body.indexOf('"content":"a"')).toBeLessThan(body.indexOf('"finish_reason":"stop"'));
+    expect(body.trimEnd().endsWith('data: [DONE]')).toBe(true);
+  });
+
+  it('a failure AFTER a delta closes the stream with no finish — the page reads a dropped stream, never a complete answer', async () => {
+    const response = await post({
+      async stream(_request, sink) {
+        sink.write('data: {"choices":[{"delta":{"content":"partial"},"finish_reason":null}]}\n\n');
+        throw new Error('your Claude CLI stopped answering for 60s');
+      },
+    });
+    expect(response.status).toBe(200);
+    const body = await readAll(response);
+    expect(body).toContain('"content":"partial"');
+    expect(body).not.toContain('finish_reason":"stop"');
+    expect(body).not.toContain('[DONE]');
+  });
+
+  it('a failure BEFORE any delta is a 502 the page can read', async () => {
+    const response = await post({
+      async stream() {
+        throw new Error('Not logged in · Please run /login');
+      },
+    });
+    expect(response.status).toBe(502);
+    expect(((await response.json()) as { error: { message: string } }).error.message).toMatch(/login/);
+  });
+
+  it('a body that is not a chat request is a 400, not a spawn', async () => {
+    let spawned = false;
+    const response = await post(
+      {
+        async stream() {
+          spawned = true;
+        },
+      },
+      { body: JSON.stringify({ nope: true }) },
+    );
+    expect(response.status).toBe(400);
+    expect(spawned).toBe(false);
+  });
+
+  it('the page aborting its fetch aborts the brain’s signal', async () => {
+    let aborted = false;
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    await start({
+      store: createUserFileStore(home),
+      brain: {
+        async stream(_request, sink) {
+          sink.signal?.addEventListener('abort', () => {
+            aborted = true;
+            release();
+          });
+          sink.write(': open\n\n');
+          await gate;
+        },
+      },
+    });
+    const controller = new AbortController();
+    const pending = call('/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ messages: [{ role: 'user', content: 'x' }] }),
+      signal: controller.signal,
+    });
+    await new Promise((r) => setTimeout(r, 50));
+    controller.abort();
+    await pending.catch(() => {});
+    await gate;
+    expect(aborted).toBe(true);
+  });
+});
+
+describe('the chat route refuses a malformed message entry before anything is spawned', () => {
+  it('a message with no role, or a numeric content, is a 400', async () => {
+    let spawned = false;
+    await start({ store: createUserFileStore(home), brain: { async stream() { spawned = true; } } });
+    for (const messages of [[null], [{ role: 'user', content: 42 }], [{ content: 'x' }]]) {
+      const response = await call('/v1/chat/completions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ messages }) });
+      expect(response.status, JSON.stringify(messages)).toBe(400);
+    }
+    expect(spawned).toBe(false);
+  });
+});
