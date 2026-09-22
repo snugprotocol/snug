@@ -1,6 +1,6 @@
 # TASK-20260922-binding-b-model-and-thinking-control: the brain chip on Binding B becomes a control — the user picks the model and the thinking level, and sees which are active
 
-- **Status**: **Gate 1 CLOSED 2026-09-22** — Q1–Q5 answered (spike + owner), AC3 rewrite approved, plan written. **No implementation yet**; the plan awaits owner approval (Gate 2) before code.
+- **Status**: **S1–S6 DONE 2026-09-22** — plan approved and implemented test-first; ADR-0070 accepted. Root suite green (30/30). **AC1–AC8 met; AC9 (🔑 owner walk) outstanding**, plus one loose end needing an owner call: rendering the chip control is a playground-side change outside this task's approved scope.
 - **Owner**: Jeetu
 - **Risk tier**: **high** — it changes the child CLI's argv (the brain's security posture, program D5), the pool's identity key, and the one disclosure surface D15/ADR-0059 govern. Plan review with fresh-context finder angles before code; explicit sign-off at Gate 5.
 - **Branch**: `feat/TASK-20260922-binding-b-model-and-thinking-control` — **cut** off `main` at `ff20cba` (PR #181 `df68d63` + done-move #182 both landed)
@@ -137,3 +137,15 @@ Tests first at every step. Steps 1–4 are `apps/host-mcp`; step 5 is `apps/host
 - **Verified LIVE against claude 2.1.278, not only fakes** (temporary test, run then deleted): a think with `{ model: 'haiku', effort: 'low' }` comes back with `claude-haiku-4-5…` as the envelope's model, and `nope-not-a-model-xyz` is refused with "There's an issue with the selected model (nope-not-a-model-xyz)… Run --model to pick a different model." So AC3 and AC5 hold on the real wire, not just in the suite.
 - `brainChoice` is a **function** on `BrainDeps`, read per request (ADR-0036 rule 3). Nothing in `apps/host-mcp` decides WHERE the choice is stored — that is S5's job in `apps/host`, which keeps the storage decision (per-machine, Gate 1 Q2) out of the network layer entirely.
 - Next: S5 — `brainChoiceStore` beside `tierStore.ts`, then `brainLabel()` in `compose-local.ts` becomes a control. AC8 (no dead control) and the AC7 posture pin live here too.
+
+### 2026-09-22 — Jeetu (via Claude Code) — S5 + S6 done; code complete, AC9 (the owner walk) is all that remains
+- S5 `8b3fb87`, S6 `6f88600` (**ADR-0070**, indexed in `docs/decisions/README.md`). **S1–S6 done.**
+- Tests: `apps/host` 266 (was 228), `apps/host-mcp` 294/1 skipped (was 271). **Root `pnpm test` green: 30/30 tasks.** `check-host-kit` 51/51 (incl. two-build reproducibility); `check-host-mcp` ok (both `claude plugin validate --strict` runs and the skill validator pass).
+- **The seam was the real work in S5, and it is where unit tests on either side would have missed a bug.** The choice lives in the PAGE; the children are spawned by the RUNNER. The model already had a wire (`localAdapter` sends it; the chat route was discarding it), so this widened the route's shape by one `effort` field and stopped ignoring the model. Three tests in `composeLocal.test.ts` pin the crossing end-to-end, including a mid-session switch reaching the next request.
+- Two consequences of that wiring worth knowing:
+  1. `localAdapter` takes a STATIC model, so the adapter is now rebuilt **per call** rather than once at composition — otherwise the choice freezes until reload (ADR-0036 rule 3). This is the same bug 0036 documented on the other binding.
+  2. The brain's own traffic now goes through `client.fetchImpl` like the rest of the page (it previously used global fetch). Behaviour is unchanged in the page; it is what made the seam testable.
+- `brainChoiceStore` mirrors `tierStore` deliberately (same storage rules, same memory-for-this-boot fallback where storage throws). `brainChipSeat()` returns `undefined` for every non-`ready` state — AC8, and `brainLabel`'s five states are now covered by tests for the first time (they had none).
+- **AC status: 1–8 all met and tested. AC9 (🔑 the owner walk) is NOT done — it needs you.**
+- Next step: **the owner walk.** On the real runner: switch model mid-session and confirm the next think uses it; switch effort and confirm the same; confirm the chip names both; confirm a bad model is refused in words. Note the chip's control is a SEAT (`brainChipSeat`) — whether the playground renders a picker for it is the open question the walk will answer (see "loose end" below).
+- **LOOSE END, owner call needed:** this task built the seat and the whole path behind it, but the playground's chip UI reads `brain.label` (a string). Rendering the control needs a playground-side change (`apps/playground`), which is OUTSIDE the packages this task listed as touched and was not in the approved plan. The walk will show whether that is a follow-up task or belongs here.
