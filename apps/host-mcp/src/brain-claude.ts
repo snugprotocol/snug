@@ -7,7 +7,7 @@
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 
-import { ChildPool, ClaudeChild, isEffort, type BrainSpec, type ChildLike, type SpawnChild } from './brain-child.js';
+import { ChildPool, ClaudeChild, isEffort, type BrainEffort, type BrainSpec, type ChildLike, type SpawnChild } from './brain-child.js';
 import { defaultResolveDeps, resolveBinary } from './brain-resolve.js';
 
 /**
@@ -59,7 +59,7 @@ export const INSTALL_REMEDY =
 
 export { BRAIN_EFFORTS } from './brain-child.js';
 export { isEffort };
-export type { BrainEffort, BrainSpec } from './brain-child.js';
+export type { BrainEffort, BrainSpec };
 
 /**
  * The posture every child runs with (program D5): no tools — which makes a single turn by
@@ -222,6 +222,13 @@ export interface BrainDeps extends BinaryDeps {
   firstDeltaMs?: number;
   /** The bound between deltas once a child is answering. */
   idleMs?: number;
+  /**
+   * The user's per-machine model and effort choice, read AT CALL TIME on every request —
+   * never captured when the brain is built (ADR-0036 rule 3: a value read once would freeze
+   * the choice until a reload, and "switch mid-session, the next think uses it" would be a
+   * lie). Absent, or returning `{}`, is the pre-task behaviour exactly.
+   */
+  brainChoice?: () => { model?: string | undefined; effort?: BrainEffort | undefined };
 }
 
 /** Where a streamed answer goes: the route's response, or a string in tests. */
@@ -266,10 +273,12 @@ export function createClaudeBrain(deps: BrainDeps = {}): Brain {
   const brain: Brain = {
     async stream(request, sink) {
       const { system, prompt } = splitChatRequest(request);
-      const model = request.model ?? 'claude';
-      // The page sends no model today (it always says `claude`), so the key is the system
-      // prompt alone; a different model would be a different child.
-      const child = pool.acquire({ system });
+      // The user's choice, read now rather than at construction, so a switch lands on THIS
+      // think. The page's own `model` field is not a choice — it has always said `claude` —
+      // and is only the envelope's fallback until the CLI tells us what actually answered.
+      const choice = deps.brainChoice?.() ?? {};
+      const child = pool.acquire({ system, model: choice.model, effort: choice.effort });
+      let model = request.model ?? 'claude';
       const base = { id: `chatcmpl-snug-${Date.now().toString(36)}`, object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model };
       // EVERY FRAME IS ONE JSON.stringify OF THE WHOLE PAYLOAD: a delta's text is a string
       // value inside it, so a delta containing "\n\ndata:" rides inside its frame and can
@@ -301,7 +310,12 @@ export function createClaudeBrain(deps: BrainDeps = {}): Brain {
         });
         // A CLI that streamed nothing still answered: its text rides as the one delta.
         if (deltas === 0 && result.text !== '') sink.write(contentFrame(result.text));
-        sink.write(frame({ ...base, choices: [{ index: 0, delta: {}, finish_reason: finishReasonFor(result.stopReason) }] }));
+        // What ANSWERED, never what was asked (AC5). Only on a turn that succeeded: the CLI
+        // emits its init frame BEFORE validating the model against its catalogue, so on a
+        // refused turn `resolvedModel` is the asked id echoed back, and announcing it would
+        // name a model that never ran (measured 2026-09-22; ADR-0059 rule 2).
+        if (result.resolvedModel !== undefined && result.resolvedModel !== '') model = result.resolvedModel;
+        sink.write(frame({ ...base, model, choices: [{ index: 0, delta: {}, finish_reason: finishReasonFor(result.stopReason) }] }));
         sink.write('data: [DONE]\n\n');
       } catch (error) {
         const message = abortReason !== undefined ? `your Claude CLI ${abortReason}` : error instanceof Error ? error.message : String(error);

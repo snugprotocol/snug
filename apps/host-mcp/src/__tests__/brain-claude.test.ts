@@ -17,7 +17,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { buildStreamArgs, childEnvFor, CHILD_ENV_ALLOWLIST, createClaudeBrain, INSTALL_REMEDY, probeBrain, SHIM_FIRST_DELTA_MS, SHIM_IDLE_MS, splitChatRequest } from '../brain-claude.js';
+import { BrainStreamError, buildStreamArgs, childEnvFor, CHILD_ENV_ALLOWLIST, createClaudeBrain, INSTALL_REMEDY, probeBrain, SHIM_FIRST_DELTA_MS, SHIM_IDLE_MS, splitChatRequest } from '../brain-claude.js';
 import { delta, fakeSpawner, result } from './fixtures/fake-claude-child.js';
 
 /** The names measured in a live Claude Code session — none may reach the child. */
@@ -396,6 +396,80 @@ describe('probeBrain — is the user’s CLI actually able to answer, on the bra
     const { state, children } = probeWith();
     await state;
     expect(children[0]?.exited).toBe(true);
+  });
+});
+
+describe('the brain carries the user’s choice and reports what ANSWERED (TASK-20260922 S4)', () => {
+  const init = (model: string): string => `${JSON.stringify({ type: 'system', subtype: 'init', model, tools: [] })}\n`;
+  // Measured against claude 2.1.278: an unknown model exits 1 with `[claude-code:unrecognized_model]`
+  // on stderr AND a final result frame, is_error, api_error_status 404, whose text names the model.
+  const UNRECOGNISED = 'There\u2019s an issue with the selected model (nope-not-a-model). It may not exist or you may not have access to it.';
+  const badModelResult = `${JSON.stringify({ type: 'result', subtype: 'success', is_error: true, api_error_status: 404, num_turns: 1, result: UNRECOGNISED })}\n`;
+
+  const brainWithChoice = (choice: { model?: string; effort?: 'low' | 'max' }, script?: Parameters<typeof fakeSpawner>[0]) => {
+    const { spawnChild, children } = fakeSpawner(script);
+    const brain = createClaudeBrain({
+      resolveBinary: () => '/x/claude',
+      spawnBinary: (_b, args, env) => spawnChild(args, env),
+      // Read at CALL time, never captured at construction — ADR-0036 rule 3, which is what
+      // makes AC9's "switch mid-session and the NEXT think uses it" true.
+      brainChoice: () => choice,
+    });
+    return { brain, children };
+  };
+
+  it('spawns the child with the chosen model and effort', async () => {
+    const { brain, children } = brainWithChoice({ model: 'haiku', effort: 'low' });
+    await brain.complete({ messages: [{ role: 'user', content: 'ping' }] });
+    expect(children[0]?.args).toEqual(expect.arrayContaining(['--model', 'haiku', '--effort', 'low']));
+    brain.stop();
+  });
+
+  it('reads the choice per request, so a mid-session switch lands on the NEXT think (AC9)', async () => {
+    let choice: { model?: string } = { model: 'haiku' };
+    const { spawnChild, children } = fakeSpawner();
+    const brain = createClaudeBrain({ resolveBinary: () => '/x/claude', spawnBinary: (_b, args, env) => spawnChild(args, env), brainChoice: () => choice });
+    await brain.complete({ messages: [{ role: 'user', content: 'a' }] });
+    choice = { model: 'opus' };
+    await brain.complete({ messages: [{ role: 'user', content: 'b' }] });
+    // The LAST child spawned ran on opus — no reload, no restart.
+    expect(children[children.length - 1]?.args).toEqual(expect.arrayContaining(['--model', 'opus']));
+    brain.stop();
+  });
+
+  it('refuses an unsupported model IN WORDS that name it, and never answers on another (AC3)', async () => {
+    const { brain } = brainWithChoice({ model: 'nope-not-a-model' }, { lines: [init('nope-not-a-model'), badModelResult] });
+    // The refusal surfaces as the brain's error, which the route turns into the page's
+    // message: the CLI's own text, which names the model. Nothing is substituted.
+    await expect(brain.complete({ messages: [{ role: 'user', content: 'ping' }] })).rejects.toThrow(/nope-not-a-model/);
+    brain.stop();
+  });
+
+  it('does NOT report a resolved model for a turn that failed — init echoes the ASKED id (measured)', async () => {
+    // The CLI emits init BEFORE validating against its catalogue, so on a bad-model run
+    // init.model is the asked id. A failed turn must therefore disclose the refusal and NO
+    // model — announcing one would name a model that never answered (ADR-0059 rule 2).
+    const { brain } = brainWithChoice({ model: 'nope-not-a-model' }, { lines: [init('nope-not-a-model'), badModelResult] });
+    const failure = await brain.complete({ messages: [{ role: 'user', content: 'ping' }] }).catch((e: unknown) => e);
+    expect(failure).toBeInstanceOf(BrainStreamError);
+    // It failed before any answer reached the page, so nothing was disclosed as "what ran".
+    expect((failure as BrainStreamError).partial).toBe(false);
+    brain.stop();
+  });
+
+  it('puts the RESOLVED model in the envelope on a turn that succeeded, not the asked alias', async () => {
+    const { brain } = brainWithChoice({ model: 'haiku' }, { lines: [init('claude-haiku-4-5-20251001'), delta('pong'), result('pong')] });
+    const body = await brain.complete({ messages: [{ role: 'user', content: 'ping' }] });
+    expect(body).toContain('claude-haiku-4-5-20251001');
+    brain.stop();
+  });
+
+  it('with no choice made, spawns exactly as it did before this task', async () => {
+    const { brain, children } = brainWithChoice({});
+    await brain.complete({ messages: [{ role: 'user', content: 'ping' }] });
+    expect(children[0]?.args).not.toContain('--model');
+    expect(children[0]?.args).not.toContain('--effort');
+    brain.stop();
   });
 });
 
