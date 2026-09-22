@@ -17,7 +17,7 @@
 
 import { localAdapter } from '@snugprotocol/adapters';
 import { BRAIN_EFFORT_OPTIONS, createBrainChoiceStore, type BrainChoice, type BrainChoiceStore, type BrainEffortChoice } from '../brains/brainChoiceStore.js';
-import type { CliModelSeat, CliModelState } from '@playground/platform/platform';
+import type { CliModelOption, CliModelSeat, CliModelState } from '@playground/platform/platform';
 
 /** `localStorage` where the browser allows it; undefined where it throws (the Safari rung). */
 const safeLocalStorage = (): Storage | undefined => {
@@ -80,6 +80,13 @@ const origin = typeof location === 'undefined' ? 'http://127.0.0.1:43127' : loca
  * once; this holder is what the `status` event writes so the chip's getter can see it.
  */
 export const brainState: { current?: { state: string; detail?: string } } = {};
+
+/**
+ * The model list from the process, which can arrive after boot for the same reason the brain
+ * verdict can (the platform is set once; a `status` read or event fills this). Same holder
+ * pattern as `brainState` — never a recomposed platform.
+ */
+export const modelsFromStatus: { current?: readonly CliModelOption[] } = {};
 
 export function brainLabel(brain: { state: string; detail?: string } | undefined): string {
   switch (brain?.state) {
@@ -196,13 +203,27 @@ function snapshotOf(choices: BrainChoiceStore): CliModelState {
  * think, so a picker on it would be dead and the user gets the remedy `brainLabel` carries
  * and nothing else (AC8 — ADR-0067's rule and ADR-0036 rule 4).
  */
-export function cliModelSeat(input: { brain: { state: string } | undefined; choices: BrainChoiceStore }): CliModelSeat | undefined {
+export function cliModelSeat(input: {
+  brain: { state: string } | undefined;
+  choices: BrainChoiceStore;
+  /** From the process, which read the CLI's own catalogue. Empty = no list could be read. */
+  models?: readonly CliModelOption[] | undefined;
+}): CliModelSeat | undefined {
   const chip = brainChipSeat(input);
   if (chip === undefined) return undefined;
   const { choices } = input;
+  const models = input.models ?? [];
   snapshotOf(choices);
+  const chosen = choices.choice().model;
+  // Whether the CHOSEN model has a thinking-effort axis at all. Haiku 4.5 has none, and an
+  // effort control on a model that ignores it is a dead control (AC8). A model typed by hand
+  // that the catalogue does not list is assumed to HAVE the axis: withholding a control the
+  // model may well support is the worse error, and the CLI refuses a flag it cannot use.
+  const listed = chosen === undefined ? undefined : models.find((model) => model.id === chosen);
   return {
     efforts: chip.efforts,
+    models,
+    effortApplies: listed === undefined ? true : listed.effort,
     activeLabel: chip.activeLabel,
     note: chip.note,
     state: { get: () => snapshotOf(choices), subscribe: choices.subscribe },
@@ -325,7 +346,7 @@ export function composeLocalPlatform(
               // state, so a brain that stops being able to think loses its control rather
               // than keeping a dead one (AC8).
               get cliModel(): CliModelSeat | undefined {
-                return cliModelSeat({ brain: brainState.current ?? status.brain, choices: brainChoices });
+                return cliModelSeat({ brain: brainState.current ?? status.brain, choices: brainChoices, models: modelsFromStatus.current ?? status.models });
               },
             },
           }

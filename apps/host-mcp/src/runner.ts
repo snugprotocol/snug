@@ -16,6 +16,8 @@ import { createClaudeBrain, type Brain } from './brain-claude.js';
 import { createControlSocket, probeControlSocket, type ControlSocket } from './control-socket.js';
 import { createFetchProxy, type FetchProxy } from './fetch-proxy.js';
 import { RealHomeRefusedError } from './home.js';
+import { readModelCatalog } from './model-catalog.js';
+import { homedir } from 'node:os';
 import { acquireLock, releaseLock, type LockDeps } from './lock.js';
 import { createLoopbackServer, type LoopbackServer } from './loopback-server.js';
 import { nodeHttpsSend } from './node-transport.js';
@@ -158,6 +160,8 @@ export function createRunner(options: RunnerOptions): Runner {
         // The user's OWN CLI, on their own subscription (D5). Absent binary → the route
         // answers a named refusal and the page falls back to the demo brain.
         brain: (brain = options.brain ?? createClaudeBrain({ cwd: brainDir })),
+        // The chip's model list, re-read per request so a CLI update lands without a restart.
+        models: () => readModelCatalog(homedir()),
       });
 
       // The fixed port first; an ephemeral fallback keeps the runner usable, and the page

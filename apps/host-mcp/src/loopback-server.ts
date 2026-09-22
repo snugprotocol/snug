@@ -50,6 +50,12 @@ export interface LoopbackServerOptions {
    * its tokens instead of a silent wait.
    */
   brain?: Pick<Brain, 'stream'>;
+  /**
+   * The models the chip may offer (TASK-20260922 S9). Read from the CLI's own catalogue by
+   * the RUNNER, because the file lives in the user's home and the page cannot read it. A
+   * function, so a CLI update between boots is picked up without restarting the runner.
+   */
+  models?: () => readonly { id: string; name: string; effort: boolean }[];
 }
 
 export interface LoopbackServer {
@@ -141,6 +147,9 @@ export function createLoopbackServer(options: LoopbackServerOptions): LoopbackSe
         pages: subscribers.size,
         ...(held !== undefined ? { heldBy: held } : {}),
         ...(brain !== undefined ? { brain } : {}),
+        // Always present, possibly empty: an empty list is the page's signal to keep free
+        // text as the only rung rather than render an empty dropdown.
+        models: options.models?.() ?? [],
       });
       return;
     }

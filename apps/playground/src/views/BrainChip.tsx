@@ -18,7 +18,7 @@
 // reader who catches an overclaim stops believing the honest claims too.
 
 import type { ReactElement } from 'react';
-import { useSyncExternalStore } from 'react';
+import { useState, useSyncExternalStore } from 'react';
 import { Link } from 'react-router-dom';
 
 import { tierAutoLabel, tierLabel, tierSubstitutionNote } from '../platform/copy.js';
@@ -107,6 +107,8 @@ function copyFor(brain: ActiveBrainKind): { label: string; aria: string; headlin
 /** One stable no-op for the seatless render (a fresh closure per render would resubscribe on every render). */
 const noSubscription = (): (() => void) => () => undefined;
 
+const OTHER_MODEL = '\u0000other';
+
 export function BrainChip(): ReactElement {
   const brain = useActiveBrain();
   const ollama = useOllama();
@@ -132,6 +134,8 @@ export function BrainChip(): ReactElement {
   // A one spawns no CLI — and absent entirely wherever the CLI cannot think, so this renders
   // no dead control (AC8).
   const cliSeat = brain === 'host' && pinned?.kind === 'host' ? pinned.cliModel : undefined;
+  // `other…` swaps the dropdown for the free-text field, for a model the catalogue lacks.
+  const [typingModel, setTypingModel] = useState(false);
   const cliState = useSyncExternalStore(
     cliSeat?.state.subscribe ?? noSubscription,
     () => cliSeat?.state.get(),
@@ -211,18 +215,52 @@ export function BrainChip(): ReactElement {
               </span>
               <label className="brain-menu-cli-row">
                 <span className="brain-menu-tier-label">model</span>
-                <input
-                  type="text"
-                  aria-label="model"
-                  data-testid="brain-menu-model"
-                  className="brain-menu-cli-input"
-                  // Free text: this CLI publishes no machine-readable model list, and refuses
-                  // an unknown model BY NAME rather than answering on another (ADR-0070 §4).
-                  placeholder="the CLI’s default"
-                  defaultValue={cliState.model ?? ''}
-                  onChange={(event) => cliSeat.setModel(event.currentTarget.value)}
-                />
+                {/* A dropdown of the CLI's OWN catalogue (S9) — exact ids, so a typo cannot
+                    break a call. `other…` keeps the free-text rung for a model the catalogue
+                    does not list, and free text is the whole control when no list could be
+                    read (the file is an internal cache and may move). */}
+                {cliSeat.models.length > 0 && !typingModel ? (
+                  <select
+                    aria-label="model"
+                    data-testid="brain-menu-model-select"
+                    value={cliState.model ?? ''}
+                    onChange={(event) => {
+                      const chosen = event.currentTarget.value;
+                      if (chosen === OTHER_MODEL) {
+                        setTypingModel(true);
+                        return;
+                      }
+                      cliSeat.setModel(chosen === '' ? undefined : chosen);
+                    }}
+                  >
+                    <option value="">the CLI’s default</option>
+                    {cliSeat.models.map((model) => (
+                      <option key={model.id} value={model.id}>
+                        {model.name}
+                      </option>
+                    ))}
+                    {/* A model chosen before this CLI knew it stays visible rather than
+                        silently reading as "default". */}
+                    {cliState.model !== undefined && !cliSeat.models.some((m) => m.id === cliState.model) ? (
+                      <option value={cliState.model}>{cliState.model}</option>
+                    ) : null}
+                    <option value={OTHER_MODEL}>other…</option>
+                  </select>
+                ) : (
+                  <input
+                    type="text"
+                    aria-label="model"
+                    data-testid="brain-menu-model"
+                    className="brain-menu-cli-input"
+                    placeholder="the CLI’s default"
+                    defaultValue={cliState.model ?? ''}
+                    onChange={(event) => cliSeat.setModel(event.currentTarget.value)}
+                  />
+                )}
               </label>
+              {/* Not every model HAS an effort axis (Haiku 4.5 does not), and a control the
+                  model ignores is a dead control (AC8). */}
+              {cliSeat.effortApplies ? (
               <label className="brain-menu-cli-row">
                 <span className="brain-menu-tier-label">thinking level</span>
                 <select
@@ -239,6 +277,7 @@ export function BrainChip(): ReactElement {
                   ))}
                 </select>
               </label>
+              ) : null}
               {cliState.refusal !== undefined ? (
                 <span className="brain-menu-hint" data-testid="brain-menu-cli-note">
                   {cliState.refusal}

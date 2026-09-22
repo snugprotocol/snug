@@ -30,6 +30,12 @@ export interface LocalStatus {
    * than as a claim either way.
    */
   brain?: { state: string; detail?: string };
+  /**
+   * The models the chip may offer, read by the process from the CLI's own catalogue
+   * (TASK-20260922 S9). ABSENT or EMPTY means no list could be read — the chip keeps free
+   * text as its only rung rather than rendering an empty dropdown.
+   */
+  models?: readonly { id: string; name: string; effort: boolean }[];
 }
 
 /**

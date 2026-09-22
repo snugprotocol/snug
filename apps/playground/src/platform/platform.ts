@@ -100,9 +100,26 @@ export interface CliModelState {
   /** A refusal in the CLI's own words, standing until a think answers again. */
   refusal?: string | undefined;
 }
+/** One model the CLI will accept, from its own catalogue — the id is exact, never an alias. */
+export interface CliModelOption {
+  id: string;
+  name: string;
+  /** Whether this model has a thinking-effort axis at all (Haiku 4.5 does not). */
+  effort: boolean;
+}
 export interface CliModelSeat {
   /** The levels this CLI documents, in the order the chip lists them. */
   efforts: readonly CliEffort[];
+  /**
+   * The models to offer. EMPTY is meaningful: no catalogue could be read, so the chip offers
+   * free text alone rather than an empty dropdown (TASK-20260922 S9).
+   */
+  models: readonly CliModelOption[];
+  /**
+   * Whether the CHOSEN model has a thinking-effort axis. False → the chip must not offer the
+   * effort control for it (Haiku 4.5 has no effort axis, and a control it ignores is dead).
+   */
+  effortApplies: boolean;
   /** What is running right now, in words — the chip's one line of truth. */
   activeLabel: string;
   /** The standing caveats: thinking is never shown; a switch lands next think and costs a warm child. */

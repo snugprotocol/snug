@@ -169,3 +169,39 @@ describe('the seat the chip actually renders (S7)', () => {
     expect(choices.choice().model).toBe('opus');
   });
 });
+
+describe('the model dropdown comes from the CLI’s catalogue (S9)', () => {
+  const MODELS = [
+    { id: 'claude-opus-5-5', name: 'Opus 5.5', effort: true },
+    { id: 'claude-haiku-4-5-20251001', name: 'Haiku 4.5', effort: false },
+  ];
+
+  it('offers what the process read, with exact ids', () => {
+    const seat = cliModelSeat({ brain: { state: 'ready' }, choices: store(), models: MODELS });
+    expect(seat?.models.map((m) => m.id)).toEqual(['claude-opus-5-5', 'claude-haiku-4-5-20251001']);
+  });
+
+  it('offers NO models when the catalogue could not be read — free text is the fallback, not an empty list', () => {
+    expect(cliModelSeat({ brain: { state: 'ready' }, choices: store(), models: [] })?.models).toEqual([]);
+    expect(cliModelSeat({ brain: { state: 'ready' }, choices: store() })?.models).toEqual([]);
+  });
+
+  it('says a chosen model has NO effort axis, so the chip can disable that control (AC8)', () => {
+    const choices = store();
+    choices.setModel('claude-haiku-4-5-20251001');
+    expect(cliModelSeat({ brain: { state: 'ready' }, choices, models: MODELS })?.effortApplies).toBe(false);
+  });
+
+  it('says effort DOES apply for a model that has the axis, and when none is chosen', () => {
+    const chosen = store();
+    chosen.setModel('claude-opus-5-5');
+    expect(cliModelSeat({ brain: { state: 'ready' }, choices: chosen, models: MODELS })?.effortApplies).toBe(true);
+    expect(cliModelSeat({ brain: { state: 'ready' }, choices: store(), models: MODELS })?.effortApplies).toBe(true);
+  });
+
+  it('assumes effort applies for a model typed by hand that the catalogue does not list', () => {
+    const choices = store();
+    choices.setModel('some-future-model');
+    expect(cliModelSeat({ brain: { state: 'ready' }, choices, models: MODELS })?.effortApplies).toBe(true);
+  });
+});

@@ -386,7 +386,9 @@ test('TASK-20260922 AC5 — the chip renders the CLI control, and says nothing i
     // No model id may be claimed before one has answered.
     await expect(active).not.toContainText('claude-opus-5');
     // Both controls are there, with the CLI's own five levels and no invented default level.
-    await expect(page.locator('[data-testid="brain-menu-model"]')).toHaveCount(1);
+    // The dropdown of the CLI's own catalogue when one could be read; free text otherwise.
+    const modelControls = page.locator('[data-testid="brain-menu-model-select"], [data-testid="brain-menu-model"]');
+    await expect(modelControls).toHaveCount(1);
     const efforts = page.locator('[data-testid="brain-menu-effort"] option');
     await expect(efforts).toHaveCount(6);
     await expect(page.locator('[data-testid="brain-menu-cli-hint"]')).toContainText(/thinking/i);
