@@ -1,6 +1,6 @@
 # TASK-20260913-binding-b-marketplace-plugin: Binding B complete — the skill in the plugin, a brain that pre-warms and names itself, a launcher that starts under a desktop host, the tree the marketplace takes
 
-- **Status**: in-progress — Gates 1–5 in one autonomous session on the owner's ask ("implement and complete the rest for Binding B with plugin, ready for the Anthropic marketplace"); plan reviewed by four fresh-context finder angles before code and folded (below); **built under the recommended defaults — any Q answered otherwise is a one-word reversal**; the owner walks (AC9) are printed, not performed
+- **Status**: done (PR #181 squash `df68d63`, merged 2026-09-22) — Gates 1–5 in one autonomous session on the owner's ask ("implement and complete the rest for Binding B with plugin, ready for the Anthropic marketplace"); plan reviewed by four fresh-context finder angles before code and folded (below); **built under the recommended defaults — any Q answered otherwise is a one-word reversal**; the owner walks (AC9) are printed, not performed
 - **Owner**: Jeetu
 - **Risk tier**: **high** — plugin packaging is release config (a marketplace clone runs the bundle as the user); the brain shim spawns and pre-warms the user's own CLI (the child-env allowlist is a C1-adjacent boundary); the threat-model delta gains rows. Plan review with finder angles before Gate 4 (done); explicit self-sign-off at Gate 5.
 - **Branch**: `feat/TASK-20260913-binding-b-marketplace-plugin` off `main` `730198c` (PR #177 merged)
