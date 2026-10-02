@@ -18,7 +18,7 @@
 // reader who catches an overclaim stops believing the honest claims too.
 
 import type { ReactElement } from 'react';
-import { useState, useSyncExternalStore } from 'react';
+import { useSyncExternalStore } from 'react';
 import { Link } from 'react-router-dom';
 
 import { tierAutoLabel, tierLabel, tierSubstitutionNote } from '../platform/copy.js';
@@ -107,8 +107,6 @@ function copyFor(brain: ActiveBrainKind): { label: string; aria: string; headlin
 /** One stable no-op for the seatless render (a fresh closure per render would resubscribe on every render). */
 const noSubscription = (): (() => void) => () => undefined;
 
-const OTHER_MODEL = '\u0000other';
-
 export function BrainChip(): ReactElement {
   const brain = useActiveBrain();
   const ollama = useOllama();
@@ -134,8 +132,6 @@ export function BrainChip(): ReactElement {
   // A one spawns no CLI — and absent entirely wherever the CLI cannot think, so this renders
   // no dead control (AC8).
   const cliSeat = brain === 'host' && pinned?.kind === 'host' ? pinned.cliModel : undefined;
-  // `other…` swaps the dropdown for the free-text field, for a model the catalogue lacks.
-  const [typingModel, setTypingModel] = useState(false);
   const cliState = useSyncExternalStore(
     cliSeat?.state.subscribe ?? noSubscription,
     () => cliSeat?.state.get(),
@@ -216,22 +212,16 @@ export function BrainChip(): ReactElement {
               <label className="brain-menu-cli-row">
                 <span className="brain-menu-tier-label">model</span>
                 {/* A dropdown of the CLI's OWN catalogue (S9) — exact ids, so a typo cannot
-                    break a call. `other…` keeps the free-text rung for a model the catalogue
-                    does not list, and free text is the whole control when no list could be
-                    read (the file is an internal cache and may move). */}
-                {cliSeat.models.length > 0 && !typingModel ? (
+                    break a call. No `other…` rung: it swapped the dropdown for a text field with
+                    no way back (owner's walk, 2026-10-02). Free text survives ONLY as the whole
+                    control when no catalogue could be read (it is an internal cache and may move),
+                    because the alternative there is no control at all. */}
+                {cliSeat.models.length > 0 ? (
                   <select
                     aria-label="model"
                     data-testid="brain-menu-model-select"
                     value={cliState.model ?? ''}
-                    onChange={(event) => {
-                      const chosen = event.currentTarget.value;
-                      if (chosen === OTHER_MODEL) {
-                        setTypingModel(true);
-                        return;
-                      }
-                      cliSeat.setModel(chosen === '' ? undefined : chosen);
-                    }}
+                    onChange={(event) => cliSeat.setModel(event.currentTarget.value === '' ? undefined : event.currentTarget.value)}
                   >
                     <option value="">the CLI’s default</option>
                     {cliSeat.models.map((model) => (
@@ -239,12 +229,11 @@ export function BrainChip(): ReactElement {
                         {model.name}
                       </option>
                     ))}
-                    {/* A model chosen before this CLI knew it stays visible rather than
-                        silently reading as "default". */}
+                    {/* A model stored earlier that this CLI no longer lists stays visible and
+                        selectable-away, rather than silently reading as "default". */}
                     {cliState.model !== undefined && !cliSeat.models.some((m) => m.id === cliState.model) ? (
                       <option value={cliState.model}>{cliState.model}</option>
                     ) : null}
-                    <option value={OTHER_MODEL}>other…</option>
                   </select>
                 ) : (
                   <input

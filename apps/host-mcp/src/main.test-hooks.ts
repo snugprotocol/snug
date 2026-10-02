@@ -70,7 +70,12 @@ if (process.env.SNUG_MCP_TEST_ENTRY === '1') {
   const fakeBrain = {
     stream: async (_request: unknown, sink: { write(chunk: string): void }): Promise<void> => {
       const base = { id: 'chatcmpl-snug-e2e', object: 'chat.completion.chunk', created: 1 };
-      sink.write(`data: ${JSON.stringify({ ...base, model: 'claude', choices: [{ index: 0, delta: { role: 'assistant', content: 'ok' }, finish_reason: null }] })}\n\n`);
+      // A JSON OBJECT, as a real model answers an app that declares a response schema: the host
+      // rejects bare text ("agent reply was not a parseable JSON object"), which once made this
+      // fake look like a broken wire. It carries no app-specific fields, so an app treats it as
+      // off-script — chess plays a legal move for it and says so.
+      const reply = JSON.stringify({ message: 'pinned reply' });
+      sink.write(`data: ${JSON.stringify({ ...base, model: 'claude', choices: [{ index: 0, delta: { role: 'assistant', content: reply }, finish_reason: null }] })}\n\n`);
       sink.write(`data: ${JSON.stringify({ ...base, model: pinnedModel, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}\n\n`);
       sink.write('data: [DONE]\n\n');
     },

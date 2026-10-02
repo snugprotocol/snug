@@ -232,6 +232,21 @@ export function cliModelSeat(input: {
   };
 }
 
+/**
+ * Add the user's thinking level to the chat request's JSON body. The shared OpenAI adapter
+ * builds that body from a fixed set of fields, so a level put on the REQUEST object is silently
+ * dropped (it was, from S5 until the owner's walk). Undefined = the body is left byte-identical.
+ */
+function withEffort(init: RequestInit | undefined, effort: BrainEffortChoice | undefined): RequestInit | undefined {
+  if (effort === undefined || init === undefined || typeof init.body !== 'string') return init;
+  try {
+    const body = JSON.parse(init.body) as Record<string, unknown>;
+    return { ...init, body: JSON.stringify({ ...body, effort }) };
+  } catch {
+    return init;
+  }
+}
+
 export function composeLocalPlatform(
   client: LocalClient,
   status: LocalStatus,
@@ -302,37 +317,34 @@ export function composeLocalPlatform(
               adapter: {
                 complete: async (request) => {
                   const choice = brainChoices.choice();
+                  // Effort only for a model that HAS the axis: the chip hides the control for
+                  // one that does not (Haiku 4.5, per the CLI's catalogue), so sending a stored
+                  // level anyway would be a setting the user can no longer see (AC8).
+                  const listed = choice.model === undefined ? undefined : (modelsFromStatus.current ?? status.models ?? []).find((m) => m.id === choice.model);
+                  const effort = listed !== undefined && !listed.effort ? undefined : choice.effort;
                   const result = await localAdapter({
                     baseUrl: `${origin}/v1`,
                     apiKey: token,
                     model: choice.model ?? 'claude',
-                    // The answer carries the model the CLI RESOLVED, and reading it here is
-                    // the only way the chip can name a default the user never chose — the
-                    // brain knows, but nothing fed it back (S8).
-                    fetch: async (input, init) => {
-                      const response = await client.fetchImpl(input, init);
-                      // Read a CLONE — the adapter still needs the body, and a Response body
-                      // can be consumed only once — and AWAIT it, so the chip is already
-                      // right when the think resolves rather than a tick later.
-                      try {
-                        // THE SHIM ANSWERS SSE, ALWAYS (loopback-server.ts; the note above says
-                        // so too), and the resolved model rides in the FINAL frame after the
-                        // deltas — so this parses frames rather than calling .json(), which
-                        // would throw on every real answer and silently teach nothing.
-                        for (const line of (await response.clone().text()).split('\n')) {
-                          if (!line.startsWith('data: ')) continue;
-                          const payload = line.slice(6).trim();
-                          if (payload === '' || payload === '[DONE]') continue;
-                          const model = (JSON.parse(payload) as { model?: unknown } | null)?.model;
-                          // The placeholder is not a model id; the last real one wins.
-                          if (typeof model === 'string' && model !== '' && model !== 'claude') brainChoices.markAnswered(model);
-                        }
-                      } catch {
-                        // An unparseable body teaches nothing, and must never fail the think.
-                      }
-                      return response;
-                    },
-                  }).complete(choice.effort === undefined ? request : ({ ...request, effort: choice.effort } as typeof request));
+                    // The page's OWN fetch, straight to its own runner on loopback. NEVER
+                    // `client.fetchImpl`: that is the connected-apps proxy (`POST /fetch`), which
+                    // re-runs the executor's gates and refuses a loopback destination — S5 routed
+                    // the brain through it and every think failed with "could not reach the local
+                    // model endpoint" (owner's walk, 2026-10-02). The wrapper only adds `effort`
+                    // to the JSON body, because the shared OpenAI adapter builds its body from a
+                    // fixed set of fields and drops anything else.
+                    fetch: (input, init) => globalThis.fetch(input, withEffort(init, effort)),
+                  }).complete(request);
+                  if (result.ok) {
+                    // The adapter reports the model on the stream's LAST chunk, which is the id the
+                    // CLI resolved (ADR-0070 D2: only a turn that SUCCEEDED may name a model).
+                    if (typeof result.model === 'string' && result.model !== '' && result.model !== 'claude') brainChoices.markAnswered(result.model);
+                  } else if (choice.model !== undefined && result.message.includes(choice.model)) {
+                    // A refusal that NAMES the chosen model is the CLI refusing it — shown on the
+                    // chip in its own words. Anything else (a network failure, a timeout) is not
+                    // about the model and must not be dressed up as one.
+                    brainChoices.markRefused(choice.model, result.message);
+                  }
                   return result;
                 },
               },

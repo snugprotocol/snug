@@ -1,6 +1,6 @@
 // The local page's platform (ADR-0068 D-B14, D-B24).
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { brainState, composeLocalPlatform } from '../local/compose-local.js';
 import { createBrainChoiceStore } from '../brains/brainChoiceStore.js';
@@ -140,52 +140,6 @@ describe('the chip’s two newer states (ADR-0069 §6)', () => {
   });
 });
 
-describe('the choice crosses from the page to the runner (TASK-20260922 S5)', () => {
-  /** A client whose fetch records the chat request the adapter actually sent. */
-  const recordingClient = (bodies: string[]) =>
-    ({
-      ...client,
-      fetchImpl: async (_url: string, init?: RequestInit) => {
-        bodies.push(String(init?.body ?? ''));
-        return new Response(JSON.stringify({ choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }] }), { headers: { 'content-type': 'application/json' } });
-      },
-    }) as unknown as LocalClient;
-
-  const brainOf = (platform: { brain?: { kind: string } }) =>
-    (platform.brain as unknown as { adapter: { complete(r: unknown): Promise<unknown> } } | undefined)?.adapter;
-
-  it('sends the chosen model and effort on the request, so the runner can spawn with them', async () => {
-    const bodies: string[] = [];
-    const choices = createBrainChoiceStore({ storage: undefined });
-    choices.setModel('haiku');
-    choices.setEffort('max');
-    const { platform } = composeLocalPlatform(recordingClient(bodies), status({ brain: { state: 'ready' } }), undefined, undefined, 't', choices);
-    await brainOf(platform)?.complete({ system: 's', messages: [{ role: 'user', content: 'hi' }] });
-    expect(bodies[0]).toContain('haiku');
-    expect(bodies[0]).toContain('max');
-  });
-
-  it('reads the choice PER CALL, so a switch lands on the next think without a reload (ADR-0036 rule 3)', async () => {
-    const bodies: string[] = [];
-    const choices = createBrainChoiceStore({ storage: undefined });
-    choices.setModel('haiku');
-    const { platform } = composeLocalPlatform(recordingClient(bodies), status({ brain: { state: 'ready' } }), undefined, undefined, 't', choices);
-    const brain = brainOf(platform);
-    await brain?.complete({ system: 's', messages: [{ role: 'user', content: 'a' }] });
-    choices.setModel('opus');
-    await brain?.complete({ system: 's', messages: [{ role: 'user', content: 'b' }] });
-    expect(bodies[1]).toContain('opus');
-    expect(bodies[1]).not.toContain('haiku');
-  });
-
-  it('sends the placeholder, and no effort, when nothing is chosen — the pre-task wire', async () => {
-    const bodies: string[] = [];
-    const { platform } = composeLocalPlatform(recordingClient(bodies), status({ brain: { state: 'ready' } }), undefined, undefined, 't', createBrainChoiceStore({ storage: undefined }));
-    await brainOf(platform)?.complete({ system: 's', messages: [{ role: 'user', content: 'hi' }] });
-    expect(bodies[0]).toContain('"model":"claude"');
-    expect(bodies[0]).not.toContain('effort');
-  });
-});
 
 describe('the control survives the probe answering LATE (S7)', () => {
   it('appears once the probe reports ready, though the platform was composed before it answered', () => {
@@ -220,43 +174,130 @@ describe('the seat is stable across renders (S7 — useSyncExternalStore)', () =
   });
 });
 
-describe('the answer teaches the chip what actually ran (S8)', () => {
-  /**
-   * The shim answers SSE, ALWAYS — `text/event-stream`, never JSON (loopback-server.ts:227,
-   * and compose-local's own note: "the shim answers SSE regardless"). The resolved model rides
-   * in the FINAL frame, after the deltas. An earlier version of this helper returned JSON and
-   * passed while the real path could not work at all; the body shape is the test.
-   */
-  const answeringClient = (model: string) =>
-    ({
-      ...client,
-      fetchImpl: async () => {
-        const base = { id: 'chatcmpl-snug-x', object: 'chat.completion.chunk', created: 1 };
-        const body =
-          `data: ${JSON.stringify({ ...base, model: 'claude', choices: [{ index: 0, delta: { role: 'assistant', content: 'ok' }, finish_reason: null }] })}\n\n` +
-          `data: ${JSON.stringify({ ...base, model, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}\n\n` +
-          'data: [DONE]\n\n';
-        return new Response(body, { headers: { 'content-type': 'text/event-stream' } });
-      },
-    }) as unknown as LocalClient;
-
-  const adapterOf = (platform: { brain?: unknown }) =>
-    (platform.brain as { adapter: { complete(r: unknown): Promise<unknown> } }).adapter;
-
-  it('names the model the CLI ran even though the user chose NONE — the whole point of the chip', async () => {
-    const choices = createBrainChoiceStore({ storage: undefined });
-    brainState.current = { state: 'ready' };
-    const { platform } = composeLocalPlatform(answeringClient('claude-opus-5[1m]'), status({}), undefined, undefined, 't', choices);
-    await adapterOf(platform).complete({ system: 's', messages: [{ role: 'user', content: 'hi' }] });
-    expect(choices.active().model).toBe('claude-opus-5[1m]');
+describe('the brain reaches its own runner DIRECTLY — never through the connected-apps proxy (S10)', () => {
+  // THE BUG THIS BLOCK EXISTS FOR (owner's walk, 2026-10-02: "the agent's move is pending"):
+  // S5 routed the brain adapter through `client.fetchImpl`. That is not a general fetch — it
+  // wraps every request into `POST /fetch`, the connected-apps network proxy, which re-runs the
+  // executor's gates and refuses a loopback destination. Every think on Binding B failed with
+  // "could not reach the local model endpoint". The earlier tests here used a fake client whose
+  // fetchImpl just recorded bodies, so they passed against a path that could never work.
+  // These drive the REAL global fetch, answer in the REAL shape (SSE), and fail if the proxy
+  // is touched at all.
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    brainState.current = undefined;
   });
 
-  it('follows a substitution: what answered wins over what was asked', async () => {
-    const choices = createBrainChoiceStore({ storage: undefined });
-    choices.setModel('opus');
+  /** The shim's real answer: SSE, deltas, then the resolved model on the final frame. */
+  const sse = (resolved: string): string => {
+    const base = { id: 'chatcmpl-snug-x', object: 'chat.completion.chunk', created: 1 };
+    return (
+      `data: ${JSON.stringify({ ...base, model: 'claude', choices: [{ index: 0, delta: { role: 'assistant', content: 'ok' }, finish_reason: null }] })}\n\n` +
+      `data: ${JSON.stringify({ ...base, model: resolved, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}\n\n` +
+      'data: [DONE]\n\n'
+    );
+  };
+
+  /** A client whose PROXY must never be used by the brain. */
+  const proxyCalls: string[] = [];
+  const guardedClient = {
+    ...client,
+    fetchImpl: async (url: string) => {
+      proxyCalls.push(url);
+      throw new Error('the brain must not use the connected-apps proxy');
+    },
+  } as unknown as LocalClient;
+
+  const stubFetch = (resolved: string, status = 200, body?: string) => {
+    const calls: { url: string; body: Record<string, unknown> }[] = [];
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      calls.push({ url: String(url), body: JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown> });
+      return new Response(body ?? sse(resolved), { status, headers: { 'content-type': status === 200 ? 'text/event-stream' : 'application/json' } });
+    });
+    return calls;
+  };
+
+  const compose = (choices = createBrainChoiceStore({ storage: undefined })) => {
     brainState.current = { state: 'ready' };
-    const { platform } = composeLocalPlatform(answeringClient('claude-opus-5[1m]'), status({}), undefined, undefined, 't', choices);
-    await adapterOf(platform).complete({ system: 's', messages: [{ role: 'user', content: 'hi' }] });
-    expect(choices.active().model).toBe('claude-opus-5[1m]');
+    const { platform } = composeLocalPlatform(guardedClient, status({}), undefined, undefined, 't', choices);
+    const adapter = (platform.brain as unknown as { adapter: { complete(r: unknown): Promise<{ ok: boolean; text?: string; message?: string }> } }).adapter;
+    return { adapter, choices };
+  };
+  const think = { system: 's', messages: [{ role: 'user' as const, content: 'hi' }] };
+
+  it('a think SUCCEEDS end to end, and never touches the proxy — the owner’s chess move', async () => {
+    proxyCalls.length = 0;
+    const calls = stubFetch('claude-opus-5-5');
+    const { adapter } = compose();
+    const result = await adapter.complete(think);
+    expect(result.ok).toBe(true);
+    expect(result.text).toBe('ok');
+    expect(proxyCalls).toEqual([]);
+    expect(calls[0]?.url).toMatch(/\/v1\/chat\/completions$/);
+  });
+
+  it('sends the chosen model as its exact id', async () => {
+    const calls = stubFetch('claude-sonnet-5');
+    const { adapter, choices } = compose();
+    choices.setModel('claude-sonnet-5');
+    await adapter.complete(think);
+    expect(calls[0]?.body.model).toBe('claude-sonnet-5');
+  });
+
+  it('sends the chosen effort AS A FIELD — the shared adapter drops unknown request fields', async () => {
+    // The S5 version of this asserted the body contained "max", which matched
+    // `max_completion_tokens`: a false positive while effort never reached the runner.
+    const calls = stubFetch('claude-opus-5-5');
+    const { adapter, choices } = compose();
+    choices.setEffort('max');
+    await adapter.complete(think);
+    expect(calls[0]?.body.effort).toBe('max');
+  });
+
+  it('sends the placeholder and NO effort when nothing is chosen — the pre-task wire', async () => {
+    const calls = stubFetch('claude-opus-5-5');
+    const { adapter } = compose();
+    await adapter.complete(think);
+    expect(calls[0]?.body.model).toBe('claude');
+    expect('effort' in (calls[0]?.body ?? {})).toBe(false);
+  });
+
+  it('reads the choice PER CALL, so a switch lands on the next think (ADR-0036 rule 3)', async () => {
+    const calls = stubFetch('claude-opus-5-5');
+    const { adapter, choices } = compose();
+    choices.setModel('claude-sonnet-5');
+    await adapter.complete(think);
+    choices.setModel('claude-opus-5');
+    await adapter.complete(think);
+    expect(calls.map((c) => c.body.model)).toEqual(['claude-sonnet-5', 'claude-opus-5']);
+  });
+
+  it('teaches the chip the model that ANSWERED, even though the user chose none', async () => {
+    stubFetch('claude-opus-5-5');
+    const { adapter, choices } = compose();
+    await adapter.complete(think);
+    expect(choices.active().model).toBe('claude-opus-5-5');
+  });
+
+  it('records a refusal of the chosen model IN WORDS, and leaves the active model alone', async () => {
+    const message = 'There’s an issue with the selected model (nope-not-a-model). It may not exist or you may not have access to it.';
+    stubFetch('', 502, JSON.stringify({ error: { message } }));
+    const { adapter, choices } = compose();
+    choices.markAnswered('claude-opus-5-5');
+    choices.setModel('nope-not-a-model');
+    const result = await adapter.complete(think);
+    expect(result.ok).toBe(false);
+    expect(choices.active().refusal).toMatch(/nope-not-a-model/);
+    expect(choices.active().model).toBe('claude-opus-5-5');
+  });
+
+  it('does NOT call a network failure a model refusal', async () => {
+    vi.stubGlobal('fetch', async () => {
+      throw new TypeError('Failed to fetch');
+    });
+    const { adapter, choices } = compose();
+    choices.setModel('claude-sonnet-5');
+    await adapter.complete(think);
+    expect(choices.active().refusal).toBeUndefined();
   });
 });

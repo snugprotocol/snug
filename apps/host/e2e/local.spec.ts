@@ -5,6 +5,9 @@
 // token, whether the executor's request actually reaches a provider through the process,
 // and whether the refusals hold against a browser rather than against a fake request.
 
+import fs from 'node:fs';
+import path from 'node:path';
+
 import { expect, test, type Browser } from '@playwright/test';
 import { chromium } from '@playwright/test';
 
@@ -394,4 +397,47 @@ test('TASK-20260922 AC5 — the chip renders the CLI control, and says nothing i
     await expect(page.locator('[data-testid="brain-menu-cli-hint"]')).toContainText(/thinking/i);
     await page.close();
   }, { brain: 'ready' });
+});
+
+test('TASK-20260922 S10 — an APP’s think reaches the brain: chess gets its reply, with a model chosen', async () => {
+  // THE BUG THIS EXISTS FOR (owner's walk, 2026-10-02): S5 routed the brain adapter through
+  // `client.fetchImpl`, the connected-apps proxy, which refuses loopback — so EVERY think on
+  // this binding failed ("the agent went quiet (could not reach the local model endpoint)") and
+  // chess sat on "the agent's move is pending". No leg here drove an app's think through the
+  // real page, so nothing could see it. This one does: real page, real socket, an app iframe,
+  // and the test build's pinned answering brain (deterministic, no API call). Its reply is
+  // "ok" — off-script for chess — so the app plays a legal move FOR it and says so; the "went
+  // quiet" banter is what a broken wire looks like.
+  await withHost(async (harness) => {
+    const page = await browser.newPage();
+    // The starter script, served from the repo (jsDelivr is not reachable from this harness).
+    const chess = path.resolve(process.cwd(), 'starters-pkg/chess.js');
+    await page.route('**/@snugprotocol/starters@*/chess.js', (route) =>
+      route.fulfill({ status: 200, headers: { 'content-type': 'text/javascript; charset=utf-8', 'access-control-allow-origin': '*' }, body: fs.readFileSync(chess) }));
+    const bodies: Record<string, unknown>[] = [];
+    page.on('request', (request) => {
+      if (request.url().endsWith('/v1/chat/completions')) bodies.push(JSON.parse(request.postData() ?? '{}') as Record<string, unknown>);
+    });
+    await page.goto(harness.url);
+    // A choice made earlier, kept on this machine (per-machine, global across apps — ADR-0070).
+    await page.evaluate(() => localStorage.setItem('snug-host:brain-choice', JSON.stringify({ model: 'claude-sonnet-5', effort: 'low' })));
+    await page.reload();
+
+    await page.getByRole('button', { name: 'open chess' }).click();
+    await page.getByTestId('starter-install').click();
+    const app = page.frameLocator('[data-testid="frame-wrap"] iframe[sandbox="allow-scripts"]');
+    await expect(app.getByRole('grid', { name: 'chessboard' })).toBeVisible({ timeout: 30_000 });
+    await app.getByRole('button', { name: /^e2 / }).click();
+    await app.getByRole('button', { name: /^e4 / }).click();
+
+    await expect(app.getByText(/a legal move was played/), 'the think must come BACK — a broken wire reads "the agent went quiet"').toBeVisible({ timeout: 30_000 });
+    await expect(app.getByRole('status').first()).toHaveText(/your move/);
+    // The choice rode the request as exact fields — model AND effort (the shared adapter drops
+    // unknown request fields, so effort once never left the page).
+    expect(bodies[0]).toMatchObject({ model: 'claude-sonnet-5', effort: 'low' });
+    // …and the chip names the model that ANSWERED.
+    await page.getByTestId('brain-chip').click();
+    await expect(page.getByTestId('brain-menu-active')).toContainText('claude-sonnet-5-e2e-resolved');
+    await page.close();
+  }, { brain: 'ready', brainModel: 'claude-sonnet-5-e2e-resolved' });
 });

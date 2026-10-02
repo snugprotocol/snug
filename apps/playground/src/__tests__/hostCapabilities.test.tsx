@@ -383,12 +383,13 @@ describe('the CLI model + effort control (ADR-0070, TASK-20260922 S7)', () => {
     expect(byTestId('brain-menu-cli-hint')?.textContent).toMatch(/next think/i);
   });
 
-  it('S9: lists the CLI\u2019s own models by display name, with the default first and an other\u2026 rung', async () => {
+  it('S9/S10: lists the CLI\u2019s own models by display name, default first, and NO other\u2026 rung (owner, 2026-10-02)', async () => {
     const g = await fresh(withCli(fakeCliSeat({})));
     await render(<g.BrainChip />);
     await click(byTestId('brain-chip'));
     const options = Array.from((byTestId('brain-menu-model-select') as HTMLSelectElement).options);
-    expect(options.map((o) => o.textContent)).toEqual(['the CLI\u2019s default', 'Opus 5.5', 'Haiku 4.5', 'other\u2026']);
+    // No `other\u2026`: it swapped the dropdown for a text field with no way back (owner's walk).
+    expect(options.map((o) => o.textContent)).toEqual(['the CLI\u2019s default', 'Opus 5.5', 'Haiku 4.5']);
     // The VALUES are the exact ids, which is what makes a typo impossible.
     expect(options[1]?.value).toBe('claude-opus-5-5');
   });
@@ -404,20 +405,6 @@ describe('the CLI model + effort control (ADR-0070, TASK-20260922 S7)', () => {
       select.dispatchEvent(new Event('change', { bubbles: true }));
     });
     expect(seat.models_).toContain('claude-haiku-4-5-20251001');
-  });
-
-  it('S9: other\u2026 swaps in the free-text field, for a model the catalogue does not list', async () => {
-    const g = await fresh(withCli(fakeCliSeat({})));
-    await render(<g.BrainChip />);
-    await click(byTestId('brain-chip'));
-    expect(byTestId('brain-menu-model')).toBeNull();
-    const select = byTestId('brain-menu-model-select') as HTMLSelectElement;
-    await act(async () => {
-      select.value = '\u0000other';
-      select.dispatchEvent(new Event('change', { bubbles: true }));
-    });
-    expect(byTestId('brain-menu-model')).not.toBeNull();
-    expect(byTestId('brain-menu-model-select')).toBeNull();
   });
 
   it('S9: with NO catalogue the model control is free text alone, never an empty dropdown', async () => {

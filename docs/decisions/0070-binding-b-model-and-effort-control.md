@@ -56,3 +56,9 @@ The child is spawned `--tools '' --disallowedTools '*' --max-turns 1 --no-sessio
 - Switching model or effort costs a warm-up, which the chip states.
 - The other CLIs (`codex`, `hermes`, `openclaw`, `ollama`) are untouched; `BrainSpec` does not make them harder, but nothing here claims to serve them.
 - Transcript continuation and multi-turn or tool-using brains remain out of scope: that is a posture change, and it needs its own task and ADR rather than arriving through a model picker.
+
+## Amendment — 2026-10-02 (S9, S10; the owner's walks)
+
+- **The model control is a dropdown of the CLI's own catalogue**, read by the process from `~/.claude/cache/model-catalog/*.json` (the `main` section, exact ids). Not a web search: the brain cannot search (`--tools ''` is what makes it single-turn — C1, AC7), and the catalogue's ids are exact where a search's would be prose. It is an internal cache, so every read fails soft; free text remains only as the whole control when no catalogue can be read. **There is no `other…` rung** (owner, 2026-10-02).
+- **Effort follows the catalogue's per-model thinking axis**: a model without one (Haiku 4.5) gets no effort control and no `--effort`.
+- **The brain adapter reaches its own runner with the page's own `fetch`, never through `client.fetchImpl`.** That seam is the connected-apps network proxy, which refuses loopback by design; routing the brain through it broke every think on this binding (S5 → S10). The resolved model comes from the adapter's own result, not from re-reading the response.
