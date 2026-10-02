@@ -301,3 +301,62 @@ describe('the brain reaches its own runner DIRECTLY — never through the connec
     expect(choices.active().refusal).toBeUndefined();
   });
 });
+
+describe('the chip label follows the model (S11)', () => {
+  const CATALOGUE = [
+    { id: 'claude-opus-5-5', name: 'Opus 5.5', effort: true },
+    { id: 'claude-sonnet-5', name: 'Sonnet 5', effort: true },
+  ];
+  afterEach(() => {
+    brainState.current = undefined;
+  });
+  const composeWith = (choices: ReturnType<typeof createBrainChoiceStore>, models: readonly (typeof CATALOGUE)[number][] = CATALOGUE) => {
+    brainState.current = { state: 'ready' };
+    const { platform } = composeLocalPlatform(client, status({ models }), undefined, undefined, 't', choices);
+    return platform;
+  };
+
+  it('names the SELECTED model by its catalogue display name', () => {
+    const choices = createBrainChoiceStore({ storage: undefined });
+    choices.setModel('claude-sonnet-5');
+    expect(labelOf(composeWith(choices).brain)).toBe('Claude · Sonnet 5');
+  });
+
+  it('follows a switch with no recompose — the platform is set once', () => {
+    const choices = createBrainChoiceStore({ storage: undefined });
+    choices.setModel('claude-sonnet-5');
+    const platform = composeWith(choices);
+    choices.setModel('claude-opus-5-5');
+    expect(labelOf(platform.brain)).toBe('Claude · Opus 5.5');
+  });
+
+  it('with NOTHING selected, names the model the CLI actually ran once a think has answered', () => {
+    const choices = createBrainChoiceStore({ storage: undefined });
+    const platform = composeWith(choices);
+    expect(labelOf(platform.brain)).toBe('Claude · your CLI');
+    // The CLI reports its default with a context suffix (measured: `claude-opus-5-5[1m]`).
+    choices.markAnswered('claude-opus-5-5[1m]');
+    expect(labelOf(platform.brain)).toBe('Claude · Opus 5.5');
+  });
+
+  it('shows the id itself for a model the catalogue does not list', () => {
+    const choices = createBrainChoiceStore({ storage: undefined });
+    choices.setModel('claude-some-future-model');
+    expect(labelOf(composeWith(choices).brain)).toBe('Claude · claude-some-future-model');
+  });
+
+  it('shows the id when no catalogue could be read at all', () => {
+    const choices = createBrainChoiceStore({ storage: undefined });
+    choices.setModel('claude-sonnet-5');
+    // An EMPTY list is how "no catalogue" arrives from the process (`/status.models` is always present).
+    expect(labelOf(composeWith(choices, []).brain)).toBe('Claude · claude-sonnet-5');
+  });
+
+  it('keeps the REMEDY when the CLI cannot think, even with a model selected', () => {
+    const choices = createBrainChoiceStore({ storage: undefined });
+    choices.setModel('claude-sonnet-5');
+    const platform = composeWith(choices);
+    brainState.current = { state: 'logged-out' };
+    expect(labelOf(platform.brain)).toMatch(/\/login/);
+  });
+});

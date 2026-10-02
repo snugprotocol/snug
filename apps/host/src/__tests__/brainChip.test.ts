@@ -205,3 +205,24 @@ describe('the model dropdown comes from the CLI’s catalogue (S9)', () => {
     expect(cliModelSeat({ brain: { state: 'ready' }, choices, models: MODELS })?.effortApplies).toBe(true);
   });
 });
+
+describe('the chip label names the model, not "your CLI" (S11, owner 2026-10-02)', () => {
+  it('names the model it is given when the CLI is ready', () => {
+    expect(brainLabel({ state: 'ready' }, 'Sonnet 5')).toBe('Claude · Sonnet 5');
+  });
+
+  it('keeps "your CLI" when there is no model to name yet', () => {
+    expect(brainLabel({ state: 'ready' }, undefined)).toBe('Claude · your CLI');
+  });
+
+  it('never trades a REMEDY for a model name — a broken CLI is not "Claude · Sonnet 5"', () => {
+    expect(brainLabel({ state: 'logged-out' }, 'Sonnet 5')).toMatch(/\/login/);
+    expect(brainLabel({ state: 'outdated' }, 'Sonnet 5')).toMatch(/claude update/);
+    expect(brainLabel({ state: 'absent' }, 'Sonnet 5')).toMatch(/code\.claude\.com/);
+    expect(brainLabel({ state: 'unknown' }, 'Sonnet 5')).toMatch(/could not check/);
+  });
+
+  it('names nothing before the probe answers — absence is not a claim the CLI works', () => {
+    expect(brainLabel(undefined, 'Sonnet 5')).toBe('Claude · your CLI');
+  });
+});

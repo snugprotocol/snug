@@ -88,7 +88,12 @@ export const brainState: { current?: { state: string; detail?: string } } = {};
  */
 export const modelsFromStatus: { current?: readonly CliModelOption[] } = {};
 
-export function brainLabel(brain: { state: string; detail?: string } | undefined): string {
+/**
+ * @param model the model to name on a READY chip (S11, owner 2026-10-02: "replace 'your CLI'
+ *   with the current selected model"). Ignored in every other state: a remedy is never traded
+ *   for a model name, and before the probe answers nothing is claimed at all.
+ */
+export function brainLabel(brain: { state: string; detail?: string } | undefined, model?: string): string {
   switch (brain?.state) {
     case 'logged-out':
       // The remedy IS the label: a chip that only says "unavailable" makes the user hunt.
@@ -103,6 +108,8 @@ export function brainLabel(brain: { state: string; detail?: string } | undefined
       return 'Claude · your CLI — out of date, run `claude update`';
     case 'unknown':
       return 'Claude · your CLI — could not check';
+    case 'ready':
+      return model === undefined || model === '' ? 'Claude · your CLI' : `Claude · ${model}`;
     default:
       return 'Claude · your CLI';
   }
@@ -233,6 +240,23 @@ export function cliModelSeat(input: {
 }
 
 /**
+ * The model the chip names (S11). The SELECTED model — it is what the next think carries; with
+ * nothing selected, the model the CLI actually ran once a think has answered; before that,
+ * nothing (the chip keeps "your CLI"). Shown by the catalogue's display name where it lists the
+ * id ("Sonnet 5"), else the id itself. The CLI reports its default with a context suffix
+ * (measured: `claude-opus-5-5[1m]`), so the suffix is ignored for the lookup.
+ *
+ * The popover's active line is unchanged and still says what ANSWERED (ADR-0059 rule 2): a
+ * selection the CLI then refuses shows the refusal there, in words.
+ */
+function chipModelName(choices: BrainChoiceStore, models: readonly CliModelOption[] | undefined): string | undefined {
+  const id = choices.choice().model ?? choices.active().model;
+  if (id === undefined) return undefined;
+  const bare = id.replace(/\[[^\]]*\]$/, '');
+  return (models ?? []).find((model) => model.id === bare)?.name ?? id;
+}
+
+/**
  * Add the user's thinking level to the chat request's JSON body. The shared OpenAI adapter
  * builds that body from a fixed set of fields, so a level put on the REQUEST object is silently
  * dropped (it was, from S5 until the owner's walk). Undefined = the body is left byte-identical.
@@ -308,7 +332,7 @@ export function composeLocalPlatform(
               // a getter over a mutable holder lets a late verdict reach the user without
               // touching the singleton.
               get label(): string {
-                return brainLabel(brainState.current ?? status.brain);
+                return brainLabel(brainState.current ?? status.brain, chipModelName(brainChoices, modelsFromStatus.current ?? status.models));
               },
               // The adapter is rebuilt PER CALL, not once: `localAdapter` takes a static
               // model, and a value read at composition time would freeze the user's choice
