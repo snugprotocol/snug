@@ -4,6 +4,16 @@
 // title — TASK-20260821-site-playground-polish AC3); on the desktop
 // platform the same tile is simply enabled, with no limitation badge at all.
 // Labeling only — no Hue connector is built here.
+//
+// MIGRATED (TASK-20261003 S2, ADR-0072 §4 — named in the plan). The lock is no longer a
+// `desktopOnly` flag read against `kind !== 'desktop'`; it is derived from the connection
+// the starter declares against the SEATS the platform carries. Two consequences here:
+//   - the web badge is byte-for-byte what it was, but its reason is now the starter's own
+//     (pinned below for hue; `hubAvailability.test.tsx` pins the other two);
+//   - the desktop fixture carries the LAN seats the real shell carries. A platform merely
+//     NAMED desktop no longer unlocks anything, so the old seatless fixture would now
+//     describe a shell that cannot reach a LAN device — and assert "enabled" about a tile
+//     that is aria-disabled (which `open.disabled` alone cannot see).
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router-dom';
@@ -20,6 +30,17 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 interface Harness {
   HubView: typeof import('../views/HubView.js')['HubView'];
 }
+
+const seat = (async () => new Response('')) as never;
+
+/** The desktop shell as it ships: the transport and the LAN pair (apps/desktop platform-desktop.ts). */
+const desktopPlatform = (): SnugPlatform => ({
+  kind: 'desktop',
+  capabilities: { subscriptionMode: false, hubSyncOrigin: false, lanHttpPrivate: true },
+  fetchImpl: seat,
+  lanFetch: seat,
+  lanPair: seat,
+});
 
 async function fresh(platform?: SnugPlatform): Promise<Harness> {
   vi.resetModules();
@@ -70,7 +91,7 @@ function starterTile(name: string): HTMLElement | undefined {
 
 const hueTile = (): HTMLElement | undefined => starterTile('hue');
 
-describe('the Hue (desktopOnly) starter tile', () => {
+describe('the Hue (LAN) starter tile', () => {
   it('web: greyed out, not clickable, with the plain download copy', async () => {
     const harness = await fresh();
     await renderHub(harness);
@@ -83,7 +104,10 @@ describe('the Hue (desktopOnly) starter tile', () => {
     // the long "needs the desktop app — free download" copy read as an ad; the title
     // still carries the full explanation on hover.
     expect(badge!.textContent?.trim().toLowerCase()).toBe('desktop');
-    expect(badge!.getAttribute('title') ?? '').not.toBe('');
+    // The reason TEXT is hue's own now — the home network — after the same lead-in as before.
+    expect(badge!.getAttribute('title')).toBe(
+      'needs the Snug desktop app (a free download) — it talks to a device on your home network, and this host cannot reach your home network',
+    );
     // ADR-0047 (TASK-20260821 AC12): the badge is now the LINK to the download page —
     // "free download" copy with nowhere to click was an unkept promise.
     expect(badge!.tagName).toBe('A');
@@ -93,10 +117,7 @@ describe('the Hue (desktopOnly) starter tile', () => {
   });
 
   it('desktop: enabled, no limitation badge', async () => {
-    const harness = await fresh({
-      kind: 'desktop',
-      capabilities: { subscriptionMode: false, hubSyncOrigin: false, lanHttpPrivate: true },
-    });
+    const harness = await fresh(desktopPlatform());
     await renderHub(harness);
 
     const tile = hueTile();
@@ -104,6 +125,9 @@ describe('the Hue (desktopOnly) starter tile', () => {
     expect(tile!.querySelector('[data-testid="desktop-only-badge"]')).toBeNull();
     const open = tile!.querySelector<HTMLButtonElement>('.tile-card-button');
     expect(open?.disabled).toBe(false);
+    // Enabled in BOTH senses: off the web a blocked tile is aria-disabled, not `disabled`.
+    expect(open?.getAttribute('aria-disabled')).toBeNull();
+    expect(tile!.querySelector('[data-testid="tile-blocked-reason"]')).toBeNull();
   });
 
   it('an ordinary starter stays enabled on web (the labeling is hue-scoped)', async () => {
@@ -119,8 +143,8 @@ describe('the Hue (desktopOnly) starter tile', () => {
 // TASK-20260822-gmail-dual-mode (ADR-0049): gmail's lock reason DISSOLVED. The old row
 // comment was honest — a Desktop-app OAuth client cannot register the web origin — but
 // the registry now vouches for a web path (webRedirectPosture: 'origin-callback' + the
-// "Web application" walkthrough), so the tile unlocks. The OTHER desktopOnly rows keep
-// their locks: their reasons are transport facts (Coinbase no-CORS, Hue LAN, WhatsApp
+// "Web application" walkthrough), so the tile unlocks. The OTHER three starters keep
+// their web locks: their reasons are transport facts (Coinbase no-CORS, Hue LAN, WhatsApp
 // unix socket) no client registration can dissolve.
 describe('the gmail starter tile is dual-mode (ADR-0049)', () => {
   it('web: enabled, no desktop-only badge — AND the registry web seat that justifies the unlock exists', async () => {
@@ -132,12 +156,13 @@ describe('the gmail starter tile is dual-mode (ADR-0049)', () => {
     expect(tile!.querySelector('[data-testid="desktop-only-badge"]')).toBeNull();
     expect(tile!.querySelector<HTMLButtonElement>('.tile-card-button')?.disabled).toBe(false);
 
-    // THE TRIPWIRE (Gate-5 review): the tile's unlock (STARTER_LOOKS) and the wizard's
-    // web walkthrough (the registry's web seats) are keyed on DIFFERENT data with no
-    // shared invariant — desktopOnly was the only web-side gate, and the web wizard
-    // never refuses OAuth postures. Binding them here means a future registry edit
-    // that drops gmail's web seat cannot leave the tile silently unlocked in front of
-    // a wizard that would render desktop-client instructions no web user can complete.
+    // THE TRIPWIRE (Gate-5 review): the tile's unlock (now the availability derivation
+    // — gmail needs the network and an OAuth redirect, both of which the web offers) and
+    // the wizard's web walkthrough (the registry's web seats) are keyed on DIFFERENT
+    // data with no shared invariant, and the web wizard never refuses OAuth postures.
+    // Binding them here means a future registry edit that drops gmail's web seat cannot
+    // leave the tile silently unlocked in front of a wizard that would render
+    // desktop-client instructions no web user can complete.
     const { lookupWellKnownProvider } = await import('@snugprotocol/auth');
     expect(
       lookupWellKnownProvider('gmail')?.webRedirectPosture,
@@ -146,10 +171,7 @@ describe('the gmail starter tile is dual-mode (ADR-0049)', () => {
   });
 
   it('desktop: still enabled (the unlock is additive, not a move)', async () => {
-    const harness = await fresh({
-      kind: 'desktop',
-      capabilities: { subscriptionMode: false, hubSyncOrigin: false, lanHttpPrivate: true },
-    });
+    const harness = await fresh(desktopPlatform());
     await renderHub(harness);
 
     const tile = starterTile('gmail');
@@ -158,7 +180,7 @@ describe('the gmail starter tile is dual-mode (ADR-0049)', () => {
     expect(tile!.querySelector<HTMLButtonElement>('.tile-card-button')?.disabled).toBe(false);
   });
 
-  // The lock-stays half (other desktopOnly rows keep their badge on web) is already
-  // pinned by the Hue suite above — trade-copilot is not on the vitest shelf, so a row
-  // of its own here could only assert against a tile that does not render.
+  // The lock-stays half (the other web-locked starters keep their badge) is pinned by the
+  // Hue suite above, and for Trade Copilot and Telepath — each with its own reason — by
+  // `hubAvailability.test.tsx`.
 });

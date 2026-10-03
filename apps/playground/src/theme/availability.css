@@ -1,3 +1,437 @@
 /* availability.css — the capability-true shelf (TASK-20261003 R3, ADR-0072 §4): blocked tiles,
    their reason, the blocked run route, the host passport. Imported once from app.css; colors
-   come from tokens.css only. */
+   come from tokens.css only.
+
+   SPECIFICITY NOTE. This sheet is @imported at the TOP of app.css, so every rule here comes
+   BEFORE app.css in source order and loses a tie. Wherever a rule below adjusts something
+   app.css already styles (the tile, the chip, the popover) it is written one class heavier
+   on purpose — `.app-tile.is-blocked …`, `.identity-menu.host-passport-menu` — rather than
+   relying on order. */
+
+/* ---------------------------------------------------------------- the blocked tile
+
+   "This exists, and here is what it needs" — never "this is broken". So nothing here is red
+   and nothing is hidden: the tile recedes (a dashed edge, a thinner colour wash, a desaturated
+   icon), the app's name stays readable, the reason is a quiet pill, and the one thing with
+   the accent colour is where the app DOES run. The web shelf's `desktop` badge is not this:
+   it keeps the rendering it has always had (app.css `.tile-desktop-badge`). */
+
+.app-tile.is-blocked {
+  cursor: default;
+  border-style: dashed;
+  background: color-mix(in srgb, var(--surface) 55%, var(--bg));
+  box-shadow: none;
+}
+
+.app-tile.is-blocked::before {
+  opacity: 0.07;
+}
+
+.app-tile.is-blocked .tile-card-button {
+  cursor: default;
+}
+
+.app-tile.is-blocked .tile-emoji {
+  filter: saturate(0.4);
+  opacity: 0.9;
+}
+
+/* Still the app's own name, at a contrast that passes AA on both surfaces — only quieter
+   than a tile you can open. */
+.app-tile.is-blocked .tile-name {
+  color: color-mix(in srgb, var(--fg) 78%, var(--surface));
+}
+
+.tile-blocked {
+  /* Above the tile's colour wash and its stretched control, like .tile-confirm: without a
+     level of its own the link inside would sit under the button's hit area. */
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+}
+
+.tile-blocked-reason {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  max-width: 100%;
+  padding: 3px var(--space-2);
+  border: 1px solid var(--border-strong);
+  /* --radius-m, not the pill radius: on a 220px tile the longest reason may take two lines,
+     and a fully round end on a two-line box reads as a blob. One line still looks like a pill. */
+  border-radius: var(--radius-m);
+  background: var(--surface-2);
+  color: var(--fg-muted);
+  font-size: var(--text-xs);
+  line-height: 1.3;
+}
+
+.need-glyph {
+  flex: none;
+}
+
+.runs-in {
+  color: var(--fg-muted);
+}
+
+.runs-in-link {
+  /* A text-size link is a small target on glass: the padding widens the hit area to 28px and
+     the equal negative margin gives the layout back, so the line does not grow. */
+  display: inline-block;
+  padding: 6px 2px;
+  margin: -6px -2px;
+  color: var(--ember-bright);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--ember) 45%, transparent);
+  text-underline-offset: 3px;
+  transition:
+    color var(--dur-1) var(--ease-out),
+    text-decoration-color var(--dur-1) var(--ease-out);
+}
+
+.runs-in-link:hover {
+  color: var(--ember);
+  text-decoration-color: currentColor;
+}
+
+/* Measured: --ember-bright on the light tile is 2.7:1 — fine for a 2rem headline, not for
+   12px text. --ember-deep is 5.3:1 there. (Dark keeps the bright step: 8.6:1.) */
+:root[data-theme='light'] .runs-in-link,
+:root[data-theme='light'] .run-blocked-back {
+  color: var(--ember-deep);
+}
+
+/* A blocked INSTALLED tile's door to its own run route — the route explains the block and
+   keeps the run header, so it is where a blocked app is exported from (orchestrator decision,
+   2026-10-03). QUIET on purpose: the one accent on this tile belongs to where the app DOES
+   run, so this is the note's own muted text with an underline — plainly a link, plainly not
+   the answer. `margin-left: auto` sends it to the end of its row, so it never reads as one
+   more place in the "runs in" list.
+
+   The same hit-area trick as .runs-in-link: the padding is the target and the negative margin
+   gives the layout back. Measured in Chromium at a 375px viewport (2026-10-03): a 45×30px
+   target that a hit-test lands on at its centre and all four corners, inside the tile, with
+   no horizontal scroll. No taller than that on purpose — when the link wraps under "runs in
+   Snug for Mac" the two targets already share a 5px band of padding (each link's own text
+   still answers for itself), and a full --tap would reach over that link's words. */
+.tile-blocked-details {
+  display: inline-block;
+  padding: 6px var(--space-1);
+  margin: -6px calc(-1 * var(--space-1)) -6px auto;
+  color: var(--fg-muted);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--fg-muted) 55%, transparent);
+  text-underline-offset: 3px;
+  transition:
+    color var(--dur-1) var(--ease-out),
+    text-decoration-color var(--dur-1) var(--ease-out);
+}
+
+.tile-blocked-details:hover {
+  color: var(--fg);
+  text-decoration-color: currentColor;
+}
+
+/* ---------------------------------------------------------------- the blocked run route
+
+   Sits in the frame's own slot (.frame-wrap), so the run header above it is untouched. A
+   column with an auto-margined card rather than a centred grid: when the card is taller than
+   the slot (a phone in landscape) auto margins collapse and the top stays reachable, where
+   `place-items: center` would push it out of the scroll range. */
+
+.run-blocked {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  padding: var(--space-5) var(--space-4);
+  background: radial-gradient(120% 70% at 50% 0%, var(--ember-glow), transparent 62%);
+}
+
+.run-blocked-card {
+  margin: auto;
+  width: 100%;
+  max-width: 30rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  /* --space-5, not -6: in an 820px-tall window a card with two blockers (Trade Copilot under
+     an artifact) ran past the bottom of the frame slot at -6 and fits at -5 (screenshots,
+     2026-10-03). It scrolls either way; fitting is the better first impression. */
+  padding: var(--space-5);
+  text-align: center;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-l);
+  box-shadow: var(--inner-glow), var(--shadow-soft);
+  animation: run-blocked-in 180ms var(--ease-out) both;
+}
+
+@keyframes run-blocked-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.run-blocked-emoji {
+  width: 64px;
+  height: 64px;
+  display: grid;
+  place-items: center;
+  font-size: 2rem;
+  border-radius: var(--radius-l);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  filter: saturate(0.55);
+}
+
+.run-blocked-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--text-l);
+  font-weight: 700;
+  line-height: 1.25;
+  color: var(--fg);
+  text-wrap: balance;
+  overflow-wrap: anywhere;
+}
+
+.run-blocked-needs {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.run-blocked-need {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.run-blocked-sentence {
+  max-width: 40ch;
+  color: var(--fg-muted);
+  font-size: var(--text-s);
+  line-height: 1.55;
+  text-wrap: pretty;
+}
+
+.run-blocked-runs-in {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border);
+}
+
+.run-blocked-runs-in-lead {
+  font-size: var(--text-xs);
+  letter-spacing: 0.04em;
+  color: var(--fg-muted);
+}
+
+.run-blocked-runs-in ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.run-blocked-place {
+  font-size: var(--text-s);
+  color: var(--fg-muted);
+}
+
+.run-blocked-place strong {
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.run-blocked-back {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--tap);
+  font-size: var(--text-s);
+  color: var(--ember-bright);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--ember) 45%, transparent);
+  text-underline-offset: 3px;
+  transition:
+    color var(--dur-1) var(--ease-out),
+    text-decoration-color var(--dur-1) var(--ease-out);
+}
+
+.run-blocked-back:hover {
+  text-decoration-color: currentColor;
+}
+
+/* ---------------------------------------------------------------- the host passport
+
+   The third chip on the header's chip row (host platforms only). It borrows the brain chip's
+   shape and the identity menu's popover so the three read as one family, and adds only what
+   is its own: the glyph, and the yes/no rows. A "no" is information, not a fault — its mark
+   is muted, never the danger colour. */
+
+.brain-chip.host-passport-chip {
+  gap: var(--space-1);
+}
+
+.host-passport-glyph {
+  flex: none;
+}
+
+.identity-menu.host-passport-menu {
+  width: max-content;
+  max-width: min(340px, calc(100vw - 24px));
+  animation: host-passport-in 160ms var(--ease-out) both;
+}
+
+@keyframes host-passport-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.host-passport-rows {
+  list-style: none;
+  margin: 0;
+  padding: var(--space-1) var(--space-2) var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.host-passport-row {
+  display: grid;
+  grid-template-columns: 1.25rem minmax(0, 1fr);
+  gap: var(--space-2);
+  align-items: start;
+}
+
+.host-passport-mark {
+  width: 1.25rem;
+  height: 1.25rem;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  font-size: 0.7rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.host-passport-row[data-can='true'] .host-passport-mark {
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 16%, transparent);
+}
+
+.host-passport-row[data-can='false'] .host-passport-mark {
+  color: var(--fg-muted);
+  /* --surface-2, not -3: the muted mark is 4.9:1 on it in the light theme, 4.4:1 on -3. */
+  background: var(--surface-2);
+}
+
+.host-passport-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.host-passport-name {
+  font-size: var(--text-s);
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.host-passport-row[data-can='false'] .host-passport-name {
+  color: var(--fg-muted);
+}
+
+.host-passport-sentence {
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  color: var(--fg-muted);
+  overflow-wrap: anywhere;
+}
+
+/* ---------------------------------------------------------------- narrow hosts
+
+   An artifact pane is often narrower than a phone, so this is the common case for the
+   passport, not the edge. Two things have to hold at 375px:
+
+   1. THE POPOVER FITS. A popover hung off its own chip (right: 0 of a chip in the middle of
+      the row) starts left of the screen edge. So below the shell's compaction breakpoint the
+      wrap stops being the positioning context and the popover hangs off the HEADER instead —
+      `.shell-header` is sticky, which makes it a containing block — spanning it with a 12px
+      gutter each side.
+
+   2. THE HEADER ROW DOES NOT GROW. app.css keeps the nav on one row (the run view derives its
+      height from that row), and at 375px it has no slack to give: "demo brain" alone overflowed
+      it by 7px, and on the kit's row (which also carries the your-file chip) the wordmark was
+      already squeezed to 5px wide before this chip existed (measured in Chromium at a 375px
+      viewport, 2026-10-03). The passport's compact chip is 24px wide, and the row pays for it
+      by trimming each nav link's side padding from 8px to 4px — only on a host that shows the
+      passport, so web and desktop are untouched. Measured after: no horizontal scroll, and
+      the wordmark has 21px. */
+
+@media (max-width: 760px) {
+  .identity-menu-wrap.host-passport-wrap {
+    position: static;
+  }
+
+  .identity-menu.host-passport-menu {
+    top: calc(100% + var(--space-2));
+    left: 12px;
+    right: 12px;
+    width: auto;
+    max-width: none;
+    /* Six rows are 424–460px tall at 375px wide (measured); a landscape phone is shorter. */
+    max-height: calc(100dvh - 5rem);
+    overflow-y: auto;
+  }
+
+  .brain-chip.host-passport-chip {
+    min-width: 24px;
+    justify-content: center;
+    padding: 0 var(--space-1);
+  }
+
+  .shell-nav:has(.host-passport-chip) .nav-link {
+    padding-inline: var(--space-1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .run-blocked-card,
+  .identity-menu.host-passport-menu {
+    animation: none;
+  }
+}

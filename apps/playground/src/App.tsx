@@ -45,6 +45,7 @@ import { ReportErrorLink } from './feedback/ReportErrorLink.js';
 import { Skeleton } from './ui/Skeleton.js';
 import { useDismissableMenu } from './ui/useDismissableMenu.js';
 import { BrainChip } from './views/BrainChip.js';
+import { HostPassport } from './views/HostPassport.js';
 import { YourFileChip } from './views/YourFileChip.js';
 import { BuilderView } from './views/BuilderView.js';
 import { DownloadView } from './views/DownloadView.js';
@@ -210,6 +211,9 @@ export function App(): ReactElement {
           {/* D8 / ADR-0065 §5: beside the brain, where the user's FILE lives in this host —
               renders only where the platform carries a custody seat (the host kit). */}
           <YourFileChip />
+          {/* ADR-0072 §4: what THIS host can and cannot do, from the table the shelf obeys —
+              host platforms only (web and desktop render nothing here). */}
+          <HostPassport />
           {/* ADR-0052: the ONE persistent feedback affordance — quiet, no badge. */}
           <FeedbackMenu />
           {/* ADR-0047 §9: a header WHISPER when a shell update is in play — desktop

@@ -9,7 +9,7 @@
 // running and has announced itself.
 //
 // The fix keeps the FOLDER as the identity (install_source, STARTER_LOOKS keys and the
-// desktopOnly gate all key on it) and adds an optional display name to the look row. This
+// availability verdict all key on it) and adds an optional display name to the look row. This
 // suite pins the two halves that matter: the rendered label, and the identity attribute
 // staying folder-shaped so nothing downstream re-keys on a human string.
 import { act } from 'react';
@@ -97,7 +97,7 @@ describe('starter tiles carry the app name, keyed by folder', () => {
   it('keeps the IDENTITY attribute folder-shaped — install_source keys on it', async () => {
     await renderHub();
     // If this ever became the display name, the install_source identity rule and the
-    // desktopOnly gate would silently re-key on a human string.
+    // availability verdict would silently re-key on a human string.
     expect(tileFor('whatsapp')?.getAttribute('data-starter-name')).toBe('whatsapp');
     expect(tileFor('hue')?.getAttribute('data-starter-name')).toBe('hue');
   });

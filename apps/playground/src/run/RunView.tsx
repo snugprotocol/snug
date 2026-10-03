@@ -38,7 +38,8 @@ import { hostReadyStreaming, useBrain, useTurnMode } from '../state/webllm.js';
 import { getUserDb } from '../state/userdb.js';
 import { toggleTheme, useTheme } from '../state/theme.js';
 import { toggleRailShown, useRailShown } from '../state/railLayout.js';
-import { STARTER_PREFIX, isStarterId, listStarterApps, loadStarterHtml, starterInstallSource } from '../starter/starterApps.js';
+import { STARTER_PREFIX, isStarterId, listStarterApps, loadStarterHtml, starterInstallSource, starterRequirement } from '../starter/starterApps.js';
+import { starterLook } from '../starter/starterLooks.js';
 import { createConsentGateTransport } from '../share/consentTransport.js';
 import { applySharedUpdate, installSharedEntry, installedCopyForBundle, type InstalledCopyForBundle } from '../share/installShared.js';
 import { ConfirmOverlay } from '../ui/ConfirmOverlay.js';
@@ -47,6 +48,7 @@ import { SharedDocsPanel } from '../share/SharedDocsPanel.js';
 import { SharedUpdateControls } from '../share/SharedUpdateControls.js';
 import { bundleIdFromSharedRouteId, getSharedEntry, isSharedId, isUnownedId, sharedInboxStore } from '../share/sharedInbox.js';
 import { desktopLinkFor } from '../share/relayClient.js';
+import { availabilityOf, needsOfConnections, needsOfRequirement, offersOf, type AppNeed } from '../platform/availability.js';
 import { getPlatform, allows } from '../platform/platform.js';
 import { installStarterConnections, starterDeclarationForStarterId } from '../starter/starterDeclaration.js';
 import { installStarterRuntimeContract } from '../starter/starterRuntimeContract.js';
@@ -71,6 +73,7 @@ import { initialInspectorState, inspectorReduce, type InspectorState } from './i
 import { useMediaQuery } from './useMediaQuery.js';
 import { isNamedLoadRefusal, missingAppCopy, starterInstallDisclosureTail } from './copy.js';
 import { sqlJsEngineOptions } from './sqlJsEngine.js';
+import { RunBlocked } from '../views/AvailabilityNote.js';
 import { ChatLog } from '../views/ChatLog.js';
 
 type HtmlState = { phase: 'loading' } | { phase: 'ready'; html: string } | { phase: 'missing'; reason?: string };
@@ -453,12 +456,20 @@ export default function RunView(): ReactElement {
    * `helperNeedsInstall` is the single rule; web (no seat) never sets it.
    */
   const [helperWanted, setHelperWanted] = useState(false);
+  /**
+   * What an OWNED app asks of its host, from the same rows (S3, ADR-0072 §4). Keyed by the
+   * id it was read for: the route element is not keyed by id, so `/run/A` → `/run/B` would
+   * otherwise judge B by A's rows for a render — long enough to mount a frame the verdict
+   * was about to refuse. `undefined` until the rows are read, and the frame waits for it.
+   */
+  const [rowNeeds, setRowNeeds] = useState<{ id: string; needs: readonly AppNeed[] } | undefined>(undefined);
   useEffect(() => {
     let cancelled = false;
     void getUserDb().then(async (db) => {
       const rows = db.listConnections(id);
       if (cancelled) return;
       setConnectionSlots(rows.length);
+      setRowNeeds({ id, needs: needsOfConnections(rows) });
       if (rows.some((row) => row.requirement.kind === 'linked_device')) {
         const status = await refreshHelperStatus(WHATSAPP_HELPER);
         if (!cancelled) setHelperWanted(helperNeedsInstall(status));
@@ -706,6 +717,37 @@ export default function RunView(): ReactElement {
   const meta = reveal.phase === 'live' ? reveal.meta : undefined;
   const stageStyle = { '--app-color': meta?.iconColor ?? 'var(--ember)' } as CSSProperties;
 
+  /**
+   * CAN THIS HOST RUN IT? (S3, ADR-0072 §4.) The same verdict the tile shows, taken again
+   * HERE because a route is reachable without a tile: `#/run/starter--hue` used to walk
+   * straight past the shelf's lock. A starter's needs come from the connection it declares
+   * (synchronous — the answer is in the first render); an owned app's from its rows, and
+   * until those are read the verdict is `undefined` and the frame does not mount. A shared
+   * preview is not judged here: it has no row and no net handler until it is installed,
+   * and the copy it installs is judged like any owned app.
+   */
+  const needs: readonly AppNeed[] | undefined = isStarterId(id)
+    ? needsOfRequirement(starterRequirement(id))
+    : isSharedId(id)
+      ? []
+      : rowNeeds?.id === id
+        ? rowNeeds.needs
+        : undefined;
+  const verdict = needs === undefined ? undefined : availabilityOf(needs, offersOf(getPlatform()));
+  /**
+   * The blocked app's identity. Its frame never mounts, so it never announces: the name and
+   * emoji come from where the shelf got them — the starter's look, or the stored app meta.
+   */
+  const blocked = (() => {
+    if (verdict === undefined || verdict.ok) return undefined;
+    if (isStarterId(id)) {
+      const look = starterLook(id.slice(STARTER_PREFIX.length));
+      return { blockers: verdict.blockers, name: look.name ?? fallbackName ?? 'this starter', emoji: look.emoji };
+    }
+    const stored = getAppMeta(id);
+    return { blockers: verdict.blockers, name: stored?.displayName ?? fallbackName ?? 'this app', emoji: stored?.iconEmoji ?? '⬡' };
+  })();
+
   const railContent = (
     <>
       <div className="seg seg-icons" role="group" aria-label="rail tabs" style={{ margin: '0 0 var(--space-3)' }}>
@@ -877,15 +919,17 @@ export default function RunView(): ReactElement {
                 {meta.description !== undefined ? <div className="run-desc">{meta.description}</div> : null}
               </div>
             </div>
-          ) : announceTimedOut ? (
+          ) : announceTimedOut || blocked !== undefined ? (
             // The app never announced — plain library-name header, no shimmer, and no
-            // reveal animation (that stays reserved for genuine announces).
+            // reveal animation (that stays reserved for genuine announces). A BLOCKED app
+            // lands here at once: its frame never mounts, so the "connecting…" shimmer
+            // below would wait for an announce that cannot come.
             <div className="run-identity">
               <span className="run-emoji" aria-hidden="true">
-                ⬡
+                {blocked?.emoji ?? '⬡'}
               </span>
               <div style={{ minWidth: 0 }}>
-                <div className="run-name">{fallbackName ?? 'snug app'}</div>
+                <div className="run-name">{blocked?.name ?? fallbackName ?? 'snug app'}</div>
               </div>
             </div>
           ) : (
@@ -1147,7 +1191,12 @@ export default function RunView(): ReactElement {
         ) : null}
 
         <div className={`frame-wrap${inspector.inFlight > 0 ? ' thinking' : ''}`} data-testid="frame-wrap">
-          {htmlState.phase === 'loading' || db === null ? (
+          {blocked !== undefined ? (
+            // The reason REPLACES the frame — and only the frame. The header above keeps
+            // export, versions, docs and the connections door, so an app this host cannot
+            // run can still be taken to one that can.
+            <RunBlocked name={blocked.name} emoji={blocked.emoji} blockers={blocked.blockers} />
+          ) : htmlState.phase === 'loading' || db === null || verdict === undefined ? (
             <div className="run-overlay">
               <Skeleton width="60%" height="1.25rem" />
               <Skeleton width="40%" height="1rem" />

@@ -127,14 +127,25 @@ describe('the run header cluster (P3: ModelSelect, connections door, share)', ()
 });
 
 describe('the starter install disclosure tail (copy pass: never instruct a hidden control)', () => {
-  it('names the review under web and the sample-mode consequence under host', async () => {
+  // MIGRATED (TASK-20261003, ADR-0072 §4 — named in the plan). The host arm used to end
+  // ", so it runs in its sample mode": false for `weather`, which has none, and no longer what
+  // the route does — a connected starter on a host without connections shows why it cannot
+  // run instead of a frame. The web arm is unchanged, byte for byte.
+  it('names the review under web; under host it says connections are unavailable and promises NO sample mode', async () => {
     const { starterInstallDisclosureTail } = await import('../run/copy.js');
     expect(starterInstallDisclosureTail(true)).toBe(
       '. installing only copies the app — nothing is connected until you review and approve it yourself.',
     );
-    expect(starterInstallDisclosureTail(false)).toBe(
-      '. installing only copies the app — connections aren’t available in this host, so it runs in its sample mode.',
-    );
+    expect(starterInstallDisclosureTail(false)).toBe('. installing only copies the app — connections aren’t available in this host.');
+    expect(starterInstallDisclosureTail(false)).not.toMatch(/sample mode/);
+  });
+
+  it('the sentence has ONE home: the disclosure and the chat card say it through the same constant', async () => {
+    const { CONNECTIONS_UNAVAILABLE } = await import('../platform/availability.js');
+    const { starterInstallDisclosureTail } = await import('../run/copy.js');
+    expect(starterInstallDisclosureTail(false)).toContain(CONNECTIONS_UNAVAILABLE);
+    // The chat log's directive card renders the same constant — pinned on the DOM below.
+    expect(CONNECTIONS_UNAVAILABLE).toBe('connections aren’t available in this host');
   });
 });
 

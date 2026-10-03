@@ -17,6 +17,9 @@ const locateWasm = (): string => require.resolve('sql.js/dist/sql-wasm.wasm');
 function sourceWith(html: () => Promise<string | undefined>): StarterSource {
   return {
     appFolders: () => ['weather'],
+    // The first-paint seat (TASK-20261003 S2). MANIFEST above is deliberately not a valid
+    // requirement, so the honest answer for this fixture is "declares nothing".
+    requirement: () => undefined,
     html,
     meta: async (folder) => (folder === 'weather' ? META : undefined),
     contract: async () => undefined,

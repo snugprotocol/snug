@@ -7,6 +7,7 @@
 
 import type { PersistenceKind } from '@snugprotocol/db';
 
+import { CONNECTIONS_UNAVAILABLE, RUNS_IN_LABEL, offersOf } from './availability.js';
 import type { CustodyState, HostModelTier, SnugPlatform, TierSeat, TierState } from './platform.js';
 
 /** One sentence naming the storage in use; `undefined` when the platform did not say. */
@@ -142,4 +143,111 @@ export function tierAutoLabel(seat: Pick<TierSeat, 'auto'>, state: Pick<TierStat
 export function tierSubstitutionNote(applied: TierState['applied']): string | undefined {
   if (applied === undefined) return undefined;
   return `asked for ${applied.asked} — this view answered on ${applied.answered} (the viewer’s plan)`;
+}
+
+// ---------------------------------------------------------- the host passport (ADR-0072 §4)
+
+export type PassportKey = 'thinks' | 'file' | 'connections' | 'sign-in' | 'home-network' | 'phone-helper';
+
+export interface PassportRow {
+  key: PassportKey;
+  /** What the row is about, as a person would name it. */
+  name: string;
+  can: boolean;
+  /** One plain sentence: what that means here, or where it does work. */
+  sentence: string;
+}
+
+export interface HostPassportCopy {
+  /** The host, in words (`a Claude artifact`). */
+  where: string;
+  rows: readonly PassportRow[];
+}
+
+/** What each binding is called when the passport introduces the host. */
+const HOST_NAME: Readonly<Record<NonNullable<SnugPlatform['binding']>, string>> = {
+  artifact: 'a Claude artifact',
+  'artifact-static': 'a copy of an artifact page',
+  'artifact-chat': 'a Claude chat',
+  'local-host': 'your agent, on this computer',
+  file: 'a page in your browser',
+};
+
+/**
+ * The host passport (TASK-20261003 S5): what THIS host can and cannot do, one row per
+ * thing a person would ask about, each a yes or a no with one sentence.
+ *
+ * Derived, never declared: the four capability rows ARE `offersOf(platform)` — the table
+ * the shelf, the run route and the wizard's walls obey — so a tile disabled for "needs your
+ * home network" and a passport row saying the home network is reachable cannot both ship.
+ * "thinks" is the brain seat; "keeps your file" is the custody copy above, so the passport
+ * and the "your file" chip say the same place.
+ */
+export function hostPassport(platform: SnugPlatform, custody: Pick<CustodyState, 'dirty' | 'readOnly' | 'divergence' | 'workingCopy' | 'heldBy'>): HostPassportCopy {
+  const offers = offersOf(platform);
+  const brain = platform.brain;
+  const backend = platform.userdbBackend?.kind;
+  const file = custodyDisclosure(platform.binding, backend, custody);
+  // A durable copy exists and this view may write it. `artifact-static` is the artifact
+  // host serving the page top-level: nothing can save there, whatever the bucket is.
+  const keeps = backend !== undefined && backend !== 'memory' && platform.binding !== 'artifact-static' && !custody.readOnly && custody.heldBy === undefined;
+  const sentence = (text: string): string => (text.endsWith('.') ? text : `${text}.`);
+  return {
+    where: HOST_NAME[platform.binding ?? 'file'],
+    rows: [
+      {
+        key: 'thinks',
+        name: 'thinks',
+        can: brain?.kind === 'host',
+        sentence:
+          brain?.kind === 'host'
+            ? sentence(`${brain.label} answers your apps`)
+            : 'no brain is wired into this host yet — the demo brain answers, from a script.',
+      },
+      {
+        key: 'file',
+        name: 'keeps your file',
+        can: keeps,
+        sentence: keeps ? sentence(`kept ${file.headline}`) : sentence(file.status ?? `${file.headline} — export to keep what you do`),
+      },
+      {
+        key: 'connections',
+        name: 'live connections',
+        can: offers.network,
+        sentence: !offers.network
+          ? sentence(CONNECTIONS_UNAVAILABLE)
+          : offers['native-fetch']
+            ? 'apps can reach outside services once you approve each one — sent from this computer, so providers that turn a browser away work too.'
+            : 'apps can reach outside services once you approve each one.',
+      },
+      {
+        key: 'sign-in',
+        name: 'sign-in with a provider',
+        can: offers.oauth,
+        sentence: offers.oauth
+          ? 'apps that sign you in with their provider can finish that sign-in here.'
+          : offers.network
+            ? // The one host that offers connections without a sign-in: the runner whose fixed
+              // redirect port was taken (ADR-0068 — the registered redirect URI names that port).
+              'a provider’s sign-in can’t come back here right now — the local address it returns to was already in use when Snug started.'
+            : 'a provider’s sign-in has no way back to this host.',
+      },
+      {
+        key: 'home-network',
+        name: 'your home network',
+        can: offers.lan,
+        sentence: offers.lan
+          ? 'apps can talk to devices on your home network.'
+          : `this host can’t reach devices on your home network — ${RUNS_IN_LABEL.desktop} can.`,
+      },
+      {
+        key: 'phone-helper',
+        name: 'the phone helper',
+        can: offers.helper,
+        sentence: offers.helper
+          ? 'apps can link your phone through the helper.'
+          : `the helper that links your phone runs in ${RUNS_IN_LABEL.desktop} only.`,
+      },
+    ],
+  };
 }

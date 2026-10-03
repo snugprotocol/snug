@@ -6,11 +6,13 @@ import { parseBuildPrompt } from '../agent/chips.js';
 import { ProtectionOffer } from '../vault/ProtectionOffer.js';
 import { DesktopWelcome } from '../desktop/DesktopWelcome.js';
 import { useDesktopFirstRun } from '../desktop/firstRun.js';
+import { availabilityOf, needsOfConnections, needsOfRequirement, offersOf, type AppNeed } from '../platform/availability.js';
 import { getPlatform } from '../platform/platform.js';
 import { refreshAppMeta, useAppMetaMap } from '../state/appMeta.js';
 import { mintBuildThread } from '../state/buildThread.js';
 import { userLibrary, type LibraryEntry } from '../state/library.js';
 import { listStarterApps, starterInstallSource } from '../starter/starterApps.js';
+import { starterLook } from '../starter/starterLooks.js';
 import { starterUpdateStatus } from '../starter/starterUpdate.js';
 import { getUserDb } from '../state/userdb.js';
 import { SharedShelf } from '../share/SharedShelf.js';
@@ -19,53 +21,18 @@ import { Card } from '../ui/Card.js';
 import { Chip } from '../ui/Chip.js';
 import { EmptyState } from '../ui/EmptyState.js';
 import { Skeleton } from '../ui/Skeleton.js';
+import { TileBlockedNote, keepsWebDesktopBadge } from './AvailabilityNote.js';
 
 /**
- * The shelf's per-starter presentation, keyed by FOLDER — which stays the identity
- * (`install_source`, the desktopOnly gate and the tile's `data-starter-name` all key on
- * it). `name` is the optional display name the tile shows: `listStarterApps()` derives
- * its label from the folder, so without this the shelf read "whatsapp" for Telepath,
- * "spotify" for Rewind, "hue" for Moodboard. That is not a cosmetic gap — after the
- * WhatsApp starter was rebuilt into Telepath the shelf looked completely unchanged, which
- * is indistinguishable from "the rebuild did not land" (owner-reported, 2026-08-17).
- * A folder with no `name` falls back to the folder, which is honest rather than guessed.
+ * `needs` rides the list it describes (TASK-20261003 S3): what each installed app asks of
+ * its host, resolved in the SAME step as the entries, so a tile's first paint already knows
+ * whether this host runs it. An app absent from the map has no connection row and needs
+ * nothing.
  */
-const STARTER_LOOKS: Readonly<
-  Record<string, { emoji: string; color: string; blurb: string; desktopOnly?: boolean; name?: string }>
-> = {
-  // The keepers (owner curation, TASK-20260815-starter-apps-rebuild).
-  chess: { emoji: '♞', color: '#8b5cf6', blurb: 'play an opponent with opinions — no server needed' },
-  'flying-pig': { emoji: '🐷', color: '#ec4899', blurb: 'tap to keep a pig airborne — pure offline arcade' },
-  'adventure-quest': { emoji: '🐉', color: '#7c3aed', blurb: 'the agent tells the tale — your pack lives in a real file' },
-  'quiz-me': { emoji: '🧠', color: '#0284c7', blurb: 'pick any topic, take a five-question quiz, watch scores climb' },
-  // The gold-standard connected five (TASK-20260815-starter-apps-rebuild, ADR-0031):
-  // each complements its provider's own app rather than cloning it, and each teaches
-  // the provider chat lane. Desktop-only where the transport demands it: Coinbase has
-  // no browser CORS (native fetch carries it), and the Hue bridge lives on your LAN.
-  'trade-copilot': { name: 'Trade Copilot', emoji: '📈', color: '#f59e0b', blurb: 'a copilot grounded in your real Coinbase portfolio — it thinks, you decide', desktopOnly: true },
-  spotify: { name: 'Rewind', emoji: '🎧', color: '#10b981', blurb: 'your listening, understood — portraits and trends Spotify forgets' },
-  hue: { name: 'Moodboard', emoji: '🌗', color: '#e11d48', blurb: 'light as mood — the agent is your lighting designer', desktopOnly: true },
-  weather: { name: 'Should I?', emoji: '🌦️', color: '#3b82f6', blurb: 'forecasts turned into decisions — run, ride, water, or wait' },
-  github: { name: 'Standup', emoji: '🗞️', color: '#64748b', blurb: 'what needs you today, before you ask — your queue as a briefing' },
-  // The linked-device starter (Telepath, TASK-20260817 rebuild of the Twin; ADR-0032/0034).
-  // Desktop-only for a stronger reason than the other two: the session lives in a helper
-  // process this shell spawns, reached over a unix socket that no browser tab can open.
-  whatsapp: { name: 'Telepath', emoji: '🔮', color: '#0f7d61', blurb: 'your WhatsApp, live — with an analyst who knows the room and drafts in your voice', desktopOnly: true },
-  // The personal-finance flagship (TASK-20260818-ledger-starter, ADR-0038). Web AND
-  // desktop: the SimpleFIN bridge serves CORS (probed 2026-08-18), so no transport
-  // constraint applies — the sample dataset makes the tile compelling before any
-  // connection exists.
-  ledger: { name: 'Ledger', emoji: '📒', color: '#b95c22', blurb: 'your money, at home — every account in your file, an analyst on tap, a time machine for your net worth' },
-  // The AI inbox manager (TASK-20260819-gmail-starter, ADR-0039). Web AND desktop
-  // since ADR-0049 (TASK-20260822-gmail-dual-mode): the v1 lock was a client-type
-  // fact, not a CORS one — a Google DESKTOP-app client registers only loopback — and
-  // the registry now vouches for a "Web application" client path
-  // (webRedirectPosture: 'origin-callback' + its own walkthrough), with the Gmail API
-  // itself CORS-open (probed 2026-08-21). The wizard picks the walkthrough by runtime.
-  gmail: { name: 'Inbox Copilot', emoji: '📬', color: '#c2410c', blurb: 'who is really filling your inbox, who you never answer, and a mass cleanup you approve once' },
-};
-
-type LoadState = { phase: 'loading' } | { phase: 'ready'; entries: LibraryEntry[] } | { phase: 'error'; message: string };
+type LoadState =
+  | { phase: 'loading' }
+  | { phase: 'ready'; entries: LibraryEntry[]; needs: ReadonlyMap<string, readonly AppNeed[]> }
+  | { phase: 'error'; message: string };
 
 /**
  * The hub route. ONE full-screen gate sits in front of the shelf: the desktop welcome
@@ -117,9 +84,7 @@ function HubHome(): ReactElement {
     setDeleteError(undefined);
     try {
       await userLibrary().delete(appId);
-      setLoad((current) =>
-        current.phase === 'ready' ? { phase: 'ready', entries: current.entries.filter((e) => e.id !== appId) } : current,
-      );
+      setLoad((current) => (current.phase === 'ready' ? { ...current, entries: current.entries.filter((e) => e.id !== appId) } : current));
       setConfirmingDelete(undefined);
     } catch (err) {
       setDeleteError(err instanceof Error ? err.message : 'unknown error');
@@ -136,10 +101,7 @@ function HubHome(): ReactElement {
       await userLibrary().rename(appId, name);
       setLoad((current) =>
         current.phase === 'ready'
-          ? {
-              phase: 'ready',
-              entries: current.entries.map((e) => (e.id === appId ? { ...e, displayName: name.trim().slice(0, 80) } : e)),
-            }
+          ? { ...current, entries: current.entries.map((e) => (e.id === appId ? { ...e, displayName: name.trim().slice(0, 80) } : e)) }
           : current,
       );
       setRenaming(undefined);
@@ -189,8 +151,20 @@ function HubHome(): ReactElement {
     void refreshAppMeta();
     userLibrary()
       .list()
-      .then((entries) => {
-        if (!cancelled) setLoad({ phase: 'ready', entries });
+      .then(async (entries) => {
+        // ONE read of the whole connections table, grouped by app — never a per-tile
+        // effect (S3): a shelf of forty apps would otherwise run forty queries and paint
+        // forty tiles that each flip a beat later. The same db the list just read.
+        const db = await getUserDb();
+        const rowsByApp = new Map<string, ReturnType<typeof db.listConnections>>();
+        for (const row of db.listConnections()) {
+          const rows = rowsByApp.get(row.appId);
+          if (rows === undefined) rowsByApp.set(row.appId, [row]);
+          else rows.push(row);
+        }
+        const needs = new Map<string, readonly AppNeed[]>();
+        for (const [appId, rows] of rowsByApp) needs.set(appId, needsOfConnections(rows));
+        if (!cancelled) setLoad({ phase: 'ready', entries, needs });
       })
       .catch(() => {
         if (!cancelled) setLoad({ phase: 'error', message: 'could not open your snug file.' });
@@ -199,6 +173,10 @@ function HubHome(): ReactElement {
       cancelled = true;
     };
   }, []);
+
+  // What this host offers (ADR-0072 §4) — read from the platform's seats, which are set
+  // once before boot, so this is the same answer on every render.
+  const offers = offersOf(getPlatform());
 
   const startBuild = (text: string): void => {
     const trimmed = text.trim();
@@ -305,18 +283,55 @@ function HubHome(): ReactElement {
             const style = { '--tile-color': meta?.iconColor ?? 'var(--ember)' } as CSSProperties;
             const name = meta?.displayName !== undefined && meta.displayName !== '' ? meta.displayName : entry.displayName;
             const armed = confirmingDelete === entry.id;
+            // The same verdict the app's starter would get, from the rows the list
+            // resolution read (S3). A blocked tile is not itself a link — opening the app is
+            // the one thing this host cannot do. Rename and delete stay, and the note's quiet
+            // `details` link leads to the run route: the app is still the user's, and that
+            // route's header is where it is exported from.
+            const verdict = availabilityOf(load.needs.get(entry.id) ?? [], offers);
+            const blocker = verdict.ok ? undefined : verdict.blockers[0];
+            const noteId = `tile-blocked-${entry.id}`;
+            const face = (
+              <>
+                <span className="tile-emoji" aria-hidden="true">
+                  {meta?.iconEmoji ?? '⬡'}
+                </span>
+                <span className="tile-name">{name}</span>
+                <span className="tile-sub">{meta?.description ?? new Date(entry.createdAt).toLocaleDateString()}</span>
+              </>
+            );
             // The Card CONTAINS the Link (rather than the Link wrapping the Card) so the
             // delete action is a sibling of the navigation, not nested inside it — a
             // button inside an <a> would navigate into the app on click (AC22).
             return (
-              <Card key={entry.id} interactive className="app-tile" style={style} data-testid="installed-tile">
-                <Link to={`/run/${entry.id}`} className="tile-link" style={{ color: 'inherit' }}>
-                  <span className="tile-emoji" aria-hidden="true">
-                    {meta?.iconEmoji ?? '⬡'}
-                  </span>
-                  <span className="tile-name">{name}</span>
-                  <span className="tile-sub">{meta?.description ?? new Date(entry.createdAt).toLocaleDateString()}</span>
-                </Link>
+              <Card
+                key={entry.id}
+                interactive={blocker === undefined}
+                className={`app-tile${blocker !== undefined ? ' is-blocked' : ''}`}
+                style={style}
+                data-testid="installed-tile"
+              >
+                {blocker === undefined ? (
+                  <Link to={`/run/${entry.id}`} className="tile-link" style={{ color: 'inherit' }}>
+                    {face}
+                  </Link>
+                ) : (
+                  <>
+                    {/* aria-disabled, never `disabled`: the control stays in the tab order so
+                        the reason it points at is reachable by keyboard. It has no handler —
+                        activating it does nothing. */}
+                    <button
+                      type="button"
+                      className="tile-link tile-card-button"
+                      aria-disabled="true"
+                      aria-describedby={noteId}
+                      title={`${name} can’t run here — ${blocker.sentence}`}
+                    >
+                      {face}
+                    </button>
+                    <TileBlockedNote id={noteId} blocker={blocker} details={{ to: `/run/${entry.id}`, name }} />
+                  </>
+                )}
                 {renaming === entry.id ? (
                   <div className="tile-confirm tile-rename-editor" role="group" aria-label={`rename ${name}`}>
                     <input
@@ -435,9 +450,7 @@ function HubHome(): ReactElement {
       ) : (
         <div className="tile-grid">
           {starters.map((starter) => {
-            const look =
-              STARTER_LOOKS[starter.name.replace(/ /g, '-')] ??
-              ({ emoji: '⬡', color: 'var(--ember)', blurb: 'curated example — runs without a server' } as const);
+            const look = starterLook(starter.name.replace(/ /g, '-'));
             // What the USER reads. `starter.name` is the folder (the identity every
             // downstream rule keys on); the look's optional `name` is what the app calls
             // itself. Falling back to the folder keeps an unnamed starter honest.
@@ -446,10 +459,19 @@ function HubHome(): ReactElement {
             const source = starterInstallSource(starter.id);
             const installed = installedBySource.has(source);
             const updateTo = updatesBySource.get(source);
-            // P3 item 5: a desktopOnly starter is LOCKED on web (its device lives on the
-            // user's LAN, unreachable from a page) and simply enabled on the desktop
-            // shell — where the badge would be a limitation that no longer exists.
-            const locked = look.desktopOnly === true && getPlatform().kind !== 'desktop';
+            // Can THIS host run it? (S2, ADR-0072 §4.) Derived from the connection the
+            // starter declares against the seats this platform carries — synchronously, so
+            // the answer is in the first paint. It used to be a `desktopOnly` flag checked
+            // against `kind !== 'desktop'`: locked under the local runner where Trade
+            // Copilot works, and wide open inside an artifact with no connections at all.
+            const verdict = availabilityOf(needsOfRequirement(starter.requirement), offers);
+            const blocker = verdict.ok ? undefined : verdict.blockers[0];
+            // The WEB shelf keeps the rendering it has always had — the `desktop` tag, the
+            // disabled button — and only its reason changes. Everywhere else the reason is
+            // visible text under the tile.
+            const webBadge = blocker !== undefined && keepsWebDesktopBadge(blocker);
+            const noted = blocker !== undefined && !webBadge;
+            const noteId = `tile-blocked-${starter.id}`;
             // AC18: installing is now an EXPLICIT act. The tile itself no longer
             // installs on click — an uninstalled starter offers "install", an installed
             // one offers "open" and routes to the user's OWN copy. Clicking a starter
@@ -457,8 +479,8 @@ function HubHome(): ReactElement {
             return (
               <Card
                 key={starter.id}
-                interactive
-                className="app-tile"
+                interactive={!noted}
+                className={`app-tile${noted ? ' is-blocked' : ''}`}
                 style={style}
                 data-testid="starter-tile"
                 data-starter-name={starter.name}
@@ -489,7 +511,7 @@ function HubHome(): ReactElement {
                   that into a strict-mode violation (two elements). Found by the full
                   Playwright run on the parked branch, 2026-08-08.
                 */}
-                {locked ? (
+                {webBadge ? (
                   // ADR-0047 (TASK-20260821): the badge is now the LINK to the /download
                   // page — it sits beside (not inside) the disabled tile button, so it
                   // stays clickable while the tile itself refuses.
@@ -499,7 +521,7 @@ function HubHome(): ReactElement {
                     to="/download"
                     className="tile-desktop-badge"
                     data-testid="desktop-only-badge"
-                    title="needs the Snug desktop app (a free download) — this starter reaches things a web page cannot"
+                    title={`needs the Snug desktop app (a free download) — ${blocker.sentence}`}
                   >
                     desktop
                   </Link>
@@ -521,15 +543,20 @@ function HubHome(): ReactElement {
                   type="button"
                   className="tile-link tile-card-button"
                   data-testid={installed ? 'starter-open' : 'starter-open-card'}
-                  disabled={locked}
-                  onClick={() => openStarter(starter.id)}
+                  disabled={webBadge}
+                  // Off the web a blocked tile is aria-disabled, never `disabled`: it stays
+                  // in the tab order so the reason it points at is reachable by keyboard,
+                  // and it carries no handler — activating it does nothing.
+                  {...(noted ? { 'aria-disabled': true, 'aria-describedby': noteId } : { onClick: () => openStarter(starter.id) })}
                   // An explicit name: the card's own text is the blurb, which reads as
                   // a description rather than an action. "open chess" says what the
                   // control DOES, which is what a screen reader (and the E2E) needs.
                   aria-label={`open ${label}`}
                   title={
-                    locked
-                      ? `${label} needs the free desktop app — a web page cannot reach your home network`
+                    blocker !== undefined
+                      ? webBadge
+                        ? `${label} needs the free desktop app — ${blocker.sentence}`
+                        : `${label} can’t run here — ${blocker.sentence}`
                       : installed
                         ? `open your copy of ${label}`
                         : `open ${label} — it stays read-only until you install it`
@@ -540,13 +567,17 @@ function HubHome(): ReactElement {
                   </span>
                   <span className="tile-name">{label}</span>
                   <span className="tile-sub">
-                    {installed
-                      ? updateTo !== undefined
-                        ? `${look.blurb} — update available, open your copy to take it`
-                        : `${look.blurb} — already in your snug file, opens your copy`
-                      : `${look.blurb} — try it first, install it if you like it`}
+                    {noted
+                      ? // "try it first" would be an offer this host cannot keep.
+                        look.blurb
+                      : installed
+                        ? updateTo !== undefined
+                          ? `${look.blurb} — update available, open your copy to take it`
+                          : `${look.blurb} — already in your snug file, opens your copy`
+                        : `${look.blurb} — try it first, install it if you like it`}
                   </span>
                 </button>
+                {noted ? <TileBlockedNote id={noteId} blocker={blocker} /> : null}
               </Card>
             );
           })}

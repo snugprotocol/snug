@@ -3,6 +3,8 @@
 // glob — TASK-20260905-host-kit AC14) so they run without any server on web and desktop,
 // and on demand in the host kit.
 
+import type { ConnectionRequirement } from '@snugprotocol/protocol';
+
 import { starterSource } from './starterSource.js';
 
 export const STARTER_PREFIX = 'starter--';
@@ -11,23 +13,38 @@ export interface StarterApp {
   /** Library-style id, e.g. "starter--chess" — routable as /run/starter--chess. */
   id: string;
   name: string;
+  /**
+   * The connection this starter declares, as its manifest states it — known at first paint,
+   * so the shelf can say whether this host runs it before any tile is clickable
+   * (TASK-20261003 S2). Absent for a starter that declares none.
+   */
+  requirement?: ConnectionRequirement;
   load: () => Promise<string>;
+}
+
+/** The connection a starter declares, by shelf id — the run route's twin of the shelf's read. */
+export function starterRequirement(starterId: string): ConnectionRequirement | undefined {
+  return isStarterId(starterId) ? starterSource().requirement(starterId.slice(STARTER_PREFIX.length)) : undefined;
 }
 
 export function listStarterApps(): StarterApp[] {
   const source = starterSource();
   return source
     .appFolders()
-    .map((folder) => ({
-      id: `${STARTER_PREFIX}${folder}`,
-      name: folder.replace(/-/g, ' '),
-      load: async () => {
-        const html = await source.html(folder);
-        // Unreachable for a listed folder — the catalogue and the html come from one source.
-        if (html === undefined) throw new Error(`starter '${folder}' listed but its app.html is missing`);
-        return html;
-      },
-    }))
+    .map((folder): StarterApp => {
+      const requirement = source.requirement(folder);
+      return {
+        id: `${STARTER_PREFIX}${folder}`,
+        name: folder.replace(/-/g, ' '),
+        ...(requirement !== undefined ? { requirement } : {}),
+        load: async () => {
+          const html = await source.html(folder);
+          // Unreachable for a listed folder — the catalogue and the html come from one source.
+          if (html === undefined) throw new Error(`starter '${folder}' listed but its app.html is missing`);
+          return html;
+        },
+      };
+    })
     .sort((a, b) => a.id.localeCompare(b.id));
 }
 

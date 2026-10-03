@@ -76,6 +76,7 @@ import { createStore } from './store.js';
 import { getUserDb } from './userdb.js';
 import { authShapedFailureStore, connectedFetchDepsFor, dismissAuthShapedFailure, invalidateNetGrants } from './net.js';
 import { recordLanHostChoice } from './authKindChoice.js';
+import { offersOf } from '../platform/availability.js';
 import { getPlatform } from '../platform/platform.js';
 
 export type ConnectionWizardStep = 'review' | 'register' | 'credentials' | 'connect' | 'done';
@@ -838,21 +839,17 @@ export function isLinkedDeviceRequirement(requirement: ConnectionRequirement | u
 }
 
 /**
- * Can this platform link a device at all? BOTH seats are required — see the seam's own
- * comment: one starts the helper and carries the spawn nonce, the other talks to it, and a
- * flow offered on half a seam fails midway. `false` on web is a DISCLOSURE, never a refusal
- * to render: the row stays intact and readable, exactly as a LAN row does.
+ * Can this platform link a device at all? It is the `helper` OFFER — the one derivation the
+ * shelf and the run route read too (`platform/availability.ts`, TASK-20261003 S4), so the
+ * tile, the route and this wall cannot disagree about the same row. ALL THREE seats are
+ * required: one starts the helper and carries the spawn nonce, one is the app door, and the
+ * WIZARD door is the one the pairing flow actually drives — a test over only the first two
+ * advertised a flow that died at its first step, which is exactly what shipped, because
+ * `sidecarFetch` refuses every pairing route by design. `false` on web is a DISCLOSURE,
+ * never a refusal to render: the row stays intact and readable, exactly as a LAN row does.
  */
 export function canLinkDevice(): boolean {
-  const platform = getPlatform();
-  return (
-    platform.sidecarCtl !== undefined &&
-    platform.sidecarFetch !== undefined &&
-    // The WIZARD door too, and it is the one the pairing flow actually drives. Checking only
-    // the first two advertised a flow that died at its first step — which is exactly what
-    // shipped, because `sidecarFetch` refuses every pairing route by design.
-    platform.sidecarWizardFetch !== undefined
-  );
+  return offersOf(getPlatform()).helper;
 }
 
 /** Has the address been collected yet? A LAN row with no host is pre-collection. */
@@ -908,9 +905,20 @@ export const LAN_HOST_REFUSAL =
  * `lan_fetch` in pair mode, and a browser has no way to accept a private-CA
  * certificate. `false` on web is a DISCLOSURE, never a refusal to render: the
  * row stays intact and readable (ADR-0023 D1's portability rule).
+ *
+ * It is the `lan` OFFER — the one derivation the shelf and the run route read too
+ * (`platform/availability.ts`, TASK-20261003 S4) — and so it asks for BOTH LAN seats, not
+ * the pairing seat alone. A wizard that paired on a shell with no pinned transport would
+ * mint a key on the device for an app whose tile says "needs your home network" and whose
+ * run route will not mount it; ADR-0025's verify step would then refuse the claim, after
+ * the user had already walked to the bridge and pressed its button. The wall stops that
+ * walk before it starts. The pairing function below still reads its own seat and still
+ * cannot claim `connected` without the verify read (`lanWizardFlow` drives it directly) —
+ * the wall is what the user meets, never the only thing standing between a half seam and a
+ * false claim.
  */
 export function canPairLanDevice(): boolean {
-  return getPlatform().lanPair !== undefined;
+  return offersOf(getPlatform()).lan;
 }
 
 /**

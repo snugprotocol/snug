@@ -20,4 +20,25 @@ test.describe('desktop-only badge — really clickable', () => {
     await badge.click();
     await expect(page).toHaveURL(/\/download$/, { timeout: 10_000 });
   });
+
+  // MIGRATED (TASK-20261003 S2, ADR-0072 §4 — the reason TEXT only; the badge above is
+  // untouched). The three locked starters used to share one title — "this starter reaches
+  // things a web page cannot" — over a button whose own title blamed the home network for
+  // all three. Each lock is derived from what the starter declares now, so each badge says
+  // its own reason after the same lead-in.
+  test('each locked starter’s badge carries ITS reason in the title', async ({ page }) => {
+    await page.goto('/');
+    const badgeOf = (folder: string) => page.locator(`[data-testid="starter-tile"][data-starter-name="${folder}"]`).getByTestId('desktop-only-badge');
+    await expect(badgeOf('hue')).toBeVisible({ timeout: 20_000 });
+    for (const [folder, reason] of [
+      ['hue', /home network/],
+      ['trade copilot', /requests sent from a web page/],
+      ['whatsapp', /helper program/],
+    ] as const) {
+      await expect(badgeOf(folder)).toHaveText(/^\s*desktop\s*$/i);
+      await expect(badgeOf(folder)).toHaveAttribute('title', /^needs the Snug desktop app \(a free download\) — /);
+      await expect(badgeOf(folder)).toHaveAttribute('title', reason);
+    }
+    await expect(page.getByTestId('desktop-only-badge')).toHaveCount(3);
+  });
 });
