@@ -17,6 +17,11 @@ export const MAX_RPC_LINE_BYTES = 4 * 1024 * 1024;
 export interface LineFramerOptions {
   /** Called when a line exceeded the cap and was discarded. */
   onOverflow?: (bytes: number) => void;
+  /**
+   * The cap, for a channel that is not the stdio transport. The control socket frames its
+   * lines with this same splitter (one framing, not two) under its own, slightly larger cap.
+   */
+  maxBytes?: number;
 }
 
 export interface LineFramer {
@@ -30,6 +35,7 @@ export interface LineFramer {
  * decoded per complete line.
  */
 export function createLineFramer(onLine: (line: string) => void, options: LineFramerOptions = {}): LineFramer {
+  const maxBytes = options.maxBytes ?? MAX_RPC_LINE_BYTES;
   let buffer = Buffer.alloc(0);
   // Set while discarding an over-long line: everything up to the next newline is refuse.
   let skipping = false;
@@ -53,7 +59,7 @@ export function createLineFramer(onLine: (line: string) => void, options: LineFr
         }
         emit(line);
       }
-      if (!skipping && buffer.byteLength > MAX_RPC_LINE_BYTES) {
+      if (!skipping && buffer.byteLength > maxBytes) {
         options.onOverflow?.(buffer.byteLength);
         buffer = Buffer.alloc(0);
         skipping = true;

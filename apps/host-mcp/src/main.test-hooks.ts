@@ -7,7 +7,8 @@
 //
 // A resolved-address check in the proxy would refuse this stub outright — which is one
 // reason (besides its being a new policy the desktop lacks) the proxy has none. The release
-// bundle is swept for both names below by `check-host-mcp`.
+// bundle is swept by `check-host-mcp` for the PREFIX every name below shares, so a hook
+// added here is covered the day it is added.
 
 import type { LookupFn } from './node-transport.js';
 
@@ -54,22 +55,30 @@ export const TEST_BRAIN_MODEL_ENV = 'SNUG_MCP_TEST_BRAIN_MODEL';
  */
 export const TEST_MODELS_ENV = 'SNUG_MCP_TEST_MODELS';
 
+/** How long the primary waits after its own session ends, in ms — so an L7 leg takes no three seconds. */
+export const TEST_GRACE_ENV = 'SNUG_MCP_TEST_GRACE_MS';
+/**
+ * The ports to try, comma-separated. One port a test itself holds makes every listen fail
+ * for real (`listen-failed`), which the release build's "fixed, then any" can never do.
+ */
+export const TEST_PORTS_ENV = 'SNUG_MCP_TEST_PORTS';
+
+const numberFrom = (value: string | undefined): number | undefined => {
+  const parsed = value === undefined || value === '' ? Number.NaN : Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+};
+
 /* c8 ignore start — the entry half, exercised by the e2e rather than by unit tests */
 if (process.env.SNUG_MCP_TEST_ENTRY === '1') {
-  const { createRunner } = await import('./runner.js');
-  const { createMcpServer } = await import('./mcp/server.js');
-  const { readFileSync } = await import('node:fs');
-  const nodePath = await import('node:path');
-  const { fileURLToPath } = await import('node:url');
+  const { startProcess } = await import('./process.js');
   const { createFetchProxy } = await import('./fetch-proxy.js');
   const { createNodeHttpsSend } = await import('./node-transport.js');
-  const { resolveHome } = await import('./home.js');
 
-  const here = nodePath.dirname(fileURLToPath(import.meta.url));
-  const page = (): string => readFileSync(nodePath.join(here, 'snug-host-local.html'), 'utf8');
   const holder = process.env[TEST_HOLDER_ENV];
   const pinnedBrain = process.env[TEST_BRAIN_ENV];
   const pinnedModel = process.env[TEST_BRAIN_MODEL_ENV];
+  const graceMs = numberFrom(process.env[TEST_GRACE_ENV]);
+  const ports = process.env[TEST_PORTS_ENV]?.split(',').map(Number).filter(Number.isFinite);
   // The SHAPE the real shim answers: SSE frames, the resolved model on the LAST one after the
   // deltas. A fake that answered JSON would let a page-side bug pass (it did once).
   const fakeBrain = {
@@ -85,34 +94,58 @@ if (process.env.SNUG_MCP_TEST_ENTRY === '1') {
       sink.write('data: [DONE]\n\n');
     },
   };
-  const runner = createRunner({
-    // The TEST build never gets the real home, not even on an opt-in (D-B34): this is the
-    // binary the e2e spawns, and it is the one that once wrote over the owner's user file.
-    home: resolveHome(),
-    page,
-    openBrowser: async () => {},
-    ...(holder !== undefined && holder !== '' ? { heldBy: () => holder } : {}),
-    // A real `claude` on the developer's machine is logged IN, so the interesting states
-    // are unreachable without a pin — and a test that can only observe the happy state
-    // cannot tell a working chip from a broken one.
-    ...(pinnedBrain !== undefined && pinnedBrain !== ''
-      ? { brainState: async () => ({ state: pinnedBrain, detail: `pinned by ${TEST_BRAIN_ENV}` }) }
-      : {}),
-    ...(pinnedModel !== undefined && pinnedModel !== '' ? { brain: fakeBrain } : {}),
-    models: () => {
-      try {
-        const parsed: unknown = JSON.parse(process.env[TEST_MODELS_ENV] ?? '[]');
-        return Array.isArray(parsed) ? (parsed as { id: string; name: string; effort: boolean }[]) : [];
-      } catch {
-        return [];
-      }
+
+  const noBrain = {
+    stream: async (): Promise<void> => {
+      throw new Error(`the test build has no brain unless ${TEST_BRAIN_MODEL_ENV} pins one`);
     },
-    proxy: createFetchProxy({ send: createNodeHttpsSend(resolverFromEnv(process.env[TEST_RESOLVE_ENV])) }),
+  };
+
+  // ONE composition (K5): the same `startProcess` the release entry calls, so the browser
+  // suite runs the shipped handshake, grace, parent watch and shutdown. What follows is only
+  // what a test needs to stand in for — and what it must never reach.
+  await startProcess({
+    hooks: {
+      // NO `allowRealHome`: the TEST build never gets the real home, not even on an opt-in
+      // (D-B34). This is the binary the e2e spawns, and it is the one that once wrote over
+      // the owner's user file. Without SNUG_HOME it answers `home-unresolved`.
+      // NO `openBrowser`: a suite must never launch the developer's browser.
+      ...(holder !== undefined && holder !== '' ? { heldBy: () => holder } : {}),
+      // A real `claude` on the developer's machine is logged IN, so the interesting states
+      // are unreachable without a pin — and a test that can only observe the happy state
+      // cannot tell a working chip from a broken one. UNPINNED there is no probe at all:
+      // the real one spawns the developer's CLI and spends their subscription on a suite.
+      ...(pinnedBrain !== undefined && pinnedBrain !== ''
+        ? { brainState: async () => ({ state: pinnedBrain, detail: `pinned by ${TEST_BRAIN_ENV}` }) }
+        : {}),
+      // ALWAYS a brain of this build's own. Unpinned, the runner's default is the user's real
+      // CLI — and a suite that reached it would spend the developer's subscription on a
+      // think nobody asked for. The refusal is the 502 a machine with no CLI answers.
+      brain: pinnedModel !== undefined && pinnedModel !== '' ? fakeBrain : noBrain,
+      models: () => {
+        try {
+          const parsed: unknown = JSON.parse(process.env[TEST_MODELS_ENV] ?? '[]');
+          return Array.isArray(parsed) ? (parsed as { id: string; name: string; effort: boolean }[]) : [];
+        } catch {
+          return [];
+        }
+      },
+      proxy: createFetchProxy({ send: createNodeHttpsSend(resolverFromEnv(process.env[TEST_RESOLVE_ENV])) }),
+      ...(graceMs !== undefined ? { graceMs } : {}),
+      ...(ports !== undefined && ports.length > 0 ? { ports } : {}),
+      // The line the browser suite's global setup waits for (`apps/host/e2e/local-setup.ts`).
+      // It carries the launch URL, token and all — which is exactly why it exists only in
+      // this build: stderr is a host's log, and the release never writes the bearer to one.
+      onStarted: (started) => {
+        process.stderr.write(
+          `${JSON.stringify(
+            started.role === 'degraded'
+              ? { ready: false, refusal: started.refusal }
+              : { ready: true, role: started.role, port: started.port, url: started.url },
+          )}\n`,
+        );
+      },
+    },
   });
-  const started = await runner.start();
-  process.stderr.write(`${JSON.stringify({ ready: true, port: started.port, url: runner.launchUrl() })}\n`);
-  const server = createMcpServer({ callTool: (name, args) => runner.callTool(name, args) });
-  server.attach(process.stdin, (line) => process.stdout.write(`${line}\n`));
-  process.stdin.resume();
 }
 /* c8 ignore stop */

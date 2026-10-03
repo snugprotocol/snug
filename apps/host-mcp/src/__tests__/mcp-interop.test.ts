@@ -10,43 +10,44 @@
 // build is part of what is being tested (a bundling change that broke the entry would pass
 // a source-level test).
 
-import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { afterAll, describe, expect, it } from 'vitest';
 
-const here = path.dirname(fileURLToPath(import.meta.url));
-const BUNDLE = path.resolve(here, '../../dist/snug-mcp.mjs');
+import { bundleProblem, isolation, reapAll, RELEASE_BUNDLE as BUNDLE, startScript } from './built.js';
 
-/** A missing build is CANNOT RUN by name, never a silent skip (the kit's own discipline). */
-const built = existsSync(BUNDLE);
-const describeBuilt = built ? describe : describe.skip;
-if (!built) {
-  // eslint-disable-next-line no-console
-  console.warn(`[mcp-interop] ${BUNDLE} is missing — run \`pnpm --filter host-mcp build\` first`);
-}
+/**
+ * A missing or stale build is CANNOT RUN — a FAILING test, by name (`built.ts`). The cases
+ * below are skipped only so that failure is one line, not thirty about old bytes.
+ */
+const cannotRun = bundleProblem(BUNDLE);
+it('the bundle under test is built, and built from the sources on disk', () => {
+  if (cannotRun !== undefined) throw new Error(cannotRun);
+});
+const describeBuilt = describe.skipIf(cannotRun !== undefined);
 
 /**
  * An ISOLATED home for every spawn. Without it these tests inherit the developer's real
  * `~/Snug` — where a runner they started by hand already holds the lock, so the process
  * exits at boot and every case fails as "Connection closed", pointing nowhere near the
  * cause. A test that can collide with a real running product is a test that will.
+ *
+ * The environment is the three-variable isolation contract (`built.ts`, D1) — it used to
+ * be `{ ...process.env, SNUG_HOME }`, which handed the one build allowed to reach the real
+ * home the developer's real HOME to reach it with.
  */
-function isolatedEnv(): Record<string, string> {
-  const home = mkdtempSync(path.join(tmpdir(), 'snug-interop-'));
-  homes.push(home);
-  return { ...process.env, SNUG_HOME: home } as Record<string, string>;
-}
+const isolatedEnv = (): Record<string, string> => isolation().env;
 
-const homes: string[] = [];
-afterAll(() => {
-  for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true });
-});
+/**
+ * The bundle as a bare child with all three pipes — started through `built.ts`, so the
+ * child is in the registry `reapAll` kills from. These two used to call `spawn` directly:
+ * the second was then nobody's, left to its own grace after `afterAll` had removed its home.
+ */
+const bare = (): ReturnType<typeof startScript> => startScript(BUNDLE, isolatedEnv(), { stdio: ['pipe', 'pipe', 'pipe'] });
+
+// `reapAll` also FAILS when this file leaves anything behind — a process of its own, the
+// SDK's, or a temp directory.
+afterAll(reapAll);
 
 async function connected(): Promise<Client> {
   const client = new Client({ name: 'interop-test', version: '0.0.0' });
@@ -101,9 +102,9 @@ describeBuilt('the official MCP client against the shipped bundle', () => {
 
 describeBuilt('lifecycle', () => {
   it('exits when its stdin closes — the host closing the pipe is how a session ends', async () => {
-    const child = spawn(process.execPath, [BUNDLE], { stdio: ['pipe', 'pipe', 'pipe'], env: isolatedEnv() });
+    const child = bare();
     const exited = new Promise<number | null>((resolve) => child.on('exit', (code) => resolve(code)));
-    child.stdin.end();
+    child.stdin!.end();
     const code = await Promise.race([exited, new Promise<'timeout'>((r) => setTimeout(() => r('timeout'), 10_000))]);
     expect(code).not.toBe('timeout');
     expect(code).toBe(0);
@@ -112,11 +113,11 @@ describeBuilt('lifecycle', () => {
   it('writes nothing to stdout before it is spoken to — stdout is the transport', async () => {
     // A banner or a log line on stdout corrupts the JSON-RPC stream; diagnostics belong on
     // stderr. This is the cheapest test that catches a stray console.log in the entry.
-    const child = spawn(process.execPath, [BUNDLE], { stdio: ['pipe', 'pipe', 'pipe'], env: isolatedEnv() });
+    const child = bare();
     let out = '';
-    child.stdout.on('data', (c: Buffer) => (out += c.toString()));
+    child.stdout!.on('data', (c: Buffer) => (out += c.toString()));
     await new Promise((r) => setTimeout(r, 700));
-    child.stdin.end();
+    child.stdin!.end();
     expect(out).toBe('');
   }, 20_000);
 });

@@ -11,6 +11,8 @@
 // fail loudly and never write. Exactly one caller says `allowRealHome`: the shipped entry
 // in `main.ts`, run by a host that means it.
 
+import { mkdirSync, statSync } from 'node:fs';
+
 /** Thrown when the real home would have been used without anyone asking for it. */
 export class RealHomeRefusedError extends Error {
   constructor(message: string) {
@@ -57,4 +59,21 @@ export function resolveHome(options: ResolveHomeOptions = {}): string {
   }
 
   return `${realHome}/Snug`;
+}
+
+/**
+ * `mkdir -p`, for a directory two processes may be creating at the same instant.
+ *
+ * Two agent windows opening together both make the home, and a recursive mkdir that loses
+ * that race can surface EEXIST for a component the OTHER process created a moment earlier
+ * (seen 2 rounds in 80 under Node 24, answered to the agent as "Snug cannot use its folder
+ * (EEXIST)"). The directory being there is the outcome that was wanted. A FILE being there
+ * is not, and stays the error it is.
+ */
+export function ensureDirectory(dir: string, mkdir: (dir: string) => void = (target) => void mkdirSync(target, { recursive: true })): void {
+  try {
+    mkdir(dir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST' || !statSync(dir, { throwIfNoEntry: false })?.isDirectory()) throw error;
+  }
 }

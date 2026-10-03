@@ -13,7 +13,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
-import { admitDataPlaneRequest } from './loopback-gates.js';
+import { admitDataPlaneRequest, RUNNER_REFUSAL_HEADERS } from './loopback-gates.js';
 import type { Brain } from './brain-claude.js';
 import { isModelId } from './brain-child.js';
 import type { FetchProxy, ProxyRequest, ProxyResult } from './fetch-proxy.js';
@@ -24,6 +24,13 @@ import { RealHomeRefusedError } from './home.js';
 const MAX_USERDB_BODY_BYTES = 64 * 1024 * 1024;
 /** A `/fetch` request document (the URL, method, headers and body the executor already built). */
 const MAX_FETCH_REQUEST_BYTES = 8 * 1024 * 1024;
+
+/**
+ * How long `close()` lets open responses finish before it cuts them. A chat stream holds a
+ * connection for as long as the model talks, and `http.Server.close()` waits for every one:
+ * without a bound a stopping runner would stay alive behind a tab nobody is reading.
+ */
+export const CLOSE_LINGER_MS = 1_000;
 
 export type ServerEvent = 'hand-in' | 'status' | 'shutdown';
 
@@ -40,9 +47,10 @@ export interface LoopbackServerOptions {
   /** Names the other product holding the user file, when one is (D-B10). */
   heldBy?: () => string | undefined;
   /**
-   * What the user's own CLI can do, probed at boot (D-B35). Reported on `/status` so the
-   * page's brain chip can NAME a logged-out or missing CLI, rather than letting it surface
-   * as a generic 502 at the first think with no remedy shown.
+   * What the user's own CLI can do, as the probe last reported it (D-B35) — `undefined`
+   * until it has answered; the probe itself starts at the first page contact (below).
+   * Reported on `/status` so the page's brain chip can NAME a logged-out or missing CLI,
+   * rather than letting it surface as a generic 502 at the first think with no remedy shown.
    */
   brainState?: () => { state: string; detail?: string } | undefined;
   /**
@@ -51,6 +59,13 @@ export interface LoopbackServerOptions {
    * its tokens instead of a silent wait.
    */
   brain?: Pick<Brain, 'stream'>;
+  /**
+   * Called ONCE, by the first request that passed the gate — the first page contact — and
+   * awaited before that request is answered. It is what makes the brain probe lazy (B1): a
+   * session that only ever speaks over stdio spawns no CLI, and what a fast probe learns
+   * still rides the page's very first `/status`.
+   */
+  onFirstContact?: () => void | Promise<void>;
   /**
    * The models the chip may offer (TASK-20260922 S9). Read from the CLI's own catalogue by
    * the RUNNER, because the file lives in the user's home and the page cannot read it. A
@@ -66,6 +81,12 @@ export interface LoopbackServer {
   emit(event: ServerEvent, data: unknown): void;
   /** How many pages are listening — the runner is "open" when at least one is. */
   subscriberCount(): number;
+  /**
+   * Stop taking `/userdb` writes and wait — at most `timeoutMs` — for the ones in flight
+   * (L4). Called BEFORE the lock is released: a write still running when a successor takes
+   * the lock is two writers on one user file.
+   */
+  drainWrites(timeoutMs: number): Promise<void>;
 }
 
 const readBody = async (request: IncomingMessage, cap: number): Promise<Buffer | undefined> => {
@@ -97,6 +118,11 @@ export function createLoopbackServer(options: LoopbackServerOptions): LoopbackSe
   const subscribers = new Set<ServerResponse>();
   let httpServer: Server | undefined;
   let boundPort = 0;
+  let firstContact: Promise<void> | undefined;
+  // `/userdb` writes between their first byte and the rename, and whoever waits on them.
+  let writesInFlight = 0;
+  let draining = false;
+  let onWritesIdle: (() => void) | undefined;
 
   const end = (response: ServerResponse, status: number, body: string | Buffer = '', headers: Record<string, string> = {}): void => {
     response.writeHead(status, headers);
@@ -135,9 +161,16 @@ export function createLoopbackServer(options: LoopbackServerOptions): LoopbackSe
     const admitted = admitDataPlaneRequest({ method: request.method ?? 'GET', path, headers }, { port: boundPort, token });
     if (!admitted.ok) {
       // No body detail: a refusal that explains itself tells a prober which half it got right.
-      end(response, admitted.status);
+      // The marker is the same on every one of them, so it explains nothing either.
+      end(response, admitted.status, '', RUNNER_REFUSAL_HEADERS);
       return;
     }
+
+    // The first page contact. A failure in it is the probe's to report, never this request's.
+    firstContact ??= Promise.resolve()
+      .then(() => options.onFirstContact?.())
+      .catch(() => {});
+    await firstContact;
 
     if (path === '/status') {
       const held = heldBy();
@@ -162,10 +195,11 @@ export function createLoopbackServer(options: LoopbackServerOptions): LoopbackSe
         connection: 'keep-alive',
       });
       response.write(': open\n\n');
-      // REPLAY WHAT IS ALREADY KNOWN. The brain probe is kicked off at `runner.start()`,
-      // before any browser exists, so its emit can land in zero subscribers and a
-      // fire-and-forget event is simply lost — the chip would keep its boot label forever.
-      // A page that subscribes later is told the current state immediately.
+      // REPLAY WHAT IS ALREADY KNOWN. The brain probe is kicked off by the page's FIRST
+      // request — its `/status`, sent before it subscribes here — so the probe's emit can
+      // land in zero subscribers, and a fire-and-forget event is simply lost: the chip would
+      // keep its boot label forever. A page that subscribes later is told the current state
+      // immediately.
       const known = options.brainState?.();
       if (known !== undefined) {
         response.write(`event: status\ndata: ${JSON.stringify({ brain: known })}\n\n`);
@@ -291,16 +325,28 @@ export function createLoopbackServer(options: LoopbackServerOptions): LoopbackSe
           json(response, 423, { code: 'USERDB_HELD', heldBy: held });
           return;
         }
-        const body = await readBody(request, MAX_USERDB_BODY_BYTES);
-        if (body === undefined) {
-          end(response, 413);
+        if (draining) {
+          // The runner is stopping. SAID, with the marker, so the page can tell the user
+          // (K7) — a write accepted now could land after the lock has changed hands.
+          end(response, 503, '', RUNNER_REFUSAL_HEADERS);
           return;
         }
+        writesInFlight += 1;
         try {
-          await store.write(name, new Uint8Array(body));
-          end(response, 204);
-        } catch {
-          end(response, 500);
+          const body = await readBody(request, MAX_USERDB_BODY_BYTES);
+          if (body === undefined) {
+            end(response, 413);
+            return;
+          }
+          try {
+            await store.write(name, new Uint8Array(body));
+            end(response, 204);
+          } catch {
+            end(response, 500);
+          }
+        } finally {
+          writesInFlight -= 1;
+          if (writesInFlight === 0) onWritesIdle?.();
         }
         return;
       }
@@ -332,7 +378,29 @@ export function createLoopbackServer(options: LoopbackServerOptions): LoopbackSe
       const server = httpServer;
       httpServer = undefined;
       if (server === undefined) return;
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        const linger = setTimeout(() => server.closeAllConnections(), CLOSE_LINGER_MS);
+        linger.unref?.();
+        server.close(() => {
+          clearTimeout(linger);
+          resolve();
+        });
+      });
+    },
+
+    async drainWrites(timeoutMs: number): Promise<void> {
+      draining = true;
+      if (writesInFlight === 0) return;
+      await new Promise<void>((resolve) => {
+        // The bound NAMES itself by returning: a write wedged on a dead disk must not hold
+        // the exit, and the caller's own hard deadline is the backstop behind this one.
+        const timer = setTimeout(resolve, timeoutMs);
+        timer.unref?.();
+        onWritesIdle = () => {
+          clearTimeout(timer);
+          resolve();
+        };
+      });
     },
 
     address(): AddressInfo {

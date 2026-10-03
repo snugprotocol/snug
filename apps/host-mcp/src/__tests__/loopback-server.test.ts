@@ -11,7 +11,8 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { createLoopbackServer, type LoopbackServer } from '../loopback-server.js';
+import { RUNNER_MARKER_HEADER } from '../loopback-gates.js';
+import { CLOSE_LINGER_MS, createLoopbackServer, type LoopbackServer } from '../loopback-server.js';
 import { createUserFileStore } from '../userdb-fs.js';
 
 const TOKEN = 'c'.repeat(64);
@@ -455,5 +456,163 @@ describe('/status carries the chip’s model list (S9)', () => {
     const models = [{ id: 'claude-sonnet-5', name: 'Sonnet 5', effort: true }];
     await start({ store: createUserFileStore(home), models: () => models });
     expect(((await (await call('/status')).json()) as { models?: unknown }).models).toEqual(models);
+  });
+});
+
+// ------------------------------------------------------------------ the lifecycle range
+// (TASK-20261003: the marker header, the lazy first contact, a stop that loses no write.)
+
+describe('a gate refusal says "a Snug runner refused you" — and nothing more', () => {
+  // The kit page is one build for every binding (ADR-0072), so at `http://127.0.0.1` it has
+  // to tell "a runner that will not let me in" (→ "open it from your agent") from "a static
+  // server that has no /status" (→ a plain file). The marker is that difference. It is ONE
+  // constant on EVERY refusal, so it tells a prober which process this is — which the open
+  // document at `/` already does — and nothing about which half of the gate it got right.
+
+  it.each(['/status', '/events', '/userdb/user.snug', '/fetch', '/v1/chat/completions', '/nope'])('a 401 on %s carries x-snug-runner: 1', async (route) => {
+    const response = await fetch(`${origin}${route}`, { headers: { origin } });
+    expect(response.status).toBe(401);
+    expect(response.headers.get(RUNNER_MARKER_HEADER)).toBe('1');
+    expect(await response.text()).toBe('');
+  });
+
+  it('a 403 carries the SAME header, byte for byte — the status is the only thing that differs', async () => {
+    const refused = await fetch(`${origin}/status`, { headers: { origin } });
+    const foreign = await fetch(`${origin}/status`, { headers: { authorization: `Bearer ${TOKEN}`, origin: 'https://evil.example' } });
+    const preflight = await fetch(`${origin}/status`, { method: 'OPTIONS', headers: { origin } });
+    expect(foreign.status).toBe(403);
+    expect(preflight.status).toBe(403);
+    const marker = (response: Response): string | null => response.headers.get(RUNNER_MARKER_HEADER);
+    expect([marker(refused), marker(foreign), marker(preflight)]).toEqual(['1', '1', '1']);
+  });
+
+  it('is not a CORS header and exposes none — a foreign page still cannot read it', async () => {
+    const response = await fetch(`${origin}/status`, { headers: { origin: 'https://evil.example' } });
+    expect(response.headers.get('access-control-allow-origin')).toBeNull();
+    expect(response.headers.get('access-control-expose-headers')).toBeNull();
+  });
+});
+
+describe('the first page contact (B1: probes are lazy)', () => {
+  it('is announced ONCE, by the first AUTHENTICATED request — never by the document or a refusal', async () => {
+    await server.close();
+    let contacts = 0;
+    await start({ onFirstContact: () => void (contacts += 1) });
+    await fetch(`${origin}/`);
+    await fetch(`${origin}/oauth/callback?code=x`);
+    await fetch(`${origin}/status`, { headers: { origin } }); // 401
+    await fetch(`${origin}/status`, { headers: { authorization: `Bearer ${TOKEN}`, origin: 'https://evil.example' } }); // 403
+    expect(contacts, 'an anonymous request must not start the brain probe — it spawns the user’s CLI').toBe(0);
+    await call('/status');
+    await call('/status');
+    await call('/userdb/user.snug');
+    expect(contacts).toBe(1);
+  });
+
+  it('is waited for, so what it learns rides the very answer that triggered it', async () => {
+    await server.close();
+    let state: { state: string } | undefined;
+    await start({
+      brainState: () => state,
+      onFirstContact: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        state = { state: 'absent' };
+      },
+    });
+    const body = (await (await call('/status')).json()) as { brain?: { state: string } };
+    expect(body.brain?.state).toBe('absent');
+  });
+
+  it('a first contact that throws does not fail the request', async () => {
+    await server.close();
+    await start({
+      onFirstContact: () => {
+        throw new Error('probe blew up');
+      },
+    });
+    expect((await call('/status')).status).toBe(200);
+  });
+});
+
+describe('stopping loses no write (L4)', () => {
+  /** A store whose write is held open until the test lets it finish. */
+  const slowStore = () => {
+    const inner = createUserFileStore(home);
+    let release: () => void = () => {};
+    let entered: () => void = () => {};
+    const began = new Promise<void>((resolve) => (entered = resolve));
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    return {
+      began,
+      release: () => release(),
+      store: {
+        read: inner.read,
+        write: async (name: string, bytes: Uint8Array) => {
+          entered();
+          await gate;
+          await inner.write(name, bytes);
+        },
+      },
+    };
+  };
+  const put = (bytes: string): Promise<Response> => call('/userdb/user.snug', { method: 'PUT', body: bytes });
+
+  it('drainWrites waits for a write that is already in flight, and that write lands', async () => {
+    await server.close();
+    const slow = slowStore();
+    await start({ store: slow.store });
+    const writing = put('the user’s last edit');
+    await slow.began;
+
+    let drained = false;
+    const draining = server.drainWrites(5_000).then(() => void (drained = true));
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(drained, 'the drain returned while a write was still in flight').toBe(false);
+
+    slow.release();
+    await draining;
+    expect((await writing).status).toBe(204);
+    expect(Buffer.from((await createUserFileStore(home).read('user.snug'))!).toString('utf8')).toBe('the user’s last edit');
+  });
+
+  it('refuses a write that arrives AFTER the drain began — said, with the marker, never half-taken', async () => {
+    await server.drainWrites(1_000);
+    const response = await put('too late');
+    expect(response.status).toBe(503);
+    expect(response.headers.get(RUNNER_MARKER_HEADER)).toBe('1');
+    expect(await createUserFileStore(home).read('user.snug')).toBeUndefined();
+    // Reading is still answered: nothing about a read can be lost.
+    expect((await call('/userdb/user.snug')).status).toBe(404);
+  });
+
+  it('gives up at its bound rather than holding the exit for a write that never finishes', async () => {
+    await server.close();
+    const slow = slowStore();
+    await start({ store: slow.store });
+    void put('stuck').catch(() => {});
+    await slow.began;
+    const began = Date.now();
+    await server.drainWrites(120);
+    expect(Date.now() - began).toBeLessThan(2_000);
+    slow.release();
+  });
+
+  it('close() does not wait for ever on a response that is still streaming', async () => {
+    await server.close();
+    await start({
+      brain: {
+        async stream(_request, sink) {
+          sink.write(': open\n\n');
+          await new Promise(() => {}); // a model that never finishes
+        },
+      },
+    });
+    const streaming = call('/v1/chat/completions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ messages: [{ role: 'user', content: 'x' }] }) });
+    const response = await streaming;
+    expect(response.status).toBe(200);
+    const began = Date.now();
+    await server.close();
+    expect(Date.now() - began).toBeLessThan(CLOSE_LINGER_MS + 2_000);
+    await response.text().catch(() => {});
   });
 });

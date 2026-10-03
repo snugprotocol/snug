@@ -39,6 +39,19 @@ export interface GateContext {
 
 export type GateResult = { ok: true } | { ok: false; status: 401 | 403 };
 
+/**
+ * What every refusal on the data plane carries (ADR-0072 §2).
+ *
+ * The kit page is ONE build for every binding, so at `http://127.0.0.1` it must tell "a
+ * runner that will not let me in" (say: open it from your agent) from "a static server with
+ * no `/status`" (a plain file). This header is that difference. It is the same constant on
+ * every refusal — 401 or 403, any route — so it says only WHICH PROCESS answered, which the
+ * open document at `/` says already, and nothing about which half of the gate a prober got
+ * right. It is not a CORS header and none is exposed: a foreign page still reads nothing.
+ */
+export const RUNNER_MARKER_HEADER = 'x-snug-runner';
+export const RUNNER_REFUSAL_HEADERS: Readonly<Record<string, string>> = Object.freeze({ [RUNNER_MARKER_HEADER]: '1' });
+
 /** Constant-time compare. Hygiene rather than a defence — a local attacker has better options. */
 function secretEquals(a: string | undefined, b: string): boolean {
   if (a === undefined) return false;

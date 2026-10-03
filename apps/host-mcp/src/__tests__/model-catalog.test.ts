@@ -6,15 +6,31 @@
 // It is an INTERNAL cache, so every case here is about failing soft: a missing dir, a shape
 // that changed, a stale file. The chip keeps free text as its fallback rung, so "no list"
 // must degrade to "type an id", never to a broken control.
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import { readModelCatalog, MODEL_CATALOG_MAX } from '../model-catalog.js';
 
+// FIXTURE ONLY (2026-10-03, no assertion touched): every case made a home under the OS temp
+// dir and none removed it — ten directories a run, 320 of them on the owner's machine by the
+// time anybody counted. A home is now remembered when it is made and removed after the case.
+const homes: string[] = [];
+const tempHome = (prefix: string): string => {
+  const home = mkdtempSync(path.join(tmpdir(), prefix));
+  homes.push(home);
+  return home;
+};
+afterEach(() => {
+  for (const home of homes.splice(0)) {
+    rmSync(home, { recursive: true, force: true });
+    expect(existsSync(home), `${home} was left behind`).toBe(false);
+  }
+});
+
 const homeWith = (files: Record<string, string>): string => {
-  const home = mkdtempSync(path.join(tmpdir(), 'snug-catalog-'));
+  const home = tempHome('snug-catalog-');
   const dir = path.join(home, '.claude', 'cache', 'model-catalog');
   mkdirSync(dir, { recursive: true });
   for (const [name, body] of Object.entries(files)) writeFileSync(path.join(dir, name), body);
@@ -67,7 +83,7 @@ describe('the models offered come from the CLI’s own catalogue', () => {
 
 describe('it fails SOFT — the chip falls back to free text, never to a broken control', () => {
   it('returns nothing when the cache directory does not exist', () => {
-    expect(readModelCatalog(mkdtempSync(path.join(tmpdir(), 'snug-nocache-')))).toEqual([]);
+    expect(readModelCatalog(tempHome('snug-nocache-'))).toEqual([]);
   });
 
   it('returns nothing for a file that is not JSON', () => {

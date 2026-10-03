@@ -5,6 +5,9 @@ runner shows them to the user and keeps their data.
 
 1. Call `snug_status` first. It tells you whether the runner is already open, where the
    user's file lives, and which brain answers the apps.
+   If it carries a `refusal`, Snug cannot run yet: tell the user its message and its remedy
+   in one line, and do not retry in a loop — the remedy is theirs to carry out. If it
+   carries a `note`, do what the note says before anything else.
 2. If it is not open, call `snug_open`. That opens the runner in the user's browser and
    returns the address it is serving on. If the browser cannot be opened from here, the
    result says exactly what the user should run instead — pass that line along verbatim.

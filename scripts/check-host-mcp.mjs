@@ -9,20 +9,25 @@
 //      provenance does not describe its files, or which ships a hook;
 //   4. a tree the two external validators refuse — `claude plugin validate --strict` and
 //      `agentskills validate` — when they are on this machine; when they are not, the gate
-//      says NOT VERIFIED by name rather than passing in silence.
+//      says NOT VERIFIED by name rather than passing in silence;
+//   5. a tree that does not START (D1). The four rules above read files; none of them ran
+//      one, and that is how a plugin whose second window could never attach to its own
+//      runner was "marketplace-ready" (found 2026-10-03). The launch legs start the launcher
+//      the tree ships, speak to it as a host does, and start a second one beside it.
 //
 // The tree is BUILT here, on every run, from the built inputs (`turbo build` first): nothing
 // generated is committed, so the gate is what proves the sources still assemble.
 //
 // Dependency-free node builtins, like every other gate under `scripts/`.
 
-import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { execFileSync, spawn } from 'node:child_process';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { buildPlugin, checkProvenance, PLUGIN_OUT_DIR, SKILL_DIR, SOURCES } from './build-plugin.mjs';
-import { BUNDLE_PATH, claudeMcpConfig, claudePluginManifest, LAUNCHER_PATH, marketplaceManifest, PLUGIN } from './lib/plugin-manifests.mjs';
+import { BUNDLE_PATH, claudeMcpConfig, claudePluginManifest, LAUNCHER_PATH, marketplaceManifest, PLUGIN, SH } from './lib/plugin-manifests.mjs';
 import { buildSkillTree, INSTRUCTIONS_SOURCE } from './lib/skill-build.mjs';
 
 // One path per artifact: the bundle is the builder's input, the instructions the skill's source.
@@ -31,11 +36,16 @@ export const INSTRUCTIONS_FILE = INSTRUCTIONS_SOURCE;
 export const PLUGIN_DIR = PLUGIN_OUT_DIR;
 
 /**
- * Names that must never appear in a RELEASE bundle. The test-hook build reads the env var
- * and injects a resolver; the release build passes neither, and this is what proves it
- * rather than a comment claiming it.
+ * What must never appear in a RELEASE bundle: the PREFIX every test hook's env name shares
+ * (K5). The test build reads those variables and injects a resolver, a holder, a brain, a
+ * port list; the release build passes none of them, and this is what proves it rather than
+ * a comment claiming it.
+ *
+ * A prefix, not a list. The list named three hooks while the test entry had grown five —
+ * a list is only as current as the last person to remember it. A test pins that every name
+ * the test entry declares carries this prefix.
  */
-export const FORBIDDEN_IN_RELEASE = ['SNUG_MCP_TEST_RESOLVE', 'SNUG_MCP_TEST_HOLDER', 'SNUG_MCP_TEST_BRAIN'];
+export const FORBIDDEN_PREFIX_IN_RELEASE = 'SNUG_MCP_TEST_';
 
 /** Every env var the process may read. Anything else is a hook or a surprise. */
 export const ALLOWED_ENV_READS = ['HOME', 'PATH', 'SHELL', 'USER', 'LANG', 'LC_ALL', 'TMPDIR', 'TERM', 'SNUG_HOME', 'NODE_EXTRA_CA_CERTS'];
@@ -67,9 +77,10 @@ export const SKILLS_REF_VERSION = '0.1.1';
 
 export function checkBundle(source) {
   const problems = [];
-  for (const name of FORBIDDEN_IN_RELEASE) {
-    if (source.includes(name)) problems.push(`the release bundle names ${name} — a test hook must not ship`);
-  }
+  // The raw bytes, not `process.env.X` accesses: the test entry reads its hooks through
+  // constants, so in a bundle the name may exist only as a string.
+  const hooks = new Set(source.match(new RegExp(`${FORBIDDEN_PREFIX_IN_RELEASE}\\w*`, 'g')) ?? []);
+  for (const name of hooks) problems.push(`the release bundle names ${name} — a test hook must not ship`);
   // Every `process.env.X` / `process.env['X']` the bundle actually reads.
   const read = new Set();
   for (const match of source.matchAll(/process\.env(?:\.([A-Za-z_$][\w$]*)|\[["']([A-Za-z_$][\w$]*)["']\])/g)) {
@@ -187,6 +198,162 @@ export function runValidators(dir, exec = execFileSync) {
   ];
 }
 
+// ------------------------------------------------------------------- the launch legs (D1)
+
+/**
+ * THE ISOLATION CONTRACT. The environment a leg's process gets — these three variables and
+ * nothing else (the `env -i` of the contract: `spawn` with an explicit `env` inherits none
+ * of ours). The release bundle is the ONE build allowed to resolve the user's real
+ * `~/Snug`, so a gate that started it with the developer's environment would be one unset
+ * variable away from a second writer on the owner's file (lessons 2026-09-07/08). With this
+ * environment there is no real home for it to find.
+ */
+export function isolationEnv(tmp) {
+  return { HOME: tmp, SNUG_HOME: path.join(tmp, 'Snug'), PATH: path.dirname(process.execPath) };
+}
+
+/** Start the launcher as a host does (`/bin/sh <launcher>`, cwd `/`) and speak JSON-RPC lines to it. */
+function startLauncher(launcher, env, requestTimeoutMs) {
+  const child = spawn(SH, [launcher], { cwd: '/', env, stdio: ['pipe', 'pipe', 'pipe'] });
+  const waiting = new Map();
+  let out = '';
+  let err = '';
+  let exited = false;
+  child.on('exit', () => (exited = true));
+  // A launcher that cannot even be spawned, or a pipe to one that has gone: the request
+  // that follows times out and names what it saw, so neither may throw here.
+  child.on('error', (error) => (err += String(error)));
+  child.stdin.on('error', () => {});
+  child.stderr.on('data', (chunk) => (err += chunk.toString('utf8')));
+  child.stdout.on('data', (chunk) => {
+    out += chunk.toString('utf8');
+    for (let newline = out.indexOf('\n'); newline !== -1; newline = out.indexOf('\n')) {
+      const line = out.slice(0, newline);
+      out = out.slice(newline + 1);
+      let message;
+      try {
+        message = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      waiting.get(message.id)?.(message);
+      waiting.delete(message.id);
+    }
+  });
+
+  let nextId = 1;
+  const request = (method, params = {}) =>
+    new Promise((resolve, reject) => {
+      const id = nextId++;
+      const timer = setTimeout(() => {
+        waiting.delete(id);
+        reject(new Error(`${method} was not answered within ${requestTimeoutMs} ms${err.trim() === '' ? '' : ` (stderr: ${err.trim().slice(0, 300)})`}`));
+      }, requestTimeoutMs);
+      waiting.set(id, (message) => {
+        clearTimeout(timer);
+        if (message.error !== undefined) reject(new Error(`${method} answered an error: ${message.error.message}`));
+        else resolve(message.result);
+      });
+      child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`);
+    });
+
+  return {
+    child,
+    request,
+    initialize: () => request('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'check-host-mcp', version: '0' } }),
+    status: async () => JSON.parse((await request('tools/call', { name: 'snug_status', arguments: {} })).content[0].text),
+    /** End the session as a host does, ask it to go, and after the bound make it go. Only ever this leg's own child. */
+    reap: (reapMs) =>
+      new Promise((resolve) => {
+        if (exited || child.pid === undefined) return resolve();
+        const kill = setTimeout(() => child.kill('SIGKILL'), reapMs);
+        child.once('exit', () => {
+          clearTimeout(kill);
+          resolve();
+        });
+        child.stdin.end();
+        child.kill('SIGTERM');
+      }),
+  };
+}
+
+const under = (file, dir) => typeof file === 'string' && file.startsWith(`${dir}${path.sep}`);
+
+/**
+ * Start what the tree ships, twice over (D1). No leg spawns a CLI: the brain probe is lazy
+ * and nothing here ever makes the page contact that would start it.
+ *
+ *   positive  the isolation environment → `initialize`, `tools/list`, `snug_status`; then a
+ *             SECOND process against the same home, which must attach to the first.
+ *   negative  neither HOME nor SNUG_HOME → `initialize` STILL succeeds, and `snug_status`
+ *             is the `home-unresolved` refusal.
+ *
+ * @param {string} launcher the POSIX launcher inside the built tree (`<tree>/snug/scripts/snug`)
+ * @param {{ requestTimeoutMs?: number, reapMs?: number }} [options] the bounds (tests shorten them)
+ * @returns {Promise<string[]>} the problems; empty when both legs passed
+ */
+export async function runLaunchLegs(launcher, options = {}) {
+  const requestTimeoutMs = options.requestTimeoutMs ?? 20_000;
+  const reapMs = options.reapMs ?? 8_000;
+  const problems = [];
+  const started = [];
+  const start = (env) => {
+    const session = startLauncher(launcher, env, requestTimeoutMs);
+    started.push(session);
+    return session;
+  };
+
+  const tmp = mkdtempSync(path.join(tmpdir(), 'snug-gate-'));
+  try {
+    const env = isolationEnv(tmp);
+    const first = start(env);
+    await first.initialize();
+    const { tools } = await first.request('tools/list');
+    if (!tools.some((tool) => tool.name === 'snug_status')) problems.push('positive leg: tools/list does not carry snug_status');
+    const status = await first.status();
+
+    // THE FIRST ASSERTION, before anything in the answer is believed or a second process is
+    // started: this is the process the leg spawned, on the home the leg gave it. Anything
+    // else means the leg is talking to — or about to share a lock with — a Snug it does
+    // not own, and it stops here.
+    if (!under(status.home, tmp) || !under(status.file, tmp) || status.pid !== first.child.pid) {
+      problems.push(
+        `positive leg: ISOLATION — the status names home ${JSON.stringify(status.home)}, file ${JSON.stringify(status.file)} and pid ${JSON.stringify(status.pid)}, ` +
+          `but this leg started pid ${first.child.pid} under ${tmp}. The leg was aborted before starting a second process.`,
+      );
+    } else {
+      if (status.running !== true) problems.push(`positive leg: the first process is not running: ${JSON.stringify(status.refusal ?? status)}`);
+      const second = start(env);
+      await second.initialize();
+      const joined = await second.status();
+      if (joined.attached !== true || joined.pid !== first.child.pid) {
+        problems.push(`positive leg: the second process did not attach to the first (pid ${first.child.pid}): ${JSON.stringify(joined.refusal ?? joined)}`);
+      }
+    }
+  } catch (error) {
+    problems.push(`positive leg: ${error instanceof Error ? error.message : String(error)}`);
+  } finally {
+    // Newest first: the attached session leaves, then the primary it was holding open.
+    for (const session of started.splice(0).reverse()) await session.reap(reapMs);
+    rmSync(tmp, { recursive: true, force: true });
+  }
+
+  try {
+    // No home of any kind — and no way to invent one: the working directory is `/`.
+    const bare = start({ PATH: path.dirname(process.execPath) });
+    await bare.initialize();
+    const status = await bare.status();
+    if (status.running !== false || status.refusal?.code !== 'home-unresolved') {
+      problems.push(`negative leg: with neither HOME nor SNUG_HOME the status must be the home-unresolved refusal, but it was ${JSON.stringify(status.refusal?.code ?? status)}`);
+    }
+  } catch (error) {
+    problems.push(`negative leg: ${error instanceof Error ? error.message : String(error)}`);
+  } finally {
+    for (const session of started.splice(0)) await session.reap(reapMs);
+  }
+  return problems;
+}
+
 async function main() {
   const problems = [];
   if (!existsSync(BUNDLE_FILE)) {
@@ -206,6 +373,8 @@ async function main() {
     process.exit(1);
   }
   problems.push(...(await checkPluginTree(PLUGIN_DIR)));
+  // Only a tree that is what it says it is gets STARTED.
+  if (problems.length === 0) problems.push(...(await runLaunchLegs(path.join(PLUGIN_DIR, PLUGIN.name, LAUNCHER_PATH))));
 
   const validators = runValidators(PLUGIN_DIR);
   for (const v of validators) {
@@ -217,7 +386,10 @@ async function main() {
     process.exit(1);
   }
   const notVerified = validators.filter((v) => v.status === 'not verified');
-  console.log(`check-host-mcp: ok (${source.length} bytes; plugin tree built and checked; validators: ${validators.map((v) => `${v.name} ${v.status}`).join(', ')})`);
+  console.log(
+    `check-host-mcp: ok (${source.length} bytes; plugin tree built and checked; launched — a second process attached, no home refused by name; ` +
+      `validators: ${validators.map((v) => `${v.name} ${v.status}`).join(', ')})`,
+  );
   for (const v of notVerified) console.log(`check-host-mcp: NOT VERIFIED — ${v.name}: ${v.detail}`);
 }
 
