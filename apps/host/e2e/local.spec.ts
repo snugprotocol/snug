@@ -438,6 +438,8 @@ test('TASK-20260922 S10 — an APP’s think reaches the brain: chess gets its r
     // The chip's own LABEL names the selected model instead of "your CLI" (S11) — by the
     // catalogue's display name where the process could read one, else by its id.
     await expect(page.locator('.brain-chip-label').first()).toHaveText(/^Claude · (Sonnet 5|claude-sonnet-5)$/);
+    // …with the thinking level in the smaller line under it (S12).
+    await expect(page.getByTestId('brain-chip-effort')).toHaveText('thinking · low');
     // …and the popover names the model that ANSWERED.
     await page.getByTestId('brain-chip').click();
     await expect(page.getByTestId('brain-menu-active')).toContainText('claude-sonnet-5-e2e-resolved');

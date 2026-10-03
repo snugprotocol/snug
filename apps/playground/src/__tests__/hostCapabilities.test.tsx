@@ -425,6 +425,51 @@ describe('the CLI model + effort control (ADR-0070, TASK-20260922 S7)', () => {
     expect(byTestId('brain-menu-model-select')).not.toBeNull();
   });
 
+  it('S12: the chip shows the thinking level in a smaller line under its label', async () => {
+    const g = await fresh(withCli(fakeCliSeat({ effort: 'low' })));
+    await render(<g.BrainChip />);
+    expect(byTestId('brain-chip-effort')?.textContent).toBe('thinking · low');
+    // The label line itself is untouched — it is an API (tests, AT, docs).
+    expect(byTestId('brain-chip')?.querySelector('.brain-chip-label')?.textContent).toBe(HOST_LABEL);
+  });
+
+  it('S12: with no level chosen it says "default" — the CLI reports its default level nowhere, so none is invented', async () => {
+    const g = await fresh(withCli(fakeCliSeat({})));
+    await render(<g.BrainChip />);
+    expect(byTestId('brain-chip-effort')?.textContent).toBe('thinking · default');
+  });
+
+  it('S12: the line follows a switch made in the popover, live', async () => {
+    const seat = fakeCliSeat({});
+    const g = await fresh(withCli(seat));
+    await render(<g.BrainChip />);
+    await click(byTestId('brain-chip'));
+    const select = byTestId('brain-menu-effort') as HTMLSelectElement;
+    await act(async () => {
+      select.value = 'max';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    expect(byTestId('brain-chip-effort')?.textContent).toBe('thinking · max');
+  });
+
+  it('S12: the accessible name carries the level too', async () => {
+    const g = await fresh(withCli(fakeCliSeat({ effort: 'high' })));
+    await render(<g.BrainChip />);
+    expect(byTestId('brain-chip')?.getAttribute('aria-label')).toMatch(/thinking level high$/);
+  });
+
+  it('S12: NO level line for a model without an effort axis (Haiku) — a level it ignores is noise (AC8)', async () => {
+    const g = await fresh(withCli(fakeCliSeat({ model: 'claude-haiku-4-5-20251001', effort: 'low' })));
+    await render(<g.BrainChip />);
+    expect(byTestId('brain-chip-effort')).toBeNull();
+  });
+
+  it('S12: NO level line on a host brain without the CLI seat (the chat brain, a non-ready CLI)', async () => {
+    const g = await fresh(hostPlatform({ kind: 'host', label: HOST_LABEL, adapter: idleAdapter, streaming: false, tools: false }));
+    await render(<g.BrainChip />);
+    expect(byTestId('brain-chip-effort')).toBeNull();
+  });
+
   it('a host brain with NO cli seat shows no control — the chat brain, and every non-ready CLI (AC8)', async () => {
     const g = await fresh(hostPlatform({ kind: 'host', label: HOST_LABEL, adapter: idleAdapter, streaming: false, tools: false }));
     await render(<g.BrainChip />);

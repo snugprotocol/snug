@@ -139,6 +139,10 @@ export function BrainChip(): ReactElement {
   );
 
   const copy = copyFor(brain);
+  const effortLine =
+    cliSeat !== undefined && cliState !== undefined && cliSeat.effortApplies ? `thinking · ${cliState.effort ?? 'default'}` : undefined;
+  // The accessible name carries the level too — the visible line may be compacted away.
+  const chipAria = effortLine === undefined ? copy.aria : `${copy.aria}, thinking level ${cliState?.effort ?? 'default'}`;
   const models = ollama !== 'unknown' && ollama.running ? ollama.models : [];
   const tierNote = tierSubstitutionNote(tierState?.applied);
 
@@ -152,8 +156,8 @@ export function BrainChip(): ReactElement {
         data-brain={brain}
         aria-haspopup="true"
         aria-expanded={open}
-        aria-label={copy.aria}
-        title={copy.aria}
+        aria-label={chipAria}
+        title={chipAria}
         {...(tierState !== undefined ? { 'data-tier': tierState.choice } : {})}
         onClick={toggle}
       >
@@ -168,7 +172,18 @@ export function BrainChip(): ReactElement {
             <span className="brain-chip-label brain-chip-label-short">demo</span>
           </>
         ) : (
-          <span className="brain-chip-label">{copy.label}</span>
+          <span className="brain-chip-text">
+            <span className="brain-chip-label">{copy.label}</span>
+            {/* The thinking level, smaller, under the label (S12). Only where the CLI control
+                exists and the chosen model HAS an effort axis — Haiku 4.5 does not, and naming a
+                level it ignores would be noise (AC8). An unchosen level is "default": the CLI
+                reports its default level nowhere, so none is invented. */}
+            {effortLine !== undefined ? (
+              <span className="brain-chip-sub" data-testid="brain-chip-effort">
+                {effortLine}
+              </span>
+            ) : null}
+          </span>
         )}
       </button>
       {open ? (

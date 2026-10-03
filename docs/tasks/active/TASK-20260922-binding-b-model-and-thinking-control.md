@@ -229,3 +229,10 @@ Tests first at every step. Steps 1–4 are `apps/host-mcp`; step 5 is `apps/host
 - The label is still a getter (the platform is set once); the chip re-renders on the choice store's notifications, so a switch or a first answer updates it with no recompose. Pinned in unit tests and on the real page (the S10 e2e leg now asserts `.brain-chip-label` reads `Claude · Sonnet 5`).
 - Width: non-demo chip labels are hidden below 830px (dot only), and desktop already shows remedy strings far longer than any model id — no overflow risk.
 - Tests: host 299, host-mcp 304/1 skipped, playground 1921, desktop 194. **Root 30/30, host e2e 31 passed**, check-host-kit ok.
+
+### 2026-10-03 — Jeetu (via Claude Code) — S12: the thinking level under the chip label
+- **Owner ask**: show the thinking level in a smaller font under the chip (then "or on the same line" — either acceptable).
+- **Built under the label**, after a screenshot check on the real page: the chip stays at its 44px tap height and the header does not grow, so the stacked layout costs nothing. Same-line is a two-line CSS change if the owner prefers it.
+- Text: `thinking · <level>`, or `thinking · default` when none is chosen — the CLI reports its default level nowhere, so none is invented. No line where the chosen model has no effort axis (Haiku 4.5, AC8) or where the CLI control does not exist (the chat brain, a non-ready CLI). Hidden with the label below 830px (dot-only chip). The chip's accessible name gains ", thinking level <level>". The `.brain-chip-label` text is unchanged (it is an API).
+- Size: `calc(var(--text-xs) * 0.85)` — one step below the chip's own `--text-xs`; the token scale has nothing smaller.
+- Tests: 6 new in the playground chip suite (incl. live update on a popover switch) + the S10 e2e leg asserts the line. host 299, host-mcp 304/1 skipped, playground 1927, desktop 194. **Root 30/30, host e2e 31 passed**, check-host-kit ok.

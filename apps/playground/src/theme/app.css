@@ -2100,6 +2100,19 @@ img.identity-avatar {
   white-space: nowrap;
   cursor: pointer;
 }
+.brain-chip-text {
+  /* Label over the thinking level (S12). Two short lines fit inside the chip's tap-target
+     height, so the header pill does not grow. */
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  line-height: 1.15;
+}
+.brain-chip-sub {
+  /* One step below the chip's own --text-xs; there is no smaller token. */
+  font-size: calc(var(--text-xs) * 0.85);
+  opacity: 0.85;
+}
 .brain-chip:hover {
   background: var(--surface-2);
 }
@@ -2266,7 +2279,8 @@ img.identity-avatar {
   display: none;
 }
 @media (max-width: 830px) {
-  .brain-chip:not([data-brain='demo']) .brain-chip-label {
+  .brain-chip:not([data-brain='demo']) .brain-chip-label,
+  .brain-chip:not([data-brain='demo']) .brain-chip-sub {
     display: none;
   }
 }
