@@ -1,6 +1,6 @@
 # TASK-20260922-binding-b-model-and-thinking-control: the brain chip on Binding B becomes a control — the user picks the model and the thinking level, and sees which are active
 
-- **Status**: **S1–S6 DONE 2026-09-22** — plan approved and implemented test-first; ADR-0070 accepted. Root suite green (30/30). **AC1–AC8 met; AC9 (🔑 owner walk) outstanding**, plus one loose end needing an owner call: rendering the chip control is a playground-side change outside this task's approved scope.
+- **Status**: **DONE — merged 2026-10-03 as PR #183 (squash `d8fae17`)**. S1–S12 + the pre-merge review fixes. AC1–AC8 met; AC9 walked by the owner (the bad-model leg recorded as a residual in next-steps). ADR-0070 accepted + amended.
 - **Owner**: Jeetu
 - **Risk tier**: **high** — it changes the child CLI's argv (the brain's security posture, program D5), the pool's identity key, and the one disclosure surface D15/ADR-0059 govern. Plan review with fresh-context finder angles before code; explicit sign-off at Gate 5.
 - **Branch**: `feat/TASK-20260922-binding-b-model-and-thinking-control` — **cut** off `main` at `ff20cba` (PR #181 `df68d63` + done-move #182 both landed)
@@ -256,3 +256,6 @@ Tests first at every step. Steps 1–4 are `apps/host-mcp`; step 5 is `apps/host
   - R4 the "a CLI update lands without a restart" comment overstated it, and the page's `status`-event handler for `models` was dead → the runner now includes `models` in its status event; comments say a page reload picks up a changed catalogue.
   - Docs: threat-model delta row (new key; the user value in argv and how it is bounded), ADR-0070 amendment, code-map, ADR index.
 - **CORRECTION — CI caught what my gate reporting missed (2026-10-03).** PR #183's `workspace` job failed `check-threat-model` TM3: editing `docs/security/threat-model-delta-local-host-process.md` (the review disposition) changed its hash, and the consolidated model's ledger pins each delta — the rule is "re-read the delta, update the model, then the ledger". Fixed: R-43 in `docs/threat-model.md` now states that a user-chosen model/effort reaches argv and how it is bounded; the ledger pin moved `ee2aa56ff3cc` → `6ebdde883763`. **Root cause of the miss is mine:** every "Root 30/30" I reported on this task was turbo's `Tasks:` summary line, which prints BEFORE root `pnpm test` goes on to run `check-threat-model`, `check-sandbox-guard`, etc. — I did not check the command's exit code on those runs. **Only the final run is verified by exit code: `pnpm test` → exit 0, threat-model 235/235.** Earlier "30/30" claims in this journal mean "turbo tasks green", nothing more.
+
+### 2026-10-03 — Jeetu (via Claude Code) — MERGED
+- PR #183 squash-merged as `d8fae17` at 2026-10-03T11:19:56Z after both CI jobs passed on `b48db1c` (the first run failed TM3 — see the correction above). Done-move carried by its own PR, the #182 pattern.
