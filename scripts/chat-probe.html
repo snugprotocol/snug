@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Snug chat probe</title>
+<style>
+body{max-width:760px;margin:16px auto;padding:0 16px;background:#fff;color:#1f1d1a;font:14px/1.45 system-ui,sans-serif}
+h1{font-size:18px}
+table{width:100%;border-collapse:collapse;margin:8px 0;font:12px/1.4 monospace}
+td{padding:3px 6px;border-top:1px solid #ddd;vertical-align:top;word-break:break-all}
+td:first-child{width:1%;white-space:nowrap}
+textarea{box-sizing:border-box;width:100%;height:96px}
+</style>
+</head>
+<body>
+<h1>Snug chat probe</h1>
+<p>Loading this page is free. Only "measure the prompt limit" spends your Claude usage.</p>
+<table id="facts"></table>
+<p id="plan"></p>
+<button id="measure">measure the prompt limit</button> <button id="cancel" disabled>cancel</button>
+<table id="rungs"></table>
+<p>Press "test storage" once BEFORE publishing this artifact and once AFTER (then once on the published page). Copy the report each time.</p>
+<button id="store">test storage</button>
+<table id="stores"></table>
+<button id="copy">copy report</button> <span id="copied"></span>
+<textarea id="out" readonly></textarea>
+<script>
+(() => {
+const LADDER = [8e3, 32e3, 64e3, 65536, 65537, 96e3, 128e3, 256e3, 512e3, 1e6];
+const FILL = 'The quick brown fox jumps over the lazy dog. ';
+const JSON_ASK = 'Reply with exactly this JSON and nothing else: {"move":{"from":"e2","to":"e4"},"message":"ok"}';
+const PLAN = 'up to 11 calls, 2,227,167 bytes of prompt in all (about 495k tokens); stops at the first size that fails.';
+const KEY = 'snug-probe';
+const LATE = {}, GONE = {};
+const R = { schema: 'snug-chat-probe/1', at: '', ua: '', facts: {}, ladder: [], json: null, storage: [] };
+const $ = (id) => document.getElementById(id);
+const errName = (e) => (e && e.name) || 'Error';
+const attempt = (fn) => { try { return fn(); } catch (e) { return errName(e); } };
+const say = (id, text) => { $(id).textContent = text; };
+const rows = (id, obj) => {
+  const t = $(id);
+  t.textContent = '';
+  for (const k in obj) {
+    const r = t.insertRow();
+    r.insertCell().textContent = k;
+    r.insertCell().textContent = JSON.stringify(obj[k]);
+  }
+};
+const bounded = (p, ms, late) => {
+  let t;
+  return Promise.race([p, new Promise((r) => { t = setTimeout(r, ms, late); })]).finally(() => clearTimeout(t));
+};
+const timed = async (fn, limit) => {
+  const t0 = Date.now(), o = {};
+  try {
+    o.r = await bounded(Promise.resolve().then(fn), limit, LATE);
+  } catch (e) {
+    o.error = errName(e);
+    o.message = String((e && e.message) || e).slice(0, 120);
+  }
+  o.ms = Date.now() - t0;
+  return o;
+};
+const bare = (u) => u.split(/[?#]/)[0];
+const shape = (o, known) => {
+  if (Object(o) !== o) return String(o);
+  const out = {}, names = Object.getOwnPropertyNames, p = Object.getPrototypeOf(o);
+  for (const k of [...names(o), ...(p && Object.getPrototypeOf(p) ? names(p) : []), ...known]) {
+    if (k !== 'constructor') out[k] = attempt(() => typeof o[k]);
+  }
+  return out;
+};
+const FACTS = {
+  href: () => bare(location.href),
+  origin: () => location.origin,
+  ancestors: () => Array.from(location.ancestorOrigins),
+  baseURI: () => bare(document.baseURI),
+  compatMode: () => document.compatMode,
+  isSecureContext: () => isSecureContext,
+  cryptoSubtle: () => typeof crypto.subtle,
+  claude: () => shape(window.claude, ['complete']),
+  storage: () => shape(window.storage, ['get', 'set', 'delete', 'list']),
+  scripts: () => Array.from(document.scripts, (s) => bare(s.src).slice(0, 120)),
+  popup: () => {
+    const w = window.open('about:blank');
+    if (!w) return 'blocked';
+    w.close();
+    return 'ok';
+  },
+  form: () => {
+    let fired = 'blocked';
+    const f = document.createElement('form');
+    f.onsubmit = (e) => { fired = 'ok'; e.preventDefault(); };
+    document.body.append(f);
+    f.requestSubmit();
+    f.remove();
+    return fired;
+  },
+};
+const idb = () => new Promise((ok, no) => {
+  const q = indexedDB.open(KEY);
+  q.onsuccess = () => { q.result.close(); indexedDB.deleteDatabase(KEY); ok('ok'); };
+  q.onerror = () => no(q.error);
+});
+const kid = () => {
+  let spv = 0, own = 0;
+  addEventListener('securitypolicyviolation', (e) => { spv++; if (e.originalPolicy === "connect-src 'none'") own++; });
+  const tell = (fetched) => setTimeout(() => {
+    let reach = 'ok';
+    try { void parent.document.title; } catch (e) { reach = e.name; }
+    parent.postMessage({ snugProbe: 1, origin: self.origin, spv, own, fetched, reach }, '*');
+  }, 300);
+  fetch('https://example.com').then(() => tell('ok'), (e) => tell(e.name));
+};
+const nested = () => new Promise((ok) => {
+  const f = document.createElement('iframe');
+  f.setAttribute('sandbox', 'allow-scripts');
+  f.hidden = true;
+  f.srcdoc = `<meta http-equiv="Content-Security-Policy" content="connect-src 'none'"><script>(${kid})()<\/script>`;
+  addEventListener('message', (e) => { if (e.source === f.contentWindow && e.data && e.data.snugProbe) ok(e.data); });
+  document.body.append(f);
+});
+const boot = async () => {
+  const f = R.facts, here = attempt(() => location.href);
+  R.ua = attempt(() => navigator.userAgent);
+  for (const k in FACTS) f[k] = attempt(FACTS[k]);
+  for (const k of ['localStorage', 'sessionStorage']) f[k] = attempt(() => { window[k].setItem(KEY, '1'); window[k].removeItem(KEY); return 'ok'; });
+  for (const k of ['replaceState', 'pushState']) f[k] = attempt(() => { history[k](null, '', '#/x'); return 'ok'; });
+  attempt(() => history.replaceState(null, '', here));
+  rows('facts', f);
+  f.indexedDB = await bounded(idb(), 3e3, 'timeout').catch(errName);
+  f.nested = await bounded(nested(), 5e3, 'no-reply').catch(errName);
+  rows('facts', f);
+};
+const nonce = () => Math.random().toString(36).slice(2, 12).padEnd(10, '0');
+const buildPrompt = (n) => {
+  const h = 'HEAD-' + nonce(), t = 'TAIL-' + nonce();
+  const lead = `Reply with exactly the two markers in this message, the HEAD- one then the TAIL- one, separated by a space, and nothing else. The text between them is filler.\n${h}\n`;
+  const k = n - lead.length - t.length - 1;
+  return { p: lead + FILL.repeat(Math.ceil(k / FILL.length)).slice(0, k) + '\n' + t, h, t };
+};
+const classify = (reply, h, t) => {
+  const s = typeof reply === 'string' ? reply : '';
+  return !s.includes(h) ? 'unproven' : s.includes(t) ? 'ok' : 'truncated';
+};
+const jsonForm = (reply) => {
+  const s = typeof reply === 'string' ? reply.trim() : '';
+  const isObject = (x) => { try { return JSON.stringify(JSON.parse(x))[0] === '{'; } catch { return false; } };
+  const m = /^\x60{3}(?:json)?\s*([\s\S]*?)\s*\x60{3}$/.exec(s);
+  return { form: isObject(s) ? 'bare' : m && isObject(m[1]) ? 'fenced' : 'prose' };
+};
+const ask = async (prompt, gone, read) => {
+  const { r, ...rec } = await timed(() => Promise.race([window.claude.complete(prompt), gone]), 12e4);
+  if (rec.error) rec.outcome = 'rejected';
+  else if (r === LATE) rec.outcome = 'timeout';
+  else if (r === GONE) rec.outcome = 'cancelled';
+  else Object.assign(rec, { len: typeof r === 'string' ? r.length : -1 }, read(r));
+  return rec;
+};
+const measure = async () => {
+  const go = $('measure'), stop = $('cancel');
+  if (go.disabled) return;
+  if (typeof (window.claude && window.claude.complete) !== 'function') return say('plan', 'no window.claude.complete here - nothing to measure');
+  go.disabled = true;
+  stop.disabled = false;
+  const gone = new Promise((r) => { stop.onclick = () => r(GONE); });
+  const draw = () => rows('rungs', R.ladder.concat(R.json || []));
+  R.ladder = [];
+  R.json = null;
+  try {
+    let rec;
+    for (const n of LADDER) {
+      say('plan', `asking with ${n} bytes...`);
+      const { p, h, t } = buildPrompt(n);
+      rec = await ask(p, gone, (r) => ({ outcome: classify(r, h, t) }));
+      R.ladder.push({ bytes: n, ...rec });
+      draw();
+      if (rec.outcome !== 'ok') break;
+    }
+    if (rec.outcome !== 'cancelled') {
+      say('plan', 'asking for a small JSON reply...');
+      R.json = await ask(JSON_ASK, gone, jsonForm);
+      draw();
+    }
+  } finally {
+    say('plan', 'done - ' + PLAN);
+    go.disabled = false;
+    stop.disabled = true;
+  }
+};
+const store = async () => {
+  const s = window.storage, run = { at: new Date().toISOString() };
+  const val = (r) => (Object(r) === r && 'value' in r ? r.value : r);
+  const step = async (label, fn, read) => {
+    const { r, error, message, ms } = await timed(fn, 3e4);
+    run[label] = error || r === LATE
+      ? { ok: false, error: r === LATE ? 'no answer in 30 s' : message, ms }
+      : { ok: true, shape: Object(r) === r ? Object.keys(r).join() : typeof r, ...(read && read(r)), ms };
+    rows('stores', run);
+  };
+  R.storage.push(run);
+  $('store').disabled = true;
+  for (const [tag, v] of [['', 'v1'], ['200k', 'x'.repeat(2e5)]]) {
+    await step('set' + tag, () => s.set(KEY + tag, v));
+    await step('get' + tag, () => s.get(KEY + tag), (r) => ({ same: val(r) === v }));
+    await step('delete' + tag, () => s.delete(KEY + tag));
+  }
+  await step('earlierRuns', () => s.get(KEY + '-runs'), (r) => ({ count: +val(r) || 0 }));
+  await step('markRun', () => s.set(KEY + '-runs', String((run.earlierRuns.count || 0) + 1)));
+  await step('list', () => s.list(), (r) => ({ count: (r && r.keys || r || []).length }));
+  $('store').disabled = false;
+};
+const copy = () => {
+  const o = $('out');
+  R.at = new Date().toISOString();
+  o.value = JSON.stringify(R);
+  o.select();
+  say('copied', attempt(() => document.execCommand('copy')) === true ? 'copied' : 'not copied - copy it by hand from the box below');
+};
+const on = (id, fn) => { $(id).onclick = () => fn(); };
+try {
+  window.__probe = { LADDER, buildPrompt, classify, jsonForm, kid };
+  on('measure', measure);
+  on('store', store);
+  on('copy', copy);
+  say('plan', PLAN);
+  boot().catch((e) => { R.facts.error = errName(e); });
+} catch (e) { attempt(() => document.body.append('probe failed: ' + errName(e))); }
+})();
+</script>
+</body>
+</html>
