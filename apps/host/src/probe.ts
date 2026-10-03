@@ -8,9 +8,10 @@
 //              `use` that never settles at all). Asked only when `window.claude.use` is a
 //              function; nothing is prompted and nothing is spent (`use()` and `limits()`
 //              ask the viewer nothing — sample.d.ts).
-//   binding  — `decideBinding(env)` is pure over five facts (protocol, hostname, the two
-//              claude globals, what the host answered) and matrix-tested. Disclosure and
-//              the per-binding recipes read it; nothing routes on it (the surface flags do).
+//   binding  — `decideBinding(env)` is pure over six facts (protocol, hostname, the two
+//              claude globals, what the host answered, whether a runner answered) and
+//              matrix-tested. Disclosure and the per-binding recipes read it; nothing routes
+//              on it (the surface flags do).
 //              `'artifact-static'`: `use` exists but sample AND artifact are `null` — the
 //              page served top-level on the artifact's own host (claude.d.ts:17-20), where
 //              nothing can save and no brain exists; the chip says so and no save act renders.
@@ -30,12 +31,12 @@ import { createIdbBackend, createMemoryBackend, createOpfsBackend, type Persiste
 import { USERDB_OPFS_DIR } from '@snugprotocol/protocol';
 
 import type { PlatformBrain, SnugPlatform } from '@playground/platform/platform';
-import { isLocalEndpointHost } from '@playground/security/privateHost';
 
 import { createCompleteAdapter, type CompleteFn } from './brains/complete.js';
 import { measurePrompt } from './brains/prompt.js';
 import { createSampleAdapter, type SampleFn } from './brains/sample.js';
 import { createTierStore, type TierStorage } from './brains/tierStore.js';
+import { safeIndexedDB, safeLocalStorage, safeNavigatorStorage, type StorageHost } from './safeStorage.js';
 
 // ---------------------------------------------------------------------------- binding
 
@@ -52,6 +53,11 @@ export interface BindingEnv {
   claudeComplete: boolean;
   /** What `use()` answered, once asked: absent when it was never asked or never answered (guard). */
   hostAnswered?: { sample: boolean; artifact: boolean };
+  /**
+   * The page's own origin answered `/status` as the local runner (the boot asked — and only
+   * at the literal `http://127.0.0.1`, `boot.tsx`). The ONE thing that makes `local-host`.
+   */
+  runner?: boolean;
 }
 
 export interface BindingWindowLike {
@@ -72,23 +78,28 @@ export function readBindingEnv(win: BindingWindowLike): BindingEnv {
 }
 
 /**
- * The host globals outrank the origin: an artifact viewer is always https, and a page
- * served from anywhere ELSE with nothing wired is, for every purpose the kit has, a plain
- * file — `'file'` names "no host", not the scheme. A loopback http(s) origin with no host
- * globals is the local host (T3) or a developer's static server, which is the same thing
- * to the kit. `use` present with NOTHING resolving is the artifact host serving the page
- * top-level: `'artifact-static'` (nothing saves, no brain). No answer at all (the guard
- * tripped, or the sync path) keeps `'artifact'` — the T2 shape.
+ * A runner that ANSWERED is the host, first: its page is its own, whatever globals an
+ * extension put on the window. Then the host globals outrank the origin: an artifact viewer
+ * is always https, and a page served from anywhere ELSE with nothing wired is, for every
+ * purpose the kit has, a plain file — `'file'` names "no host", not the scheme. `use`
+ * present with NOTHING resolving is the artifact host serving the page top-level:
+ * `'artifact-static'` (nothing saves, no brain). No answer at all (the guard tripped, or
+ * the sync path) keeps `'artifact'` — the T2 shape.
+ *
+ * A LOOPBACK ORIGIN IS NOT A BINDING (K2). This used to answer `local-host` for any
+ * loopback http(s) origin — "the local host or a developer's static server, which is the
+ * same thing to the kit". It is not the same thing: `local-host` composes nothing here, but
+ * it names where the user's file lives, and a static server got "on this Mac, in
+ * ~/Snug/user.snug" for a file that lives in the browser. With no runner behind it a
+ * loopback page is file-class, like any other page somebody served.
  */
 export function decideBinding(env: BindingEnv): Binding {
+  if (env.runner === true) return 'local-host';
   if (env.claudeUse) {
     if (env.hostAnswered !== undefined && !env.hostAnswered.sample && !env.hostAnswered.artifact) return 'artifact-static';
     return 'artifact';
   }
   if (env.claudeComplete) return 'artifact-chat';
-  if (env.protocol === 'file:') return 'file';
-  // The repo's ONE host classifier (security/privateHost.ts) — not a second loopback regex.
-  if ((env.protocol === 'http:' || env.protocol === 'https:') && isLocalEndpointHost(env.hostname)) return 'local-host';
   return 'file';
 }
 
@@ -385,21 +396,13 @@ export interface ProbeResult {
   host?: HostNamespaces;
 }
 
-export interface ProbeWindowLike extends BindingWindowLike {
-  navigator?: { storage?: { getDirectory?: unknown } | undefined } | undefined;
-  indexedDB?: IDBFactory | undefined;
-  /** Where the thinking-level choice lives (this browser, this origin). Absent or throwing → memory for this boot. */
-  localStorage?: TierStorage | undefined;
-}
-
-/** `window.localStorage` is a THROWING getter where third-party storage is denied (Safari) — read it once, guarded. */
-function readLocalStorage(win: ProbeWindowLike): TierStorage | undefined {
-  try {
-    return win.localStorage ?? undefined;
-  } catch {
-    return undefined;
-  }
-}
+/**
+ * What the probe reads off `window`. The three storage seats are GETTERS that throw where a
+ * page has no storage (an opaque origin; Safari with third-party storage denied), so they
+ * are read through `safeStorage.ts` and nowhere else: absent or throwing → the next rung,
+ * and memory for the thinking-level choice.
+ */
+export type ProbeWindowLike = BindingWindowLike & StorageHost;
 
 /**
  * The whole probe, from `window`, in the order the kit boots: host, binding, storage, brain.
@@ -417,7 +420,8 @@ export async function runProbe(win: ProbeWindowLike, options: { guardMs?: number
     if (!host.guardTripped && !host.rejected) env.hostAnswered = { sample: host.sample !== undefined, artifact: host.artifact !== undefined };
   }
   const complete = !env.claudeUse && env.claudeComplete && claude?.complete !== undefined ? (prompt: string) => claude.complete!(prompt) : undefined;
-  const storage = await probeStorage({ storage: win.navigator?.storage, indexedDB: win.indexedDB });
-  const brain = await probeBrain(env, host, complete, readLocalStorage(win));
+  const storage = await probeStorage({ storage: safeNavigatorStorage(win), indexedDB: safeIndexedDB(win) });
+  // Where the thinking-level choice lives (this browser, this origin); memory when there is none.
+  const brain = await probeBrain(env, host, complete, safeLocalStorage(win));
   return { binding: decideBinding(env), storage, brain, ...(host !== undefined ? { host } : {}) };
 }

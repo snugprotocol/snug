@@ -3,7 +3,7 @@
 // and linting for the artifact viewer's narrower CDN policy (a LOADING aid, never safety).
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -169,4 +169,115 @@ test('the caps restated here equal the protocol source (one home, text-pinned)',
   };
   assert.equal(BUNDLE_MAX_BYTES, valueOf('APP_BUNDLE_MAX_BYTES'));
   assert.equal(BUNDLE_MAX_HTML_CHARS, valueOf('APP_BUNDLE_MAX_HTML_CHARS'));
+});
+
+// ---- TASK-20261003 K6: the skill's own page is never an OUTPUT -------------------------
+
+/**
+ * The skill as the plugin ships it: `<skill>/scripts/snug-embed.mjs` (+ its one module) and
+ * `<skill>/assets/snug-host.html` — which is ALSO the page the local runner serves, pinned by
+ * its hash. A script copied here is the script an agent actually runs.
+ */
+function skillLayout() {
+  const dir = mkdtempSync(path.join(tmpdir(), 'snug-embed-skill-'));
+  const skill = path.join(dir, 'skills', 'snug');
+  mkdirSync(path.join(skill, 'scripts', 'lib'), { recursive: true });
+  mkdirSync(path.join(skill, 'assets'), { recursive: true });
+  cpSync(path.join(HERE, 'snug-embed.mjs'), path.join(skill, 'scripts', 'snug-embed.mjs'));
+  cpSync(path.join(HERE, 'lib', 'page-blocks.mjs'), path.join(skill, 'scripts', 'lib', 'page-blocks.mjs'));
+  const asset = path.join(skill, 'assets', 'snug-host.html');
+  writeFileSync(asset, PAGE);
+  const app = path.join(dir, 'a.json');
+  writeFileSync(app, bundle(A, '<p>a</p>'));
+  const run = (...args) => spawnSync(process.execPath, [path.join(skill, 'scripts', 'snug-embed.mjs'), ...args], { encoding: 'utf8', cwd: dir });
+  return { dir, skill, asset, app, run, remove: () => rmSync(dir, { recursive: true, force: true }) };
+}
+
+test('(N, K6) an input that IS the skill’s own page requires --out — the default (write in place) would rewrite the page the runner serves', () => {
+  const s = skillLayout();
+  try {
+    const refused = s.run(s.asset, '--bundle', s.app);
+    assert.equal(refused.status, 2, refused.stdout);
+    assert.match(refused.stderr, /--out/);
+    assert.match(refused.stderr, /nothing written/);
+    assert.equal(readFileSync(s.asset, 'utf8'), PAGE, 'the skill’s page is byte-identical');
+    // …and reached by ANOTHER SPELLING of the same file, it is still the skill's page.
+    const relative = s.run(path.join('skills', 'snug', 'scripts', '..', 'assets', 'snug-host.html'), '--bundle', s.app);
+    assert.equal(relative.status, 2);
+    assert.equal(readFileSync(s.asset, 'utf8'), PAGE);
+  } finally {
+    s.remove();
+  }
+});
+
+test('(N, K6) refuses to WRITE into its own skill’s assets/ — by the resolved real path, so a symlink is no way round', () => {
+  const s = skillLayout();
+  try {
+    const live = path.join(s.dir, 'live.html');
+    writeFileSync(live, PAGE);
+    // A new file beside the page.
+    const beside = s.run(live, '--bundle', s.app, '--out', path.join(s.skill, 'assets', 'merged.html'));
+    assert.equal(beside.status, 2, beside.stdout);
+    assert.match(beside.stderr, /assets/);
+    // Over the page itself.
+    assert.equal(s.run(live, '--bundle', s.app, '--out', s.asset).status, 2);
+    // Through a symlinked directory, and through a symlinked file.
+    symlinkSync(path.join(s.skill, 'assets'), path.join(s.dir, 'elsewhere'));
+    assert.equal(s.run(live, '--bundle', s.app, '--out', path.join(s.dir, 'elsewhere', 'merged.html')).status, 2);
+    symlinkSync(s.asset, path.join(s.dir, 'innocent.html'));
+    assert.equal(s.run(live, '--bundle', s.app, '--out', path.join(s.dir, 'innocent.html')).status, 2);
+    // A subdirectory of assets/ is inside it.
+    mkdirSync(path.join(s.skill, 'assets', 'sub'));
+    assert.equal(s.run(live, '--bundle', s.app, '--out', path.join(s.skill, 'assets', 'sub', 'merged.html')).status, 2);
+
+    assert.deepEqual(readdirSync(path.join(s.skill, 'assets')).sort(), ['snug-host.html', 'sub'], 'nothing was written into assets/');
+    assert.deepEqual(readdirSync(path.join(s.skill, 'assets', 'sub')), []);
+    assert.equal(readFileSync(s.asset, 'utf8'), PAGE);
+  } finally {
+    s.remove();
+  }
+});
+
+test('(K6) the positive twin: the skill’s page as INPUT with --out elsewhere merges, and the page itself is untouched', () => {
+  const s = skillLayout();
+  try {
+    const out = path.join(s.dir, 'artifact.html');
+    const ok = s.run(s.asset, '--bundle', s.app, '--out', out);
+    assert.equal(ok.status, 0, ok.stderr);
+    assert.deepEqual(readBundleBlocks(readFileSync(out, 'utf8')).map((b) => b.lineage), [A]);
+    assert.equal(readFileSync(s.asset, 'utf8'), PAGE);
+    // A live page anywhere else is still merged in place, as it always was.
+    const live = path.join(s.dir, 'live.html');
+    writeFileSync(live, PAGE);
+    assert.equal(s.run(live, '--bundle', s.app).status, 0);
+    assert.deepEqual(readBundleBlocks(readFileSync(live, 'utf8')).map((b) => b.lineage), [A]);
+    // --list reads; it writes nothing, so the skill's page may be listed.
+    assert.equal(s.run(s.asset, '--list').status, 0);
+  } finally {
+    s.remove();
+  }
+});
+
+test('the CLI RUNS when it is reached through a symlinked path — it used to exit 0 having done nothing', () => {
+  // Found by the cases above on macOS, where the temp directory is itself behind a link
+  // (/var → /private/var): the "am I the program?" check compared the path as typed with the
+  // module's resolved URL, so an installed skill reached through any link was a silent no-op.
+  const s = skillLayout();
+  try {
+    symlinkSync(path.join(s.skill, 'scripts'), path.join(s.dir, 'linked-scripts'));
+    const live = path.join(s.dir, 'live.html');
+    writeFileSync(live, PAGE);
+    const ran = spawnSync(process.execPath, [path.join(s.dir, 'linked-scripts', 'snug-embed.mjs'), live, '--bundle', s.app], { encoding: 'utf8' });
+    assert.equal(ran.status, 0, ran.stderr);
+    assert.match(ran.stdout, /1 bundle\(s\) merged/);
+    assert.deepEqual(readBundleBlocks(readFileSync(live, 'utf8')).map((b) => b.lineage), [A]);
+    // …and through that link it still knows which assets/ is its own.
+    assert.equal(spawnSync(process.execPath, [path.join(s.dir, 'linked-scripts', 'snug-embed.mjs'), s.asset, '--bundle', s.app], { encoding: 'utf8' }).status, 2);
+  } finally {
+    s.remove();
+  }
+});
+
+test('(K6) run from the repo (no assets/ beside scripts/) the rule constrains nothing', () => {
+  assert.equal(existsSync(path.join(HERE, '..', 'assets')), false, 'this repo has no top-level assets/ — if one appears, this rule would start guarding it');
 });

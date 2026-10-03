@@ -33,6 +33,7 @@ import { USERDB_FILE } from '@snugprotocol/protocol';
 
 import { DB_BLOCK_FORMAT, readBundleBlocks, readDbBlock, unwrapViewerPage, verifyKitPage, writeDbBlock, type DbBlockManifest, type DbBlockRead } from '../../../../scripts/lib/page-blocks.mjs';
 import type { CustodyStore } from './custodyStore.js';
+import { safeSessionStorage } from '../safeStorage.js';
 
 /** The viewer's 16 MiB page cap, minus a margin for the runtime the viewer injects. */
 export const ARTIFACT_MAX_PAGE_BYTES = 16 * 1024 * 1024 - 512 * 1024;
@@ -88,15 +89,15 @@ const utf8 = (s: string): number => new TextEncoder().encode(s).length;
 
 function stashNote(note: string): void {
   try {
-    sessionStorage.setItem(CUSTODY_NOTE_STASH_KEY, note);
+    safeSessionStorage()?.setItem(CUSTODY_NOTE_STASH_KEY, note);
   } catch {
-    /* no session storage here — the store still carries the note */
+    /* a storage that refuses the write — the store still carries the note */
   }
 }
 
 function dropStash(): void {
   try {
-    sessionStorage.removeItem(CUSTODY_NOTE_STASH_KEY);
+    safeSessionStorage()?.removeItem(CUSTODY_NOTE_STASH_KEY);
   } catch {
     /* nothing to drop */
   }

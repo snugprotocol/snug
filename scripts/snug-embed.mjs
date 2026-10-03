@@ -9,6 +9,16 @@
 //
 //   node scripts/snug-embed.mjs <live.html> --bundle app.json [--bundle …] [--remove <lineage>] [--out file] [--strict]
 //
+// THE SKILL'S OWN PAGE IS NEVER AN OUTPUT (TASK-20261003 K6). This script ships inside the
+// skill, beside `assets/snug-host.html` — the kit page a first artifact starts from, and,
+// since the plugin carries that page once, the very file the local runner serves. Writing in
+// place is this script's default, so pointed at that file it would have rewritten it — and
+// nothing downstream would have caught it: the runner checks the page against a `.sha256`
+// pin only where one sits beside it (`apps/host-mcp` `page.ts`), and the plugin build does
+// not write one yet (D8, owed), so the rewritten page would simply be served, embedded apps
+// and all, to every later session. It refuses to write anywhere under its own skill's
+// `assets/`, and an input that lives there needs `--out`.
+//
 // Merges `snug-app-bundle/1` documents into the page by lineage (replace the same lineage,
 // append a new one, remove on request) through the ONE grammar (`lib/page-blocks.mjs`) —
 // which keeps the `snug-db` block (the user's saved file) and every block it does not own
@@ -22,7 +32,7 @@
 // inside an artifact. Warnings by default; `--strict` refuses. It says nothing about
 // whether the code is safe — the sandbox (C2) is the safety boundary, unchanged.
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -145,12 +155,53 @@ export function parseArgs(argv) {
   return args;
 }
 
+/** The real path of a file that may not exist yet: its nearest existing ancestor, resolved, plus the rest. */
+function realPathOf(file) {
+  const absolute = path.resolve(file);
+  try {
+    return realpathSync(absolute);
+  } catch {
+    const parent = path.dirname(absolute);
+    return parent === absolute ? absolute : path.join(realPathOf(parent), path.basename(absolute));
+  }
+}
+
+/**
+ * Why this run may not write `out`, or undefined when it may. The guarded directory is the
+ * `assets/` beside this script's own `scripts/` — the skill it ships in. Compared by REAL
+ * path on both sides: a symlink to the page, or into the directory, is the same file.
+ * Run from the monorepo there is no such directory, and nothing is guarded.
+ */
+export function ownAssetsRefusal({ page, out }, scriptFile = fileURLToPath(import.meta.url)) {
+  let assets;
+  try {
+    assets = realpathSync(path.resolve(path.dirname(scriptFile), '..', 'assets'));
+  } catch {
+    return undefined;
+  }
+  const within = (file) => {
+    const real = realPathOf(file);
+    return real === assets || real.startsWith(`${assets}${path.sep}`);
+  };
+  if (out === undefined) {
+    return within(page) ? `${page} is this skill's own copy of the kit page — pass --out <file> to write the merged page somewhere else (the default writes in place)` : undefined;
+  }
+  return within(out) ? `--out ${out} is inside this skill's own assets/ — the kit page there is the one the runner serves; write the merged page somewhere else` : undefined;
+}
+
 export function main(argv, io = { log: console.log, error: console.error }) {
   const args = parseArgs(argv);
   const page = readFileSync(args.page, 'utf8');
   if (args.list) {
     for (const b of listBlocks(page)) io.log(`${b.lineage}  ${b.displayName ?? '(unnamed)'}  ${b.bytes} B`);
     return 0;
+  }
+  // Before anything is merged: a run that may not write must not get as far as a result.
+  const refusal = ownAssetsRefusal({ page: args.page, out: args.out });
+  if (refusal !== undefined) {
+    io.error(`error: ${refusal}`);
+    io.error('snug-embed: nothing written');
+    return 2;
   }
   const bundles = args.bundles.map((file) => ({ name: path.basename(file), text: readFileSync(file, 'utf8') }));
   const result = embed({ page, bundles, remove: args.remove, strict: args.strict });
@@ -166,7 +217,10 @@ export function main(argv, io = { log: console.log, error: console.error }) {
   return 0;
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+// Is this file the program being run? Compared by REAL path: Node resolves the main module's
+// own URL through symlinks, so a script reached by a linked path (macOS's /var → /private/var,
+// a plugin cache behind a link) used to compare unequal here — and exit 0 having done nothing.
+if (process.argv[1] && realPathOf(process.argv[1]) === realPathOf(fileURLToPath(import.meta.url))) {
   try {
     process.exit(main(process.argv.slice(2)));
   } catch (error) {

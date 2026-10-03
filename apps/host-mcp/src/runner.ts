@@ -47,7 +47,7 @@ import { createFetchProxy, type FetchProxy } from './fetch-proxy.js';
 import { ensureDirectory, RealHomeRefusedError } from './home.js';
 import { askToStop, isAlive, readCommandLine } from './identity.js';
 import { acquireLock, controlSocketPath, reassertLock, recordBoundPort, releaseLock, type LockDeps } from './lock.js';
-import { createLoopbackServer, type LoopbackServer } from './loopback-server.js';
+import { createLoopbackServer, type HandInReport, type LoopbackServer } from './loopback-server.js';
 import { readModelCatalog, type CatalogModel } from './model-catalog.js';
 import { nodeHttpsSend } from './node-transport.js';
 import { refusalFor, refusalSentence, type Refusal, type RefusalCode, type RefusalFacts } from './refusals.js';
@@ -75,6 +75,21 @@ const FIRST_CONTACT_WAIT_MS = 250;
 const CALL_TIMEOUT_MS = 15_000;
 /** How long a stop waits for `/userdb` writes already in flight before it releases the lock. */
 const DRAIN_WRITES_MS = 2_000;
+/**
+ * How long `snug_hand_in` waits for the page to say what it did with the bundle (K6). A
+ * page that is open answers in well under a second (it parses, installs and reports); past
+ * this the tool says "sent — not confirmed" rather than claiming a delivery or holding the
+ * agent. Well inside `CALL_TIMEOUT_MS`, so an attached session's forwarded call still gets
+ * the primary's own answer.
+ */
+const HAND_IN_WAIT_MS = 5_000;
+/**
+ * The least time between two brain probes (D4). A probe of a READY brain is a real, tiny
+ * think on the user's subscription, and the page may ask for one after every failed think
+ * and while the demo brain is answering — so the page's eagerness is bounded HERE, where
+ * the cost is, and not only by the page's own manners.
+ */
+const BRAIN_PROBE_FLOOR_MS = 30_000;
 
 export interface ToolCallResult {
   content: Array<{ type: 'text'; text: string }>;
@@ -135,6 +150,10 @@ export interface RunnerOptions {
   cli?: string;
   /** `stop` arrived over the control socket: shut the PROCESS down. Defaults to stopping this runner. */
   onStopRequested?(): void;
+  /** How long `snug_hand_in` waits for the page's report. Tests shorten it. */
+  handInWaitMs?: number;
+  /** The least time between two brain probes. Tests set it to zero, or far out. */
+  brainRecheckFloorMs?: number;
 }
 
 export interface RunnerStart {
@@ -173,6 +192,29 @@ const whoami = (): { version: string; build: string; pid: number; platform: stri
 });
 
 const refusedStatus = (refusal: Refusal): ToolCallResult => text(JSON.stringify({ running: false, ...whoami(), refusal }));
+
+/**
+ * `snug_hand_in`'s answer, from what the page reported (K6) — or, with no report inside the
+ * bound, the one thing that is known: it was sent. The app's name is the one THIS process
+ * parsed out of the bundle; of the page's words only the (already flattened and bounded)
+ * reason is quoted.
+ */
+export function handInAnswer(displayName: string, report: HandInReport | undefined): ToolCallResult {
+  const name = JSON.stringify(displayName);
+  if (report === undefined) return text(`sent ${name} to the open runner — not confirmed`);
+  switch (report.outcome) {
+    case 'installed':
+      return text(`installed ${name} in the open runner`);
+    case 'updated':
+      return text(`updated ${name}${report.version !== undefined ? ` to v${report.version}` : ''} in the open runner`);
+    case 'current':
+      return text(`${name} is already current in the open runner — nothing changed`);
+    case 'offered':
+      return text(`offered — the user edited ${name}, so the update waits for them`);
+    case 'refused':
+      return text(`refused: ${report.reason === undefined || report.reason === '' ? 'the open runner gave no reason' : report.reason}`, true);
+  }
+}
 
 const errnoOf = (error: unknown): string => {
   const code = (error as NodeJS.ErrnoException | undefined)?.code;
@@ -270,6 +312,8 @@ export function createRunner(options: RunnerOptions): Runner {
   const ports = options.ports ?? [SNUG_LOCAL_PORT, 0];
   const cli = options.cli ?? 'sh <plugin>/scripts/snug';
   const open = options.openBrowser ?? (async (): Promise<void> => {});
+  const handInWaitMs = options.handInWaitMs ?? HAND_IN_WAIT_MS;
+  const brainRecheckFloorMs = options.brainRecheckFloorMs ?? BRAIN_PROBE_FLOOR_MS;
 
   // 256 bits, memory only. It reaches the page in the launch URL's fragment and is written
   // nowhere: the lock keeps only its hash.
@@ -291,6 +335,15 @@ export function createRunner(options: RunnerOptions): Runner {
   let brain: RunnerOptions['brain'];
   /** This runner took over from a primary that went away: the agent must open the page again. */
   let reopenNote = false;
+  /** Whether the listener holds the port a user registers as their OAuth redirect (D-B13). */
+  let boundFixedPort = false;
+  /** Hand-ins sent to the page and not yet reported on, by the id their event carried (K6). */
+  const awaitingOutcome = new Map<string, (report: HandInReport) => void>();
+  /** The probe in flight, and when the last one started (D4: never two at once, never inside the floor). */
+  let probing: Promise<void> | undefined;
+  let lastProbeAt = Number.NEGATIVE_INFINITY;
+  /** A re-check asked for inside the floor: owed, and run when the floor allows. At most one. */
+  let owedRecheck: ReturnType<typeof setTimeout> | undefined;
 
   const lockDeps: LockDeps = {
     pid: process.pid,
@@ -418,8 +471,26 @@ export function createRunner(options: RunnerOptions): Runner {
         if (server.subscriberCount() === 0) {
           return text('no Snug page is open — call snug_open first, then hand the app in', true);
         }
-        server.emit('hand-in', { bundle: parsed.bundle });
-        return text(`handed "${parsed.bundle.app.displayName}" to the open runner`);
+        // The page owns the database, so only the page knows what became of the bundle:
+        // installed, updated, offered to a user who edited their copy, or refused. It says
+        // so on `POST /hand-in/outcome`, naming this id — and the answer waits for that,
+        // bounded. "handed to the open runner" used to be said the moment the event was
+        // written, whatever the page then did with it.
+        const id = randomBytes(16).toString('hex');
+        const report = await new Promise<HandInReport | undefined>((resolve) => {
+          const timer = setTimeout(() => {
+            awaitingOutcome.delete(id);
+            resolve(undefined);
+          }, handInWaitMs);
+          timer.unref?.();
+          awaitingOutcome.set(id, (reported) => {
+            clearTimeout(timer);
+            awaitingOutcome.delete(id);
+            resolve(reported);
+          });
+          server.emit('hand-in', { id, bundle: parsed.bundle });
+        });
+        return handInAnswer(parsed.bundle.app.displayName, report);
       }
 
       case 'snug_list_apps':
@@ -490,20 +561,59 @@ export function createRunner(options: RunnerOptions): Runner {
 
   // ------------------------------------------------------------------ the start
 
+  /**
+   * Ask the brain what it can do, and tell every open page. ONE probe at a time, and never
+   * two inside the floor: the first page contact and every re-check come through here, so a
+   * page cannot make the user's CLI think in a loop by asking in one.
+   */
+  const probeBrain = (): Promise<void> | undefined => {
+    const probe = options.brainState;
+    if (probe === undefined) return undefined;
+    if (probing !== undefined) return probing;
+    if (Date.now() - lastProbeAt < brainRecheckFloorMs) return undefined;
+    lastProbeAt = Date.now();
+    probing = probe({ cwd: brainDir })
+      .then(
+        (readiness) => {
+          brainReadiness = readiness;
+          if (state.role === 'primary') state.server.emit('status', { brain: readiness, models: modelsFor() });
+        },
+        // A probe that throws leaves the last verdict standing rather than taking the runner down.
+        () => {},
+      )
+      .finally(() => {
+        probing = undefined;
+      });
+    return probing;
+  };
+
+  /**
+   * The page asked for the brain to be looked at again (D4): a think just failed, or the
+   * demo brain is answering in a real brain's place. Inside the floor the ask is OWED rather
+   * than dropped — one probe, when the floor allows — because "a failed think triggers a
+   * re-check" has to hold in the seconds after any probe too, which is when a page that
+   * just opened meets its first failed think. Asked five times, it is still one probe.
+   */
+  const recheckBrain = (): void => {
+    if (options.brainState === undefined || probing !== undefined || owedRecheck !== undefined) return;
+    const wait = lastProbeAt + brainRecheckFloorMs - Date.now();
+    if (wait <= 0) {
+      void probeBrain();
+      return;
+    }
+    owedRecheck = setTimeout(() => {
+      owedRecheck = undefined;
+      void probeBrain();
+    }, wait);
+    owedRecheck.unref?.();
+  };
+
   /** The first page contact (B1): start the probe, and give a fast answer the chance to ride this read. */
   const firstContact = async (): Promise<void> => {
-    const probe = options.brainState;
-    if (probe === undefined) return;
-    const probing = probe({ cwd: brainDir }).then(
-      (readiness) => {
-        brainReadiness = readiness;
-        if (state.role === 'primary') state.server.emit('status', { brain: readiness, models: modelsFor() });
-      },
-      // A probe that throws leaves the state unknown rather than taking the runner down.
-      () => {},
-    );
+    const started = probeBrain();
+    if (started === undefined) return;
     await Promise.race([
-      probing,
+      started,
       new Promise<void>((resolve) => {
         setTimeout(resolve, FIRST_CONTACT_WAIT_MS).unref?.();
       }),
@@ -566,6 +676,9 @@ export function createRunner(options: RunnerOptions): Runner {
         store: createUserFileStore(home),
         brainState: () => brainReadiness,
         onFirstContact: firstContact,
+        onBrainRecheck: recheckBrain,
+        oauthRedirect: () => boundFixedPort,
+        onHandInOutcome: (report) => awaitingOutcome.get(report.id)?.(report),
         ...(options.heldBy !== undefined ? { heldBy: options.heldBy } : {}),
         // The user's OWN CLI, on their own subscription (D5). Absent binary → the route
         // answers a named refusal and the page falls back to the demo brain.
@@ -581,6 +694,9 @@ export function createRunner(options: RunnerOptions): Runner {
       for (const candidate of ports) {
         try {
           ({ port } = await server.listen(candidate));
+          // Only the FIRST candidate is an address a user can have registered, and only
+          // when it names a port: "any port" (0) is nobody's redirect URI.
+          boundFixedPort = candidate !== 0 && candidate === ports[0];
           break;
         } catch (error) {
           listenError = error;
@@ -771,6 +887,8 @@ export function createRunner(options: RunnerOptions): Runner {
     async stop() {
       stopped = true;
       clearGrace();
+      if (owedRecheck !== undefined) clearTimeout(owedRecheck);
+      owedRecheck = undefined;
       await pending;
       const current = state;
       state = { role: 'idle' };

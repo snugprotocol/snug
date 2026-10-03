@@ -12,6 +12,12 @@
 export const PLUGIN = {
   name: 'snug',
   version: '0.1.0',
+  /**
+   * What a person sees in Claude's plugin list. The directory will not install a plugin
+   * without one (D2 — the task's reading of the plugin docs, 2026-10-03); `name` stays the
+   * id the tools and the install command are spelled with.
+   */
+  displayName: 'Snug',
   description: 'Build and run your own micro apps, on your machine, with your own data.',
   author: { name: 'TechVoyage LLC' },
   homepage: 'https://snugprotocol.org',
@@ -83,6 +89,7 @@ export function codexMcpConfig(options = {}) {
 export function claudePluginManifest() {
   return {
     name: PLUGIN.name,
+    displayName: PLUGIN.displayName,
     version: PLUGIN.version,
     description: PLUGIN.description,
     author: PLUGIN.author,

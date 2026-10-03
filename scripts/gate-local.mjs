@@ -106,18 +106,18 @@ export const LEGS = [
         existsSync(join(dir, 'src', 'main.tsx')) &&
         (existsSync(join(dir, 'vite.config.ts')) || existsSync(join(dir, 'vite.config.js')));
       if (!present) return 'appIsPresent() is false — 10 of 15 e2e specs would silently skip';
+      // ONE page (ADR-0072 §1): the artifact suite opens it from a static server, and the
+      // Binding-B specs open the SAME file served by the real process.
       if (!existsSync(join(REPO, 'apps', 'host', 'dist', 'snug-host.html'))) {
-        return 'apps/host/dist/snug-host.html missing — the kit e2e opens the built page (pnpm --filter host build)';
+        return 'apps/host/dist/snug-host.html missing — the kit e2e and the local e2e both open the built page (pnpm --filter host build)';
       }
-      // The local page and the process are the SAME shape of precondition (ADR-0068): the
-      // Binding-B specs drive a real process serving the real page, so a missing build is
-      // CANNOT RUN by name. Without this a turbo cache miss on the second output would
-      // have shown up as a spec failure rather than an un-runnable leg.
-      if (!existsSync(join(REPO, 'apps', 'host', 'dist-local', 'snug-host-local.html'))) {
-        return 'apps/host/dist-local/snug-host-local.html missing — the local e2e opens the built page (pnpm --filter host build)';
-      }
-      if (!existsSync(join(REPO, 'apps', 'host-mcp', 'dist', 'snug-mcp.mjs'))) {
-        return 'apps/host-mcp/dist/snug-mcp.mjs missing — the local e2e drives the real process (pnpm --filter host-mcp build)';
+      // The process is the SAME shape of precondition (ADR-0068): the Binding-B specs drive
+      // a real process, so a missing build is CANNOT RUN by name rather than a spec failure.
+      // They spawn the TEST build (it carries the resolver and the pins the suite needs).
+      for (const bundle of ['snug-mcp.mjs', 'snug-mcp.test.mjs']) {
+        if (!existsSync(join(REPO, 'apps', 'host-mcp', 'dist', bundle))) {
+          return `apps/host-mcp/dist/${bundle} missing — the local e2e drives the real process (pnpm --filter host-mcp build)`;
+        }
       }
       return null;
     },

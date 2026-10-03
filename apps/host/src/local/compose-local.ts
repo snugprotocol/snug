@@ -14,67 +14,39 @@
 //  * NO `lanFetch` / `lanHttpPrivate`. The LAN rungs are out of scope for this task, and
 //    the executor's own named refusal is the honest answer for a LAN row rather than a
 //    silent fallback through the ordinary transport.
+//
+// What it SHARES with the probe-path composition (`compose.ts`), since TASK-20261003 (K4):
+// the capability table, the custody store and the hand-in seat are the kit's ONE of each —
+// this module used to hand-write the first twice and keep private copies of the others.
+// What a host learns AFTER boot (the brain probe's verdict, the model list) reaches the UI
+// through `applyRunnerStatus` and the playground's revision signal, never a DOM event.
 
 import { localAdapter } from '@snugprotocol/adapters';
-import { BRAIN_EFFORT_OPTIONS, createBrainChoiceStore, type BrainChoice, type BrainChoiceStore, type BrainEffortChoice } from '../brains/brainChoiceStore.js';
-import type { CliModelOption, CliModelSeat, CliModelState } from '@playground/platform/platform';
-
-/** `localStorage` where the browser allows it; undefined where it throws (the Safari rung). */
-const safeLocalStorage = (): Storage | undefined => {
-  try {
-    return typeof localStorage === 'undefined' ? undefined : localStorage;
-  } catch {
-    return undefined;
-  }
-};
 import { createFileBackend, type PersistenceBackend } from '@snugprotocol/db';
+import { ERROR_CODES } from '@snugprotocol/protocol';
 
-import type { CustodySeat, CustodyState, SnugPlatform } from '@playground/platform/platform';
+import { hostCapabilities } from '@playground/platform/hostCapabilities';
+import type { CliModelOption, CliModelSeat, CliModelState, CustodySeat, PlatformBrain, SnugPlatform } from '@playground/platform/platform';
+import { bumpBrainRevision } from '@playground/platform/signals';
 
-import type { LocalClient, LocalStatus } from './client.js';
+import { BRAIN_EFFORT_OPTIONS, createBrainChoiceStore, type BrainChoice, type BrainChoiceStore, type BrainEffortChoice } from '../brains/brainChoiceStore.js';
+import { createHandInSeat, type HandInSeat } from '../handin.js';
+import { safeLocalStorage } from '../safeStorage.js';
+import { createCustodyStore, type CustodyStore } from '../storage/custodyStore.js';
+import { parseStatusEvent, type LocalClient, type LocalStatus } from './client.js';
 
 export interface LocalComposition {
   platform: SnugPlatform;
   /** Set when the file is held by another product: the page shows this instead of opening. */
   refusal?: { heldBy: string };
-}
-
-export interface CustodyStoreLike {
-  get(): CustodyState;
-  subscribe(listener: () => void): () => void;
-  patch(next: Partial<CustodyState>): void;
-}
-
-/** A tiny store so the chip re-renders when the holder appears or leaves. */
-export function createLocalCustodyStore(initial: CustodyState = { dirty: false, readOnly: false }): CustodyStoreLike {
-  let state = initial;
-  const listeners = new Set<() => void>();
-  return {
-    get: () => state,
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    patch(next) {
-      state = { ...state, ...next };
-      for (const listener of listeners) listener();
-    },
-  };
+  /** The store the "your file" chip reads — the kit's ONE custody store; a hand-in's note is patched onto it. */
+  custody: CustodyStore;
+  /** The offers for edited copies (ADR-0045 §7) — the seat Binding A has always had. */
+  handIns: HandInSeat;
 }
 
 const origin = typeof location === 'undefined' ? 'http://127.0.0.1:43127' : location.origin;
 
-/**
- * What the brain chip says (D-B35).
- *
- * The owner's walk found a logged-out CLI surfacing as a bare HTTP 502 the first time an
- * app tried to think — no remedy, and no sign that the BRAIN was the problem rather than
- * the app. The chip is where that belongs, before the user asks for anything.
- *
- * An absent `brain` means the probe has not answered yet, which is NOT a claim that the
- * CLI works: the plain label is what the seat has always said, and the chip corrects
- * itself a moment later when the `status` event arrives.
- */
 /**
  * Where the brain probe's late verdict lands (D-B35). The platform is composed once and set
  * once; this holder is what the `status` event writes so the chip's getter can see it.
@@ -89,6 +61,61 @@ export const brainState: { current?: { state: string; detail?: string } } = {};
 export const modelsFromStatus: { current?: readonly CliModelOption[] } = {};
 
 /**
+ * Fold a late `status` in — the probe's verdict, the catalogue — and say that what the
+ * platform's `brain` answers may have changed (D4). The holders are what the getters read;
+ * the bump is what makes a reader look again. It replaces three DOM `CustomEvent`s that
+ * nothing listened to, which is why the chip kept its boot label until something else
+ * happened to re-render it.
+ *
+ * Bumped only on a CHANGE: an unchanged verdict re-emitted by a re-check must not re-render
+ * every reader of the brain every thirty seconds.
+ */
+export function applyRunnerStatus(data: unknown): void {
+  const { brain, models } = parseStatusEvent(data);
+  let changed = false;
+  if (models !== undefined && JSON.stringify(models) !== JSON.stringify(modelsFromStatus.current)) {
+    modelsFromStatus.current = models;
+    changed = true;
+  }
+  if (brain !== undefined && (brain.state !== brainState.current?.state || brain.detail !== brainState.current?.detail)) {
+    brainState.current = brain;
+    changed = true;
+  }
+  if (changed) bumpBrainRevision();
+}
+
+/**
+ * The states in which the runner KNOWS its brain cannot answer (ADR-0069 §6). `unknown` and
+ * "not answered yet" are not among them: a brain that could not be checked may well work,
+ * and treating it as gone would put the demo script in front of a user whose CLI is fine.
+ */
+const KNOWN_NOT_READY: ReadonlySet<string> = new Set(['absent', 'logged-out', 'outdated']);
+
+/** The demo arm. ONE object: `useMemo` and `useSyncExternalStore` compare it by reference. */
+const DEMO_BRAIN: PlatformBrain = { kind: 'demo' };
+
+/**
+ * The least time between two "the demo brain is answering — look again" asks from this page.
+ * The runner keeps its own floor for every ask (a probe of a ready brain is a real think);
+ * this one only keeps a page that renders often from sending a request per render.
+ */
+export const DEMO_RECHECK_FLOOR_MS = 30_000;
+
+/**
+ * What the brain's label says, per readiness state (D-B35).
+ *
+ * The owner's walk found a logged-out CLI surfacing as a bare HTTP 502 the first time an
+ * app tried to think — no remedy, and no sign that the BRAIN was the problem rather than
+ * the app. Each not-ready state has ONE sentence a person can act on.
+ *
+ * An absent `brain` means the probe has not answered yet, which is NOT a claim that the
+ * CLI works: the plain label is what the seat has always said, and the chip corrects
+ * itself a moment later when the `status` event arrives.
+ *
+ * (Since D4 the platform pins the DEMO brain while the state is absent, logged-out or
+ * outdated, so this label is not what the chip shows then — the three remedy sentences
+ * wait here for the surface that renders them beside a demo brain: the brain switcher.)
+ *
  * @param model the model to name on a READY chip (S11, owner 2026-10-02: "replace 'your CLI'
  *   with the current selected model"). Ignored in every other state: a remedy is never traded
  *   for a model name, and before the probe answers nothing is claimed at all.
@@ -275,7 +302,7 @@ export function composeLocalPlatform(
   client: LocalClient,
   status: LocalStatus,
   /**
-   * The sql.js engine as bytes. Both builds swap the `?url` locator for a stub that must
+   * The sql.js engine as bytes. The build swaps the `?url` locator for a stub that must
    * never run, so the engine can ONLY arrive through this seat — without it the user db
    * never opens and the page renders an empty shell with a console error. Caught by the
    * first real-browser run; no unit test could see it, because every one of them injects
@@ -290,146 +317,164 @@ export function composeLocalPlatform(
    * drive it; in the page it is one store per boot over `localStorage`.
    */
   brainChoices: BrainChoiceStore = createBrainChoiceStore({ storage: safeLocalStorage() }),
+  /** The clock the demo re-check's floor reads. A test turns it by hand. */
+  now: () => number = () => Date.now(),
 ): LocalComposition {
+  const custody = createCustodyStore();
+  const handIns = createHandInSeat();
+
   // The holder check decides whether we open AT ALL. Both of the db's save paths swallow a
   // failed write with a bare `catch`, and no persist-error seam exists — so a page that
   // opened read-only would take an hour of the user's work and lose it on tab close.
   if (status.heldBy !== undefined) {
-    return {
-      refusal: { heldBy: status.heldBy },
-      platform: minimalPlatform(),
-    };
+    return { refusal: { heldBy: status.heldBy }, platform: minimalPlatform(), custody, handIns };
   }
 
-  const custody = createLocalCustodyStore({ dirty: false, readOnly: false });
   const custodySeat: CustodySeat = {
     state: custody,
     dismissNote: () => custody.patch({ note: undefined }),
   };
 
-  return {
-    platform: {
-      kind: 'host',
-      binding: 'local-host',
-      // The one binding whose page can reach the network — through the process, which
-      // re-runs the executor's own gates on the far side of the socket.
-      fetchImpl: (input, init) => client.fetchImpl(input, init),
-      ...(sqlJsWasmBinary !== undefined ? { sqlJsWasmBinary } : {}),
-      // THE BRAIN (D5, D-B7). The user's own `claude` CLI behind the process's shim,
-      // reached through the adapter the playground already has — `localAdapter` accepts a
-      // key, and the host arm of `createTurnAdapter` reads no BYOK key and skips the F15
-      // endpoint confirm, so no mode, setting or secret is involved. `streaming: false` is
-      // an app-facing declaration in `host-ready`, not a transport switch: the shim answers
-      // SSE regardless, because `openaiAdapter` always streams.
-      ...(token !== undefined
-        ? {
-            brain: {
-              kind: 'host' as const,
-              // A GETTER, not a value. The probe answers after boot (it spawns the user's
-              // CLI), and the platform is set ONCE — `setPlatform` throws on a second call
-              // and on any call after `getPlatform` has been read, so a page cannot swap in
-              // a recomposed platform to update this. The chip reads `label` at render, so
-              // a getter over a mutable holder lets a late verdict reach the user without
-              // touching the singleton.
-              get label(): string {
-                return brainLabel(brainState.current ?? status.brain, chipModelName(brainChoices, modelsFromStatus.current ?? status.models));
-              },
-              // The adapter is rebuilt PER CALL, not once: `localAdapter` takes a static
-              // model, and a value read at composition time would freeze the user's choice
-              // until a reload — ADR-0036 rule 3, and what makes "switch now, it lands on
-              // your next think" true. The effort rides beside it on the same request.
-              adapter: {
-                complete: async (request) => {
-                  const choice = brainChoices.choice();
-                  // Effort only for a model that HAS the axis: the chip hides the control for
-                  // one that does not (Haiku 4.5, per the CLI's catalogue), so sending a stored
-                  // level anyway would be a setting the user can no longer see (AC8).
-                  const listed = choice.model === undefined ? undefined : (modelsFromStatus.current ?? status.models ?? []).find((m) => m.id === choice.model);
-                  const effort = listed !== undefined && !listed.effort ? undefined : choice.effort;
-                  const result = await localAdapter({
-                    baseUrl: `${origin}/v1`,
-                    apiKey: token,
-                    model: choice.model ?? 'claude',
-                    // The page's OWN fetch, straight to its own runner on loopback. NEVER
-                    // `client.fetchImpl`: that is the connected-apps proxy (`POST /fetch`), which
-                    // re-runs the executor's gates and refuses a loopback destination — S5 routed
-                    // the brain through it and every think failed with "could not reach the local
-                    // model endpoint" (owner's walk, 2026-10-02). The wrapper only adds `effort`
-                    // to the JSON body, because the shared OpenAI adapter builds its body from a
-                    // fixed set of fields and drops anything else.
-                    fetch: (input, init) => globalThis.fetch(input, withEffort(init, effort)),
-                  }).complete(request);
-                  // Thinks overlap (the pool runs several), so a slow one can finish after a newer
-                  // one. A call teaches the chip ONLY while the choice is still the one it carried —
-                  // otherwise a late answer or refusal for a model the user already left would
-                  // overwrite what the newer think taught (review, 2026-10-03).
-                  if (brainChoices.choice().model !== choice.model) return result;
-                  if (result.ok) {
-                    // The adapter reports the model on the stream's LAST chunk, which is the id the
-                    // CLI resolved (ADR-0070 D2: only a turn that SUCCEEDED may name a model).
-                    if (typeof result.model === 'string' && result.model !== '' && result.model !== 'claude') brainChoices.markAnswered(result.model);
-                  } else if (choice.model !== undefined && result.message.includes(choice.model)) {
-                    // A refusal that NAMES the chosen model is the CLI refusing it — shown on the
-                    // chip in its own words. Anything else (a network failure, a timeout) is not
-                    // about the model and must not be dressed up as one.
-                    brainChoices.markRefused(choice.model, result.message);
-                  }
-                  return result;
-                },
-              },
-              streaming: false,
-              tools: false,
-              // The model + effort control (ADR-0070). A GETTER for the same reason `label` is
-              // one: the probe answers AFTER boot and the platform is set once, so a value
-              // computed here would be read while the brain state is still unknown and the
-              // control would never appear (caught by a test, not by review). Present only
-              // while the CLI can think — `cliModelSeat` returns undefined for every other
-              // state, so a brain that stops being able to think loses its control rather
-              // than keeping a dead one (AC8).
-              get cliModel(): CliModelSeat | undefined {
-                return cliModelSeat({ brain: brainState.current ?? status.brain, choices: brainChoices, models: modelsFromStatus.current ?? status.models });
-              },
-            },
-          }
-        : {}),
-      userdbBackend: backendOverride ?? createFileBackend(client.fs, 'Snug'),
-      custody: custodySeat,
-      capabilities: {
-        subscriptionMode: false,
-        hubSyncOrigin: false,
-        lanHttpPrivate: false,
-        hubAuth: false,
-        // D15: the brain is the host's and is never chosen.
-        brainSettings: false,
-        account: false,
-        sync: false,
-        // THE difference from Binding A. `RunView` keys its net handler on this, so
-        // `host-ready.net` becomes true structurally rather than by a flag an app must trust.
-        connections: true,
-        // The relay is reachable from a browser, but no acceptance criterion covers it here.
-        share: false,
-        appExport: true,
-      },
-    },
+  const platform: SnugPlatform = {
+    kind: 'host',
+    binding: 'local-host',
+    // The one binding whose page can reach the network — through the process, which
+    // re-runs the executor's own gates on the far side of the socket.
+    fetchImpl: (input, init) => client.fetchImpl(input, init),
+    ...(sqlJsWasmBinary !== undefined ? { sqlJsWasmBinary } : {}),
+    userdbBackend: backendOverride ?? createFileBackend(client.fs, 'Snug'),
+    custody: custodySeat,
+    // K6: an edited copy's update is OFFERED in the run header, exactly as under Binding A.
+    // This seat was missing here, so on the runner such a hand-in was announced on a chip
+    // note and then could not be taken anywhere.
+    agentHandIns: handIns.seat,
+    capabilities: hostCapabilities({
+      // THE difference from Binding A. `RunView` keys its net handler on this, so
+      // `host-ready.net` becomes true structurally rather than by a flag an app must trust.
+      connections: true,
+      // Whether a provider's redirect can come back: the runner says `false` when the port
+      // a user registers was taken (ADR-0068 D-B13), and the `oauth` offer — every sign-in
+      // tile, the wizard's wall — reads this. An older wire that does not say is available.
+      oauthRedirect: status.oauthRedirect !== false,
+    }),
   };
+
+  if (token !== undefined) {
+    let lastDemoRecheckAt = Number.NEGATIVE_INFINITY;
+    // THE BRAIN (D5, D-B7). The user's own `claude` CLI behind the process's shim, reached
+    // through the adapter the playground already has — `localAdapter` accepts a key, and
+    // the host arm of `createTurnAdapter` reads no BYOK key and skips the F15 endpoint
+    // confirm, so no mode, setting or secret is involved. `streaming: false` is an
+    // app-facing declaration in `host-ready`, not a transport switch: the shim answers SSE
+    // regardless, because `openaiAdapter` always streams.
+    //
+    // ONE object for the life of the page (its `label` and `cliModel` are getters over the
+    // holders above): the platform hands it out by reference, and a fresh one per read
+    // would make every memo keyed on it recompute on every render.
+    const hostBrain: PlatformBrain = {
+      kind: 'host',
+      // A GETTER, not a value. The probe answers after boot (it spawns the user's CLI),
+      // and the platform is set ONCE — `setPlatform` throws on a second call and on any
+      // call after `getPlatform` has been read, so a page cannot swap in a recomposed
+      // platform to update this. The chip reads `label` at render, so a getter over a
+      // mutable holder lets a late verdict reach the user without touching the singleton.
+      get label(): string {
+        return brainLabel(brainState.current ?? status.brain, chipModelName(brainChoices, modelsFromStatus.current ?? status.models));
+      },
+      // The adapter is rebuilt PER CALL, not once: `localAdapter` takes a static model, and
+      // a value read at composition time would freeze the user's choice until a reload —
+      // ADR-0036 rule 3, and what makes "switch now, it lands on your next think" true. The
+      // effort rides beside it on the same request.
+      adapter: {
+        complete: async (request) => {
+          const choice = brainChoices.choice();
+          // Effort only for a model that HAS the axis: the chip hides the control for one
+          // that does not (Haiku 4.5, per the CLI's catalogue), so sending a stored level
+          // anyway would be a setting the user can no longer see (AC8).
+          const listed = choice.model === undefined ? undefined : (modelsFromStatus.current ?? status.models ?? []).find((m) => m.id === choice.model);
+          const effort = listed !== undefined && !listed.effort ? undefined : choice.effort;
+          const result = await localAdapter({
+            baseUrl: `${origin}/v1`,
+            apiKey: token,
+            model: choice.model ?? 'claude',
+            // The page's OWN fetch, straight to its own runner on loopback. NEVER
+            // `client.fetchImpl`: that is the connected-apps proxy (`POST /fetch`), which
+            // re-runs the executor's gates and refuses a loopback destination — S5 routed
+            // the brain through it and every think failed with "could not reach the local
+            // model endpoint" (owner's walk, 2026-10-02). The wrapper only adds `effort`
+            // to the JSON body, because the shared OpenAI adapter builds its body from a
+            // fixed set of fields and drops anything else.
+            fetch: (input, init) => globalThis.fetch(input, withEffort(init, effort)),
+          }).complete(request);
+          // D4: a think the brain could not answer may mean the brain WENT AWAY (logged
+          // out, uninstalled, out of date) since the last probe. This turn keeps its own
+          // named error — no demo reply is slipped in under a turn sent to the user's CLI —
+          // and the runner is asked to look again, so the NEXT turn is routed on the truth.
+          // A turn the user stopped says nothing about the brain. The runner floors the ask.
+          if (!result.ok && result.code !== ERROR_CODES.CANCELLED) void client.recheckBrain();
+          // Thinks overlap (the pool runs several), so a slow one can finish after a newer
+          // one. A call teaches the chip ONLY while the choice is still the one it carried —
+          // otherwise a late answer or refusal for a model the user already left would
+          // overwrite what the newer think taught (review, 2026-10-03).
+          if (brainChoices.choice().model !== choice.model) return result;
+          if (result.ok) {
+            // The adapter reports the model on the stream's LAST chunk, which is the id the
+            // CLI resolved (ADR-0070 D2: only a turn that SUCCEEDED may name a model).
+            if (typeof result.model === 'string' && result.model !== '' && result.model !== 'claude') brainChoices.markAnswered(result.model);
+          } else if (choice.model !== undefined && result.message.includes(choice.model)) {
+            // A refusal that NAMES the chosen model is the CLI refusing it — shown on the
+            // chip in its own words. Anything else (a network failure, a timeout) is not
+            // about the model and must not be dressed up as one.
+            brainChoices.markRefused(choice.model, result.message);
+          }
+          return result;
+        },
+      },
+      streaming: false,
+      tools: false,
+      // The model + effort control (ADR-0070). A GETTER for the same reason `label` is one:
+      // the probe answers AFTER boot and the platform is set once, so a value computed here
+      // would be read while the brain state is still unknown and the control would never
+      // appear (caught by a test, not by review). Present only while the CLI can think —
+      // `cliModelSeat` returns undefined for every other state, so a brain that stops being
+      // able to think loses its control rather than keeping a dead one (AC8).
+      get cliModel(): CliModelSeat | undefined {
+        return cliModelSeat({ brain: brainState.current ?? status.brain, choices: brainChoices, models: modelsFromStatus.current ?? status.models });
+      },
+    };
+
+    // WHICH brain answers is itself a getter (D4). While the runner KNOWS the user's CLI
+    // cannot answer, the platform pins the DEMO brain: before this the chip said "demo
+    // brain" for a machine with no CLI while every think still went to the shim and came
+    // back a 502. Ready, could-not-check and not-answered-yet stay on the host brain —
+    // optimistic, as before: a think is then the first to find out, and it re-checks.
+    //
+    // Defined on the object rather than spread into it: a spread READS a getter once and
+    // copies the value, which would freeze the arm the page booted with.
+    Object.defineProperty(platform, 'brain', {
+      enumerable: true,
+      get(): PlatformBrain {
+        const known = (brainState.current ?? status.brain)?.state;
+        if (known === undefined || !KNOWN_NOT_READY.has(known)) return hostBrain;
+        // The demo brain is standing in. The user may have just fixed the cause (logged in,
+        // installed, updated) in a terminal this page cannot see, so it asks the runner to
+        // look again — at most once per floor, and only while something is reading the
+        // brain (a think, a render): an idle tab asks nothing.
+        if (now() - lastDemoRecheckAt >= DEMO_RECHECK_FLOOR_MS) {
+          lastDemoRecheckAt = now();
+          void client.recheckBrain();
+        }
+        return DEMO_BRAIN;
+      },
+    });
+  }
+
+  return { platform, custody, handIns };
 }
 
 /** What the page carries when it is refusing to open: enough to render the refusal, no seams. */
 function minimalPlatform(): SnugPlatform {
-  return {
-    kind: 'host',
-    binding: 'local-host',
-    capabilities: {
-      subscriptionMode: false,
-      hubSyncOrigin: false,
-      lanHttpPrivate: false,
-      hubAuth: false,
-      brainSettings: false,
-      account: false,
-      sync: false,
-      connections: false,
-      share: false,
-      appExport: false,
-    },
-  };
+  // The kit's table with the one surface it otherwise keeps switched off too: a page that
+  // will not open the file has no app to export.
+  return { kind: 'host', binding: 'local-host', capabilities: hostCapabilities({ appExport: false }) };
 }

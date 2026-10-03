@@ -28,13 +28,19 @@ import path from 'node:path';
 
 /**
  * The page's homes, relative to the bundle's own directory, in order of how the process is
- * actually run:
- *   1. beside the bundle — how the PLUGIN ships it (build-plugin.mjs puts them together);
- *   2. the sibling app's build output — how a developer runs `dist/snug-mcp.mjs` straight
- *      out of the repo. That path is relative to `apps/host-mcp/dist/`, so it climbs TWO
+ * actually run (K1 — there is ONE page, `snug-host.html`, and nothing ships a second copy):
+ *   1. the PLUGIN layout — the bundle is `<plugin>/scripts/snug-mcp.mjs` and the page is the
+ *      skill's asset, `<plugin>/skills/snug/assets/snug-host.html`: the same file the
+ *      artifact route hands in to. `scripts/build-plugin.test.mjs` resolves this entry
+ *      inside a tree it builds, so a moved asset reds there rather than serving the
+ *      placeholder below with HTTP 200.
+ *   2. the REPO layout — a developer running `apps/host-mcp/dist/snug-mcp.mjs` straight out
+ *      of the checkout. That path is relative to `apps/host-mcp/dist/`, so it climbs TWO
  *      levels, not one.
+ *   3. a SIBLING of the bundle — a scratch install (the browser suite copies the bundle and
+ *      a page into one directory, so it can serve a page it has altered).
  */
-export const PAGE_CANDIDATES = ['snug-host-local.html', '../../host/dist-local/snug-host-local.html'] as const;
+export const PAGE_CANDIDATES = ['../skills/snug/assets/snug-host.html', '../../host/dist/snug-host.html', 'snug-host.html'] as const;
 
 /** Served when no page exists anywhere: missing, which is not the same thing as damaged. */
 export const MISSING_PAGE = '<!doctype html><title>Snug</title><p>The Snug runner page is missing from this install.';

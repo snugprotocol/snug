@@ -4,9 +4,21 @@
 // `new Response(...)` THROW, which the executor would then report to the app as a transport
 // failure for a request that actually succeeded.
 
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+
 import { describe, expect, it, vi } from 'vitest';
 
-import { claimTokenFromFragment, responseFromEnvelope, serializeBody } from '../local/client.js';
+import {
+  RUNNER_MARKER_HEADER,
+  RUNNER_STOPPED_MESSAGE,
+  claimTokenFromFragment,
+  createLocalClient,
+  isRunnerRefusal,
+  parseLocalStatus,
+  responseFromEnvelope,
+  serializeBody,
+} from '../local/client.js';
 
 const TOKEN = 'a'.repeat(64);
 
@@ -45,6 +57,16 @@ describe('claiming the token from the fragment', () => {
 
   it('ignores a fragment that is not a well-formed token', () => {
     expect(claimTokenFromFragment(win('#token=short').win)).toBeUndefined();
+  });
+
+  it('works with NO sessionStorage at all — the guarded accessor answered undefined', () => {
+    // K4: the caller hands in `safeSessionStorage(window)`, which is undefined where the
+    // global throws. This load still works; a reload has nothing to remember it by.
+    const replaceState = vi.fn();
+    const w = { location: { hash: `#token=${TOKEN}`, pathname: '/', search: '' }, history: { replaceState }, sessionStorage: undefined };
+    expect(claimTokenFromFragment(w)).toBe(TOKEN);
+    expect(replaceState).toHaveBeenCalledWith(null, '', '/#/');
+    expect(claimTokenFromFragment({ ...w, location: { hash: '#/', pathname: '/', search: '' } })).toBeUndefined();
   });
 
   it('survives sessionStorage throwing (a private window)', () => {
@@ -96,9 +118,25 @@ describe('rebuilding a Response the executor can gate', () => {
     expect(() => responseFromEnvelope({ ok: true, status: 200, statusText: 'bad\nnewline' })).not.toThrow();
   });
 
+  it('keeps a statusText inside the reason-phrase grammar — obs-text included — and drops DEL', () => {
+    // The grammar is HTAB / SP / VCHAR / obs-text (0x80–0xFF). The range used to be spelled
+    // with a RAW U+0080 in the source, invisible in an editor; it is escapes now, and this
+    // pins both of its edges.
+    expect(responseFromEnvelope({ ok: true, status: 200, statusText: 'Not Found' }).statusText).toBe('Not Found');
+    expect(responseFromEnvelope({ ok: true, status: 200, statusText: 'caf\u00e9 \u0080' }).statusText).toBe('caf\u00e9 \u0080');
+    expect(responseFromEnvelope({ ok: true, status: 200, statusText: 'a\u007fb' }).statusText).toBe('');
+    expect(responseFromEnvelope({ ok: true, status: 200, statusText: 'snow \u2603' }).statusText).toBe('');
+  });
+
   it('preserves a 3xx as data, so the executor’s own redirect gate is what refuses it', () => {
     const response = responseFromEnvelope({ ok: true, status: 302, headers: [['content-type', 'text/html']] });
     expect(response.status).toBe(302);
+  });
+
+  it('a body that is not base64 is a NAMED failure, not an empty success', () => {
+    // The decode is `@snugprotocol/db`'s (one decoder — K4), which is total: it answers
+    // undefined for garbage. Treating that as "no body" would hand an app an empty 200.
+    expect(() => responseFromEnvelope({ ok: true, status: 200, bodyBase64: '%%% not base64 %%%' })).toThrow(/not base64/);
   });
 
   it('round-trips bytes above 0x7F without mangling them', () => {
@@ -123,5 +161,338 @@ describe('serializing a request body', () => {
   it('leaves an absent body absent', () => {
     expect(serializeBody(undefined)).toBeUndefined();
     expect(serializeBody(null)).toBeUndefined();
+  });
+});
+
+// ------------------------------------------------------------------ the one-kit range
+
+describe('the status wire — ONE fixture, read by the process’s route test and by this client (B2)', () => {
+  const wire: unknown = JSON.parse(readFileSync(path.resolve(__dirname, '../../../host-mcp/src/__tests__/fixtures/status-wire.json'), 'utf8'));
+
+  it('parses the fixture: the binding, the port, the pages and the redirect fact', () => {
+    const status = parseLocalStatus(wire);
+    expect(status).toMatchObject({ binding: 'local-host', port: 43127, pages: 1, oauthRedirect: true });
+  });
+
+  it('reads the optional seats when they are well-formed, and drops them when they are not', () => {
+    const base = { binding: 'local-host', port: 43127, pages: 0 };
+    expect(parseLocalStatus({ ...base, heldBy: 'Snug for Mac', brain: { state: 'logged-out', detail: 'run /login' }, models: [{ id: 'm', name: 'M', effort: true }], oauthRedirect: false })).toEqual({
+      ...base,
+      heldBy: 'Snug for Mac',
+      brain: { state: 'logged-out', detail: 'run /login' },
+      models: [{ id: 'm', name: 'M', effort: true }],
+      oauthRedirect: false,
+    });
+    // A seat of the wrong shape is ABSENT, never cast through: the page then says "not known".
+    expect(parseLocalStatus({ ...base, heldBy: 7, brain: 'ready', models: [{ id: 1 }], oauthRedirect: 'yes' })).toEqual(base);
+  });
+
+  it.each([
+    ['null', null],
+    ['a string', 'local-host'],
+    ['an array', []],
+    ['another binding', { binding: 'artifact', port: 1, pages: 0 }],
+    ['no binding', { port: 43127, pages: 1 }],
+    ['a port that is not a number', { binding: 'local-host', port: '43127', pages: 1 }],
+    ['no pages', { binding: 'local-host', port: 43127 }],
+  ])('refuses %s — a 200 from something that is not a runner is not a runner', (_label, value) => {
+    expect(parseLocalStatus(value)).toBeUndefined();
+  });
+});
+
+describe('the runner’s refusal marker', () => {
+  it('is the process’s own constant — the page cannot import it, so it is pinned against the source', () => {
+    const gates = readFileSync(path.resolve(__dirname, '../../../host-mcp/src/loopback-gates.ts'), 'utf8');
+    expect(/export const RUNNER_MARKER_HEADER = '([^']+)'/.exec(gates)?.[1]).toBe(RUNNER_MARKER_HEADER);
+    expect(gates).toContain("[RUNNER_MARKER_HEADER]: '1'");
+  });
+
+  it('is read off a response: the header AND its value', () => {
+    expect(isRunnerRefusal(new Response('', { status: 401, headers: { [RUNNER_MARKER_HEADER]: '1' } }))).toBe(true);
+    expect(isRunnerRefusal(new Response('', { status: 401 }))).toBe(false);
+    expect(isRunnerRefusal(new Response('', { status: 401, headers: { [RUNNER_MARKER_HEADER]: 'yes' } }))).toBe(false);
+  });
+});
+
+/** A fetch whose answers a test scripts per path. */
+function scripted(routes: Record<string, (init: RequestInit | undefined) => Response | Promise<Response>>) {
+  const calls: { path: string; init: RequestInit | undefined }[] = [];
+  const fetchImpl = async (input: string, init?: RequestInit): Promise<Response> => {
+    calls.push({ path: input, init });
+    const route = routes[input];
+    if (route === undefined) throw new TypeError('Failed to fetch');
+    return route(init);
+  };
+  return { calls, fetchImpl };
+}
+
+const refusal = (status: number): Response => new Response('', { status, headers: { [RUNNER_MARKER_HEADER]: '1' } });
+const BYTES = new Uint8Array([1, 2, 3]);
+
+describe('a stopped runner is SAID, on the write that found it (K7)', () => {
+  const write = async (response: () => Response | Promise<Response>) => {
+    const net = scripted({ '/userdb/user.snug': response });
+    const client = createLocalClient(TOKEN, { fetch: net.fetchImpl });
+    const outcome = await client.fs.writeFileAtomic('Snug/user.snug', BYTES).then(
+      () => 'saved',
+      (error: unknown) => (error instanceof Error ? error.message : String(error)),
+    );
+    return { client, net, outcome };
+  };
+
+  it('a 401 — the runner restarted and this page’s bearer is nobody’s', async () => {
+    const { client, outcome } = await write(() => refusal(401));
+    expect(client.stopped.get()).toBe(true);
+    expect(outcome).toBe(RUNNER_STOPPED_MESSAGE);
+  });
+
+  it('a bare 401 too — whatever answers there now, this page’s bearer admits no write', async () => {
+    const { client } = await write(() => new Response('', { status: 401 }));
+    expect(client.stopped.get()).toBe(true);
+  });
+
+  it('a network failure — nothing is listening where the runner was', async () => {
+    const { client, outcome } = await write(() => {
+      throw new TypeError('Failed to fetch');
+    });
+    expect(client.stopped.get()).toBe(true);
+    expect(outcome).toBe(RUNNER_STOPPED_MESSAGE);
+  });
+
+  it('a refusal carrying the marker — the runner is draining and will take no more writes', async () => {
+    const { client } = await write(() => refusal(503));
+    expect(client.stopped.get()).toBe(true);
+  });
+
+  it('NOT every failure: a 500 or a held file is a failed save, and the runner is still there', async () => {
+    for (const status of [500, 423, 413]) {
+      const { client, outcome } = await write(() => new Response('', { status }));
+      expect(client.stopped.get(), String(status)).toBe(false);
+      expect(outcome).toBe(`saving your file failed (${status})`);
+    }
+  });
+
+  it('a successful write stops nothing', async () => {
+    const { client, outcome } = await write(() => new Response(null, { status: 204 }));
+    expect(outcome).toBe('saved');
+    expect(client.stopped.get()).toBe(false);
+  });
+
+  it('once stopped it takes NO further edits — the next write is refused without a request', async () => {
+    const { client, net } = await write(() => refusal(401));
+    const requests = net.calls.length;
+    await expect(client.fs.writeFileAtomic('Snug/user.snug', BYTES)).rejects.toThrow(RUNNER_STOPPED_MESSAGE);
+    expect(net.calls.length, 'a stopped page must not keep knocking').toBe(requests);
+  });
+
+  it('tells its subscribers ONCE', async () => {
+    const net = scripted({ '/userdb/user.snug': () => refusal(401) });
+    const client = createLocalClient(TOKEN, { fetch: net.fetchImpl });
+    let told = 0;
+    client.stopped.subscribe(() => void (told += 1));
+    await client.fs.writeFileAtomic('Snug/user.snug', BYTES).catch(() => undefined);
+    await client.fs.writeFileAtomic('Snug/user.snug', BYTES).catch(() => undefined);
+    expect(told).toBe(1);
+  });
+
+  it('a READ that fails is not "stopped" — absence and failure keep their own meanings', async () => {
+    const net = scripted({ '/userdb/user.snug': () => new Response('', { status: 404 }) });
+    const client = createLocalClient(TOKEN, { fetch: net.fetchImpl });
+    expect(await client.fs.readFile('Snug/user.snug')).toBeUndefined();
+    expect(client.stopped.get()).toBe(false);
+  });
+});
+
+/** An SSE body a test feeds frame by frame and can end. */
+function stream() {
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  const body = new ReadableStream<Uint8Array>({ start: (c) => void (controller = c) });
+  const encoder = new TextEncoder();
+  return {
+    response: new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } }),
+    send: (name: string, data: unknown) => controller.enqueue(encoder.encode(`event: ${name}\ndata: ${JSON.stringify(data)}\n\n`)),
+    end: () => controller.close(),
+  };
+}
+
+describe('the event stream says when the runner went away (K7)', () => {
+  /** Timers a test turns by hand: the reconnect loop sleeps and reads the clock through these. */
+  const clock = () => {
+    let now = 0;
+    const sleepers: Array<() => void> = [];
+    return {
+      now: () => now,
+      sleep: (ms: number) =>
+        new Promise<void>((resolve) => {
+          sleepers.push(() => {
+            now += ms;
+            resolve();
+          });
+        }),
+      /** Let the loop's current sleep finish. */
+      tick: async () => {
+        await vi.waitFor(() => expect(sleepers.length).toBeGreaterThan(0));
+        sleepers.shift()!();
+      },
+    };
+  };
+
+  it('delivers events, and a `shutdown` event stops the page at once', async () => {
+    const live = stream();
+    const net = scripted({ '/events': () => live.response });
+    const client = createLocalClient(TOKEN, { fetch: net.fetchImpl });
+    const seen: [string, unknown][] = [];
+    const close = client.events((name, data) => void seen.push([name, data]));
+    live.send('status', { brain: { state: 'ready' } });
+    await vi.waitFor(() => expect(seen).toEqual([['status', { brain: { state: 'ready' } }]]));
+    expect(client.stopped.get()).toBe(false);
+
+    live.send('shutdown', {});
+    await vi.waitFor(() => expect(client.stopped.get()).toBe(true));
+    expect(seen, 'shutdown is the client’s own business, not an event for the page').toHaveLength(1);
+    close();
+  });
+
+  it('a stream that is LOST and does not come back within the bound → stopped', async () => {
+    const first = stream();
+    let opened = 0;
+    const net = scripted({
+      '/events': () => {
+        opened += 1;
+        if (opened === 1) return first.response;
+        throw new TypeError('Failed to fetch');
+      },
+    });
+    const time = clock();
+    const client = createLocalClient(TOKEN, { fetch: net.fetchImpl, now: time.now, sleep: time.sleep, reconnectBoundMs: 1_000, retryMs: 400 });
+    const close = client.events(() => undefined);
+    await vi.waitFor(() => expect(opened).toBe(1));
+    first.end();
+
+    // Lost at t=0. Retries at 400 and 800 fail and are inside the bound; at 1200 it is past.
+    await time.tick();
+    await vi.waitFor(() => expect(opened).toBe(2));
+    expect(client.stopped.get()).toBe(false);
+    await time.tick();
+    await vi.waitFor(() => expect(opened).toBe(3));
+    expect(client.stopped.get()).toBe(false);
+    await time.tick();
+    await vi.waitFor(() => expect(client.stopped.get()).toBe(true));
+    close();
+  });
+
+  it('a stream that is lost and COMES BACK inside the bound is not a stopped runner — and keeps delivering', async () => {
+    const first = stream();
+    const second = stream();
+    let opened = 0;
+    const net = scripted({
+      '/events': () => {
+        opened += 1;
+        return opened === 1 ? first.response : second.response;
+      },
+    });
+    const time = clock();
+    const client = createLocalClient(TOKEN, { fetch: net.fetchImpl, now: time.now, sleep: time.sleep, reconnectBoundMs: 1_000, retryMs: 400 });
+    const seen: string[] = [];
+    const close = client.events((name) => void seen.push(name));
+    await vi.waitFor(() => expect(opened).toBe(1));
+    first.end(); // a laptop lid, a dropped connection
+    await time.tick();
+    await vi.waitFor(() => expect(opened).toBe(2));
+    second.send('hand-in', { bundle: {} });
+    await vi.waitFor(() => expect(seen).toEqual(['hand-in']));
+    expect(client.stopped.get()).toBe(false);
+    close();
+  });
+
+  it('each loss gets its OWN bound — a stream that came back does not carry the earlier outage with it', async () => {
+    const first = stream();
+    const second = stream();
+    let opened = 0;
+    const net = scripted({
+      '/events': () => {
+        opened += 1;
+        if (opened === 1) return first.response;
+        if (opened === 2) return second.response;
+        throw new TypeError('Failed to fetch');
+      },
+    });
+    const time = clock();
+    const client = createLocalClient(TOKEN, { fetch: net.fetchImpl, now: time.now, sleep: time.sleep, reconnectBoundMs: 1_000, retryMs: 400 });
+    const close = client.events(() => undefined);
+    await vi.waitFor(() => expect(opened).toBe(1));
+    first.end(); // lost at t=0…
+    await time.tick(); // …back at t=400
+    await vi.waitFor(() => expect(opened).toBe(2));
+    second.end(); // lost AGAIN at t=400: the bound runs from here, to t=1400
+    await time.tick(); // t=800
+    await vi.waitFor(() => expect(opened).toBe(3));
+    await time.tick(); // t=1200 — 800 ms into THIS outage, 1200 ms after the first one
+    await vi.waitFor(() => expect(opened).toBe(4));
+    expect(client.stopped.get(), 'the first outage must not be counted against the second').toBe(false);
+    await time.tick(); // t=1600
+    await vi.waitFor(() => expect(client.stopped.get()).toBe(true));
+    close();
+  });
+
+  it('a reconnect the runner REFUSES is a stopped runner at once — a new runner holds a new bearer', async () => {
+    const first = stream();
+    let opened = 0;
+    const net = scripted({
+      '/events': () => {
+        opened += 1;
+        return opened === 1 ? first.response : refusal(401);
+      },
+    });
+    const time = clock();
+    const client = createLocalClient(TOKEN, { fetch: net.fetchImpl, now: time.now, sleep: time.sleep, reconnectBoundMs: 60_000, retryMs: 400 });
+    const close = client.events(() => undefined);
+    await vi.waitFor(() => expect(opened).toBe(1));
+    first.end();
+    await time.tick();
+    await vi.waitFor(() => expect(client.stopped.get()).toBe(true));
+    expect(opened).toBe(2);
+    close();
+  });
+
+  it('unsubscribing ends the loop quietly — a page that left is not a runner that stopped', async () => {
+    const live = stream();
+    const net = scripted({ '/events': () => live.response });
+    const client = createLocalClient(TOKEN, { fetch: net.fetchImpl });
+    const close = client.events(() => undefined);
+    await vi.waitFor(() => expect(net.calls).toHaveLength(1));
+    close();
+    live.end();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(client.stopped.get()).toBe(false);
+    expect(net.calls).toHaveLength(1);
+  });
+});
+
+describe('what the page tells the runner (K6, D4)', () => {
+  it('reports a hand-in’s outcome on the bearer route, as JSON', async () => {
+    const net = scripted({ '/hand-in/outcome': () => new Response(null, { status: 204 }) });
+    const client = createLocalClient(TOKEN, { fetch: net.fetchImpl });
+    await client.reportHandIn({ id: 'f'.repeat(32), outcome: 'updated', version: 3 });
+    const { init } = net.calls[0]!;
+    expect(init?.method).toBe('POST');
+    expect(new Headers(init?.headers).get('authorization')).toBe(`Bearer ${TOKEN}`);
+    expect(new Headers(init?.headers).get('content-type')).toBe('application/json');
+    expect(JSON.parse(String(init?.body))).toEqual({ id: 'f'.repeat(32), outcome: 'updated', version: 3 });
+  });
+
+  it('a report that cannot be delivered is swallowed — the tool says "not confirmed", the page does not break', async () => {
+    const client = createLocalClient(TOKEN, { fetch: scripted({}).fetchImpl });
+    await expect(client.reportHandIn({ id: 'f'.repeat(32), outcome: 'installed' })).resolves.toBeUndefined();
+    expect(client.stopped.get(), 'a failed report is not evidence the runner stopped').toBe(false);
+  });
+
+  it('asks for the brain to be probed again, with the bearer', async () => {
+    const net = scripted({ '/brain/recheck': () => new Response(null, { status: 202 }) });
+    const client = createLocalClient(TOKEN, { fetch: net.fetchImpl });
+    await client.recheckBrain();
+    expect(net.calls[0]!.init?.method).toBe('POST');
+    expect(new Headers(net.calls[0]!.init?.headers).get('authorization')).toBe(`Bearer ${TOKEN}`);
+    await expect(createLocalClient(TOKEN, { fetch: scripted({}).fetchImpl }).recheckBrain()).resolves.toBeUndefined();
   });
 });

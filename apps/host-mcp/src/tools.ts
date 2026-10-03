@@ -53,7 +53,7 @@ const TOOLS: readonly ToolDefinition[] = [
   {
     name: 'snug_hand_in',
     description:
-      'Deliver an app to the open runner as a snug-app-bundle/1 document. Installs a new app, or offers the update in the run header when the user has edited their copy. A bundle asking for connections is refused — the user grants those in the runner.',
+      'Deliver an app to the open runner as a snug-app-bundle/1 document. Installs a new app, or offers the update in the run header when the user has edited their copy. A bundle asking for connections is refused — the user grants those in the runner. The answer says what the runner did with it: installed, updated (to which version), already current, offered (the user edited their copy, so the update waits for them), refused (with the reason) — or "sent — not confirmed" when the open page did not report back in time.',
     inputSchema: {
       type: 'object',
       properties: {

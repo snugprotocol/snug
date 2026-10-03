@@ -526,8 +526,8 @@ describeBuilt('L2 — no failure precedes the handshake: every row of the refusa
     const iso = isolation();
     const install = scratch();
     cpSync(RELEASE_BUNDLE, path.join(install, 'snug-mcp.mjs'));
-    writeFileSync(path.join(install, 'snug-host-local.html'), '<!doctype html><title>a stale mix</title>');
-    writeFileSync(path.join(install, 'snug-host-local.html.sha256'), `${createHash('sha256').update('the page the plugin was built with').digest('hex')}\n`);
+    writeFileSync(path.join(install, 'snug-host.html'), '<!doctype html><title>a stale mix</title>');
+    writeFileSync(path.join(install, 'snug-host.html.sha256'), `${createHash('sha256').update('the page the plugin was built with').digest('hex')}\n`);
     const session = await begin(path.join(install, 'snug-mcp.mjs'), iso.env);
     const refusal = await expectRefused(session, 'page-damaged');
     expect(refusal.remedy).toMatch(/reinstall the Snug plugin/i);
@@ -549,8 +549,8 @@ describeBuilt('D8 — the served page is the pinned page', () => {
       const install = scratch();
       const page = '<!doctype html><meta charset="utf-8"><title>kit</title><p>héllo';
       cpSync(RELEASE_BUNDLE, path.join(install, 'snug-mcp.mjs'));
-      writeFileSync(path.join(install, 'snug-host-local.html'), page);
-      writeFileSync(path.join(install, 'snug-host-local.html.sha256'), createHash('sha256').update(Buffer.from(page, 'utf8')).digest('hex'));
+      writeFileSync(path.join(install, 'snug-host.html'), page);
+      writeFileSync(path.join(install, 'snug-host.html.sha256'), createHash('sha256').update(Buffer.from(page, 'utf8')).digest('hex'));
       const session = await begin(path.join(install, 'snug-mcp.mjs'), iso.env);
       const status = await session.status();
       expect(status.running).toBe(true);
@@ -577,8 +577,8 @@ describeBuilt('D8 — the served page is the pinned page', () => {
       const port = await silentPort();
       const env = testEnv(iso, { SNUG_MCP_TEST_PORTS: `${port},0` });
       cpSync(TEST_BUNDLE, path.join(install, 'snug-mcp.test.mjs'));
-      writeFileSync(path.join(install, 'snug-host-local.html'), '<!doctype html><title>a stale mix</title>');
-      writeFileSync(path.join(install, 'snug-host-local.html.sha256'), `${createHash('sha256').update('the page the plugin was built with').digest('hex')}\n`);
+      writeFileSync(path.join(install, 'snug-host.html'), '<!doctype html><title>a stale mix</title>');
+      writeFileSync(path.join(install, 'snug-host.html.sha256'), `${createHash('sha256').update('the page the plugin was built with').digest('hex')}\n`);
       const damaged = await begin(path.join(install, 'snug-mcp.test.mjs'), env);
       // Its start has SETTLED (the test build says so on stderr): whatever it was going to
       // bind, it has bound.
@@ -607,10 +607,10 @@ describeBuilt('D8 — the served page is the pinned page', () => {
       const iso = isolation();
       const install = scratch();
       cpSync(RELEASE_BUNDLE, path.join(install, 'snug-mcp.mjs'));
-      writeFileSync(path.join(install, 'snug-host-local.html'), 'the page at boot');
+      writeFileSync(path.join(install, 'snug-host.html'), 'the page at boot');
       const session = await begin(path.join(install, 'snug-mcp.mjs'), iso.env);
       const status = await session.status();
-      writeFileSync(path.join(install, 'snug-host-local.html'), 'swapped underneath a running process');
+      writeFileSync(path.join(install, 'snug-host.html'), 'swapped underneath a running process');
       expect(await (await fetch(`http://127.0.0.1:${String(status.port)}/`)).text()).toBe('the page at boot');
     },
     SLOW,

@@ -6,24 +6,33 @@
 // scripts/ is vitest-run).
 
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, it } from 'node:test';
 
-import { buildPlugin } from './build-plugin.mjs';
+import { ARCHIVE_NAME, archiveEntries, buildPlugin, PAGE_PATH, PAGE_PIN_PATH } from './build-plugin.mjs';
 import { FAKE_SKILL, fixtures } from './build-plugin.test.mjs';
 import {
   ALLOWED_ENV_READS,
   ALLOWED_WHOLE_ENV_READS,
+  bundleSizeLine,
+  checkArchive,
   checkBundle,
   checkInstructions,
   checkPluginTree,
   FORBIDDEN_PREFIX_IN_RELEASE,
   isolationEnv,
+  REVIEWER_HOLD_BYTES,
+  runDamagedPageLeg,
   runLaunchLegs,
   runValidators,
 } from './check-host-mcp.mjs';
+import { LAUNCHER_PATH } from './lib/plugin-manifests.mjs';
+import { createZip } from './lib/zip.mjs';
+
+const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
 
 const CLEAN = `const home = process.env.HOME; const t = process.env.TMPDIR; export const tools = ['snug_status'];`;
 
@@ -132,6 +141,18 @@ describe('the plugin tree', () => {
     }
   });
 
+  it('names what is missing from a folder that holds no plugin at all — a list, never a throw', async () => {
+    const { dir, out } = await built();
+    rmSync(path.join(out, 'snug'), { recursive: true });
+    try {
+      const problems = await check(out);
+      assert.ok(problems.some((p) => p.includes('missing snug/.claude-plugin/plugin.json')), JSON.stringify(problems));
+      assert.ok(problems.some((p) => p.includes('missing the runner page')), JSON.stringify(problems));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('catches a hand-edited manifest', async () => {
     // The mutant: the "one contract, two artifacts" defect this module exists to prevent.
     const { dir, out } = await built();
@@ -164,11 +185,26 @@ describe('the plugin tree', () => {
     }
   });
 
-  it('catches a missing runner page', async () => {
+  it('catches a missing runner page — the ONE page, the skill’s asset (K1)', async () => {
+    // MIGRATED 2026-10-03: the page was a second build shipped beside the bundle. It is the
+    // skill's asset now, which the process finds relative to its bundle.
     const { dir, out } = await built();
-    rmSync(path.join(out, 'snug/scripts/snug-host-local.html'));
+    rmSync(path.join(out, 'snug', PAGE_PATH));
     try {
       assert.ok((await check(out)).some((p) => p.includes('runner page')));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('catches a SECOND copy of the page beside the bundle — the plugin ships it once', async () => {
+    // The mutant: a build step that copies the page next to the process "to be safe". The
+    // process would never read it (its first home is the skill's asset), so the two would
+    // drift in silence, and the plugin would be 2 MB heavier for it.
+    const { dir, out } = await built();
+    writeFileSync(path.join(out, 'snug/scripts/snug-host.html'), '<!doctype html><title>a second copy</title>');
+    try {
+      assert.ok((await check(out)).some((p) => /second copy of the page/.test(p) && p.includes('scripts/snug-host.html')));
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -213,6 +249,154 @@ describe('the plugin tree', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  describe('the page’s pin (D8)', () => {
+    // The provenance cannot see either of these: it hashes whatever the build wrote, so a
+    // build that wrote no pin, or the wrong one, would describe its own tree perfectly.
+
+    it('catches a tree with NO pin beside its page — every install of it would serve whatever page it found', async () => {
+      const { dir, out } = await built();
+      rmSync(path.join(out, 'snug', PAGE_PIN_PATH));
+      try {
+        assert.ok((await check(out)).some((p) => /missing the page’s pin/.test(p) && p.includes(PAGE_PIN_PATH)), JSON.stringify(await check(out)));
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('catches a pin that names some other page — the process would refuse to lead from a fresh install', async () => {
+      const { dir, out } = await built();
+      writeFileSync(path.join(out, 'snug', PAGE_PIN_PATH), `${sha256('yesterday’s page')}  snug-host.html\n`);
+      try {
+        assert.ok((await check(out)).some((p) => /pin .*does not name the sha256 of the page/.test(p)), JSON.stringify(await check(out)));
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('reads the pin as the process does: the first token, in either case', async () => {
+      const { dir, out } = await built();
+      const pin = path.join(out, 'snug', PAGE_PIN_PATH);
+      writeFileSync(pin, readFileSync(pin, 'utf8').toUpperCase().replace('SNUG-HOST.HTML', 'snug-host.html'));
+      try {
+        assert.ok(!(await check(out)).some((p) => /pin/.test(p) && !p.includes('PROVENANCE')), JSON.stringify(await check(out)));
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  it('holds the tree to the directory’s install-blocking rules (D2 — each rule’s own mutant is in build-plugin.test.mjs)', async () => {
+    const { dir, out } = await built();
+    writeFileSync(path.join(out, 'snug/skills/.DS_Store'), '');
+    try {
+      assert.ok((await check(out)).some((p) => /plugin directory would refuse/.test(p) && p.includes('skills/.DS_Store')), JSON.stringify(await check(out)));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  describe('the upload archive is the plugin folder — whole, byte for byte, and nothing else (D3)', () => {
+    /** A built tree whose archive has been REWRITTEN from the tree's own entries, changed by `change`. */
+    const rearchived = async (change) => {
+      const { dir, out } = await built();
+      writeFileSync(path.join(out, ARCHIVE_NAME), createZip(change(archiveEntries(path.join(out, 'snug')))));
+      return { dir, out };
+    };
+    const caught = async ({ dir, out }, pattern) => {
+      try {
+        // Through the whole tree check AND on its own: the rule is wired in, and it is this rule.
+        assert.ok((await check(out)).some((p) => pattern.test(p)), JSON.stringify(await check(out)));
+        assert.ok(checkArchive(out).some((p) => pattern.test(p)), JSON.stringify(checkArchive(out)));
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    };
+
+    it('passes the archive the builder wrote — and one rewritten from the same entries', async () => {
+      const { dir, out } = await rearchived((entries) => entries);
+      try {
+        assert.deepEqual(checkArchive(out), []);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('catches a tree with no archive', async () => {
+      const { dir, out } = await built();
+      rmSync(path.join(out, ARCHIVE_NAME));
+      await caught({ dir, out }, /snug\.zip is missing/);
+    });
+
+    it('catches an entry whose bytes are not the tree’s file', async () => {
+      await caught(
+        await rearchived((entries) => entries.map((entry) => (entry.name === 'snug/README.md' ? { ...entry, data: Buffer.from('# another README') } : entry))),
+        /snug\.zip: snug\/README\.md is not the tree’s file/,
+      );
+    });
+
+    it('catches a tree changed AFTER it was archived — the archive would upload yesterday’s file', async () => {
+      const { dir, out } = await built();
+      writeFileSync(path.join(out, 'snug/README.md'), `${readFileSync(path.join(out, 'snug/README.md'), 'utf8')}\nedited`);
+      await caught({ dir, out }, /snug\.zip: snug\/README\.md is not the tree’s file/);
+    });
+
+    it('catches a file of the tree the archive left out', async () => {
+      await caught(await rearchived((entries) => entries.filter((entry) => entry.name !== `snug/${PAGE_PIN_PATH}`)), /snug\.zip is missing snug\/skills\/snug\/assets\/snug-host\.html\.sha256/);
+    });
+
+    it('catches an entry the tree does not have', async () => {
+      await caught(await rearchived((entries) => [...entries, { name: 'snug/scripts/extra.mjs', data: Buffer.from('// extra'), mode: 0o644 }]), /snug\.zip carries snug\/scripts\/extra\.mjs, which is not in the tree/);
+    });
+
+    it('catches a SECOND top-level entry — the marketplace root’s files are not part of the upload', async () => {
+      await caught(await rearchived((entries) => [...entries, { name: 'PROVENANCE.json', data: Buffer.from('{}'), mode: 0o644 }]), /ONE top-level entry.*PROVENANCE\.json/);
+    });
+
+    it('catches a second top-level entry wherever it sorts, and the folder under any other name', async () => {
+      await caught(await rearchived((entries) => [...entries, { name: 'zz-notes.txt', data: Buffer.from('x'), mode: 0o644 }]), /ONE top-level entry.*zz-notes\.txt/);
+      await caught(await rearchived((entries) => entries.map((entry) => ({ ...entry, name: `plugin/${entry.name.slice('snug/'.length)}` }))), /ONE top-level entry, snug\/.* it holds: plugin$/);
+    });
+
+    it('catches an archive of the folder’s CONTENTS with no folder around them', async () => {
+      await caught(await rearchived((entries) => entries.map((entry) => ({ ...entry, name: entry.name.slice('snug/'.length) }))), /ONE top-level entry/);
+    });
+
+    it('catches a launcher that would unzip without its executable bit', async () => {
+      await caught(
+        await rearchived((entries) => entries.map((entry) => (entry.name === `snug/${LAUNCHER_PATH}` ? { ...entry, mode: 0o644 } : entry))),
+        /snug\.zip: snug\/scripts\/snug has mode 644 where the tree’s file is 755/,
+      );
+    });
+
+    it('catches an archive that does not read back — by name, not by a throw', async () => {
+      const { dir, out } = await built();
+      const archive = readFileSync(path.join(out, ARCHIVE_NAME));
+      archive[archive.indexOf(Buffer.from('MIT License'))] ^= 1; // one bit of a stored file
+      writeFileSync(path.join(out, ARCHIVE_NAME), archive);
+      await caught({ dir, out }, /snug\.zip does not read back: zip: snug\/LICENSE: CRC mismatch/);
+    });
+  });
+});
+
+describe('the release bundle’s size against the directory’s reviewer-hold line (D2)', () => {
+  it('the line is 256 KiB', () => {
+    assert.equal(REVIEWER_HOLD_BYTES, 256 * 1024);
+  });
+
+  it('says how far OVER the line a bundle is — the figure a reviewer of a growing bundle needs', () => {
+    assert.equal(bundleSizeLine(282_046), 'the release bundle is 282,046 bytes — 19,902 OVER the plugin directory’s 256 KiB reviewer-hold line (262,144)');
+  });
+
+  it('says how far under it a bundle is, and a bundle exactly on the line is not over it', () => {
+    assert.equal(bundleSizeLine(200_000), 'the release bundle is 200,000 bytes — 62,144 under the plugin directory’s 256 KiB reviewer-hold line (262,144)');
+    assert.match(bundleSizeLine(REVIEWER_HOLD_BYTES), /— 0 under /);
+  });
+
+  it('is a line, never a problem: `checkBundle` does not fail a bundle for its size', () => {
+    // Printed so growth is seen in review; whether to hold a plugin is the directory's call.
+    assert.deepEqual(checkBundle(`${CLEAN} /* ${'x'.repeat(REVIEWER_HOLD_BYTES)} */`), []);
   });
 });
 
@@ -265,6 +449,9 @@ describe('the launch legs — the gate STARTS what it ships (D1)', () => {
     assert.deepEqual(outlived.splice(0), [], 'a launch leg left a process running');
   });
 
+  /** What an honest fake serves at `/` — and what a test hands the leg as the page the tree ships. */
+  const PAGE = '<!doctype html><title>kit</title><p>the page the tree ships';
+
   /** A launcher whose process answers as `mode` says. Every start is logged, with its pid. */
   const fake = (mode) => {
     const dir = mkdtempSync(path.join(tmpdir(), 'snug-leg-'));
@@ -273,11 +460,21 @@ describe('the launch legs — the gate STARTS what it ships (D1)', () => {
     writeFileSync(
       script,
       `import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
 const mode = ${JSON.stringify(mode)};
 appendFileSync(${JSON.stringify(starts)}, process.pid + '\\n');
 const home = process.env.SNUG_HOME;
+// The document a runner serves at / — or, for a tree whose page is not where the process
+// looks, the placeholder it serves in its place (with HTTP 200, which is the whole problem).
+const served = mode === 'serves-placeholder' ? '<!doctype html><title>Snug</title><p>The Snug runner page is missing from this install.' : ${JSON.stringify(PAGE)};
+let port = 0;
+if (home !== undefined && mode !== 'serves-nothing') {
+  const server = createServer((request, response) => response.end(served));
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  port = server.address().port;
+}
 const status = () => {
   if (home === undefined) {
     if (mode === 'resolves-a-home-anyway') return { running: true, pid: process.pid, home: '/Users/someone/Snug', file: '/Users/someone/Snug/user.snug' };
@@ -287,6 +484,7 @@ const status = () => {
   const record = path.join(home, 'primary.pid');
   const base = {
     running: true,
+    port,
     home: mode === 'leaks-home' ? '/Users/someone/Snug' : home,
     file: mode === 'leaks-file' ? '/Users/someone/Snug/user.snug' : path.join(home, 'user.snug'),
   };
@@ -427,9 +625,259 @@ process.stdin.on('end', () => { if (mode !== 'lingers') process.exit(0); });
     }
   });
 
+  describe('the process SERVES the page the tree ships (K1)', () => {
+    // The page is found by the process relative to its bundle, and a page it cannot find is
+    // served as a placeholder with HTTP 200 — so nothing that reads files can see a layout
+    // that moved one side and not the other. The leg asks the started process for `/`.
+    const shipped = () => {
+      const dir = mkdtempSync(path.join(tmpdir(), 'snug-leg-page-'));
+      const file = path.join(dir, 'snug-host.html');
+      writeFileSync(file, PAGE);
+      return { file, remove: () => rmSync(dir, { recursive: true, force: true }) };
+    };
+
+    it('passes when what is served at / is the shipped page, byte for byte', async () => {
+      const f = fake('honest');
+      const page = shipped();
+      try {
+        assert.deepEqual(await runLaunchLegs(f.launcher, { ...quick, page: page.file }), []);
+      } finally {
+        f.remove();
+        page.remove();
+      }
+    });
+
+    it('catches a process serving the "page is missing" placeholder — a 200 that is not the page', async () => {
+      const f = fake('serves-placeholder');
+      const page = shipped();
+      try {
+        const problems = await runLaunchLegs(f.launcher, { ...quick, page: page.file });
+        assert.ok(problems.some((p) => /positive leg/.test(p) && /does not serve the page the tree ships/.test(p) && /missing from this install/.test(p)), JSON.stringify(problems));
+      } finally {
+        f.remove();
+        page.remove();
+      }
+    });
+
+    it('catches a process that serves nothing at its address', async () => {
+      const f = fake('serves-nothing');
+      const page = shipped();
+      try {
+        const problems = await runLaunchLegs(f.launcher, { ...quick, page: page.file });
+        assert.ok(problems.some((p) => /positive leg/.test(p) && /does not serve the page the tree ships/.test(p)), JSON.stringify(problems));
+      } finally {
+        f.remove();
+        page.remove();
+      }
+    });
+
+    it('with no page named, the leg asks for none (a caller that only has a launcher)', async () => {
+      const f = fake('serves-placeholder');
+      try {
+        assert.deepEqual(await runLaunchLegs(f.launcher, quick), []);
+      } finally {
+        f.remove();
+      }
+    });
+  });
+
   it('catches a launcher that is not there', async () => {
     const problems = await runLaunchLegs('/nowhere/scripts/snug', quick);
     assert.ok(problems.length >= 2);
+  });
+
+  describe('the PIN, proven on the tree: one changed byte of the page and the install refuses to lead (D8)', () => {
+    // The build writes the page's sha256 beside it and the process serves only bytes that
+    // match. Nothing that reads files can show the two halves meet: a build that pinned the
+    // wrong file, or a process that stopped reading the pin, leaves every hash in the tree
+    // correct. So the leg damages a COPY of the tree and starts it.
+
+    /**
+     * A plugin folder whose launcher starts a runner that treats the page as the real
+     * process does: `skills/snug/assets/snug-host.html`, relative to its own script, pinned
+     * by the `.sha256` beside it. Every start is logged with its pid and the script it ran.
+     */
+    const fakePlugin = (mode) => {
+      const dir = mkdtempSync(path.join(tmpdir(), 'snug-leg-tree-'));
+      const plugin = path.join(dir, 'snug');
+      // Outside the plugin folder: a copy of the tree does not take the log with it.
+      const starts = path.join(dir, 'starts.log');
+      mkdirSync(path.join(plugin, 'scripts'), { recursive: true });
+      mkdirSync(path.join(plugin, path.dirname(PAGE_PATH)), { recursive: true });
+      writeFileSync(path.join(plugin, PAGE_PATH), PAGE);
+      if (mode !== 'unpinned') writeFileSync(path.join(plugin, PAGE_PIN_PATH), `${sha256(PAGE)}  snug-host.html\n`);
+      writeFileSync(
+        path.join(plugin, 'scripts/fake-runner.mjs'),
+        `import { createHash } from 'node:crypto';
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
+import path from 'node:path';
+import { createInterface } from 'node:readline';
+import { fileURLToPath } from 'node:url';
+const mode = ${JSON.stringify(mode)};
+const here = path.dirname(fileURLToPath(import.meta.url));
+appendFileSync(${JSON.stringify(starts)}, process.pid + ' ' + here + '\\n');
+const home = process.env.SNUG_HOME;
+const page = path.join(here, '..', ${JSON.stringify(PAGE_PATH)});
+const pin = existsSync(page + '.sha256') ? readFileSync(page + '.sha256', 'utf8').split(/\\s+/)[0] : undefined;
+const mismatch = pin !== undefined && pin !== createHash('sha256').update(readFileSync(page)).digest('hex');
+const damaged = mode === 'refuses-everything' || (mode !== 'ignores-pin' && mismatch);
+const status = () => {
+  const refusal = { code: mode === 'wrong-refusal' ? 'listen-failed' : 'page-damaged', message: 'damaged', remedy: 'reinstall' };
+  if (damaged && mode !== 'leads-and-says-damaged') return { running: false, refusal };
+  mkdirSync(home, { recursive: true });
+  return {
+    running: true,
+    pid: mode === 'wrong-pid' ? process.pid + 1 : process.pid,
+    home: mode === 'leaks-home' ? '/Users/someone/Snug' : home,
+    file: path.join(home, 'user.snug'),
+    ...(damaged ? { refusal } : {}),
+  };
+};
+if (mode === 'lingers') { process.on('SIGTERM', () => {}); setInterval(() => {}, 1_000); }
+const reply = (id, result) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id, result }) + '\\n');
+createInterface({ input: process.stdin }).on('line', (line) => {
+  const message = JSON.parse(line);
+  if (message.id === undefined || mode === 'silent') return;
+  if (message.method === 'initialize') reply(message.id, { protocolVersion: '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'snug', version: '0' } });
+  else reply(message.id, { content: [{ type: 'text', text: JSON.stringify(status()) }] });
+});
+process.stdin.on('end', () => { if (mode !== 'lingers') process.exit(0); });
+`,
+      );
+      // Shell builtins only, as the real launcher: under the isolation environment the PATH
+      // holds node and nothing else — there is no `dirname` to call.
+      writeFileSync(path.join(plugin, LAUNCHER_PATH), '#!/bin/sh\nexec node "${0%/*}/fake-runner.mjs" "$@"\n', { mode: 0o755 });
+      const log = () => (existsSync(starts) ? readFileSync(starts, 'utf8').trim().split('\n').map((line) => ({ pid: Number(line.split(' ')[0]), ranFrom: line.slice(line.indexOf(' ') + 1) })) : []);
+      return {
+        plugin,
+        log,
+        remove: () => {
+          outlived.push(...log().map((start) => start.pid).filter(alive));
+          rmSync(dir, { recursive: true, force: true });
+        },
+      };
+    };
+
+    it('passes a tree whose damaged copy refuses and which itself still leads — and never touches the tree it was given', async () => {
+      const f = fakePlugin('honest');
+      try {
+        assert.deepEqual(await runDamagedPageLeg(f.plugin, quick), []);
+        const [damaged, untouched] = f.log();
+        assert.equal(f.log().length, 2);
+        // The damaged one ran from a COPY, which is gone; the untouched one from the tree
+        // itself. (Real paths: a process names its own script through /private on a Mac.)
+        const scripts = realpathSync(path.join(f.plugin, 'scripts'));
+        assert.notEqual(damaged.ranFrom, scripts);
+        assert.equal(existsSync(damaged.ranFrom), false, 'the leg left its damaged copy behind');
+        assert.equal(untouched.ranFrom, scripts);
+        assert.equal(readFileSync(path.join(f.plugin, PAGE_PATH), 'utf8'), PAGE);
+        assert.equal(readFileSync(path.join(f.plugin, PAGE_PIN_PATH), 'utf8'), `${sha256(PAGE)}  snug-host.html\n`);
+        for (const { pid } of f.log()) assert.equal(alive(pid), false, `pid ${pid} was left running`);
+      } finally {
+        f.remove();
+      }
+    });
+
+    it('catches a tree with NO pin: its damaged copy leads, serving a page that is not the one it was built with', async () => {
+      // The mutant the leg exists for — the build that forgot the pin.
+      const f = fakePlugin('unpinned');
+      try {
+        const problems = await runDamagedPageLeg(f.plugin, quick);
+        assert.ok(problems.some((p) => /damaged-page leg/.test(p) && /must refuse to lead \(page-damaged\)/.test(p)), JSON.stringify(problems));
+        // …and it stops there: a copy that led holds the leg's lock, so a second process would only attach to it.
+        assert.equal(f.log().length, 1);
+      } finally {
+        f.remove();
+      }
+    });
+
+    it('catches a process that does not read the pin', async () => {
+      const f = fakePlugin('ignores-pin');
+      try {
+        assert.ok((await runDamagedPageLeg(f.plugin, quick)).some((p) => /damaged-page leg/.test(p) && /must refuse to lead \(page-damaged\)/.test(p)));
+      } finally {
+        f.remove();
+      }
+    });
+
+    it('catches a damaged copy that names the refusal and LEADS anyway — the code alone is not the refusal', async () => {
+      const f = fakePlugin('leads-and-says-damaged');
+      try {
+        assert.ok((await runDamagedPageLeg(f.plugin, quick)).some((p) => /damaged-page leg/.test(p) && /must refuse to lead \(page-damaged\)/.test(p)));
+        assert.equal(f.log().length, 1);
+      } finally {
+        f.remove();
+      }
+    });
+
+    it('catches a damaged copy that refuses for some OTHER reason — the leg proves the pin, not that something went wrong', async () => {
+      const f = fakePlugin('wrong-refusal');
+      try {
+        assert.ok((await runDamagedPageLeg(f.plugin, quick)).some((p) => /damaged-page leg/.test(p) && /listen-failed/.test(p)));
+      } finally {
+        f.remove();
+      }
+    });
+
+    it('catches a tree that refuses UNTOUCHED — a pin of the wrong page passes the first half on its own', async () => {
+      const f = fakePlugin('refuses-everything');
+      try {
+        const problems = await runDamagedPageLeg(f.plugin, quick);
+        assert.ok(problems.some((p) => /damaged-page leg/.test(p) && /untouched tree must still lead/.test(p) && /page-damaged/.test(p)), JSON.stringify(problems));
+        assert.equal(problems.length, 1);
+      } finally {
+        f.remove();
+      }
+    });
+
+    for (const [mode, names] of [
+      ['leaks-home', /\/Users\/someone\/Snug/],
+      ['wrong-pid', /pid/],
+    ]) {
+      it(`catches an untouched tree that does not lead on the leg’s OWN home (${mode})`, async () => {
+        const f = fakePlugin(mode);
+        try {
+          const problems = await runDamagedPageLeg(f.plugin, quick);
+          assert.ok(problems.some((p) => /damaged-page leg/.test(p) && /isolation/i.test(p) && names.test(p)), JSON.stringify(problems));
+        } finally {
+          f.remove();
+        }
+      });
+    }
+
+    it('catches a launcher that never answers, by name — and does not hang', async () => {
+      const f = fakePlugin('silent');
+      try {
+        const began = Date.now();
+        assert.ok((await runDamagedPageLeg(f.plugin, quick)).some((p) => /damaged-page leg/.test(p) && /initialize/.test(p)));
+        assert.ok(Date.now() - began < 15_000);
+      } finally {
+        f.remove();
+      }
+    });
+
+    it('catches a tree that is not there, and one with no page to damage', async () => {
+      assert.ok((await runDamagedPageLeg('/nowhere/snug', quick)).some((p) => /damaged-page leg/.test(p)));
+      const f = fakePlugin('honest');
+      rmSync(path.join(f.plugin, PAGE_PATH));
+      try {
+        assert.ok((await runDamagedPageLeg(f.plugin, quick)).some((p) => /damaged-page leg/.test(p)));
+        assert.equal(f.log().length, 0, 'nothing is started when there is no page to damage');
+      } finally {
+        f.remove();
+      }
+    });
+
+    it('REAPS both processes however they behave', async () => {
+      const f = fakePlugin('lingers');
+      try {
+        await runDamagedPageLeg(f.plugin, quick);
+        assert.equal(f.log().length, 2);
+        for (const { pid } of f.log()) assert.equal(alive(pid), false, `pid ${pid} outlived the leg`);
+      } finally {
+        f.remove();
+      }
+    });
   });
 
   it('REAPS a process that will not go: closing its input and a SIGTERM are followed, after the bound, by a SIGKILL', async () => {

@@ -1,14 +1,16 @@
-// compose.ts — the kit's composition root (TASK-20260905-binding-a-artifacts): from the
-// probe's answers and the page, the seats the platform carries. Pure over injected window /
-// document slices so every binding's wiring is tested without a browser; `main.tsx` calls
-// it once and renders.
+// compose.ts — the kit's composition root for every binding the PROBE finds
+// (TASK-20260905-binding-a-artifacts): from the probe's answers and the page, the seats the
+// platform carries. Pure over injected window / document slices so every binding's wiring
+// is tested without a browser; the boot calls it once and renders. (The local runner is
+// composed by `local/compose-local.ts` — the boot decides which, `boot.tsx`.)
 //
 //   artifact / artifact-static → the artifact-html RECORD over the probed bucket (seeded
 //       from the page's `snug-db` block; the save act only where `artifact` resolved), the
 //       custody seat, the export seat over `downloads` (or the copy path).
 //   artifact-chat             → `window.storage` as the file's home when the viewer has it
 //       (else the bucket), no save act (storage IS the durable copy), the copy export.
-//   local-host / file         → the bucket, the custody chip's plain-file copy, the copy export.
+//   file                      → the bucket, the custody chip's plain-file copy, the copy
+//       export. (A loopback static server is file-class too — K2.)
 //
 // The hand-in runs AFTER the user db opens (`handIn(db)`), never before: it installs and
 // updates through the db, and pending (edited-copy) hand-ins are offered through the
@@ -17,12 +19,11 @@
 
 import { type PersistenceBackend, type UserDb } from '@snugprotocol/db';
 
-import type { AgentHandInSeat, CustodySeat, PendingAgentUpdate, SnugPlatform } from '@playground/platform/platform';
-import { createStore, type Store } from '@playground/state/store';
+import type { CustodySeat, PendingAgentUpdate, SnugPlatform } from '@playground/platform/platform';
 
 import { parseDbBlockBody } from '../../../scripts/lib/page-blocks.mjs';
 import { createExportSeat } from './exportSeat.js';
-import { applyPendingHandIn, handInFromPage, readBundleBlocksFromDocument, type HandInOutcome, type PendingHandIn } from './handin.js';
+import { applyAgentBundles, createHandInSeat, readBundleBlocksFromDocument, type HandInOutcome } from './handin.js';
 import { createHostPlatform } from './platform-host.js';
 import type { ProbeResult } from './probe.js';
 import { CUSTODY_NOTE_STASH_KEY, createArtifactRecord, type ArtifactRecord } from './storage/artifactHtml.js';
@@ -49,7 +50,7 @@ export interface Composition {
   platform: SnugPlatform;
   custody: CustodyStore;
   record?: ArtifactRecord;
-  pending: Store<readonly PendingAgentUpdate[]>;
+  pending: { get(): readonly PendingAgentUpdate[]; subscribe(listener: () => void): () => void };
   /** The boot-time hand-in — call once the user db is open. */
   handIn(db: UserDb): Promise<HandInOutcome>;
 }
@@ -136,39 +137,27 @@ export function composeHostPlatform(probe: ProbeResult, win: ComposeWindow, doc:
     }
   }
 
-  const pending = createStore<readonly PendingAgentUpdate[]>([]);
-  const pendingByApp = new Map<string, PendingHandIn>();
-  const publishPending = (): void => pending.set([...pendingByApp.values()].map((p) => ({ appId: p.appId, displayName: p.displayName, bundleId: p.bundleId })));
-  let dbForApply: UserDb | undefined;
-  const agentHandIns: AgentHandInSeat = {
-    pending,
-    async apply(appId) {
-      const entry = pendingByApp.get(appId);
-      if (entry === undefined || dbForApply === undefined) throw new Error('nothing is pending for this app');
-      const result = await applyPendingHandIn(dbForApply, entry);
-      pendingByApp.delete(appId);
-      publishPending();
-      return result;
-    },
-  };
+  // The ONE seat for offered updates — the runner's composition makes the same one (K4).
+  const handIns = createHandInSeat();
 
   const platform = createHostPlatform(probe, wasm, {
     userdbBackend: backend,
     custody: custodySeat,
     saveFile: createExportSeat({ downloads: probe.host?.downloads, store: custody }),
-    agentHandIns,
+    agentHandIns: handIns.seat,
   });
 
   return {
     platform,
     custody,
     ...(record !== undefined ? { record } : {}),
-    pending,
+    pending: handIns.seat.pending,
     async handIn(db) {
-      dbForApply = db;
-      const outcome = await handInFromPage(db, readBundleBlocksFromDocument(doc));
-      for (const p of outcome.pending) pendingByApp.set(p.appId, p);
-      publishPending();
+      // The page's embedded blocks through the ONE core, under Binding A's rule: a block
+      // rides the page and is read again on every load, so an app the user deleted stays
+      // deleted (no `explicit`).
+      const outcome = await applyAgentBundles(db, readBundleBlocksFromDocument(doc));
+      handIns.absorb(db, outcome);
       return outcome;
     },
   };

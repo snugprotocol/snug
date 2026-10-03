@@ -103,8 +103,10 @@ describe('/oauth/callback (D-B14)', () => {
     // D-B14 puts the web popup path on this binding: the redirect URI is
     // `${origin}/oauth/callback` — a PATH, not a hash route (connectionWizard.ts:2351) —
     // and the provider sends the user's browser there. Without this route the process
-    // 404s the popup and every OAuth connection dies at the last step. The page's own
-    // HashRouter takes over once the document loads.
+    // 404s the popup and every OAuth connection dies at the last step. The document's own
+    // boot sees the path and renders the callback page ALONE (apps/host boot, K2) — it used
+    // to be claimed here that "the page's own HashRouter takes over", and under a hash router
+    // that document rendered the hub, so no sign-in ever completed.
     const response = await fetch(`${origin}/oauth/callback?code=abc&state=xyz`);
     expect(response.status).toBe(200);
     expect(response.headers.get('content-type')).toMatch(/text\/html/);
@@ -277,17 +279,24 @@ describe('/events', () => {
 });
 
 describe('the page the process serves', () => {
-  it('is the real runner, not the placeholder', async () => {
+  it('is the real runner, not the placeholder — found by the ONE locator, in the repo layout', async () => {
     // The placeholder is what a MISSING page looks like, and it serves with HTTP 200 — so a
     // wrong lookup path is invisible unless something asserts on the bytes. Found exactly
     // that way: the repo-relative fallback climbed one directory too few.
-    const { readFileSync, existsSync } = await import('node:fs');
+    //
+    // MIGRATED 2026-10-03 (K1). It used to read the second build's output by a path of its
+    // own and RETURN when that build was absent, which is a pass nobody earned. It now asks
+    // `locatePage` from where the bundle is built, and a missing kit build fails BY NAME
+    // (turbo builds `host` before this suite — turbo.json).
+    const { locatePage } = await import('../page.js');
     const nodePath = await import('node:path');
-    const built = nodePath.resolve(__dirname, '../../../host/dist-local/snug-host-local.html');
-    if (!existsSync(built)) return; // CANNOT RUN without the sibling build; the gate covers that
-    const html = readFileSync(built, 'utf8');
-    expect(html.length).toBeGreaterThan(100_000);
-    expect(html).not.toContain('is missing from this install');
+    const found = locatePage(nodePath.resolve(__dirname, '../../dist'));
+    const built = nodePath.resolve(__dirname, '../../../host/dist/snug-host.html');
+    expect(found.damaged, 'the repo build must carry no pin that disagrees with it').toBe(false);
+    if (found.damaged) return;
+    expect(found.file, 'apps/host/dist/snug-host.html is missing — run `pnpm --filter host build` before this suite').toBe(built);
+    expect(found.html.length).toBeGreaterThan(100_000);
+    expect(found.html).not.toContain('is missing from this install');
   });
 });
 
@@ -614,5 +623,137 @@ describe('stopping loses no write (L4)', () => {
     await server.close();
     expect(Date.now() - began).toBeLessThan(CLOSE_LINGER_MS + 2_000);
     await response.text().catch(() => {});
+  });
+});
+
+// ------------------------------------------------------------------ the one-kit range
+// (TASK-20261003 R2: the redirect fact on /status, the hand-in outcome, the brain re-check.)
+
+describe('/status says whether an OAuth redirect can come back here (ADR-0068 D-B13)', () => {
+  const redirect = async (): Promise<unknown> => ((await (await call('/status')).json()) as { oauthRedirect?: unknown }).oauthRedirect;
+
+  it('is always a boolean, and FALSE unless the runner says the registered port was bound', async () => {
+    // The registered redirect URI names the fixed port; a runner that fell back to another
+    // port must not let the page offer a sign-in that can never return. So absence of the
+    // fact is "no", never "yes".
+    expect(await redirect()).toBe(false);
+    await server.close();
+    await start({ oauthRedirect: () => true });
+    expect(await redirect()).toBe(true);
+    await server.close();
+    await start({ oauthRedirect: () => false });
+    expect(await redirect()).toBe(false);
+  });
+
+  it('is the field the wire fixture names — the page’s client and this route read ONE shape', async () => {
+    const { readFileSync } = await import('node:fs');
+    const wire = JSON.parse(readFileSync(path.join(__dirname, 'fixtures', 'status-wire.json'), 'utf8')) as Record<string, unknown>;
+    expect(typeof wire.oauthRedirect).toBe('boolean');
+    const body = (await (await call('/status')).json()) as Record<string, unknown>;
+    for (const key of ['binding', 'port', 'pages', 'oauthRedirect']) expect(typeof body[key], key).toBe(typeof wire[key]);
+  });
+});
+
+describe('POST /hand-in/outcome — the page says what it did with a bundle (K6)', () => {
+  const ID = 'a'.repeat(32);
+  const seen: unknown[] = [];
+  const post = (body: unknown, init: RequestInit = {}): Promise<Response> =>
+    call('/hand-in/outcome', { method: 'POST', headers: { 'content-type': 'application/json' }, body: typeof body === 'string' ? body : JSON.stringify(body), ...init });
+
+  beforeEach(async () => {
+    seen.length = 0;
+    await server.close();
+    await start({ onHandInOutcome: (report) => void seen.push(report) });
+  });
+
+  it('hands a well-formed report to the runner and answers 204', async () => {
+    expect((await post({ id: ID, outcome: 'installed' })).status).toBe(204);
+    expect((await post({ id: ID, outcome: 'updated', version: 3 })).status).toBe(204);
+    expect((await post({ id: ID, outcome: 'offered' })).status).toBe(204);
+    expect((await post({ id: ID, outcome: 'current' })).status).toBe(204);
+    expect((await post({ id: ID, outcome: 'refused', reason: 'it asks for a connection' })).status).toBe(204);
+    expect(seen).toEqual([
+      { id: ID, outcome: 'installed' },
+      { id: ID, outcome: 'updated', version: 3 },
+      { id: ID, outcome: 'offered' },
+      { id: ID, outcome: 'current' },
+      { id: ID, outcome: 'refused', reason: 'it asks for a connection' },
+    ]);
+  });
+
+  it('is bearer-gated like every data-plane route, with the marker', async () => {
+    const response = await fetch(`${origin}/hand-in/outcome`, { method: 'POST', headers: { origin, 'content-type': 'application/json' }, body: JSON.stringify({ id: ID, outcome: 'installed' }) });
+    expect(response.status).toBe(401);
+    expect(response.headers.get(RUNNER_MARKER_HEADER)).toBe('1');
+    expect(seen).toEqual([]);
+  });
+
+  it.each([
+    ['not JSON', '{nope'],
+    ['not an object', '[]'],
+    ['no id', { outcome: 'installed' }],
+    ['an id that is not the runner’s shape', { id: 'chess', outcome: 'installed' }],
+    ['an id with a path in it', { id: '../'.repeat(10) + 'ab', outcome: 'installed' }],
+    ['an outcome outside the vocabulary', { id: ID, outcome: 'deleted-everything' }],
+    ['a reason that is not text', { id: ID, outcome: 'refused', reason: { $ne: 1 } }],
+    ['a version that is not a positive integer', { id: ID, outcome: 'updated', version: -1 }],
+    ['a version that is not a number', { id: ID, outcome: 'updated', version: '3' }],
+  ])('refuses %s with a 400 and tells the runner nothing', async (_label, body) => {
+    expect((await post(body)).status).toBe(400);
+    expect(seen).toEqual([]);
+  });
+
+  it('strips control characters from the reason and caps its length — it ends up in an agent’s context', async () => {
+    // The reason is quoted in `snug_hand_in`'s answer, so it reaches a model. A line break
+    // or an escape sequence in it could dress page-supplied text up as a new instruction
+    // or a second tool result.
+    await post({ id: ID, outcome: 'refused', reason: `line one\nline two\u0000\u001b[31m\u0085 end${'x'.repeat(2_000)}` });
+    const [report] = seen as Array<{ reason: string }>;
+    expect(report!.reason).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/);
+    expect(report!.reason.startsWith('line one line two')).toBe(true);
+    expect(report!.reason.length).toBeLessThanOrEqual(500);
+  });
+
+  it('caps the body — a report is a few hundred bytes, never a megabyte', async () => {
+    const response = await post({ id: ID, outcome: 'refused', reason: 'x'.repeat(64 * 1024) });
+    expect(response.status).toBe(413);
+    expect(seen).toEqual([]);
+  });
+
+  it('only POST is a report', async () => {
+    expect((await call('/hand-in/outcome')).status).toBe(404);
+  });
+});
+
+describe('POST /brain/recheck — the page asks for the brain to be probed again (D4)', () => {
+  it('tells the runner and answers 202: the verdict arrives as a status event, not in this answer', async () => {
+    await server.close();
+    let asked = 0;
+    await start({ onBrainRecheck: () => void (asked += 1) });
+    const response = await call('/brain/recheck', { method: 'POST' });
+    expect(response.status).toBe(202);
+    expect(await response.text()).toBe('');
+    expect(asked).toBe(1);
+  });
+
+  it('is bearer-gated — an anonymous request must not be able to spawn the user’s CLI', async () => {
+    await server.close();
+    let asked = 0;
+    await start({ onBrainRecheck: () => void (asked += 1) });
+    const response = await fetch(`${origin}/brain/recheck`, { method: 'POST', headers: { origin } });
+    expect(response.status).toBe(401);
+    expect(asked).toBe(0);
+  });
+
+  it('a recheck that throws does not fail the request or leak its reason', async () => {
+    await server.close();
+    await start({
+      onBrainRecheck: () => {
+        throw new Error('probe blew up at /Users/someone/.claude');
+      },
+    });
+    const response = await call('/brain/recheck', { method: 'POST' });
+    expect(response.status).toBe(202);
+    expect(await response.text()).toBe('');
   });
 });

@@ -25,6 +25,56 @@ const MAX_USERDB_BODY_BYTES = 64 * 1024 * 1024;
 /** A `/fetch` request document (the URL, method, headers and body the executor already built). */
 const MAX_FETCH_REQUEST_BYTES = 8 * 1024 * 1024;
 
+/** A hand-in report is an id, a word and one sentence — a few hundred bytes. */
+const MAX_OUTCOME_BODY_BYTES = 8 * 1024;
+/** What survives of a report's reason: enough for a sentence, never a document. */
+export const MAX_OUTCOME_REASON_CHARS = 500;
+
+/**
+ * What the page did with one handed-in bundle (K6):
+ *   installed — a new app; updated — a newer version of an unedited copy;
+ *   current   — the user's copy already IS this bundle, so nothing changed;
+ *   offered   — the user edited their copy, so the update waits for them in the run header;
+ *   refused   — with the page's reason.
+ */
+export const HAND_IN_OUTCOMES = ['installed', 'updated', 'current', 'offered', 'refused'] as const;
+export type HandInOutcomeKind = (typeof HAND_IN_OUTCOMES)[number];
+
+export interface HandInReport {
+  /** The id the runner put on the `hand-in` event this report answers. */
+  id: string;
+  outcome: HandInOutcomeKind;
+  reason?: string;
+  /** The version an update landed as. */
+  version?: number;
+}
+
+/** The runner mints a hand-in id as 16 random bytes in hex; nothing else is one. */
+const HAND_IN_ID = /^[0-9a-f]{32}$/;
+/** C0, DEL and C1 — a reason is one line of plain text by the time it leaves this module. */
+const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]+/g;
+
+/**
+ * A report, parsed at the boundary (C5). `undefined` for anything that is not one. The
+ * reason is the one field whose TEXT travels on — into `snug_hand_in`'s answer, and so into
+ * an agent's context — which is why its control characters are flattened and its length
+ * bounded here, before anything else can read it.
+ */
+export function parseHandInReport(value: unknown): HandInReport | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  const { id, outcome, reason, version } = value as Record<string, unknown>;
+  if (typeof id !== 'string' || !HAND_IN_ID.test(id)) return undefined;
+  if (typeof outcome !== 'string' || !(HAND_IN_OUTCOMES as readonly string[]).includes(outcome)) return undefined;
+  if (reason !== undefined && typeof reason !== 'string') return undefined;
+  if (version !== undefined && (typeof version !== 'number' || !Number.isSafeInteger(version) || version < 1)) return undefined;
+  return {
+    id,
+    outcome: outcome as HandInOutcomeKind,
+    ...(reason !== undefined ? { reason: reason.replace(CONTROL_CHARACTERS, ' ').trim().slice(0, MAX_OUTCOME_REASON_CHARS) } : {}),
+    ...(version !== undefined ? { version } : {}),
+  };
+}
+
 /**
  * How long `close()` lets open responses finish before it cuts them. A chat stream holds a
  * connection for as long as the model talks, and `http.Server.close()` waits for every one:
@@ -72,6 +122,21 @@ export interface LoopbackServerOptions {
    * function, so a CLI update between boots is picked up without restarting the runner.
    */
   models?: () => readonly { id: string; name: string; effort: boolean }[];
+  /**
+   * Whether an OAuth redirect can come back to this origin: true only when the listener
+   * bound the port a user registers with a provider (D-B13). Absent → `false`: a server
+   * that was never told it holds that port must not let the page offer a sign-in that
+   * cannot return.
+   */
+  oauthRedirect?: () => boolean;
+  /** The page reporting what it did with a handed-in bundle (K6). Already parsed and bounded. */
+  onHandInOutcome?: (report: HandInReport) => void;
+  /**
+   * The page asking for the brain to be probed again (D4): a think just failed, or the demo
+   * brain is answering in a real brain's place. The floor is the runner's — this route only
+   * carries the ask.
+   */
+  onBrainRecheck?: () => void | Promise<void>;
 }
 
 export interface LoopbackServer {
@@ -144,11 +209,14 @@ export function createLoopbackServer(options: LoopbackServerOptions): LoopbackSe
     //
     // `/oauth/callback` serves the SAME document (D-B14). The web popup path makes the
     // registered redirect URI `${origin}/oauth/callback` — a PATH, not a hash route
-    // (connectionWizard.ts:2351) — so the provider sends the user's browser here and the
-    // page's own HashRouter takes over once it loads, delivering the code over
-    // BroadcastChannel. It is open for the same reason `/` is, and for one more: the
-    // redirect arrives carrying only what the PROVIDER put in the query, so there is no
-    // bearer to present and gating it would 401 every real callback.
+    // (connectionWizard.ts:2351) — so the provider sends the user's browser here. The
+    // document's boot reads that path FIRST and renders the callback page alone, which
+    // delivers the code over BroadcastChannel (apps/host `boot.tsx`, K2). This comment used
+    // to say "the page's own HashRouter takes over once it loads": a hash router never
+    // looks at the path, so that document rendered the hub and no sign-in completed (found
+    // 2026-10-03). It is open for the same reason `/` is, and for one more: the redirect
+    // arrives carrying only what the PROVIDER put in the query, so there is no bearer to
+    // present and gating it would 401 every real callback.
     if ((path === '/' || path === '/oauth/callback') && request.method === 'GET') {
       end(response, 200, page(), { 'content-type': 'text/html; charset=utf-8' });
       return;
@@ -184,7 +252,42 @@ export function createLoopbackServer(options: LoopbackServerOptions): LoopbackSe
         // Always present, possibly empty: an empty list is the page's signal to keep free
         // text as the only rung rather than render an empty dropdown.
         models: options.models?.() ?? [],
+        // Always a boolean: the page's `oauth` offer (and so every sign-in tile) reads it.
+        oauthRedirect: options.oauthRedirect?.() === true,
       });
+      return;
+    }
+
+    if (path === '/hand-in/outcome' && request.method === 'POST') {
+      const body = await readBody(request, MAX_OUTCOME_BODY_BYTES);
+      if (body === undefined) {
+        end(response, 413);
+        return;
+      }
+      let report: HandInReport | undefined;
+      try {
+        report = parseHandInReport(JSON.parse(body.toString('utf8')));
+      } catch {
+        report = undefined;
+      }
+      if (report === undefined) {
+        end(response, 400);
+        return;
+      }
+      // An id nobody is waiting on (the tool's bound has passed) is still a 204: the page
+      // did its part, and "too late" is not something it can act on.
+      options.onHandInOutcome?.(report);
+      end(response, 204);
+      return;
+    }
+
+    if (path === '/brain/recheck' && request.method === 'POST') {
+      // Asked, not awaited: a probe can take as long as the user's CLI takes to start, and
+      // its verdict travels as a `status` event to every open page.
+      void Promise.resolve()
+        .then(() => options.onBrainRecheck?.())
+        .catch(() => {});
+      end(response, 202);
       return;
     }
 

@@ -13,7 +13,19 @@
 //   5. a tree that does not START (D1). The four rules above read files; none of them ran
 //      one, and that is how a plugin whose second window could never attach to its own
 //      runner was "marketplace-ready" (found 2026-10-03). The launch legs start the launcher
-//      the tree ships, speak to it as a host does, and start a second one beside it.
+//      the tree ships, speak to it as a host does, start a second one beside it — and ask
+//      the first for `/`, which must be the page the tree ships (K1: the plugin carries the
+//      page ONCE, as the skill's asset, and the process finds it relative to its bundle; a
+//      page it cannot find is served as a placeholder with HTTP 200);
+//   6. a tree whose page is not PINNED (D8): no sha256 beside the page, one that names
+//      another page — or a pin the process does not honour, which only starting a copy of
+//      the tree with one byte of its page changed can show;
+//   7. a tree the plugin directory would refuse to install (D2 — `checkDirectoryRules`);
+//   8. an upload archive, `snug.zip`, that is not the plugin folder — whole, byte for byte,
+//      launcher still runnable, and nothing else (D3).
+//
+// And one thing it PRINTS and does not refuse: the release bundle's size against the
+// directory's 256 KiB reviewer-hold line, so growth is seen in review.
 //
 // The tree is BUILT here, on every run, from the built inputs (`turbo build` first): nothing
 // generated is committed, so the gate is what proves the sources still assemble.
@@ -21,14 +33,27 @@
 // Dependency-free node builtins, like every other gate under `scripts/`.
 
 import { execFileSync, spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { buildPlugin, checkProvenance, PLUGIN_OUT_DIR, SKILL_DIR, SOURCES } from './build-plugin.mjs';
+import {
+  ARCHIVE_NAME,
+  archiveEntries,
+  buildPlugin,
+  checkDirectoryRules,
+  checkProvenance,
+  PAGE_PATH,
+  PAGE_PIN_PATH,
+  PLUGIN_OUT_DIR,
+  SKILL_DIR,
+  SOURCES,
+} from './build-plugin.mjs';
 import { BUNDLE_PATH, claudeMcpConfig, claudePluginManifest, LAUNCHER_PATH, marketplaceManifest, PLUGIN, SH } from './lib/plugin-manifests.mjs';
 import { buildSkillTree, INSTRUCTIONS_SOURCE } from './lib/skill-build.mjs';
+import { readZip } from './lib/zip.mjs';
 
 // One path per artifact: the bundle is the builder's input, the instructions the skill's source.
 export const BUNDLE_FILE = SOURCES.bundle;
@@ -71,6 +96,24 @@ export const ALLOWED_ENV_READS = ['HOME', 'PATH', 'SHELL', 'USER', 'LANG', 'LC_A
  * resolver (ADR-0069 §6) reads HOME and PATH by NAME and adds none.
  */
 export const ALLOWED_WHOLE_ENV_READS = 3;
+
+/**
+ * The plugin directory's reviewer-hold line for a plugin's server bundle (the task's reading
+ * of the plugin docs, 2026-10-03): past it a submission waits for a person. It is not an
+ * install-blocking rule, so the gate PRINTS where the bundle stands and never fails on it —
+ * growth is then a number in a review instead of a surprise at submission. (The bundle was
+ * already over when this was written: 286,953 bytes.)
+ */
+export const REVIEWER_HOLD_BYTES = 256 * 1024;
+
+export function bundleSizeLine(bytes) {
+  const count = (n) => n.toLocaleString('en-US');
+  const where = bytes > REVIEWER_HOLD_BYTES ? `${count(bytes - REVIEWER_HOLD_BYTES)} OVER` : `${count(REVIEWER_HOLD_BYTES - bytes)} under`;
+  return (
+    `the release bundle is ${count(bytes)} bytes — ${where} ` +
+    `the plugin directory’s 256 KiB reviewer-hold line (${count(REVIEWER_HOLD_BYTES)})`
+  );
+}
 
 /** The Agent Skills reference validator the gate runs, pinned (supply chain at gate time). */
 export const SKILLS_REF_VERSION = '0.1.1';
@@ -143,7 +186,15 @@ export async function checkPluginTree(dir, options = {}) {
   same('.claude-plugin/marketplace.json', read('.claude-plugin/marketplace.json'), marketplaceManifest());
   if (!existsSync(path.join(pluginDir, BUNDLE_PATH))) problems.push(`the plugin tree is missing ${BUNDLE_PATH}`);
   if (!existsSync(path.join(pluginDir, LAUNCHER_PATH))) problems.push(`the plugin tree is missing the launcher ${LAUNCHER_PATH} (AC3)`);
-  if (!existsSync(path.join(pluginDir, 'scripts/snug-host-local.html'))) problems.push('the plugin tree is missing the runner page');
+  // The runner page is the skill's asset — the ONE copy (ADR-0072 §1). A page beside the
+  // bundle is the second copy the plugin used to ship: the process would not read it.
+  if (!existsSync(path.join(pluginDir, PAGE_PATH))) problems.push(`the plugin tree is missing the runner page (${PAGE_PATH})`);
+  const besideBundle = path.join(pluginDir, path.dirname(BUNDLE_PATH));
+  if (existsSync(besideBundle)) {
+    for (const name of readdirSync(besideBundle).filter((entry) => entry.endsWith('.html'))) {
+      problems.push(`the plugin tree carries a second copy of the page (${path.dirname(BUNDLE_PATH)}/${name}) — it ships once, as ${PAGE_PATH}`);
+    }
+  }
 
   // The skill: byte-identical to a fresh render of its sources (AC1), self-contained (assets +
   // scripts), every reference present.
@@ -158,18 +209,71 @@ export async function checkPluginTree(dir, options = {}) {
     if (!existsSync(path.join(skillDir, rel))) problems.push(`the skill is missing ${rel} — the artifact route needs it`);
   }
 
-  // What a reviewer reads, and what the plugin must not ship.
-  if (!existsSync(path.join(pluginDir, 'LICENSE'))) problems.push('the plugin tree is missing LICENSE');
+  // D8: the pin beside the page names THIS page. The provenance cannot stand in for this —
+  // it hashes whatever the build wrote, so a build that wrote no pin, or pinned another
+  // file, describes its own tree perfectly. Read as the process reads it: the first token.
+  const pageFile = path.join(pluginDir, PAGE_PATH);
+  const pinFile = path.join(pluginDir, PAGE_PIN_PATH);
+  if (!existsSync(pinFile)) {
+    problems.push(`the plugin tree is missing the page’s pin (${PAGE_PIN_PATH}) — without it an installed plugin serves whatever page it finds`);
+  } else if (existsSync(pageFile)) {
+    const pinned = readFileSync(pinFile, 'utf8').trim().split(/\s+/)[0].toLowerCase();
+    if (pinned !== createHash('sha256').update(readFileSync(pageFile)).digest('hex')) {
+      problems.push(`the pin (${PAGE_PIN_PATH}) does not name the sha256 of the page beside it — the process would refuse to lead (page-damaged)`);
+    }
+  }
+
+  // What a reviewer reads, what the plugin must not ship, and what the directory will not
+  // install (D2 — a missing README or LICENSE is one of its rules).
   const readmeFile = path.join(pluginDir, 'README.md');
-  if (!existsSync(readmeFile)) problems.push('the plugin tree is missing README.md');
-  else {
+  if (existsSync(readmeFile)) {
     const text = readFileSync(readmeFile, 'utf8');
     if (!/Node\.js 20/.test(text) || !/Claude Code/.test(text)) problems.push('README.md does not name both prerequisites (Node.js 20, Claude Code)');
   }
   if (existsSync(path.join(pluginDir, 'hooks'))) problems.push('the plugin ships a hooks/ directory — it must ship no hooks (ADR-0069)');
   if (manifest !== undefined && 'hooks' in manifest) problems.push('plugin.json declares hooks — it must ship no hooks (ADR-0069)');
+  // (Both walk the plugin folder: with no folder, everything above has already said so.)
+  if (existsSync(pluginDir)) problems.push(...checkDirectoryRules(pluginDir), ...checkArchive(dir));
 
   if (existsSync(dir)) problems.push(...checkProvenance(dir));
+  return problems;
+}
+
+/**
+ * The upload archive against the tree it was made from (D3): read back (which verifies
+ * every entry's CRC), it must hold the plugin folder as its ONE top-level entry and, under
+ * it, exactly the tree's files — the same bytes, the same runnable bit. The provenance
+ * vouches for the archive's own hash; only this says what is IN it.
+ *
+ * @param {string} dir the marketplace dir (the archive is `<dir>/snug.zip`, the plugin `<dir>/snug`)
+ */
+export function checkArchive(dir) {
+  const file = path.join(dir, ARCHIVE_NAME);
+  if (!existsSync(file)) return [`the upload archive ${ARCHIVE_NAME} is missing`];
+  let entries;
+  try {
+    entries = readZip(readFileSync(file));
+  } catch (error) {
+    return [`${ARCHIVE_NAME} does not read back: ${error instanceof Error ? error.message : String(error)}`];
+  }
+  const problems = [];
+  const top = [...new Set(entries.map((entry) => entry.name.split('/')[0]))];
+  if (top.length !== 1 || top[0] !== PLUGIN.name) {
+    problems.push(`${ARCHIVE_NAME} must hold ONE top-level entry, ${PLUGIN.name}/ — what "Upload plugin" takes — and it holds: ${top.join(', ') || 'nothing'}`);
+  }
+  const archived = new Map(entries.filter((entry) => !entry.name.endsWith('/')).map((entry) => [entry.name, entry]));
+  for (const expected of archiveEntries(path.join(dir, PLUGIN.name))) {
+    const entry = archived.get(expected.name);
+    if (entry === undefined) {
+      problems.push(`${ARCHIVE_NAME} is missing ${expected.name}`);
+      continue;
+    }
+    archived.delete(expected.name);
+    const mode = entry.mode & 0o777;
+    if (!entry.data.equals(expected.data)) problems.push(`${ARCHIVE_NAME}: ${expected.name} is not the tree’s file, byte for byte`);
+    else if (mode !== expected.mode) problems.push(`${ARCHIVE_NAME}: ${expected.name} has mode ${mode.toString(8)} where the tree’s file is ${expected.mode.toString(8)}`);
+  }
+  for (const name of archived.keys()) problems.push(`${ARCHIVE_NAME} carries ${name}, which is not in the tree`);
   return problems;
 }
 
@@ -279,6 +383,26 @@ function startLauncher(launcher, env, requestTimeoutMs) {
 
 const under = (file, dir) => typeof file === 'string' && file.startsWith(`${dir}${path.sep}`);
 
+/** Is this status from the process the leg started, on the home the leg gave it? */
+const ownedBy = (status, session, tmp) => under(status.home, tmp) && under(status.file, tmp) && status.pid === session.child.pid;
+
+/** What a started process serves at `/`, against the page the tree ships. Empty when they are the same bytes. */
+async function servedPageProblems(port, pageFile, timeoutMs) {
+  const shipped = readFileSync(pageFile, 'utf8');
+  let served;
+  try {
+    // The open document: no bearer, and so no page contact — nothing here starts a brain probe.
+    served = await (await fetch(`http://127.0.0.1:${port}/`, { signal: AbortSignal.timeout(timeoutMs) })).text();
+  } catch (error) {
+    return [`positive leg: the process does not serve the page the tree ships — nothing answered at http://127.0.0.1:${port}/ (${error instanceof Error ? error.message : String(error)})`];
+  }
+  if (served === shipped) return [];
+  return [
+    `positive leg: the process does not serve the page the tree ships (${path.basename(pageFile)}, ${shipped.length} chars) — it answered ${served.length} chars: ` +
+      `${JSON.stringify(served.slice(0, 120))}. The process finds the page relative to its bundle (apps/host-mcp/src/page.ts).`,
+  ];
+}
+
 /**
  * Start what the tree ships, twice over (D1). No leg spawns a CLI: the brain probe is lazy
  * and nothing here ever makes the page contact that would start it.
@@ -289,7 +413,9 @@ const under = (file, dir) => typeof file === 'string' && file.startsWith(`${dir}
  *             is the `home-unresolved` refusal.
  *
  * @param {string} launcher the POSIX launcher inside the built tree (`<tree>/snug/scripts/snug`)
- * @param {{ requestTimeoutMs?: number, reapMs?: number }} [options] the bounds (tests shorten them)
+ * @param {{ requestTimeoutMs?: number, reapMs?: number, page?: string }} [options] the bounds
+ *   (tests shorten them), and the page file the tree ships — when given, the positive leg
+ *   requires the started process to serve exactly those bytes at `/`
  * @returns {Promise<string[]>} the problems; empty when both legs passed
  */
 export async function runLaunchLegs(launcher, options = {}) {
@@ -316,13 +442,14 @@ export async function runLaunchLegs(launcher, options = {}) {
     // started: this is the process the leg spawned, on the home the leg gave it. Anything
     // else means the leg is talking to — or about to share a lock with — a Snug it does
     // not own, and it stops here.
-    if (!under(status.home, tmp) || !under(status.file, tmp) || status.pid !== first.child.pid) {
+    if (!ownedBy(status, first, tmp)) {
       problems.push(
         `positive leg: ISOLATION — the status names home ${JSON.stringify(status.home)}, file ${JSON.stringify(status.file)} and pid ${JSON.stringify(status.pid)}, ` +
           `but this leg started pid ${first.child.pid} under ${tmp}. The leg was aborted before starting a second process.`,
       );
     } else {
       if (status.running !== true) problems.push(`positive leg: the first process is not running: ${JSON.stringify(status.refusal ?? status)}`);
+      else if (options.page !== undefined) problems.push(...(await servedPageProblems(status.port, options.page, requestTimeoutMs)));
       const second = start(env);
       await second.initialize();
       const joined = await second.status();
@@ -354,6 +481,79 @@ export async function runLaunchLegs(launcher, options = {}) {
   return problems;
 }
 
+/**
+ * The pin, proven on the tree (D8). The build writes the page's sha256 beside it and the
+ * process serves only bytes that match — two halves in two packages, and every hash in the
+ * tree stays correct if they stop meeting. So this starts what the tree ships, twice:
+ *
+ *   damaged    a COPY of the plugin folder with ONE byte of its page changed, under the
+ *              isolation environment → `initialize` succeeds and `snug_status` is the
+ *              `page-damaged` refusal. (No pin, or a process that does not read it, and the
+ *              copy LEADS — on a page that is not the one it was built with.)
+ *   untouched  the tree itself, on the same home, while the damaged process is still
+ *              running → it leads. A pin of the wrong page passes the first half all by
+ *              itself; and a damaged install must hold nothing a healthy one needs.
+ *
+ * The tree it is given is never written to. No leg spawns a CLI, and both processes are
+ * reaped in the `finally`.
+ *
+ * @param {string} pluginDir the built plugin folder (`<tree>/snug`)
+ * @param {{ requestTimeoutMs?: number, reapMs?: number }} [options] the bounds (tests shorten them)
+ * @returns {Promise<string[]>} the problems; empty when both halves held
+ */
+export async function runDamagedPageLeg(pluginDir, options = {}) {
+  const requestTimeoutMs = options.requestTimeoutMs ?? 20_000;
+  const reapMs = options.reapMs ?? 8_000;
+  const problems = [];
+  const started = [];
+  const start = (launcher, env) => {
+    const session = startLauncher(launcher, env, requestTimeoutMs);
+    started.push(session);
+    return session;
+  };
+
+  const tmp = mkdtempSync(path.join(tmpdir(), 'snug-gate-'));
+  try {
+    const copy = path.join(tmp, 'install', PLUGIN.name);
+    cpSync(pluginDir, copy, { recursive: true });
+    const page = path.join(copy, PAGE_PATH);
+    const bytes = readFileSync(page);
+    bytes[bytes.length >> 1] ^= 1;
+    writeFileSync(page, bytes);
+
+    const env = isolationEnv(tmp);
+    const damaged = start(path.join(copy, LAUNCHER_PATH), env);
+    await damaged.initialize();
+    const refused = await damaged.status();
+    if (refused.running !== false || refused.refusal?.code !== 'page-damaged') {
+      // It stops here: a copy that LED holds this home's lock, and a second process would
+      // only attach to it.
+      problems.push(
+        `damaged-page leg: a copy of the tree with one byte of its page changed must refuse to lead (page-damaged), but its status was ` +
+          `${JSON.stringify(refused)} — is ${PAGE_PIN_PATH} in the tree, and does the process read it (apps/host-mcp/src/page.ts)?`,
+      );
+    } else {
+      const untouched = start(path.join(pluginDir, LAUNCHER_PATH), env);
+      await untouched.initialize();
+      const status = await untouched.status();
+      if (status.running !== true) {
+        problems.push(`damaged-page leg: the untouched tree must still lead, beside the damaged copy — but its status was ${JSON.stringify(status.refusal ?? status)}`);
+      } else if (!ownedBy(status, untouched, tmp)) {
+        problems.push(
+          `damaged-page leg: ISOLATION — the untouched tree's status names home ${JSON.stringify(status.home)}, file ${JSON.stringify(status.file)} and pid ${JSON.stringify(status.pid)}, ` +
+            `but this leg started pid ${untouched.child.pid} under ${tmp}: it is not leading on the leg's own home.`,
+        );
+      }
+    }
+  } catch (error) {
+    problems.push(`damaged-page leg: ${error instanceof Error ? error.message : String(error)}`);
+  } finally {
+    for (const session of started.splice(0).reverse()) await session.reap(reapMs);
+    rmSync(tmp, { recursive: true, force: true });
+  }
+  return problems;
+}
+
 async function main() {
   const problems = [];
   if (!existsSync(BUNDLE_FILE)) {
@@ -361,6 +561,7 @@ async function main() {
     process.exit(1);
   }
   const source = readFileSync(BUNDLE_FILE, 'utf8');
+  const bundleBytes = Buffer.byteLength(source);
   problems.push(...checkBundle(source));
   problems.push(...checkInstructions(source, readFileSync(INSTRUCTIONS_FILE, 'utf8')));
 
@@ -374,20 +575,26 @@ async function main() {
   }
   problems.push(...(await checkPluginTree(PLUGIN_DIR)));
   // Only a tree that is what it says it is gets STARTED.
-  if (problems.length === 0) problems.push(...(await runLaunchLegs(path.join(PLUGIN_DIR, PLUGIN.name, LAUNCHER_PATH))));
+  if (problems.length === 0) {
+    problems.push(...(await runLaunchLegs(path.join(PLUGIN_DIR, PLUGIN.name, LAUNCHER_PATH), { page: path.join(PLUGIN_DIR, PLUGIN.name, PAGE_PATH) })));
+    problems.push(...(await runDamagedPageLeg(path.join(PLUGIN_DIR, PLUGIN.name))));
+  }
 
   const validators = runValidators(PLUGIN_DIR);
   for (const v of validators) {
     if (v.status === 'failed') problems.push(`${v.name} refused the tree:\n${v.detail}`);
   }
 
+  // Printed whatever the verdict, and never part of it.
+  console.log(`check-host-mcp: SIZE — ${bundleSizeLine(bundleBytes)}`);
   if (problems.length > 0) {
     for (const problem of problems) console.error(`check-host-mcp: ${problem}`);
     process.exit(1);
   }
   const notVerified = validators.filter((v) => v.status === 'not verified');
   console.log(
-    `check-host-mcp: ok (${source.length} bytes; plugin tree built and checked; launched — a second process attached, no home refused by name; ` +
+    `check-host-mcp: ok (${bundleBytes} bytes; plugin tree built and checked — page pinned, directory rules kept, ${ARCHIVE_NAME} is the tree; ` +
+      `launched — the shipped page served, a second process attached, no home refused by name, a damaged page refused beside a tree that still led; ` +
       `validators: ${validators.map((v) => `${v.name} ${v.status}`).join(', ')})`,
   );
   for (const v of notVerified) console.log(`check-host-mcp: NOT VERIFIED — ${v.name}: ${v.detail}`);

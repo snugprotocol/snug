@@ -15,6 +15,7 @@
 
 import { useMemo } from 'react';
 import { getPlatform, type PlatformBrain } from '../platform/platform.js';
+import { useBrainRevision } from '../platform/signals.js';
 
 import { WEBLLM_DEFAULT_MODEL } from '../agent/webllm/model.js';
 import { useMode, type PlaygroundMode } from './mode.js';
@@ -119,9 +120,18 @@ export function currentBrain(): Brain {
 export function useBrain(): Brain {
   const flag = useStore(webllmFlagStore);
   const gpu = useStore(webgpuStore);
-  // The platform is set once, before boot — a static input, so it needs no subscription.
+  // The platform OBJECT is set once, before boot — but what its `brain` answers is not
+  // static everywhere: the local runner carries it as a getter (the demo brain while the
+  // user's CLI is known not ready, the host brain otherwise, and a label that names what
+  // the probe found). This comment used to say "a static input, so it needs no
+  // subscription", and the chip kept its boot label for ever (TASK-20261003 D4). The
+  // revision is the host's signal that the getter would now answer differently: it
+  // re-renders this hook's readers, and it is a memo dependency because the host arm is ONE
+  // stable object whose label changes underneath an unchanged reference.
+  const revision = useBrainRevision();
   const pinned = getPlatform().brain;
-  return useMemo(() => resolveBrain(flag, gpu, pinned), [flag, gpu, pinned]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- `revision` IS the dependency (see above).
+  return useMemo(() => resolveBrain(flag, gpu, pinned), [flag, gpu, pinned, revision]);
 }
 
 export function useWebllmFlag(): boolean {

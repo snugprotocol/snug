@@ -5,8 +5,15 @@
 // `inlineSingleFile`, and two modules are swapped by resolved path: the starter source (the
 // ≈ 1 MB of starter bytes load on click — AC14) and the sql.js locator (the engine rides as
 // bytes — P4). WebLLM is aliased to a stub so the lazily imported 6 MB engine never enters
-// the bundle. A second input is refused by `inlineDynamicImports`; the micro kit (T5) gets
-// its own config.
+// the bundle.
+//
+// THE ONLY CONFIG, THE ONLY ENTRY, THE ONLY OUTPUT (TASK-20261003 K1, ADR-0072 §1). This
+// page is the artifact page, the chat page, the plain file AND the page the local host
+// process serves; which of those it is, it finds out at runtime (`src/boot.tsx`). A second
+// config used to build the same sources into a second page for the runner — a restatement
+// of this file that differed in three lines, the same size, shipped beside it in the plugin.
+// A structural test (`src/__tests__/oneKit.test.ts`) fails on a second config or html entry
+// here; a second input is refused by `inlineDynamicImports` as well.
 
 import { execSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';

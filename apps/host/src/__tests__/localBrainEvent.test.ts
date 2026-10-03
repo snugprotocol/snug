@@ -33,8 +33,10 @@ describe('the probe’s verdict must survive a page that was not listening yet (
     const client = {
       fetchImpl: async () => new Response('ok'),
       fs: { readFile: async () => undefined, writeFileAtomic: async () => {} },
-      status: async () => ({ binding: 'local-host', port: 43127, pages: 1, brain: { state: 'logged-out' } }),
       events: () => () => {},
+      reportHandIn: async () => {},
+      recheckBrain: async () => {},
+      stopped: { get: () => false, subscribe: () => () => {} },
     } as never;
 
     // The boot status is what the page fetched BEFORE subscribing — it already knows.
@@ -45,8 +47,12 @@ describe('the probe’s verdict must survive a page that was not listening yet (
       undefined,
       't',
     );
-    const brain = platform.brain as { kind: string; label?: string } | undefined;
-    expect(brain?.kind === 'host' ? brain.label : undefined).toMatch(/log/i);
+    // MIGRATED 2026-10-03 (TASK-20261003 D4): this read the remedy off the host brain's
+    // label. What "the page already knows" MEANS changed: a CLI known to be logged out is no
+    // longer pinned as the brain with a sentence on it — the demo brain is pinned, from the
+    // very first paint, so no think is sent to a brain that cannot answer. The claim under
+    // test is unchanged: the verdict in the boot read is honoured without any event.
+    expect(platform.brain).toEqual({ kind: 'demo' });
   });
 });
 
@@ -56,12 +62,13 @@ describe('the late-arrival path, driven directly (D-B35)', () => {
     // boot `/status` read, so the SSE path never runs there (measured — that test passed
     // against a deliberately reintroduced crash and proved nothing about it). Here the
     // ordering is forced.
-    const { composeLocalPlatform, brainState } = await import('../local/compose-local.js');
+    const { applyRunnerStatus, composeLocalPlatform, brainState } = await import('../local/compose-local.js');
+    const { brainRevisionStore } = await import('@playground/platform/signals');
     brainState.current = undefined;
 
     // Boot with NO brain yet: the probe is still running.
     const { platform } = composeLocalPlatform(
-      { fetchImpl: async () => new Response('ok'), fs: { readFile: async () => undefined, writeFileAtomic: async () => {} }, status: async () => ({}), events: () => () => {} } as never,
+      { fetchImpl: async () => new Response('ok'), fs: { readFile: async () => undefined, writeFileAtomic: async () => {} }, events: () => () => {}, reportHandIn: async () => {}, recheckBrain: async () => {}, stopped: { get: () => false, subscribe: () => () => {} } } as never,
       { binding: 'local-host', port: 43127, pages: 1 } as never,
       undefined,
       undefined,
@@ -73,12 +80,22 @@ describe('the late-arrival path, driven directly (D-B35)', () => {
     };
     expect(brainOf(platform)).toBe('Claude · your CLI');
 
-    // The verdict lands the way `main.tsx`'s status handler lands it.
-    brainState.current = { state: 'logged-out', detail: 'run `/login`' };
+    // The verdict lands the way the boot's event handler lands it.
+    // MIGRATED 2026-10-03 (D4, K4): it was a bare write to the holder followed by a DOM
+    // `CustomEvent` nothing listened to, and the object then read a logged-out LABEL. It is
+    // `applyRunnerStatus` now — the holder, then the revision the UI subscribes to — and a
+    // logged-out verdict moves the SAME object to the demo brain.
+    const before = brainRevisionStore.get();
+    applyRunnerStatus({ brain: { state: 'logged-out', detail: 'run `/login`' } });
 
-    // THE POINT: the same object the page already handed to setPlatform now reads the new
-    // label. A recomposed platform could not be installed — setPlatform throws.
-    expect(brainOf(platform)).toMatch(/log/i);
+    // THE POINT: the same object the page already handed to setPlatform now answers
+    // differently. A recomposed platform could not be installed — setPlatform throws.
+    expect(platform.brain).toEqual({ kind: 'demo' });
+    expect(brainRevisionStore.get(), 'and the readers are told').toBe(before + 1);
+
+    // A verdict that leaves the host brain in place shows the label itself is live.
+    applyRunnerStatus({ brain: { state: 'unknown', detail: 'timed out' } });
+    expect(brainOf(platform)).toMatch(/could not check/);
     brainState.current = undefined;
   });
 });

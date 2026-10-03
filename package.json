@@ -28,7 +28,7 @@
     "check-deploy-web": "node --test scripts/deploy-web.test.mjs",
     "check-deploy-relay": "node --test scripts/deploy-relay.test.mjs",
     "audit:deps": "node --test scripts/audit-deps.test.mjs && node scripts/audit-deps.mjs",
-    "check-host-mcp": "node --test scripts/check-host-mcp.test.mjs scripts/build-plugin.test.mjs && node scripts/check-host-mcp.mjs"
+    "check-host-mcp": "node --test scripts/check-host-mcp.test.mjs scripts/build-plugin.test.mjs scripts/lib/zip.test.mjs && node scripts/check-host-mcp.mjs"
   },
   "pnpm": {
     "overrides": {

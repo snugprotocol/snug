@@ -871,6 +871,28 @@
   color: var(--danger);
 }
 
+/* THE STRIP (TASK-20261003 K6): the same note laid ALONG the top of the run stage, above
+   the app's frame — "your agent updated this app". The stage is a flex column whose frame
+   takes whatever height is left, so the strip costs the app its own height and none of its
+   width; the words lead, the one act trails, and the row wraps when a phone has no room
+   for both. Its side margins are the frame's own, so the two read as one column. */
+.connection-note.is-strip {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  margin: var(--space-3) var(--space-4) 0;
+  padding: var(--space-3) var(--space-4);
+}
+
+.connection-note.is-strip .connection-note-lead {
+  /* Grows into the row; wraps the act onto its own line before the words get narrower than this. */
+  flex: 1 1 24ch;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
 /* THE AUTH-REPAIR CHIP (TASK-20260819) — the run header's standing note that a provider
    refused this app's key. Deliberately the QUIETEST thing that cannot be missed: it sits
    in the header's control cluster, so it must read as chrome rather than as an alarm
@@ -1791,6 +1813,11 @@
   .frame-wrap {
     margin: var(--space-3);
     min-height: 62dvh;
+  }
+
+  /* The strip above the frame keeps the frame's (narrower) gutters here too. */
+  .connection-note.is-strip {
+    margin: var(--space-3) var(--space-3) 0;
   }
 
   /* The either/or full-view swap rules (.is-mobile-think / .mobile-think) live in

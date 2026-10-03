@@ -680,7 +680,7 @@ describe('snug_status says which runner this is (L4)', () => {
 });
 
 describe('an attached session serves all four tools, through the PRIMARY (L3)', () => {
-  const pair = async (overFirst: Parameters<typeof make>[0] = {}, overSecond: Parameters<typeof make>[0] = {}) => {
+  const pair = async (overFirst: Parameters<typeof make>[0] = { handInWaitMs: 150 }, overSecond: Parameters<typeof make>[0] = {}) => {
     const first = make(overFirst);
     const a = await first.start();
     const second = make(overSecond);
@@ -705,7 +705,10 @@ describe('an attached session serves all four tools, through the PRIMARY (L3)', 
 
     const result = await second.callTool('snug_hand_in', { bundle: bundle('Chess') });
     expect(result.isError).toBeUndefined();
-    expect(result.content[0]!.text).toBe('handed "Chess" to the open runner');
+    // MIGRATED 2026-10-03 (K6) from 'handed "Chess" to the open runner': that sentence
+    // claimed a delivery nobody had confirmed. The answer is now what the PAGE reports; this
+    // fake page reports nothing, so the primary's bound runs out and it says exactly that.
+    expect(result.content[0]!.text).toBe('sent "Chess" to the open runner — not confirmed');
     const seen = await page.read('hand-in');
     expect(seen).toContain('"displayName":"Chess"');
   });
@@ -875,6 +878,9 @@ describe('the bearer has one way out besides the page (L5)', () => {
         if (failOpen) throw new Error('no window server');
       },
       onStopRequested: () => {},
+      // FIXTURE, 2026-10-03 (K6): a hand-in now waits for the page's report, and this page
+      // reports nothing — the default bound would outlast the socket client's own.
+      handInWaitMs: 50,
     });
     const { port } = await runner.start();
     const token = tokenOf(runner);
@@ -1239,5 +1245,258 @@ describe('the brain probe is lazy (B1)', () => {
     const { port } = await runner.start();
     const body = (await (await fetch(`http://127.0.0.1:${port}/status`, { headers: { authorization: `Bearer ${tokenOf(runner)}` } })).json()) as { brain?: unknown };
     expect(body.brain).toBeUndefined();
+  });
+});
+
+// =====================================================================================
+// The one-kit range (TASK-20261003 R2): the redirect fact, the hand-in's outcome, the
+// brain re-check.
+// =====================================================================================
+
+/** A port nothing is listening on right now (bound and released), for a runner to claim as its fixed one. */
+const freePort = async (): Promise<number> => {
+  const probe = createHttpServer();
+  await new Promise<void>((resolve) => probe.listen(0, '127.0.0.1', resolve));
+  const { port } = probe.address() as { port: number };
+  await new Promise((resolve) => probe.close(resolve));
+  return port;
+};
+
+const pageStatus = async (runner: Runner, port: number): Promise<Record<string, unknown>> =>
+  (await (await fetch(`http://127.0.0.1:${port}/status`, { headers: { authorization: `Bearer ${tokenOf(runner)}` } })).json()) as Record<string, unknown>;
+
+describe('/status says whether an OAuth redirect can come back (D-B13)', () => {
+  it('true when the FIRST port — the one a user registers with a provider — was bound', async () => {
+    const fixed = await freePort();
+    const runner = make({ ports: [fixed, 0] });
+    const { port } = await runner.start();
+    expect(port).toBe(fixed);
+    expect((await pageStatus(runner, port)).oauthRedirect).toBe(true);
+  });
+
+  it('false when that port was taken and the runner fell back to another', async () => {
+    // The registered redirect URI names the fixed port, so a provider would send the
+    // user's browser to whatever holds it — not to this runner.
+    const taken = createHttpServer();
+    await new Promise<void>((resolve) => taken.listen(0, '127.0.0.1', resolve));
+    closers.push(() => new Promise((resolve) => taken.close(resolve)));
+    const { port: fixed } = taken.address() as { port: number };
+    const runner = make({ ports: [fixed, 0] });
+    const { port } = await runner.start();
+    expect(port).not.toBe(fixed);
+    expect((await pageStatus(runner, port)).oauthRedirect).toBe(false);
+  });
+
+  it('false for a runner told to take ANY port — there is no registered address to return to', async () => {
+    const runner = make({ ports: [0] });
+    const { port } = await runner.start();
+    expect((await pageStatus(runner, port)).oauthRedirect).toBe(false);
+  });
+});
+
+describe('snug_hand_in answers with what the PAGE did (K6)', () => {
+  /** A page that reads the hand-in event and reports `report` for it (or nothing, when undefined). */
+  const pageReporting = async (runner: Runner, port: number, report: ((id: string) => Record<string, unknown>) | undefined) => {
+    const page = await openPage(runner, port);
+    closers.push(() => page.close());
+    await vi.waitFor(async () => expect(await statusOf(runner)).toMatchObject({ pages: 1 }));
+    void (async () => {
+      const text = await page.read('"bundle"');
+      const id = /"id":"([0-9a-f]{32})"/.exec(text)?.[1];
+      if (id === undefined || report === undefined) return;
+      await fetch(`http://127.0.0.1:${port}/hand-in/outcome`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${tokenOf(runner)}`, 'content-type': 'application/json' },
+        body: JSON.stringify(report(id)),
+      });
+    })();
+    return page;
+  };
+
+  const handIn = async (report: ((id: string) => Record<string, unknown>) | undefined, over: Parameters<typeof make>[0] = {}) => {
+    const runner = make({ handInWaitMs: 2_000, ...over });
+    const { port } = await runner.start();
+    await pageReporting(runner, port, report);
+    return runner.callTool('snug_hand_in', { bundle: bundle('Chess') });
+  };
+
+  it('the event carries an id, so a report can name the hand-in it answers', async () => {
+    const runner = make({ handInWaitMs: 50 });
+    const { port } = await runner.start();
+    const page = await openPage(runner, port);
+    closers.push(() => page.close());
+    await vi.waitFor(async () => expect(await statusOf(runner)).toMatchObject({ pages: 1 }));
+    await runner.callTool('snug_hand_in', { bundle: bundle('Chess') });
+    expect(await page.read('"bundle"')).toMatch(/"id":"[0-9a-f]{32}"/);
+  });
+
+  it('installed', async () => {
+    const result = await handIn((id) => ({ id, outcome: 'installed' }));
+    expect(result).toEqual({ content: [{ type: 'text', text: 'installed "Chess" in the open runner' }] });
+  });
+
+  it('updated, to the version it landed as', async () => {
+    const result = await handIn((id) => ({ id, outcome: 'updated', version: 3 }));
+    expect(result).toEqual({ content: [{ type: 'text', text: 'updated "Chess" to v3 in the open runner' }] });
+  });
+
+  it('already current — the same bundle handed in again changes nothing, and says so', async () => {
+    const result = await handIn((id) => ({ id, outcome: 'current' }));
+    expect(result).toEqual({ content: [{ type: 'text', text: '"Chess" is already current in the open runner — nothing changed' }] });
+  });
+
+  it('offered — an edited copy is never superseded, and the agent is told the update is waiting', async () => {
+    const result = await handIn((id) => ({ id, outcome: 'offered' }));
+    expect(result).toEqual({ content: [{ type: 'text', text: 'offered — the user edited "Chess", so the update waits for them' }] });
+  });
+
+  it('refused, with the page’s reason — as an error', async () => {
+    const result = await handIn((id) => ({ id, outcome: 'refused', reason: 'the lineage does not match' }));
+    expect(result).toEqual({ content: [{ type: 'text', text: 'refused: the lineage does not match' }], isError: true });
+  });
+
+  it('refused with no reason still says refused — never a blank', async () => {
+    const result = await handIn((id) => ({ id, outcome: 'refused' }));
+    expect(result).toEqual({ content: [{ type: 'text', text: 'refused: the open runner gave no reason' }], isError: true });
+  });
+
+  it('past the bound: "sent — not confirmed", and it does not wait for ever', async () => {
+    const began = Date.now();
+    const result = await handIn(undefined, { handInWaitMs: 120 });
+    expect(result).toEqual({ content: [{ type: 'text', text: 'sent "Chess" to the open runner — not confirmed' }] });
+    expect(Date.now() - began).toBeLessThan(3_000);
+  });
+
+  it('a report for ANOTHER id confirms nothing', async () => {
+    const result = await handIn(() => ({ id: 'f'.repeat(32), outcome: 'installed' }), { handInWaitMs: 150 });
+    expect(result.content[0]!.text).toBe('sent "Chess" to the open runner — not confirmed');
+  });
+
+  it('a report that arrives after the bound is dropped — it cannot answer a later hand-in', async () => {
+    const runner = make({ handInWaitMs: 60 });
+    const { port } = await runner.start();
+    const page = await openPage(runner, port);
+    closers.push(() => page.close());
+    await vi.waitFor(async () => expect(await statusOf(runner)).toMatchObject({ pages: 1 }));
+    const first = await runner.callTool('snug_hand_in', { bundle: bundle('Chess') });
+    expect(first.content[0]!.text).toMatch(/not confirmed/);
+    const id = /"id":"([0-9a-f]{32})"/.exec(await page.read('"bundle"'))![1]!;
+    const late = await fetch(`http://127.0.0.1:${port}/hand-in/outcome`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${tokenOf(runner)}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ id, outcome: 'refused', reason: 'late' }),
+    });
+    expect(late.status).toBe(204);
+    const second = await runner.callTool('snug_hand_in', { bundle: bundle('Ledger') });
+    expect(second.content[0]!.text).toBe('sent "Ledger" to the open runner — not confirmed');
+  });
+
+  it('the bearer never rides the event or the answer', async () => {
+    const runner = make({ handInWaitMs: 50 });
+    const { port } = await runner.start();
+    const page = await openPage(runner, port);
+    closers.push(() => page.close());
+    await vi.waitFor(async () => expect(await statusOf(runner)).toMatchObject({ pages: 1 }));
+    const result = await runner.callTool('snug_hand_in', { bundle: bundle('Chess') });
+    expect(JSON.stringify(result)).not.toContain(tokenOf(runner));
+    expect(await page.read('"bundle"')).not.toContain(tokenOf(runner));
+  });
+});
+
+describe('the brain re-check (D4)', () => {
+  const recheck = (runner: Runner, port: number): Promise<Response> =>
+    fetch(`http://127.0.0.1:${port}/brain/recheck`, { method: 'POST', headers: { authorization: `Bearer ${tokenOf(runner)}` } });
+
+  it('re-runs the probe, and the new verdict reaches the open page as a status event', async () => {
+    let state = 'absent';
+    const probe = vi.fn(async () => ({ state }));
+    const runner = make({ brainState: probe, brainRecheckFloorMs: 0 });
+    const { port } = await runner.start();
+    expect((await pageStatus(runner, port)).brain).toEqual({ state: 'absent' });
+    const page = await openPage(runner, port);
+    closers.push(() => page.close());
+    await vi.waitFor(async () => expect(await statusOf(runner)).toMatchObject({ pages: 1 }));
+
+    state = 'ready'; // the user installed and logged in
+    expect((await recheck(runner, port)).status).toBe(202);
+    expect(await page.read('"state":"ready"')).toContain('"state":"ready"');
+    expect(probe).toHaveBeenCalledTimes(2);
+    expect((await pageStatus(runner, port)).brain).toEqual({ state: 'ready' });
+  });
+
+  it('at most once per floor — a page that asks in a loop cannot make the CLI think in a loop', async () => {
+    // Every probe of a READY brain is a real (tiny) think on the user's subscription.
+    const probe = vi.fn(async () => ({ state: 'ready' }));
+    const runner = make({ brainState: probe, brainRecheckFloorMs: 60_000 });
+    const { port } = await runner.start();
+    await pageStatus(runner, port); // the first contact: probe #1
+    for (let i = 0; i < 5; i += 1) expect((await recheck(runner, port)).status).toBe(202);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(probe).toHaveBeenCalledTimes(1);
+  });
+
+  it('a re-check asked for INSIDE the floor is OWED, not dropped: it runs once when the floor allows — however often it was asked', async () => {
+    // "A think that fails triggers a re-check" has to stay true in the seconds after any
+    // probe, which is exactly when a page that just opened meets its first failed think.
+    // Dropped, the brain's state would stay stale until some LATER think failed again.
+    let state = 'ready';
+    const probe = vi.fn(async () => ({ state }));
+    const runner = make({ brainState: probe, brainRecheckFloorMs: 250 });
+    const { port } = await runner.start();
+    await pageStatus(runner, port); // probe #1, at the first contact
+    state = 'logged-out';
+    for (let i = 0; i < 5; i += 1) await recheck(runner, port);
+    expect(probe, 'not inside the floor').toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(2), { timeout: 2_000 });
+    expect((await pageStatus(runner, port)).brain).toEqual({ state: 'logged-out' });
+    await new Promise((r) => setTimeout(r, 400));
+    expect(probe, 'five asks were ONE owed re-check').toHaveBeenCalledTimes(2);
+  });
+
+  it('a stopped runner owes nothing — no probe fires after stop', async () => {
+    const probe = vi.fn(async () => ({ state: 'ready' }));
+    const runner = make({ brainState: probe, brainRecheckFloorMs: 120 });
+    const { port } = await runner.start();
+    await pageStatus(runner, port);
+    await recheck(runner, port); // owed, at the floor
+    await runner.stop();
+    await new Promise((r) => setTimeout(r, 300));
+    expect(probe).toHaveBeenCalledTimes(1);
+  });
+
+  it('never runs two probes at once', async () => {
+    let finish: (value: { state: string }) => void = () => {};
+    const probe = vi.fn(() => new Promise<{ state: string }>((resolve) => (finish = resolve)));
+    const runner = make({ brainState: probe, brainRecheckFloorMs: 0 });
+    const { port } = await runner.start();
+    await pageStatus(runner, port); // starts probe #1, which is still running
+    await recheck(runner, port);
+    await recheck(runner, port);
+    expect(probe).toHaveBeenCalledTimes(1);
+    finish({ state: 'ready' });
+  });
+
+  it('a runner with no probe (the test build, unpinned) has nothing to re-run and spawns nothing', async () => {
+    const runner = make({ brainRecheckFloorMs: 0 });
+    const { port } = await runner.start();
+    expect((await recheck(runner, port)).status).toBe(202);
+    expect((await pageStatus(runner, port)).brain).toBeUndefined();
+  });
+
+  it('a re-check that throws leaves the last verdict standing', async () => {
+    let calls = 0;
+    const runner = make({
+      brainRecheckFloorMs: 0,
+      brainState: async () => {
+        calls += 1;
+        if (calls > 1) throw new Error('probe blew up');
+        return { state: 'logged-out' };
+      },
+    });
+    const { port } = await runner.start();
+    expect((await pageStatus(runner, port)).brain).toEqual({ state: 'logged-out' });
+    await recheck(runner, port);
+    await vi.waitFor(() => expect(calls).toBe(2));
+    expect((await pageStatus(runner, port)).brain).toEqual({ state: 'logged-out' });
   });
 });

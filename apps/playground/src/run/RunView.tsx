@@ -30,6 +30,7 @@ import {
   openConnectionWizardForApp,
   openConnectionWizardForNetError,
 } from '../state/connectionWizard.js';
+import { useLibraryRevision } from '../platform/signals.js';
 import { useStore } from '../state/store.js';
 import { getAppMeta, recordAppMeta, useAppMetaMap } from '../state/appMeta.js';
 import { userLibrary } from '../state/library.js';
@@ -625,6 +626,54 @@ export default function RunView(): ReactElement {
     };
   }, [id, contentEpoch]);
 
+  /**
+   * THE VERSION CAN CHANGE UNDERNEATH THIS VIEW (K6). On the local runner the agent hands a
+   * new version in while the user is inside the app: an unedited copy takes it at once, in
+   * the file — and the frame on screen is still the old html. The host bumps
+   * `libraryRevision`; this re-reads the app's code and, when it is no longer what is
+   * mounted, OFFERS the reload. It never swaps the frame itself: what the user was doing in
+   * the app is theirs until they say so.
+   *
+   * Compared against the html this view LOADED, so a version this view brought in itself (a
+   * chat edit, a revert, an update taken from the header — all `contentEpoch`) is never
+   * announced as the agent's: by the time it is mounted it is what the file holds.
+   */
+  const libraryRevision = useLibraryRevision();
+  const mountedHtml = htmlState.phase === 'ready' ? htmlState.html : undefined;
+  const [agentUpdated, setAgentUpdated] = useState(false);
+  useEffect(() => {
+    if (isUnownedId(id) || mountedHtml === undefined) {
+      setAgentUpdated(false);
+      return;
+    }
+    let cancelled = false;
+    userLibrary()
+      .getHtml(id)
+      .then((html) => {
+        if (!cancelled) setAgentUpdated(html !== undefined && html !== mountedHtml);
+      })
+      .catch(() => {
+        /* a read that fails offers nothing; the next bump reads again */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [id, libraryRevision, mountedHtml]);
+  /**
+   * The reload the user asked for lands when the app is IDLE: a frame remounted while a
+   * think is in flight drops the reply it was promised (the host's `post()` to a destroyed
+   * frame goes nowhere), and a chat turn still editing this app is about to write a version
+   * of its own. So the click ARMS it and this takes it the moment nothing is in flight.
+   */
+  const [reloadArmed, setReloadArmed] = useState(false);
+  const idle = inspector.inFlight === 0 && !chat.busy;
+  useEffect(() => {
+    if (!reloadArmed || !idle) return;
+    setReloadArmed(false);
+    setContentEpoch((epoch) => epoch + 1);
+    setFrameEpoch((epoch) => epoch + 1);
+  }, [reloadArmed, idle]);
+
   // Capability reveal has a floor: host-ready seen but no announce after the grace
   // period → show the library name in plain style instead of shimmering forever.
   useEffect(() => {
@@ -1187,6 +1236,30 @@ export default function RunView(): ReactElement {
         ) : isSharedId(id) ? (
           <div className="hint" data-testid="shared-preview-disclosure" style={{ margin: 'var(--space-3) var(--space-4) 0' }}>
             this shared app is no longer on your shelf — <Link to="/">back to your apps</Link>.
+          </div>
+        ) : null}
+        {agentUpdated ? (
+          // K6: said in the calm form — a new version is good news, not a failure — with one
+          // act. `status`, not `alert`: it must not interrupt whatever the app is saying.
+          //
+          // A STRIP IN THE STAGE'S COLUMN, directly above the frame it speaks about — not a
+          // child of `.run-layout`. That element is a flex ROW (stage | divider | rail), and
+          // there this note became a full-height column beside the stage: 583 px taken from
+          // the app at 1280, the frame pushed off-screen at 375 (measured 2026-10-03). Here
+          // it costs the app a strip of height and none of its width — "never swaps the frame
+          // underneath the user" has to hold for where the frame IS, too.
+          <div className="connection-note is-strip" role="status" data-testid="agent-updated">
+            <div className="connection-note-lead">
+              <p className="connection-note-title">your agent updated this app</p>
+              <p className="connection-note-body">
+                what is running is the version from before. reload to run the new one — your data, chats and docs stay.
+              </p>
+            </div>
+            <div className="connection-note-actions">
+              <Button variant="primary" data-testid="agent-updated-reload" disabled={reloadArmed} onClick={() => setReloadArmed(true)}>
+                {reloadArmed ? 'reloading when the app finishes thinking…' : 'reload'}
+              </Button>
+            </div>
           </div>
         ) : null}
 

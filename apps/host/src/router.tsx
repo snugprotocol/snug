@@ -1,0 +1,56 @@
+// router.tsx — which router the kit mounts (K3, ADR-0072 §2).
+//
+// The kit runs from `file://`, inside an artifact viewer, and from a loopback server — none
+// of which has an SPA fallback — so it has always used a HASH router. One host breaks that:
+// a chat artifact is an `about:srcdoc` document at origin `null`, where the History API
+// refuses every URL (plan review, 2026-10-03). `HashRouter` navigates with
+// `pushState(state, '', '#/…')`, and what react-router does when that is refused is
+// `location.assign` — a navigation of the DOCUMENT rather than a route change, in a frame
+// whose address is not its own to navigate (what that does in the real viewer is unmeasured;
+// the kit does not depend on finding out).
+//
+// The choice is made by a guarded CAPABILITY probe, not by origin: the one call a hash
+// router cannot work without is tried, once. An origin check would be a list of hosts that
+// behave this way today; the probe is the behaviour itself, and a viewer that changes its
+// sandbox moves the kit with it.
+
+import type { ReactElement, ReactNode } from 'react';
+import { HashRouter, MemoryRouter } from 'react-router-dom';
+
+export type RouterChoice = { kind: 'hash' } | { kind: 'memory'; initialEntries: [string] };
+
+/** What the probe reads: the address's fragment and the History API. */
+export interface RouterWindow {
+  location: { hash: string };
+  history: { state: unknown; replaceState(state: unknown, unused: string, url: string): void };
+}
+
+/**
+ * The route a fragment names: `#/settings` → `/settings`. Anything that is not a route — no
+ * fragment, a bare `#`, an anchor — is the hub, which is what the hash router makes of it.
+ */
+export function entryFromHash(hash: string): string {
+  const route = hash.startsWith('#') ? hash.slice(1) : hash;
+  return route.startsWith('/') ? route : '/';
+}
+
+/**
+ * The probe replaces the current entry WITH ITSELF — same state, same fragment (or `#/`,
+ * what the hash router would normalise an empty one to) — so where it succeeds nothing has
+ * changed that a user or the router can observe. Where it throws, the fragment the page
+ * was opened with still seeds the memory router, so a deep link opens on its route.
+ */
+export function pickRouter(win: RouterWindow): RouterChoice {
+  let hash = '';
+  try {
+    hash = win.location.hash;
+    win.history.replaceState(win.history.state, '', hash || '#/');
+    return { kind: 'hash' };
+  } catch {
+    return { kind: 'memory', initialEntries: [entryFromHash(hash)] };
+  }
+}
+
+export function KitRouter({ choice, children }: { choice: RouterChoice; children: ReactNode }): ReactElement {
+  return choice.kind === 'hash' ? <HashRouter>{children}</HashRouter> : <MemoryRouter initialEntries={choice.initialEntries}>{children}</MemoryRouter>;
+}

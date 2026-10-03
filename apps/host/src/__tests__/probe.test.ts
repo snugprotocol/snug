@@ -29,11 +29,24 @@ describe('decideBinding — the matrix', () => {
   it('file:// with no host globals is `file`', () => {
     expect(decideBinding(env({ protocol: 'file:', hostname: '' }))).toBe('file');
   });
-  it('http(s) on a loopback host with no host globals is `local-host`', () => {
-    for (const hostname of ['localhost', '127.0.0.1', '[::1]', '127.0.0.5']) {
-      expect(decideBinding(env({ protocol: 'http:', hostname }))).toBe('local-host');
+  it('a loopback origin with NO runner is FILE-class — a static server, a dev server, a page somebody served', () => {
+    // MIGRATED 2026-10-03 (TASK-20261003 K2, the migration the plan names) from
+    // "http(s) on a loopback host with no host globals is `local-host`". That made
+    // `local-host` mean two things — the runner, or anything served from loopback — and the
+    // second got the runner's custody copy: "your file: on this Mac, in ~/Snug/user.snug"
+    // on a page whose file lives in the browser. The binding is `local-host` only when a
+    // runner ANSWERED (the boot asks, at the literal `http://127.0.0.1` alone).
+    for (const hostname of ['localhost', '127.0.0.1', '[::1]', '127.0.0.5', 'snug.localhost', '0.0.0.0']) {
+      expect(decideBinding(env({ protocol: 'http:', hostname })), hostname).toBe('file');
     }
-    expect(decideBinding(env({ protocol: 'https:', hostname: 'localhost' }))).toBe('local-host');
+    expect(decideBinding(env({ protocol: 'https:', hostname: 'localhost' }))).toBe('file');
+    expect(decideBinding(env({ protocol: 'https:', hostname: '127.0.0.1' }))).toBe('file');
+  });
+  it('the RUNNER fact makes `local-host` — and outranks everything, because the runner’s page is the runner’s', () => {
+    expect(decideBinding(env({ protocol: 'http:', hostname: '127.0.0.1', runner: true }))).toBe('local-host');
+    // A runner that answered is the host, whatever globals an extension or a test put on the window.
+    expect(decideBinding(env({ protocol: 'http:', hostname: '127.0.0.1', runner: true, claudeComplete: true }))).toBe('local-host');
+    expect(decideBinding(env({ protocol: 'http:', hostname: '127.0.0.1', runner: false }))).toBe('file');
   });
   it('any other origin with nothing wired reads as `file` — a plain page, no host', () => {
     expect(decideBinding(env({}))).toBe('file');
@@ -459,5 +472,29 @@ describe('the runtime is invoked as a METHOD; a rejecting use is never a static 
     expect(refusal.ok).toBe(false);
     if (!refusal.ok) expect(refusal.message).toContain('1,000');
     expect(result.brain.maxPromptBytes).toBe(1000);
+  });
+});
+
+// ---- the storage globals are read through the ONE guarded accessor (K4) ----------------
+
+describe('runProbe at an opaque origin — every storage getter THROWS', () => {
+  it('still answers: memory, the demo brain, `file` — the page boots and says so', async () => {
+    // A chat artifact is an `about:srcdoc` document at origin `null`: `localStorage`,
+    // `indexedDB` and `navigator.storage` are getters that throw a SecurityError there.
+    // `runProbe` read two of the three bare.
+    const deny = (name: string) => ({
+      get(): never {
+        throw new DOMException(`The document is sandboxed and lacks the 'allow-same-origin' flag (${name}).`, 'SecurityError');
+      },
+    });
+    const navigator = {};
+    Object.defineProperty(navigator, 'storage', deny('storage'));
+    const win = { location: { protocol: 'about:', hostname: '' }, navigator };
+    Object.defineProperty(win, 'indexedDB', deny('indexedDB'));
+    Object.defineProperty(win, 'localStorage', deny('localStorage'));
+    const result = await runProbe(win as Parameters<typeof runProbe>[0]);
+    expect(result.storage.kind).toBe('memory');
+    expect(result.brain.brain).toEqual({ kind: 'demo' });
+    expect(result.binding).toBe('file');
   });
 });

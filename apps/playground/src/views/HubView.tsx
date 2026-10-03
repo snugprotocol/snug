@@ -8,6 +8,7 @@ import { DesktopWelcome } from '../desktop/DesktopWelcome.js';
 import { useDesktopFirstRun } from '../desktop/firstRun.js';
 import { availabilityOf, needsOfConnections, needsOfRequirement, offersOf, type AppNeed } from '../platform/availability.js';
 import { getPlatform } from '../platform/platform.js';
+import { useLibraryRevision } from '../platform/signals.js';
 import { refreshAppMeta, useAppMetaMap } from '../state/appMeta.js';
 import { mintBuildThread } from '../state/buildThread.js';
 import { userLibrary, type LibraryEntry } from '../state/library.js';
@@ -145,9 +146,15 @@ function HubHome(): ReactElement {
     };
   }, [installedBySource]);
 
+  // The library can change UNDERNEATH the hub: on the local runner an agent hands an app in
+  // while the user is looking at this shelf (K6). The host says so by bumping this revision.
+  const libraryRevision = useLibraryRevision();
   useEffect(() => {
     let cancelled = false;
-    setLoad({ phase: 'loading' });
+    // No `setLoad({ phase: 'loading' })` here. The state STARTS as loading, which is the
+    // first read's skeleton; a later read — a revision bump — replaces the list IN PLACE.
+    // Going back through the loading phase would unmount every tile, and with it a rename
+    // the user is in the middle of typing (its text lives in an uncontrolled input).
     void refreshAppMeta();
     userLibrary()
       .list()
@@ -167,12 +174,14 @@ function HubHome(): ReactElement {
         if (!cancelled) setLoad({ phase: 'ready', entries, needs });
       })
       .catch(() => {
-        if (!cancelled) setLoad({ phase: 'error', message: 'could not open your snug file.' });
+        // A REFRESH that fails keeps the shelf it had: the user was reading that list, and
+        // the next bump (or a reload) reads again. Only a first read that fails is an error.
+        if (!cancelled) setLoad((current) => (current.phase === 'ready' ? current : { phase: 'error', message: 'could not open your snug file.' }));
       });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [libraryRevision]);
 
   // What this host offers (ADR-0072 §4) — read from the platform's seats, which are set
   // once before boot, so this is the same answer on every render.

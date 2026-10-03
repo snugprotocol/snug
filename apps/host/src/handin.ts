@@ -1,7 +1,13 @@
-// handin.ts — the app hand-in (TASK-20260905-binding-a-artifacts AC8, ADR-0065 §6). Inside
-// a Claude artifact the agent hands apps in as `snug-app-bundle/1` blocks embedded in the
-// page (`scripts/snug-embed.mjs` writes them; `scripts/lib/page-blocks.mjs` is the grammar).
-// Boot, after the user db opens, reads every block and resolves it:
+// handin.ts — the app hand-in (TASK-20260905-binding-a-artifacts AC8, ADR-0065 §6), and since
+// TASK-20261003 (ADR-0072 §3) the ONE core every binding hands in through.
+//
+// Inside a Claude artifact the agent hands apps in as `snug-app-bundle/1` blocks embedded in
+// the page (`scripts/snug-embed.mjs` writes them; `scripts/lib/page-blocks.mjs` is the
+// grammar), read ONCE at boot after the user db opens. Under the local runner the same
+// bundles arrive one at a time, as events, while the page is up (`local/handinEvents.ts`).
+// Both go through `applyAgentBundles`, and both offer an edited copy's update through
+// `createHandInSeat` — the runner used to reuse the core and drop everything around it, so
+// its edited-copy updates were offered nowhere. Each bundle is resolved:
 //
 //   1. an app under `agent:<lineage>`            → an update candidate
 //   2. else the app the bundle was LIFTED FROM     → an update candidate (kit-built or an
@@ -13,7 +19,8 @@
 // unedited (`isEditedCopy` — the one predicate the run header shares); an edited copy is
 // never superseded silently: it is PENDING and the run header offers it through the
 // ADR-0045 §7 confirm. A deleted app stays deleted (the `agentDismissed:` tombstone — read
-// only when no target exists, so a rolled-back bundle can still update a live app). A
+// only when no target exists, so a rolled-back bundle can still update a live app) — unless
+// the hand-in is `explicit`, the ONE rule the bindings do not share (see `HandInOptions`). A
 // bundle carrying connections is a hard refusal at the boundary (D4), BEFORE it can be
 // offered; every refusal is named, never a crash. Idempotent: the same block on the next
 // boot installs nothing twice.
@@ -36,6 +43,8 @@ import {
   type UserDb,
 } from '@snugprotocol/db';
 import { appBundleId, parseAppBundle, type AppBundle } from '@snugprotocol/protocol';
+
+import type { AgentHandInSeat, PendingAgentUpdate } from '@playground/platform/platform';
 
 import { BUNDLE_BLOCK_TYPE, LINEAGE_RULE, type BundleBlockRead } from '../../../scripts/lib/page-blocks.mjs';
 
@@ -79,9 +88,18 @@ export interface HandInOptions {
    * bundle. The refusal stands in both, and only its sentence differs (ADR-0068 D-B26).
    */
   binding?: 'artifact' | 'local-host';
+  /**
+   * The agent is handing this in NOW, by an act the user asked for (the runner's tool call)
+   * — not a block riding a page that is read again on every load. It is the ONE place the
+   * bindings differ (the parity test states it): an explicit hand-in of an app the user
+   * deleted CLEARS the tombstone and installs, because "build that again" is the request;
+   * a page block for a deleted app stays deleted, because honouring it would resurrect the
+   * app every time the page opened.
+   */
+  explicit?: boolean;
 }
 
-export async function handInFromPage(db: UserDb, blocks: readonly HandInBlock[], options: HandInOptions = {}): Promise<HandInOutcome> {
+export async function applyAgentBundles(db: UserDb, blocks: readonly HandInBlock[], options: HandInOptions = {}): Promise<HandInOutcome> {
   const outcome: HandInOutcome = { installed: [], updated: [], pending: [], skipped: [], refused: [] };
   for (const block of blocks) {
     const parsed = parseAppBundle(block.json);
@@ -114,7 +132,10 @@ export async function handInFromPage(db: UserDb, blocks: readonly HandInBlock[],
       (lifted !== undefined && lifted.installSource?.startsWith(SHARE_INSTALL_SOURCE_PREFIX) !== true ? lifted : undefined);
     try {
       if (target === undefined) {
-        if (db.getSetting(agentDismissedSettingKey(lineage)) === bundleId) {
+        // Cleared, not stepped over: a tombstone left behind an installed app would have the
+        // next page block for this lineage read "dismissed" about an app the user has.
+        if (options.explicit === true) db.deleteSetting(agentDismissedSettingKey(lineage));
+        else if (db.getSetting(agentDismissedSettingKey(lineage)) === bundleId) {
           outcome.skipped.push({ lineage, reason: 'dismissed' });
           continue;
         }
@@ -148,7 +169,84 @@ export async function applyPendingHandIn(db: UserDb, pending: PendingHandIn): Pr
   return { version: result.version };
 }
 
-/** One line for the custody chip after a boot that handed something in. */
+export interface HandInSeat {
+  /** What the platform carries: the offers, and the act that takes one after the confirm. */
+  seat: AgentHandInSeat;
+  /** Fold one hand-in's outcome in — new offers added, superseded ones withdrawn — against the db it ran on. */
+  absorb(db: UserDb, outcome: HandInOutcome): void;
+}
+
+/**
+ * The offers for edited copies (ADR-0045 §7), for whichever binding composes it.
+ *
+ * AN OFFER IS WITHDRAWN when it stops being true (K6): the user took it; the app was
+ * deleted; the app became that version by another path; or a later hand-in updated the app
+ * directly (the copy was reverted to the agent's version in between), which makes this the
+ * OLDER version. The last arrives with an outcome. The middle two are facts about the user's
+ * file that change with no hand-in at all, so they are checked where the offers are READ —
+ * silently: the snapshot changes, nothing is notified, and the only reader is the run header
+ * of the app the offer is for, which re-reads on its own renders.
+ */
+export function createHandInSeat(): HandInSeat {
+  const offers = new Map<string, PendingHandIn>();
+  const listeners = new Set<() => void>();
+  let db: UserDb | undefined;
+  // ONE array between changes: `useSyncExternalStore` re-renders for ever on a fresh one.
+  let snapshot: readonly PendingAgentUpdate[] = [];
+  const reshape = (): void => {
+    snapshot = [...offers.values()].map((offer) => ({ appId: offer.appId, displayName: offer.displayName, bundleId: offer.bundleId }));
+  };
+  const publish = (): void => {
+    reshape();
+    for (const listener of listeners) listener();
+  };
+  /** Drop offers the file no longer supports. True when any went. */
+  const withdrawStale = (): boolean => {
+    if (db === undefined) return false;
+    let dropped = false;
+    for (const [appId, offer] of offers) {
+      if (db.getApp(appId) === undefined || db.getSetting(sharedBundleSettingKey(appId)) === offer.bundleId) {
+        offers.delete(appId);
+        dropped = true;
+      }
+    }
+    return dropped;
+  };
+  return {
+    seat: {
+      pending: {
+        get() {
+          if (withdrawStale()) reshape();
+          return snapshot;
+        },
+        subscribe(listener) {
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        },
+      },
+      async apply(appId) {
+        withdrawStale();
+        const offer = offers.get(appId);
+        if (offer === undefined || db === undefined) throw new Error('nothing is pending for this app');
+        const result = await applyPendingHandIn(db, offer);
+        offers.delete(appId);
+        publish();
+        return result;
+      },
+    },
+    absorb(nextDb, outcome) {
+      db = nextDb;
+      const before = offers.size;
+      for (const updated of outcome.updated) offers.delete(updated.appId);
+      // Keyed by app: a newer offer for the same app replaces the older one.
+      for (const pending of outcome.pending) offers.set(pending.appId, pending);
+      const stale = withdrawStale();
+      if (stale || outcome.pending.length > 0 || offers.size !== before) publish();
+    },
+  };
+}
+
+/** One line for the custody chip after a hand-in did something. */
 export function describeHandIn(outcome: HandInOutcome): string | undefined {
   const parts: string[] = [];
   if (outcome.installed.length > 0) parts.push(`installed by your agent: ${outcome.installed.map((a) => a.displayName).join(', ')}`);

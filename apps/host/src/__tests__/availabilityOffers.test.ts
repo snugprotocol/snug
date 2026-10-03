@@ -31,12 +31,14 @@ const probe = (binding: Binding): ProbeResult => ({
   brain: { brain: { kind: 'demo' }, legs: { sample: 'detected', complete: 'absent', local: 'absent' } },
 });
 
-const client = {
+const client: LocalClient = {
   fetchImpl: async () => new Response('ok'),
   fs: { readFile: async () => undefined, writeFileAtomic: async () => {} },
-  status: async () => ({ binding: 'local-host', port: 43127, pages: 1 }),
   events: () => () => {},
-} as unknown as LocalClient;
+  reportHandIn: async () => {},
+  recheckBrain: async () => {},
+  stopped: { get: () => false, subscribe: () => () => {} },
+};
 const status = (over: Partial<LocalStatus> = {}): LocalStatus => ({ binding: 'local-host', port: 43127, pages: 1, ...over });
 
 afterEach(() => {
@@ -46,7 +48,8 @@ afterEach(() => {
 describe('createHostPlatform — every binding it serves offers NOTHING an app could need', () => {
   // The host kit inside an artifact, a chat, a static copy or a plain file carries no
   // transport seat at all, and switches the connections surface off. (A loopback static
-  // server lands on this composition too — the runner is composed by the other function.)
+  // server lands on this composition too, as `file` since K2 — the runner is composed by
+  // the other function; the `local-host` row here only shows the table does not key on it.)
   it.each(['artifact', 'artifact-static', 'artifact-chat', 'file', 'local-host'] as const)('%s', (binding) => {
     expect(offersOf(createHostPlatform(probe(binding), wasm))).toEqual(NOTHING);
   });
