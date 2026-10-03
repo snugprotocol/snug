@@ -2100,6 +2100,19 @@ img.identity-avatar {
   white-space: nowrap;
   cursor: pointer;
 }
+.brain-chip-text {
+  /* Label over the thinking level (S12). Two short lines fit inside the chip's tap-target
+     height, so the header pill does not grow. */
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  line-height: 1.15;
+}
+.brain-chip-sub {
+  /* One step below the chip's own --text-xs; there is no smaller token. */
+  font-size: calc(var(--text-xs) * 0.85);
+  opacity: 0.85;
+}
 .brain-chip:hover {
   background: var(--surface-2);
 }
@@ -2161,6 +2174,40 @@ img.identity-avatar {
   font-size: var(--text-s);
 }
 .brain-menu-tier .brain-menu-hint {
+  padding: var(--space-1) 0 0;
+}
+/* The CLI model + effort control (ADR-0070, Binding B). Reuses the tier control's type scale
+   and tap targets so the two read as the same control in the same slot — no binding ever shows
+   both, but a user moving between them should not feel a different chip. */
+.brain-menu-cli {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: 0 var(--space-2) var(--space-2);
+}
+.brain-menu-cli-active {
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+  /* The resolved model id is long and must not widen the popover past the 375px header. */
+  overflow-wrap: anywhere;
+}
+.brain-menu-cli-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.brain-menu-cli-row select,
+.brain-menu-cli-input {
+  min-height: var(--tap);
+  min-width: 0;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-s);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--fg);
+  font-size: var(--text-s);
+}
+.brain-menu-cli .brain-menu-hint {
   padding: var(--space-1) 0 0;
 }
 /* The first-contact callout (ADR-0059, AC6): an inline NOTE above the builder chat —
@@ -2232,7 +2279,8 @@ img.identity-avatar {
   display: none;
 }
 @media (max-width: 830px) {
-  .brain-chip:not([data-brain='demo']) .brain-chip-label {
+  .brain-chip:not([data-brain='demo']) .brain-chip-label,
+  .brain-chip:not([data-brain='demo']) .brain-chip-sub {
     display: none;
   }
 }

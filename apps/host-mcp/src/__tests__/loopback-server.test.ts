@@ -395,3 +395,65 @@ describe('the chat route refuses a malformed message entry before anything is sp
     expect(spawned).toBe(false);
   });
 });
+
+describe('the chat route validates the user’s choice at the envelope boundary (review, 2026-10-03; C5)', () => {
+  const streamed: unknown[] = [];
+  const brain = {
+    async stream(request: never, sink: { write(chunk: string): void }) {
+      streamed.push(request);
+      sink.write('data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n');
+      sink.write('data: [DONE]\n\n');
+    },
+  };
+  const send = async (extra: Record<string, unknown>) => {
+    await start({ store: createUserFileStore(home), brain });
+    return call('/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ messages: [{ role: 'user', content: 'x' }], ...extra }),
+    });
+  };
+
+  it('refuses a non-string model with 400 — it once reached argv building and threw a TypeError', async () => {
+    streamed.length = 0;
+    const response = await send({ model: 5 });
+    expect(response.status).toBe(400);
+    expect(streamed).toEqual([]);
+  });
+
+  it('refuses a model id that could read as a FLAG, naming it — argv safety must not rest on the CLI’s parser', async () => {
+    streamed.length = 0;
+    const response = await send({ model: '--dangerous-flag' });
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { error: { message: string } }).error.message).toContain('--dangerous-flag');
+    expect(streamed).toEqual([]);
+  });
+
+  it('refuses a model id carrying whitespace or a control character', async () => {
+    expect((await send({ model: 'claude sonnet' })).status).toBe(400);
+    expect((await send({ model: 'claude\u0000x' })).status).toBe(400);
+  });
+
+  it('refuses a non-string effort with 400', async () => {
+    expect((await send({ effort: ['max'] })).status).toBe(400);
+  });
+
+  it('still accepts every real id shape — aliases, dated ids, the context suffix', async () => {
+    for (const model of ['claude', 'sonnet', 'claude-haiku-4-5-20251001', 'claude-opus-5-5[1m]']) {
+      expect((await send({ model, effort: 'low' })).status, model).toBe(200);
+    }
+  });
+});
+
+describe('/status carries the chip’s model list (S9)', () => {
+  it('is always present, and empty when no list was given', async () => {
+    const status = (await (await call('/status')).json()) as { models?: unknown };
+    expect(status.models).toEqual([]);
+  });
+
+  it('carries what the runner read', async () => {
+    const models = [{ id: 'claude-sonnet-5', name: 'Sonnet 5', effort: true }];
+    await start({ store: createUserFileStore(home), models: () => models });
+    expect(((await (await call('/status')).json()) as { models?: unknown }).models).toEqual(models);
+  });
+});

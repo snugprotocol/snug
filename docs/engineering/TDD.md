@@ -18,6 +18,7 @@
 | One package | `packages/<name>` | `pnpm --filter @snugprotocol/<name> test` |
 | Playground | `apps/playground` | `pnpm --filter playground test` |
 | Server | `apps/server` | `pnpm --filter server test` |
+| Local host (Binding B) | `apps/host-mcp` | `pnpm --filter host-mcp test` (tsc against `tsconfig.test.json` — stricter than vitest alone — then vitest: the child pool, the brain, the loopback gates, and an MCP interop suite that spawns the BUILT bundle) |
 | Host kit | `apps/host` | `pnpm --filter host test` (tsc + vitest: probe, platform, loader, plugins); `pnpm --filter host build` then `pnpm --filter host test:e2e` (Playwright on the BUILT page); root `pnpm run check-host-kit` (structural gate + two-build reproducibility) |
 
 Dependents rule (Gate 5): `protocol` changes → also run `runner`, `sdk`, `server`, `playground`. `db` changes → also `sdk`, `playground`. Playground SOURCE changes → also `desktop` and `host` (both alias it in; the kit's e2e opens the rebuilt page). In doubt: run everything.

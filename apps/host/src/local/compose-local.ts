@@ -16,6 +16,17 @@
 //    silent fallback through the ordinary transport.
 
 import { localAdapter } from '@snugprotocol/adapters';
+import { BRAIN_EFFORT_OPTIONS, createBrainChoiceStore, type BrainChoice, type BrainChoiceStore, type BrainEffortChoice } from '../brains/brainChoiceStore.js';
+import type { CliModelOption, CliModelSeat, CliModelState } from '@playground/platform/platform';
+
+/** `localStorage` where the browser allows it; undefined where it throws (the Safari rung). */
+const safeLocalStorage = (): Storage | undefined => {
+  try {
+    return typeof localStorage === 'undefined' ? undefined : localStorage;
+  } catch {
+    return undefined;
+  }
+};
 import { createFileBackend, type PersistenceBackend } from '@snugprotocol/db';
 
 import type { CustodySeat, CustodyState, SnugPlatform } from '@playground/platform/platform';
@@ -70,7 +81,19 @@ const origin = typeof location === 'undefined' ? 'http://127.0.0.1:43127' : loca
  */
 export const brainState: { current?: { state: string; detail?: string } } = {};
 
-export function brainLabel(brain: { state: string; detail?: string } | undefined): string {
+/**
+ * The model list from the process, which can arrive after boot for the same reason the brain
+ * verdict can (the platform is set once; a `status` read or event fills this). Same holder
+ * pattern as `brainState` — never a recomposed platform.
+ */
+export const modelsFromStatus: { current?: readonly CliModelOption[] } = {};
+
+/**
+ * @param model the model to name on a READY chip (S11, owner 2026-10-02: "replace 'your CLI'
+ *   with the current selected model"). Ignored in every other state: a remedy is never traded
+ *   for a model name, and before the probe answers nothing is claimed at all.
+ */
+export function brainLabel(brain: { state: string; detail?: string } | undefined, model?: string): string {
   switch (brain?.state) {
     case 'logged-out':
       // The remedy IS the label: a chip that only says "unavailable" makes the user hunt.
@@ -85,8 +108,166 @@ export function brainLabel(brain: { state: string; detail?: string } | undefined
       return 'Claude · your CLI — out of date, run `claude update`';
     case 'unknown':
       return 'Claude · your CLI — could not check';
+    case 'ready':
+      return model === undefined || model === '' ? 'Claude · your CLI' : `Claude · ${model}`;
     default:
       return 'Claude · your CLI';
+  }
+}
+
+/**
+ * The chip's control (TASK-20260922 AC5/AC8). `undefined` means NO control: the brain cannot
+ * think, so a picker on it would be dead — the user gets the remedy `brainLabel` already
+ * carries and nothing else. This is ADR-0067's rule for Binding A and ADR-0036 rule 4 for the
+ * playground's selector; three surfaces now agree, so it is not re-litigated here.
+ *
+ * `activeLabel` is what ANSWERED, never what was asked (ADR-0059 rule 2). A chosen model does
+ * not appear until a think has come back on it, because until then the chip would be naming a
+ * model that may yet be refused or substituted.
+ */
+export interface BrainChipSeat {
+  /** The thinking levels to offer — the CLI's own `--effort`, not ADR-0067's tiers. */
+  efforts: readonly BrainEffortChoice[];
+  /** What is running right now, in words. */
+  activeLabel: string;
+  /** The standing caveats: what the control does not do, and what a switch costs. */
+  note: string;
+  choice: BrainChoice;
+  setModel(model: string | undefined): void;
+  setEffort(effort: BrainEffortChoice | undefined): void;
+}
+
+export function brainChipSeat(input: { brain: { state: string } | undefined; choices: BrainChoiceStore }): BrainChipSeat | undefined {
+  // Anything but a ready brain — including a probe that has not answered yet, which is NOT a
+  // claim the CLI works — gets no control (AC8). The demo brain gains nothing.
+  if (input.brain?.state !== 'ready') return undefined;
+  const { choices } = input;
+  const active = choices.active();
+  const choice = choices.choice();
+  // The CLI reports the model it resolved on EVERY think, chosen or not, so after the first
+  // answer this names the real id — including the default the user never picked. Before that
+  // there is nothing true to say, and a chosen-but-unproven alias is not it (ADR-0059 rule 2).
+  const model = active.model ?? 'the CLI’s default (known after the first think)';
+  // Effort has no such report: the CLI echoes the level back nowhere, in `init` or `result`
+  // (measured 2026-09-22 — only the thinking-token COUNT differs, which is an effect, not a
+  // setting). So an unchosen level is left unnamed rather than guessed at.
+  const effort = choice.effort ?? 'the CLI’s default';
+  const refusal = active.refusal === undefined ? '' : ` — ${active.refusal}`;
+  return {
+    efforts: BRAIN_EFFORT_OPTIONS,
+    activeLabel: `thinking on ${model}, effort ${effort}${refusal}`,
+    // Honest about what it does NOT do (Q4) and what a switch costs (Q5): no tokens, but the
+    // pre-warmed child for the old choice is thrown away, so the next think starts cold.
+    note: 'Thinking itself is never shown. A switch takes effect on your next think and spends nothing, but the ready-and-waiting brain is started again, so that think is a little slower.',
+    choice,
+    setModel: choices.setModel,
+    setEffort: choices.setEffort,
+  };
+}
+
+/**
+ * The seat the chip renders (ADR-0070, S7). `undefined` means NO control: the brain cannot
+ * think, so a picker on it would be dead and the user gets the remedy `brainLabel` carries
+ * and nothing else (AC8 — ADR-0067's rule and ADR-0036 rule 4).
+ *
+ * `state.get()` must return a STABLE reference while nothing changes: the chip reads it
+ * through `useSyncExternalStore`, which re-renders forever on a fresh object each call. The
+ * cache below is that stability, recomputed only when the store actually notifies.
+ */
+/**
+ * ONE snapshot per store, recomputed only when the store notifies. `useSyncExternalStore`
+ * re-renders forever if `getSnapshot` returns a fresh object each call, and the seat itself is
+ * rebuilt on every render (its getter must be, so a late probe verdict reaches the chip) — so
+ * the cache cannot live on the seat. It lives here, keyed by the store the seat wraps.
+ */
+const snapshots = new WeakMap<BrainChoiceStore, { value: CliModelState }>();
+
+function snapshotOf(choices: BrainChoiceStore): CliModelState {
+  const existing = snapshots.get(choices);
+  if (existing !== undefined) return existing.value;
+  const compute = (): CliModelState => {
+    const choice = choices.choice();
+    const active = choices.active();
+    return {
+      ...(choice.model === undefined ? {} : { model: choice.model }),
+      ...(choice.effort === undefined ? {} : { effort: choice.effort }),
+      ...(active.model === undefined ? {} : { activeModel: active.model }),
+      ...(active.refusal === undefined ? {} : { refusal: active.refusal }),
+    };
+  };
+  const cell = { value: compute() };
+  snapshots.set(choices, cell);
+  // Subscribed ONCE per store, not once per render: the seat is rebuilt constantly and a
+  // subscription there would leak a listener on every render.
+  choices.subscribe(() => {
+    cell.value = compute();
+  });
+  return cell.value;
+}
+
+/**
+ * The seat the chip renders (ADR-0070, S7). `undefined` means NO control: the brain cannot
+ * think, so a picker on it would be dead and the user gets the remedy `brainLabel` carries
+ * and nothing else (AC8 — ADR-0067's rule and ADR-0036 rule 4).
+ */
+export function cliModelSeat(input: {
+  brain: { state: string } | undefined;
+  choices: BrainChoiceStore;
+  /** From the process, which read the CLI's own catalogue. Empty = no list could be read. */
+  models?: readonly CliModelOption[] | undefined;
+}): CliModelSeat | undefined {
+  const chip = brainChipSeat(input);
+  if (chip === undefined) return undefined;
+  const { choices } = input;
+  const models = input.models ?? [];
+  snapshotOf(choices);
+  const chosen = choices.choice().model;
+  // Whether the CHOSEN model has a thinking-effort axis at all. Haiku 4.5 has none, and an
+  // effort control on a model that ignores it is a dead control (AC8). A model typed by hand
+  // that the catalogue does not list is assumed to HAVE the axis: withholding a control the
+  // model may well support is the worse error, and the CLI refuses a flag it cannot use.
+  const listed = chosen === undefined ? undefined : models.find((model) => model.id === chosen);
+  return {
+    efforts: chip.efforts,
+    models,
+    effortApplies: listed === undefined ? true : listed.effort,
+    activeLabel: chip.activeLabel,
+    note: chip.note,
+    state: { get: () => snapshotOf(choices), subscribe: choices.subscribe },
+    setModel: choices.setModel,
+    setEffort: choices.setEffort,
+  };
+}
+
+/**
+ * The model the chip names (S11). The SELECTED model — it is what the next think carries; with
+ * nothing selected, the model the CLI actually ran once a think has answered; before that,
+ * nothing (the chip keeps "your CLI"). Shown by the catalogue's display name where it lists the
+ * id ("Sonnet 5"), else the id itself. The CLI reports its default with a context suffix
+ * (measured: `claude-opus-5-5[1m]`), so the suffix is ignored for the lookup.
+ *
+ * The popover's active line is unchanged and still says what ANSWERED (ADR-0059 rule 2): a
+ * selection the CLI then refuses shows the refusal there, in words.
+ */
+function chipModelName(choices: BrainChoiceStore, models: readonly CliModelOption[] | undefined): string | undefined {
+  const id = choices.choice().model ?? choices.active().model;
+  if (id === undefined) return undefined;
+  const bare = id.replace(/\[[^\]]*\]$/, '');
+  return (models ?? []).find((model) => model.id === bare)?.name ?? id;
+}
+
+/**
+ * Add the user's thinking level to the chat request's JSON body. The shared OpenAI adapter
+ * builds that body from a fixed set of fields, so a level put on the REQUEST object is silently
+ * dropped (it was, from S5 until the owner's walk). Undefined = the body is left byte-identical.
+ */
+function withEffort(init: RequestInit | undefined, effort: BrainEffortChoice | undefined): RequestInit | undefined {
+  if (effort === undefined || init === undefined || typeof init.body !== 'string') return init;
+  try {
+    const body = JSON.parse(init.body) as Record<string, unknown>;
+    return { ...init, body: JSON.stringify({ ...body, effort }) };
+  } catch {
+    return init;
   }
 }
 
@@ -104,6 +285,11 @@ export function composeLocalPlatform(
   backendOverride?: PersistenceBackend,
   /** The bearer, so the brain adapter can reach the shim on the same origin. */
   token?: string,
+  /**
+   * The user's per-machine model and effort choice (TASK-20260922). Injectable so tests can
+   * drive it; in the page it is one store per boot over `localStorage`.
+   */
+  brainChoices: BrainChoiceStore = createBrainChoiceStore({ storage: safeLocalStorage() }),
 ): LocalComposition {
   // The holder check decides whether we open AT ALL. Both of the db's save paths swallow a
   // failed write with a bare `catch`, and no persist-error seam exists — so a page that
@@ -146,11 +332,63 @@ export function composeLocalPlatform(
               // a getter over a mutable holder lets a late verdict reach the user without
               // touching the singleton.
               get label(): string {
-                return brainLabel(brainState.current ?? status.brain);
+                return brainLabel(brainState.current ?? status.brain, chipModelName(brainChoices, modelsFromStatus.current ?? status.models));
               },
-              adapter: localAdapter({ baseUrl: `${origin}/v1`, apiKey: token, model: 'claude' }),
+              // The adapter is rebuilt PER CALL, not once: `localAdapter` takes a static
+              // model, and a value read at composition time would freeze the user's choice
+              // until a reload — ADR-0036 rule 3, and what makes "switch now, it lands on
+              // your next think" true. The effort rides beside it on the same request.
+              adapter: {
+                complete: async (request) => {
+                  const choice = brainChoices.choice();
+                  // Effort only for a model that HAS the axis: the chip hides the control for
+                  // one that does not (Haiku 4.5, per the CLI's catalogue), so sending a stored
+                  // level anyway would be a setting the user can no longer see (AC8).
+                  const listed = choice.model === undefined ? undefined : (modelsFromStatus.current ?? status.models ?? []).find((m) => m.id === choice.model);
+                  const effort = listed !== undefined && !listed.effort ? undefined : choice.effort;
+                  const result = await localAdapter({
+                    baseUrl: `${origin}/v1`,
+                    apiKey: token,
+                    model: choice.model ?? 'claude',
+                    // The page's OWN fetch, straight to its own runner on loopback. NEVER
+                    // `client.fetchImpl`: that is the connected-apps proxy (`POST /fetch`), which
+                    // re-runs the executor's gates and refuses a loopback destination — S5 routed
+                    // the brain through it and every think failed with "could not reach the local
+                    // model endpoint" (owner's walk, 2026-10-02). The wrapper only adds `effort`
+                    // to the JSON body, because the shared OpenAI adapter builds its body from a
+                    // fixed set of fields and drops anything else.
+                    fetch: (input, init) => globalThis.fetch(input, withEffort(init, effort)),
+                  }).complete(request);
+                  // Thinks overlap (the pool runs several), so a slow one can finish after a newer
+                  // one. A call teaches the chip ONLY while the choice is still the one it carried —
+                  // otherwise a late answer or refusal for a model the user already left would
+                  // overwrite what the newer think taught (review, 2026-10-03).
+                  if (brainChoices.choice().model !== choice.model) return result;
+                  if (result.ok) {
+                    // The adapter reports the model on the stream's LAST chunk, which is the id the
+                    // CLI resolved (ADR-0070 D2: only a turn that SUCCEEDED may name a model).
+                    if (typeof result.model === 'string' && result.model !== '' && result.model !== 'claude') brainChoices.markAnswered(result.model);
+                  } else if (choice.model !== undefined && result.message.includes(choice.model)) {
+                    // A refusal that NAMES the chosen model is the CLI refusing it — shown on the
+                    // chip in its own words. Anything else (a network failure, a timeout) is not
+                    // about the model and must not be dressed up as one.
+                    brainChoices.markRefused(choice.model, result.message);
+                  }
+                  return result;
+                },
+              },
               streaming: false,
               tools: false,
+              // The model + effort control (ADR-0070). A GETTER for the same reason `label` is
+              // one: the probe answers AFTER boot and the platform is set once, so a value
+              // computed here would be read while the brain state is still unknown and the
+              // control would never appear (caught by a test, not by review). Present only
+              // while the CLI can think — `cliModelSeat` returns undefined for every other
+              // state, so a brain that stops being able to think loses its control rather
+              // than keeping a dead one (AC8).
+              get cliModel(): CliModelSeat | undefined {
+                return cliModelSeat({ brain: brainState.current ?? status.brain, choices: brainChoices, models: modelsFromStatus.current ?? status.models });
+              },
             },
           }
         : {}),

@@ -15,6 +15,7 @@ import type { AddressInfo } from 'node:net';
 
 import { admitDataPlaneRequest } from './loopback-gates.js';
 import type { Brain } from './brain-claude.js';
+import { isModelId } from './brain-child.js';
 import type { FetchProxy, ProxyRequest, ProxyResult } from './fetch-proxy.js';
 import { validUserFileName, type UserFileStore } from './userdb-fs.js';
 import { RealHomeRefusedError } from './home.js';
@@ -50,6 +51,12 @@ export interface LoopbackServerOptions {
    * its tokens instead of a silent wait.
    */
   brain?: Pick<Brain, 'stream'>;
+  /**
+   * The models the chip may offer (TASK-20260922 S9). Read from the CLI's own catalogue by
+   * the RUNNER, because the file lives in the user's home and the page cannot read it. A
+   * function, so a CLI update between boots is picked up without restarting the runner.
+   */
+  models?: () => readonly { id: string; name: string; effort: boolean }[];
 }
 
 export interface LoopbackServer {
@@ -141,6 +148,9 @@ export function createLoopbackServer(options: LoopbackServerOptions): LoopbackSe
         pages: subscribers.size,
         ...(held !== undefined ? { heldBy: held } : {}),
         ...(brain !== undefined ? { brain } : {}),
+        // Always present, possibly empty: an empty list is the page's signal to keep free
+        // text as the only rung rather than render an empty dropdown.
+        models: options.models?.() ?? [],
       });
       return;
     }
@@ -201,10 +211,15 @@ export function createLoopbackServer(options: LoopbackServerOptions): LoopbackSe
         end(response, 413);
         return;
       }
-      let parsed: { messages?: unknown; model?: string };
+      let parsed: { messages?: unknown; model?: unknown; effort?: unknown };
       try {
-        parsed = JSON.parse(body.toString('utf8')) as { messages?: unknown; model?: string };
+        parsed = JSON.parse(body.toString('utf8')) as { messages?: unknown; model?: unknown; effort?: unknown };
         if (!Array.isArray(parsed.messages)) throw new Error('messages must be an array');
+        // The user's choice rides this body to the child's argv, so it is checked HERE, at the
+        // envelope boundary (C5): a non-string once threw a TypeError deep in argv building, and
+        // a dash-led id must never depend on the CLI's parser to stay a value.
+        if (parsed.model !== undefined && !isModelId(parsed.model)) throw new Error(`"${String(parsed.model)}" is not a model id`);
+        if (parsed.effort !== undefined && typeof parsed.effort !== 'string') throw new Error('effort must be a string');
         for (const message of parsed.messages as unknown[]) {
           const m = message as { role?: unknown; content?: unknown } | null;
           if (m === null || typeof m !== 'object' || typeof m.role !== 'string' || !(typeof m.content === 'string' || Array.isArray(m.content))) {

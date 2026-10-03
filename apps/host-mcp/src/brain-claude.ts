@@ -7,7 +7,7 @@
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 
-import { ChildPool, ClaudeChild, type ChildLike, type SpawnChild } from './brain-child.js';
+import { ChildPool, ClaudeChild, isEffort, isModelId, type BrainEffort, type BrainSpec, type ChildLike, type SpawnChild } from './brain-child.js';
 import { defaultResolveDeps, resolveBinary } from './brain-resolve.js';
 
 /**
@@ -57,6 +57,10 @@ export function resolveClaudeBinary(): string | undefined {
 export const INSTALL_REMEDY =
   'No `claude` CLI found on this machine — Snug is using its demo brain. Install Claude Code (https://code.claude.com/docs/en/quickstart), then run `claude` and `/login`, and reopen Snug.';
 
+export { BRAIN_EFFORTS } from './brain-child.js';
+export { isEffort, isModelId };
+export type { BrainEffort, BrainSpec };
+
 /**
  * The posture every child runs with (program D5): no tools — which makes a single turn by
  * construction (verified: `num_turns: 1`) — `--max-turns 1` as belt and braces (accepted by
@@ -93,8 +97,28 @@ const POSTURE = [
  * as an argument, never as an environment variable. The probe and the brain share it, so
  * the probe proves the wire the brain uses.
  */
-export function buildStreamArgs(system: string): string[] {
-  return ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--system-prompt', system, ...POSTURE];
+export function buildStreamArgs(spec: BrainSpec): string[] {
+  // The model and the effort are OPTIONAL and additive: with neither chosen the argv is
+  // byte-identical to the one this binding shipped with (AC1, pinned by a frozen literal in
+  // the tests), so the default path is provably unchanged by this task. Both ride BEFORE the
+  // posture, which stays last and whole — neither flag may displace or reorder it (AC7).
+  const choice: string[] = [];
+  // Free text, validated by the CLI itself: it has no machine-readable model list (measured,
+  // 2.1.278) but refuses an unknown model BY NAME rather than answering on another, so the
+  // check that matters happens where the truth is. Empty/blank is "no choice", not a model.
+  if (spec.model !== undefined) {
+    const model = typeof spec.model === 'string' ? spec.model.trim() : spec.model;
+    if (model !== '') {
+      // The route refuses a bad id at the boundary; this is the defence behind it, and it fails
+      // LOUD rather than quietly running the default model.
+      if (!isModelId(model)) throw new Error(`"${String(model)}" is not a model id`);
+      choice.push('--model', model);
+    }
+  }
+  // An effort outside the five the CLI documents never reaches argv: the child would reject
+  // the flag, which would turn a slower think into a refused one.
+  if (spec.effort !== undefined && isEffort(spec.effort)) choice.push('--effort', spec.effort);
+  return ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--system-prompt', spec.system, ...choice, ...POSTURE];
 }
 
 /**
@@ -114,7 +138,14 @@ export interface ChatMessage {
 
 export interface ChatRequest {
   messages: ChatMessage[];
+  /**
+   * The model the PAGE asked for. Historically always the literal `claude` (a placeholder,
+   * not a choice), so a value equal to it is ignored; anything else is the user's per-machine
+   * choice, which reaches this process through the chat route (TASK-20260922).
+   */
   model?: string;
+  /** The thinking level the page asked for — the CLI's `--effort`. */
+  effort?: string;
 }
 
 /** OpenAI allows content as a string OR as an array of parts; the page's adapter uses both. */
@@ -206,6 +237,13 @@ export interface BrainDeps extends BinaryDeps {
   firstDeltaMs?: number;
   /** The bound between deltas once a child is answering. */
   idleMs?: number;
+  /**
+   * The user's per-machine model and effort choice, read AT CALL TIME on every request —
+   * never captured when the brain is built (ADR-0036 rule 3: a value read once would freeze
+   * the choice until a reload, and "switch mid-session, the next think uses it" would be a
+   * lie). Absent, or returning `{}`, is the pre-task behaviour exactly.
+   */
+  brainChoice?: () => { model?: string | undefined; effort?: BrainEffort | undefined };
 }
 
 /** Where a streamed answer goes: the route's response, or a string in tests. */
@@ -250,10 +288,20 @@ export function createClaudeBrain(deps: BrainDeps = {}): Brain {
   const brain: Brain = {
     async stream(request, sink) {
       const { system, prompt } = splitChatRequest(request);
-      const model = request.model ?? 'claude';
-      // The page sends no model today (it always says `claude`), so the key is the system
-      // prompt alone; a different model would be a different child.
-      const child = pool.acquire(system);
+      // The user's choice, read now rather than at construction, so a switch lands on THIS
+      // think. The page's own `model` field is not a choice — it has always said `claude` —
+      // and is only the envelope's fallback until the CLI tells us what actually answered.
+      // The page's own choice wins where it sent one; `deps.brainChoice` is the fallback for
+      // callers that hold the choice process-side. `claude` is the page's historical
+      // placeholder, never a model id, so it is not treated as a choice.
+      const fallback = deps.brainChoice?.() ?? {};
+      const asked = request.model !== undefined && request.model !== '' && request.model !== 'claude' ? request.model : fallback.model;
+      const effort = isEffort(request.effort) ? request.effort : fallback.effort;
+      const child = pool.acquire({ system, model: asked, effort });
+      // The placeholder until the CLI says what answered — NEVER the requested id: the page reads
+      // the final frame's model as "what ran", and a turn whose init frame was missing must not
+      // turn the request into a claim (review, 2026-10-03; ADR-0070 D2).
+      let model = 'claude';
       const base = { id: `chatcmpl-snug-${Date.now().toString(36)}`, object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model };
       // EVERY FRAME IS ONE JSON.stringify OF THE WHOLE PAYLOAD: a delta's text is a string
       // value inside it, so a delta containing "\n\ndata:" rides inside its frame and can
@@ -285,7 +333,12 @@ export function createClaudeBrain(deps: BrainDeps = {}): Brain {
         });
         // A CLI that streamed nothing still answered: its text rides as the one delta.
         if (deltas === 0 && result.text !== '') sink.write(contentFrame(result.text));
-        sink.write(frame({ ...base, choices: [{ index: 0, delta: {}, finish_reason: finishReasonFor(result.stopReason) }] }));
+        // What ANSWERED, never what was asked (AC5). Only on a turn that succeeded: the CLI
+        // emits its init frame BEFORE validating the model against its catalogue, so on a
+        // refused turn `resolvedModel` is the asked id echoed back, and announcing it would
+        // name a model that never ran (measured 2026-09-22; ADR-0059 rule 2).
+        if (result.resolvedModel !== undefined && result.resolvedModel !== '') model = result.resolvedModel;
+        sink.write(frame({ ...base, model, choices: [{ index: 0, delta: {}, finish_reason: finishReasonFor(result.stopReason) }] }));
         sink.write('data: [DONE]\n\n');
       } catch (error) {
         const message = abortReason !== undefined ? `your Claude CLI ${abortReason}` : error instanceof Error ? error.message : String(error);
@@ -374,7 +427,7 @@ export async function probeBrain(deps: ProbeDeps = {}): Promise<BrainReadiness> 
   }, deps.timeoutMs ?? 20_000);
   timer.unref?.();
   try {
-    child = new ClaudeChild((deps.spawnBinary ?? nodeSpawn)(binary, buildStreamArgs(PROBE_SYSTEM), childEnvFor(process.env, EXEC_DIR), deps.cwd));
+    child = new ClaudeChild((deps.spawnBinary ?? nodeSpawn)(binary, buildStreamArgs({ system: PROBE_SYSTEM }), childEnvFor(process.env, EXEC_DIR), deps.cwd));
     await child.send(PROBE_PROMPT, { onDelta() {} });
     return { state: 'ready' };
   } catch (error) {

@@ -78,9 +78,22 @@ async function render(node: ReactElement, initialEntries: string[] = ['/settings
   await act(async () => {
     root!.render(<MemoryRouter initialEntries={initialEntries}>{node}</MemoryRouter>);
   });
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  });
+  // Settle on the CONDITION, never on a fixed wall-clock wait (the parallelism-flake lesson
+  // in vitest.config.ts): this view's sections arrive after the platform's async probes
+  // resolve, and a flat 5 ms was enough alone but not under a loaded run — every test in this
+  // file inherited that timeout. Drain the microtask/timer queue until the DOM stops changing,
+  // with a deadline that still fails a genuinely stuck render.
+  const deadline = Date.now() + 4_000;
+  let previous = '';
+  for (;;) {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    const current = container?.innerHTML ?? '';
+    if (current !== '' && current === previous) return;
+    previous = current;
+    if (Date.now() > deadline) throw new Error('hostSettings render never settled — the view is stuck, not slow');
+  }
 }
 
 const byTestId = (id: string): HTMLElement | null => (container?.querySelector(`[data-testid="${id}"]`) as HTMLElement | null) ?? null;

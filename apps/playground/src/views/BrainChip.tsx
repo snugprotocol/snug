@@ -22,7 +22,7 @@ import { useSyncExternalStore } from 'react';
 import { Link } from 'react-router-dom';
 
 import { tierAutoLabel, tierLabel, tierSubstitutionNote } from '../platform/copy.js';
-import { allows, getPlatform, type TierChoice } from '../platform/platform.js';
+import { allows, getPlatform, type CliEffort, type TierChoice } from '../platform/platform.js';
 import { setMode } from '../state/mode.js';
 import { useActiveBrain, type ActiveBrainKind } from '../state/activeBrain.js';
 import { useOllama } from '../state/ollama.js';
@@ -127,8 +127,22 @@ export function BrainChip(): ReactElement {
     () => tierSeat?.state.get(),
     () => tierSeat?.state.get(),
   );
+  // The user's own CLI as the brain (ADR-0070): model + effort. Mutually exclusive with the
+  // tier seat in practice — a Binding B runner has no artifact `sample` contract and a Binding
+  // A one spawns no CLI — and absent entirely wherever the CLI cannot think, so this renders
+  // no dead control (AC8).
+  const cliSeat = brain === 'host' && pinned?.kind === 'host' ? pinned.cliModel : undefined;
+  const cliState = useSyncExternalStore(
+    cliSeat?.state.subscribe ?? noSubscription,
+    () => cliSeat?.state.get(),
+    () => cliSeat?.state.get(),
+  );
 
   const copy = copyFor(brain);
+  const effortLine =
+    cliSeat !== undefined && cliState !== undefined && cliSeat.effortApplies ? `thinking · ${cliState.effort ?? 'default'}` : undefined;
+  // The accessible name carries the level too — the visible line may be compacted away.
+  const chipAria = effortLine === undefined ? copy.aria : `${copy.aria}, thinking level ${cliState?.effort ?? 'default'}`;
   const models = ollama !== 'unknown' && ollama.running ? ollama.models : [];
   const tierNote = tierSubstitutionNote(tierState?.applied);
 
@@ -142,8 +156,8 @@ export function BrainChip(): ReactElement {
         data-brain={brain}
         aria-haspopup="true"
         aria-expanded={open}
-        aria-label={copy.aria}
-        title={copy.aria}
+        aria-label={chipAria}
+        title={chipAria}
         {...(tierState !== undefined ? { 'data-tier': tierState.choice } : {})}
         onClick={toggle}
       >
@@ -158,7 +172,18 @@ export function BrainChip(): ReactElement {
             <span className="brain-chip-label brain-chip-label-short">demo</span>
           </>
         ) : (
-          <span className="brain-chip-label">{copy.label}</span>
+          <span className="brain-chip-text">
+            <span className="brain-chip-label">{copy.label}</span>
+            {/* The thinking level, smaller, under the label (S12). Only where the CLI control
+                exists and the chosen model HAS an effort axis — Haiku 4.5 does not, and naming a
+                level it ignores would be noise (AC8). An unchosen level is "default": the CLI
+                reports its default level nowhere, so none is invented. */}
+            {effortLine !== undefined ? (
+              <span className="brain-chip-sub" data-testid="brain-chip-effort">
+                {effortLine}
+              </span>
+            ) : null}
+          </span>
         )}
       </button>
       {open ? (
@@ -187,6 +212,85 @@ export function BrainChip(): ReactElement {
                 </span>
               ) : null}
             </label>
+          ) : null}
+          {cliSeat !== undefined && cliState !== undefined ? (
+            <div className="brain-menu-cli">
+              {/* What is RUNNING, not what was asked: the chip's one line of truth (ADR-0059
+                  rule 2). A chosen model does not appear here until a think has answered on it. */}
+              <span className="brain-menu-cli-active" data-testid="brain-menu-active">
+                {/* Derived from the LIVE state, not from `activeLabel`: that string is built
+                    when the seat is, and the seat outlives a think — so rendering it showed a
+                    stale "default" even after the model was known. */}
+                {`thinking on ${cliState.activeModel ?? 'the CLI’s default (known after the first think)'}, effort ${cliState.effort ?? 'the CLI’s default'}`}
+                {cliState.refusal === undefined ? '' : ` — ${cliState.refusal}`}
+              </span>
+              <label className="brain-menu-cli-row">
+                <span className="brain-menu-tier-label">model</span>
+                {/* A dropdown of the CLI's OWN catalogue (S9) — exact ids, so a typo cannot
+                    break a call. No `other…` rung: it swapped the dropdown for a text field with
+                    no way back (owner's walk, 2026-10-02). Free text survives ONLY as the whole
+                    control when no catalogue could be read (it is an internal cache and may move),
+                    because the alternative there is no control at all. */}
+                {cliSeat.models.length > 0 ? (
+                  <select
+                    aria-label="model"
+                    data-testid="brain-menu-model-select"
+                    value={cliState.model ?? ''}
+                    onChange={(event) => cliSeat.setModel(event.currentTarget.value === '' ? undefined : event.currentTarget.value)}
+                  >
+                    <option value="">the CLI’s default</option>
+                    {cliSeat.models.map((model) => (
+                      <option key={model.id} value={model.id}>
+                        {model.name}
+                      </option>
+                    ))}
+                    {/* A model stored earlier that this CLI no longer lists stays visible and
+                        selectable-away, rather than silently reading as "default". */}
+                    {cliState.model !== undefined && !cliSeat.models.some((m) => m.id === cliState.model) ? (
+                      <option value={cliState.model}>{cliState.model}</option>
+                    ) : null}
+                  </select>
+                ) : (
+                  <input
+                    type="text"
+                    aria-label="model"
+                    data-testid="brain-menu-model"
+                    className="brain-menu-cli-input"
+                    placeholder="the CLI’s default"
+                    defaultValue={cliState.model ?? ''}
+                    onChange={(event) => cliSeat.setModel(event.currentTarget.value)}
+                  />
+                )}
+              </label>
+              {/* Not every model HAS an effort axis (Haiku 4.5 does not), and a control the
+                  model ignores is a dead control (AC8). */}
+              {cliSeat.effortApplies ? (
+              <label className="brain-menu-cli-row">
+                <span className="brain-menu-tier-label">thinking level</span>
+                <select
+                  aria-label="thinking level"
+                  data-testid="brain-menu-effort"
+                  value={cliState.effort ?? ''}
+                  onChange={(event) => cliSeat.setEffort(event.currentTarget.value === '' ? undefined : (event.currentTarget.value as CliEffort))}
+                >
+                  <option value="">the CLI’s default</option>
+                  {cliSeat.efforts.map((effort) => (
+                    <option key={effort} value={effort}>
+                      {effort}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              ) : null}
+              {cliState.refusal !== undefined ? (
+                <span className="brain-menu-hint" data-testid="brain-menu-cli-note">
+                  {cliState.refusal}
+                </span>
+              ) : null}
+              <span className="brain-menu-hint" data-testid="brain-menu-cli-hint">
+                {cliSeat.note}
+              </span>
+            </div>
           ) : null}
           {/* The BRAIN switch affordances exist only where a brain can be chosen (D15): under
               the host kit the brain is the host's; the thinking level above is the one control

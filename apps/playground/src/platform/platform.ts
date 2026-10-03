@@ -45,6 +45,14 @@ export type PlatformBrain =
       promptBytes?: (system: string, messages: AdapterMessage[]) => number;
       /** The thinking-level seat (ADR-0067). Absent → no control anywhere (the chat brain, the demo brain, web, desktop). */
       tiers?: TierSeat;
+      /**
+       * The model + effort seat for a brain that is the user's own CLI (ADR-0070, Binding B).
+       * Absent → no control, which is every other brain: `tiers` and this are mutually
+       * exclusive in practice, since a Binding B runner has no artifact `sample` contract and
+       * a Binding A one spawns no CLI. Absent ALSO whenever the CLI cannot think (logged out,
+       * outdated, absent, unknown), so the chip shows the remedy alone (AC8).
+       */
+      cliModel?: CliModelSeat;
     };
 
 /**
@@ -73,6 +81,53 @@ export interface TierSeat {
   state: { get(): TierState; subscribe(listener: () => void): () => void };
   /** Changes what the NEXT call carries. Never calls the model. */
   set(choice: TierChoice): void;
+}
+
+/**
+ * The model and thinking-level control for the user's own CLI (ADR-0070). The playground owns
+ * the seat type (the `CustodyState`/`TierSeat` precedent); the host kit's store implements it.
+ *
+ * The axis here is the CLI's own `--effort`, NOT `HostModelTier`: a different binding, a
+ * different vocabulary, and deliberately no mapping between them.
+ */
+export type CliEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+export interface CliModelState {
+  /** What the NEXT think will carry. Absent = the CLI's own default. */
+  model?: string | undefined;
+  effort?: CliEffort | undefined;
+  /** The model the CLI reported it actually RAN with — never what was asked (ADR-0059 rule 2). */
+  activeModel?: string | undefined;
+  /** A refusal in the CLI's own words, standing until a think answers again. */
+  refusal?: string | undefined;
+}
+/** One model the CLI will accept, from its own catalogue — the id is exact, never an alias. */
+export interface CliModelOption {
+  id: string;
+  name: string;
+  /** Whether this model has a thinking-effort axis at all (Haiku 4.5 does not). */
+  effort: boolean;
+}
+export interface CliModelSeat {
+  /** The levels this CLI documents, in the order the chip lists them. */
+  efforts: readonly CliEffort[];
+  /**
+   * The models to offer. EMPTY is meaningful: no catalogue could be read, so the chip offers
+   * free text alone rather than an empty dropdown (TASK-20260922 S9).
+   */
+  models: readonly CliModelOption[];
+  /**
+   * Whether the CHOSEN model has a thinking-effort axis. False → the chip must not offer the
+   * effort control for it (Haiku 4.5 has no effort axis, and a control it ignores is dead).
+   */
+  effortApplies: boolean;
+  /** What is running right now, in words — the chip's one line of truth. */
+  activeLabel: string;
+  /** The standing caveats: thinking is never shown; a switch lands next think and costs a warm child. */
+  note: string;
+  state: { get(): CliModelState; subscribe(listener: () => void): () => void };
+  /** Changes what the NEXT think carries. Never calls the model. */
+  setModel(model: string | undefined): void;
+  setEffort(effort: CliEffort | undefined): void;
 }
 
 /**

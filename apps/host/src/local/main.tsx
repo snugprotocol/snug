@@ -17,7 +17,7 @@ import { refreshAppMeta } from '@playground/state/appMeta';
 import { applyHandInEvent } from './handinEvents.js';
 import { claimTokenFromFragment, createLocalClient } from './client.js';
 import { sqlJsWasmBinary } from '../wasmBytes.js';
-import { brainState, composeLocalPlatform } from './compose-local.js';
+import { brainState, modelsFromStatus, composeLocalPlatform } from './compose-local.js';
 import { LocalRefusal } from './LocalRefusal.js';
 
 import { App } from '@playground/App';
@@ -68,6 +68,10 @@ async function boot(): Promise<void> {
     // without this the chip keeps its boot value and the user meets the failure at the
     // first think instead, which is the gap the owner's walk found (D-B35).
     if (name === 'status') {
+      // The model list rides the same event for the same reason (S9): the process reads the
+      // CLI's catalogue, the page cannot, and the platform is set once.
+      const models = (data as { models?: readonly { id: string; name: string; effort: boolean }[] } | undefined)?.models;
+      if (models !== undefined) modelsFromStatus.current = models;
       const brain = (data as { brain?: { state: string; detail?: string } } | undefined)?.brain;
       if (brain !== undefined) {
         // Write the holder the seat's `label` getter reads — NOT a recomposed platform.

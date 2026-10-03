@@ -17,7 +17,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { buildStreamArgs, childEnvFor, CHILD_ENV_ALLOWLIST, createClaudeBrain, INSTALL_REMEDY, probeBrain, SHIM_FIRST_DELTA_MS, SHIM_IDLE_MS, splitChatRequest } from '../brain-claude.js';
+import { BrainStreamError, buildStreamArgs, childEnvFor, CHILD_ENV_ALLOWLIST, createClaudeBrain, INSTALL_REMEDY, probeBrain, SHIM_FIRST_DELTA_MS, SHIM_IDLE_MS, splitChatRequest } from '../brain-claude.js';
 import { delta, fakeSpawner, result } from './fixtures/fake-claude-child.js';
 
 /** The names measured in a live Claude Code session — none may reach the child. */
@@ -75,7 +75,7 @@ describe('the child environment', () => {
 });
 
 describe('the one argv (ADR-0069 §5)', () => {
-  const args = buildStreamArgs('you are a brain');
+  const args = buildStreamArgs({ system: 'you are a brain' });
   it('speaks stream-json both ways, verbose, with partial messages', () => {
     expect(args).toEqual(expect.arrayContaining(['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages']));
   });
@@ -90,6 +90,46 @@ describe('the one argv (ADR-0069 §5)', () => {
   });
   it('carries the system prompt as an argument, never as an env var', () => {
     expect(args[args.indexOf('--system-prompt') + 1]).toBe('you are a brain');
+  });
+});
+
+describe('the model and the effort reach argv (TASK-20260922 AC1)', () => {
+  // AC1's proof that the default path is unchanged: a FROZEN literal, not a recomputation
+  // of whatever buildStreamArgs does today — the point is to notice if it ever changes.
+  const ARGV_BEFORE_THIS_TASK = [
+    '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
+    '--system-prompt', 'you are a brain',
+    '--tools', '', '--disallowedTools', '*', '--max-turns', '1', '--no-session-persistence', '--setting-sources', 'local', '--strict-mcp-config',
+  ];
+
+  it('is BYTE-IDENTICAL to the pre-task argv when no model and no effort are chosen', () => {
+    expect(buildStreamArgs({ system: 'you are a brain' })).toEqual(ARGV_BEFORE_THIS_TASK);
+  });
+
+  it('emits --model <id> when a model is chosen, and nothing model-ish when it is not', () => {
+    expect(buildStreamArgs({ system: 's', model: 'haiku' })).toEqual(expect.arrayContaining(['--model', 'haiku']));
+    expect(buildStreamArgs({ system: 's' })).not.toContain('--model');
+  });
+
+  it('emits --effort <level> when an effort is chosen, and nothing effort-ish when it is not', () => {
+    expect(buildStreamArgs({ system: 's', effort: 'low' })).toEqual(expect.arrayContaining(['--effort', 'low']));
+    expect(buildStreamArgs({ system: 's' })).not.toContain('--effort');
+  });
+
+  it('accepts every effort the CLI documents, and no others (measured, claude 2.1.278)', () => {
+    for (const level of ['low', 'medium', 'high', 'xhigh', 'max'] as const) {
+      expect(buildStreamArgs({ system: 's', effort: level })).toEqual(expect.arrayContaining(['--effort', level]));
+    }
+    // An effort that is not one of the five never reaches argv: the child would reject it,
+    // and a rejected flag is a refused think rather than a slower one.
+    expect(buildStreamArgs({ system: 's', effort: 'turbo' as never })).not.toContain('--effort');
+  });
+
+  it('keeps the whole D5 posture with a model AND an effort selected (AC7)', () => {
+    const args = buildStreamArgs({ system: 's', model: 'opus', effort: 'max' });
+    expect(args).toEqual(expect.arrayContaining(['--tools', '', '--disallowedTools', '*', '--max-turns', '1', '--no-session-persistence', '--strict-mcp-config']));
+    expect(args[args.indexOf('--setting-sources') + 1]).toBe('local');
+    expect(args).not.toContain('--bare');
   });
 });
 
@@ -342,7 +382,7 @@ describe('probeBrain — is the user’s CLI actually able to answer, on the bra
   it('runs the SAME wire the brain does, with no tools — a probe down a different path proves the wrong thing', async () => {
     const { state, children } = probeWith();
     await state;
-    expect(children[0]?.args).toEqual(buildStreamArgs('Answer with the single word ok.'));
+    expect(children[0]?.args).toEqual(buildStreamArgs({ system: 'Answer with the single word ok.' }));
     expect(children[0]?.args).toEqual(expect.arrayContaining(['--tools', '', '--input-format', 'stream-json']));
   });
 
@@ -359,9 +399,113 @@ describe('probeBrain — is the user’s CLI actually able to answer, on the bra
   });
 });
 
+describe('the brain carries the user’s choice and reports what ANSWERED (TASK-20260922 S4)', () => {
+  const init = (model: string): string => `${JSON.stringify({ type: 'system', subtype: 'init', model, tools: [] })}\n`;
+  // Measured against claude 2.1.278: an unknown model exits 1 with `[claude-code:unrecognized_model]`
+  // on stderr AND a final result frame, is_error, api_error_status 404, whose text names the model.
+  const UNRECOGNISED = 'There\u2019s an issue with the selected model (nope-not-a-model). It may not exist or you may not have access to it.';
+  const badModelResult = `${JSON.stringify({ type: 'result', subtype: 'success', is_error: true, api_error_status: 404, num_turns: 1, result: UNRECOGNISED })}\n`;
+
+  const brainWithChoice = (choice: { model?: string; effort?: 'low' | 'max' }, script?: Parameters<typeof fakeSpawner>[0]) => {
+    const { spawnChild, children } = fakeSpawner(script);
+    const brain = createClaudeBrain({
+      resolveBinary: () => '/x/claude',
+      spawnBinary: (_b, args, env) => spawnChild(args, env),
+      // Read at CALL time, never captured at construction — ADR-0036 rule 3, which is what
+      // makes AC9's "switch mid-session and the NEXT think uses it" true.
+      brainChoice: () => choice,
+    });
+    return { brain, children };
+  };
+
+  it('spawns the child with the chosen model and effort', async () => {
+    const { brain, children } = brainWithChoice({ model: 'haiku', effort: 'low' });
+    await brain.complete({ messages: [{ role: 'user', content: 'ping' }] });
+    expect(children[0]?.args).toEqual(expect.arrayContaining(['--model', 'haiku', '--effort', 'low']));
+    brain.stop();
+  });
+
+  it('reads the choice per request, so a mid-session switch lands on the NEXT think (AC9)', async () => {
+    let choice: { model?: string } = { model: 'haiku' };
+    const { spawnChild, children } = fakeSpawner();
+    const brain = createClaudeBrain({ resolveBinary: () => '/x/claude', spawnBinary: (_b, args, env) => spawnChild(args, env), brainChoice: () => choice });
+    await brain.complete({ messages: [{ role: 'user', content: 'a' }] });
+    choice = { model: 'opus' };
+    await brain.complete({ messages: [{ role: 'user', content: 'b' }] });
+    // The LAST child spawned ran on opus — no reload, no restart.
+    expect(children[children.length - 1]?.args).toEqual(expect.arrayContaining(['--model', 'opus']));
+    brain.stop();
+  });
+
+  it('refuses an unsupported model IN WORDS that name it, and never answers on another (AC3)', async () => {
+    const { brain } = brainWithChoice({ model: 'nope-not-a-model' }, { lines: [init('nope-not-a-model'), badModelResult] });
+    // The refusal surfaces as the brain's error, which the route turns into the page's
+    // message: the CLI's own text, which names the model. Nothing is substituted.
+    await expect(brain.complete({ messages: [{ role: 'user', content: 'ping' }] })).rejects.toThrow(/nope-not-a-model/);
+    brain.stop();
+  });
+
+  it('does NOT report a resolved model for a turn that failed — init echoes the ASKED id (measured)', async () => {
+    // The CLI emits init BEFORE validating against its catalogue, so on a bad-model run
+    // init.model is the asked id. A failed turn must therefore disclose the refusal and NO
+    // model — announcing one would name a model that never answered (ADR-0059 rule 2).
+    const { brain } = brainWithChoice({ model: 'nope-not-a-model' }, { lines: [init('nope-not-a-model'), badModelResult] });
+    const failure = await brain.complete({ messages: [{ role: 'user', content: 'ping' }] }).catch((e: unknown) => e);
+    expect(failure).toBeInstanceOf(BrainStreamError);
+    // It failed before any answer reached the page, so nothing was disclosed as "what ran".
+    expect((failure as BrainStreamError).partial).toBe(false);
+    brain.stop();
+  });
+
+  it('puts the RESOLVED model in the envelope on a turn that succeeded, not the asked alias', async () => {
+    const { brain } = brainWithChoice({ model: 'haiku' }, { lines: [init('claude-haiku-4-5-20251001'), delta('pong'), result('pong')] });
+    const body = await brain.complete({ messages: [{ role: 'user', content: 'ping' }] });
+    expect(body).toContain('claude-haiku-4-5-20251001');
+    brain.stop();
+  });
+
+  it('takes the choice the PAGE sent, which is how it crosses from the browser to this process', async () => {
+    const { spawnChild, children } = fakeSpawner();
+    const brain = createClaudeBrain({ resolveBinary: () => '/x/claude', spawnBinary: (_b, args, env) => spawnChild(args, env) });
+    await brain.complete({ messages: [{ role: 'user', content: 'ping' }], model: 'opus', effort: 'high' });
+    expect(children[0]?.args).toEqual(expect.arrayContaining(['--model', 'opus', '--effort', 'high']));
+    brain.stop();
+  });
+
+  it('ignores the page\u2019s historical `claude` placeholder \u2014 it was never a model id', async () => {
+    const { brain, children } = brainWithChoice({});
+    await brain.complete({ messages: [{ role: 'user', content: 'ping' }], model: 'claude' });
+    expect(children[0]?.args).not.toContain('--model');
+    brain.stop();
+  });
+
+  it('NEVER puts the requested id in the envelope — a turn with no init frame reports the placeholder (review, 2026-10-03)', async () => {
+    // Without this the page would read the REQUESTED id off the final frame and record it as
+    // the model that answered — a model the CLI never confirmed (ADR-0070 D2, ADR-0059 rule 2).
+    const { brain } = brainWithChoice({}, { lines: [delta('pong'), result('pong')] });
+    const body = await brain.complete({ messages: [{ role: 'user', content: 'ping' }], model: 'claude-sonnet-5' });
+    expect(body).not.toContain('"model":"claude-sonnet-5"');
+    expect(body).toContain('"model":"claude"');
+    brain.stop();
+  });
+
+  it('buildStreamArgs refuses a model id that could read as a flag — defence behind the route', () => {
+    expect(() => buildStreamArgs({ system: 's', model: '--bad' })).toThrow(/--bad/);
+    expect(() => buildStreamArgs({ system: 's', model: 5 as never })).toThrow(/not a model id/);
+  });
+
+  it('with no choice made, spawns exactly as it did before this task', async () => {
+    const { brain, children } = brainWithChoice({});
+    await brain.complete({ messages: [{ role: 'user', content: 'ping' }] });
+    expect(children[0]?.args).not.toContain('--model');
+    expect(children[0]?.args).not.toContain('--effort');
+    brain.stop();
+  });
+});
+
 describe('the child is isolated from the agent host’s project and the user’s memory (security review, measured 2026-09-13)', () => {
   it('runs with --setting-sources local and --strict-mcp-config', () => {
-    const args = buildStreamArgs('s');
+    const args = buildStreamArgs({ system: 's' });
     expect(args[args.indexOf('--setting-sources') + 1]).toBe('local');
     expect(args).toContain('--strict-mcp-config');
   });

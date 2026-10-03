@@ -424,8 +424,16 @@ the first, measured 2026-09-13. Every child runs in a neutral directory under th
 with `--setting-sources local --strict-mcp-config`, so neither the agent host's project nor
 the user's own `CLAUDE.md`, hooks or MCP servers reach an app's think (measured: they did
 before). The launcher's and the resolver's search of the user's own install directories is
-the user's shell's trust (R-40's boundary). See
-`docs/security/threat-model-delta-local-host-process.md` (the 2026-09-13 amendments).
+the user's shell's trust (R-40's boundary). **Since ADR-0070 the user chooses the child's model
+and thinking level**, so a user-supplied value now reaches the child's argv: the pool is keyed by
+`[system, model, effort]` (a child pre-warmed for one model is never handed to another); the chat
+route refuses at its envelope boundary any model id that is not a string, does not start with a
+letter or digit, or carries whitespace or control characters — so it can never read as a flag,
+whatever the CLI's parser does — and `buildStreamArgs` refuses the same again behind it; effort is
+one of five literals; both ride before the posture, which stays last and unchanged. Only a
+bearer-holding caller (the page) can send either. See
+`docs/security/threat-model-delta-local-host-process.md` (the 2026-09-13 amendments, and
+ADR-0070's).
 
 
 **R-38 — Shared docs may carry the sharer's personal data.** `memory` is off by default
@@ -762,7 +770,7 @@ cannot fail a hash check). Its content is not new; the record is.
 | `docs/security/threat-model-delta-desktop-update-channel.md` | `2f6321918cce` | §5 C2 + authoring · R-28, R-29, R-30, R-33 |
 | `docs/security/threat-model-delta-app-sharing.md` | `806ca935aa18` | §4 boundary 5 · §5 C1 + C2 + authoring · R-34, R-35, R-36, R-37, R-38, R-39 |
 
-| `docs/security/threat-model-delta-local-host-process.md` | `ee2aa56ff3cc` | §6 R-40 · R-41 · R-42 · R-43 |
+| `docs/security/threat-model-delta-local-host-process.md` | `6ebdde883763` | §6 R-40 · R-41 · R-42 · R-43 (R-43 amended for ADR-0070) |
 <!-- DELTA-LEDGER:END -->
 
 ---
