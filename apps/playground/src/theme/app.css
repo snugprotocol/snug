@@ -2,6 +2,11 @@
    No component library anywhere near this file (design brief, binding).
    Mobile-first: single column at 375px; rails become sheets under 760px. */
 
+/* Two surfaces keep their own sheet so the shelf and the brain dock can change without
+   contending for this file (TASK-20261003). @import must precede every rule. */
+@import './availability.css';
+@import './brain-dock.css';
+
 /* ---------------------------------------------------------------- shell */
 
 .shell {

@@ -51,9 +51,121 @@ export type PlatformBrain =
        * exclusive in practice, since a Binding B runner has no artifact `sample` contract and
        * a Binding A one spawns no CLI. Absent ALSO whenever the CLI cannot think (logged out,
        * outdated, absent, unknown), so the chip shows the remedy alone (AC8).
+       *
+       * @deprecated TASK-20261003 (ADR-0071): superseded by `SnugPlatform.brainSwitch`, which
+       *   serves every brain and renders while the demo brain answers. Removed, together with
+       *   its consumers, by that task's R4 range.
        */
       cliModel?: CliModelSeat;
+      /**
+       * The prompt-budget seat for a brain whose input ceiling is not a documented number
+       * (TASK-20261003, ADR-0072 §5 — the chat brain, `window.claude.complete`). Absent → the
+       * brain's cap, if any, is the static `maxPromptBytes` above.
+       */
+      budget?: PromptBudgetSeat;
     };
+
+/**
+ * What a brain can do right now (ADR-0069 §6, ADR-0071 §6). A later driver may append a state;
+ * a reader that meets a string it does not know renders it as `unknown` with its detail.
+ */
+export type BrainReadyState = 'ready' | 'logged-out' | 'outdated' | 'absent' | 'unknown';
+
+/** One model a brain will accept, with the thinking levels THAT model has, in the brain's own words. */
+export interface BrainModelOption {
+  id: string;
+  name: string;
+  /** Empty = this model has no thinking-level axis, so no control is offered for it. */
+  efforts: readonly string[];
+}
+
+/** One brain the runner knows about, as the chip lists it (ADR-0071). */
+export interface BrainOptionView {
+  /** The driver's id (`claude`, `codex`). Compared, never displayed. */
+  id: string;
+  /** The brain's name (`Claude`, `Codex`). */
+  name: string;
+  /** Whose it is, in words (`your Claude Code CLI`). */
+  via: string;
+  state: BrainReadyState | (string & {});
+  /** One sentence a person can act on. Present whenever the state is not `ready`. */
+  detail?: string | undefined;
+  /**
+   * Whether this brain's tool-free posture has been proven on a real, logged-in run
+   * (ADR-0071 §2). An unverified brain is never chosen by `auto`; it can only be pinned, and
+   * the chip says it is experimental.
+   */
+  verified: boolean;
+  /** The levels offered while NO model is chosen (the brain's default model's). */
+  efforts: readonly string[];
+  /** Empty is meaningful: no catalogue could be read. */
+  models: readonly BrainModelOption[];
+}
+
+export interface BrainSwitchState {
+  /** What the user pinned: `auto`, or a brain id. */
+  choice: string;
+  /** The brain a think sent NOW would run on. Absent = none is ready and the demo brain answers. */
+  active?: string | undefined;
+  brains: readonly BrainOptionView[];
+  /** The stored model / level of the brain the controls are showing (the pin, else the active one). */
+  model?: string | undefined;
+  effort?: string | undefined;
+  /** What the last think REPORTED — never what was asked (ADR-0059 rule 2). */
+  answered?: { brain: string; model?: string | undefined } | undefined;
+  /** A refusal in the brain's own fixed sentence, standing until a think answers again. */
+  refusal?: string | undefined;
+  /** A re-check is in flight. */
+  checking: boolean;
+}
+
+/**
+ * The brain switcher (TASK-20261003, ADR-0071 §4): which of the user's own agents answers,
+ * and that brain's model and thinking level. On the PLATFORM, not on the brain union, so it
+ * renders while the demo brain answers — which is exactly when the user needs the remedies.
+ * Per machine; never in the user file. `choose` and the setters change what the NEXT think
+ * carries and never call a model.
+ */
+export interface BrainSwitchSeat {
+  state: { get(): BrainSwitchState; subscribe(listener: () => void): () => void };
+  /** `auto`, or the id of a READY brain. A brain that is not ready is refused (no dead pin). */
+  choose(id: string): void;
+  setModel(model: string | undefined): void;
+  setEffort(effort: string | undefined): void;
+  /** Ask the runner to probe the brains again. Resolves when the fresh states have arrived. */
+  recheck(): Promise<void>;
+  /** The standing caveats, in words. */
+  note: string;
+}
+
+/** Where a prompt cap came from: assumed, learned from a refused call, or measured by the user's act. */
+export type PromptBudgetSource = 'default' | 'learned' | 'measured';
+export interface PromptBudgetState {
+  maxPromptBytes: number;
+  source: PromptBudgetSource;
+  /** ISO instant of the last measure act, when one ran. */
+  measuredAt?: string | undefined;
+  /** A measure act is running: the step it is on, of how many. */
+  measuring?: { step: number; of: number } | undefined;
+}
+/** The measure act's result: sizes and booleans only — never a prompt, a reply or a stored value. */
+export interface PromptBudgetReport {
+  /** The largest prompt, in UTF-8 bytes, whose head AND tail markers came back. */
+  provenBytes: number;
+  /** The first size that failed, and how: a rejection, or a reply missing the tail marker (silent truncation). */
+  firstFailure?: { bytes: number; kind: 'rejected' | 'truncated' | 'timeout' } | undefined;
+  steps: readonly { bytes: number; ok: boolean; ms: number }[];
+  cancelled: boolean;
+}
+export interface PromptBudgetSeat {
+  state: { get(): PromptBudgetState; subscribe(listener: () => void): () => void };
+  /** What `measure` would spend, for the disclosure BEFORE it runs. */
+  plan(): { calls: number; bytes: number };
+  /** The explicit act. Every call bills the viewer, so nothing but a click reaches this. */
+  measure(options: { signal?: AbortSignal }): Promise<PromptBudgetReport>;
+  /** The copyable diagnostics report (value-free). */
+  report(): string;
+}
 
 /**
  * The thinking levels a host brain's contract offers (TASK-20260906-host-brain-tier-control,
@@ -214,6 +326,8 @@ export interface SnugPlatform {
   binding?: 'artifact' | 'artifact-static' | 'artifact-chat' | 'local-host' | 'file';
   /** The pinned brain — see `PlatformBrain`. Absent → the user file decides (web, desktop). */
   brain?: PlatformBrain;
+  /** The brain switcher — see `BrainSwitchSeat`. The local runner only; absent → no switcher. */
+  brainSwitch?: BrainSwitchSeat;
   /**
    * The sql.js engine as bytes (TASK-20260905-host-kit P4): both user-db callers pass it
    * to `openUserDb` / `createDbDriver` beside `locateWasm`, and with bytes present no
@@ -425,6 +539,14 @@ export interface SnugPlatform {
     connections?: boolean;
     share?: boolean;
     appExport?: boolean;
+    /**
+     * Whether an OAuth redirect can come back to this host (TASK-20261003, ADR-0072 §4).
+     * Optional, and ABSENCE MEANS AVAILABLE, like the surface flags: web and desktop keep their
+     * own redirect paths; the local runner says `false` when its fixed port was taken (the
+     * registered redirect URI names that port — ADR-0068), and `platform/availability.ts`
+     * reads it as the `oauth` offer.
+     */
+    oauthRedirect?: boolean;
   };
 }
 
