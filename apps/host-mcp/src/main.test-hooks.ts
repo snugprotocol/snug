@@ -48,6 +48,11 @@ export const TEST_BRAIN_ENV = 'SNUG_MCP_TEST_BRAIN';
  * model the chip names. The value is the id the fake reports as having run.
  */
 export const TEST_BRAIN_MODEL_ENV = 'SNUG_MCP_TEST_BRAIN_MODEL';
+/**
+ * The chip's model list for the TEST build, as JSON. The test build never reads the developer's
+ * real `~/.claude` catalogue (D-B34's intent): absent = an empty list, i.e. "no catalogue".
+ */
+export const TEST_MODELS_ENV = 'SNUG_MCP_TEST_MODELS';
 
 /* c8 ignore start — the entry half, exercised by the e2e rather than by unit tests */
 if (process.env.SNUG_MCP_TEST_ENTRY === '1') {
@@ -94,6 +99,14 @@ if (process.env.SNUG_MCP_TEST_ENTRY === '1') {
       ? { brainState: async () => ({ state: pinnedBrain, detail: `pinned by ${TEST_BRAIN_ENV}` }) }
       : {}),
     ...(pinnedModel !== undefined && pinnedModel !== '' ? { brain: fakeBrain } : {}),
+    models: () => {
+      try {
+        const parsed: unknown = JSON.parse(process.env[TEST_MODELS_ENV] ?? '[]');
+        return Array.isArray(parsed) ? (parsed as { id: string; name: string; effort: boolean }[]) : [];
+      } catch {
+        return [];
+      }
+    },
     proxy: createFetchProxy({ send: createNodeHttpsSend(resolverFromEnv(process.env[TEST_RESOLVE_ENV])) }),
   });
   const started = await runner.start();

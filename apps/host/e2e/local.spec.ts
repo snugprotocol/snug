@@ -435,14 +435,19 @@ test('TASK-20260922 S10 — an APP’s think reaches the brain: chess gets its r
     // The choice rode the request as exact fields — model AND effort (the shared adapter drops
     // unknown request fields, so effort once never left the page).
     expect(bodies[0]).toMatchObject({ model: 'claude-sonnet-5', effort: 'low' });
-    // The chip's own LABEL names the selected model instead of "your CLI" (S11) — by the
-    // catalogue's display name where the process could read one, else by its id.
-    await expect(page.locator('.brain-chip-label').first()).toHaveText(/^Claude · (Sonnet 5|claude-sonnet-5)$/);
+    // The chip's own LABEL names the selected model instead of "your CLI" (S11), by the
+    // catalogue's display name — the test build serves a PINNED catalogue, never the
+    // developer's real ~/.claude.
+    await expect(page.locator('.brain-chip-label').first()).toHaveText('Claude · Sonnet 5');
+    // The pinned catalogue reached the page as the DROPDOWN, with exact ids as values.
+    await page.getByTestId('brain-chip').click();
+    await expect(page.getByTestId('brain-menu-model-select')).toHaveValue('claude-sonnet-5');
+    await page.keyboard.press('Escape');
     // …with the thinking level in the smaller line under it (S12).
     await expect(page.getByTestId('brain-chip-effort')).toHaveText('thinking · low');
     // …and the popover names the model that ANSWERED.
     await page.getByTestId('brain-chip').click();
     await expect(page.getByTestId('brain-menu-active')).toContainText('claude-sonnet-5-e2e-resolved');
     await page.close();
-  }, { brain: 'ready', brainModel: 'claude-sonnet-5-e2e-resolved' });
+  }, { brain: 'ready', brainModel: 'claude-sonnet-5-e2e-resolved', models: [{ id: 'claude-sonnet-5', name: 'Sonnet 5', effort: true }] });
 });

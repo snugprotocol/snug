@@ -16,7 +16,7 @@ import { createClaudeBrain, type Brain } from './brain-claude.js';
 import { createControlSocket, probeControlSocket, type ControlSocket } from './control-socket.js';
 import { createFetchProxy, type FetchProxy } from './fetch-proxy.js';
 import { RealHomeRefusedError } from './home.js';
-import { readModelCatalog } from './model-catalog.js';
+import { readModelCatalog, type CatalogModel } from './model-catalog.js';
 import { homedir } from 'node:os';
 import { acquireLock, releaseLock, type LockDeps } from './lock.js';
 import { createLoopbackServer, type LoopbackServer } from './loopback-server.js';
@@ -38,6 +38,11 @@ export interface ToolCallResult {
 }
 
 export interface RunnerOptions {
+  /**
+   * The chip's model list (ADR-0070). Defaults to the CLI's own catalogue in the user's home;
+   * injected so the TEST build never reads the developer's real `~/.claude` (D-B34's intent).
+   */
+  models?: () => readonly CatalogModel[];
   /**
    * Where this runner keeps its state. REQUIRED (D-B34): it used to default to the live
    * `~/Snug`, which is how a test destroyed the owner's user file. A caller that wants the
@@ -86,6 +91,7 @@ export function createRunner(options: RunnerOptions): Runner {
   // Types stop a caller inside this repo; this stops a JS caller, a stale build and a
   // `as any` — the guard has to hold at runtime because the failure it prevents is silent.
   const home = options.home;
+  const modelsFor = options.models ?? (() => readModelCatalog(homedir()));
   if (typeof home !== 'string' || home === '') {
     throw new RealHomeRefusedError('createRunner needs an explicit home; it no longer defaults to the real ~/Snug (D-B34)');
   }
@@ -160,8 +166,8 @@ export function createRunner(options: RunnerOptions): Runner {
         // The user's OWN CLI, on their own subscription (D5). Absent binary → the route
         // answers a named refusal and the page falls back to the demo brain.
         brain: (brain = options.brain ?? createClaudeBrain({ cwd: brainDir })),
-        // The chip's model list, re-read per request so a CLI update lands without a restart.
-        models: () => readModelCatalog(homedir()),
+        // The chip's model list, re-read per `/status` (a page reload after a CLI update sees it).
+        models: modelsFor,
       });
 
       // The fixed port first; an ephemeral fallback keeps the runner usable, and the page
@@ -200,7 +206,7 @@ export function createRunner(options: RunnerOptions): Runner {
       void probe().then(
         (state) => {
           brainReadiness = state;
-          server?.emit('status', { brain: state });
+          server?.emit('status', { brain: state, models: modelsFor() });
         },
         // A probe that throws leaves the state unknown rather than taking the runner down.
         () => {},

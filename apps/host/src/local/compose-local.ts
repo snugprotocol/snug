@@ -359,6 +359,11 @@ export function composeLocalPlatform(
                     // fixed set of fields and drops anything else.
                     fetch: (input, init) => globalThis.fetch(input, withEffort(init, effort)),
                   }).complete(request);
+                  // Thinks overlap (the pool runs several), so a slow one can finish after a newer
+                  // one. A call teaches the chip ONLY while the choice is still the one it carried —
+                  // otherwise a late answer or refusal for a model the user already left would
+                  // overwrite what the newer think taught (review, 2026-10-03).
+                  if (brainChoices.choice().model !== choice.model) return result;
                   if (result.ok) {
                     // The adapter reports the model on the stream's LAST chunk, which is the id the
                     // CLI resolved (ADR-0070 D2: only a turn that SUCCEEDED may name a model).

@@ -7,7 +7,7 @@
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 
-import { ChildPool, ClaudeChild, isEffort, type BrainEffort, type BrainSpec, type ChildLike, type SpawnChild } from './brain-child.js';
+import { ChildPool, ClaudeChild, isEffort, isModelId, type BrainEffort, type BrainSpec, type ChildLike, type SpawnChild } from './brain-child.js';
 import { defaultResolveDeps, resolveBinary } from './brain-resolve.js';
 
 /**
@@ -58,7 +58,7 @@ export const INSTALL_REMEDY =
   'No `claude` CLI found on this machine — Snug is using its demo brain. Install Claude Code (https://code.claude.com/docs/en/quickstart), then run `claude` and `/login`, and reopen Snug.';
 
 export { BRAIN_EFFORTS } from './brain-child.js';
-export { isEffort };
+export { isEffort, isModelId };
 export type { BrainEffort, BrainSpec };
 
 /**
@@ -106,7 +106,15 @@ export function buildStreamArgs(spec: BrainSpec): string[] {
   // Free text, validated by the CLI itself: it has no machine-readable model list (measured,
   // 2.1.278) but refuses an unknown model BY NAME rather than answering on another, so the
   // check that matters happens where the truth is. Empty/blank is "no choice", not a model.
-  if (spec.model !== undefined && spec.model.trim() !== '') choice.push('--model', spec.model.trim());
+  if (spec.model !== undefined) {
+    const model = typeof spec.model === 'string' ? spec.model.trim() : spec.model;
+    if (model !== '') {
+      // The route refuses a bad id at the boundary; this is the defence behind it, and it fails
+      // LOUD rather than quietly running the default model.
+      if (!isModelId(model)) throw new Error(`"${String(model)}" is not a model id`);
+      choice.push('--model', model);
+    }
+  }
   // An effort outside the five the CLI documents never reaches argv: the child would reject
   // the flag, which would turn a slower think into a refused one.
   if (spec.effort !== undefined && isEffort(spec.effort)) choice.push('--effort', spec.effort);
@@ -290,7 +298,10 @@ export function createClaudeBrain(deps: BrainDeps = {}): Brain {
       const asked = request.model !== undefined && request.model !== '' && request.model !== 'claude' ? request.model : fallback.model;
       const effort = isEffort(request.effort) ? request.effort : fallback.effort;
       const child = pool.acquire({ system, model: asked, effort });
-      let model = request.model ?? 'claude';
+      // The placeholder until the CLI says what answered — NEVER the requested id: the page reads
+      // the final frame's model as "what ran", and a turn whose init frame was missing must not
+      // turn the request into a claim (review, 2026-10-03; ADR-0070 D2).
+      let model = 'claude';
       const base = { id: `chatcmpl-snug-${Date.now().toString(36)}`, object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model };
       // EVERY FRAME IS ONE JSON.stringify OF THE WHOLE PAYLOAD: a delta's text is a string
       // value inside it, so a delta containing "\n\ndata:" rides inside its frame and can

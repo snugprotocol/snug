@@ -233,6 +233,16 @@ export const isEffort = (value: unknown): value is BrainEffort => typeof value =
  * same source and cannot drift apart (AC1 + AC2). The choices are per-machine and global across
  * apps (Gate 1 Q2) — they never ride the user file, so nothing here reaches `packages/protocol`.
  */
+/**
+ * What a model id may look like before it is allowed into argv: it starts with a letter or digit
+ * (so it can never read as a flag), and holds only the characters real ids use — aliases
+ * (`sonnet`), dated ids (`claude-haiku-4-5-20251001`), the context suffix (`claude-opus-5-5[1m]`).
+ * The CLI's parser happens to consume a dash-led value as the option's argument today; the
+ * child's argv must not rest on that (review, 2026-10-03).
+ */
+const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:[\]-]{0,199}$/;
+export const isModelId = (value: unknown): value is string => typeof value === 'string' && MODEL_ID.test(value);
+
 export interface BrainSpec {
   system: string;
   /** A model id or alias for the user's CLI (`haiku`, `claude-fable-5`). Absent = the CLI's default. */
@@ -268,11 +278,12 @@ export const POOL_IDLE_MS = 5 * 60_000;
  * for one model is never handed to a request for another — the bug the pre-task key
  * (`sha256(system)` alone) would have had the moment a model could be chosen.
  *
- * The NUL separator is load-bearing: without it `model:'a' + effort:'b'` and `model:'ab'` would
- * hash the same, and a NUL cannot occur in any of the three fields.
+ * The fields are hashed as a JSON TUPLE, so no field's content can run into another's — not
+ * `model:'a' + effort:'b'` against `model:'ab'`, and not a system prompt that happens to
+ * contain a separator character (review, 2026-10-03).
  */
 export function poolKey(spec: BrainSpec): string {
-  return createHash('sha256').update(`${spec.system}\u0000${spec.model ?? ''}\u0000${spec.effort ?? ''}`).digest('hex');
+  return createHash('sha256').update(JSON.stringify([spec.system, spec.model ?? null, spec.effort ?? null])).digest('hex');
 }
 
 export class ChildPool {

@@ -479,6 +479,21 @@ describe('the brain carries the user’s choice and reports what ANSWERED (TASK-
     brain.stop();
   });
 
+  it('NEVER puts the requested id in the envelope — a turn with no init frame reports the placeholder (review, 2026-10-03)', async () => {
+    // Without this the page would read the REQUESTED id off the final frame and record it as
+    // the model that answered — a model the CLI never confirmed (ADR-0070 D2, ADR-0059 rule 2).
+    const { brain } = brainWithChoice({}, { lines: [delta('pong'), result('pong')] });
+    const body = await brain.complete({ messages: [{ role: 'user', content: 'ping' }], model: 'claude-sonnet-5' });
+    expect(body).not.toContain('"model":"claude-sonnet-5"');
+    expect(body).toContain('"model":"claude"');
+    brain.stop();
+  });
+
+  it('buildStreamArgs refuses a model id that could read as a flag — defence behind the route', () => {
+    expect(() => buildStreamArgs({ system: 's', model: '--bad' })).toThrow(/--bad/);
+    expect(() => buildStreamArgs({ system: 's', model: 5 as never })).toThrow(/not a model id/);
+  });
+
   it('with no choice made, spawns exactly as it did before this task', async () => {
     const { brain, children } = brainWithChoice({});
     await brain.complete({ messages: [{ role: 'user', content: 'ping' }] });

@@ -291,6 +291,59 @@ describe('the brain reaches its own runner DIRECTLY — never through the connec
     expect(choices.active().model).toBe('claude-opus-5-5');
   });
 
+  it('a think that finishes LATE cannot overwrite what a newer one taught the chip (review, 2026-10-03)', async () => {
+    // Thinks overlap (the pool runs up to four). Think A starts on a model the CLI will refuse,
+    // the user switches, think B answers first — then A's refusal lands. It must not stamp a
+    // refusal of a model the user already left onto the chip.
+    const message = 'There’s an issue with the selected model (nope-not-a-model).';
+    const releases: Array<() => void> = [];
+    vi.stubGlobal('fetch', (_url: string, init?: RequestInit) => {
+      const model = (JSON.parse(String(init?.body ?? '{}')) as { model?: string }).model;
+      return new Promise<Response>((resolve) => {
+        releases.push(() =>
+          resolve(
+            model === 'nope-not-a-model'
+              ? new Response(JSON.stringify({ error: { message } }), { status: 502, headers: { 'content-type': 'application/json' } })
+              : new Response(sse('claude-sonnet-5'), { headers: { 'content-type': 'text/event-stream' } }),
+          ),
+        );
+      });
+    });
+    const { adapter, choices } = compose();
+    choices.setModel('nope-not-a-model');
+    const a = adapter.complete(think);
+    choices.setModel('claude-sonnet-5');
+    const b = adapter.complete(think);
+    await vi.waitFor(() => expect(releases).toHaveLength(2));
+    releases[1]!(); // B answers first
+    await b;
+    releases[0]!(); // A's refusal lands late
+    await a;
+    expect(choices.active().model).toBe('claude-sonnet-5');
+    expect(choices.active().refusal).toBeUndefined();
+  });
+
+  it('a late SUCCESS on the old model cannot move the chip back to it either', async () => {
+    const releases: Array<() => void> = [];
+    vi.stubGlobal('fetch', (_url: string, init?: RequestInit) => {
+      const model = (JSON.parse(String(init?.body ?? '{}')) as { model?: string }).model ?? 'claude';
+      return new Promise<Response>((resolve) => {
+        releases.push(() => resolve(new Response(sse(model === 'claude-opus-5' ? 'claude-opus-5' : 'claude-sonnet-5'), { headers: { 'content-type': 'text/event-stream' } })));
+      });
+    });
+    const { adapter, choices } = compose();
+    choices.setModel('claude-opus-5');
+    const a = adapter.complete(think);
+    choices.setModel('claude-sonnet-5');
+    const b = adapter.complete(think);
+    await vi.waitFor(() => expect(releases).toHaveLength(2));
+    releases[1]!();
+    await b;
+    releases[0]!();
+    await a;
+    expect(choices.active().model).toBe('claude-sonnet-5');
+  });
+
   it('does NOT call a network failure a model refusal', async () => {
     vi.stubGlobal('fetch', async () => {
       throw new TypeError('Failed to fetch');

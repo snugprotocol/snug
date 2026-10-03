@@ -291,6 +291,12 @@ describe('the pool key is the child’s whole identity, not just its prompt (TAS
     expect(poolKey(spec('SX'))).not.toBe(poolKey(spec('S', { model: 'X' })));
   });
 
+  it('cannot be fooled by a NUL INSIDE the system prompt (review, 2026-10-03)', () => {
+    // A separator-joined key collides when a field can contain the separator: system 'a\0b'
+    // with no model hashed like system 'a' with model 'b'. The key is a JSON tuple now.
+    expect(poolKey(spec('a\u0000b'))).not.toBe(poolKey(spec('a', { model: 'b' })));
+  });
+
   it('hands a request for model B a FRESH child, never the one pre-warmed for model A', () => {
     const { spawnChild, children } = fakeSpawner();
     const p = pool(spawnChild);
