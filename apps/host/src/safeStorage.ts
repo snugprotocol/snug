@@ -2,12 +2,12 @@
 //
 // `window.sessionStorage`, `window.localStorage`, `window.indexedDB` and `navigator.storage`
 // are GETTERS, and where a page has no storage they do not answer `undefined` — they THROW.
-// That is every document at an opaque origin (a chat artifact is an `about:srcdoc` frame,
-// origin `null`: reading `sessionStorage` there is a SecurityError) and Safari with
-// third-party storage denied. The kit's entry read `sessionStorage` bare while building an
-// argument list, so at a chat origin the page would have died before its probe ran (found
-// 2026-10-03). Three modules had each grown their own try/catch around one global and a
-// fourth had none.
+// That is every document at an opaque origin (an `about:srcdoc` frame, origin `null` — what
+// T1 measured September's chat artifacts to be: reading `sessionStorage` there is a
+// SecurityError) and Safari with third-party storage denied. The kit's entry read
+// `sessionStorage` bare while building an argument list, so at such an origin the page would
+// have died before its probe ran (found 2026-10-03). Three modules had each grown their own
+// try/catch around one global and a fourth had none.
 //
 // Reading the global is the only thing guarded here. What a caller then DOES with a storage
 // it was handed can still throw (a quota, a private window) — those calls keep their own

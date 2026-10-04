@@ -6,11 +6,13 @@
 //
 //   artifact / artifact-static → the artifact-html RECORD over the probed bucket (seeded
 //       from the page's `snug-db` block; the save act only where `artifact` resolved), the
-//       custody seat, the export seat over `downloads` (or the copy path).
-//   artifact-chat             → `window.storage` as the file's home when the viewer has it
-//       (else the bucket), no save act (storage IS the durable copy), the copy export.
+//       custody seat, the export seat over `downloads` (or the copy path). A chat-created
+//       artifact is this binding: the same hosted runtime (measured 2026-10-03).
 //   file                      → the bucket, the custody chip's plain-file copy, the copy
-//       export. (A loopback static server is file-class too — K2.)
+//       export. (A loopback static server is file-class too — K2; so is a page that meets
+//       only the September chat runtime's flat `window.claude.complete` — TASK-20261003 R5
+//       C2: that runtime, and the per-view `window.storage` it kept the file in, are gone,
+//       and the kit no longer reads either.)
 //
 // The hand-in runs AFTER the user db opens (`handIn(db)`), never before: it installs and
 // updates through the db, and pending (edited-copy) hand-ins are offered through the
@@ -28,14 +30,11 @@ import { createHostPlatform } from './platform-host.js';
 import type { ProbeResult } from './probe.js';
 import { CUSTODY_NOTE_STASH_KEY, createArtifactRecord, type ArtifactRecord } from './storage/artifactHtml.js';
 import { createCustodyStore, type CustodyStore } from './storage/custodyStore.js';
-import { createWindowStorageBackend, type WindowStorageLike } from './storage/windowStorage.js';
 
 export interface ComposeWindow {
   location: { href: string };
   fetch?: (input: string, init?: { cache?: 'no-store' }) => Promise<{ ok: boolean; status: number; text(): Promise<string> }>;
   sessionStorage?: { getItem(key: string): string | null; removeItem(key: string): void };
-  /** The chat viewer's flat storage, when present. */
-  storage?: unknown;
   /** The terminal act after "load the page's copy". */
   reload?: () => void;
 }
@@ -74,11 +73,6 @@ export function handInBeforePaint(handIn: Promise<unknown>, ms: number = HAND_IN
   });
 }
 
-const isWindowStorage = (value: unknown): value is WindowStorageLike => {
-  const s = value as Partial<WindowStorageLike> | null;
-  return typeof s?.get === 'function' && typeof s.set === 'function' && typeof s.delete === 'function' && typeof s.list === 'function';
-};
-
 export function composeHostPlatform(probe: ProbeResult, win: ComposeWindow, doc: ComposeDocument, wasm: Uint8Array): Composition {
   // A working copy in MEMORY (Safari denies third-party storage) is gone with the tab —
   // the chip says so beside the artifact arms (correctness review 14).
@@ -106,8 +100,6 @@ export function composeHostPlatform(probe: ProbeResult, win: ComposeWindow, doc:
       ...(win.reload !== undefined ? { onReload: win.reload } : {}),
     });
     backend = record.backend;
-  } else if (probe.binding === 'artifact-chat' && isWindowStorage(win.storage)) {
-    backend = createWindowStorageBackend(win.storage);
   }
 
   // A publish reloads the view; the note it stashed is rendered once, then dropped.

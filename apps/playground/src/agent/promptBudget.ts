@@ -1,7 +1,9 @@
 // promptBudget.ts — budget or refuse (TASK-20260905-binding-a-artifacts AC3).
 //
-// A host brain may carry an INPUT CAP (`PlatformBrain.maxPromptBytes` — the artifact
-// runtime's `sample` accepts 65,536 UTF-8 bytes, inclusive, measured to the byte in T4 S11)
+// A host brain may carry an INPUT CAP (`PlatformBrain.maxPromptBytes` — for the artifact
+// runtime's `sample`, the number its `limits()` reports: 262,144 UTF-8 bytes, inclusive, under
+// contract 0.2.67, measured to the byte 2026-10-03; 65,536 under 0.2.41, T4 S11, still the
+// kit's fallback when `limits()` cannot be read)
 // and the RULER that counts what its adapter actually sends (`promptBytes`, the kit's own
 // shaper — lesson 2026-08-05: a bound re-derived upstream of the sent string is a second
 // bound, and the cap flips accept/refuse on one byte).

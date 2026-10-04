@@ -175,7 +175,7 @@ describe('the brain chip (AC5: disclosure only)', () => {
     await click(chip);
     expect(byTestId('brain-menu')?.textContent).toContain(HOST_LABEL);
     expect(byTestId('brain-menu-settings')).toBeNull();
-    // TASK-20260906 AC5 twin: a host brain WITHOUT a tier seat (the chat brain) shows no thinking-level control.
+    // TASK-20260906 AC5 twin: a host brain WITHOUT a tier seat shows no thinking-level control.
     expect(byTestId('brain-menu-tier')).toBeNull();
     expect(chip?.getAttribute('data-tier')).toBeNull();
   });
@@ -501,7 +501,7 @@ describe('the CLI model + effort control (ADR-0070, TASK-20260922 S7)', () => {
     expect(byTestId('brain-chip-effort')).toBeNull();
   });
 
-  it('S12: NO level line on a host brain without the seat (the chat brain), nor while no brain answers (a non-ready CLI)', async () => {
+  it('S12: NO level line on a host brain without the seat, nor while no brain answers (a non-ready CLI)', async () => {
     const chat = await fresh(hostPlatform({ kind: 'host', label: HOST_LABEL, adapter: idleAdapter, streaming: false, tools: false }));
     await render(<chat.BrainChip />);
     expect(byTestId('brain-chip-effort')).toBeNull();
@@ -517,7 +517,7 @@ describe('the CLI model + effort control (ADR-0070, TASK-20260922 S7)', () => {
     expect(byTestId('brain-chip-effort')).toBeNull();
   });
 
-  it('a host brain with NO seat shows no control — the chat brain; and neither does the runner while no brain answers (AC8)', async () => {
+  it('a host brain with NO seat shows no control; and neither does the runner while no brain answers (AC8)', async () => {
     const chat = await fresh(hostPlatform({ kind: 'host', label: HOST_LABEL, adapter: idleAdapter, streaming: false, tools: false }));
     await render(<chat.BrainChip />);
     await click(byTestId('brain-chip'));

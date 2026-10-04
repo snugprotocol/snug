@@ -24,17 +24,24 @@ to the user and keeps their data.
 
 ## Find or start the runner
 
-Pick the runner by the tools you have, in this order:
+Where you are running picks the runner. Take the first row that fits:
 
-1. **You have `snug_status`, `snug_open`, `snug_hand_in` and `snug_list_apps`** — the local
-   runner. Follow *The local runner* below. This is the full Snug: the user's file is on
-   their disk, apps can hold approved connections to real APIs, and thinks run on the
-   user's own agent CLI — Claude by default.
-2. **No Snug tools, but an `Artifact` tool that takes `capabilities`** — the artifact
-   runner. Follow *The artifact runner* below. Apps think on the viewer's own Claude; there
-   are no connections; the file lives in the artifact.
-3. **Neither** — tell the user, in one line, how to get the plugin (see *No runner*), and
-   stop. Do not build an app nobody can run.
+1. **Claude Code — in a terminal or in Claude Desktop's Code tab — or Claude Desktop's
+   Cowork tab, with `snug_status`, `snug_open`, `snug_hand_in` and `snug_list_apps`** —
+   the local runner. Follow *The local runner* below. This is the full Snug: the user's
+   file is on their disk, apps can hold approved connections to real APIs, and thinks run
+   on the user's own agent CLI — Claude by default.
+2. **Claude Code or Cowork, but none of the Snug tools** — the plugin is here but its
+   runner could not start, which on these surfaces means it found no Node.js to run on.
+   Say, in one line: "Snug needs Node.js 20 or newer. Install it from https://nodejs.org
+   (on a Mac with Homebrew: brew install node), then restart your agent." Then stop.
+3. **claude.ai chat, Claude Desktop's chat tab, or any other surface whose `Artifact` tool
+   takes `capabilities`** — the artifact runner. Follow *The artifact runner* below. Apps
+   think on the viewer's own Claude; there are no connections; the file lives in the
+   artifact. A chat artifact is the same artifact a tool publishes — the same page, the
+   same capabilities — so the recipe is the same.
+4. **Anywhere else** — tell the user, in one line, how to get the plugin (see *No runner*),
+   and stop. Do not build an app nobody can run.
 
 ### The local runner
 
@@ -43,8 +50,9 @@ Pick the runner by the tools you have, in this order:
 ### The artifact runner
 
 - Find the artifact titled `Snug` (list the user's artifacts). If there is none, publish
-  `assets/snug-host.html` from this skill as a PRIVATE artifact titled `Snug`, favicon 🔥,
-  with `capabilities: { sample: {}, artifact: {}, downloads: true }`.
+  `assets/snug-host.html` from this skill as a PRIVATE artifact titled `Snug`, icon `app`,
+  with `capabilities: { sample: {}, artifact: {}, downloads: true }`. Publish the file
+  itself — never retype or paste its contents. It is megabytes.
 - To hand an app in, embed its bundle in the page and republish: read the artifact's page,
   run `node scripts/snug-embed.mjs <page.html> --bundle <app.json> --out <page.html>`, then
   publish the result to the same artifact. The runner installs it on the next load.
@@ -126,5 +134,5 @@ Say it once, plainly, the first time you hand an app in:
 - Never run `claude`, `codex` or any model yourself to answer an app's think. The runner
   does that, on the user's own agent CLI.
 - Never describe the runner as an MCP server or Snug as built on MCP. Say: Snug apps run
-  inside Claude Code / Cowork.
+  inside Claude Code, Cowork, or an artifact in chat.
 - Never persist through `localStorage`, `sessionStorage` or cookies: the sandbox drops them.

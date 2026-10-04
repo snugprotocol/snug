@@ -43,15 +43,17 @@ export type PlatformBrain =
       tools: boolean;
       maxPromptBytes?: number;
       promptBytes?: (system: string, messages: AdapterMessage[]) => number;
-      /** The thinking-level seat (ADR-0067). Absent → no control anywhere (the chat brain, the demo brain, web, desktop). */
+      /** The thinking-level seat (ADR-0067). Absent → no control anywhere (the runner's brains, the demo brain, web, desktop). */
       tiers?: TierSeat;
-      /**
-       * The prompt-budget seat for a brain whose input ceiling is not a documented number
-       * (TASK-20261003, ADR-0072 §5 — the chat brain, `window.claude.complete`). Absent → the
-       * brain's cap, if any, is the static `maxPromptBytes` above.
-       */
-      budget?: PromptBudgetSeat;
     };
+
+/**
+ * A host brain's REFUSAL, as its adapter answers it — the one failure whose streamed text is
+ * WITHDRAWN rather than kept (artifact runtime contract 0.2.67, `refused`: "clear what you
+ * showed"). One string, homed on the seat both sides read: the kit's `brains/errors.ts` maps
+ * `refused` to it, and a surface that showed the brain's streamed text clears it on this code.
+ */
+export const HOST_BRAIN_REFUSED_CODE = 'HOST_BRAIN_REFUSED';
 
 /**
  * What a brain can do right now (ADR-0069 §6, ADR-0071 §6). A later driver may append a state;
@@ -126,39 +128,10 @@ export interface BrainSwitchSeat {
   note: string;
 }
 
-/** Where a prompt cap came from: assumed, learned from a refused call, or measured by the user's act. */
-export type PromptBudgetSource = 'default' | 'learned' | 'measured';
-export interface PromptBudgetState {
-  maxPromptBytes: number;
-  source: PromptBudgetSource;
-  /** ISO instant of the last measure act, when one ran. */
-  measuredAt?: string | undefined;
-  /** A measure act is running: the step it is on, of how many. */
-  measuring?: { step: number; of: number } | undefined;
-}
-/** The measure act's result: sizes and booleans only — never a prompt, a reply or a stored value. */
-export interface PromptBudgetReport {
-  /** The largest prompt, in UTF-8 bytes, whose head AND tail markers came back. */
-  provenBytes: number;
-  /** The first size that failed, and how: a rejection, or a reply missing the tail marker (silent truncation). */
-  firstFailure?: { bytes: number; kind: 'rejected' | 'truncated' | 'timeout' } | undefined;
-  steps: readonly { bytes: number; ok: boolean; ms: number }[];
-  cancelled: boolean;
-}
-export interface PromptBudgetSeat {
-  state: { get(): PromptBudgetState; subscribe(listener: () => void): () => void };
-  /** What `measure` would spend, for the disclosure BEFORE it runs. */
-  plan(): { calls: number; bytes: number };
-  /** The explicit act. Every call bills the viewer, so nothing but a click reaches this. */
-  measure(options: { signal?: AbortSignal }): Promise<PromptBudgetReport>;
-  /** The copyable diagnostics report (value-free). */
-  report(): string;
-}
-
 /**
  * The thinking levels a host brain's contract offers (TASK-20260906-host-brain-tier-control,
  * ADR-0067 — D15 amended narrowly: the BRAIN stays the host's; the TIER is the user's). The
- * artifact runtime's `sample` has exactly these three (`sample.d.ts` 0.2.41), and the tier IS
+ * artifact runtime's `sample` has exactly these three (`sample.d.ts` 0.2.41 and 0.2.67), and the tier IS
  * the thinking level: `quick` does not think first; `default` (the viewer's default) and
  * `complex` think before writing. The playground owns the seat types (the `CustodyState`
  * precedent); the kit's store implements them.
@@ -263,8 +236,11 @@ export interface SnugPlatform {
   /**
    * Which host the kit woke up in (TASK-20260905-host-kit P6) — disclosure and the
    * per-binding recipes read it; nothing routes on it (feature flags do). Host kit only.
+   * A chat-created artifact is `artifact`: the same hosted runtime (measured 2026-10-03).
+   * The September chat runtime's own binding went with that runtime (TASK-20261003 R5 C2);
+   * no user file ever carried a binding, so nothing persisted names it.
    */
-  binding?: 'artifact' | 'artifact-static' | 'artifact-chat' | 'local-host' | 'file';
+  binding?: 'artifact' | 'artifact-static' | 'local-host' | 'file';
   /** The pinned brain — see `PlatformBrain`. Absent → the user file decides (web, desktop). */
   brain?: PlatformBrain;
   /** The brain switcher — see `BrainSwitchSeat`. The local runner only; absent → no switcher. */

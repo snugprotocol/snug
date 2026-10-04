@@ -62,11 +62,12 @@ describe('custodyDisclosure — the "your file" chip, one arm per binding × sta
     expect(custodyDisclosure('artifact', 'artifact-html', { dirty: true, readOnly: true, divergence: 'older' }).status).toBe('read-only view — export to keep a copy.');
     expect(custodyDisclosure('artifact', 'artifact-html', clean).status).toBeUndefined();
   });
-  it('the static page, the chat view, and the plain-file rungs', () => {
+  it('the static page and the plain-file rungs', () => {
+    // MIGRATED 2026-10-03 (TASK-20261003 R5 C2): the chat view's arm ("your file: in this chat",
+    // in its page storage) went with the September chat runtime, measured gone — a chat-created
+    // artifact is the hosted runtime and takes the artifact arm above.
     expect(custodyDisclosure('artifact-static', 'opfs', clean)).toMatchObject({ label: 'your file: not saved here', headline: 'a copy of the artifact page' });
     expect(custodyDisclosure('artifact-static', 'opfs', clean).body).toContain('export');
-    expect(custodyDisclosure('artifact-chat', 'window-storage', clean)).toMatchObject({ label: 'your file: in this chat', headline: 'in this chat’s page storage' });
-    expect(custodyDisclosure('artifact-chat', 'window-storage', clean).body).toContain('published link keeps its own');
     expect(custodyDisclosure('file', 'opfs', clean)).toMatchObject({ label: 'your file: in this browser', body: storageDisclosure('opfs') });
     // CHANGED for Binding B (ADR-0068): under `local-host` the file is a real file on disk
     // served by the local host process, so the old fall-through label ("in this browser")
@@ -89,7 +90,7 @@ describe('custodyDisclosure — the "your file" chip, one arm per binding × sta
   });
   it('S2 — a memory-only WORKING copy under an artifact says the tab holds it, on every arm, and never without the flag', () => {
     const memory = { ...clean, workingCopy: 'memory' as const };
-    for (const binding of ['artifact', 'artifact-static', 'artifact-chat'] as const) {
+    for (const binding of ['artifact', 'artifact-static'] as const) {
       expect(custodyDisclosure(binding, 'memory', memory).body).toContain('in memory only — close it unsaved and the changes are gone');
       expect(custodyDisclosure(binding, 'artifact-html', clean).body).not.toContain('in memory only');
     }

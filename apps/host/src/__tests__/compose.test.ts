@@ -5,9 +5,11 @@ import { USERDB_FILE } from '@snugprotocol/protocol';
 import { createRequire } from 'node:module';
 import { describe, expect, it, vi } from 'vitest';
 
+import { custodyDisclosure, hostPassport } from '@playground/platform/copy';
+
 import { DB_BLOCK_FORMAT, upsertBundleBlock, writeDbBlock } from '../../../../scripts/lib/page-blocks.mjs';
 import { composeHostPlatform, handInBeforePaint, type ComposeDocument, type ComposeWindow } from '../compose.js';
-import type { HostNamespaces, ProbeResult } from '../probe.js';
+import { runProbe, type HostNamespaces, type ProbeResult } from '../probe.js';
 import { CUSTODY_NOTE_STASH_KEY } from '../storage/artifactHtml.js';
 
 const require = createRequire(import.meta.url);
@@ -36,7 +38,7 @@ function winOf(page: string, extra: Partial<ComposeWindow> = {}): ComposeWindow 
 const probeOf = (binding: ProbeResult['binding'], host?: Partial<HostNamespaces>): ProbeResult => ({
   binding,
   storage: { backend: createMemoryBackend(), kind: 'memory' },
-  brain: { brain: { kind: 'demo' }, legs: { sample: 'absent', complete: 'absent', local: 'absent' } },
+  brain: { brain: { kind: 'demo' }, legs: { sample: 'absent', local: 'absent' } },
   ...(host !== undefined ? { host: { legs: { sample: 'null', artifact: 'null', downloads: 'null' }, guardTripped: false, rejected: false, ...host } } : {}),
 });
 
@@ -74,23 +76,48 @@ describe('composeHostPlatform', () => {
     expect(c.platform.binding).toBe('artifact-static');
   });
 
-  it('a chat artifact with window.storage: the window-storage backend, no save act, the copy export', () => {
-    const store = new Map<string, string>();
-    const storage = {
-      get: async (k: string) => ({ key: k, value: store.get(k) }),
-      set: async (k: string, v: string) => (store.set(k, v), { key: k, value: v }),
-      delete: async (k: string) => (store.delete(k), { key: k }),
-      list: async (p?: string) => ({ keys: [...store.keys()].filter((k) => p === undefined || k.startsWith(p)), prefix: p ?? '', shared: false }),
-    };
-    const c = composeHostPlatform(probeOf('artifact-chat'), winOf(KIT, { storage }), docOf(KIT), wasm);
-    expect(c.platform.userdbBackend?.kind).toBe('window-storage');
+  it('a plain file: the probed bucket, no save act, the copy export', () => {
+    // MIGRATED 2026-10-03 (TASK-20261003 R5 C2): this and the C2 case below replace the two
+    // chat-binding cases ("window.storage is the file's home"; "the chat binding without it:
+    // the bucket") — the September chat runtime they composed was measured gone.
+    const c = composeHostPlatform(probeOf('file'), winOf(KIT), docOf(KIT), wasm);
+    expect(c.platform.userdbBackend?.kind).toBe('memory');
     expect(c.platform.custody?.save).toBeUndefined();
     expect(c.platform.saveFile).toBeDefined();
+    expect(c.record).toBeUndefined();
   });
 
-  it('a chat artifact WITHOUT window.storage, and a plain file: the probed bucket', () => {
-    expect(composeHostPlatform(probeOf('artifact-chat'), winOf(KIT), docOf(KIT), wasm).platform.userdbBackend?.kind).toBe('memory');
-    expect(composeHostPlatform(probeOf('file'), winOf(KIT), docOf(KIT), wasm).platform.userdbBackend?.kind).toBe('memory');
+  it('C2: a page that meets only the September chat runtime composes EXACTLY as a plain page — the bucket (its window.storage never read or written), the demo brain, and the same true sentences, none of them about a chat', async () => {
+    const touched: string[] = [];
+    const flatStorage = Object.fromEntries(['get', 'set', 'delete', 'list'].map((name) => [name, async () => void touched.push(`storage.${name}`)]));
+    const complete = async (): Promise<string> => (touched.push('complete'), '{}');
+    const location = { protocol: 'https:', hostname: 'x.frame.claudeusercontent.com' };
+    const compose = async (claude: unknown, extra: Record<string, unknown>) => {
+      const probe = await runProbe({ location, claude, navigator: undefined, indexedDB: undefined });
+      // The boot hands compose the window it has; a September page's window carries `storage`.
+      const win = { ...winOf(KIT), ...extra } as ComposeWindow;
+      return composeHostPlatform(probe, win, docOf(KIT), wasm);
+    };
+    const flat = await compose({ complete }, { storage: flatStorage });
+    const plain = await compose(undefined, {});
+    expect(flat.platform.binding).toBe('file');
+    expect(flat.platform.brain).toEqual({ kind: 'demo' });
+    expect(flat.platform.userdbBackend?.kind).toBe(plain.platform.userdbBackend?.kind);
+    await flat.platform.userdbBackend!.save(USERDB_FILE, new Uint8Array([1]));
+    await flat.platform.userdbBackend!.load(USERDB_FILE);
+    expect(touched).toEqual([]);
+    // What the page SAYS: the passport and the "your file" chip are the plain page's, word for
+    // word. (The brain chip's demo sentence does not read the binding at all — the e2e reads it.)
+    const custody = flat.custody.get();
+    expect(hostPassport(flat.platform, custody)).toEqual(hostPassport(plain.platform, plain.custody.get()));
+    expect(custodyDisclosure(flat.platform.binding, flat.platform.userdbBackend?.kind, custody)).toEqual(custodyDisclosure(plain.platform.binding, plain.platform.userdbBackend?.kind, plain.custody.get()));
+    const said = hostPassport(flat.platform, custody);
+    expect(said.where).toBe('a page in your browser');
+    const thinks = said.rows.find((row) => row.key === 'thinks')!;
+    expect(thinks).toEqual({ key: 'thinks', name: 'thinks', can: false, sentence: 'no brain is wired into this host yet — the demo brain answers, from a script.' });
+    for (const sentence of [said.where, ...said.rows.map((row) => row.sentence)]) {
+      expect(sentence, sentence).not.toMatch(/\bchat\b/i);
+    }
   });
 
   it('a stashed note from the publish-then-reload is rendered once and dropped', () => {

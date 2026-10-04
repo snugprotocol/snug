@@ -249,7 +249,7 @@ const probeStub = () => {
     binding: decideBinding(readBindingEnv(win)),
     // The rung a loopback page gets in a real browser (OPFS/IndexedDB), over memory bytes.
     storage: { backend: { ...createMemoryBackend(), kind: 'idb' }, kind: 'idb' },
-    brain: { brain: { kind: 'demo' }, legs: { sample: 'absent', complete: 'absent', local: 'absent' } },
+    brain: { brain: { kind: 'demo' }, legs: { sample: 'absent', local: 'absent' } },
   }));
   return probe;
 };
@@ -325,7 +325,7 @@ describe('planBoot — the order', () => {
     const probe = vi.fn(async (): Promise<ProbeResult> => ({
       binding: 'artifact',
       storage: { backend: createMemoryBackend(), kind: 'memory' },
-      brain: { brain: { kind: 'demo' }, legs: { sample: 'null', complete: 'absent', local: 'absent' } },
+      brain: { brain: { kind: 'demo' }, legs: { sample: 'null', local: 'absent' } },
       host: { legs: { sample: 'null', artifact: 'resolved', downloads: 'null' }, artifact: { publish: async () => ({ version: 'v' }) }, guardTripped: false, rejected: false },
     }));
     const plan = await planBoot(fake.win, doc, { probe, wasm });

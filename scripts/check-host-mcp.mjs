@@ -294,6 +294,12 @@ export function runValidators(dir, exec = execFileSync) {
       return { name, status: 'ok', detail: String(out).trim().split('\n').pop() ?? '' };
     } catch (error) {
       if (error?.code === 'ENOENT') return { name, status: 'not verified', detail: `${command} is not on this machine` };
+      // A validator that cannot START vouches for nothing either way (measured 2026-10-04: an
+      // interrupted install left a non-executable `claude` stub on PATH, read as a refusal
+      // with no words). Only a validator that RAN and said no is a refusal.
+      if (error?.code === 'EACCES' || error?.code === 'ENOEXEC') {
+        return { name, status: 'not verified', detail: `${command} is on this machine but cannot run (${error.code}) — repair or reinstall it` };
+      }
       const detail = `${error?.stdout ?? ''}\n${error?.stderr ?? ''}`.trim();
       return { name, status: 'failed', detail };
     }

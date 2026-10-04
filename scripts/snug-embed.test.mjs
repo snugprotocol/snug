@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 
 import { VIEWER_WRAPPER_HEAD, VIEWER_WRAPPER_TAIL, wrapAsViewerPage } from './fixtures/viewer-wrapper.mjs';
-import { DB_BLOCK_FORMAT, readBundleBlocks, readDbBlock, unwrapViewerPage, writeDbBlock } from './lib/page-blocks.mjs';
+import { ARTIFACT_SKELETON_OPEN, DB_BLOCK_FORMAT, readBundleBlocks, readDbBlock, unwrapViewerPage, writeDbBlock } from './lib/page-blocks.mjs';
 import { ARTIFACT_SCRIPT_ALLOWLIST, BUNDLE_MAX_BYTES, BUNDLE_MAX_HTML_CHARS, embed, lintBundleHtml, listBlocks, parseArgs } from './snug-embed.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -62,6 +62,75 @@ test('the Artifact tool’s read-back is the VIEWER-WRAPPED page (AC13, 2026-09-
     assert.equal(refused.errors.length, 1, label);
     assert.match(refused.errors[0], /wrapper/, label);
     assert.equal(refused.html, page, label);
+  }
+});
+
+// ---- TASK-20261003 C3: the read-back under contract 0.2.67 ------------------------------
+// The Artifact tool's read now returns every page inside the 0.2.67 skeleton (charset,
+// viewport, a reset — no injected script; two REAL read-backs in fixtures/readback-0.2.67/).
+// The kit page is a full document, so its read-back is the skeleton around that document.
+
+const READBACKS = path.join(HERE, 'fixtures', 'readback-0.2.67');
+/** The platform's form of a page, as both real read-backs show it. */
+const skeleton = (page) => `${ARTIFACT_SKELETON_OPEN}\n${page}\n</body></html>`;
+
+test('(C3) a 0.2.67 read-back of the kit page: embed lifts the kit document out of the skeleton, merges, and writes the BARE kit page — the same bytes a bare input gives', () => {
+  const read = skeleton(withDb);
+  const out = embed({ page: read, bundles: [{ name: 'a.json', text: bundle(A, '<p>a</p>') }] });
+  assert.deepEqual(out.errors, []);
+  assert.equal(out.unwrapped, true);
+  assert.equal(out.html.includes(ARTIFACT_SKELETON_OPEN), false, 'the skeleton is not carried into the output');
+  assert.equal(out.html.startsWith('<!doctype html>\n<html>'), true);
+  assert.equal(out.html, embed({ page: withDb, bundles: [{ name: 'a.json', text: bundle(A, '<p>a</p>') }] }).html);
+  assert.deepEqual(readBundleBlocks(out.html).map((b) => b.lineage), [A]);
+  assert.equal(readDbBlock(out.html).base64, 'AAA=', 'the saved file rides through untouched');
+  assert.deepEqual(listBlocks(read), []);
+  assert.deepEqual(listBlocks(skeleton(out.html)).map((b) => b.lineage), [A]);
+  // The next hand-in reads the republished page back — skeleton again — and the page never nests.
+  const next = embed({ page: skeleton(out.html), bundles: [{ name: 'b.json', text: bundle(B, '<p>b</p>') }] });
+  assert.deepEqual(next.errors, []);
+  assert.deepEqual(unwrapViewerPage(next.html), { html: next.html, wrapped: false });
+  assert.deepEqual(readBundleBlocks(next.html).map((b) => b.lineage), [A, B]);
+  assert.equal(next.html.split('<!doctype html>').length - 1, 1, 'one document, one doctype');
+});
+
+test('(N, C3) the REAL tool-published fragment read-back is refused by name (a fragment is not the kit page), as are a skeleton around nothing and a skeleton inside a skeleton — the page unchanged each time', () => {
+  const fragment = readFileSync(path.join(READBACKS, 'tool-published-fragment.html'), 'utf8');
+  for (const [label, page, problem] of [
+    ['the tool-published fragment', fragment, /page fragment, not a kit document/],
+    ['a skeleton around nothing', `${ARTIFACT_SKELETON_OPEN}\n\n</body></html>`, /carries nothing/],
+    ['a skeleton inside a skeleton', skeleton(skeleton(withDb)), /a skeleton inside a skeleton/],
+  ]) {
+    const refused = embed({ page, bundles: [{ name: 'a.json', text: bundle(A, '<p>a</p>') }] });
+    assert.equal(refused.errors.length, 1, label);
+    assert.match(refused.errors[0], problem, label);
+    assert.equal(refused.html, page, label);
+  }
+});
+
+test('(C3) CLI over a 0.2.67 read-back file: writes the bare page and says the skeleton was lifted off; the real fragment read-back exits 2 and writes nothing', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'snug-embed-0267-'));
+  try {
+    const live = path.join(dir, 'live.html');
+    const a = path.join(dir, 'a.json');
+    writeFileSync(live, skeleton(withDb));
+    writeFileSync(a, bundle(A, '<p>a</p>'));
+    const ok = spawnSync(process.execPath, [path.join(HERE, 'snug-embed.mjs'), live, '--bundle', a], { encoding: 'utf8' });
+    assert.equal(ok.status, 0, ok.stderr);
+    assert.match(ok.stdout, /lifted off — publish this bare page as it is/);
+    const written = readFileSync(live, 'utf8');
+    assert.deepEqual(unwrapViewerPage(written), { html: written, wrapped: false });
+    assert.deepEqual(readBundleBlocks(written).map((b) => b.lineage), [A]);
+    const fragment = path.join(dir, 'fragment.html');
+    cpSync(path.join(READBACKS, 'tool-published-fragment.html'), fragment);
+    const before = readFileSync(fragment, 'utf8');
+    const refused = spawnSync(process.execPath, [path.join(HERE, 'snug-embed.mjs'), fragment, '--bundle', a], { encoding: 'utf8' });
+    assert.equal(refused.status, 2);
+    assert.match(refused.stderr, /page fragment, not a kit document/);
+    assert.match(refused.stderr, /nothing written/);
+    assert.equal(readFileSync(fragment, 'utf8'), before);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 

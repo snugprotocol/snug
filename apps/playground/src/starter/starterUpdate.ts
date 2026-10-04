@@ -25,7 +25,7 @@
 
 import type { UserDb } from '@snugprotocol/db';
 import { starterVersionSettingKey } from '@snugprotocol/db';
-import { runtimeContractSchema, type RuntimeContract } from '@snugprotocol/protocol';
+import { canonicalRuntimeContract, runtimeContractSchema, type RuntimeContract } from '@snugprotocol/protocol';
 
 import { isNamedLoadRefusal } from '../run/copy.js';
 import { STARTER_PREFIX, loadStarterHtml } from './starterApps.js';
@@ -142,10 +142,15 @@ async function bundledContract(folder: string): Promise<RuntimeContract | undefi
   }
 }
 
+/** Same contract whatever the key order (the import guard's canonical bytes). */
+function sameContract(stored: RuntimeContract | undefined, bundled: RuntimeContract): boolean {
+  return stored !== undefined && canonicalRuntimeContract(stored) === canonicalRuntimeContract(bundled);
+}
+
 /**
  * THE UPDATE ACT — the second host write act of the install-act class (ADR-0045 §3; the
- * first is `installThisStarter` in RunView). Idempotent: bytes already at the bundle ⇒
- * no version is written except healing a missing `starterVersion:` row — but the
+ * first is `installThisStarter` in RunView). Idempotent: bytes and contract already at the
+ * bundle ⇒ no version is written except healing a missing `starterVersion:` row — but the
  * absent-only docs seed still runs, because for a docs-only release that branch IS the
  * update. A retry after a partial failure converges instead of accumulating pins.
  *
@@ -160,9 +165,16 @@ export async function applyStarterUpdate(db: UserDb, appId: string): Promise<Sta
   if (meta === undefined || bundle === undefined) return { status: 'unavailable' };
 
   const running = db.getAppHtml(appId);
-  if (running !== undefined && normalizeStarterHtml(running) === normalizeStarterHtml(bundle)) {
-    // Already on this release's BYTES — which is not the same as having taken this
-    // release: a docs-only release moves the version without touching the html, and its
+  const contract = await bundledContract(folder);
+  // A CONTRACT-ONLY release (TASK-20261003 R5, C7 — chess v3 first shipped v2's bytes with
+  // only its `responseGuidance` corrected) is a release behind on its contract alone: bytes
+  // equal to the bundle are not "taken" while the stored contract differs from the bundled
+  // one. It lands below as any update does — a new pinned version — so a contract the user
+  // re-authored stays on the version they can revert to, never overwritten in place.
+  const contractTaken = contract === undefined || sameContract(db.getRuntimeContract(appId), contract);
+  if (running !== undefined && normalizeStarterHtml(running) === normalizeStarterHtml(bundle) && contractTaken) {
+    // Already on this release's BYTES and CONTRACT — which is not the same as having taken
+    // this release: a docs-only release moves the version without touching either, and its
     // whole payload lands here. Seed the absent docs, then record the version (offer
     // clears), and change nothing else. The declared-only connection refresh
     // deliberately does NOT run in this branch — nothing in a docs-only release changes
@@ -174,7 +186,6 @@ export async function applyStarterUpdate(db: UserDb, appId: string): Promise<Sta
     return { status: 'already-current', version: meta.version };
   }
 
-  const contract = await bundledContract(folder);
   db.saveAppVersion(appId, bundle, `starter update to v${meta.version}`, undefined, {
     pinned: true,
     ...(contract === undefined ? {} : { contract }),

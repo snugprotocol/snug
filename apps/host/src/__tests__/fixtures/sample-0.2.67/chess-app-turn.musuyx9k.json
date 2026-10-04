@@ -1,0 +1,35 @@
+{
+  "source": "musuyx9k.json",
+  "schema": "snug-chat-probe/3",
+  "at": "2026-10-03T20:42:43.247Z",
+  "limits": {
+    "maxPromptBytes": 262144,
+    "tools": {
+      "maxCount": 16
+    }
+  },
+  "appTurn": [
+    {
+      "tier": "quick",
+      "tierApplied": "quick",
+      "form": "fenced",
+      "shape": "from,to,message",
+      "len": 83,
+      "truncatedFlag": false,
+      "firstMs": 954,
+      "ms": 1220,
+      "reply": "```json\n{\"from\":\"e7\",\"to\":\"e5\",\"message\":\"Classic. Let's see what you've got.\"}\n```"
+    },
+    {
+      "tier": "default",
+      "tierApplied": "default",
+      "form": "bare",
+      "shape": "move,message,gameOver",
+      "len": 106,
+      "truncatedFlag": false,
+      "firstMs": 734,
+      "ms": 1170,
+      "reply": "{\"move\":{\"from\":\"e7\",\"to\":\"e5\"},\"message\":\"Classic for a classic beatdown. Let's dance.\",\"gameOver\":false}"
+    }
+  ]
+}

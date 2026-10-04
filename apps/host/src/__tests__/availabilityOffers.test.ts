@@ -28,7 +28,7 @@ const wasm = new Uint8Array([0x00, 0x61, 0x73, 0x6d, 1, 0, 0, 0]);
 const probe = (binding: Binding): ProbeResult => ({
   binding,
   storage: { backend: createMemoryBackend(), kind: 'memory' },
-  brain: { brain: { kind: 'demo' }, legs: { sample: 'detected', complete: 'absent', local: 'absent' } },
+  brain: { brain: { kind: 'demo' }, legs: { sample: 'detected', local: 'absent' } },
 });
 
 const client: LocalClient = {
@@ -42,11 +42,13 @@ const client: LocalClient = {
 const status = (over: Partial<LocalStatus> = {}): LocalStatus => ({ binding: 'local-host', port: 43127, pages: 1, brains: [], ...over });
 
 describe('createHostPlatform — every binding it serves offers NOTHING an app could need', () => {
-  // The host kit inside an artifact, a chat, a static copy or a plain file carries no
-  // transport seat at all, and switches the connections surface off. (A loopback static
-  // server lands on this composition too, as `file` since K2 — the runner is composed by
-  // the other function; the `local-host` row here only shows the table does not key on it.)
-  it.each(['artifact', 'artifact-static', 'artifact-chat', 'file', 'local-host'] as const)('%s', (binding) => {
+  // The host kit inside an artifact (a chat-created one included — the same hosted runtime,
+  // measured 2026-10-03), a static copy or a plain file carries no transport seat at all, and
+  // switches the connections surface off. (A loopback static server lands on this composition
+  // too, as `file` since K2 — the runner is composed by the other function; the `local-host`
+  // row here only shows the table does not key on it.) The chat binding's row went with the
+  // binding (TASK-20261003 R5 C2).
+  it.each(['artifact', 'artifact-static', 'file', 'local-host'] as const)('%s', (binding) => {
     expect(offersOf(createHostPlatform(probe(binding), wasm))).toEqual(NOTHING);
   });
 

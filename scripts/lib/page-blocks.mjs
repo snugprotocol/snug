@@ -230,45 +230,88 @@ export function removeBundleBlock(html, lineage) {
   return `${html.slice(0, existing.index)}${html.slice(tail)}`;
 }
 
-// ------------------------------------------------------------------ the viewer's wrapper
+// ---------------------------------------------------------------- the platform's wrappers
+//
+// The platform never hands a published page back as it was sent: `fetch(location.href)` and
+// the Artifact tool's read return it INSIDE a wrapper of the platform's own, the kit's WHOLE
+// document — doctype and all — in the wrapper's `<body>`, then `</body></html>`. Every
+// reader unwraps first and every writer acts on the kit document; a republish sends the BARE
+// kit page (artifactHtml.ts says why). Two wrappers have been measured and only those two are
+// read — anything else is a named problem, never a guess:
+//
+//   the 0.2.67 SKELETON (2026-10-03, TASK-20261003 C3 — two REAL read-backs in
+//     `scripts/fixtures/readback-0.2.67/`): `ARTIFACT_SKELETON_OPEN` byte-for-byte — charset,
+//     viewport, a small reset and NOTHING else (no injected script in the stored source; the
+//     live DOM has two) — then `\n`, the page, `\n</body></html>`. A chat-created artifact
+//     and a tool-published one are stored alike. A page written as a FRAGMENT (its `<title>`
+//     and `<style>` first, no doctype of its own) sits in that body as it is: a fragment is
+//     not a kit document, so that form is refused by name, as is the skeleton around nothing.
+//   the SEPTEMBER viewer (2026-09-06, TASK-20260905 AC13): a head carrying its frame runtime —
+//     exactly two classic `<script>`s inside a comment fence — then a charset meta, a viewport
+//     meta and a reset `<style>`, back to back. Read by SHAPE: the runtime's bodies were never
+//     pinned (`scripts/fixtures/viewer-wrapper.mjs`).
+
+/** The contract-0.2.67 skeleton through `<body>`: the 536 bytes both real read-backs open with. */
+export const ARTIFACT_SKELETON_OPEN =
+  '<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#faf9f5;color:#141413}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>';
+
+/** What may sit before the September wrapper's `<html>` and between each pair of its head's elements, in order. */
+const SEPTEMBER_HEAD_GAPS = ['<!doctype html>', '', '<!-- frame-runtime -->', '', '<!-- /frame-runtime -->', '', '', '</head>'];
+
+const plainTag = (e, name) => e?.name === name && Object.keys(e.attrs).length === 0;
+
+/** The September viewer's head: html, head, two classic scripts in the fence, charset, viewport, style, body — and only the measured text between them. */
+function isSeptemberViewerHead(html, elements) {
+  const [root, head, preamble, runtime, charset, viewport, style, body] = elements;
+  const shaped =
+    plainTag(root, 'html') && plainTag(head, 'head') && plainTag(preamble, 'script') && plainTag(runtime, 'script') &&
+    charset?.name === 'meta' && charset.attrs.charset !== undefined &&
+    viewport?.name === 'meta' && viewport.attrs.name === 'viewport' &&
+    style?.name === 'style' && body?.name === 'body';
+  if (!shaped) return false;
+  const sequence = [root, head, preamble, runtime, charset, viewport, style, body];
+  const gaps = [html.slice(0, root.index), ...sequence.slice(1).map((e, i) => html.slice(sequence[i].end, e.index))];
+  return gaps.every((gap, i) => gap === SEPTEMBER_HEAD_GAPS[i]);
+}
 
 /**
- * The artifact viewer stores and serves a published kit page WRAPPED (measured on the real
- * artifact, 2026-09-06 — TASK-20260905 AC13): its own `<!doctype html><html><head>` with two
- * injected classic `<script>`s (the frame preamble and the frame runtime), a meta/style
- * reset, then `<body>` carrying the kit's WHOLE document — doctype and all — and
- * `</body></html>`. `fetch(location.href)` and the Artifact tool's read both hand back this
- * form, and a republish takes the BARE kit page (the viewer wraps it again), so every
- * consumer unwraps first and every writer acts on the kit document. The check is a SHAPE
- * check like `verifyKitPage`: the second `<html>` must be preceded by nothing but the kit's
- * doctype inside the wrapper's body, and nothing but `</body></html>` may follow the kit's
- * `</html>`; anything else is a named problem, never a guess — the kit page is then still
- * put through `verifyKitPage`, which refuses the wrapped form itself (two foreign scripts).
- *
- * Returns `{ html, wrapped: false }` for a bare page, `{ html, wrapped: true }` for the kit
- * document lifted out of one wrapper, or `{ wrapped: true, problem }` (no `html`).
+ * The kit document lifted out of the platform's wrapper. Returns `{ html, wrapped: false }`
+ * for a page that is not inside a measured wrapper (a bare kit page — anything else is then
+ * refused by `verifyKitPage` or the caller's own checks), `{ html, wrapped: true }` for the
+ * kit document out of ONE wrapper, or `{ wrapped: true, problem }` (no `html`). A SHAPE
+ * check like `verifyKitPage`: the wrapper's body must open with nothing but the kit's doctype,
+ * and nothing but `</body></html>` may follow the kit's `</html>`.
  */
 export function unwrapViewerPage(html) {
   const elements = tokenizeTopLevel(html);
   const htmls = elements.filter((e) => e.name === 'html');
-  if (htmls.length <= 1) return { html, wrapped: false };
-  if (htmls.length > 2) return { wrapped: true, problem: `${htmls.length} <html> elements — a wrapper inside a wrapper, not one viewer wrapper around the kit page` };
-  const inner = htmls[1];
-  const outerBody = elements.find((e) => e.name === 'body' && e.index < inner.index);
-  const opening = outerBody === undefined ? undefined : html.slice(outerBody.end, inner.index);
-  const doctype = opening === undefined ? -1 : opening.search(/<!doctype html>/i);
-  if (outerBody === undefined || doctype === -1 || !/^\s*<!doctype html>\s*$/i.test(opening)) {
-    return { wrapped: true, problem: 'the viewer wrapper’s body does not open with the kit document (its doctype)' };
+  const wrapper = html.startsWith(ARTIFACT_SKELETON_OPEN) ? 'the 0.2.67 skeleton' : isSeptemberViewerHead(html, elements) ? 'the September viewer wrapper' : undefined;
+  if (wrapper === undefined) {
+    if (htmls.length <= 1) return { html, wrapped: false };
+    return { wrapped: true, problem: 'a wrapper whose head is neither the measured 0.2.67 skeleton (charset, viewport, reset — nothing else) nor the September viewer’s (its frame runtime, then charset, viewport, reset)' };
   }
-  const start = outerBody.end + doctype;
+  // Both heads were matched whole, so the first <body> is the wrapper's.
+  const outerBody = elements.find((e) => e.name === 'body');
+  if (htmls.length === 1) {
+    const content = html.slice(outerBody.end).replace(/<\/body>\s*<\/html>\s*$/i, '');
+    return content.trim() === ''
+      ? { wrapped: true, problem: `${wrapper} carries nothing — there is no page inside it` }
+      : { wrapped: true, problem: `${wrapper} carries a page fragment, not a kit document (no <!doctype html> of its own — a page written as a fragment)` };
+  }
+  const inner = htmls[1];
+  const opening = html.slice(outerBody.end, inner.index);
+  if (!/^\s*<!doctype html>\s*$/i.test(opening)) return { wrapped: true, problem: `${wrapper}’s body does not open with the kit document (its doctype)` };
+  const start = outerBody.end + opening.search(/<!doctype html>/i);
+  if (html.startsWith(ARTIFACT_SKELETON_OPEN, start)) return { wrapped: true, problem: `a skeleton inside a skeleton — ${wrapper} around another 0.2.67 skeleton, not around the kit page` };
+  if (htmls.length > 2) return { wrapped: true, problem: `${htmls.length} <html> elements — a wrapper inside a wrapper, not one wrapper around the kit page` };
   const lower = html.toLowerCase();
   const outerClose = lower.lastIndexOf('</html>');
   const innerClose = outerClose === -1 ? -1 : lower.lastIndexOf('</html>', outerClose - 1);
-  if (innerClose <= start) return { wrapped: true, problem: 'the kit document inside the viewer wrapper has no </html> of its own' };
+  if (innerClose <= start) return { wrapped: true, problem: `the kit document inside ${wrapper} has no </html> of its own` };
   const between = html.slice(innerClose + '</html>'.length, outerClose);
   const after = html.slice(outerClose + '</html>'.length);
   if (!/^\s*(<\/body>)?\s*$/i.test(between) || !/^\s*$/.test(after)) {
-    return { wrapped: true, problem: 'content after the kit document inside the viewer wrapper — not the wrapper the viewer was measured to write' };
+    return { wrapped: true, problem: `content after the kit document inside ${wrapper} — not the shape the platform was measured to write` };
   }
   // The kit page ends in ONE newline (the build writes it) and the wrapper puts its own
   // before `</body>`: the first newline after the kit's `</html>` is the kit's.
@@ -282,11 +325,13 @@ export function unwrapViewerPage(html) {
  * A SHAPE check on the page source the artifact record fetched before republishing — NOT a
  * security control: exactly one inline module script (the kit), a stamp equal to the
  * running page's, every other script a known data block, no `<script src>`, no `<link>`, a
- * doctype first. What it catches is the viewer's INJECTED runtime and a foreign or
- * mismatched page (the contract forbids serializing the live DOM — artifact.d.ts 0.2.41),
- * so a republish never captures them. It defends nothing against a page WRITER, who can
- * edit the one module script and its stamp: that boundary is the artifact's write
- * permission (ADR-0065 §6 amendment).
+ * doctype first, ONE `<html>`. What it catches is the viewer's INJECTED runtime, a platform
+ * wrapper still around the kit document (the 0.2.67 skeleton injects no script, so only its
+ * second `<html>` tells it apart — a save that published it would be stored as a skeleton
+ * inside a skeleton) and a foreign or mismatched page (the contract forbids serializing the
+ * live DOM — artifact.d.ts, 0.2.41 and 0.2.67 alike), so a republish never captures them.
+ * It defends nothing against a page WRITER, who can edit the one module script and its
+ * stamp: that boundary is the artifact's write permission (ADR-0065 §6 amendment).
  */
 export function verifyKitPage(html, { expectedStamp }) {
   const problems = [];
@@ -306,5 +351,7 @@ export function verifyKitPage(html, { expectedStamp }) {
   if (stamps.length !== 1 || (stamps[0].attrs.content ?? '') !== expectedStamp) {
     problems.push(`the build stamp "${stamps[0]?.attrs.content ?? '(none)'}" is not this page's "${expectedStamp}"`);
   }
+  const roots = elements.filter((e) => e.name === 'html').length;
+  if (roots !== 1) problems.push(`the page carries ${roots} <html> elements — a platform wrapper is still around the kit document`);
   return problems;
 }

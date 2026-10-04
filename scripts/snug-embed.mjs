@@ -2,10 +2,13 @@
 // snug-embed.mjs — hand apps in to a live Snug artifact page (TASK-20260905-binding-a-artifacts
 // AC9, ADR-0065 §6). The agent's session reads the live page (the Artifact tool's read),
 // runs this over it, and publishes the result: an edit is a republish, never a second runner.
-// The read-back is the VIEWER-WRAPPED page (the viewer's skeleton and injected runtime
-// around the kit's whole document — measured on the real artifact, AC13 2026-09-06): this
-// script unwraps it through the one grammar, merges into the KIT document, and writes the
-// BARE kit page — the form a republish takes (the viewer wraps it again). Never re-wrap.
+// The read-back is the WRAPPED page — under contract 0.2.67 the platform's skeleton (charset,
+// viewport, a reset) around the kit's whole document (two real read-backs, 2026-10-03; the
+// September viewer's wrapper, AC13 2026-09-06, is still read): this script unwraps it through
+// the one grammar, merges into the KIT document, and writes the BARE kit page — the form a
+// republish takes (the platform wraps it again). Never re-wrap: a skeleton sent back would be
+// stored inside a second one. A read-back whose skeleton carries a page FRAGMENT is not the
+// kit page and is refused by name.
 //
 //   node scripts/snug-embed.mjs <live.html> --bundle app.json [--bundle …] [--remove <lineage>] [--out file] [--strict]
 //
@@ -95,10 +98,10 @@ export function parseBundleText(text, label = 'bundle') {
 export function embed({ page: input, bundles = [], remove = [], strict = false }) {
   const warnings = [];
   const errors = [];
-  // The Artifact tool's read-back is viewer-wrapped: lift the kit document out first, and
-  // refuse a wrapper of any other shape rather than embed into it.
+  // The Artifact tool's read-back is wrapped: lift the kit document out first, and refuse a
+  // wrapper of any other shape (or a fragment inside one) rather than embed into it.
   const lifted = unwrapViewerPage(input);
-  if (lifted.html === undefined) errors.push(`the page is inside a viewer wrapper this script does not recognise (${lifted.problem})`);
+  if (lifted.html === undefined) errors.push(`the page is not one platform wrapper around the kit page (${lifted.problem})`);
   const page = lifted.html ?? input;
   if (!/^\s*<!doctype html>/i.test(page)) errors.push('the page does not start with <!doctype html> — is this the live artifact page?');
   if (!/<\/body\s*>/i.test(page)) errors.push('the page has no </body> — nothing to embed into');
@@ -213,7 +216,7 @@ export function main(argv, io = { log: console.log, error: console.error }) {
   }
   const out = args.out ?? args.page;
   writeFileSync(out, result.html);
-  io.log(`snug-embed: ${bundles.length} bundle(s) merged${args.remove.length ? `, ${args.remove.length} removed` : ''} → ${out}${result.unwrapped ? ' (the viewer wrapper was lifted off — publish this bare page as it is)' : ''}${result.warnings.length ? ` (${result.warnings.length} warning(s))` : ''}`);
+  io.log(`snug-embed: ${bundles.length} bundle(s) merged${args.remove.length ? `, ${args.remove.length} removed` : ''} → ${out}${result.unwrapped ? ' (the platform wrapper was lifted off — publish this bare page as it is)' : ''}${result.warnings.length ? ` (${result.warnings.length} warning(s))` : ''}`);
   return 0;
 }
 

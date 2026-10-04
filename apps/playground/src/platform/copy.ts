@@ -22,6 +22,9 @@ export function storageDisclosure(kind: PersistenceKind | undefined): string | u
       return 'this copy of your file lives in memory only — it is gone when the page closes, so export it to keep it.';
     case 'file':
       return 'this copy of your file lives on this computer’s disk.';
+    // RESIDUE: `window-storage` is a persisted kind in `packages/db` (an append-only enum), so
+    // the switch names it; no host composes it since the September chat runtime whose
+    // per-view storage it described was measured gone (2026-10-03, TASK-20261003 R5 C2).
     case 'window-storage':
       return 'this copy of your file lives in this chat’s page storage — this view only; the published link keeps its own.';
     case 'artifact-html':
@@ -86,12 +89,6 @@ export function custodyDisclosure(
         headline: 'a copy of the artifact page',
         body: 'this page is served outside the Claude viewer — nothing saves here. export to keep what you do.',
       });
-    case 'artifact-chat':
-      return withStatus({
-        label: 'your file: in this chat',
-        headline: 'in this chat’s page storage',
-        body: 'this view only — the published link keeps its own copy. copy the export to move or keep it.',
-      });
     case 'local-host':
       // The file is a real file on this Mac, served by the local host process — NOT the
       // browser storage the default arm describes. Saying "in this browser" here would be
@@ -114,7 +111,7 @@ export function custodyDisclosure(
 
 // ---------------------------------------------------------- the thinking level (ADR-0067)
 
-/** What each tier does, in the contract's own terms (sample.d.ts 0.2.41) — the option labels the chip lists. */
+/** What each tier does, in the contract's own terms (sample.d.ts 0.2.41; unchanged in 0.2.67) — the option labels the chip lists. */
 export function tierLabel(tier: HostModelTier, seat: Pick<TierSeat, 'viewerDefault'>, state: Pick<TierState, 'unavailable'>): string {
   const answered = state.unavailable[tier];
   if (answered !== undefined) return `${tier} — not on this plan, answered on ${answered}`;
@@ -352,7 +349,6 @@ export interface HostPassportCopy {
 const HOST_NAME: Readonly<Record<NonNullable<SnugPlatform['binding']>, string>> = {
   artifact: 'a Claude artifact',
   'artifact-static': 'a copy of an artifact page',
-  'artifact-chat': 'a Claude chat',
   'local-host': 'your agent, on this computer',
   file: 'a page in your browser',
 };

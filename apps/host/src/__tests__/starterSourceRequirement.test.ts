@@ -53,7 +53,7 @@ const wasm = new Uint8Array([0x00, 0x61, 0x73, 0x6d, 1, 0, 0, 0]);
 const artifactProbe: ProbeResult = {
   binding: 'artifact',
   storage: { backend: createMemoryBackend(), kind: 'memory' },
-  brain: { brain: { kind: 'demo' }, legs: { sample: 'detected', complete: 'absent', local: 'absent' } },
+  brain: { brain: { kind: 'demo' }, legs: { sample: 'detected', local: 'absent' } },
 };
 
 /** The real module the build aliases in, over the shipped manifests instead of the fixture. */

@@ -18,6 +18,7 @@ import type { AgentTool, AgentTurnEvent } from '@snugprotocol/adapters';
 import { AUTH_WIZARD_DIRECTIVE_KIND, type AuthWizardDirective, type RenderDirective } from '@snugprotocol/protocol';
 
 import { directiveToMeta, metaToDirective, scanForRenderDirective } from './renderDirective.js';
+import { HOST_BRAIN_REFUSED_CODE } from '../platform/platform.js';
 import { createServerArtifactFetch } from '../state/library.js';
 import { resolveModelForApp } from '../state/appModel.js';
 import { applyBuilderPickToApp, useBuilderPick } from '../state/builderModel.js';
@@ -1008,8 +1009,12 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
             }
           }
         } else {
+          // A host brain's REFUSAL withdraws what it streamed (artifact runtime contract
+          // 0.2.67, `refused`: "clear what you showed") — the bubble keeps only the error.
+          // Every other failure keeps what was shown, as before; neither is persisted.
           patchMessage(agentId, {
             streaming: false,
+            ...(result.code === HOST_BRAIN_REFUSED_CODE ? { displayText: '' } : {}),
             error: { code: result.code, message: result.message, retryable: result.retryable },
           });
         }

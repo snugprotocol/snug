@@ -1,11 +1,11 @@
 // router.test.tsx — TASK-20261003 K3 (ADR-0072 §2): the kit's router is picked by a guarded
 // CAPABILITY probe, never by origin.
 //
-// `HashRouter` navigates with `history.pushState(state, '', '#/…')`. At an opaque origin — a
-// chat artifact is an `about:srcdoc` document, origin `null` — the History API refuses every
-// URL (plan review, 2026-10-03), so a hash router cannot navigate there. Asking "what origin
-// is this?" would be guessing which hosts behave that way; trying the one call the router
-// needs, once, is the fact itself.
+// `HashRouter` navigates with `history.pushState(state, '', '#/…')`. At an opaque origin — an
+// `about:srcdoc` document, origin `null`, what T1 measured September's chat artifacts to be —
+// the History API refuses every URL (plan review, 2026-10-03), so a hash router cannot
+// navigate there. Asking "what origin is this?" would be guessing which hosts behave that
+// way; trying the one call the router needs, once, is the fact itself.
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { Link, Route, Routes, useLocation } from 'react-router-dom';

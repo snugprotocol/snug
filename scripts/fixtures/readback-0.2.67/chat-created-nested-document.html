@@ -1,3 +1,4 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#faf9f5;color:#141413}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
 <!doctype html>
 <html lang="en">
 <head>
@@ -16,23 +17,25 @@ textarea{box-sizing:border-box;width:100%;height:96px}
 <h1>Snug chat probe</h1>
 <p>Loading this page is free. Only "measure the prompt limit" spends your Claude usage.</p>
 <table id="facts"></table>
+<table id="caps"></table>
 <p id="plan"></p>
 <button id="measure">measure the prompt limit</button> <button id="cancel" disabled>cancel</button>
 <table id="rungs"></table>
-<p>Press "test storage" once BEFORE publishing this artifact and once AFTER (then once on the published page). Copy the report each time.</p>
-<button id="store">test storage</button>
-<table id="stores"></table>
+<p>Then press these two (free). Copy the report here, and once more on the published page.</p>
+<button id="source">read my own source</button> <button id="save">test download</button>
+<table id="extras"></table>
 <button id="copy">copy report</button> <span id="copied"></span>
 <textarea id="out" readonly></textarea>
 <script>
 (() => {
-const LADDER = [8e3, 32e3, 64e3, 65536, 65537, 96e3, 128e3, 256e3, 512e3, 1e6];
+const CAPS = ['sample', 'artifact', 'downloads', 'db', 'user', 'assets', 'files', 'mcp', 'room', 'comments', 'permissions'];
+let LADDER = [8192, 65536, 65537], NS = {};
 const FILL = 'The quick brown fox jumps over the lazy dog. ';
 const JSON_ASK = 'Reply with exactly this JSON and nothing else: {"move":{"from":"e2","to":"e4"},"message":"ok"}';
-const PLAN = 'up to 11 calls, 2,227,167 bytes of prompt in all (about 495k tokens); stops at the first size that fails.';
+const plan = () => `up to ${LADDER.length + 1} calls, ${LADDER.reduce((a, b) => a + b, 0)} bytes of prompt in all (a size over the limit is refused at once and costs nothing); stops at the first size that fails.`;
 const KEY = 'snug-probe';
 const LATE = {}, GONE = {};
-const R = { schema: 'snug-chat-probe/1', at: '', ua: '', facts: {}, ladder: [], json: null, storage: [] };
+const R = { schema: 'snug-chat-probe/2', at: '', ua: '', facts: {}, caps: {}, limits: null, permissions: null, ladder: [], json: null, source: null, download: null };
 const $ = (id) => document.getElementById(id);
 const errName = (e) => (e && e.name) || 'Error';
 const attempt = (fn) => { try { return fn(); } catch (e) { return errName(e); } };
@@ -128,9 +131,23 @@ const boot = async () => {
   for (const k of ['replaceState', 'pushState']) f[k] = attempt(() => { history[k](null, '', '#/x'); return 'ok'; });
   attempt(() => history.replaceState(null, '', here));
   rows('facts', f);
+  f.runs = attempt(() => { const n = (+localStorage.getItem(KEY + '-runs') || 0) + 1; localStorage.setItem(KEY + '-runs', n); return n; });
   f.indexedDB = await bounded(idb(), 3e3, 'timeout').catch(errName);
   f.nested = await bounded(nested(), 5e3, 'no-reply').catch(errName);
   rows('facts', f);
+  if (typeof (window.claude && window.claude.use) === 'function') {
+    await Promise.all(CAPS.map(async (name) => {
+      const ns = await bounded(Promise.resolve().then(() => window.claude.use(name)), 12e3, LATE).catch(errName);
+      R.caps[name] = ns === LATE ? 'timeout' : typeof ns === 'string' ? ns : ns === null ? 'null' : typeof ns;
+      if (Object(ns) === ns) NS[name] = ns;
+    }));
+    if (NS.sample) R.limits = await bounded(Promise.resolve().then(() => NS.sample.limits()), 12e3, 'timeout').catch(errName);
+    if (NS.permissions) R.permissions = await bounded(Promise.resolve().then(() => NS.permissions.state()), 12e3, 'timeout').catch(errName);
+    const max = R.limits && R.limits.maxPromptBytes;
+    if (max > 0) LADDER = [...new Set([8192, 65536, max, max + 1])].sort((a, b) => a - b);
+  }
+  rows('caps', { ...R.caps, limits: R.limits, permissions: R.permissions });
+  say('plan', plan());
 };
 const nonce = () => Math.random().toString(36).slice(2, 12).padEnd(10, '0');
 const buildPrompt = (n) => {
@@ -150,8 +167,16 @@ const jsonForm = (reply) => {
   return { form: isObject(s) ? 'bare' : m && isObject(m[1]) ? 'fenced' : 'prose' };
 };
 const ask = async (prompt, gone, read) => {
-  const { r, ...rec } = await timed(() => Promise.race([window.claude.complete(prompt), gone]), 12e4);
-  if (rec.error) rec.outcome = 'rejected';
+  const ac = new AbortController(), t0 = Date.now();
+  let first, more = {};
+  gone.then(() => ac.abort());
+  const call = NS.sample
+    ? () => NS.sample(prompt, { modelTier: 'quick', cache: false, signal: ac.signal, onText: () => { first = first || Date.now() - t0; } })
+        .then((x) => { more = { truncatedFlag: x.truncated, tier: x.modelTierApplied }; return x.text; }, (e) => { more = { code: e && e.code }; throw e; })
+    : () => window.claude.complete(prompt);
+  const { r, ...rec } = await timed(() => Promise.race([call(), gone]), 12e4);
+  Object.assign(rec, more, first ? { firstMs: first } : {});
+  if (rec.error || rec.code) rec.outcome = rec.code === 'cancelled' ? 'cancelled' : 'rejected';
   else if (r === LATE) rec.outcome = 'timeout';
   else if (r === GONE) rec.outcome = 'cancelled';
   else Object.assign(rec, { len: typeof r === 'string' ? r.length : -1 }, read(r));
@@ -160,7 +185,7 @@ const ask = async (prompt, gone, read) => {
 const measure = async () => {
   const go = $('measure'), stop = $('cancel');
   if (go.disabled) return;
-  if (typeof (window.claude && window.claude.complete) !== 'function') return say('plan', 'no window.claude.complete here - nothing to measure');
+  if (!NS.sample && typeof (window.claude && window.claude.complete) !== 'function') return say('plan', 'no brain here (neither the sample capability nor window.claude.complete) - nothing to measure');
   go.disabled = true;
   stop.disabled = false;
   const gone = new Promise((r) => { stop.onclick = () => r(GONE); });
@@ -183,33 +208,26 @@ const measure = async () => {
       draw();
     }
   } finally {
-    say('plan', 'done - ' + PLAN);
+    say('plan', 'done - ' + plan());
     go.disabled = false;
     stop.disabled = true;
   }
 };
-const store = async () => {
-  const s = window.storage, run = { at: new Date().toISOString() };
-  const val = (r) => (Object(r) === r && 'value' in r ? r.value : r);
-  const step = async (label, fn, read) => {
-    const { r, error, message, ms } = await timed(fn, 3e4);
-    run[label] = error || r === LATE
-      ? { ok: false, error: r === LATE ? 'no answer in 30 s' : message, ms }
-      : { ok: true, shape: Object(r) === r ? Object.keys(r).join() : typeof r, ...(read && read(r)), ms };
-    rows('stores', run);
-  };
-  R.storage.push(run);
-  $('store').disabled = true;
-  for (const [tag, v] of [['', 'v1'], ['200k', 'x'.repeat(2e5)]]) {
-    await step('set' + tag, () => s.set(KEY + tag, v));
-    await step('get' + tag, () => s.get(KEY + tag), (r) => ({ same: val(r) === v }));
-    await step('delete' + tag, () => s.delete(KEY + tag));
-  }
-  await step('earlierRuns', () => s.get(KEY + '-runs'), (r) => ({ count: +val(r) || 0 }));
-  await step('markRun', () => s.set(KEY + '-runs', String((run.earlierRuns.count || 0) + 1)));
-  await step('list', () => s.list(), (r) => ({ count: (r && r.keys || r || []).length }));
-  $('store').disabled = false;
+const extra = async (key, fn) => {
+  const { r, error, message, ms, ...rest } = await timed(fn, 3e4);
+  R[key] = error || r === LATE ? { ok: false, error: r === LATE ? 'no answer in 30 s' : message, ...rest, ms } : { ok: true, ...r, ms };
+  rows('extras', { source: R.source, download: R.download });
 };
+const source = () => extra('source', async () => {
+  const res = await fetch(location.href, { cache: 'no-store' });
+  const s = await res.text(), low = s.toLowerCase(), count = (x) => low.split(x).length - 1;
+  return { status: res.status, bytes: s.length, doctypes: count('<!doctype'), scripts: count('<script'), scriptsBeforeProbe: low.slice(0, low.indexOf('<title>snug chat probe')).split('<script').length - 1, hasProbe: s.includes(R.schema) };
+});
+const save = () => extra('download', async () => {
+  if (!NS.downloads) throw new Error('the downloads capability did not resolve');
+  const r = await NS.downloads.save({ filename: 'snug-probe.json', data: JSON.stringify({ probe: R.schema }) }).catch((e) => { throw new Error(String((e && e.code) || e)); });
+  return { result: Object(r) === r ? Object.keys(r).join() : typeof r };
+});
 const copy = () => {
   const o = $('out');
   R.at = new Date().toISOString();
@@ -219,14 +237,17 @@ const copy = () => {
 };
 const on = (id, fn) => { $(id).onclick = () => fn(); };
 try {
-  window.__probe = { LADDER, buildPrompt, classify, jsonForm, kid };
+  window.__probe = { buildPrompt, classify, jsonForm, kid };
   on('measure', measure);
-  on('store', store);
+  on('source', source);
+  on('save', save);
   on('copy', copy);
-  say('plan', PLAN);
+  say('plan', plan());
   boot().catch((e) => { R.facts.error = errName(e); });
 } catch (e) { attempt(() => document.body.append('probe failed: ' + errName(e))); }
 })();
 </script>
 </body>
 </html>
+
+</body></html>

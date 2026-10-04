@@ -134,14 +134,11 @@ describe('YourFileChip', () => {
     expect(dismissNote).toHaveBeenCalledTimes(1);
   });
 
-  it('the chat view and the static page carry their own labels', async () => {
-    const { seat } = seatWith({ dirty: false, readOnly: false });
-    await mountChip(hostPlatform(seat, 'artifact-chat'));
-    expect(chip()?.textContent).toContain('your file: in this chat');
-    act(() => root?.unmount());
-    container?.remove();
-    const { seat: seat2 } = seatWith({ dirty: false, readOnly: true });
-    await mountChip(hostPlatform(seat2, 'artifact-static'));
+  it('the static page carries its own label', async () => {
+    // MIGRATED 2026-10-03 (TASK-20261003 R5 C2): the chat view's half ("your file: in this
+    // chat") went with the September chat runtime, measured gone.
+    const { seat } = seatWith({ dirty: false, readOnly: true });
+    await mountChip(hostPlatform(seat, 'artifact-static'));
     expect(chip()?.textContent).toContain('your file: not saved here');
   });
 });

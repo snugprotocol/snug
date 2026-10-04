@@ -264,6 +264,53 @@ describe('applyStarterUpdate — the update act (AC5, AC7)', () => {
   });
 });
 
+describe('contract-only releases — identical html, a new runtime contract (TASK-20261003 R5, C7)', () => {
+  // Chess v3 as first shipped: the bytes of v2, only `responseGuidance` corrected. The act
+  // compared bytes alone, took its already-current branch for every unedited copy, recorded
+  // v3 — and never wrote the contract, so the copy kept the guidance the release existed to
+  // replace. A factory update ships factory contract (ADR-0045 §4), whatever else moved.
+  const OLD_GUIDANCE = { overview: 'chess', responseGuidance: 'Reply {"from":"e7","to":"e5","say":"…"}.' };
+  const NEW_GUIDANCE = { overview: 'chess', responseGuidance: 'Reply {"move":{"from":"e7","to":"e5"},"message":"…"}.' };
+
+  it('the unedited copy takes the release’s contract — as a NEW pinned version, the old one keeping the old contract', async () => {
+    setBundle(HTML_V1, 2, { contractRaw: JSON.stringify(NEW_GUIDANCE) });
+    const appId = installAtV1();
+    db.putRuntimeContract(appId, 1, OLD_GUIDANCE);
+    expect(await starterUpdateStatus(db, appId)).toMatchObject({ installedVersion: 1, latestVersion: 2, updateAvailable: true, edited: false });
+
+    const result = await applyStarterUpdate(db, appId);
+    expect(result).toMatchObject({ status: 'updated', version: 2 });
+    expect(db.getRuntimeContract(appId)?.responseGuidance).toBe(NEW_GUIDANCE.responseGuidance);
+    expect(db.getSetting(starterVersionSettingKey(appId))).toBe(2);
+    // Non-destructive as every update is: same bytes on a new pin, the old contract revertable.
+    expect(db.getAppHtml(appId)).toBe(HTML_V1);
+    const versions = db.listAppVersions(appId);
+    expect(versions[0]).toMatchObject({ pinned: true, note: 'starter update to v2' });
+    expect(db.getRuntimeContract(appId, 1)).toEqual(OLD_GUIDANCE);
+    // Converges: a second apply finds bytes AND contract at the release — nothing more written.
+    expect(await applyStarterUpdate(db, appId)).toMatchObject({ status: 'already-current', version: 2 });
+    expect(db.listAppVersions(appId)).toHaveLength(versions.length);
+  });
+
+  it('a contract the user re-authored is not overwritten in place — it stays on the version they can revert to', async () => {
+    setBundle(HTML_V1, 2, { contractRaw: JSON.stringify(NEW_GUIDANCE) });
+    const appId = installAtV1();
+    db.putRuntimeContract(appId, 1, { overview: 'mine — rewritten in the builder' });
+    await applyStarterUpdate(db, appId);
+    expect(db.getRuntimeContract(appId)?.responseGuidance).toBe(NEW_GUIDANCE.responseGuidance);
+    expect(db.getRuntimeContract(appId, 1)?.overview).toBe('mine — rewritten in the builder');
+  });
+
+  it('the same contract in other key order is the same contract — no version minted', async () => {
+    // `settings` is a record, so its key order survives the schema: compared canonically.
+    setBundle(HTML_V1, 2, { contractRaw: JSON.stringify({ ...NEW_GUIDANCE, settings: { persona: 'rival', depth: 2 } }) });
+    const appId = installAtV1();
+    db.putRuntimeContract(appId, 1, { ...NEW_GUIDANCE, settings: { depth: 2, persona: 'rival' } });
+    expect(await applyStarterUpdate(db, appId)).toMatchObject({ status: 'already-current', version: 2 });
+    expect(db.listAppVersions(appId)).toHaveLength(1);
+  });
+});
+
 describe('docs-only releases — identical html, higher version (AC8; plan-review findings 6+12)', () => {
   // A release whose whole payload is the wiki: the bundle's bytes never change, only
   // `starter.json`'s version moves. Detection must OFFER it (byte-equality is not

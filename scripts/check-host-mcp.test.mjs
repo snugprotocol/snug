@@ -505,6 +505,22 @@ describe('the external validators', () => {
     assert.ok(results.every((r) => r.status === 'not verified'));
   });
 
+  // Measured 2026-10-04: an interrupted claude-code install left a non-executable 500-byte
+  // stub as `claude` on PATH; the spawn's EACCES read as "refused the tree:" with no words.
+  // A validator that cannot START vouches for nothing either way — NOT VERIFIED, with why.
+  for (const code of ['EACCES', 'ENOEXEC']) {
+    it(`reports a validator that cannot start (${code}) as NOT VERIFIED, naming why — never as a refusal`, () => {
+      const exec = (command) => {
+        const error = new Error(`spawn ${command} ${code}`);
+        error.code = code;
+        throw error;
+      };
+      const results = runValidators('/nowhere', exec);
+      assert.ok(results.every((r) => r.status === 'not verified'));
+      assert.match(results[0].detail, new RegExp(`claude is on this machine but cannot run \\(${code}\\)`));
+    });
+  }
+
   it('reports a refusal as failed, with the validator’s own words', () => {
     const exec = () => {
       const error = new Error('exit 1');

@@ -17,8 +17,8 @@
 //      local composition. A refusal carrying the runner's marker → "open it from your
 //      agent". Anything else — another status, not JSON, no answer inside the bound — is
 //      NOT a runner, and falls through.
-//   3. EVERYTHING ELSE: the probe (artifact, chat, static copy, plain file) and the hosted
-//      composition, as before.
+//   3. EVERYTHING ELSE: the probe (an artifact — published or chat-created, one hosted
+//      runtime — a static copy, a plain file) and the hosted composition, as before.
 //
 // `planBoot` is the decision, pure over an injected window and document so each branch is
 // tested without a browser; `boot` renders what it decided, through `mountKit` — the one
@@ -63,8 +63,6 @@ export interface BootWindow extends ProbeWindowLike, RouterWindow {
   location: { protocol: string; hostname: string; pathname: string; hash: string; search: string; href: string; reload?: () => void };
   history: { state: unknown; replaceState(state: unknown, unused: string, url: string): void };
   fetch(input: string, init?: RequestInit): Promise<Response>;
-  /** The chat viewer's flat storage, when present. */
-  storage?: unknown;
 }
 
 /**
@@ -151,7 +149,6 @@ export async function planBoot(win: BootWindow, doc: ComposeDocument, deps: Boot
       location: win.location,
       fetch: (input, init) => win.fetch(input, init),
       sessionStorage: safeSessionStorage(win),
-      storage: win.storage,
       ...(win.location.reload !== undefined ? { reload: () => win.location.reload?.() } : {}),
     },
     doc,

@@ -1,6 +1,6 @@
 // safeStorage.test.ts — TASK-20261003 K4: the storage globals are read through ONE guarded
-// accessor. At an opaque origin (a chat artifact's `about:srcdoc` frame) each of them is a
-// getter that THROWS, and the kit's entry read `sessionStorage` bare.
+// accessor. At an opaque origin (an `about:srcdoc` frame, as September's chat artifacts
+// were) each of them is a getter that THROWS, and the kit's entry read `sessionStorage` bare.
 import { describe, expect, it } from 'vitest';
 
 import { safeIndexedDB, safeLocalStorage, safeNavigatorStorage, safeSessionStorage, type StorageHost } from '../safeStorage.js';

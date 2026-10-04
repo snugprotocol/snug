@@ -1,9 +1,11 @@
 // router.tsx — which router the kit mounts (K3, ADR-0072 §2).
 //
 // The kit runs from `file://`, inside an artifact viewer, and from a loopback server — none
-// of which has an SPA fallback — so it has always used a HASH router. One host breaks that:
-// a chat artifact is an `about:srcdoc` document at origin `null`, where the History API
-// refuses every URL (plan review, 2026-10-03). `HashRouter` navigates with
+// of which has an SPA fallback — so it has always used a HASH router. One kind of document
+// breaks that: an `about:srcdoc` document at origin `null`, where the History API refuses
+// every URL (plan review, 2026-10-03) — what T1 measured September's chat artifacts to be.
+// (The owner's 2026-10-03 probe found a chat artifact at a real origin with a working History
+// API; the fallback stays for any document that refuses.) `HashRouter` navigates with
 // `pushState(state, '', '#/…')`, and what react-router does when that is refused is
 // `location.assign` — a navigation of the DOCUMENT rather than a route change, in a frame
 // whose address is not its own to navigate (what that does in the real viewer is unmeasured;

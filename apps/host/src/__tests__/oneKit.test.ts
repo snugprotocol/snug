@@ -204,11 +204,79 @@ describe('K4 — one of everything the bindings share', () => {
     expect(read_, 'the page’s copy of it').toBe(said);
   });
 
+  it('one fallback input cap — the 65,536 a page budgets on when `limits()` cannot be read is spelled once, and imported', () => {
+    // R5 review: the refusal sentence for `prompt_too_large` named the cap as
+    // `maxPromptBytes ?? 65_536` — a second copy of the probe's fallback, free to drift from the
+    // number the builder budgets on (lesson 2026-08-05: a bound re-derived elsewhere is a second
+    // bound). One home, the budget's ruler; every reader imports it.
+    const spelled = /\b65_?536\b/;
+    expect(kit.filter((file) => spelled.test(stripComments(read(file))))).toEqual(['apps/host/src/brains/prompt.ts']);
+    for (const file of ['apps/host/src/probe.ts', 'apps/host/src/brains/errors.ts']) {
+      expect(stripComments(read(file)), file).toMatch(/import \{[^}]*\bDEFAULT_MAX_PROMPT_BYTES\b[^}]*\} from '\.\/(brains\/)?prompt\.js'/);
+    }
+    // The positive twin: the pattern catches the copy this rule exists for, in both spellings.
+    expect(spelled.test('context.maxPromptBytes ?? 65_536')).toBe(true);
+    expect(spelled.test('const cap = 65536;')).toBe(true);
+    expect(spelled.test('const cap = 165_5360;')).toBe(false);
+  });
+
   it('one boot: both compositions mount through mountKit, from the one entry', () => {
     const boot = stripComments(read('apps/host/src/boot.tsx'));
     expect(boot.match(/mountKit\(root,/g)).toHaveLength(2);
     expect(boot.match(/createRoot\(/g)).toHaveLength(1);
     expect(kit.filter((file) => /createRoot\(/.test(stripComments(read(file))))).toEqual(['apps/host/src/boot.tsx']);
     expect(stripComments(read('apps/host/src/main.tsx'))).toMatch(/void boot\(\);/);
+  });
+});
+
+// C2 (TASK-20261003 R5): ONE hosted runtime, one path. The September chat runtime — a flat
+// `window.claude.complete` and a per-view `window.storage` at an `about:srcdoc` origin — was
+// measured GONE on 2026-10-03: a chat artifact runs in the hosted runtime (a real
+// `frame.claudeusercontent.com` origin, `window.claude = { use }`, no `complete`, no
+// `window.storage`). Its adapter, its storage backend, its binding and the prompt-budget seat
+// R0 added for it were removed; this keeps them from coming back under the old names. Every
+// file under the two trees is read — tests and comments included — because a test that still
+// builds the chat binding is the old path kept alive. Spellings assembled, so this file does
+// not name them. No exemption: the binding was never persisted (the user file carries no
+// binding), and `packages/db`'s `window-storage` persistence kind is spelled with a hyphen
+// and lives outside both trees — residue of an append-only enum, kept by rule.
+describe('C2 — one hosted runtime: the September chat runtime’s names are gone from the kit and the playground', () => {
+  const GONE = ['artifact' + '-chat', 'claude' + 'Complete', 'create' + 'CompleteAdapter', 'window' + 'Storage', 'Prompt' + 'BudgetSeat'];
+  const gone = new RegExp(GONE.join('|'), 'i');
+  const everyFile = (dir: string): string[] =>
+    readdirSync(path.join(REPO, dir), { withFileTypes: true, recursive: true })
+      .filter((entry) => entry.isFile())
+      .map((entry) => path.relative(REPO, path.join(entry.parentPath, entry.name)).split(path.sep).join('/'))
+      .filter((file) => !file.split('/').includes('node_modules'))
+      .sort();
+
+  it('no file under apps/host/src or apps/playground/src names them — source, tests, fixtures, comments', () => {
+    const files = [...everyFile('apps/host/src'), ...everyFile('apps/playground/src')];
+    // The walk sees both trees, tests included — never an empty list.
+    expect(files).toContain('apps/host/src/probe.ts');
+    expect(files).toContain('apps/host/src/__tests__/probe.test.ts');
+    expect(files).toContain('apps/playground/src/platform/platform.ts');
+    expect(files).toContain('apps/playground/src/__tests__/availability.test.ts');
+    const hits: string[] = [];
+    for (const file of files) {
+      if (gone.test(file)) hits.push(`${file} (the path itself)`);
+      const line = read(file).split('\n').findIndex((candidate) => gone.test(candidate));
+      if (line !== -1) hits.push(`${file}:${line + 1}`);
+    }
+    expect(hits).toEqual([]);
+  });
+
+  it('the pattern catches each name in the shapes it had, and not the persisted kind it must leave alone', () => {
+    for (const spelling of [
+      "binding?: 'artifact' | 'artifact-static' | '" + GONE[0] + "' | 'local-host' | 'file';",
+      `  ${GONE[1]}: isFunction(claude?.complete),`,
+      `import { ${GONE[2]}, type CompleteFn } from './brains/complete.js';`,
+      `import { createBackend } from './storage/${GONE[3]}.js';`,
+      `export function create${GONE[3].replace(/^w/, 'W')}Backend(`,
+      `      budget?: ${GONE[4]};`,
+    ]) {
+      expect(gone.test(spelling), spelling).toBe(true);
+    }
+    expect(gone.test("case 'window-storage':")).toBe(false);
   });
 });

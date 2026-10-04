@@ -2,24 +2,33 @@
 layer: knowledge-base
 destination: served (whole or as ##-sections via searchKnowledge) by the {{appBuilderToolName}} tool when the host LLM picks libraries or debugs script loading; reachable only when the app-builder capability is enabled
 blast-radius: which CDN URLs generated apps embed — a wrong URL here ships as a broken script tag in every app that uses that library
-source: rewritten for Snug v0.1 from ancestor KBs; allowlist narrowed to the Snug CSP (no Tailwind play CDN, no Google Fonts)
+source: rewritten for Snug v0.1 from ancestor KBs; allowlist narrowed to the Snug CSP (no Tailwind play CDN, no Google Fonts); the allowlist bullets name exactly what RUNNER_CSP admits, tied by src/__tests__/cdn-policy.test.ts (TASK-20261003 R5)
 -->
 
 # CDN Compatibility
 
 ## The Allowlist Is Fixed
 
-The iframe CSP permits scripts ONLY from: {{cdnAllowlist}} — plus `data:` URIs for inline
-images/SVGs. This list is never widened at runtime. Notably NOT available: the Tailwind
-play CDN and Google Fonts (style with plain CSS and the system font stack instead), and any
-other origin. A script tag pointing anywhere else silently fails to load.
+Every Snug host runs an app under the same fixed policy, and it lets the app load:
+
+- scripts — inline and `eval` (the app is inline code that Babel compiles in the page), and from {{cdnAllowlist}};
+- stylesheets — inline, and from {{cdnAllowlist}};
+- fonts — `data:` URLs, and from {{cdnAllowlist}};
+- images — `data:` and `blob:` URLs only.
+
+Nothing else loads, and the list is never widened at runtime. Notably NOT available: the
+Tailwind play CDN and Google Fonts (style with plain CSS and the system font stack instead),
+and any other origin. A script tag pointing anywhere else silently fails to load. Inside a
+Claude artifact the list is narrower still (next section), so an app that may ever run
+there keeps its CSS in a `<style>` block.
 
 ## Inside a Claude Artifact: a Narrower Allowlist
 
-When the app will run inside a Claude artifact (the Snug host kit published as an artifact,
-or a chat artifact), the artifact viewer's own policy sits above Snug's and admits LESS.
-Measured on both viewers: scripts load ONLY from `https://cdn.jsdelivr.net/npm/` and
-`https://cdnjs.cloudflare.com/`; jsDelivr `/gh/…` and unpkg are blocked; NO CDN stylesheet
+When the app will run inside a Claude artifact (the Snug host kit published as an artifact
+— whether a tool published it or a chat created it, it is the same artifact), the artifact
+viewer's own policy sits above Snug's and admits LESS. Measured in the artifact viewer (a
+chat artifact runs in the same one): scripts load ONLY from `https://cdn.jsdelivr.net/npm/`
+and `https://cdnjs.cloudflare.com/`; jsDelivr `/gh/…` and unpkg are blocked; NO CDN stylesheet
 or font loads at all. So for an artifact-bound app:
 
 - load libraries from jsDelivr `/npm/` or cdnjs only — never unpkg, never `/gh/`;

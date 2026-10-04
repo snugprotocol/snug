@@ -18,7 +18,7 @@ import type { AgentHandInSeat, CustodySeat, SnugPlatform } from '@playground/pla
 import type { ProbeResult } from './probe.js';
 
 export interface HostPlatformSeats {
-  /** The file's home as composed (the artifact record, window storage, or the probed bucket). Absent → the probed bucket. */
+  /** The file's home as composed (the artifact record, or the probed bucket). Absent → the probed bucket. */
   userdbBackend?: PersistenceBackend;
   custody?: CustodySeat;
   saveFile?: (bytes: Uint8Array, suggestedName: string) => Promise<void>;
@@ -30,7 +30,7 @@ export function createHostPlatform(probe: ProbeResult, sqlJsWasmBinary: Uint8Arr
     kind: 'host',
     binding: probe.binding,
     // The brain the ONE derivation honours ahead of the user file (P2): demo, or the
-    // host brain the probe pinned (T4: `sample` / `window.claude.complete`).
+    // host brain the probe pinned (T4: `sample`).
     brain: probe.brain.brain,
     // The engine as bytes (P4/AC8): both sql.js callers pass it beside the locator and
     // no request for sql-wasm.wasm is ever made.
