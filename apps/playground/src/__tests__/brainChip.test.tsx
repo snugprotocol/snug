@@ -387,7 +387,9 @@ describe('the brain switcher — a host that carries brainSwitch (B6, B8)', () =
       const seat = await fakeSeat({ model: 'claude-sonnet-5-5' });
       await mount(seat);
       await open();
-      expect(text('brain-menu-active')).toBe('thinking on Claude’s default model (known after the first think), level default');
+      // MIGRATED in R4's round-2 fix: this pinned "thinking on Claude's default model" with
+      // Sonnet chosen — untrue, the next think carries Sonnet. Asked-for is said as asked-for.
+      expect(text('brain-menu-active')).toBe('next think asks for Sonnet 5.5, level default — what answers is shown here after it');
       await act(async () => seat.set({ answered: { brain: 'claude', model: 'claude-sonnet-5-5[1m]' }, effort: 'high' }));
       expect(text('brain-menu-active')).toBe('thinking on claude-sonnet-5-5[1m], level high');
     });
@@ -599,7 +601,19 @@ describe('the brain switcher — a host that carries brainSwitch (B6, B8)', () =
       expect(byId('brain-chip-effort')).toBeNull();
       await open();
       expect(byId('brain-menu-effort')).toBeNull();
-      expect(text('brain-menu-active')).toBe('thinking on Claude’s default model (known after the first think)');
+      expect(text('brain-menu-active')).toBe('next think asks for Haiku 4.5 — what answers is shown here after it');
+    });
+
+    it('nothing chosen and nothing answered yet: the default model, said as unknown until a think comes back', async () => {
+      await mount(await fakeSeat());
+      await open();
+      expect(text('brain-menu-active')).toBe('thinking on Claude’s default model (known after the first think), level default');
+    });
+
+    it('a model typed by hand that the catalogue does not list is named by what was typed', async () => {
+      await mount(await fakeSeat({ model: 'claude-opus-5-5' }));
+      await open();
+      expect(text('brain-menu-active')).toBe('next think asks for claude-opus-5-5, level default — what answers is shown here after it');
     });
 
     it('up to six levels are ONE row of segments: every level is one tap, "default" clears, and the chosen one is marked', async () => {
@@ -664,7 +678,9 @@ describe('the brain switcher — a host that carries brainSwitch (B6, B8)', () =
       await mount(await standingIn([loggedOut(CLAUDE, CLAUDE_REMEDY), CODEX]));
       await open();
       expect(text('brain-dock-now')).toBe('answering nowthe demo brain');
-      expect(text('brain-dock-standin')).toBe('Claude · not logged in. a tiny script inside this page answers until one of your agents is ready — no AI model or service is called.');
+      // MIGRATED in R4's round-2 fix: this pinned "…until one of your agents is ready" two
+      // rows above a Codex marked ready. The sentence now names the agent and the way out.
+      expect(text('brain-dock-standin')).toBe('Claude · not logged in. a tiny script inside this page answers until Claude is ready, or you pick a ready agent below — no AI model or service is called.');
       expect(text('brain-remedy-claude')).toBe('Your Claude CLI is not logged in — run claude and /login, then check again.');
       expect([...need('brain-remedy-claude').querySelectorAll('code')].map((code) => code.textContent)).toEqual(['claude', '/login']);
       expect(need('brain-menu').textContent).not.toMatch(/nothing to configure|no host brain wired/);
@@ -679,6 +695,18 @@ describe('the brain switcher — a host that carries brainSwitch (B6, B8)', () =
       expect(need('brain-option-codex').getAttribute('aria-pressed'), 'it is still the user’s choice').toBe('true');
       expect(need('brain-option-codex').dataset.answering).toBe('false');
       expect(need('brain-option-claude').dataset.answering, 'and nothing else answers in its place').toBe('false');
+    });
+
+    it('the stand-in sentence with NO ready agent anywhere: it waits for one of them', async () => {
+      await mount(await standingIn([loggedOut(CLAUDE, CLAUDE_REMEDY), loggedOut(CODEX, CODEX_REMEDY)]));
+      await open();
+      expect(text('brain-dock-standin')).toBe('Claude · not logged in. a tiny script inside this page answers until one of your agents is ready — no AI model or service is called.');
+    });
+
+    it('the stand-in sentence when the reason is about no ONE agent and one is ready: it answers meanwhile, and the remedy follows', async () => {
+      await mount(await standingIn([CLAUDE, CODEX]));
+      await open();
+      expect(text('brain-dock-standin')).toBe('no agent is answering. a tiny script inside this page answers meanwhile — no AI model or service is called. check again, or pick an agent below.');
     });
 
     it('there are no model or level controls while no brain answers (AC8) — and no dead "thinking on" line', async () => {

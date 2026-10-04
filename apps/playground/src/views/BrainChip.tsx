@@ -40,6 +40,7 @@ import {
   brainRemedy,
   demoStandIn,
   proseParts,
+  standInBody,
   tierAutoLabel,
   tierLabel,
   tierSubstitutionNote,
@@ -254,13 +255,6 @@ function StatusChip(): ReactElement {
 // ------------------------------------------------------------------ the brain switcher
 
 /**
- * What the popover says under "the demo brain" on a host with a switcher. Never "nothing to
- * configure": on the runner there is always something the user can do — each agent's row
- * says what — and this says what is answering meanwhile.
- */
-export const HOST_STAND_IN_BODY = 'a tiny script inside this page answers until one of your agents is ready — no AI model or service is called.';
-
-/**
  * A thinking-level row shows every level at once while there are few enough to read as one
  * row at 375 px (Claude has five; with "default" that is six segments at about 50 px each).
  * Past that it is the plain dropdown.
@@ -402,6 +396,10 @@ function BrainSwitcher({ seat }: { seat: BrainSwitchSeat }): ReactElement {
   // What ANSWERED, never what was asked (ADR-0059 rule 2): a chosen model is not named here
   // until a think has come back on it — and what another brain answered on is not this one's.
   const ran = answering !== undefined && state.answered?.brain === answering.id ? state.answered.model : undefined;
+  // …and a CHOSEN model nothing has answered on yet is said as asked for: "thinking on the
+  // default model" there was untrue — the next think carries the choice.
+  const asked = answering === undefined || ran !== undefined || state.model === undefined ? undefined : (answering.models.find((model) => model.id === state.model)?.name ?? state.model);
+  const levelWords = levels.length > 0 ? `, level ${level}` : '';
 
   const refusal =
     state.refusal !== undefined ? (
@@ -478,7 +476,8 @@ function BrainSwitcher({ seat }: { seat: BrainSwitchSeat }): ReactElement {
           </div>
           {standIn !== undefined ? (
             <p className="brain-dock-standin" data-testid="brain-dock-standin">
-              <strong>{standIn.why}.</strong> {HOST_STAND_IN_BODY}
+              {/* Never "nothing to configure": on the runner there is always something to do. */}
+              <strong>{standIn.why}.</strong> {standInBody(standIn, state.brains)}
               {/* A reason that is about ONE agent has its remedy on that agent's row, below. */}
               {standIn.brain === undefined ? <span className="brain-dock-standin-remedy"> {standIn.remedy}</span> : null}
             </p>
@@ -559,8 +558,9 @@ function BrainSwitcher({ seat }: { seat: BrainSwitchSeat }): ReactElement {
                   model ignores is a dead control (AC8). */}
               {levels.length > 0 ? <LevelPicker levels={levels} value={state.effort} onChange={(next) => seat.setEffort(next)} /> : null}
               <p className="brain-dock-active" data-testid="brain-menu-active">
-                {`thinking on ${ran ?? `${answering.name}’s default model (known after the first think)`}`}
-                {levels.length > 0 ? `, level ${level}` : ''}
+                {asked !== undefined
+                  ? `next think asks for ${asked}${levelWords} — what answers is shown here after it`
+                  : `thinking on ${ran ?? `${answering.name}’s default model (known after the first think)`}${levelWords}`}
               </p>
               {refusal}
               <p className="brain-dock-hint" data-testid="brain-menu-cli-hint">

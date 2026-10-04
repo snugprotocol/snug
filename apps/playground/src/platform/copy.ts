@@ -297,6 +297,21 @@ export function demoStandIn(state: Pick<BrainSwitchState, 'choice' | 'active' | 
 }
 
 /**
+ * The sentence after the stand-in's reason: what answers meanwhile, and until when. It once
+ * said "until one of your agents is ready" two rows above an agent marked ready (auto does
+ * not take that one — ADR-0071 §4), so where there is a way out it names it.
+ */
+export function standInBody(standIn: DemoStandIn, brains: readonly BrainOptionView[]): string {
+  const script = 'a tiny script inside this page answers';
+  const free = 'no AI model or service is called.';
+  // The brain a reason names is never a ready one (`demoStandIn`), so any ready brain is a way out.
+  if (!brains.some((brain) => brain.state === 'ready')) return `${script} until one of your agents is ready — ${free}`;
+  if (standIn.brain !== undefined) return `${script} until ${standIn.brain.name} is ready, or you pick a ready agent below — ${free}`;
+  // The reason is about no one agent ("no agent is answering"); its remedy follows this.
+  return `${script} meanwhile — ${free}`;
+}
+
+/**
  * The one plain line under `auto`: what auto means here, now. While the demo brain stands
  * in it says WHICH fact made it so — it once said "nothing is ready" two lines above a row
  * marked "ready" (auto does not take that row: ADR-0071 §4), which read as a contradiction.
