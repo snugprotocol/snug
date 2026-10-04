@@ -1,6 +1,6 @@
 # 0045 — Starter versioning and the in-place update channel
 
-- **Status:** accepted (owner plan approval, 2026-08-21)
+- **Status:** accepted (owner plan approval, 2026-08-21) — **amended 2026-10-04** (TASK-20261003-host-bindings-complete, Gate 5): §7's "edited" also covers a re-authored runtime contract, recorded in a new per-app setting `starterContract:<appId>` beside §6's `starterVersion:<appId>` — see the amendment at the end
 - **Date:** 2026-08-20
 - **Task:** TASK-20260820-starter-updates
 
@@ -41,3 +41,40 @@ No starter carried a version or release notes; both are net-new data.
 - `resetToFactory` after an update restores the updated starter, not install-day bytes; the install-day version remains reachable via the versions panel (pinned rows are never pruned).
 - The update act is the first writer of a second pinned row; everything assuming "exactly one pinned version" must treat pinned as plural. The full-repo sweep found exactly two: `resetToFactory` (flipped to MAX here) and `VersionsPanel` (banner + factory tags — its DESC `find` already lands on the newest pinned; the selection is made deliberate and test-pinned, and every pinned row keeps the `factory` tag since each is a factory snapshot).
 - Spec impact: none — no `packages/protocol` change.
+
+## Amendment (2026-10-04, TASK-20261003 Gate 5)
+
+- **What changed underneath §4 and §7.** TASK-20261003 (R5, C7) made a CONTRACT-ONLY release
+  reach installed copies: `applyStarterUpdate` (`apps/playground/src/starter/starterUpdate.ts`)
+  treats a copy whose html equals the bundle as behind when its stored runtime contract differs
+  from the bundled one, and lands the release as a new pinned version carrying the factory
+  contract (§4). But §7's edited test — `starterUpdateStatus.edited` — compared the html only.
+  The builder's `runtime_contract_write` re-authors a contract IN PLACE on the current version
+  (`putRuntimeContract`), and on an unedited copy that version is the starter's own pin, so the
+  pin agrees with any re-author. A re-authored contract was therefore replaced as current by a
+  docs-only or contract-only release in one click, with no "you've customized this app"
+  confirmation (Gate 5 seams/F2). It stays revertable in the versions panel, as §7 promises.
+- **§7, amended: `edited` also covers a re-authored runtime contract.** `edited` is true when the
+  running html differs from the newest pin's html, OR when the copy's current runtime contract
+  differs from the contract the starter last WROTE. That fact is a new per-app `snug_settings`
+  row, `starterContract:<appId>`: the canonical contract the starter wrote, or `null` for a
+  starter with no contract (`apps/playground/src/starter/starterRuntimeContract.ts`,
+  `starterContractSettingKey`, `recordStarterContract`). The install act writes it after it
+  writes the contract (`null` for a contract-free starter); the update act writes it whenever
+  the release carries a contract, in the update branch and in the already-current branch; it is
+  never written when an update copies the user's contract forward. A copy without the row (one
+  installed before it existed) is judged against its newest pin's contract.
+- **§6's settings-key obligation is OWED for the new key.** §6 keeps `starterVersion:` in
+  `packages/db`'s settings-key module (`packages/db/src/userdb/app-settings-keys.ts`) and
+  equality-deletes it in `deleteApp`'s cascade (`packages/db/src/userdb/userdb.ts`).
+  `starterContract:` is defined in the playground instead, because the Gate 5 fix could not touch
+  `packages/db`; until it moves there and joins the cascade, a deleted app leaves this row
+  behind. It is read only for a starter copy of the same app id, whose install act writes it
+  afresh.
+- **Residual: copies installed before the row existed.** Such a copy whose contract was already
+  re-authored in place reads as UNEDITED — its newest pin's contract is the re-authored one — until
+  a release that carries a contract records the starter's word. The first contract-writing release
+  after this build (chess v3 for an older chess copy, or any contract-only release) therefore
+  replaces that contract as current with no confirmation, for the existing installed base. On
+  `main` an HTML update already did the same to such a contract (`edited` compared html only, and
+  §4 ships the factory contract); the contract stays revertable in the versions panel.

@@ -127,8 +127,10 @@ differs from the playground is the OUTPUT and what the platform carries:
   token claim, no `/status`, no platform, no db (under the hash router that document used to
   render the hub, so a runner sign-in could never complete). (2) Only at the literal origin
   `http://127.0.0.1` (never `localhost`, another address, `https:` or `file:`): claim the
-  launch token from the fragment, then ONE `GET /status` to its own origin, bounded at
-  1.5 s — a `200` in the runner's pinned shape composes the local platform
+  launch token from the fragment, then `GET /status` to its own origin, bounded at 1.5 s — a
+  tokenless page asks once; a page holding a token asks again (3 s, then 6 s) and, with no
+  answer, renders "the Snug runner is not answering" (`LocalRefusal`'s `not-answering`)
+  rather than open on this browser's storage (TASK-20261003 Gate 5) — a `200` in the runner's pinned shape composes the local platform
   (`src/local/compose-local.ts`); a `401`/`403` carrying `x-snug-runner: 1` renders "open
   it from your agent" (`src/local/LocalRefusal.tsx`); anything else falls through. (3) The
   probe and the hosted composition (`src/compose.ts`). Both compositions mount through one
@@ -398,7 +400,9 @@ an ack written by the socket after the handler — `{ ok: true, op }`, or `{ ok:
 `build` is an older build — the `older-build` row, never a false success. `call` runs the
 PRIMARY's own `callTool` (a forwarded bundle is re-validated there), so an attached session
 and the primary cannot drift. `open` makes the primary open the browser (`src/opener.ts`:
-`/usr/bin/open` on macOS, an `error` listener for the child's whole life) and answers
+`/usr/bin/open` on macOS, `/usr/bin/xdg-open` on Linux — absolute paths; the child's
+environment an allowlist (`openerEnvFor`, from `machineEnvironment()` via `main.ts`); an
+`error` listener for the child's whole life) and answers
 `{ port }`; `launch-url` is the ONE op that answers the bearer, used only by the human CLI
 (`src/cli.ts`), which prints it only when stdout is a terminal. `snug status` reports the
 version, the build (`src/build.ts`: the first seven hex digits of the sha256 of the running

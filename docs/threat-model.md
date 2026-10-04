@@ -9,7 +9,7 @@
   lock and control socket were rebuilt (the control socket gained `launch-url`, the one op that
   answers the bearer); the plugin pins its page by sha256; and chat was measured to run the
   same hosted artifact runtime as a published artifact. §5's new "local runner and its brains"
-  table and residuals R-44 to R-48 carry it, with notes added to R-11, R-40 and R-42; the delta
+  table and residuals R-44 to R-49 (R-49 from its Gate 5 note) carry it, with notes added to R-11, R-40 and R-42; the delta
   `threat-model-delta-brains-and-chat.md` is the detailed record, and
   `threat-model-delta-local-host-process.md` was revised for the lock and socket. A targeted
   consolidation, not a re-attack: each row was traced to the code on the task's branch, and
@@ -255,11 +255,12 @@ page. The detailed record is `docs/security/threat-model-delta-brains-and-chat.m
 | A think never moves to another vendor without a user act: `auto` is the default brain when it is ready and verified, else none (the demo brain answers); a pin is that brain or none; an unverified brain answers only a pin | `apps/host-mcp/src/brains/registry.ts` (`resolve`); the page's mirror, `apps/host/src/local/compose-local.ts` (`brainFor`) | `apps/host-mcp/src/__tests__/brains/registry.test.ts` — the selection matrix; `apps/host/src/__tests__/composeLocal.test.ts` |
 | Codex stays unverified until a journaled logged-in walk: `verified` is false, `auto` never takes it, and the chip labels it experimental | `apps/host-mcp/src/brains/codex.ts` — `CODEX_VERIFIED_VERSIONS` ships empty | `apps/host-mcp/src/__tests__/brain-codex.test.ts`; `apps/playground/src/__tests__/brainChip.test.tsx` |
 | A Codex failure reaches the page as one of Snug's own fixed sentences (`CODEX_SENTENCES` plus the bound, abort, cap and stopping sentences) — never the CLI's own text or its stderr (Claude's own text does pass: R-44) | `apps/host-mcp/src/brains/codex-events.ts` (`CODEX_SENTENCES`) | `apps/host-mcp/src/__tests__/brain-codex.test.ts` — the recorded logged-out run yields none of its bytes |
-| The one kit page tries the runner path — claiming a launch token and asking `/status` — ONLY at the literal origin `http://127.0.0.1`, and under the runner reads no embedded bundle or `snug-db` block | `apps/host/src/boot.tsx` (`isRunnerOrigin`, `askRunner`, `planBoot`) | `apps/host/src/__tests__/boot.test.tsx` — `localhost`, `[::1]`, `0.0.0.0`, another `127.x`, LAN, `https:` and `file:` neither fetch nor claim |
+| The one kit page tries the runner path — claiming a launch token and asking `/status` — ONLY at the literal origin `http://127.0.0.1`, and under the runner reads no embedded bundle or `snug-db` block. A page holding a launch token that gets no answer asks again and then refuses (`not-answering`) — it never opens as a file page on the browser's storage (Gate 5) | `apps/host/src/boot.tsx` (`isRunnerOrigin`, `askRunner`, `planBoot`) | `apps/host/src/__tests__/boot.test.tsx` — `localhost`, `[::1]`, `0.0.0.0`, another `127.x`, LAN, `https:` and `file:` neither fetch nor claim; a claimed token with no answer is "not answering", the tokenless twin boots file-class |
 | A plugin install whose page does not match its pinned sha256 refuses (`page-damaged`) and binds nothing — no lock, socket or listener. It catches a partial copy, not a same-user writer (R-40) | `apps/host-mcp/src/page.ts` (`locatePage`); `apps/host-mcp/src/process.ts` | `apps/host-mcp/src/__tests__/page.test.ts`; `apps/host-mcp/src/__tests__/lifecycle-interop.test.ts`; `scripts/check-host-mcp.test.mjs` — the gate's damaged-page leg |
-| The bearer leaves the process only to the page and through the control socket's `launch-url`, which the human CLI asks only when its stdout is a terminal | `apps/host-mcp/src/runner.ts` (`handleControl`); `apps/host-mcp/src/cli.ts` | `apps/host-mcp/src/__tests__/runner.test.ts` — a token canary over every other op's answer, errors and unknown ops included; `apps/host-mcp/src/__tests__/cli.test.ts` |
+| The bearer leaves the process to the page, through the control socket's `launch-url` (which the human CLI asks only when its stdout is a terminal), and — NOT sealed — as the browser opener's argv entry, readable in process listings by other local accounts (R-49) | `apps/host-mcp/src/runner.ts` (`handleControl`); `apps/host-mcp/src/cli.ts` | `apps/host-mcp/src/__tests__/runner.test.ts` — a token canary over every other op's answer, errors and unknown ops included; `apps/host-mcp/src/__tests__/cli.test.ts` |
+| The browser opener runs by absolute path (`/usr/bin/open`, `/usr/bin/xdg-open`; anything else is the printed fallback) with an environment built by allowlist from the one whole-environment read — never the parent's whole environment | `apps/host-mcp/src/opener.ts` (`openerEnvFor`); `apps/host-mcp/src/main.ts`; `apps/host-mcp/src/brains/registry.ts` (`machineEnvironment`) | `apps/host-mcp/src/__tests__/opener.test.ts` — absolute openers; a hostile parent environment reaches no opener child; the real spawn gets exactly the built environment |
 | `stop` refuses while a page is open unless forced, and a stop drains in-flight `/userdb` writes before the lock is released | `apps/host-mcp/src/runner.ts` (`stop`); `apps/host-mcp/src/process.ts` (`EXIT_DEADLINE_MS`) | `apps/host-mcp/src/__tests__/runner.test.ts`; `apps/host-mcp/src/__tests__/lifecycle-interop.test.ts` |
-| A take-over cannot kill a healthy runner or a stranger: the socket's token hash is asked first, identity is read only for a live silent pid and only by the script's basename, a runner of ours is signalled only after three probes over five seconds and a silent port, then waited for; only the canonical `ctl.sock` is ever unlinked | `apps/host-mcp/src/lock.ts`; `apps/host-mcp/src/identity.ts` | `apps/host-mcp/src/__tests__/lock.test.ts`; `apps/host-mcp/src/__tests__/identity.test.ts` |
+| A take-over cannot kill a healthy runner or a stranger: the socket's token hash is asked first, identity is read only for a live silent pid and only by the script's basename, a runner of ours is signalled only after three probes over five seconds and a silent port, then waited for; only the canonical `ctl.sock` is ever unlinked, and never while anything listens on it at connect level or the dead record's port still answers | `apps/host-mcp/src/lock.ts` (`takeOver`); `apps/host-mcp/src/runner.ts` (`somethingListens`); `apps/host-mcp/src/identity.ts` | `apps/host-mcp/src/__tests__/lock.test.ts`; `apps/host-mcp/src/__tests__/runner.test.ts`; `apps/host-mcp/src/__tests__/identity.test.ts` |
 | A kit save publishes only the bare kit page, lifted from the measured contract-0.2.67 skeleton byte for byte or refused by name (R-47) | `scripts/lib/page-blocks.mjs` (`unwrapViewerPage`); `apps/host/src/storage/artifactHtml.ts` | `scripts/lib/page-blocks.test.mjs` — two real read-backs; `apps/host/src/__tests__/artifactHtml.test.ts` |
 | No gate or suite spawns a real agent CLI or reaches the real `~/Snug`: the runner takes no default brain registry, and the gate's launch legs run the shipped process under a temp home and abort unless its status names that home and the leg's own pid | `apps/host-mcp/src/runner.ts`; `scripts/check-host-mcp.mjs` (`runLaunchLegs`) | `apps/host-mcp/src/__tests__/runner.test.ts`; `scripts/check-host-mcp.test.mjs` |
 | The desktop-host walk — opt-in, in no gate — refuses a `SNUG_HOME` that is or is inside the user's real Snug home, and believes only its own child | `scripts/walk-desktop-host.mjs` (`walkEnv`, `whyNotMine`) | `scripts/walk-desktop-host.test.mjs` |
@@ -536,6 +537,21 @@ credential is in either. The kernel caps a command line, so each driver advertis
 `maxPromptBytes` (120,000 bytes on Linux, 900,000 on macOS) and names an `E2BIG` spawn as "too
 large"; Codex's cap counts the prompt before TOML escaping, so a quote-heavy prompt near it
 fails with that named sentence — safe, not silent.
+
+**R-49 — The launch URL, bearer included, is the browser opener's argv (Gate 5, 2026-10-04;
+severity minor).** To open the browser, the local host process spawns the opener with
+`http://127.0.0.1:<port>/#token=<bearer>` as its one argument (`apps/host-mcp/src/opener.ts`):
+`/usr/bin/open` on macOS, for the moment it runs (as on `main`); `/usr/bin/xdg-open` on Linux,
+where a browser it starts may keep the URL in its own argv for its whole life. A process
+listing (`ps`, `/proc/<pid>/cmdline`) shows argv to OTHER local OS accounts, not only this
+user's — so this is outside R-40's same-user boundary — and the bearer is the loopback data
+plane's only guard against a non-browser client. An account that reads it can fetch the user
+file (plaintext `snug_secrets` unless protected, R-3), drive `/fetch`, and use the chat route on
+the user's own agent. *Bounded by:* a second account on the same machine, and a listing taken
+while the URL is visible. *Follow-up:* a one-time launch code in the fragment instead of the
+bearer — single use, a short TTL, held in memory, exchanged for the bearer on a POST that passes
+the `Host`/`Origin` gate. *Full surface:* `docs/security/threat-model-delta-brains-and-chat.md`
+(L1, L6, residual 8) and `docs/security/threat-model-delta-local-host-process.md` (residual 12).
 
 
 **R-38 — Shared docs may carry the sharer's personal data.** `memory` is off by default
@@ -867,6 +883,13 @@ to any caller, and whose take-over signalled after one silent probe — with a d
 recording what changed. The blank line that had split the last ledger row into a second,
 headerless table is gone.
 
+**v3.2 Gate-5 note (2026-10-04).** Both of TASK-20261003's deltas were edited after the branch's
+Gate 5 review and re-hashed here. Recorded: R-49 (the bearer in the opener's argv); the opener's
+absolute path and allowlisted environment; the take-over's connect-level listening check before
+any unlink; and the page that holds a launch token and refuses rather than opening as a file
+page. The local-host delta's "macOS-only" line now says what is true: the shipped surface is
+macOS, and a Linux opener exists, untested on a real Linux desktop.
+
 <!-- DELTA-LEDGER:BEGIN -->
 
 | Delta | Pinned hash | Consolidated into |
@@ -884,8 +907,8 @@ headerless table is gone.
 | `docs/security/threat-model-delta-multi-provider-byok.md` | `540490f88a1c` | §5 authoring · R-32 |
 | `docs/security/threat-model-delta-desktop-update-channel.md` | `2f6321918cce` | §5 C2 + authoring · R-28, R-29, R-30, R-33 |
 | `docs/security/threat-model-delta-app-sharing.md` | `806ca935aa18` | §4 boundary 5 · §5 C1 + C2 + authoring · R-34, R-35, R-36, R-37, R-38, R-39 |
-| `docs/security/threat-model-delta-local-host-process.md` | `733d328bec13` | §5 local runner (lock, socket, bearer) · §6 R-40 · R-41 · R-42 · R-43 (R-43 amended for ADR-0070; R-40 and R-42 noted for R1) |
-| `docs/security/threat-model-delta-brains-and-chat.md` | `8092c284d23d` | §4 boundary 3 · §5 local runner and its brains · R-11 note · R-40 note · R-44, R-45, R-46, R-47, R-48 |
+| `docs/security/threat-model-delta-local-host-process.md` | `b7ddc88afd9a` | §5 local runner (lock, socket, bearer) · §6 R-40 · R-41 · R-42 · R-43 · R-49 (R-43 amended for ADR-0070; R-40 and R-42 noted for R1; R-49 and the take-over row added at Gate 5) |
+| `docs/security/threat-model-delta-brains-and-chat.md` | `4305f1f75d89` | §4 boundary 3 · §5 local runner and its brains · R-11 note · R-40 note · R-44, R-45, R-46, R-47, R-48, R-49 (Gate 5) |
 <!-- DELTA-LEDGER:END -->
 
 ---

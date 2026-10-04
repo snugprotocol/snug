@@ -99,3 +99,31 @@ That is the decision's centre. An app's think is **untrusted input**: apps are L
   `docs/next-steps.md` (2026-10-04) with §2's rule each must meet.
 - **The decisions index's summary of `auto`** ("the spawning host's brain, else the first ready
   one") was the pre-review wording; §4 and the code are as above.
+
+## Amendment (2026-10-04, TASK-20261003 Gate 5)
+
+- **One "measured" fact in the Context was transcribed.** The `codex login status` bullet lists,
+  among the facts measured on 2026-10-03, that logged in the CLI "names the method (`Logged in
+  using ChatGPT` is the subscription)". Only the logged-OUT run was measured. The logged-in
+  line was TRANSCRIBED from upstream: `run_login_status` in `codex-rs/cli/src/login.rs` at tag
+  `rust-v0.160.0` prints `Logged in using ChatGPT` with `eprintln!` (stderr) and exits 0, and the
+  API-key branch prints `Logged in using an API key - <first 8 characters>***<last 5>`
+  (`apps/host-mcp/src/__tests__/fixtures/codex/PROVENANCE.md`; the constants
+  `CODEX_LOGIN_STATUS_CHATGPT_TRANSCRIBED` and `CODEX_LOGIN_STATUS_API_KEY_TRANSCRIBED` in
+  `fixtures/fake-codex-child.ts`). §3's "`ready` only when it reports the ChatGPT login" rests on
+  that transcription until the owner's walk (track C, step 1, of
+  [the owner's walks](../runbooks/owner-walks-host-bindings.md)) records the real output as
+  `login-status-chatgpt.recorded.*`. If the real CLI prints something else, a logged-in Codex
+  reads as not ready — it fails safe. The driver (`apps/host-mcp/src/brains/codex.ts`) reads any
+  other `Logged in using …` line at exit 0 as the API-key case: `logged-out`, with the sentence
+  "Snug uses your ChatGPT login, not an API key". Per the Gate 5 reading of the same upstream
+  function, it has more logged-in lines than these two (other auth modes); for those the
+  driver's state is still right (not ready) and its sentence is imprecise.
+- **The walk names the version the way the list is matched.** `CODEX_VERIFIED_VERSIONS` is
+  compared with the bare number the driver parses from `codex --version` (`codex-cli 0.160.0` →
+  `0.160.0`). The walk's report now prints that number — `the Codex walk — 0.160.0` — and its
+  PASS line names the exact entry, `add '0.160.0' to CODEX_VERIFIED_VERSIONS`; a walk whose
+  `codex --version` the driver cannot read ends `verdict: FAIL`
+  (`apps/host-mcp/src/__tests__/fixtures/codex-walk.ts`). `brain-codex.test.ts` fails any list
+  entry the driver's parse would not yield, so the raw `codex-cli 0.160.0` cannot be pasted in
+  and leave Codex unverified with every test green.

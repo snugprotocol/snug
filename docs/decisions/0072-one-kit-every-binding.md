@@ -107,3 +107,42 @@ path.
   as stores (`apps/playground/src/platform/signals.ts`); and the availability derivation
   (`apps/playground/src/platform/availability.ts`) behind the shelf, the run route, the wizard's
   walls and the host passport (`apps/playground/src/views/HostPassport.tsx`).
+
+## Amendment (2026-10-04, TASK-20261003 Gate 5)
+
+- **§2's "anything else is what the probe finds" now holds only for a TOKENLESS page.** The
+  task's criterion K2 read "anything else or no answer within the bound → what the probe
+  finds". A page that holds a launch token — claimed from the fragment, or found in
+  `sessionStorage` after a reload — and gets NO answer from `/status` no longer falls through.
+  It asks up to three times, each bound longer than the last (`RUNNER_STATUS_BOUND_MS` 1,500 ms,
+  then `RUNNER_STATUS_RETRY_BOUNDS_MS` 3,000 and 6,000 ms, with pauses of
+  `RUNNER_STATUS_RETRY_PAUSE_MS` 250 ms, then 500 ms — about 11.3 s at worst), and then renders
+  the refusal "The Snug runner is not answering" (`LocalRefusal` kind `not-answering`) with no
+  platform and no database composed (`apps/host/src/boot.tsx`, `askRunner`, `planBoot`). A
+  failed connection counts as no answer. Any ANSWER that is not the runner's — a 404, a 200 that
+  is not JSON or not the runner's shape — still means "not a runner" and is asked once, token or
+  no token. Why: the token is claimed and stripped from the address before `/status` is asked,
+  so a runner slower than the first bound (every `/status` runs a synchronous `/bin/ps` bounded
+  at 2 s) booted its own page as a plain file on the browser's storage, with nothing on screen
+  saying the runner was there (Gate 5 security/F5). The tokenless fall-through is unchanged: it
+  is the loopback static-server case K2 was written for.
+- **§4's needs: `oauth` counts only while a sign-in is owed.** §4 says an installed app's needs
+  come from its `declared` and `approved` connection rows. For `oauth` that is now narrower:
+  `needsOfConnections` (`apps/playground/src/platform/availability.ts`) counts it for a
+  `declared` row, or for an `approved` row whose sign-in has not finished. Finished means what
+  `OAuthService.getAccessToken` (`packages/auth`) needs to run on stored tokens: the slot's
+  connection state (`authConnectionStateSecretKey`) is present with a status other than
+  `pending`, and the slot holds an access token (`authConnectionCredentialSecretKey(…,
+  'access_token')`, checked by key, never read). `signedIn(db)` is that reader; its argument
+  is required, and the hub (`HubView.tsx`) and the run route (`RunView.tsx`) pass it. Why: the
+  OAuth redirect is what SIGNING IN needs; an app already signed in runs on its stored tokens
+  over the network. Counted for every OAuth row, a runner that fell back off its fixed port
+  (`oauthRedirect: false`) blocked every app the user had already connected, with a false
+  reason (Gate 5 seams/F1). The wizard's sign-in wall still reads the `oauth` offer.
+  **Residuals:** the STARTER-SHELF tile judges the starter's own connection requirement, so on
+  an `oauthRedirect: false` runner the shelf tile of a Spotify or Gmail starter the user has
+  installed and signed in still shows blocked ("needs a provider sign-in") — its installed tile
+  and its run route do run; and a grant in the `expired` state counts as signed in (the service
+  refreshes it over the network), so if its refresh fails for want of a refresh token the app is
+  shown runnable on such a runner while every connected call fails, and the remedy — signing in
+  again — needs the redirect that runner cannot take.
