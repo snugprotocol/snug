@@ -18,22 +18,33 @@
 // What it SHARES with the probe-path composition (`compose.ts`), since TASK-20261003 (K4):
 // the capability table, the custody store and the hand-in seat are the kit's ONE of each —
 // this module used to hand-write the first twice and keep private copies of the others.
-// What a host learns AFTER boot (the brain probe's verdict, the model list) reaches the UI
-// through `applyRunnerStatus` and the playground's revision signal, never a DOM event.
+//
+// THE BRAIN (ADR-0069 §5, ADR-0071). The runner reports every agent the user already has
+// (`brains[]`) and which one `auto` would use (`active`); the user's own choice — `auto`, or
+// a pin — and each brain's model and level live in this browser (`brainChoiceStore`). From
+// those two this module derives, and re-derives whenever either changes:
+//   · `platform.brain`       — the host arm while the choice resolves to a ready brain, the
+//                              demo brain otherwise (D4: never a think sent to a brain that
+//                              is known not to be there);
+//   · `platform.brainSwitch` — what the chip renders and acts through, whatever answers.
+// The page MIRRORS the runner's selection rule and never out-votes it: a think the runner
+// cannot place comes back as its own named refusal and makes the page look again.
 
 import { localAdapter } from '@snugprotocol/adapters';
 import { createFileBackend, type PersistenceBackend } from '@snugprotocol/db';
 import { ERROR_CODES } from '@snugprotocol/protocol';
 
+import { BRAIN_AUTO, brainLevels, brainReadyState, demoStandIn } from '@playground/platform/copy';
 import { hostCapabilities } from '@playground/platform/hostCapabilities';
-import type { CliModelOption, CliModelSeat, CliModelState, CustodySeat, PlatformBrain, SnugPlatform } from '@playground/platform/platform';
+import type { BrainSwitchSeat, BrainSwitchState, CustodySeat, PlatformBrain, SnugPlatform } from '@playground/platform/platform';
 import { bumpBrainRevision } from '@playground/platform/signals';
+import { createStore } from '@playground/state/store';
 
-import { BRAIN_EFFORT_OPTIONS, createBrainChoiceStore, type BrainChoice, type BrainChoiceStore, type BrainEffortChoice } from '../brains/brainChoiceStore.js';
+import { LEGACY_BRAIN, createBrainChoiceStore, type BrainChoiceState, type BrainChoiceStore, type BrainPrefs } from '../brains/brainChoiceStore.js';
 import { createHandInSeat, type HandInSeat } from '../handin.js';
 import { safeLocalStorage } from '../safeStorage.js';
 import { createCustodyStore, type CustodyStore } from '../storage/custodyStore.js';
-import { parseStatusEvent, type LocalClient, type LocalStatus } from './client.js';
+import { parseStatusEvent, type BrainWire, type LocalClient, type LocalStatus } from './client.js';
 
 export interface LocalComposition {
   platform: SnugPlatform;
@@ -47,254 +58,152 @@ export interface LocalComposition {
 
 const origin = typeof location === 'undefined' ? 'http://127.0.0.1:43127' : location.origin;
 
-/**
- * Where the brain probe's late verdict lands (D-B35). The platform is composed once and set
- * once; this holder is what the `status` event writes so the chip's getter can see it.
- */
-export const brainState: { current?: { state: string; detail?: string } } = {};
+/** What the runner says about its brains: every one it knows, and the one `auto` would use. */
+export type RunnerBrains = Pick<LocalStatus, 'active' | 'brains'>;
 
 /**
- * The model list from the process, which can arrive after boot for the same reason the brain
- * verdict can (the platform is set once; a `status` read or event fills this). Same holder
- * pattern as `brainState` — never a recomposed platform.
+ * Where a late `status` lands (D-B35). The probes answer after boot — each spawns an agent's
+ * CLI, and a wedged one must not hold the kit shut — and the platform is set ONCE:
+ * `setPlatform` throws on a second call and on any call after `getPlatform` has been read,
+ * so the page cannot recompose to learn what they found. The composition leaves its door
+ * here and the boot's event handler knocks. One page, one composition.
  */
-export const modelsFromStatus: { current?: readonly CliModelOption[] } = {};
+let landStatus: ((status: RunnerBrains) => void) | undefined;
 
 /**
- * Fold a late `status` in — the probe's verdict, the catalogue — and say that what the
- * platform's `brain` answers may have changed (D4). The holders are what the getters read;
- * the bump is what makes a reader look again. It replaces three DOM `CustomEvent`s that
- * nothing listened to, which is why the chip kept its boot label until something else
- * happened to re-render it.
- *
- * Bumped only on a CHANGE: an unchanged verdict re-emitted by a re-check must not re-render
- * every reader of the brain every thirty seconds.
+ * Fold a late `status` in — each brain's verdict, its catalogue — and say that what the
+ * platform's `brain` answers may have changed (D4). It replaces three DOM `CustomEvent`s
+ * that nothing listened to, which is why the chip kept its boot label until something else
+ * happened to re-render it. A frame that is not a status changes nothing.
  */
 export function applyRunnerStatus(data: unknown): void {
-  const { brain, models } = parseStatusEvent(data);
-  let changed = false;
-  if (models !== undefined && JSON.stringify(models) !== JSON.stringify(modelsFromStatus.current)) {
-    modelsFromStatus.current = models;
-    changed = true;
-  }
-  if (brain !== undefined && (brain.state !== brainState.current?.state || brain.detail !== brainState.current?.detail)) {
-    brainState.current = brain;
-    changed = true;
-  }
-  if (changed) bumpBrainRevision();
+  const status = parseStatusEvent(data);
+  if (status !== undefined) landStatus?.(status);
 }
-
-/**
- * The states in which the runner KNOWS its brain cannot answer (ADR-0069 §6). `unknown` and
- * "not answered yet" are not among them: a brain that could not be checked may well work,
- * and treating it as gone would put the demo script in front of a user whose CLI is fine.
- */
-const KNOWN_NOT_READY: ReadonlySet<string> = new Set(['absent', 'logged-out', 'outdated']);
 
 /** The demo arm. ONE object: `useMemo` and `useSyncExternalStore` compare it by reference. */
 const DEMO_BRAIN: PlatformBrain = { kind: 'demo' };
 
 /**
- * The least time between two "the demo brain is answering — look again" asks from this page.
- * The runner keeps its own floor for every ask (a probe of a ready brain is a real think);
- * this one only keeps a page that renders often from sending a request per render.
+ * The least time between two "the demo brain is standing in — look again" asks from this
+ * page. The runner keeps its own floor for every ask (a probe of a ready brain is a real
+ * think); this one keeps a page the user keeps coming back to from asking each time.
  */
 export const DEMO_RECHECK_FLOOR_MS = 30_000;
 
 /**
- * What the brain's label says, per readiness state (D-B35).
- *
- * The owner's walk found a logged-out CLI surfacing as a bare HTTP 502 the first time an
- * app tried to think — no remedy, and no sign that the BRAIN was the problem rather than
- * the app. Each not-ready state has ONE sentence a person can act on.
- *
- * An absent `brain` means the probe has not answered yet, which is NOT a claim that the
- * CLI works: the plain label is what the seat has always said, and the chip corrects
- * itself a moment later when the `status` event arrives.
- *
- * (Since D4 the platform pins the DEMO brain while the state is absent, logged-out or
- * outdated, so this label is not what the chip shows then — the three remedy sentences
- * wait here for the surface that renders them beside a demo brain: the brain switcher.)
- *
- * @param model the model to name on a READY chip (S11, owner 2026-10-02: "replace 'your CLI'
- *   with the current selected model"). Ignored in every other state: a remedy is never traded
- *   for a model name, and before the probe answers nothing is claimed at all.
+ * How long "check again" shows itself working before it stops waiting. The runner probes at
+ * most once per floor and OWES an ask made inside it, and a probe is a spawn of the agent's
+ * CLI — so the fresh status can be most of a minute away. A status that lands later still
+ * lands; this bounds only the progress mark.
  */
-export function brainLabel(brain: { state: string; detail?: string } | undefined, model?: string): string {
-  switch (brain?.state) {
-    case 'logged-out':
-      // The remedy IS the label: a chip that only says "unavailable" makes the user hunt.
-      return 'Claude · your CLI — not logged in, run `claude` then `/login`';
-    case 'absent':
-      // The remedy in words a non-technical user can follow: a page to visit, then two
-      // commands. Never a curl-into-bash line on a chip (ADR-0069 §6).
-      return 'demo brain — no Claude CLI found; install Claude Code (code.claude.com), then run `claude` and `/login`';
-    case 'outdated':
-      // Measured 2026-09-13: a CLI whose default model moved answers every think with a
-      // 400 until `claude update` — the CLI's own remedy, so it is the chip's.
-      return 'Claude · your CLI — out of date, run `claude update`';
-    case 'unknown':
-      return 'Claude · your CLI — could not check';
-    case 'ready':
-      return model === undefined || model === '' ? 'Claude · your CLI' : `Claude · ${model}`;
-    default:
-      return 'Claude · your CLI';
+export const RECHECK_BOUND_MS = 45_000;
+
+/** The header the chat route answers with: the brain that ANSWERED (ADR-0071, B2). */
+const BRAIN_HEADER = 'x-snug-brain';
+
+/**
+ * The standing caveats, honest about what the controls do NOT do (ADR-0070 Q4) and what a
+ * switch costs (Q5): no tokens, but a child kept warm for the old choice is thrown away.
+ */
+const SWITCH_NOTE =
+  'Thinking itself is never shown. A switch takes effect on your next think and spends nothing; that think may start a little slower, because a brain kept ready for the old choice is started again.';
+
+/**
+ * WHICH brain a think sent now would run on — the runner's rule, mirrored (ADR-0071 §4):
+ *
+ *  · `auto` is whatever the runner calls `active`: its default brain when that is ready,
+ *    else NONE. Never the next ready brain — an app's think carries the user's data, and
+ *    sending it to another vendor because the first was logged out is a re-route nobody
+ *    asked for. And never an UNVERIFIED brain: the runner does not name one as `active`,
+ *    and a status that did would not be followed.
+ *  · a pin is that brain while it is `ready`, else NONE — never another brain.
+ *
+ * `undefined` is NONE: the demo brain answers, and the chip says why.
+ */
+export function brainFor(choice: string, status: RunnerBrains): BrainWire | undefined {
+  if (choice === BRAIN_AUTO) {
+    const active = status.brains.find((brain) => brain.id === status.active);
+    return active?.verified === true ? active : undefined;
+  }
+  const pinned = status.brains.find((brain) => brain.id === choice);
+  return pinned?.state === 'ready' ? pinned : undefined;
+}
+
+/**
+ * What a think on this brain carries: the stored model, and the stored level ONLY while
+ * that model has it. A level kept from an older catalogue, or chosen for a model the user
+ * has since left, is neither sent nor shown — the runner validates a level against the
+ * driver and answers a bad one with a 400, so sending it would turn every think into a
+ * refusal for a setting the user can no longer see (AC8). It stays stored: going back to
+ * the model it belongs to brings it back.
+ */
+export function prefsFor(brain: BrainWire, stored: BrainPrefs | undefined): BrainPrefs {
+  const model = stored?.model;
+  const effort = stored?.effort !== undefined && brainLevels(brain, model).includes(stored.effort) ? stored.effort : undefined;
+  return { ...(model !== undefined ? { model } : {}), ...(effort !== undefined ? { effort } : {}) };
+}
+
+/**
+ * What the chip calls the answering brain: `<Name> · <model>` (S11, owner 2026-10-02:
+ * "replace 'your CLI' with the current selected model"). The model is the SELECTED one —
+ * it is what the next think carries; with nothing selected, the one the brain actually ran
+ * once a think has answered; before that, nothing (`your CLI`). Shown by the catalogue's
+ * display name where it lists the id, else the id itself. The CLI reports its default with
+ * a context suffix (measured: `claude-opus-5-5[1m]`), so the suffix is ignored for the lookup.
+ *
+ * The popover's own line is unchanged and still says what ANSWERED (ADR-0059 rule 2).
+ */
+export function brainLabel(brain: BrainWire, model: string | undefined): string {
+  if (model === undefined) return `${brain.name} · your CLI`;
+  const bare = model.replace(/\[[^\]]*\]$/, '');
+  return `${brain.name} · ${brain.models.find((listed) => listed.id === bare)?.name ?? model}`;
+}
+
+/** The model the label names for this brain: chosen, else what it answered on. */
+function labelModel(brain: BrainWire, choices: BrainChoiceState): string | undefined {
+  return choices.prefs[brain.id]?.model ?? (choices.answered?.brain === brain.id ? choices.answered.model : undefined);
+}
+
+/** What the chip renders, derived whole from the two sources — never kept beside them (ADR-0059 rule 2). */
+function switchStateOf(status: RunnerBrains, choices: BrainChoiceState, checking: boolean): BrainSwitchState {
+  const answering = brainFor(choices.choice, status);
+  const prefs = answering === undefined ? {} : prefsFor(answering, choices.prefs[answering.id]);
+  // A refusal belongs to the brain that gave it. It is shown while that brain is the one
+  // answering, or while none is — never under another brain's controls.
+  const refusal = choices.refused !== undefined && (answering === undefined || answering.id === choices.refused.brain) ? choices.refused.message : undefined;
+  return {
+    choice: choices.choice,
+    ...(answering !== undefined ? { active: answering.id } : {}),
+    brains: status.brains,
+    ...(prefs.model !== undefined ? { model: prefs.model } : {}),
+    ...(prefs.effort !== undefined ? { effort: prefs.effort } : {}),
+    ...(choices.answered !== undefined ? { answered: choices.answered } : {}),
+    ...(refusal !== undefined ? { refusal } : {}),
+    checking,
+  };
+}
+
+/** The chat request's JSON body with the page's own fields added. The shared OpenAI adapter builds that body from a fixed set of fields, so a field put on the REQUEST object is silently dropped (the level was, from S5 until the owner's walk). */
+function withBody(init: RequestInit | undefined, fields: Record<string, unknown>): RequestInit | undefined {
+  if (init === undefined || typeof init.body !== 'string') return init;
+  try {
+    const body = JSON.parse(init.body) as Record<string, unknown>;
+    return { ...init, body: JSON.stringify({ ...body, ...fields }) };
+  } catch {
+    return init;
   }
 }
 
-/**
- * The chip's control (TASK-20260922 AC5/AC8). `undefined` means NO control: the brain cannot
- * think, so a picker on it would be dead — the user gets the remedy `brainLabel` already
- * carries and nothing else. This is ADR-0067's rule for Binding A and ADR-0036 rule 4 for the
- * playground's selector; three surfaces now agree, so it is not re-litigated here.
- *
- * `activeLabel` is what ANSWERED, never what was asked (ADR-0059 rule 2). A chosen model does
- * not appear until a think has come back on it, because until then the chip would be naming a
- * model that may yet be refused or substituted.
- */
-export interface BrainChipSeat {
-  /** The thinking levels to offer — the CLI's own `--effort`, not ADR-0067's tiers. */
-  efforts: readonly BrainEffortChoice[];
-  /** What is running right now, in words. */
-  activeLabel: string;
-  /** The standing caveats: what the control does not do, and what a switch costs. */
-  note: string;
-  choice: BrainChoice;
-  setModel(model: string | undefined): void;
-  setEffort(effort: BrainEffortChoice | undefined): void;
-}
-
-export function brainChipSeat(input: { brain: { state: string } | undefined; choices: BrainChoiceStore }): BrainChipSeat | undefined {
-  // Anything but a ready brain — including a probe that has not answered yet, which is NOT a
-  // claim the CLI works — gets no control (AC8). The demo brain gains nothing.
-  if (input.brain?.state !== 'ready') return undefined;
-  const { choices } = input;
-  const active = choices.active();
-  const choice = choices.choice();
-  // The CLI reports the model it resolved on EVERY think, chosen or not, so after the first
-  // answer this names the real id — including the default the user never picked. Before that
-  // there is nothing true to say, and a chosen-but-unproven alias is not it (ADR-0059 rule 2).
-  const model = active.model ?? 'the CLI’s default (known after the first think)';
-  // Effort has no such report: the CLI echoes the level back nowhere, in `init` or `result`
-  // (measured 2026-09-22 — only the thinking-token COUNT differs, which is an effect, not a
-  // setting). So an unchosen level is left unnamed rather than guessed at.
-  const effort = choice.effort ?? 'the CLI’s default';
-  const refusal = active.refusal === undefined ? '' : ` — ${active.refusal}`;
-  return {
-    efforts: BRAIN_EFFORT_OPTIONS,
-    activeLabel: `thinking on ${model}, effort ${effort}${refusal}`,
-    // Honest about what it does NOT do (Q4) and what a switch costs (Q5): no tokens, but the
-    // pre-warmed child for the old choice is thrown away, so the next think starts cold.
-    note: 'Thinking itself is never shown. A switch takes effect on your next think and spends nothing, but the ready-and-waiting brain is started again, so that think is a little slower.',
-    choice,
-    setModel: choices.setModel,
-    setEffort: choices.setEffort,
-  };
-}
-
-/**
- * The seat the chip renders (ADR-0070, S7). `undefined` means NO control: the brain cannot
- * think, so a picker on it would be dead and the user gets the remedy `brainLabel` carries
- * and nothing else (AC8 — ADR-0067's rule and ADR-0036 rule 4).
- *
- * `state.get()` must return a STABLE reference while nothing changes: the chip reads it
- * through `useSyncExternalStore`, which re-renders forever on a fresh object each call. The
- * cache below is that stability, recomputed only when the store actually notifies.
- */
-/**
- * ONE snapshot per store, recomputed only when the store notifies. `useSyncExternalStore`
- * re-renders forever if `getSnapshot` returns a fresh object each call, and the seat itself is
- * rebuilt on every render (its getter must be, so a late probe verdict reaches the chip) — so
- * the cache cannot live on the seat. It lives here, keyed by the store the seat wraps.
- */
-const snapshots = new WeakMap<BrainChoiceStore, { value: CliModelState }>();
-
-function snapshotOf(choices: BrainChoiceStore): CliModelState {
-  const existing = snapshots.get(choices);
-  if (existing !== undefined) return existing.value;
-  const compute = (): CliModelState => {
-    const choice = choices.choice();
-    const active = choices.active();
-    return {
-      ...(choice.model === undefined ? {} : { model: choice.model }),
-      ...(choice.effort === undefined ? {} : { effort: choice.effort }),
-      ...(active.model === undefined ? {} : { activeModel: active.model }),
-      ...(active.refusal === undefined ? {} : { refusal: active.refusal }),
-    };
-  };
-  const cell = { value: compute() };
-  snapshots.set(choices, cell);
-  // Subscribed ONCE per store, not once per render: the seat is rebuilt constantly and a
-  // subscription there would leak a listener on every render.
-  choices.subscribe(() => {
-    cell.value = compute();
-  });
-  return cell.value;
-}
-
-/**
- * The seat the chip renders (ADR-0070, S7). `undefined` means NO control: the brain cannot
- * think, so a picker on it would be dead and the user gets the remedy `brainLabel` carries
- * and nothing else (AC8 — ADR-0067's rule and ADR-0036 rule 4).
- */
-export function cliModelSeat(input: {
-  brain: { state: string } | undefined;
-  choices: BrainChoiceStore;
-  /** From the process, which read the CLI's own catalogue. Empty = no list could be read. */
-  models?: readonly CliModelOption[] | undefined;
-}): CliModelSeat | undefined {
-  const chip = brainChipSeat(input);
-  if (chip === undefined) return undefined;
-  const { choices } = input;
-  const models = input.models ?? [];
-  snapshotOf(choices);
-  const chosen = choices.choice().model;
-  // Whether the CHOSEN model has a thinking-effort axis at all. Haiku 4.5 has none, and an
-  // effort control on a model that ignores it is a dead control (AC8). A model typed by hand
-  // that the catalogue does not list is assumed to HAVE the axis: withholding a control the
-  // model may well support is the worse error, and the CLI refuses a flag it cannot use.
-  const listed = chosen === undefined ? undefined : models.find((model) => model.id === chosen);
-  return {
-    efforts: chip.efforts,
-    models,
-    effortApplies: listed === undefined ? true : listed.effort,
-    activeLabel: chip.activeLabel,
-    note: chip.note,
-    state: { get: () => snapshotOf(choices), subscribe: choices.subscribe },
-    setModel: choices.setModel,
-    setEffort: choices.setEffort,
-  };
-}
-
-/**
- * The model the chip names (S11). The SELECTED model — it is what the next think carries; with
- * nothing selected, the model the CLI actually ran once a think has answered; before that,
- * nothing (the chip keeps "your CLI"). Shown by the catalogue's display name where it lists the
- * id ("Sonnet 5"), else the id itself. The CLI reports its default with a context suffix
- * (measured: `claude-opus-5-5[1m]`), so the suffix is ignored for the lookup.
- *
- * The popover's active line is unchanged and still says what ANSWERED (ADR-0059 rule 2): a
- * selection the CLI then refuses shows the refusal there, in words.
- */
-function chipModelName(choices: BrainChoiceStore, models: readonly CliModelOption[] | undefined): string | undefined {
-  const id = choices.choice().model ?? choices.active().model;
-  if (id === undefined) return undefined;
-  const bare = id.replace(/\[[^\]]*\]$/, '');
-  return (models ?? []).find((model) => model.id === bare)?.name ?? id;
-}
-
-/**
- * Add the user's thinking level to the chat request's JSON body. The shared OpenAI adapter
- * builds that body from a fixed set of fields, so a level put on the REQUEST object is silently
- * dropped (it was, from S5 until the owner's walk). Undefined = the body is left byte-identical.
- */
-function withEffort(init: RequestInit | undefined, effort: BrainEffortChoice | undefined): RequestInit | undefined {
-  if (effort === undefined || init === undefined || typeof init.body !== 'string') return init;
+/** The runner's own sentence for a think it did not answer: `{ error: { message } }`. Anything else says nothing. */
+async function refusalOf(response: Response): Promise<string | undefined> {
   try {
-    const body = JSON.parse(init.body) as Record<string, unknown>;
-    return { ...init, body: JSON.stringify({ ...body, effort }) };
+    const body: unknown = await response.json();
+    const error = typeof body === 'object' && body !== null ? (body as { error?: unknown }).error : undefined;
+    const message = typeof error === 'object' && error !== null ? (error as { message?: unknown }).message : undefined;
+    return typeof message === 'string' && message !== '' ? message : undefined;
   } catch {
-    return init;
+    return undefined;
   }
 }
 
@@ -313,15 +222,15 @@ export function composeLocalPlatform(
   /** The bearer, so the brain adapter can reach the shim on the same origin. */
   token?: string,
   /**
-   * The user's per-machine model and effort choice (TASK-20260922). Injectable so tests can
-   * drive it; in the page it is one store per boot over `localStorage`.
+   * The user's per-machine brain choice (TASK-20260922, TASK-20261003). Injectable so tests
+   * can drive it; in the page it is one store per boot over `localStorage`.
    */
-  brainChoices: BrainChoiceStore = createBrainChoiceStore({ storage: safeLocalStorage() }),
-  /** The clock the demo re-check's floor reads. A test turns it by hand. */
-  now: () => number = () => Date.now(),
+  brainChoices?: BrainChoiceStore,
 ): LocalComposition {
   const custody = createCustodyStore();
   const handIns = createHandInSeat();
+  // A page that is being composed is the page: an earlier composition's door closes.
+  landStatus = undefined;
 
   // The holder check decides whether we open AT ALL. Both of the db's save paths swallow a
   // failed write with a bare `catch`, and no persist-error seam exists — so a page that
@@ -360,113 +269,245 @@ export function composeLocalPlatform(
   };
 
   if (token !== undefined) {
-    let lastDemoRecheckAt = Number.NEGATIVE_INFINITY;
-    // THE BRAIN (D5, D-B7). The user's own `claude` CLI behind the process's shim, reached
-    // through the adapter the playground already has — `localAdapter` accepts a key, and
-    // the host arm of `createTurnAdapter` reads no BYOK key and skips the F15 endpoint
-    // confirm, so no mode, setting or secret is involved. `streaming: false` is an
-    // app-facing declaration in `host-ready`, not a transport switch: the shim answers SSE
-    // regardless, because `openaiAdapter` always streams.
+    // THE TWO SOURCES. What the runner said (the boot read; later, each `status` event) and
+    // what the user chose. Everything below is derived from them at the moment it is read.
+    const runner = createStore<RunnerBrains>({ ...(status.active !== undefined ? { active: status.active } : {}), brains: status.brains });
+    const choices = brainChoices ?? createBrainChoiceStore({ storage: safeLocalStorage(), brains: () => runner.get().brains });
+    const answering = (): BrainWire | undefined => brainFor(choices.get().choice, runner.get());
+
+    let checking = false;
+    const seatState = createStore<BrainSwitchState>(switchStateOf(runner.get(), choices.get(), checking));
+    const refresh = (): void => seatState.set(switchStateOf(runner.get(), choices.get(), checking));
+
+    // ---------------------------------------------------------------- looking again
     //
-    // ONE object for the life of the page (its `label` and `cliModel` are getters over the
-    // holders above): the platform hands it out by reference, and a fresh one per read
-    // would make every memo keyed on it recompute on every render.
+    // The user fixes a brain where this page cannot see it: `/login` in a terminal, an
+    // install, an update. Three things make the page ask the runner to probe again, and
+    // none of them is a render — the ask used to sit inside the `platform.brain` getter, a
+    // network request fired while React was rendering (found by the R2 verifier).
+
+    // On the MONOTONIC clock: against a wall clock that was set back, the last ask would sit
+    // in the future and the next one would be owed for as long as the clock had moved.
+    let lastAskAt = Number.NEGATIVE_INFINITY;
+    let owed: ReturnType<typeof setTimeout> | undefined;
+    let recheck: Promise<void> | undefined;
+    /** Ends the explicit re-check in flight; set while one is. */
+    let statusLanded: (() => void) | undefined;
+
+    const ask = (): void => {
+      lastAskAt = performance.now();
+      void client.recheckBrain();
+    };
+
+    /**
+     * WHILE THE DEMO BRAIN STANDS IN for a brain the runner reported — at most once per
+     * floor. Called when that begins or changes, and when the user comes back to the page
+     * (which is when they have just fixed it). An ask that arrives inside the floor is
+     * owed, not dropped: dropped, a user back from a twenty-second `/login` would stay on
+     * the demo brain until they thought to press "check again". An idle page asks nothing,
+     * and nothing is asked before the runner has reported at all — its first probe is
+     * already under way.
+     */
+    const lookAgain = (): void => {
+      if (answering() !== undefined || runner.get().brains.length === 0 || recheck !== undefined) return;
+      const wait = lastAskAt + DEMO_RECHECK_FLOOR_MS - performance.now();
+      if (wait <= 0) {
+        ask();
+        return;
+      }
+      owed ??= setTimeout(() => {
+        owed = undefined;
+        lookAgain();
+      }, wait);
+    };
+
+    /**
+     * THE EXPLICIT ACT ("check again"), and what a think that was not answered does. One at
+     * a time — a second ask joins the first — and `checking` is true until the runner's
+     * next `status` lands, or the bound passes.
+     */
+    const recheckNow = (): Promise<void> => {
+      recheck ??= new Promise<void>((resolve) => {
+        const finish = (): void => {
+          clearTimeout(bound);
+          statusLanded = undefined;
+          recheck = undefined;
+          checking = false;
+          refresh();
+          resolve();
+        };
+        const bound = setTimeout(finish, RECHECK_BOUND_MS);
+        statusLanded = finish;
+        checking = true;
+        refresh();
+        ask();
+      });
+      return recheck;
+    };
+
+    /** Either source changed: re-derive, tell the readers of `platform.brain`, and look again if the demo brain now stands in. */
+    const changed = (): void => {
+      refresh();
+      bumpBrainRevision();
+      lookAgain();
+    };
+    runner.subscribe(changed);
+    choices.subscribe(changed);
+
+    landStatus = (next) => {
+      // Set only on a CHANGE: an unchanged verdict re-emitted by a re-check must not
+      // re-render every reader of the brain.
+      if (JSON.stringify(next) !== JSON.stringify(runner.get())) runner.set(next);
+      statusLanded?.();
+    };
+
+    window.addEventListener('focus', lookAgain);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') lookAgain();
+    });
+
+    // ---------------------------------------------------------------- the host arm
+    //
+    // The user's own agent behind the process's shim (D5, D-B7), reached through the adapter
+    // the playground already has — `localAdapter` accepts a key, and the host arm of
+    // `createTurnAdapter` reads no BYOK key and skips the F15 endpoint confirm, so no mode,
+    // setting or secret is involved.
+    //
+    // ONE object for the life of the page, every fact on it a GETTER over the two sources:
+    // the platform hands it out by reference, and a fresh one per read would make every
+    // memo keyed on it recompute on every render. Its readers are told to look again by
+    // `brainRevision`.
     const hostBrain: PlatformBrain = {
       kind: 'host',
-      // A GETTER, not a value. The probe answers after boot (it spawns the user's CLI),
-      // and the platform is set ONCE — `setPlatform` throws on a second call and on any
-      // call after `getPlatform` has been read, so a page cannot swap in a recomposed
-      // platform to update this. The chip reads `label` at render, so a getter over a
-      // mutable holder lets a late verdict reach the user without touching the singleton.
       get label(): string {
-        return brainLabel(brainState.current ?? status.brain, chipModelName(brainChoices, modelsFromStatus.current ?? status.models));
+        const brain = answering();
+        // Read only while this arm is the platform's brain; a holder of a stale reference
+        // gets a true sentence, not the last brain's name.
+        return brain === undefined ? 'no agent is ready' : brainLabel(brain, labelModel(brain, choices.get()));
       },
-      // The adapter is rebuilt PER CALL, not once: `localAdapter` takes a static model, and
-      // a value read at composition time would freeze the user's choice until a reload —
-      // ADR-0036 rule 3, and what makes "switch now, it lands on your next think" true. The
-      // effort rides beside it on the same request.
+      // The adapter resolves PER CALL, not once: a value read at composition time would
+      // freeze the user's choice until a reload — ADR-0036 rule 3, and what makes "switch
+      // now, it lands on your next think" true.
       adapter: {
         complete: async (request) => {
-          const choice = brainChoices.choice();
-          // Effort only for a model that HAS the axis: the chip hides the control for one
-          // that does not (Haiku 4.5, per the CLI's catalogue), so sending a stored level
-          // anyway would be a setting the user can no longer see (AC8).
-          const listed = choice.model === undefined ? undefined : (modelsFromStatus.current ?? status.models ?? []).find((m) => m.id === choice.model);
-          const effort = listed !== undefined && !listed.effort ? undefined : choice.effort;
+          const sent = choices.get();
+          const brain = answering();
+          const prefs = brain === undefined ? {} : prefsFor(brain, sent.prefs[brain.id]);
+          // The chat route's top-level `model` / `effort` are the single-brain form and mean
+          // the `claude` entry; the OpenAI adapter must name SOME model, and `claude` is the
+          // placeholder the route strips. So they carry that brain's entry when it answers,
+          // and the placeholder alone when another does.
+          const legacy = brain?.id === LEGACY_BRAIN ? prefs : {};
+          let answeredBy: string | undefined;
+          let refusal: string | undefined;
           const result = await localAdapter({
             baseUrl: `${origin}/v1`,
             apiKey: token,
-            model: choice.model ?? 'claude',
+            model: legacy.model ?? LEGACY_BRAIN,
             // The page's OWN fetch, straight to its own runner on loopback. NEVER
             // `client.fetchImpl`: that is the connected-apps proxy (`POST /fetch`), which
             // re-runs the executor's gates and refuses a loopback destination — S5 routed
             // the brain through it and every think failed with "could not reach the local
-            // model endpoint" (owner's walk, 2026-10-02). The wrapper only adds `effort`
-            // to the JSON body, because the shared OpenAI adapter builds its body from a
-            // fixed set of fields and drops anything else.
-            fetch: (input, init) => globalThis.fetch(input, withEffort(init, effort)),
+            // model endpoint" (owner's walk, 2026-10-02).
+            fetch: async (input, init) => {
+              const response = await globalThis.fetch(
+                input,
+                withBody(init, {
+                  ...(legacy.effort !== undefined ? { effort: legacy.effort } : {}),
+                  // The user's choice as they made it; the RUNNER resolves it (and is the
+                  // authority if this page's picture is stale). Only the entry of the
+                  // brain this page expects to answer rides along.
+                  brain: sent.choice,
+                  ...(brain !== undefined && Object.keys(prefs).length > 0 ? { prefs: { [brain.id]: prefs } } : {}),
+                }),
+              );
+              answeredBy = response.headers.get(BRAIN_HEADER) ?? undefined;
+              // Read from a copy: the adapter still has to read the body itself.
+              if (!response.ok) refusal = await refusalOf(response.clone());
+              return response;
+            },
           }).complete(request);
-          // D4: a think the brain could not answer may mean the brain WENT AWAY (logged
-          // out, uninstalled, out of date) since the last probe. This turn keeps its own
-          // named error — no demo reply is slipped in under a turn sent to the user's CLI —
-          // and the runner is asked to look again, so the NEXT turn is routed on the truth.
-          // A turn the user stopped says nothing about the brain. The runner floors the ask.
-          if (!result.ok && result.code !== ERROR_CODES.CANCELLED) void client.recheckBrain();
+          // D4: a think that was not answered may mean the brain WENT AWAY (logged out,
+          // uninstalled, out of date) since the last probe — the runner says so with a 503
+          // `no-brain`, a driver with its own refusal. This turn keeps its own named error —
+          // no demo reply is slipped in under a turn sent to the user's agent — and the
+          // runner is asked to look again, so the NEXT turn is routed on the truth. A turn
+          // the user stopped says nothing about the brain.
+          if (!result.ok && result.code !== ERROR_CODES.CANCELLED) void recheckNow();
           // Thinks overlap (the pool runs several), so a slow one can finish after a newer
           // one. A call teaches the chip ONLY while the choice is still the one it carried —
-          // otherwise a late answer or refusal for a model the user already left would
-          // overwrite what the newer think taught (review, 2026-10-03).
-          if (brainChoices.choice().model !== choice.model) return result;
+          // otherwise a late answer or refusal for a brain or model the user already left
+          // would overwrite what the newer think taught (review, 2026-10-03).
+          const current = choices.get();
+          if (current.choice !== sent.choice || (brain !== undefined && current.prefs[brain.id]?.model !== sent.prefs[brain.id]?.model)) return result;
+          // Recorded against the brain the RUNNER names, which is the one that ran; where
+          // it names none (a think it could not place), against the brain the choice meant.
+          const by = answeredBy ?? brain?.id ?? (sent.choice === BRAIN_AUTO ? undefined : sent.choice);
+          if (by === undefined) return result;
           if (result.ok) {
-            // The adapter reports the model on the stream's LAST chunk, which is the id the
-            // CLI resolved (ADR-0070 D2: only a turn that SUCCEEDED may name a model).
-            if (typeof result.model === 'string' && result.model !== '' && result.model !== 'claude') brainChoices.markAnswered(result.model);
-          } else if (choice.model !== undefined && result.message.includes(choice.model)) {
-            // A refusal that NAMES the chosen model is the CLI refusing it — shown on the
-            // chip in its own words. Anything else (a network failure, a timeout) is not
-            // about the model and must not be dressed up as one.
-            brainChoices.markRefused(choice.model, result.message);
+            // The stream's LAST chunk names the model the brain resolved (ADR-0070 D2: only
+            // a turn that SUCCEEDED may name one). Until then the frames carry the brain's
+            // own id as a placeholder, which is not a model.
+            choices.markAnswered({ brain: by, ...(typeof result.model === 'string' && result.model !== by ? { model: result.model } : {}) });
+          } else if (refusal !== undefined) {
+            // The runner's sentence, not the adapter's `HTTP 502: {…}` around it. A network
+            // failure or a dropped stream carries none and is not dressed up as a refusal.
+            choices.markRefused({ brain: by, message: refusal });
           }
           return result;
         },
       },
-      streaming: false,
+      // What the answering brain's own wire entry says. `streaming` is an app-facing
+      // declaration in `host-ready`, not a transport switch — the shim answers SSE
+      // regardless — and Codex's answers arrive whole (ADR-0071).
+      get streaming(): boolean {
+        return answering()?.streaming ?? false;
+      },
       tools: false,
-      // The model + effort control (ADR-0070). A GETTER for the same reason `label` is one:
-      // the probe answers AFTER boot and the platform is set once, so a value computed here
-      // would be read while the brain state is still unknown and the control would never
-      // appear (caught by a test, not by review). Present only while the CLI can think —
-      // `cliModelSeat` returns undefined for every other state, so a brain that stops being
-      // able to think loses its control rather than keeping a dead one (AC8).
-      get cliModel(): CliModelSeat | undefined {
-        return cliModelSeat({ brain: brainState.current ?? status.brain, choices: brainChoices, models: modelsFromStatus.current ?? status.models });
+      get maxPromptBytes(): number | undefined {
+        return answering()?.maxPromptBytes;
       },
     };
 
-    // WHICH brain answers is itself a getter (D4). While the runner KNOWS the user's CLI
-    // cannot answer, the platform pins the DEMO brain: before this the chip said "demo
-    // brain" for a machine with no CLI while every think still went to the shim and came
-    // back a 502. Ready, could-not-check and not-answered-yet stay on the host brain —
-    // optimistic, as before: a think is then the first to find out, and it re-checks.
+    const brainSwitch: BrainSwitchSeat = {
+      state: { get: seatState.get, subscribe: seatState.subscribe },
+      choose: (id) => choices.choose(id),
+      // The controls show the ANSWERING brain's model and level, so that is whose they set.
+      // With no brain answering there is no control to call these (AC8 — no dead control).
+      setModel: (model) => {
+        const brain = answering();
+        if (brain !== undefined) choices.setModel(brain.id, model);
+      },
+      setEffort: (effort) => {
+        const brain = answering();
+        if (brain !== undefined) choices.setEffort(brain.id, effort);
+      },
+      recheck: recheckNow,
+      note: SWITCH_NOTE,
+    };
+    // On the PLATFORM, not on the brain: it must render while the demo brain answers,
+    // which is exactly when the user needs each brain's remedy.
+    platform.brainSwitch = brainSwitch;
+
+    // WHICH brain answers is itself a getter (D4). While the choice resolves to no ready
+    // brain the platform pins the DEMO brain: before this the chip said "demo brain" for a
+    // machine with no CLI while every think still went to the shim and came back a 502.
     //
     // Defined on the object rather than spread into it: a spread READS a getter once and
     // copies the value, which would freeze the arm the page booted with.
     Object.defineProperty(platform, 'brain', {
       enumerable: true,
-      get(): PlatformBrain {
-        const known = (brainState.current ?? status.brain)?.state;
-        if (known === undefined || !KNOWN_NOT_READY.has(known)) return hostBrain;
-        // The demo brain is standing in. The user may have just fixed the cause (logged in,
-        // installed, updated) in a terminal this page cannot see, so it asks the runner to
-        // look again — at most once per floor, and only while something is reading the
-        // brain (a think, a render): an idle tab asks nothing.
-        if (now() - lastDemoRecheckAt >= DEMO_RECHECK_FLOOR_MS) {
-          lastDemoRecheckAt = now();
-          void client.recheckBrain();
-        }
-        return DEMO_BRAIN;
-      },
+      get: (): PlatformBrain => (answering() === undefined ? DEMO_BRAIN : hostBrain),
     });
+
+    // THE BOOT READ may already say a brain cannot answer. One that is known not ready is
+    // asked about quietly (the user may be about to fix it). One the runner has NOT CHECKED
+    // YET is the common case — its first look runs at this page's first contact, and a real
+    // CLI takes seconds to answer — so there the page shows that it is checking, until that
+    // first round lands: the ask joins the round already in flight.
+    const about = demoStandIn(seatState.get())?.brain;
+    if (about !== undefined && brainReadyState(about.state) === 'unknown') void recheckNow();
+    else lookAgain();
   }
 
   return { platform, custody, handIns };

@@ -16,7 +16,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentAdapter } from '@snugprotocol/adapters';
 import { createMemoryBackend } from '@snugprotocol/db';
 
-import type { CustodyState, PlatformBrain, SnugPlatform } from '../platform/platform.js';
+import type { BrainOptionView, BrainSwitchSeat, BrainSwitchState, CustodyState, PlatformBrain, SnugPlatform } from '../platform/platform.js';
 import { createStore } from '../state/store.js';
 import { HOST_OFF_CAPABILITIES, hostPlatform as hostFixture } from './fixtures/hostPlatform.js';
 
@@ -244,6 +244,71 @@ describe('what it says — six rows, each a yes or a no with one plain sentence'
     expect(row('connections').querySelector('.visually-hidden')?.textContent).toBe('no: ');
     expect(row('connections').querySelector('[aria-hidden="true"]')?.textContent).toBe('✗');
     expect(row('file').querySelector('[aria-hidden="true"]')?.textContent).toBe('✓');
+  });
+});
+
+describe('"thinks" on a host with a brain switcher — the same fact the chip gives (TASK-20261003 R4)', () => {
+  // The R2 verifier's finding: while the demo brain stood in for a logged-out CLI the
+  // passport said "no brain is wired into this host yet". On the runner that is false — the
+  // runner knows the user's agents, and one of them needs something.
+  const claude = (over: Partial<BrainOptionView> = {}): BrainOptionView => ({ id: 'claude', name: 'Claude', via: 'your Claude Code CLI', state: 'ready', verified: true, efforts: [], models: [], ...over });
+  const REMEDY = 'Your Claude CLI is not logged in — run `claude` and `/login`, then check again.';
+  const switcher = (state: () => BrainSwitchState): BrainSwitchSeat => ({
+    state: { get: state, subscribe: () => () => undefined },
+    choose: () => undefined,
+    setModel: () => undefined,
+    setEffort: () => undefined,
+    recheck: async () => undefined,
+    note: '',
+  });
+  const standingIn: BrainSwitchState = { choice: 'auto', brains: [claude({ state: 'logged-out', detail: REMEDY })], checking: false };
+
+  it('the demo brain standing in: a NO that says for whom and what to do — the command set as code', async () => {
+    await mount({ ...runner(), brain: { kind: 'demo' }, brainSwitch: switcher(() => standingIn) });
+    click(chip());
+    expect(verdicts()['thinks']).toBe(false);
+    expect(row('thinks').textContent).toContain(
+      'the demo brain answers, from a script, for now (Claude · not logged in). Your Claude CLI is not logged in — run claude and /login, then check again.',
+    );
+    expect([...row('thinks').querySelectorAll('code')].map((code) => code.textContent)).toEqual(['claude', '/login']);
+    expect(row('thinks').textContent).not.toMatch(/no brain is wired|nothing to configure/);
+  });
+
+  it('a brain answering: a YES with the brain’s own label, as before', async () => {
+    await mount({ ...runner(), brainSwitch: switcher(() => ({ choice: 'auto', active: 'claude', brains: [claude()], checking: false })) });
+    click(chip());
+    expect(verdicts()['thinks']).toBe(true);
+    expect(row('thinks').textContent).toContain('Claude · your CLI answers your apps.');
+  });
+
+  it('follows the switcher: a different reason, then a brain, without a reload', async () => {
+    let state: BrainSwitchState = standingIn;
+    let brain: PlatformBrain = { kind: 'demo' };
+    const platform = { ...runner(), brainSwitch: switcher(() => state) };
+    Object.defineProperty(platform, 'brain', { get: () => brain });
+    const mounted = await mount(platform);
+    click(chip());
+    expect(row('thinks').textContent).toContain('not logged in');
+    state = { choice: 'auto', brains: [claude({ state: 'outdated' })], checking: false };
+    act(() => mounted.signals.bumpBrainRevision());
+    expect(row('thinks').textContent).toContain('the demo brain answers, from a script, for now (Claude · out of date). Claude is out of date.');
+    state = { choice: 'auto', active: 'claude', brains: [claude()], checking: false };
+    brain = hostBrain('Claude · your CLI');
+    act(() => mounted.signals.bumpBrainRevision());
+    expect(verdicts()['thinks']).toBe(true);
+  });
+
+  it('a host with NO switcher keeps its own sentence — there, no brain IS wired in', async () => {
+    await mount(artifact());
+    click(chip());
+    expect(row('thinks').textContent).toContain('no brain is wired into this host yet — the demo brain answers, from a script.');
+  });
+
+  it('no other row gains code or changes its words', async () => {
+    await mount({ ...runner(), brain: { kind: 'demo' }, brainSwitch: switcher(() => standingIn) });
+    click(chip());
+    for (const key of ['file', 'connections', 'sign-in', 'home-network', 'phone-helper']) expect(row(key).querySelector('code'), key).toBeNull();
+    expect(row('file').textContent).toContain('kept on this Mac');
   });
 });
 

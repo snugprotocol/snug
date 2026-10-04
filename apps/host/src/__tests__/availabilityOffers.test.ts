@@ -9,12 +9,12 @@
 // hands the playground yields those offers. Cut `fetchImpl` from the local composition and
 // the playground's suite stays green while Trade Copilot is locked on every runner.
 import { createMemoryBackend } from '@snugprotocol/db';
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { HOST_OFFERS, availabilityOf, needsOfRequirement, offersOf, type HostOffers } from '@playground/platform/availability';
 
 import type { LocalClient, LocalStatus } from '../local/client.js';
-import { brainState, composeLocalPlatform } from '../local/compose-local.js';
+import { composeLocalPlatform } from '../local/compose-local.js';
 import { createHostPlatform } from '../platform-host.js';
 import type { Binding, ProbeResult } from '../probe.js';
 import type { StartersIndex } from '../starterLoader.js';
@@ -39,11 +39,7 @@ const client: LocalClient = {
   recheckBrain: async () => {},
   stopped: { get: () => false, subscribe: () => () => {} },
 };
-const status = (over: Partial<LocalStatus> = {}): LocalStatus => ({ binding: 'local-host', port: 43127, pages: 1, ...over });
-
-afterEach(() => {
-  brainState.current = undefined;
-});
+const status = (over: Partial<LocalStatus> = {}): LocalStatus => ({ binding: 'local-host', port: 43127, pages: 1, brains: [], ...over });
 
 describe('createHostPlatform — every binding it serves offers NOTHING an app could need', () => {
   // The host kit inside an artifact, a chat, a static copy or a plain file carries no
@@ -73,8 +69,10 @@ describe('composeLocalPlatform — the runner offers connections through the pro
   });
 
   it('with a brain wired (the token present) the offers are the same — thinking is not a connection', () => {
-    brainState.current = { state: 'ready' };
-    expect(offersOf(composeLocalPlatform(client, status(), undefined, undefined, 't').platform)).toEqual(RUNNER);
+    const claude = { id: 'claude', name: 'Claude', via: 'your Claude Code CLI', state: 'ready', verified: true, streaming: true, efforts: [], models: [] };
+    const { platform } = composeLocalPlatform(client, status({ active: 'claude', brains: [claude] }), undefined, undefined, 't');
+    expect(platform.brain?.kind).toBe('host');
+    expect(offersOf(platform)).toEqual(RUNNER);
   });
 
   it('when another product holds the file, connections go and so does everything that rides them', () => {

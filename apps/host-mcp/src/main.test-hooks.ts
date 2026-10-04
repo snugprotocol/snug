@@ -1,15 +1,17 @@
 // The TEST entry (D-B11) — never shipped.
 //
 // The e2e drives the real process against a self-signed stub on 127.0.0.1 answering for
-// `stub.snug.test`. Two things make that possible, and both are hooks that must not exist
-// in the release bundle: a DNS resolver, and a holder override so the read-only path can be
-// exercised without running Snug Desktop.
+// `stub.snug.test`. Three things make that possible, and all are hooks that must not exist
+// in the release bundle: a DNS resolver, a holder override so the read-only path can be
+// exercised without running Snug Desktop, and FAKE BRAINS — so a suite can see every state
+// a brain can be in, and can never reach the developer's real CLIs.
 //
 // A resolved-address check in the proxy would refuse this stub outright — which is one
 // reason (besides its being a new policy the desktop lacks) the proxy has none. The release
 // bundle is swept by `check-host-mcp` for the PREFIX every name below shares, so a hook
 // added here is covered the day it is added.
 
+import { chatFrames, isModelId, type Brain, type BrainDriver, type BrainModel, type BrainReadiness, type BrainState } from './brains/brain.js';
 import type { LookupFn } from './node-transport.js';
 
 /** `host=ip,host=ip` — the browser's `--host-resolver-rules`, for the process side. */
@@ -41,19 +43,15 @@ export function resolverFromEnv(spec: string | undefined): LookupFn | undefined 
 
 export const TEST_RESOLVE_ENV = 'SNUG_MCP_TEST_RESOLVE';
 export const TEST_HOLDER_ENV = 'SNUG_MCP_TEST_HOLDER';
-/** Pins the brain probe's verdict so the e2e can see a state this machine's CLI is not in. */
-export const TEST_BRAIN_ENV = 'SNUG_MCP_TEST_BRAIN';
 /**
- * A brain that ANSWERS, pinned to one resolved model id (TASK-20260922 S8). The developer's
- * real CLI answers on whatever it defaults to, so an e2e that used it could not assert which
- * model the chip names. The value is the id the fake reports as having run.
+ * The TEST build's brains, as a JSON array of
+ * `{ id, name, via, state, detail?, verified, streaming?, efforts?, models?, reply?, resolvedModel?, afterRecheck? }`
+ * — one fake driver each, in order (ADR-0071). A real `claude` on the developer's machine
+ * is logged IN, so the interesting states are unreachable without a fake, and a test that
+ * can only observe the happy state cannot tell a working chip from a broken one. ABSENT
+ * there is no brain at all: the test build never has a default that could reach a real CLI.
  */
-export const TEST_BRAIN_MODEL_ENV = 'SNUG_MCP_TEST_BRAIN_MODEL';
-/**
- * The chip's model list for the TEST build, as JSON. The test build never reads the developer's
- * real `~/.claude` catalogue (D-B34's intent): absent = an empty list, i.e. "no catalogue".
- */
-export const TEST_MODELS_ENV = 'SNUG_MCP_TEST_MODELS';
+export const TEST_BRAINS_ENV = 'SNUG_MCP_TEST_BRAINS';
 
 /** How long the primary waits after its own session ends, in ms — so an L7 leg takes no three seconds. */
 export const TEST_GRACE_ENV = 'SNUG_MCP_TEST_GRACE_MS';
@@ -62,6 +60,83 @@ export const TEST_GRACE_ENV = 'SNUG_MCP_TEST_GRACE_MS';
  * for real (`listen-failed`), which the release build's "fixed, then any" can never do.
  */
 export const TEST_PORTS_ENV = 'SNUG_MCP_TEST_PORTS';
+
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
+const isStrings = (value: unknown): value is string[] => Array.isArray(value) && value.every((entry) => typeof entry === 'string');
+const isModels = (value: unknown): value is BrainModel[] =>
+  Array.isArray(value) && value.every((entry) => isRecord(entry) && typeof entry.id === 'string' && typeof entry.name === 'string' && isStrings(entry.efforts));
+
+/**
+ * The fake drivers a spec asked for. A spec that cannot be read THROWS: a typo that quietly
+ * meant "no brain" would turn a spec's failure into a pass of the demo-brain path.
+ *
+ * A fake with a `reply` answers every think with it, in the frames the real brains write —
+ * a fake that answered plain JSON once let a page-side bug pass — and reports
+ * `resolvedModel` (default `<id>-fake`) as the model that ran. One without refuses by name.
+ * `afterRecheck: { state, detail? }` is what its probe answers from the SECOND round on: a
+ * brain the user fixed (or broke) while the page was open.
+ */
+export function fakeDriversFromEnv(spec: string | undefined): BrainDriver[] {
+  if (spec === undefined || spec.trim() === '') return [];
+  const malformed = (why: string): Error => new Error(`${TEST_BRAINS_ENV} ${why}`);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(spec);
+  } catch {
+    throw malformed('is not JSON');
+  }
+  if (!Array.isArray(parsed)) throw malformed('must be an array of brains');
+
+  return parsed.map((entry: unknown): BrainDriver => {
+    if (!isRecord(entry)) throw malformed('holds an entry that is not an object');
+    const { id, name, via, state, detail, verified, streaming = true, efforts = [], models = [], reply, resolvedModel, afterRecheck } = entry;
+    if (typeof id !== 'string' || typeof name !== 'string' || typeof via !== 'string' || typeof state !== 'string' || typeof verified !== 'boolean' || typeof streaming !== 'boolean') {
+      throw malformed('needs id, name, via and state as strings and verified as a boolean on every brain');
+    }
+    if ((detail !== undefined && typeof detail !== 'string') || (reply !== undefined && typeof reply !== 'string') || (resolvedModel !== undefined && typeof resolvedModel !== 'string')) {
+      throw malformed('takes detail, reply and resolvedModel as strings');
+    }
+    if (!isStrings(efforts) || !isModels(models)) throw malformed('takes efforts as strings and models as { id, name, efforts }');
+    if (afterRecheck !== undefined && !(isRecord(afterRecheck) && typeof afterRecheck.state === 'string' && (afterRecheck.detail === undefined || typeof afterRecheck.detail === 'string'))) {
+      throw malformed('takes afterRecheck as { state, detail? }');
+    }
+    // Passed through as written — an unknown state is how a spec shows the page one.
+    const readiness = (verdict: Record<string, unknown>): BrainReadiness => ({ state: verdict.state as BrainState, ...(typeof verdict.detail === 'string' ? { detail: verdict.detail } : {}) });
+    let rounds = 0;
+
+    const brain: Brain = {
+      async stream(_request, sink) {
+        if (reply === undefined) throw new Error(`the test build’s fake "${id}" brain has no reply — give it one in ${TEST_BRAINS_ENV}`);
+        const frames = chatFrames(id);
+        sink.write(frames.content(reply));
+        sink.write(frames.finish(resolvedModel ?? `${id}-fake`, 'stop'));
+        sink.write(frames.done);
+      },
+      async complete(request) {
+        let body = '';
+        await brain.stream(request, { write: (chunk) => (body += chunk) });
+        return body;
+      },
+      stop() {},
+    };
+
+    return {
+      id,
+      name,
+      via,
+      verified,
+      streaming,
+      probe: async () => {
+        rounds += 1;
+        return readiness(rounds > 1 && isRecord(afterRecheck) ? afterRecheck : { state, detail });
+      },
+      catalog: () => ({ efforts, models }),
+      acceptsModel: isModelId,
+      acceptsEffort: (model, effort) => (models.find((listed) => listed.id === model)?.efforts ?? efforts).includes(effort),
+      create: () => brain,
+    };
+  });
+}
 
 const numberFrom = (value: string | undefined): number | undefined => {
   const parsed = value === undefined || value === '' ? Number.NaN : Number(value);
@@ -74,32 +149,12 @@ if (process.env.SNUG_MCP_TEST_ENTRY === '1') {
   const { createFetchProxy } = await import('./fetch-proxy.js');
   const { createNodeHttpsSend } = await import('./node-transport.js');
 
+  const { createBrainRegistry } = await import('./brains/registry.js');
+
   const holder = process.env[TEST_HOLDER_ENV];
-  const pinnedBrain = process.env[TEST_BRAIN_ENV];
-  const pinnedModel = process.env[TEST_BRAIN_MODEL_ENV];
+  const drivers = fakeDriversFromEnv(process.env[TEST_BRAINS_ENV]);
   const graceMs = numberFrom(process.env[TEST_GRACE_ENV]);
   const ports = process.env[TEST_PORTS_ENV]?.split(',').map(Number).filter(Number.isFinite);
-  // The SHAPE the real shim answers: SSE frames, the resolved model on the LAST one after the
-  // deltas. A fake that answered JSON would let a page-side bug pass (it did once).
-  const fakeBrain = {
-    stream: async (_request: unknown, sink: { write(chunk: string): void }): Promise<void> => {
-      const base = { id: 'chatcmpl-snug-e2e', object: 'chat.completion.chunk', created: 1 };
-      // A JSON OBJECT, as a real model answers an app that declares a response schema: the host
-      // rejects bare text ("agent reply was not a parseable JSON object"), which once made this
-      // fake look like a broken wire. It carries no app-specific fields, so an app treats it as
-      // off-script — chess plays a legal move for it and says so.
-      const reply = JSON.stringify({ message: 'pinned reply' });
-      sink.write(`data: ${JSON.stringify({ ...base, model: 'claude', choices: [{ index: 0, delta: { role: 'assistant', content: reply }, finish_reason: null }] })}\n\n`);
-      sink.write(`data: ${JSON.stringify({ ...base, model: pinnedModel, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}\n\n`);
-      sink.write('data: [DONE]\n\n');
-    },
-  };
-
-  const noBrain = {
-    stream: async (): Promise<void> => {
-      throw new Error(`the test build has no brain unless ${TEST_BRAIN_MODEL_ENV} pins one`);
-    },
-  };
 
   // ONE composition (K5): the same `startProcess` the release entry calls, so the browser
   // suite runs the shipped handshake, grace, parent watch and shutdown. What follows is only
@@ -111,25 +166,10 @@ if (process.env.SNUG_MCP_TEST_ENTRY === '1') {
       // the owner's user file. Without SNUG_HOME it answers `home-unresolved`.
       // NO `openBrowser`: a suite must never launch the developer's browser.
       ...(holder !== undefined && holder !== '' ? { heldBy: () => holder } : {}),
-      // A real `claude` on the developer's machine is logged IN, so the interesting states
-      // are unreachable without a pin — and a test that can only observe the happy state
-      // cannot tell a working chip from a broken one. UNPINNED there is no probe at all:
-      // the real one spawns the developer's CLI and spends their subscription on a suite.
-      ...(pinnedBrain !== undefined && pinnedBrain !== ''
-        ? { brainState: async () => ({ state: pinnedBrain, detail: `pinned by ${TEST_BRAIN_ENV}` }) }
-        : {}),
-      // ALWAYS a brain of this build's own. Unpinned, the runner's default is the user's real
-      // CLI — and a suite that reached it would spend the developer's subscription on a
-      // think nobody asked for. The refusal is the 502 a machine with no CLI answers.
-      brain: pinnedModel !== undefined && pinnedModel !== '' ? fakeBrain : noBrain,
-      models: () => {
-        try {
-          const parsed: unknown = JSON.parse(process.env[TEST_MODELS_ENV] ?? '[]');
-          return Array.isArray(parsed) ? (parsed as { id: string; name: string; effort: boolean }[]) : [];
-        } catch {
-          return [];
-        }
-      },
+      // ONLY fakes, and only the ones the spec named. This build has no path to the machine's
+      // real CLIs: a suite that reached one would spend the developer's subscription on a
+      // think nobody asked for (it once did, at every start).
+      brains: () => createBrainRegistry({ drivers }),
       proxy: createFetchProxy({ send: createNodeHttpsSend(resolverFromEnv(process.env[TEST_RESOLVE_ENV])) }),
       ...(graceMs !== undefined ? { graceMs } : {}),
       ...(ports !== undefined && ports.length > 0 ? { ports } : {}),

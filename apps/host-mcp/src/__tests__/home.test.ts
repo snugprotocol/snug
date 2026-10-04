@@ -10,7 +10,7 @@
 // not the next one written. The other half is here: reaching a real home must take an
 // EXPLICIT act, so that forgetting can only ever produce a refusal, never a write.
 
-import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -48,6 +48,27 @@ describe('resolveHome', () => {
 
   it('prefers SNUG_HOME even when the real home is allowed, so a host can still be isolated', () => {
     expect(resolveHome({ env: { HOME: REAL, SNUG_HOME: '/tmp/iso' }, allowRealHome: true })).toBe('/tmp/iso');
+  });
+
+  it('with no env handed in it reads the process’s own two variables — by name, never the whole environment', () => {
+    // The release gate counts whole-environment reads in the shipped bundle and allows ONE,
+    // the brain registry's (ADR-0071 §3). This one must stay two named reads.
+    const before = { SNUG_HOME: process.env.SNUG_HOME, HOME: process.env.HOME };
+    try {
+      process.env.SNUG_HOME = '/tmp/iso-from-the-process';
+      expect(resolveHome()).toBe('/tmp/iso-from-the-process');
+      delete process.env.SNUG_HOME;
+      process.env.HOME = REAL;
+      expect(() => resolveHome()).toThrow(RealHomeRefusedError);
+      expect(resolveHome({ allowRealHome: true })).toBe(`${REAL}/Snug`);
+    } finally {
+      for (const [name, value] of Object.entries(before)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+    const source = readFileSync(path.join(__dirname, '..', 'home.ts'), 'utf8').replace(/\/\/.*$/gm, '');
+    expect(source.match(/process\.env(?!\.[A-Z_]+\b)/g) ?? []).toEqual([]);
   });
 
   it('refuses rather than inventing a relative home when HOME itself is absent', () => {

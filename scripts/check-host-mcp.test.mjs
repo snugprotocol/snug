@@ -7,12 +7,12 @@
 
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, it } from 'node:test';
 
-import { ARCHIVE_NAME, archiveEntries, buildPlugin, PAGE_PATH, PAGE_PIN_PATH } from './build-plugin.mjs';
+import { ARCHIVE_NAME, archiveEntries, buildPlugin, MAX_FILE_BYTES, PAGE_PATH, PAGE_PIN_PATH } from './build-plugin.mjs';
 import { FAKE_SKILL, fixtures } from './build-plugin.test.mjs';
 import {
   ALLOWED_ENV_READS,
@@ -23,13 +23,17 @@ import {
   checkInstructions,
   checkPluginTree,
   FORBIDDEN_PREFIX_IN_RELEASE,
+  GATE_LEGS,
+  INSTRUCTIONS_FILE,
   isolationEnv,
   REVIEWER_HOLD_BYTES,
   runDamagedPageLeg,
+  runGate,
   runLaunchLegs,
   runValidators,
 } from './check-host-mcp.mjs';
 import { LAUNCHER_PATH } from './lib/plugin-manifests.mjs';
+import { renderSkill, SKILL_SOURCE } from './lib/skill-build.mjs';
 import { createZip } from './lib/zip.mjs';
 
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
@@ -51,7 +55,9 @@ describe('the release-inertness sweep', () => {
     for (const name of hooks) assert.ok(name.startsWith(FORBIDDEN_PREFIX_IN_RELEASE), `${name} is a test hook the prefix sweep would miss`);
   });
 
-  for (const name of ['SNUG_MCP_TEST_RESOLVE', 'SNUG_MCP_TEST_HOLDER', 'SNUG_MCP_TEST_BRAIN', 'SNUG_MCP_TEST_BRAIN_MODEL', 'SNUG_MCP_TEST_MODELS', 'SNUG_MCP_TEST_ENTRY', 'SNUG_MCP_TEST_A_HOOK_NOBODY_HAS_WRITTEN_YET']) {
+  // (`…_BRAINS` is the registry's fake-driver hook; the three single-brain names it replaced
+  // stay in the list — a retired hook's name in the shipped bytes is still a hook that shipped.)
+  for (const name of ['SNUG_MCP_TEST_RESOLVE', 'SNUG_MCP_TEST_HOLDER', 'SNUG_MCP_TEST_BRAINS', 'SNUG_MCP_TEST_BRAIN', 'SNUG_MCP_TEST_BRAIN_MODEL', 'SNUG_MCP_TEST_MODELS', 'SNUG_MCP_TEST_ENTRY', 'SNUG_MCP_TEST_A_HOOK_NOBODY_HAS_WRITTEN_YET']) {
     it(`catches ${name} in the shipped bytes`, () => {
       // The mutant: the test build's env name reaching the release artifact.
       const problems = checkBundle(`${CLEAN} process.env.${name};`);
@@ -96,6 +102,24 @@ describe('the release-inertness sweep', () => {
     );
   });
 
+  it('declares exactly ONE whole-environment read — the brain registry’s — and admits it (B1)', () => {
+    // The count was three (`resolveHome`, `createClaudeBrain`, `probeBrain`): every reader
+    // took the parent environment for itself. The registry now takes it once and hands it on.
+    assert.equal(ALLOWED_WHOLE_ENV_READS, 1);
+    assert.deepEqual(checkBundle(`${CLEAN} const registry = createRegistry({ env: process.env });`), []);
+  });
+
+  it('names a SECOND whole-environment read as a finding, and says where the one read lives (B4)', () => {
+    // The mutant: a new driver that reaches for the parent environment on its own instead of
+    // taking the registry's — the shape that forwards an API key to an agent's child.
+    const problems = checkBundle(`${CLEAN} createRegistry({ env: process.env }); spawn('codex', args, { env: process.env });`);
+    assert.equal(problems.length, 1, JSON.stringify(problems));
+    assert.match(problems[0], /whole environment 2 times/);
+    assert.match(problems[0], /brains\/registry\.ts/);
+    // Not an invitation to raise the number.
+    assert.doesNotMatch(problems[0], /count raised|raise the count/i);
+  });
+
   it('catches a bundle that lost its tool surface', () => {
     const problems = checkBundle('const home = process.env.HOME;');
     assert.ok(problems.some((p) => p.includes('tool surface')));
@@ -120,6 +144,75 @@ describe('the instructions byte-compare (D-B12)', () => {
     // The mutant: someone edits instructions.md and ships yesterday's bundle.
     const bundled = `var i = ${JSON.stringify('Call snug_status first.\n')};`;
     assert.equal(checkInstructions(bundled, instructions).length, 1);
+  });
+});
+
+describe('what the instructions tell an agent — sent at MCP initialize, and spliced into the skill', () => {
+  // The byte-compare above proves the bundle carries THIS text; nothing proved the text was
+  // still true. Two things changed under it in TASK-20261003: a hand-in from the agent
+  // installs an app again even if the user had deleted it (K6 — the runner clears the
+  // tombstone for an explicit hand-in), and `snug_hand_in` answers with what the page did
+  // with the bundle instead of "handed to the open runner" whatever happened.
+  const instructions = readFileSync(INSTRUCTIONS_FILE, 'utf8');
+  const lines = instructions.split('\n');
+  /** The text as sentences: a claim must not hide across a wrapped line. */
+  const said = instructions.replace(/\s+/g, ' ');
+  const handingOver = said.split('## Handing an app over')[1].split('## What you do not do here')[0];
+
+  it('no longer says a hand-in "never restores" a deleted app — on the runner that is false', () => {
+    assert.doesNotMatch(said, /never restores/);
+  });
+
+  it('says, in ONE plain sentence, that an explicit hand-in installs the app again even if the user had deleted it', () => {
+    const sentences = handingOver.split(/(?<=\.)\s+/).filter((sentence) => /deleted/.test(sentence));
+    assert.deepEqual(sentences, ['An explicit hand-in installs the app again even if the user had deleted it.']);
+  });
+
+  it('still says an edited copy is offered the update and never overwritten silently', () => {
+    assert.match(handingOver, /offers the update in its run header when the user has edited their copy/);
+    assert.match(handingOver, /never overwrites an edited app silently/);
+  });
+
+  it('says what each of `snug_hand_in`’s answers means, in at most four lines', () => {
+    const first = lines.findIndex((line) => line.includes('`snug_hand_in` answers'));
+    const last = lines.map((line) => line.includes('not confirmed')).lastIndexOf(true);
+    assert.ok(first >= 0, 'the instructions never say that `snug_hand_in` answers');
+    assert.ok(last >= first, 'the instructions never mention the unconfirmed answer');
+    // This text is in every session's context.
+    const passage = lines.slice(first, last + 1);
+    assert.ok(passage.length <= 4, `the answers take ${passage.length} lines`);
+    assert.ok(passage.every((line) => line.trim() !== ''), 'the answers are one paragraph');
+    const answers = passage.join(' ');
+    // Every answer the process gives (`handInAnswer` in apps/host-mcp/src/runner.ts), by its first word.
+    for (const answer of ['`installed`', '`updated`', '`current`', '`offered`', '`refused: <reason>`', '`sent … — not confirmed`']) {
+      assert.ok(answers.includes(answer), `the instructions do not name the answer ${answer}`);
+    }
+    assert.match(answers, /to vN/);
+    // …and what the three that are not "done" mean for the agent's next step.
+    assert.match(answers, /`offered`: the user edited their copy, so the update waits for them/);
+    assert.match(answers, /`refused: <reason>`: nothing changed/);
+    assert.match(answers, /`sent … — not confirmed`: the page did not report back/);
+    // It belongs to the hand-in section, after the sentence about a deleted app.
+    assert.ok(first > lines.findIndex((line) => line.includes('even if the user had deleted it')));
+    assert.ok(last < lines.findIndex((line) => line.includes('## What you do not do here')));
+  });
+
+  it('never says the thinks run on a "Claude CLI" — the brain is the user’s own agent CLI, Claude by default (ADR-0071)', () => {
+    assert.doesNotMatch(said, /Claude CLI/);
+    // What it does say about the brain is the one neutral clause: `snug_status` names it.
+    assert.match(said, /which brain answers the apps/);
+  });
+
+  it('lands in the skill under THE LOCAL RUNNER — the deleted-app sentence is not true of an artifact, and must not read as if it were', () => {
+    // An artifact page re-reads its embedded bundles on every load, so there an app the user
+    // deleted stays deleted (Binding A's rule — the one difference the parity test states).
+    const skill = renderSkill({ source: readFileSync(SKILL_SOURCE, 'utf8'), instructions });
+    const sentence = skill.indexOf('An explicit hand-in installs the app again even if the user had deleted it.');
+    assert.ok(sentence > skill.indexOf('### The local runner'), 'the sentence is missing from the rendered skill, or above the local runner');
+    assert.ok(sentence < skill.indexOf('### The artifact runner'));
+    assert.equal(skill.split('even if the user had deleted it').length - 1, 1);
+    // The answers are said ONCE, by the launch protocol; the skill's own text does not restate them.
+    assert.equal(skill.split('not confirmed').length - 1, 1);
   });
 });
 
@@ -889,5 +982,284 @@ process.stdin.on('end', () => { if (mode !== 'lingers') process.exit(0); });
     } finally {
       f.remove();
     }
+  });
+});
+
+describe('the gate, whole: it CALLS every rule it has', () => {
+  // The R2 verifier's finding: with the launch legs and the damaged-page leg called inline
+  // in `main()`, deleting either call left every suite green. Each leg had its own tests;
+  // nothing tested that the gate runs them. `runGate` is `main()`'s body with its
+  // collaborators as parameters, and these tests drive it over a real build of fixture inputs.
+
+  const instructions = readFileSync(INSTRUCTIONS_FILE, 'utf8');
+  /** Fixture inputs whose "release bundle" passes the sweep and carries the real instructions. */
+  const gateFixtures = (bundle = `${CLEAN} export const instructions = ${JSON.stringify(instructions)};`) => {
+    const fixture = fixtures();
+    writeFileSync(fixture.sources.bundle, bundle);
+    return fixture;
+  };
+  /** Legs that record how they were called and answer what the test says. */
+  const recordingLegs = (answers = {}) => {
+    const calls = [];
+    const leg = (name) => async (...args) => {
+      calls.push([name, ...args]);
+      return answers[name] ?? [];
+    };
+    return { calls, legs: { launch: leg('launch'), damagedPage: leg('damagedPage') } };
+  };
+  const gate = ({ out, sources }, options = {}) =>
+    runGate({ bundleFile: sources.bundle, pluginDir: out, sources, skill: FAKE_SKILL, validators: () => [], ...options });
+  const sizeLine = (sources) => `SIZE — ${bundleSizeLine(readFileSync(sources.bundle).length)}`;
+
+  it('a clean tree is STARTED: both launch legs and the damaged-page leg are called, on the tree the gate just built', async () => {
+    const fixture = gateFixtures();
+    const { calls, legs } = recordingLegs();
+    try {
+      const { lines, problems } = await gate(fixture, { legs });
+      assert.deepEqual(problems, []);
+      const plugin = path.join(fixture.out, 'snug');
+      assert.deepEqual(calls, [
+        // The launcher the tree ships, and the page it must be found serving.
+        ['launch', path.join(plugin, LAUNCHER_PATH), { page: path.join(plugin, PAGE_PATH) }],
+        ['damagedPage', plugin],
+      ]);
+      assert.ok(existsSync(path.join(plugin, LAUNCHER_PATH)), 'the gate must have BUILT the tree it starts');
+      assert.equal(lines[0], sizeLine(fixture.sources));
+      assert.match(lines[1], /^ok \(/);
+      assert.equal(lines.length, 2);
+    } finally {
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  for (const [name, problem] of [
+    ['launch', 'positive leg: the second process did not attach to the first (pid 1)'],
+    ['damagedPage', 'damaged-page leg: the untouched tree must still lead'],
+  ]) {
+    it(`a problem from the ${name} leg FAILS the gate — and the other leg still runs`, async () => {
+      const fixture = gateFixtures();
+      const { calls, legs } = recordingLegs({ [name]: [problem] });
+      try {
+        const { lines, problems } = await gate(fixture, { legs });
+        assert.deepEqual(problems, [problem]);
+        assert.deepEqual(calls.map(([leg]) => leg), ['launch', 'damagedPage']);
+        // The size is printed whatever the verdict; "ok" is not.
+        assert.deepEqual(lines, [sizeLine(fixture.sources)]);
+      } finally {
+        rmSync(fixture.dir, { recursive: true, force: true });
+      }
+    });
+  }
+
+  it('a tree that is NOT what it says it is is never started', async () => {
+    // A release bundle carrying a test hook: the sweep's problem, and no process.
+    const fixture = gateFixtures(`${CLEAN} export const instructions = ${JSON.stringify(instructions)}; process.env.SNUG_MCP_TEST_BRAINS;`);
+    const { calls, legs } = recordingLegs();
+    try {
+      const { lines, problems } = await gate(fixture, { legs });
+      assert.ok(problems.some((p) => p.includes('SNUG_MCP_TEST_BRAINS')), JSON.stringify(problems));
+      assert.deepEqual(calls, []);
+      assert.deepEqual(lines, [sizeLine(fixture.sources)]);
+    } finally {
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  it('checks the bundle against the instructions’ one source (D-B12) — a stale bundle is named and never started', async () => {
+    const fixture = gateFixtures(`${CLEAN} export const instructions = "Call snug_status first.";`);
+    const { calls, legs } = recordingLegs();
+    try {
+      const { problems } = await gate(fixture, { legs });
+      assert.ok(problems.some((p) => /bundled instructions text differs/.test(p)), JSON.stringify(problems));
+      assert.deepEqual(calls, []);
+    } finally {
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  it('holds the tree it built to the tree’s rules — one the directory would refuse is named and never started', async () => {
+    // The mutant input: a page of exactly 5 MiB. Nothing about the BUNDLE is wrong, so only
+    // the tree check — run over what the gate just built — can see it.
+    const fixture = gateFixtures();
+    writeFileSync(fixture.sources.kit, Buffer.alloc(MAX_FILE_BYTES, 0x20));
+    const { calls, legs } = recordingLegs();
+    try {
+      const { problems } = await gate(fixture, { legs });
+      assert.ok(problems.some((p) => /plugin directory would refuse/.test(p) && p.includes(PAGE_PATH)), JSON.stringify(problems));
+      assert.deepEqual(calls, []);
+    } finally {
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  it('a validator’s refusal FAILS the gate; an absent validator is NOT VERIFIED by name, after the ok', async () => {
+    const fixture = gateFixtures();
+    const { legs } = recordingLegs();
+    const seen = [];
+    const verdicts = (list) => (dir) => {
+      seen.push(dir);
+      return list;
+    };
+    try {
+      const refused = await gate(fixture, { legs, validators: verdicts([{ name: 'agentskills validate (skill)', status: 'failed', detail: 'description too long' }]) });
+      assert.deepEqual(refused.problems, ['agentskills validate (skill) refused the tree:\ndescription too long']);
+      assert.deepEqual(refused.lines, [sizeLine(fixture.sources)]);
+
+      const absent = await gate(fixture, {
+        legs,
+        validators: verdicts([
+          { name: 'claude plugin validate --strict (plugin)', status: 'ok', detail: '' },
+          { name: 'agentskills validate (skill)', status: 'not verified', detail: 'uvx is not on this machine' },
+        ]),
+      });
+      assert.deepEqual(absent.problems, []);
+      assert.match(absent.lines[1], /^ok \(.*validators: claude plugin validate --strict \(plugin\) ok, agentskills validate \(skill\) not verified\)$/);
+      assert.equal(absent.lines[2], 'NOT VERIFIED — agentskills validate (skill): uvx is not on this machine');
+      // The validators are handed the tree the gate built.
+      assert.deepEqual(seen, [fixture.out, fixture.out]);
+    } finally {
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  it('a missing bundle is CANNOT RUN by name: nothing is built, nothing is started, no size is claimed', async () => {
+    const fixture = gateFixtures();
+    rmSync(fixture.sources.bundle);
+    const { calls, legs } = recordingLegs();
+    try {
+      const { lines, problems } = await gate(fixture, { legs });
+      assert.equal(problems.length, 1);
+      assert.match(problems[0], /^CANNOT RUN — .*snug-mcp\.mjs is missing \(pnpm --filter host-mcp build\)$/);
+      assert.deepEqual(lines, []);
+      assert.deepEqual(calls, []);
+      assert.equal(existsSync(fixture.out), false);
+    } finally {
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  it('a missing build input is CANNOT RUN by name — after the bundle’s own problems, which are not lost with it', async () => {
+    const fixture = gateFixtures(`${CLEAN} export const instructions = ${JSON.stringify(instructions)}; process.env.ANTHROPIC_API_KEY;`);
+    rmSync(fixture.sources.kit);
+    const { calls, legs } = recordingLegs();
+    try {
+      const { problems } = await gate(fixture, { legs });
+      assert.equal(problems.length, 2, JSON.stringify(problems));
+      assert.match(problems[0], /ANTHROPIC_API_KEY/);
+      assert.match(problems[1], /^CANNOT RUN — missing kit/);
+      assert.deepEqual(calls, []);
+    } finally {
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  describe('with no legs given, the legs are the REAL ones', () => {
+    const outlived = [];
+    afterEach(() => {
+      assert.deepEqual(outlived.splice(0), [], 'the gate left a process running');
+    });
+    const alive = (pid) => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    it('the defaults are the launch legs and the damaged-page leg themselves', () => {
+      assert.equal(GATE_LEGS.launch, runLaunchLegs);
+      assert.equal(GATE_LEGS.damagedPage, runDamagedPageLeg);
+      assert.ok(Object.isFrozen(GATE_LEGS));
+    });
+
+    it('runs them: a fixture tree whose "bundle" is an honest runner is started five times over, passes, and is reaped', async () => {
+      // No fake leg here. The fixture's release bundle IS a runner — it leads, is joined,
+      // refuses with no home, serves the page it ships and honours the page's pin — so the
+      // whole gate runs as shipped: build → check → launch legs (3 processes) → damaged-page
+      // leg (2). A gate whose default legs were swapped for no-ops starts nothing.
+      const dir = mkdtempSync(path.join(tmpdir(), 'snug-gate-whole-'));
+      const starts = path.join(dir, 'starts.log');
+      const fixture = gateFixtures(`// a fixture release bundle: an honest runner, as the gate's legs see one
+import { createHash } from 'node:crypto';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
+import path from 'node:path';
+import { createInterface } from 'node:readline';
+import { fileURLToPath } from 'node:url';
+export const instructions = ${JSON.stringify(instructions)};
+appendFileSync(${JSON.stringify(starts)}, process.pid + '\\n');
+const home = process.env.SNUG_HOME;
+const pageFile = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', ${JSON.stringify(PAGE_PATH)});
+const page = readFileSync(pageFile);
+const damaged = readFileSync(pageFile + '.sha256', 'utf8').split(/\\s+/)[0] !== createHash('sha256').update(page).digest('hex');
+let port = 0;
+if (home !== undefined && !damaged) {
+  const server = createServer((request, response) => response.end(page));
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  port = server.address().port;
+}
+const status = () => {
+  if (home === undefined) return { running: false, refusal: { code: 'home-unresolved' } };
+  if (damaged) return { running: false, refusal: { code: 'page-damaged' } };
+  mkdirSync(home, { recursive: true });
+  const record = path.join(home, 'primary.pid');
+  const base = { running: true, port, home, file: path.join(home, 'user.snug') };
+  if (existsSync(record)) return { ...base, attached: true, pid: Number(readFileSync(record, 'utf8')) };
+  writeFileSync(record, String(process.pid));
+  return { ...base, pid: process.pid };
+};
+const reply = (id, result) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id, result }) + '\\n');
+createInterface({ input: process.stdin }).on('line', (line) => {
+  const message = JSON.parse(line);
+  if (message.id === undefined) return;
+  if (message.method === 'initialize') reply(message.id, { protocolVersion: '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'snug', version: '0' } });
+  else if (message.method === 'tools/list') reply(message.id, { tools: [{ name: 'snug_status' }] });
+  else reply(message.id, { content: [{ type: 'text', text: JSON.stringify(status()) }] });
+});
+process.stdin.on('end', () => process.exit(0));
+`);
+      const pids = () => (existsSync(starts) ? readFileSync(starts, 'utf8').trim().split('\n').map(Number) : []);
+      try {
+        const { lines, problems } = await gate(fixture);
+        assert.deepEqual(problems, []);
+        assert.match(lines[1], /^ok \(/);
+        assert.equal(pids().length, 5, 'three processes for the launch legs, two for the damaged-page leg');
+      } finally {
+        outlived.push(...pids().filter(alive));
+        rmSync(fixture.dir, { recursive: true, force: true });
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  });
+});
+
+describe('the tests are RUN — a test file no script names tests nothing', () => {
+  // Found 2026-10-03: `lib/skill-build.test.mjs` and `lib/plugin-launcher.test.mjs` had been in
+  // no root script since the PR that added them (#181). Every rule of the skill render and of
+  // the launcher had a mutant, and no gate had ever run one of them.
+  const repo = new URL('..', import.meta.url);
+  const scripts = JSON.parse(readFileSync(new URL('package.json', repo), 'utf8')).scripts;
+  const testFiles = (dir) =>
+    readdirSync(new URL(`${dir}/`, repo), { withFileTypes: true }).flatMap((entry) =>
+      entry.isDirectory() ? testFiles(`${dir}/${entry.name}`) : /\.(test|node-test)\.mjs$/.test(entry.name) ? [`${dir}/${entry.name}`] : [],
+    );
+
+  it('every test file under scripts/ is named by a root script', () => {
+    const named = Object.values(scripts).join(' ');
+    const files = testFiles('scripts');
+    assert.ok(files.length >= 20, `expected to find the scripts' test files, found ${files.length}`);
+    assert.deepEqual(files.filter((file) => !named.split(/\s+/).includes(file)), []);
+  });
+
+  it('this gate runs the tests of everything it builds a plugin from', () => {
+    const list = scripts['check-host-mcp'].split('&&')[0].trim().split(/\s+/);
+    assert.deepEqual(list.slice(0, 2), ['node', '--test']);
+    for (const file of ['scripts/check-host-mcp.test.mjs', 'scripts/build-plugin.test.mjs', 'scripts/lib/zip.test.mjs', 'scripts/lib/plugin-launcher.test.mjs', 'scripts/lib/skill-build.test.mjs', 'scripts/walk-desktop-host.test.mjs']) {
+      assert.ok(list.includes(file), `check-host-mcp does not run ${file}`);
+    }
+    // …and the gate itself still follows them.
+    assert.match(scripts['check-host-mcp'], /&& node scripts\/check-host-mcp\.mjs$/);
+    assert.match(scripts.test, /pnpm run check-host-mcp/);
   });
 });

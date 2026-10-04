@@ -1075,7 +1075,11 @@ export default function RunView(): ReactElement {
                 )}
               </>
             ) : null}
-            {isStarterId(id) ? (
+            {/*
+              Not for a starter this host cannot run: the panel below has just said so, and
+              installing it only makes a tile that is blocked the moment it appears.
+            */}
+            {isStarterId(id) && blocked === undefined ? (
               <Button
                 variant="primary"
                 data-testid="starter-install"

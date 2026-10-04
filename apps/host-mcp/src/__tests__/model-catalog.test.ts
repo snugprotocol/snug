@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { readModelCatalog, MODEL_CATALOG_MAX } from '../model-catalog.js';
+import { readModelCatalog, MODEL_CATALOG_MAX } from '../brains/claude-catalog.js';
 
 // FIXTURE ONLY (2026-10-03, no assertion touched): every case made a home under the OS temp
 // dir and none removed it — ten directories a run, 320 of them on the owner's machine by the

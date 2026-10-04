@@ -29,7 +29,7 @@ Pick the runner by the tools you have, in this order:
 1. **You have `snug_status`, `snug_open`, `snug_hand_in` and `snug_list_apps`** — the local
    runner. Follow *The local runner* below. This is the full Snug: the user's file is on
    their disk, apps can hold approved connections to real APIs, and thinks run on the
-   user's own Claude CLI.
+   user's own agent CLI — Claude by default.
 2. **No Snug tools, but an `Artifact` tool that takes `capabilities`** — the artifact
    runner. Follow *The artifact runner* below. Apps think on the viewer's own Claude; there
    are no connections; the file lives in the artifact.
@@ -123,8 +123,8 @@ Say it once, plainly, the first time you hand an app in:
 
 - Never put an API key, token or password in app code, and never ask the user for one to
   paste into an app. Connections are made in the runner, by the user.
-- Never run `claude` or any model yourself to answer an app's think. The runner does that,
-  on the user's own CLI.
+- Never run `claude`, `codex` or any model yourself to answer an app's think. The runner
+  does that, on the user's own agent CLI.
 - Never describe the runner as an MCP server or Snug as built on MCP. Say: Snug apps run
   inside Claude Code / Cowork.
 - Never persist through `localStorage`, `sessionStorage` or cookies: the sandbox drops them.

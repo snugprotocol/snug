@@ -10,11 +10,14 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { BrainReadiness } from '../brains/brain.js';
+import { createBrainRegistry } from '../brains/registry.js';
 import { buildId, VERSION } from '../build.js';
 import { CONTROL_OPS, controlCall } from '../control-socket.js';
 import { controlSocketPath, readLock } from '../lock.js';
 import { refusalFor, refusalSentence } from '../refusals.js';
 import { createRefusedRunner, createRunner, type Runner } from '../runner.js';
+import { brainOf, fakeDriver } from './fixtures/fake-brains.js';
 
 let home: string;
 const started: Runner[] = [];
@@ -27,9 +30,13 @@ afterEach(async () => {
   rmSync(home, { recursive: true, force: true });
 });
 
+/** A runner with no brain at all — what every case here gets unless it hands one in (ADR-0071: never a default). */
+const noBrains = () => createBrainRegistry({ drivers: [] });
+
 const make = (over: Partial<Parameters<typeof createRunner>[0]> = {}): Runner => {
   const runner = createRunner({
     home,
+    brains: noBrains(),
     page: () => '<!doctype html><title>kit</title>',
     openBrowser: async () => {},
     // Port 0: the fixed 43127 belongs to a developer's own running Snug, and a test that
@@ -60,6 +67,15 @@ describe('the real-home guard (D-B34)', () => {
   });
 });
 
+describe('the brain registry is handed in, never built here (B1, ADR-0071)', () => {
+  it('refuses to construct without one, rather than defaulting to the real machine’s CLIs', () => {
+    // The default used to be the user's real `claude`: the unit suite and the browser suite
+    // both spawned it. Cast: the type already refuses this call; what is under test is the
+    // RUNTIME half of the guard.
+    expect(() => createRunner({ home, page: () => 'kit' } as Parameters<typeof createRunner>[0])).toThrow(/brain registry/i);
+  });
+});
+
 describe('starting', () => {
   it('becomes the primary and serves the page', async () => {
     const runner = make();
@@ -87,19 +103,26 @@ describe('the brain readiness probe (D-B35)', () => {
     // first time an app thought. The page's first request is this `/status`; it starts the
     // probe and waits a moment for it, so a verdict that needs no spawn is named before the
     // user asks for anything. (That nothing probes at start: "the brain probe is lazy", below.)
-    const runner = make({ brainState: async () => ({ state: 'logged-out' as const, detail: 'run `claude` and `/login`' }) });
+    // MIGRATED 2026-10-03 (ADR-0071, the wire): the probe is a driver's, and its verdict is
+    // that brain's entry in `brains[]` rather than a top-level `brain`.
+    const runner = make({ brains: createBrainRegistry({ drivers: [fakeDriver('claude', { readiness: { state: 'logged-out', detail: 'run `claude` and `/login`' } })] }) });
     const { port } = await runner.start();
     const status = (await (await fetch(`http://127.0.0.1:${port}/status`, {
       headers: { authorization: `Bearer ${new URL(runner.launchUrl()).hash.replace('#token=', '')}` },
-    })).json()) as { brain?: { state: string } };
-    expect(status.brain?.state).toBe('logged-out');
+    })).json()) as { brains: Array<{ id: string; state: string }> };
+    expect(status.brains[0]).toMatchObject({ id: 'claude', state: 'logged-out' });
   });
 
   it('a brain probe that throws does not stop the runner from starting', async () => {
     // The kit must open even when the brain cannot be reached: an app that only stores
     // data still works, and a page that refuses to boot teaches the user nothing.
-    const runner = make({ brainState: async () => { throw new Error('probe blew up'); } });
+    const runner = make({ brains: createBrainRegistry({ drivers: [fakeDriver('claude', { probe: async () => { throw new Error('probe blew up'); } })] }) });
     await expect(runner.start()).resolves.toMatchObject({ role: 'primary' });
+    // …and the page's first read, which is what starts the probe, is answered too.
+    const { port } = await runner.start();
+    const response = await fetch(`http://127.0.0.1:${port}/status`, { headers: { authorization: `Bearer ${new URL(runner.launchUrl()).hash.replace('#token=', '')}` } });
+    expect(response.status).toBe(200);
+    expect(await response.text()).not.toContain('blew up');
   });
 });
 
@@ -223,8 +246,29 @@ describe('the exit grace', () => {
 
 describe('the runner reaps the brain’s children (ADR-0069 §5)', () => {
   it('stop() calls the brain’s stop() — reverting the wire would leave pre-warmed children behind', async () => {
+    // FIXTURE MIGRATED 2026-10-03 (ADR-0071): a brain is no longer handed to the runner, it
+    // is MADE by the registry at the first think that resolves to it — so this case now
+    // sends that think. The claim is the one it always made.
     const stop = vi.fn();
-    const runner = make({ brain: { stream: async () => {}, stop } });
+    const runner = make({ brains: createBrainRegistry({ drivers: [fakeDriver('claude', { create: () => brainOf(async () => {}, stop) })] }) });
+    const { port } = await runner.start();
+    const authorization = `Bearer ${new URL(runner.launchUrl()).hash.replace('#token=', '')}`;
+    await fetch(`http://127.0.0.1:${port}/status`, { headers: { authorization } }); // the first contact: the probe
+    const thought = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { authorization, 'content-type': 'application/json' },
+      body: JSON.stringify({ messages: [{ role: 'user', content: 'x' }] }),
+    });
+    expect(thought.headers.get('x-snug-brain')).toBe('claude');
+    expect(stop).not.toHaveBeenCalled();
+    await runner.stop();
+    expect(stop).toHaveBeenCalledTimes(1);
+  });
+
+  it('stop() stops the REGISTRY — which reaps every brain it made and owes no further probe', async () => {
+    const brains = noBrains();
+    const stop = vi.spyOn(brains, 'stop');
+    const runner = make({ brains });
     await runner.start();
     await runner.stop();
     expect(stop).toHaveBeenCalledTimes(1);
@@ -604,7 +648,7 @@ process.stdout.write('up\\n');
     });
     await new Promise<void>((resolve) => wedged.stdout.once('data', () => resolve()));
 
-    const runner = createRunner({ home, page: () => 'kit', ports: [0], lockDeps: { sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms / 20)) } });
+    const runner = createRunner({ home, brains: noBrains(), page: () => 'kit', ports: [0], lockDeps: { sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms / 20)) } });
     started.push(runner);
     const led = await runner.start();
     expect(led.refusal).toBeUndefined();
@@ -1136,7 +1180,7 @@ describe('stop (L4)', () => {
     // Stopping closes the very socket the answer travels on. Ten rounds, because the
     // failure this guards against is an ordering one.
     for (let round = 0; round < 10; round += 1) {
-      const runner = createRunner({ home, page: () => 'kit', openBrowser: async () => {} });
+      const runner = createRunner({ home, brains: noBrains(), page: () => 'kit', openBrowser: async () => {} });
       await runner.start();
       expect(await controlCall(socketOf(), { op: 'stop' }), `round ${round}`).toEqual({ ok: true, op: 'stop', pid: process.pid });
       await vi.waitFor(() => expect(readLock(hostDir())).toBeUndefined());
@@ -1201,10 +1245,19 @@ describe('stop (L4)', () => {
   });
 });
 
+/** A registry of ONE brain, `claude`, whose probe is this function — the wire names it `brains[0]`. */
+const brainsProbing = (probe: () => Promise<BrainReadiness>, recheckFloorMs?: number) =>
+  createBrainRegistry({ drivers: [fakeDriver('claude', { probe })], ...(recheckFloorMs !== undefined ? { recheckFloorMs } : {}) });
+type PageStatus = { active?: string; brains: Array<{ id: string; state: string; detail?: string }> };
+
+// MIGRATED 2026-10-03 (ADR-0071): the probe was a runner option (`brainState`) answering a
+// top-level `brain`; it is a driver's `probe`, in the registry the runner is handed, and its
+// verdict is that brain's entry in `brains[]`. A brain nobody has asked yet is no longer an
+// ABSENT field: it is listed, as `unknown`, and is not `active`.
 describe('the brain probe is lazy (B1)', () => {
   it('does NOT run at start — a session that only speaks over stdio spawns no CLI', async () => {
-    const probe = vi.fn(async () => ({ state: 'ready' }));
-    const runner = make({ brainState: probe });
+    const probe = vi.fn(async (): Promise<BrainReadiness> => ({ state: 'ready' }));
+    const runner = make({ brains: brainsProbing(probe) });
     const { port } = await runner.start();
     await runner.callTool('snug_status', {});
     await fetch(`http://127.0.0.1:${port}/`); // the open document is not a page contact
@@ -1213,38 +1266,68 @@ describe('the brain probe is lazy (B1)', () => {
     expect(probe).not.toHaveBeenCalled();
   });
 
-  it('runs ONCE, at the first authenticated request, in the brain’s own neutral directory', async () => {
-    const probe = vi.fn(async (_context: { cwd: string }) => ({ state: 'ready' }));
-    const runner = make({ brainState: probe });
+  it('runs ONCE, at the first authenticated request', async () => {
+    // (That each driver probes in its own neutral directory under the Snug home is the
+    // shipped registry's claim now — `brains/registry.test.ts`.)
+    const probe = vi.fn(async (): Promise<BrainReadiness> => ({ state: 'ready' }));
+    const runner = make({ brains: brainsProbing(probe) });
     const { port } = await runner.start();
     const authed = { headers: { authorization: `Bearer ${tokenOf(runner)}` } };
     await fetch(`http://127.0.0.1:${port}/status`, authed);
     await fetch(`http://127.0.0.1:${port}/status`, authed);
     expect(probe).toHaveBeenCalledTimes(1);
-    expect(probe.mock.calls[0]![0]).toEqual({ cwd: path.join(home, 'host', 'brain') });
   });
 
   it('a SLOW probe does not hold the page’s first read — the state arrives by event instead', async () => {
-    let finish: (value: { state: string }) => void = () => {};
-    const runner = make({ brainState: () => new Promise<{ state: string }>((resolve) => (finish = resolve)) });
+    let finish: (value: BrainReadiness) => void = () => {};
+    const runner = make({ brains: brainsProbing(() => new Promise<BrainReadiness>((resolve) => (finish = resolve))) });
     const { port } = await runner.start();
     const authed = { headers: { authorization: `Bearer ${tokenOf(runner)}` } };
     const began = Date.now();
-    const first = (await (await fetch(`http://127.0.0.1:${port}/status`, authed)).json()) as { brain?: unknown };
+    const first = (await (await fetch(`http://127.0.0.1:${port}/status`, authed)).json()) as PageStatus;
     expect(Date.now() - began).toBeLessThan(2_000);
-    expect(first.brain).toBeUndefined();
+    // Not known yet: listed, never claimed ready, and not the brain a think would run on.
+    expect(first.brains[0]).toMatchObject({ id: 'claude', state: 'unknown' });
+    expect(first.active).toBeUndefined();
 
     const page = await openPage(runner, port);
     closers.push(() => page.close());
-    finish({ state: 'logged-out' });
+    finish({ state: 'logged-out', detail: 'run /login' });
     expect(await page.read('logged-out')).toContain('event: status');
   });
 
-  it('with no probe given there is NO probe — the default never reaches for the real CLI', async () => {
+  it('with no brain given there is NO probe and no brain — a runner never reaches for the real CLI on its own', async () => {
     const runner = make();
     const { port } = await runner.start();
-    const body = (await (await fetch(`http://127.0.0.1:${port}/status`, { headers: { authorization: `Bearer ${tokenOf(runner)}` } })).json()) as { brain?: unknown };
-    expect(body.brain).toBeUndefined();
+    const body = (await (await fetch(`http://127.0.0.1:${port}/status`, { headers: { authorization: `Bearer ${tokenOf(runner)}` } })).json()) as PageStatus;
+    expect(body.brains).toEqual([]);
+    expect(body.active).toBeUndefined();
+  });
+
+  it('`snug_status` lists the brains WITHOUT probing them — and names the active one once a page has', async () => {
+    const probe = vi.fn(async (): Promise<BrainReadiness> => ({ state: 'ready' }));
+    const runner = make({
+      brains: createBrainRegistry({ drivers: [fakeDriver('claude', { probe, name: 'Claude' }), fakeDriver('codex', { name: 'Codex', verified: false, readiness: { state: 'logged-out', detail: 'run `codex login`' } })] }),
+    });
+    const { port } = await runner.start();
+    const before = await statusOf(runner);
+    expect(probe).not.toHaveBeenCalled();
+    expect(before).not.toHaveProperty('active');
+    expect(before.brains).toEqual([
+      { id: 'claude', name: 'Claude', state: 'unknown', detail: 'Snug is still checking this brain.', verified: true },
+      { id: 'codex', name: 'Codex', state: 'unknown', detail: 'Snug is still checking this brain.', verified: false },
+    ]);
+
+    await pageStatus(runner, port); // the first page contact
+    const after = await statusOf(runner);
+    expect(after.active).toBe('claude');
+    expect(after.brains).toEqual([
+      { id: 'claude', name: 'Claude', state: 'ready', verified: true },
+      { id: 'codex', name: 'Codex', state: 'logged-out', detail: 'run `codex login`', verified: false },
+    ]);
+    // …and the human CLI's `status` is the same document, over the socket.
+    const overSocket = await controlCall(socketOf(), { op: 'status' });
+    expect(overSocket).toMatchObject({ ok: true, op: 'status', active: 'claude', brains: after.brains });
   });
 });
 
@@ -1408,11 +1491,13 @@ describe('the brain re-check (D4)', () => {
     fetch(`http://127.0.0.1:${port}/brain/recheck`, { method: 'POST', headers: { authorization: `Bearer ${tokenOf(runner)}` } });
 
   it('re-runs the probe, and the new verdict reaches the open page as a status event', async () => {
-    let state = 'absent';
-    const probe = vi.fn(async () => ({ state }));
-    const runner = make({ brainState: probe, brainRecheckFloorMs: 0 });
+    // MIGRATED 2026-10-03 (ADR-0071), here and through this block: the floor is the
+    // registry's, and a verdict is read off `brains[0]` instead of a top-level `brain`.
+    let state: BrainReadiness['state'] = 'absent';
+    const probe = vi.fn(async (): Promise<BrainReadiness> => ({ state }));
+    const runner = make({ brains: brainsProbing(probe, 0) });
     const { port } = await runner.start();
-    expect((await pageStatus(runner, port)).brain).toEqual({ state: 'absent' });
+    expect(((await pageStatus(runner, port)) as PageStatus).brains[0]).toMatchObject({ id: 'claude', state: 'absent' });
     const page = await openPage(runner, port);
     closers.push(() => page.close());
     await vi.waitFor(async () => expect(await statusOf(runner)).toMatchObject({ pages: 1 }));
@@ -1421,13 +1506,15 @@ describe('the brain re-check (D4)', () => {
     expect((await recheck(runner, port)).status).toBe(202);
     expect(await page.read('"state":"ready"')).toContain('"state":"ready"');
     expect(probe).toHaveBeenCalledTimes(2);
-    expect((await pageStatus(runner, port)).brain).toEqual({ state: 'ready' });
+    const now = (await pageStatus(runner, port)) as PageStatus;
+    expect(now.brains[0]).toMatchObject({ id: 'claude', state: 'ready' });
+    expect(now.active, 'a brain that became ready is the one a think would run on').toBe('claude');
   });
 
   it('at most once per floor — a page that asks in a loop cannot make the CLI think in a loop', async () => {
     // Every probe of a READY brain is a real (tiny) think on the user's subscription.
-    const probe = vi.fn(async () => ({ state: 'ready' }));
-    const runner = make({ brainState: probe, brainRecheckFloorMs: 60_000 });
+    const probe = vi.fn(async (): Promise<BrainReadiness> => ({ state: 'ready' }));
+    const runner = make({ brains: brainsProbing(probe, 60_000) });
     const { port } = await runner.start();
     await pageStatus(runner, port); // the first contact: probe #1
     for (let i = 0; i < 5; i += 1) expect((await recheck(runner, port)).status).toBe(202);
@@ -1439,23 +1526,23 @@ describe('the brain re-check (D4)', () => {
     // "A think that fails triggers a re-check" has to stay true in the seconds after any
     // probe, which is exactly when a page that just opened meets its first failed think.
     // Dropped, the brain's state would stay stale until some LATER think failed again.
-    let state = 'ready';
-    const probe = vi.fn(async () => ({ state }));
-    const runner = make({ brainState: probe, brainRecheckFloorMs: 250 });
+    let state: BrainReadiness['state'] = 'ready';
+    const probe = vi.fn(async (): Promise<BrainReadiness> => ({ state }));
+    const runner = make({ brains: brainsProbing(probe, 250) });
     const { port } = await runner.start();
     await pageStatus(runner, port); // probe #1, at the first contact
     state = 'logged-out';
     for (let i = 0; i < 5; i += 1) await recheck(runner, port);
     expect(probe, 'not inside the floor').toHaveBeenCalledTimes(1);
     await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(2), { timeout: 2_000 });
-    expect((await pageStatus(runner, port)).brain).toEqual({ state: 'logged-out' });
+    expect(((await pageStatus(runner, port)) as PageStatus).brains[0]).toMatchObject({ state: 'logged-out' });
     await new Promise((r) => setTimeout(r, 400));
     expect(probe, 'five asks were ONE owed re-check').toHaveBeenCalledTimes(2);
   });
 
   it('a stopped runner owes nothing — no probe fires after stop', async () => {
-    const probe = vi.fn(async () => ({ state: 'ready' }));
-    const runner = make({ brainState: probe, brainRecheckFloorMs: 120 });
+    const probe = vi.fn(async (): Promise<BrainReadiness> => ({ state: 'ready' }));
+    const runner = make({ brains: brainsProbing(probe, 120) });
     const { port } = await runner.start();
     await pageStatus(runner, port);
     await recheck(runner, port); // owed, at the floor
@@ -1465,9 +1552,9 @@ describe('the brain re-check (D4)', () => {
   });
 
   it('never runs two probes at once', async () => {
-    let finish: (value: { state: string }) => void = () => {};
-    const probe = vi.fn(() => new Promise<{ state: string }>((resolve) => (finish = resolve)));
-    const runner = make({ brainState: probe, brainRecheckFloorMs: 0 });
+    let finish: (value: BrainReadiness) => void = () => {};
+    const probe = vi.fn(() => new Promise<BrainReadiness>((resolve) => (finish = resolve)));
+    const runner = make({ brains: brainsProbing(probe, 0) });
     const { port } = await runner.start();
     await pageStatus(runner, port); // starts probe #1, which is still running
     await recheck(runner, port);
@@ -1476,27 +1563,26 @@ describe('the brain re-check (D4)', () => {
     finish({ state: 'ready' });
   });
 
-  it('a runner with no probe (the test build, unpinned) has nothing to re-run and spawns nothing', async () => {
-    const runner = make({ brainRecheckFloorMs: 0 });
+  it('a runner with no brain (the test build, unpinned) has nothing to re-run and spawns nothing', async () => {
+    const runner = make({ brains: createBrainRegistry({ drivers: [], recheckFloorMs: 0 }) });
     const { port } = await runner.start();
     expect((await recheck(runner, port)).status).toBe(202);
-    expect((await pageStatus(runner, port)).brain).toBeUndefined();
+    expect(((await pageStatus(runner, port)) as PageStatus).brains).toEqual([]);
   });
 
   it('a re-check that throws leaves the last verdict standing', async () => {
     let calls = 0;
     const runner = make({
-      brainRecheckFloorMs: 0,
-      brainState: async () => {
+      brains: brainsProbing(async () => {
         calls += 1;
         if (calls > 1) throw new Error('probe blew up');
         return { state: 'logged-out' };
-      },
+      }, 0),
     });
     const { port } = await runner.start();
-    expect((await pageStatus(runner, port)).brain).toEqual({ state: 'logged-out' });
+    expect(((await pageStatus(runner, port)) as PageStatus).brains[0]).toMatchObject({ state: 'logged-out' });
     await recheck(runner, port);
     await vi.waitFor(() => expect(calls).toBe(2));
-    expect((await pageStatus(runner, port)).brain).toEqual({ state: 'logged-out' });
+    expect(((await pageStatus(runner, port)) as PageStatus).brains[0]).toMatchObject({ state: 'logged-out' });
   });
 });

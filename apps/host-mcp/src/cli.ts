@@ -67,7 +67,7 @@ export function positionalVerb(args: readonly string[]): string | undefined {
 function usage(command: string): string {
   return [
     `Usage: ${command} <verb>`,
-    '  status         what is running: version, build, pid, home, sessions, pages',
+    '  status         what is running: version, build, pid, home, sessions, pages, brains',
     '  open           open Snug in your browser',
     '  open --print   print the launch address instead (in a terminal only)',
     '  stop           stop the running Snug (refuses while a page is open)',

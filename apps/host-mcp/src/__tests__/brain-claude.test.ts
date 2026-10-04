@@ -17,8 +17,16 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { BrainStreamError, buildStreamArgs, childEnvFor, CHILD_ENV_ALLOWLIST, createClaudeBrain, INSTALL_REMEDY, probeBrain, SHIM_FIRST_DELTA_MS, SHIM_IDLE_MS, splitChatRequest } from '../brain-claude.js';
+import { BrainStreamError, childEnvFor, CHILD_ENV_ALLOWLIST, splitChatRequest } from '../brains/brain.js';
+import { buildStreamArgs, createClaudeBrain, INSTALL_REMEDY, probeBrain, SHIM_FIRST_DELTA_MS, SHIM_IDLE_MS } from '../brains/claude.js';
 import { delta, fakeSpawner, result } from './fixtures/fake-claude-child.js';
+
+/**
+ * The environment these fakes are handed. Since TASK-20261003 the brain no longer reads the
+ * process's own: the registry builds the child env ONCE, by allowlist, and hands it to every
+ * driver (ADR-0071 §3) — so a caller that passes none can never leak the parent's.
+ */
+const ENV = childEnvFor({ HOME: '/Users/x', PATH: '/usr/bin' });
 
 /** The names measured in a live Claude Code session — none may reach the child. */
 const MEASURED_INHERITED = [
@@ -189,9 +197,9 @@ describe('the OpenAI-shaped request the page sends', () => {
 });
 
 describe('the brain end to end, with a fake CLI (a pre-warmed child, one request each)', () => {
-  const brainWith = (script?: Parameters<typeof fakeSpawner>[0], over: Parameters<typeof createClaudeBrain>[0] = {}) => {
+  const brainWith = (script?: Parameters<typeof fakeSpawner>[0], over: Partial<Parameters<typeof createClaudeBrain>[0]> = {}) => {
     const { spawnChild, children } = fakeSpawner(script);
-    const brain = createClaudeBrain({ resolveBinary: () => '/Users/x/.local/bin/claude', spawnBinary: (_binary, args, env) => spawnChild(args, env), ...over });
+    const brain = createClaudeBrain({ env: ENV, resolveBinary: () => '/Users/x/.local/bin/claude', spawnBinary: (_binary, args, env) => spawnChild(args, env), ...over });
     return { brain, children };
   };
 
@@ -299,21 +307,21 @@ describe('the brain end to end, with a fake CLI (a pre-warmed child, one request
   });
 
   it('surfaces a CLI that could not start, with its reason', async () => {
-    const brain = createClaudeBrain({ resolveBinary: () => '/x/claude', spawnBinary: () => { throw new Error('could not start claude: ENOENT'); } });
+    const brain = createClaudeBrain({ env: ENV, resolveBinary: () => '/x/claude', spawnBinary: () => { throw new Error('could not start claude: ENOENT'); } });
     await expect(brain.complete({ messages: [{ role: 'user', content: 'x' }] })).rejects.toThrow(/ENOENT/);
   });
 
   it('spawns the RESOLVED path, not the bare name', async () => {
     const seen: string[] = [];
     const { spawnChild } = fakeSpawner();
-    const brain = createClaudeBrain({ resolveBinary: () => '/Users/x/.local/bin/claude', spawnBinary: (binary, args, env) => { seen.push(binary); return spawnChild(args, env); } });
+    const brain = createClaudeBrain({ env: ENV, resolveBinary: () => '/Users/x/.local/bin/claude', spawnBinary: (binary, args, env) => { seen.push(binary); return spawnChild(args, env); } });
     await brain.complete({ messages: [{ role: 'user', content: 'x' }] });
     expect(seen[0]).toBe('/Users/x/.local/bin/claude');
     brain.stop();
   });
 
   it('a think with no binary fails by name, with the install remedy, rather than ENOENT', async () => {
-    const brain = createClaudeBrain({ resolveBinary: () => undefined, spawnBinary: () => { throw new Error('never'); } });
+    const brain = createClaudeBrain({ env: ENV, resolveBinary: () => undefined, spawnBinary: () => { throw new Error('never'); } });
     await expect(brain.complete({ messages: [{ role: 'user', content: 'x' }] })).rejects.toThrow(/install/i);
   });
 
@@ -333,9 +341,9 @@ describe('probeBrain — is the user’s CLI actually able to answer, on the bra
   // the FIRST THINK, with no remedy shown and no hint that the brain was the problem. A
   // brain chip that says "Claude · your CLI" while the CLI cannot answer is a lie the user
   // pays for with a confusing failure — so the state is probed at boot and named.
-  const probeWith = (script?: Parameters<typeof fakeSpawner>[0], over: Parameters<typeof probeBrain>[0] = {}) => {
+  const probeWith = (script?: Parameters<typeof fakeSpawner>[0], over: Partial<Parameters<typeof probeBrain>[0]> = {}) => {
     const { spawnChild, children } = fakeSpawner(script);
-    return { state: probeBrain({ resolveBinary: () => '/Users/x/.local/bin/claude', spawnBinary: (_b, args, env) => spawnChild(args, env), timeoutMs: 200, ...over }), children };
+    return { state: probeBrain({ env: ENV, resolveBinary: () => '/Users/x/.local/bin/claude', spawnBinary: (_b, args, env) => spawnChild(args, env), timeoutMs: 200, ...over }), children };
   };
 
   it('reports ready when the CLI answers normally', async () => {
@@ -361,13 +369,13 @@ describe('probeBrain — is the user’s CLI actually able to answer, on the bra
 
   it('reports ABSENT without spawning anything when no binary resolves — a GUI-spawned process has no user PATH', async () => {
     const spawnBinary = vi.fn(() => { throw new Error('never called'); });
-    const state = await probeBrain({ resolveBinary: () => undefined, spawnBinary });
+    const state = await probeBrain({ env: ENV, resolveBinary: () => undefined, spawnBinary });
     expect(state.state).toBe('absent');
     expect(spawnBinary).not.toHaveBeenCalled();
   });
 
   it('the absent remedy sends a non-technical user to the install page, never to pipe curl into bash', async () => {
-    const state = await probeBrain({ resolveBinary: () => undefined });
+    const state = await probeBrain({ env: ENV, resolveBinary: () => undefined });
     expect(state.detail).toBe(INSTALL_REMEDY);
     expect(state.detail).toMatch(/code\.claude\.com/);
     expect(state.detail).not.toMatch(/curl|\| *bash/);
@@ -375,7 +383,7 @@ describe('probeBrain — is the user’s CLI actually able to answer, on the bra
   });
 
   it('names a resolved binary that still cannot start as absent, not logged-out', async () => {
-    const state = await probeBrain({ resolveBinary: () => '/x/claude', spawnBinary: () => { throw new Error('could not start claude: ENOENT'); } });
+    const state = await probeBrain({ env: ENV, resolveBinary: () => '/x/claude', spawnBinary: () => { throw new Error('could not start claude: ENOENT'); } });
     expect(state.state).toBe('absent');
   });
 
@@ -409,6 +417,7 @@ describe('the brain carries the user’s choice and reports what ANSWERED (TASK-
   const brainWithChoice = (choice: { model?: string; effort?: 'low' | 'max' }, script?: Parameters<typeof fakeSpawner>[0]) => {
     const { spawnChild, children } = fakeSpawner(script);
     const brain = createClaudeBrain({
+      env: ENV,
       resolveBinary: () => '/x/claude',
       spawnBinary: (_b, args, env) => spawnChild(args, env),
       // Read at CALL time, never captured at construction — ADR-0036 rule 3, which is what
@@ -428,7 +437,7 @@ describe('the brain carries the user’s choice and reports what ANSWERED (TASK-
   it('reads the choice per request, so a mid-session switch lands on the NEXT think (AC9)', async () => {
     let choice: { model?: string } = { model: 'haiku' };
     const { spawnChild, children } = fakeSpawner();
-    const brain = createClaudeBrain({ resolveBinary: () => '/x/claude', spawnBinary: (_b, args, env) => spawnChild(args, env), brainChoice: () => choice });
+    const brain = createClaudeBrain({ env: ENV, resolveBinary: () => '/x/claude', spawnBinary: (_b, args, env) => spawnChild(args, env), brainChoice: () => choice });
     await brain.complete({ messages: [{ role: 'user', content: 'a' }] });
     choice = { model: 'opus' };
     await brain.complete({ messages: [{ role: 'user', content: 'b' }] });
@@ -466,7 +475,7 @@ describe('the brain carries the user’s choice and reports what ANSWERED (TASK-
 
   it('takes the choice the PAGE sent, which is how it crosses from the browser to this process', async () => {
     const { spawnChild, children } = fakeSpawner();
-    const brain = createClaudeBrain({ resolveBinary: () => '/x/claude', spawnBinary: (_b, args, env) => spawnChild(args, env) });
+    const brain = createClaudeBrain({ env: ENV, resolveBinary: () => '/x/claude', spawnBinary: (_b, args, env) => spawnChild(args, env) });
     await brain.complete({ messages: [{ role: 'user', content: 'ping' }], model: 'opus', effort: 'high' });
     expect(children[0]?.args).toEqual(expect.arrayContaining(['--model', 'opus', '--effort', 'high']));
     brain.stop();
@@ -513,7 +522,7 @@ describe('the child is isolated from the agent host’s project and the user’s
   it('spawns every child in the neutral cwd the runner hands it — never the agent host’s project', async () => {
     const cwds: Array<string | undefined> = [];
     const { spawnChild } = fakeSpawner();
-    const brain = createClaudeBrain({ cwd: '/Users/x/Snug/host/brain', resolveBinary: () => '/x/claude', spawnBinary: (_b, args, env, cwd) => { cwds.push(cwd); return spawnChild(args, env); } });
+    const brain = createClaudeBrain({ env: ENV, cwd: '/Users/x/Snug/host/brain', resolveBinary: () => '/x/claude', spawnBinary: (_b, args, env, cwd) => { cwds.push(cwd); return spawnChild(args, env); } });
     await brain.complete({ messages: [{ role: 'user', content: 'x' }] });
     brain.stop();
     expect(cwds.length).toBeGreaterThanOrEqual(2); // the request's child and the pre-warmed one
@@ -523,7 +532,7 @@ describe('the child is isolated from the agent host’s project and the user’s
   it('the probe runs in the same cwd', async () => {
     const cwds: Array<string | undefined> = [];
     const { spawnChild } = fakeSpawner();
-    await probeBrain({ cwd: '/Users/x/Snug/host/brain', resolveBinary: () => '/x/claude', spawnBinary: (_b, args, env, cwd) => { cwds.push(cwd); return spawnChild(args, env); } });
+    await probeBrain({ env: ENV, cwd: '/Users/x/Snug/host/brain', resolveBinary: () => '/x/claude', spawnBinary: (_b, args, env, cwd) => { cwds.push(cwd); return spawnChild(args, env); } });
     expect(cwds).toEqual(['/Users/x/Snug/host/brain']);
   });
 
@@ -537,7 +546,99 @@ describe('the child is isolated from the agent host’s project and the user’s
 
   it('the outdated regex matches the CLI’s sentence and not a passing mention of an update', async () => {
     const { spawnChild } = fakeSpawner({ lines: [result('Not logged in · Please run /login (tip: claude update is available)', { is_error: true })] });
-    const state = await probeBrain({ resolveBinary: () => '/x/claude', spawnBinary: (_b, args, env) => spawnChild(args, env), timeoutMs: 200 });
+    const state = await probeBrain({ env: ENV, resolveBinary: () => '/x/claude', spawnBinary: (_b, args, env) => spawnChild(args, env), timeoutMs: 200 });
     expect(state.state).toBe('logged-out');
+  });
+});
+
+// ------------------------------------------------ characterization before the move (B1)
+//
+// TASK-20261003 R4 puts this code behind a `BrainDriver` (ADR-0071 §1) and the registry
+// requires it to be BEHAVIOUR-IDENTICAL. The cases above pin behaviour by pattern; these pin
+// the exact bytes a page reads — every readiness sentence and every frame of a think — and
+// were written, and seen green, against the pre-move modules.
+
+// MIGRATED (R4 fix, named by the verifier): the three remedies ended "…reopen Snug". Since
+// this range the page picks a mended brain up on "check again" or when it regains focus, so
+// reopening is no longer the step — and the browser specs' fixture already said "check
+// again", a sentence no user was shown. One wording now; everything else here is unchanged.
+describe('characterization — the five readiness states and their exact sentences', () => {
+  const probe = (script: Parameters<typeof fakeSpawner>[0], over: Partial<Parameters<typeof probeBrain>[0]> = {}) => {
+    const { spawnChild } = fakeSpawner(script);
+    return probeBrain({ env: ENV, resolveBinary: () => '/Users/x/.local/bin/claude', spawnBinary: (_b, args, env) => spawnChild(args, env), timeoutMs: 200, ...over });
+  };
+
+  it('ready carries no detail at all', async () => {
+    expect(await probe({})).toEqual({ state: 'ready' });
+  });
+
+  it('absent is the install remedy, word for word', async () => {
+    expect(await probeBrain({ env: ENV, resolveBinary: () => undefined })).toEqual({
+      state: 'absent',
+      detail:
+        'No `claude` CLI found on this machine — Snug is using its demo brain. Install Claude Code (https://code.claude.com/docs/en/quickstart), then run `claude` and `/login`, and check again.',
+    });
+  });
+
+  it('logged-out is our sentence with the CLI’s own words in brackets', async () => {
+    expect(await probe({ lines: [result('Not logged in · Please run /login', { is_error: true })] })).toEqual({
+      state: 'logged-out',
+      detail: 'Your Claude CLI is not logged in — run `claude` and `/login`, then check again. (Not logged in · Please run /login)',
+    });
+  });
+
+  it('outdated is our sentence with the CLI’s own words in brackets', async () => {
+    const said = "API Error: 400 Claude Code 2.1.211 does not support this model; version 2.1.251 or newer is required. Run 'claude update', or update the Claude desktop app, then try again.";
+    expect(await probe({ lines: [result(said, { is_error: true })] })).toEqual({
+      state: 'outdated',
+      detail: `Your Claude CLI is out of date — run \`claude update\`, then check again. (${said})`,
+    });
+  });
+
+  it('unknown is the CLI’s own words when it said something unreadable, and the bound’s when it said nothing', async () => {
+    expect(await probe({ lines: [result('Credit balance is too low', { is_error: true })] })).toEqual({ state: 'unknown', detail: 'Credit balance is too low' });
+    expect(await probe({ silent: true }, { timeoutMs: 20 })).toEqual({ state: 'unknown', detail: 'your Claude CLI did not answer the startup check in time' });
+  });
+});
+
+describe('characterization — every frame of a think, as the page’s adapter reads it', () => {
+  const init = (model: string): string => `${JSON.stringify({ type: 'system', subtype: 'init', model, tools: [] })}\n`;
+
+  it('a content frame per delta, then ONE finish frame naming what answered, then [DONE]', async () => {
+    const { spawnChild } = fakeSpawner({ lines: [init('claude-sonnet-5-5'), delta('a'), delta('b'), result('ab')] });
+    const brain = createClaudeBrain({ env: ENV, resolveBinary: () => '/x/claude', spawnBinary: (_b, args, env) => spawnChild(args, env) });
+    const chunks: string[] = [];
+    await brain.stream({ messages: [{ role: 'user', content: 'x' }] }, { write: (chunk) => chunks.push(chunk) });
+    brain.stop();
+
+    expect(chunks).toHaveLength(4);
+    expect(chunks.every((chunk) => chunk.endsWith('\n\n'))).toBe(true);
+    const frames = chunks.slice(0, 3).map((chunk) => JSON.parse(chunk.slice('data: '.length)) as Record<string, unknown>);
+    const { id, created } = frames[0] as { id: string; created: number };
+    expect(id).toMatch(/^chatcmpl-snug-[0-9a-z]+$/);
+    expect(Number.isInteger(created)).toBe(true);
+    expect(frames).toEqual([
+      { id, object: 'chat.completion.chunk', created, model: 'claude', choices: [{ index: 0, delta: { role: 'assistant', content: 'a' }, finish_reason: null }] },
+      { id, object: 'chat.completion.chunk', created, model: 'claude', choices: [{ index: 0, delta: { role: 'assistant', content: 'b' }, finish_reason: null }] },
+      { id, object: 'chat.completion.chunk', created, model: 'claude-sonnet-5-5', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] },
+    ]);
+    expect(chunks[3]).toBe('data: [DONE]\n\n');
+  });
+
+  it('a refused think says the CLI’s own sentence, and a bound says ours', async () => {
+    const refused = fakeSpawner({ lines: [result('Not logged in · Please run /login', { is_error: true })] });
+    const brain = createClaudeBrain({ env: ENV, resolveBinary: () => '/x/claude', spawnBinary: (_b, args, env) => refused.spawnChild(args, env) });
+    await expect(brain.complete({ messages: [{ role: 'user', content: 'x' }] })).rejects.toThrow(new BrainStreamError('Not logged in · Please run /login', false));
+    brain.stop();
+
+    const wedged = fakeSpawner({ silent: true });
+    const slow = createClaudeBrain({ env: ENV, resolveBinary: () => '/x/claude', spawnBinary: (_b, args, env) => wedged.spawnChild(args, env), firstDeltaMs: 20 });
+    await expect(slow.complete({ messages: [{ role: 'user', content: 'x' }] })).rejects.toThrow(new BrainStreamError('your Claude CLI did not answer within 0s', false));
+    slow.stop();
+  });
+
+  it('a think with no CLI at all is the install remedy', async () => {
+    const brain = createClaudeBrain({ env: ENV, resolveBinary: () => undefined });
+    await expect(brain.complete({ messages: [{ role: 'user', content: 'x' }] })).rejects.toThrow(INSTALL_REMEDY);
   });
 });

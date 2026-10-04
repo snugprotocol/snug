@@ -39,7 +39,11 @@ export interface ResolveHomeOptions {
  * Otherwise the real home is used ONLY on an explicit opt-in.
  */
 export function resolveHome(options: ResolveHomeOptions = {}): string {
-  const env = options.env ?? process.env;
+  // The two variables, read BY NAME. This used to take the whole `process.env`, which made
+  // it one of three places holding the parent's environment; since the brain registry
+  // (ADR-0071 §3) there is exactly one, and the release gate counts them. A home needs two
+  // names, not the object.
+  const env = options.env ?? { SNUG_HOME: process.env.SNUG_HOME, HOME: process.env.HOME };
 
   const explicit = env.SNUG_HOME;
   if (explicit !== undefined && explicit !== '') return explicit;

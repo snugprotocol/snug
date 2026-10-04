@@ -7,9 +7,9 @@
 //
 // Everything the process DOES is `startProcess` (K5); this file is only what the shipped
 // build is allowed that nothing else is: the user's real home, their real browser, their
-// real CLI, and the process table that says whether Snug for Mac holds their file.
+// real agent CLIs, and the process table that says whether Snug for Mac holds their file.
 
-import { probeBrain } from './brain-claude.js';
+import { createBrainRegistry, machineDrivers } from './brains/registry.js';
 import { detectHolder } from './holder.js';
 import { openInBrowser } from './opener.js';
 import { startProcess } from './process.js';
@@ -20,6 +20,8 @@ void startProcess({
     allowRealHome: true,
     heldBy: detectHolder,
     openBrowser: openInBrowser,
-    brainState: ({ cwd }) => probeBrain({ cwd }),
+    // The user's OWN agents, on their own logins (D5, ADR-0071): `claude`, then `codex`.
+    // Nothing is probed here — the first page contact does that.
+    brains: ({ home }) => createBrainRegistry({ drivers: machineDrivers({ home }) }),
   },
 });

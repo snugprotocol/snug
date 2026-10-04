@@ -1,11 +1,13 @@
-// Where the user's own CLI is (ADR-0069 §6).
+// Where the user's own agent CLIs are (ADR-0069 §6) — `claude`, and since ADR-0071 `codex`.
 //
 // A process a desktop host spawns gets no user PATH. Measured 2026-09-13 on the owner's Mac:
 // `launchctl getenv PATH` is empty, and both `node` and `claude` are nvm installs — so a
 // bare `spawn('claude')` from under Claude Desktop is ENOENT, and the probe would tell a
 // user who HAS the CLI that it is absent. The binary is therefore looked for on PATH first
 // and then in the directories the installers actually use, from ONE list
-// (`install-roots.json`) that the plugin's sh launcher is templated from as well.
+// (`install-roots.json`) that the plugin's sh launcher is templated from as well. Codex
+// needed no new root: its npm install lands in a Node `bin` (the versioned roots) and its
+// Homebrew one in `/opt/homebrew/bin` or `/usr/local/bin`, all already listed.
 //
 // The trust boundary is the user's own home: executing the first `claude` found under it
 // is the same trust as the user's shell (threat-model residual 1 — any same-user process).

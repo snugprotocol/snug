@@ -181,6 +181,29 @@ describe('K4 — one of everything the bindings share', () => {
     expect(stripComments(read('apps/host/src/local/handinEvents.ts'))).toMatch(/applyAgentBundles\(/);
   });
 
+  it('one "connections aren’t available" sentence — the kit says it through the playground’s constant, never in words of its own', () => {
+    // Three surfaces once said it three ways; the hand-in refusal was the fourth, and named
+    // "an artifact" under bindings that are not one (K4; carried from R2 into R4).
+    const ownWords = /connect(ions|ed apps)\s+(are not|aren[’']t|are unavailable|unavailable)\b/i;
+    const offenders = kit.filter((file) => ownWords.test(stripComments(read(file))));
+    expect(offenders).toEqual([]);
+    expect(stripComments(read('apps/host/src/handin.ts'))).toMatch(/import \{ CONNECTIONS_UNAVAILABLE \} from '@playground\/platform\/availability'/);
+    expect(stripComments(read('apps/host/src/handin.ts'))).toMatch(/\$\{CONNECTIONS_UNAVAILABLE\}/);
+    // The positive twin: the pattern catches the sentence this rule exists for, in both spellings.
+    expect(ownWords.test('connected apps are not available inside an artifact')).toBe(true);
+    expect(ownWords.test(stripComments(read('apps/playground/src/platform/availability.ts')))).toBe(true);
+  });
+
+  it('one "still checking" sentence across the wire — the page tells "not checked yet" from "could not be checked" by the runner’s own words', () => {
+    // `unknown` is two facts: nobody has looked at the brain yet, or it was asked and could
+    // not be read. The wire carries one state for both, and the runner's sentence for the
+    // first is the page's only way to tell — so the two ends must spell it alike.
+    const said = /export const NOT_PROBED_DETAIL = '([^']+)';/.exec(read('apps/host-mcp/src/brains/registry.ts'))?.[1];
+    const read_ = /export const BRAIN_NOT_CHECKED_DETAIL = '([^']+)';/.exec(read('apps/playground/src/platform/copy.ts'))?.[1];
+    expect(said, 'the runner’s sentence').toBeTypeOf('string');
+    expect(read_, 'the page’s copy of it').toBe(said);
+  });
+
   it('one boot: both compositions mount through mountKit, from the one entry', () => {
     const boot = stripComments(read('apps/host/src/boot.tsx'));
     expect(boot.match(/mountKit\(root,/g)).toHaveLength(2);

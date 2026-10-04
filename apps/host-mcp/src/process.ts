@@ -7,9 +7,10 @@
 // differ only in the HOOKS they hand it.
 //
 // THE DEFAULTS ARE INERT, deliberately (D-B34's rule, generalised): with no hooks this
-// reaches no real home, opens no browser and probes no CLI. Each of those is something the
-// release entry says out loud, so the test entry cannot acquire one by forgetting to
-// override it.
+// reaches no real home and opens no browser. Each of those is something the release entry
+// says out loud, so the test entry cannot acquire one by forgetting to override it. The
+// BRAINS have no default at all: an entry must say which it runs on (ADR-0071), because the
+// obvious default is the user's real CLIs.
 //
 // HANDSHAKE FIRST (L2). In MCP mode the stdio server is attached before anything that can
 // fail is attempted, and nothing in here throws: a home that cannot be resolved and a
@@ -20,6 +21,7 @@ import { statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import type { BrainRegistry } from './brains/registry.js';
 import { VERSION } from './build.js';
 import { positionalVerb, runCli } from './cli.js';
 import { controlCall } from './control-socket.js';
@@ -39,7 +41,13 @@ import { createRefusedRunner, createRunner, type Runner, type RunnerOptions, typ
  */
 export const EXIT_DEADLINE_MS = 5_000;
 
-export interface ProcessHooks extends Pick<RunnerOptions, 'openBrowser' | 'heldBy' | 'brainState' | 'brain' | 'models' | 'proxy' | 'graceMs' | 'ports'> {
+export interface ProcessHooks extends Pick<RunnerOptions, 'openBrowser' | 'heldBy' | 'proxy' | 'graceMs' | 'ports'> {
+  /**
+   * The brains this process may think with, built once the home is known — each driver's
+   * children run in a directory under it. REQUIRED: the release entry builds the machine's
+   * own, the test entry fakes, and neither can get the other's by leaving this out.
+   */
+  brains(context: { home: string }): BrainRegistry;
   /**
    * Opt in to the user's real `~/Snug`. The release entry passes this; nothing else may
    * (D-B34 — a test once destroyed the owner's user file by reaching it by default).
@@ -82,7 +90,7 @@ export function shutdownWithin(stop: () => Promise<void>, exit: (code: number) =
 }
 
 export async function startProcess({ hooks }: { hooks: ProcessHooks }): Promise<void> {
-  const { allowRealHome, onStarted, ...runnerHooks } = hooks;
+  const { allowRealHome, onStarted, brains, ...runnerHooks } = hooks;
   const bundleFile = fileURLToPath(import.meta.url);
   const cli = cliCommand(bundleFile);
   const home = (): string => resolveHome({ allowRealHome: allowRealHome === true });
@@ -131,7 +139,7 @@ export async function startProcess({ hooks }: { hooks: ProcessHooks }): Promise<
     // a healthy install started beside it leads at the fixed port as if it were not there.
     if (page.damaged) return createRefusedRunner(refusalFor('page-damaged', { cli, home: resolved }));
     const { html } = page;
-    return createRunner({ ...runnerHooks, home: resolved, page: () => html, cli, onStopRequested: shutdown });
+    return createRunner({ ...runnerHooks, brains: brains({ home: resolved }), home: resolved, page: () => html, cli, onStopRequested: shutdown });
   })();
 
   const server = createMcpServer({ callTool: (name, toolArgs) => runner.callTool(name, toolArgs), serverVersion: VERSION });

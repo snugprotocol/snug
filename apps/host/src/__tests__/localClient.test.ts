@@ -16,6 +16,7 @@ import {
   createLocalClient,
   isRunnerRefusal,
   parseLocalStatus,
+  parseStatusEvent,
   responseFromEnvelope,
   serializeBody,
 } from '../local/client.js';
@@ -167,24 +168,108 @@ describe('serializing a request body', () => {
 // ------------------------------------------------------------------ the one-kit range
 
 describe('the status wire — ONE fixture, read by the process’s route test and by this client (B2)', () => {
-  const wire: unknown = JSON.parse(readFileSync(path.resolve(__dirname, '../../../host-mcp/src/__tests__/fixtures/status-wire.json'), 'utf8'));
+  // MIGRATED 2026-10-03 (TASK-20261003 B2 — named in the plan). The wire carried ONE brain
+  // (`brain: { state, detail }`) and its model list (`models: [{ id, name, effort }]`). It
+  // carries every brain the runner knows now — `brains[]`, each with its own state, levels
+  // and catalogue — and `active`, the brain a think sent under `auto` would run on. The two
+  // legacy fields are gone from both ends (the page ships with the process: one build).
+  const wire = JSON.parse(readFileSync(path.resolve(__dirname, '../../../host-mcp/src/__tests__/fixtures/status-wire.json'), 'utf8')) as { brains: unknown[] };
 
   it('parses the fixture: the binding, the port, the pages and the redirect fact', () => {
     const status = parseLocalStatus(wire);
     expect(status).toMatchObject({ binding: 'local-host', port: 43127, pages: 1, oauthRedirect: true });
   });
 
+  it('parses the fixture’s brains WHOLE — every field the runner sends for a brain is one the page reads', () => {
+    const status = parseLocalStatus(wire);
+    expect(status?.active).toBe('claude');
+    expect(status?.brains).toEqual(wire.brains);
+    expect(status?.brains.map((brain) => [brain.id, brain.state, brain.verified])).toEqual([
+      ['claude', 'ready', true],
+      ['codex', 'logged-out', false],
+    ]);
+    // Per-model levels, in the brain's own words; a model with none says so by an empty list.
+    expect(status?.brains[0]?.models.map((model) => [model.id, model.efforts.length])).toEqual([
+      ['claude-sonnet-5-5', 5],
+      ['claude-haiku-4-5-20251001', 0],
+    ]);
+    expect(status?.brains[1]?.detail).toBe('Your Codex CLI is not logged in — run `codex login`, then check again.');
+  });
+
   it('reads the optional seats when they are well-formed, and drops them when they are not', () => {
     const base = { binding: 'local-host', port: 43127, pages: 0 };
-    expect(parseLocalStatus({ ...base, heldBy: 'Snug for Mac', brain: { state: 'logged-out', detail: 'run /login' }, models: [{ id: 'm', name: 'M', effort: true }], oauthRedirect: false })).toEqual({
+    const codex = { id: 'codex', name: 'Codex', via: 'your Codex CLI', state: 'ready', verified: false, streaming: false, efforts: ['low'], models: [{ id: 'gpt-5.5', name: 'GPT-5.5', efforts: ['low'] }] };
+    expect(parseLocalStatus({ ...base, heldBy: 'Snug for Mac', oauthRedirect: false, active: 'codex', brains: [codex] })).toEqual({
       ...base,
       heldBy: 'Snug for Mac',
-      brain: { state: 'logged-out', detail: 'run /login' },
-      models: [{ id: 'm', name: 'M', effort: true }],
       oauthRedirect: false,
+      active: 'codex',
+      brains: [codex],
     });
     // A seat of the wrong shape is ABSENT, never cast through: the page then says "not known".
-    expect(parseLocalStatus({ ...base, heldBy: 7, brain: 'ready', models: [{ id: 1 }], oauthRedirect: 'yes' })).toEqual(base);
+    expect(parseLocalStatus({ ...base, heldBy: 7, oauthRedirect: 'yes', active: 7, brains: 'claude' })).toEqual({ ...base, brains: [] });
+    expect(parseLocalStatus({ ...base, active: '' })).toEqual({ ...base, brains: [] });
+  });
+
+  it('a runner that has reported no brain yet is a status with NONE — not a refusal to parse', () => {
+    expect(parseLocalStatus({ binding: 'local-host', port: 43127, pages: 1 })).toEqual({ binding: 'local-host', port: 43127, pages: 1, brains: [] });
+  });
+
+  it('the LEGACY single-brain fields are not read: a status that carries only them reports no brain', () => {
+    const status = parseLocalStatus({ binding: 'local-host', port: 43127, pages: 1, brain: { state: 'ready' }, models: [{ id: 'm', name: 'M', effort: true }] });
+    expect(status).toEqual({ binding: 'local-host', port: 43127, pages: 1, brains: [] });
+  });
+
+  describe('one brain entry', () => {
+    const good = { id: 'claude', name: 'Claude', via: 'your Claude Code CLI', state: 'ready', verified: true, streaming: true, efforts: ['low'], models: [{ id: 'm', name: 'M', efforts: [] }] };
+    const brainsOf = (entry: unknown): unknown => parseLocalStatus({ binding: 'local-host', port: 1, pages: 0, brains: [entry, { ...good, id: 'other' }] })?.brains;
+
+    it('keeps the optional detail and cap when they are well-formed', () => {
+      expect(brainsOf({ ...good, state: 'logged-out', detail: 'run `/login`', maxPromptBytes: 900_000 })).toEqual([
+        { ...good, state: 'logged-out', detail: 'run `/login`', maxPromptBytes: 900_000 },
+        { ...good, id: 'other' },
+      ]);
+    });
+
+    it('ignores fields it does not know — a newer runner may say more', () => {
+      expect(brainsOf({ ...good, colour: 'ember', models: [{ id: 'm', name: 'M', efforts: [], context: 1_000_000 }] })).toEqual([good, { ...good, id: 'other' }]);
+    });
+
+    it('a STATE it has never heard of is kept as the string it is — the chip renders it as unknown, with its detail', () => {
+      expect(brainsOf({ ...good, state: 'rate-limited', detail: 'try again at noon' })).toEqual([
+        { ...good, state: 'rate-limited', detail: 'try again at noon' },
+        { ...good, id: 'other' },
+      ]);
+    });
+
+    it.each([
+      ['no id', { ...good, id: undefined }],
+      ['an empty id', { ...good, id: '' }],
+      ['a name that is not a string', { ...good, name: 7 }],
+      ['no via', { ...good, via: undefined }],
+      ['a state that is not a string', { ...good, state: { ready: true } }],
+      ['`verified` that is not a boolean — never guessed: an unverified brain must not pass as verified', { ...good, verified: 'yes' }],
+      ['no `verified` at all', { ...good, verified: undefined }],
+      ['`streaming` that is not a boolean', { ...good, streaming: 1 }],
+      ['levels that are not strings', { ...good, efforts: ['low', 2] }],
+      ['levels that are not a list', { ...good, efforts: 'low' }],
+      ['models that are not a list', { ...good, models: 'all of them' }],
+      ['a model with no id', { ...good, models: [{ name: 'M', efforts: [] }] }],
+      ['a model whose levels are not a list', { ...good, models: [{ id: 'm', name: 'M', efforts: true }] }],
+      ['a string', 'claude'],
+      ['null', null],
+    ])('drops an entry with %s, and keeps the well-formed one beside it', (_label, entry) => {
+      expect(brainsOf(entry)).toEqual([{ ...good, id: 'other' }]);
+    });
+
+    it.each([
+      ['a detail that is not a string', { detail: 7 }],
+      ['a cap that is not a number', { maxPromptBytes: '900000' }],
+      ['a cap that is not a positive size', { maxPromptBytes: 0 }],
+      ['a cap that is not finite', { maxPromptBytes: Number.POSITIVE_INFINITY }],
+    ])('drops %s and keeps the brain', (_label, extra) => {
+      expect(brainsOf({ ...good, ...extra })).toEqual([good, { ...good, id: 'other' }]);
+    });
   });
 
   it.each([
@@ -197,6 +282,25 @@ describe('the status wire — ONE fixture, read by the process’s route test an
     ['no pages', { binding: 'local-host', port: 43127 }],
   ])('refuses %s — a 200 from something that is not a runner is not a runner', (_label, value) => {
     expect(parseLocalStatus(value)).toBeUndefined();
+  });
+
+  describe('the `status` EVENT — the same brains, late', () => {
+    it('parses the fixture as an event: what answers under auto, and every brain', () => {
+      expect(parseStatusEvent(wire)).toEqual({ active: 'claude', brains: wire.brains });
+    });
+
+    it('an event with brains and NO `active` says none is ready — absence is the fact, not a gap', () => {
+      const event = parseStatusEvent({ brains: wire.brains });
+      expect(event).toEqual({ brains: wire.brains });
+      expect(event !== undefined && 'active' in event).toBe(false);
+    });
+
+    it.each([undefined, null, 'ready', 7, [], {}, { brain: { state: 'ready' } }, { brains: 'all of them' }, { active: 'claude' }])(
+      'a frame that carries no brains list (%j) is not a status at all',
+      (frame) => {
+        expect(parseStatusEvent(frame)).toBeUndefined();
+      },
+    );
   });
 });
 

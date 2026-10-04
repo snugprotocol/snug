@@ -37,10 +37,15 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
 // RE-POINTED (TASK-20260815-starter-apps-rebuild): `connection-demo` was removed in the
 // shelf re-curation. This suite renders the REAL read-only starter route, so the folder
-// must exist in the shipped `examples/*/app.html` glob — `trade-copilot` is the declaring
-// starter whose app.html ships today. The MANIFEST is still injected below, so the
-// disclosure copy under test stays the deliberate fixture values.
-const DEMO_FOLDER = 'trade-copilot';
+// must exist in the shipped `examples/*/app.html` glob. The MANIFEST is still injected
+// below, so the disclosure copy under test stays the deliberate fixture values.
+//
+// RE-POINTED AGAIN (TASK-20261003 R4): `trade-copilot` → `weather`. Whether a starter can
+// run here is judged from its REAL `connection.json`, not the injected manifest, and Trade
+// Copilot cannot run in a browser (Coinbase turns one away) — so since R4 its route offers
+// no install, and the install act these suites drive has to be driven on a starter this
+// host can run. `weather` declares a plain API-key connection, which a browser carries.
+const DEMO_FOLDER = 'weather';
 const DEMO_STARTER = `${STARTER_PREFIX}${DEMO_FOLDER}`;
 const DECLARED_HOST = 'api.example.com';
 const BUNDLED_HTML = '<!doctype html>\n<html><body><script>const app = 1;</script></body></html>\n';

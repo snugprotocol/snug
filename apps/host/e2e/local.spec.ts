@@ -120,7 +120,7 @@ test('AC6 — the bearer is required: the page’s own origin cannot call withou
   });
 });
 
-test('D-B35 — a logged-out CLI reaches the chip, and the page survives learning it', async () => {
+test('D-B35 — a logged-out CLI NAMES itself on the chip, with its remedy, and the page survives learning it', async () => {
   // The state is PINNED, because the developer's own CLI is logged in and a test that can
   // only observe the happy state cannot tell a working chip from a broken one.
   //
@@ -132,37 +132,56 @@ test('D-B35 — a logged-out CLI reaches the chip, and the page survives learnin
   // driven directly in `composeLocal`/`loopback-server` unit tests instead, where the
   // ordering can be forced rather than raced.
   //
-  // MIGRATED 2026-10-03 (TASK-20261003 D4 — forced by that criterion, not named in the
-  // plan's list). This asserted the chip's label carried the remedy (/log/i), which it did
-  // because the platform still pinned the HOST brain for a CLI it knew was logged out — and
-  // every think was then a 502. The platform now pins the DEMO brain there, so the chip
-  // says what will answer. The remedy sentence has no surface in this range: the chip's
-  // demo arm renders fixed copy (BrainChip is rebuilt as the brain switcher in R4, which is
-  // where the remedy returns). That the think is ANSWERED is `local-brain.spec.ts`.
+  // RE-TIGHTENED 2026-10-03 (TASK-20261003 R4 — named in the plan). Before D4 this asserted
+  // the chip's label carried the remedy (/log/i) — which it did because the platform still
+  // pinned the HOST brain for a CLI it knew was logged out, and every think was a 502. R2
+  // pinned the demo brain there and had to loosen this to `data-brain="demo"`: the remedy
+  // had no surface. The brain switcher is that surface, so the leg asserts MORE than it
+  // ever did: the demo brain answers (`local-brain.spec.ts` drives the think), the chip
+  // says WHY, and the popover gives the runner's own sentence with its commands as code.
   await withHost(async (harness) => {
     const page = await browser.newPage();
     const errors: string[] = [];
     page.on('pageerror', (error) => errors.push(error.message));
     await page.goto(harness.url);
 
-    await expect(page.getByTestId('brain-chip'), 'the verdict must reach the chip').toHaveAttribute('data-brain', 'demo', { timeout: 20_000 });
+    const chip = page.getByTestId('brain-chip');
+    await expect(chip, 'the verdict must reach the chip').toHaveAttribute('data-brain', 'demo', { timeout: 20_000 });
     await expect(page.locator('.brain-chip-label').first()).toHaveText('demo brain');
+    await expect(page.getByTestId('brain-chip-why'), 'the chip must name the logged-out CLI, not only say "demo"').toHaveText('Claude · not logged in');
+    await expect(page.getByTestId('brain-chip-why')).toBeVisible();
+
+    await chip.click();
+    const remedy = page.getByTestId('brain-remedy-claude');
+    await expect(remedy, 'the remedy is visible text, not a tooltip').toBeVisible();
+    await expect(remedy).toContainText(/log/i);
+    await expect(remedy.locator('code')).toHaveText(['claude', '/login']);
+    // The brain that cannot answer cannot be picked, and nothing claims there is nothing to do.
+    await expect(page.getByTestId('brain-option-claude')).toHaveAttribute('aria-disabled', 'true');
+    await expect(page.getByTestId('brain-menu')).not.toContainText(/nothing to configure|no host brain wired/);
     expect(errors.filter((message) => /setPlatform|already read|set once/i.test(message))).toEqual([]);
+    expect(errors).toEqual([]);
     await page.close();
   }, { brain: 'logged-out' });
 });
 
-test('ADR-0069 — an OUTDATED CLI reaches the chip the same way', async () => {
+test('ADR-0069 — an OUTDATED CLI names itself on the chip with `claude update`', async () => {
   // Measured 2026-09-13: the owner's 2.1.211 answered every think with a 400 naming a newer
   // version. Pinned for the same reason the logged-out leg is — this machine's CLI is
   // current, so the state is unreachable without the pin.
   //
-  // MIGRATED 2026-10-03 (D4), as the leg above: it asserted `claude update` on the chip.
+  // RE-TIGHTENED 2026-10-03 (R4), as the leg above: R2 could assert only `data-brain="demo"`.
   await withHost(async (harness) => {
     const page = await browser.newPage();
     await page.goto(harness.url);
-    await expect(page.getByTestId('brain-chip'), 'the verdict must reach the chip').toHaveAttribute('data-brain', 'demo', { timeout: 20_000 });
-    await expect(page.locator('.brain-chip-label').first()).toHaveText('demo brain');
+    const chip = page.getByTestId('brain-chip');
+    await expect(chip, 'the verdict must reach the chip').toHaveAttribute('data-brain', 'demo', { timeout: 20_000 });
+    await expect(page.getByTestId('brain-chip-why'), 'the chip must name the outdated CLI').toHaveText('Claude · out of date');
+    await chip.click();
+    const remedy = page.getByTestId('brain-remedy-claude');
+    await expect(remedy, 'the chip must give the outdated CLI its remedy').toBeVisible();
+    await expect(remedy).toContainText(/claude update/);
+    await expect(remedy.locator('code')).toHaveText(['claude update']);
     await page.close();
   }, { brain: 'outdated' });
 });

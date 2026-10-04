@@ -42,6 +42,11 @@ That is the decision's centre. An app's think is **untrusted input**: apps are L
 
 7. **The system prompt never rides Codex's argv twice.** The app's runtime contract is the developer instruction (`-c developer_instructions=<TOML string>`), the conversation is the prompt on stdin; nothing is written to the working directory.
 
+### Amendment — 2026-10-03 (R4's independent verification)
+
+- **§6's fixed-sentence rule is Codex's, not every driver's.** The `claude` driver keeps ADR-0070's standing behaviour: the CLI's own message rides the probe's `detail` ("… (API Error: 400 …)") and a failed think's error, because the CLI's words carry the remedy (`Please run /login`, `run 'claude update'`) and were kept deliberately in ADR-0069 §6. Since this range that `detail` also rides `snug_status` into the calling agent's context. Recorded as a C1 residual for the threat-model delta rather than sanitised: Claude's output is the user's own CLI talking to the user's own agent, and a fixed sentence would say less than the CLI does. Codex's text is sanitised because its tool-free posture is unverified (§2).
+- **Codex is unverified until walked (B6/B7).** `CODEX_VERIFIED_VERSIONS` is empty; the opt-in live leg (`SNUG_LIVE_BRAIN=codex`) and the printed walk exist; `verified: true` requires a journaled run on a logged-in CLI showing adversarial thinks with zero non-answer items and a planted canary never answered.
+
 ## Alternatives considered
 
 - **Trust Codex's feature flags alone.** Rejected: only one of them has been observed to remove its tool. The tripwire makes the invariant ours.

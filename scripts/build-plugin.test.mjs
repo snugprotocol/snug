@@ -532,6 +532,54 @@ describe('the README a marketplace reviewer reads', () => {
     assert.doesNotMatch(text, /scripts\/snug-host/);
     assert.doesNotMatch(text, /curl .*\| *bash/);
   });
+
+  /** The README as sentences: its lines are wrapped, and a claim must not hide across a line break. */
+  const said = () => readme().replace(/\s+/g, ' ');
+
+  it('names what ANSWERS the thinks, truthfully: your own Claude Code CLI — or, experimentally, your own Codex CLI, pinned from the brain chip (ADR-0071)', () => {
+    const text = said();
+    assert.match(text, /your own Claude Code CLI \(or, experimentally, your own Codex CLI — pinned from the brain chip\)/);
+    // Under "What it needs", as a prerequisite — not a feature line somewhere below.
+    const needs = readme().split('## What it needs')[1].split('## Install')[0];
+    assert.match(needs.replace(/\s+/g, ' '), /your own Claude Code CLI \(or, experimentally, your own Codex CLI/);
+    // Codex is named ONCE, and never without "experimentally": it is unverified until a
+    // logged-in walk is journaled (B6), and `auto` never takes it.
+    assert.equal(text.match(/Codex/g).length, 1);
+    // The summary no longer says the thinks run on "your own Claude" alone.
+    assert.doesNotMatch(text, /think through your own Claude\b/);
+    assert.match(text, /think through your own agent/);
+    // A brain on a key is not "your own agent" (ADR-0071 §3): the README still asks for none.
+    assert.match(text, /No API key/);
+    // What the demo brain is, and that the chip says what to do, survive the rewording.
+    assert.match(text, /demo brain/);
+    assert.match(text, /brain chip says/);
+  });
+
+  it('says where PROVENANCE.json IS — beside the plugin folder in the marketplace repository — and that an uploaded archive has none', () => {
+    // The line read "`../PROVENANCE.json` (the marketplace root)". For someone who installed
+    // with "Upload plugin" there is no `..`: the archive is this folder alone (D3).
+    const text = said();
+    assert.doesNotMatch(text, /\.\.\/PROVENANCE\.json/);
+    assert.match(text, /`PROVENANCE\.json` — not in this folder: it sits beside it in the marketplace repository \(https:\/\/github\.com\/snugprotocol\/snug-skill\)/);
+    assert.match(text, /It is not part of an uploaded archive/);
+    assert.match(text, /the monorepo commit this tree was built from/);
+    // The repository is the manifests' value, not a second typed copy.
+    assert.ok(text.includes(`in the marketplace repository (${PLUGIN.repository})`));
+  });
+
+  it('…which is true of what the build writes: the provenance is beside the plugin folder, not in it, and not in the archive', async () => {
+    const { dir, out, sources } = fixtures();
+    try {
+      assert.deepEqual(await build(out, sources), []);
+      assert.ok(existsSync(path.join(out, 'PROVENANCE.json')));
+      assert.ok(!existsSync(path.join(out, 'snug', 'PROVENANCE.json')));
+      assert.deepEqual(readZip(readFileSync(path.join(out, ARCHIVE_NAME))).filter((entry) => /PROVENANCE/.test(entry.name)), []);
+      // And the README the tree ships is the one tested above.
+      assert.equal(readFileSync(path.join(out, 'snug', 'README.md'), 'utf8'), readme());
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('the tree carries no path from the machine that built it', () => {

@@ -144,17 +144,20 @@ test.describe('S3 — the run route obeys the same verdict (no bypass by URL)', 
     await expect(panel).toContainText('connections aren’t available in this host');
     await expect(page.locator('[data-testid="frame-wrap"] iframe'), 'the app frame never mounts').toHaveCount(0);
     await expect(page.getByText('sample mode')).toHaveCount(0);
-    // The header stays: the starter can still be installed (and, once owned, exported).
-    await expect(page.getByTestId('starter-install')).toBeVisible();
+    // The header stays — but it does NOT offer install (MIGRATED in R4; this pinned the
+    // button as visible): installing a starter this host cannot run only makes a tile that
+    // is blocked the moment it appears.
     await expect(page.locator('.run-header .run-name')).toHaveText('Should I?');
+    await expect(page.getByTestId('starter-install')).toHaveCount(0);
 
     await panel.getByTestId('run-blocked-download').click();
     await expect(page).toHaveURL(/#\/download$/);
 
-    // The positive twin, on the same page: chess declares nothing and runs.
+    // The positive twin, on the same page: chess declares nothing, runs, and is offered.
     await page.goto(`${KIT_URL}#/run/starter--chess`);
     await expect(page.locator('[data-testid="frame-wrap"] iframe[sandbox="allow-scripts"]')).toBeVisible({ timeout: 20_000 });
     await expect(page.getByTestId('run-blocked')).toHaveCount(0);
+    await expect(page.getByTestId('starter-install')).toBeVisible();
     expect(errors).toEqual([]);
   });
 

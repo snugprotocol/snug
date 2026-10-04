@@ -21,15 +21,27 @@ describe('the platform singleton refuses mid-session swaps', () => {
   });
 });
 
+/** One brain as the runner reports it (the `brains[]` wire — ADR-0071, B2). */
+const claude = (state: string, detail?: string) => ({
+  id: 'claude',
+  name: 'Claude',
+  via: 'your Claude Code CLI',
+  state,
+  ...(detail !== undefined ? { detail } : {}),
+  verified: true,
+  streaming: true,
+  efforts: [],
+  models: [],
+});
+
 describe('the probe’s verdict must survive a page that was not listening yet (D-B35)', () => {
   it('is READ from /status, not only pushed — the emit fires before any browser exists', async () => {
     // MEASURED: `runner.start()` kicks the probe off, and the page has not fetched
     // `/events` yet — the CLI answers in ~2 s but the emit can land in ZERO subscribers,
     // and a fire-and-forget event is then simply lost. The first version of this feature
     // relied on the push alone, so the chip silently kept its boot label forever.
-    // `/status` already carries `brain`, so a page that reads it on boot cannot miss.
-    const { composeLocalPlatform, brainState } = await import('../local/compose-local.js');
-    brainState.current = undefined;
+    // `/status` already carries the brains, so a page that reads it on boot cannot miss.
+    const { composeLocalPlatform } = await import('../local/compose-local.js');
     const client = {
       fetchImpl: async () => new Response('ok'),
       fs: { readFile: async () => undefined, writeFileAtomic: async () => {} },
@@ -40,9 +52,11 @@ describe('the probe’s verdict must survive a page that was not listening yet (
     } as never;
 
     // The boot status is what the page fetched BEFORE subscribing — it already knows.
+    // MIGRATED 2026-10-03 (TASK-20261003 B2): the verdict rode `brain: { state }`; it rides
+    // the brain's own entry in `brains[]` now. The claim is unchanged.
     const { platform } = composeLocalPlatform(
       client,
-      { binding: 'local-host', port: 43127, pages: 1, brain: { state: 'logged-out' } } as never,
+      { binding: 'local-host', port: 43127, pages: 1, brains: [claude('logged-out')] } as never,
       undefined,
       undefined,
       't',
@@ -53,6 +67,7 @@ describe('the probe’s verdict must survive a page that was not listening yet (
     // very first paint, so no think is sent to a brain that cannot answer. The claim under
     // test is unchanged: the verdict in the boot read is honoured without any event.
     expect(platform.brain).toEqual({ kind: 'demo' });
+    expect(platform.brainSwitch?.state.get().brains[0]?.state).toBe('logged-out');
   });
 });
 
@@ -62,14 +77,13 @@ describe('the late-arrival path, driven directly (D-B35)', () => {
     // boot `/status` read, so the SSE path never runs there (measured — that test passed
     // against a deliberately reintroduced crash and proved nothing about it). Here the
     // ordering is forced.
-    const { applyRunnerStatus, composeLocalPlatform, brainState } = await import('../local/compose-local.js');
+    const { applyRunnerStatus, composeLocalPlatform } = await import('../local/compose-local.js');
     const { brainRevisionStore } = await import('@playground/platform/signals');
-    brainState.current = undefined;
 
     // Boot with NO brain yet: the probe is still running.
     const { platform } = composeLocalPlatform(
       { fetchImpl: async () => new Response('ok'), fs: { readFile: async () => undefined, writeFileAtomic: async () => {} }, events: () => () => {}, reportHandIn: async () => {}, recheckBrain: async () => {}, stopped: { get: () => false, subscribe: () => () => {} } } as never,
-      { binding: 'local-host', port: 43127, pages: 1 } as never,
+      { binding: 'local-host', port: 43127, pages: 1, brains: [] } as never,
       undefined,
       undefined,
       't',
@@ -78,24 +92,27 @@ describe('the late-arrival path, driven directly (D-B35)', () => {
       const b = p.brain as { kind: string; label?: string } | undefined;
       return b?.kind === 'host' ? b.label : undefined;
     };
-    expect(brainOf(platform)).toBe('Claude · your CLI');
+    // MIGRATED 2026-10-03 (R4, ADR-0071 §4): before any brain was reported the page pinned
+    // the host arm on a guess ("Claude · your CLI"). It pins what the runner says a think
+    // would run on, and until the probe answers that is nothing — the demo brain.
+    expect(platform.brain).toEqual({ kind: 'demo' });
 
     // The verdict lands the way the boot's event handler lands it.
     // MIGRATED 2026-10-03 (D4, K4): it was a bare write to the holder followed by a DOM
     // `CustomEvent` nothing listened to, and the object then read a logged-out LABEL. It is
-    // `applyRunnerStatus` now — the holder, then the revision the UI subscribes to — and a
-    // logged-out verdict moves the SAME object to the demo brain.
+    // `applyRunnerStatus` now — the composition's sources, then the revision the UI
+    // subscribes to.
     const before = brainRevisionStore.get();
-    applyRunnerStatus({ brain: { state: 'logged-out', detail: 'run `/login`' } });
+    applyRunnerStatus({ active: 'claude', brains: [claude('ready')] });
 
     // THE POINT: the same object the page already handed to setPlatform now answers
     // differently. A recomposed platform could not be installed — setPlatform throws.
-    expect(platform.brain).toEqual({ kind: 'demo' });
+    expect(brainOf(platform)).toBe('Claude · your CLI');
     expect(brainRevisionStore.get(), 'and the readers are told').toBe(before + 1);
 
-    // A verdict that leaves the host brain in place shows the label itself is live.
-    applyRunnerStatus({ brain: { state: 'unknown', detail: 'timed out' } });
-    expect(brainOf(platform)).toMatch(/could not check/);
-    brainState.current = undefined;
+    // …and a verdict that the CLI cannot answer moves the SAME object back to the demo brain.
+    applyRunnerStatus({ brains: [claude('logged-out', 'run `/login`')] });
+    expect(platform.brain).toEqual({ kind: 'demo' });
+    expect(brainRevisionStore.get()).toBe(before + 2);
   });
 });

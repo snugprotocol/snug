@@ -23,7 +23,7 @@ import { custodyDisclosure } from '@playground/platform/copy';
 import { upsertBundleBlock, writeDbBlock, DB_BLOCK_FORMAT } from '../../../../scripts/lib/page-blocks.mjs';
 import { OAUTH_CALLBACK_PATH, RUNNER_STATUS_BOUND_MS, askRunner, isRunnerOrigin, planBoot, type BootWindow } from '../boot.js';
 import type { ComposeDocument } from '../compose.js';
-import { RUNNER_MARKER_HEADER, type LocalClient } from '../local/client.js';
+import { RUNNER_MARKER_HEADER, parseLocalStatus, type LocalClient } from '../local/client.js';
 import { decideBinding, readBindingEnv, type ProbeResult } from '../probe.js';
 
 declare global {
@@ -387,7 +387,6 @@ describe('followRunner — the runner’s events reach the UI’s signals, not D
     const signals = await import('@playground/platform/signals');
     const local = await import('../local/compose-local.js');
     const { followRunner } = await import('../boot.js');
-    local.brainState.current = undefined;
     let push: (name: string, data: unknown) => void = () => undefined;
     const reports: unknown[] = [];
     const client: LocalClient = {
@@ -398,7 +397,10 @@ describe('followRunner — the runner’s events reach the UI’s signals, not D
       },
       reportHandIn: async (report) => void reports.push(report),
     };
-    const composition = local.composeLocalPlatform(client, { binding: 'local-host', port: 43127, pages: 1 }, wasm(), createMemoryBackend(), TOKEN);
+    // The runner's status as the shared fixture has it (B2): Claude ready and answering.
+    const boot = parseLocalStatus(WIRE);
+    if (boot === undefined) throw new Error('the status fixture no longer parses');
+    const composition = local.composeLocalPlatform(client, boot, wasm(), createMemoryBackend(), TOKEN);
     followRunner(client, composition);
     return { db, signals, local, composition, reports, push: (name: string, data: unknown) => push(name, data) };
   }
@@ -407,10 +409,11 @@ describe('followRunner — the runner’s events reach the UI’s signals, not D
     const f = await follow();
     const before = f.signals.brainRevisionStore.get();
     expect(f.composition.platform.brain?.kind).toBe('host');
-    f.push('status', { brain: { state: 'absent' }, models: [] });
+    // MIGRATED 2026-10-03 (TASK-20261003 B2): the event carried `brain: { state }` and
+    // `models`; it carries the runner's brains now, and no `active` when none is ready.
+    f.push('status', { brains: (WIRE.brains as { id: string }[]).map((brain) => (brain.id === 'claude' ? { ...brain, state: 'absent' } : brain)) });
     expect(f.composition.platform.brain).toEqual({ kind: 'demo' });
     expect(f.signals.brainRevisionStore.get()).toBeGreaterThan(before);
-    f.local.brainState.current = undefined;
   });
 
   it('a `hand-in` is APPLIED: the app is in the file, the note is on the custody store, the library revision is bumped, and the runner is told', async () => {

@@ -12,7 +12,7 @@
 
 import { useSyncExternalStore, type ReactElement } from 'react';
 
-import { hostPassport } from '../platform/copy.js';
+import { hostPassport, proseParts } from '../platform/copy.js';
 import { getPlatform, type CustodyState } from '../platform/platform.js';
 import { useBrainRevision } from '../platform/signals.js';
 import { useDismissableMenu } from '../ui/useDismissableMenu.js';
@@ -31,7 +31,8 @@ export function HostPassport(): ReactElement | null {
     () => custodySeat?.state.get() ?? NO_CUSTODY,
   );
   // The runner's brain is a live getter on a platform that is set once: the revision is the
-  // signal that "thinks" would now answer differently (a probe that came back after boot).
+  // signal that "thinks" would now answer differently (a probe that came back after boot, a
+  // brain the user picked) — or, while the demo brain stands in, for a different reason.
   useBrainRevision();
   const { open, toggle, triggerRef, menuRef } = useDismissableMenu();
   // Presentation, not capability: WHERE the passport is shown. What it says is derived below.
@@ -75,7 +76,10 @@ export function HostPassport(): ReactElement | null {
                 <span className="host-passport-text">
                   <span className="visually-hidden">{row.can ? 'yes: ' : 'no: '}</span>
                   <span className="host-passport-name">{row.name}</span>
-                  <span className="host-passport-sentence">{row.sentence}</span>
+                  {/* A sentence may carry a command (the brain's remedy: ``run `claude` …``); it is set as code. */}
+                  <span className="host-passport-sentence">
+                    {proseParts(row.sentence).map((part, index) => (part.code ? <code key={index}>{part.text}</code> : part.text))}
+                  </span>
                 </span>
               </li>
             ))}

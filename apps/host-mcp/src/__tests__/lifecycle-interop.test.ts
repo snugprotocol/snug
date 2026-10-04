@@ -1021,3 +1021,105 @@ process.on('SIGTERM', () => { rmSync(lock, { force: true }); rmSync(socket, { fo
     );
   });
 });
+
+// =====================================================================================
+// The brain registry range (TASK-20261003 R4, ADR-0071) — through the bundles that ship.
+// =====================================================================================
+
+describeBuilt('B1/B2 — the brains, through the built bundles', () => {
+  const CLAUDE_FAKE = { id: 'claude', name: 'Claude', via: 'your Claude Code CLI', state: 'ready', verified: true, efforts: ['low', 'max'], models: [{ id: 'claude-sonnet-5', name: 'Sonnet 5', efforts: ['low', 'max'] }], reply: '{"message":"pinned reply"}' };
+  const CODEX_FAKE = { id: 'codex', name: 'Codex', via: 'your Codex CLI', state: 'logged-out', detail: 'Your Codex CLI is not logged in — run `codex login`, then check again.', verified: false, streaming: false };
+
+  /** The test build with these fake brains, and the bearer its ready line carries. */
+  const withBrains = async (brains: unknown[] | undefined): Promise<{ session: Session; iso: Isolation; get(route: string): Promise<Response>; think(body: Record<string, unknown>): Promise<Response> }> => {
+    const iso = isolation();
+    const session = startSession(TEST_BUNDLE, testEnv(iso, brains === undefined ? {} : { SNUG_MCP_TEST_BRAINS: JSON.stringify(brains) }));
+    await session.initialize();
+    const ready = JSON.parse(await session.stderrLine(/\{"ready":true[^\n]*\}/)) as { url: string; port: number };
+    const headers = { authorization: `Bearer ${new URL(ready.url).hash.replace('#token=', '')}` };
+    const origin = `http://127.0.0.1:${ready.port}`;
+    return {
+      session,
+      iso,
+      get: (route) => fetch(`${origin}${route}`, { headers }),
+      think: (body) => fetch(`${origin}/v1/chat/completions`, { method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify({ messages: [{ role: 'user', content: 'x' }], ...body }) }),
+    };
+  };
+
+  it(
+    'the RELEASE bundle lists the user’s own agents — claude, then codex (unverified) — and has probed NEITHER by answering its agent',
+    async () => {
+      // Lazy (B1): a session that only speaks over stdio spawns no CLI. `unknown` with the
+      // "still checking" sentence is what a brain nobody has asked reads as — a probed one
+      // would say ready, absent or logged-out. (No page ever contacts this runner: the test
+      // has no bearer for the release build, which is the point of the release build.)
+      const iso = isolation();
+      const session = await begin(RELEASE_BUNDLE, iso.env);
+      const status = await session.status();
+      expect(status).not.toHaveProperty('active');
+      expect(status.brains).toEqual([
+        { id: 'claude', name: 'Claude', state: 'unknown', detail: 'Snug is still checking this brain.', verified: true },
+        { id: 'codex', name: 'Codex', state: 'unknown', detail: 'Snug is still checking this brain.', verified: false },
+      ]);
+      // …and the human CLI prints the same list.
+      const { code, stdout } = await runVerb(RELEASE_BUNDLE, ['status'], iso.env);
+      expect(code).toBe(0);
+      expect((JSON.parse(stdout) as { brains: unknown }).brains).toEqual(status.brains);
+      // Nothing was started to find that out: no brain directory was even made.
+      expect(existsSync(path.join(hostDir(iso), 'brain'))).toBe(false);
+      expect(existsSync(path.join(hostDir(iso), 'brain-codex'))).toBe(false);
+    },
+    SLOW,
+  );
+
+  it(
+    'the TEST bundle runs ONLY the fakes it was given: the wire carries them, `auto` answers on the default, and the answer names its brain',
+    async () => {
+      const { session, get, think } = await withBrains([CLAUDE_FAKE, CODEX_FAKE]);
+      const wire = JSON.parse(readFileSync(path.join(__dirname, 'fixtures', 'status-wire.json'), 'utf8')) as Record<string, unknown>;
+      const status = (await (await get('/status')).json()) as Record<string, unknown>;
+      // The shape the page's client is tested against, key for key.
+      expect(Object.keys(status).sort()).toEqual(Object.keys(wire).sort());
+      expect(status).toMatchObject({
+        binding: 'local-host',
+        active: 'claude',
+        brains: [
+          { id: 'claude', name: 'Claude', via: 'your Claude Code CLI', state: 'ready', verified: true, streaming: true, efforts: ['low', 'max'], models: [{ id: 'claude-sonnet-5', name: 'Sonnet 5', efforts: ['low', 'max'] }] },
+          { id: 'codex', name: 'Codex', via: 'your Codex CLI', state: 'logged-out', detail: CODEX_FAKE.detail, verified: false, streaming: false, efforts: [], models: [] },
+        ],
+      });
+      expect(status).not.toHaveProperty('brain');
+      expect(status).not.toHaveProperty('models');
+      const mine = await session.status();
+      expect(status).toMatchObject({ version: mine.version, build: mine.build });
+
+      const answered = await think({ model: 'claude-sonnet-5', effort: 'low' });
+      expect(answered.status).toBe(200);
+      expect(answered.headers.get('x-snug-brain')).toBe('claude');
+      const body = await answered.text();
+      expect(body).toContain(JSON.stringify('{"message":"pinned reply"}'));
+      expect(body).toContain('"model":"claude-fake"');
+      expect(body.trimEnd().endsWith('data: [DONE]')).toBe(true);
+
+      // A pinned brain that is not ready is NOTHING — never the ready one beside it.
+      const pinned = await think({ brain: 'codex' });
+      expect(pinned.status).toBe(503);
+      expect(pinned.headers.get('x-snug-brain')).toBeNull();
+      expect(await pinned.json()).toEqual({ error: { message: `Codex is not ready — ${CODEX_FAKE.detail}`, code: 'no-brain' } });
+    },
+    SLOW,
+  );
+
+  it(
+    'the TEST bundle with NO fakes has no brain at all — it can reach no CLI, and a think is `no-brain`',
+    async () => {
+      const { get, think, iso } = await withBrains(undefined);
+      expect(await (await get('/status')).json()).toMatchObject({ brains: [] });
+      const refused = await think({});
+      expect(refused.status).toBe(503);
+      expect(((await refused.json()) as { error: { code: string } }).error.code).toBe('no-brain');
+      expect(existsSync(path.join(hostDir(iso), 'brain'))).toBe(false);
+    },
+    SLOW,
+  );
+});

@@ -182,11 +182,14 @@ describe('a starter this host cannot run — no bypass by URL', () => {
     expect(sawFrame, 'the app frame never mounted, not even for a moment').toBe(false);
   });
 
-  it('web: the header stays for a blocked starter — install, the theme and the think rail are all still there', async () => {
+  it('web: the header stays for a blocked starter — its name and the think rail — but it does NOT offer install', async () => {
+    // MIGRATED (R4, carried from R2): this pinned `starter-install` as present. The route
+    // has just said the starter cannot run here; installing it makes a tile that is blocked
+    // the moment it appears, and an owned copy the user can only delete.
     const harness = await fresh();
     await openRoute(harness, 'starter--hue');
     expect(byTestId('run-blocked')).not.toBeNull();
-    expect(byTestId('starter-install')).not.toBeNull();
+    expect(byTestId('starter-install'), 'a starter this host cannot run is not offered for install').toBeNull();
     expect(byTestId('rail-toggle')).not.toBeNull();
     // The header names the app plainly: a frame that never mounts never announces, and the
     // "connecting…" shimmer would otherwise wait for it forever.
@@ -211,6 +214,22 @@ describe('a starter this host cannot run — no bypass by URL', () => {
     await waitFor(() => frame() !== null, 'the chess frame');
     expect(byTestId('run-blocked')).toBeNull();
     expect(frame()!.getAttribute('sandbox'), 'C2: the sandbox is untouched by this gate').toBe('allow-scripts');
+    expect(byTestId('starter-install'), 'a starter that runs here is still offered for install').not.toBeNull();
+  });
+
+  it('the install offer follows the HOST, not the starter: Trade Copilot offers it under the runner and not on web', async () => {
+    const web = await fresh();
+    await openRoute(web, 'starter--trade-copilot');
+    expect(byTestId('run-blocked')).not.toBeNull();
+    expect(byTestId('starter-install')).toBeNull();
+    await act(async () => root!.unmount());
+    container!.remove();
+    root = undefined;
+
+    const local = await fresh(runner());
+    await openRoute(local, 'starter--trade-copilot');
+    await waitFor(() => frame() !== null, 'the trade-copilot frame');
+    expect(byTestId('starter-install')).not.toBeNull();
   });
 
   it('an artifact: a connected starter is DISABLED with the true reason — never "runs in its sample mode"', async () => {

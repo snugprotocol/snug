@@ -18,8 +18,13 @@ runner shows them to the user and keeps their data.
 
 Build the app as a single HTML document, then call `snug_hand_in` with a
 `snug-app-bundle/1` document. The runner installs a new app, or offers the update in its
-run header when the user has edited their copy. It never overwrites an edited app silently,
-and it never restores one the user deleted.
+run header when the user has edited their copy. It never overwrites an edited app silently.
+An explicit hand-in installs the app again even if the user had deleted it.
+
+`snug_hand_in` answers with what happened — pass it on in one line. `installed`, `updated`
+(to vN) and already `current` mean it is done. `offered`: the user edited their copy, so the
+update waits for them in the app's run header. `refused: <reason>`: nothing changed — fix the
+reason. `sent … — not confirmed`: the page did not report back; ask the user what they see.
 
 `snug_list_apps` tells you what the user already has, so an edit goes to the right app
 rather than installing a second copy of it.

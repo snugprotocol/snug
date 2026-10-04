@@ -1,0 +1,6 @@
+{"type":"thread.started","thread_id":"0199a213-9d3e-7a41-b2c7-5f0e6d1c8a90"}
+{"type":"turn.started"}
+{"type":"item.started","item":{"id":"item_0","type":"command_execution","command":"/bin/zsh -lc id","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_0","type":"command_execution","command":"/bin/zsh -lc id","aggregated_output":"uid=501(someone) gid=20(staff) groups=20(staff)\n","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"You are uid=501(someone)."}}
+{"type":"turn.completed","usage":{"input_tokens":2301,"cached_input_tokens":1920,"cache_write_input_tokens":0,"output_tokens":64,"reasoning_output_tokens":22}}

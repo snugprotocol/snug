@@ -1,4 +1,4 @@
-// model-catalog.ts — the models the chip offers (TASK-20260922 S9, ADR-0070).
+// The models the chip offers for the `claude` brain (TASK-20260922 S9, ADR-0070).
 //
 // WHY A FILE AND NOT A QUESTION. The obvious design is to ask the brain "what models exist?"
 // with web search. It cannot: the child runs `--tools ''`, which is what makes a think

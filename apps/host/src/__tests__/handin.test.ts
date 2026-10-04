@@ -11,6 +11,8 @@ import { appBundleId, type AppBundle } from '@snugprotocol/protocol';
 import { createRequire } from 'node:module';
 import { beforeEach, describe, expect, it } from 'vitest';
 
+import { CONNECTIONS_UNAVAILABLE } from '@playground/platform/availability';
+
 import { readBundleBlocks, upsertBundleBlock, type BundleBlockRead } from '../../../../scripts/lib/page-blocks.mjs';
 import { applyAgentBundles, applyPendingHandIn, createHandInSeat, describeHandIn, readBundleBlocksFromDocument, type HandInOutcome } from '../handin.js';
 
@@ -115,6 +117,21 @@ describe('applyAgentBundles', () => {
     expect(outcome.installed).toHaveLength(1);
     expect(db.listApps()).toHaveLength(1);
     expect(db.getSetting(sharedBundleSettingKey(outcome.installed[0]!.appId))).toBeDefined();
+  });
+
+  it('(K4) the refusal says "connections aren’t available" in the kit’s ONE sentence — the tile, the passport and the chat card say the same', async () => {
+    // The hand-in wrote its own ("connected apps are not available inside an artifact"),
+    // which was also wrong under every other binding this core serves (a chat, a plain file).
+    const withConnections = bundle(LINEAGE_A, HTML_V1, {
+      connections: [{ slot: 'weather', provider: { name: 'OpenWeather' }, kind: 'api_key', fields: [{ key: 'api_key', label: 'API key', type: 'secret' }], declaredApiHosts: ['api.openweathermap.org'] }],
+    });
+    const outcome = await applyAgentBundles(db, blocksOf(withConnections));
+    expect(CONNECTIONS_UNAVAILABLE).toBe('connections aren’t available in this host');
+    expect(outcome.refused[0]!.reason).toBe(`"Pomodoro" asks for 1 connection(s) — ${CONNECTIONS_UNAVAILABLE}, so this hand-in was refused`);
+    // Under the runner connections ARE available; the refusal there is about who makes one.
+    const local = await applyAgentBundles(db, blocksOf(withConnections), { binding: 'local-host' });
+    expect(local.refused[0]!.reason).not.toContain(CONNECTIONS_UNAVAILABLE);
+    expect(local.refused[0]!.reason).toContain('A bundle cannot bring a connection.');
   });
 
   it('(N) hostile blocks are refused by name, never thrown: not JSON, not a bundle, a lineage that disagrees, a non-UUID lineage', async () => {

@@ -167,10 +167,50 @@ export const freePort = (): Promise<number> =>
     });
   });
 
+/**
+ * One fake brain driver of the TEST build (`SNUG_MCP_TEST_BRAINS`, read by
+ * `apps/host-mcp/src/main.test-hooks.ts`). The test build has ONLY the brains a spec names:
+ * it has no path to the developer's real CLIs, so a suite can spend nobody's subscription.
+ */
+export interface FakeBrain {
+  id: string;
+  name: string;
+  /** Whose it is, in words (`your Codex CLI`). */
+  via: string;
+  /** What its probe answers. Any string: an unknown one is how a spec shows the page one. */
+  state: string;
+  /** The remedy sentence for a state that is not `ready`. */
+  detail?: string;
+  /** false = experimental: never taken by `auto`, answers only when pinned (ADR-0071 §2). */
+  verified: boolean;
+  streaming?: boolean;
+  efforts?: readonly string[];
+  models?: readonly { id: string; name: string; efforts: readonly string[] }[];
+  /** What it answers every think with. Absent → it refuses by name (the 502 a brain that cannot answer gives). */
+  reply?: string;
+  /** The model it reports as having run. Default `<id>-fake`. */
+  resolvedModel?: string;
+  /**
+   * What its probe answers from the SECOND round on — a brain the user fixed while the
+   * page was open (`/login` in a terminal). Absent → every round answers `state`.
+   */
+  afterRecheck?: { state: string; detail?: string };
+}
+
 export interface LocalHostOptions {
   certPath?: string;
   certPaths?: string[];
   holder?: string;
+  /**
+   * The runner's brains, in the runner's order (its default brain, `claude`, first). Wins
+   * over the three single-brain options below.
+   */
+  brains?: readonly FakeBrain[];
+  /**
+   * THE SINGLE-BRAIN OPTIONS, from before the brain registry (TASK-20260922): the state of
+   * the one CLI, the model it reports having run, its model list. Kept so the specs written
+   * against them stay byte-identical — they are translated into ONE fake `claude` brain.
+   */
   brain?: string;
   brainModel?: string;
   models?: readonly { id: string; name: string; effort: boolean }[];
@@ -186,6 +226,54 @@ export interface LocalHostOptions {
    * a developer's own running Snug.
    */
   ports?: readonly number[];
+}
+
+/** The levels `claude --effort` documents (measured, 2.1.278) — what the real driver reports for a model that thinks. */
+export const CLAUDE_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+
+/** The real `claude` driver's remedy per state — held equal to its source by localSetup.test.ts — so a spec reads the sentence a user does. */
+export const CLAUDE_REMEDY: Readonly<Record<string, string>> = {
+  'logged-out': 'Your Claude CLI is not logged in — run `claude` and `/login`, then check again.',
+  outdated: 'Your Claude CLI is out of date — run `claude update`, then check again.',
+  absent: 'No `claude` CLI found on this machine — Snug is using its demo brain. Install Claude Code (https://code.claude.com/docs/en/quickstart), then run `claude` and `/login`, and check again.',
+};
+
+/**
+ * The single-brain options as the ONE brain they always described. `undefined` when a spec
+ * gave none of them: that runner has no brain at all.
+ *
+ *  - `brain`      → the state its probe answers (default `ready`: a spec that pinned only a
+ *                   model was describing a CLI that answers);
+ *  - `brainModel` → it ANSWERS (a JSON object, as a real model answers an app that declares
+ *                   a response schema — it carries no app-specific field, so an app treats it
+ *                   as off-script), and reports that id as the model that ran. Without it the
+ *                   brain refuses by name, as the old test build's did;
+ *  - `models`     → its catalogue; `effort: true` was "this model has the thinking axis",
+ *                   which is Claude's five levels now that levels are listed per model.
+ */
+export function legacyClaude(options: Pick<LocalHostOptions, 'brain' | 'brainModel' | 'models'>): FakeBrain | undefined {
+  if (options.brain === undefined && options.brainModel === undefined && options.models === undefined) return undefined;
+  const state = options.brain ?? 'ready';
+  const detail = CLAUDE_REMEDY[state];
+  return {
+    id: 'claude',
+    name: 'Claude',
+    via: 'your Claude Code CLI',
+    state,
+    ...(detail !== undefined ? { detail } : {}),
+    verified: true,
+    streaming: true,
+    efforts: CLAUDE_LEVELS,
+    models: (options.models ?? []).map(({ id, name, effort }) => ({ id, name, efforts: effort ? CLAUDE_LEVELS : [] })),
+    ...(options.brainModel !== undefined ? { reply: JSON.stringify({ message: 'pinned reply' }), resolvedModel: options.brainModel } : {}),
+  };
+}
+
+/** What `SNUG_MCP_TEST_BRAINS` carries for these options; `undefined` = the variable is not set. */
+export function brainsEnv(options: LocalHostOptions): string | undefined {
+  const legacy = legacyClaude(options);
+  const brains = options.brains ?? (legacy !== undefined ? [legacy] : undefined);
+  return brains === undefined ? undefined : JSON.stringify(brains);
 }
 
 /**
@@ -216,6 +304,7 @@ export async function startLocalHost(options: LocalHostOptions = {}): Promise<Lo
     writeFileSync(caBundle, cas.map((file) => readFileSync(file, 'utf8')).join('\n'));
   }
 
+  const brains = brainsEnv(options);
   const child = spawn(process.execPath, [bundle], {
     stdio: ['pipe', 'pipe', 'pipe'],
     env: {
@@ -226,9 +315,7 @@ export async function startLocalHost(options: LocalHostOptions = {}): Promise<Lo
       // POSTs reach the IdP — and both are made by the PROCESS, not the browser.
       SNUG_MCP_TEST_RESOLVE: `${STUB_HOST}=127.0.0.1,${IDP_HOST}=127.0.0.1`,
       ...(options.holder !== undefined ? { SNUG_MCP_TEST_HOLDER: options.holder } : {}),
-      ...(options.brain !== undefined ? { SNUG_MCP_TEST_BRAIN: options.brain } : {}),
-      ...(options.brainModel !== undefined ? { SNUG_MCP_TEST_BRAIN_MODEL: options.brainModel } : {}),
-      ...(options.models !== undefined ? { SNUG_MCP_TEST_MODELS: JSON.stringify(options.models) } : {}),
+      ...(brains !== undefined ? { SNUG_MCP_TEST_BRAINS: brains } : {}),
       ...(options.ports !== undefined ? { SNUG_MCP_TEST_PORTS: options.ports.join(',') } : {}),
       ...(caBundle !== undefined ? { NODE_EXTRA_CA_CERTS: caBundle } : {}),
     },

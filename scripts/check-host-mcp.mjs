@@ -55,6 +55,8 @@ import { BUNDLE_PATH, claudeMcpConfig, claudePluginManifest, LAUNCHER_PATH, mark
 import { buildSkillTree, INSTRUCTIONS_SOURCE } from './lib/skill-build.mjs';
 import { readZip } from './lib/zip.mjs';
 
+const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+
 // One path per artifact: the bundle is the builder's input, the instructions the skill's source.
 export const BUNDLE_FILE = SOURCES.bundle;
 export const INSTRUCTIONS_FILE = INSTRUCTIONS_SOURCE;
@@ -77,25 +79,27 @@ export const ALLOWED_ENV_READS = ['HOME', 'PATH', 'SHELL', 'USER', 'LANG', 'LC_A
 
 /**
  * How many times the release bundle may read the WHOLE environment object rather than a
- * named variable (D-B34).
+ * named variable (D-B34): once.
  *
- * The name sweep below can only see `process.env.X`, and the release bundle contains no such
- * literal: both readers hand the entire object to a function that decides — `resolveHome`
- * (which env names a home) and `childEnvFor` (which builds the child's env by ALLOWLIST).
- * That is the right design in both cases, and it is exactly why the name sweep alone proved
- * nothing. Counting the whole-object reads and pinning the count is what keeps a further one
- * from arriving unreviewed: adding a reader is fine, but it must be a deliberate edit here
- * with a reason, not a silent pass.
+ * The name sweep below can only see `process.env.X`. A reader that hands the entire object
+ * to a function that decides — which variable names a home, which variables an agent's
+ * child may inherit — is invisible to it, and that is the shape every reader of consequence
+ * has. So the whole-object reads are counted, and the count is pinned.
  *
- * The declared three (raise this ONLY with a reason, and only after checking the new reader
- * cannot leak the parent's environment to a child):
- *   1. `resolveHome`            — reads which env names a home (D-B34).
- *   2. `createClaudeBrain`      — `childEnvFor(process.env)`, the child env by ALLOWLIST.
- *   3. `probeBrain`             — the same allowlist, for the boot readiness probe (D-B35).
- * This gate caught #3 the moment it was written, which is the review working. The binary
- * resolver (ADR-0069 §6) reads HOME and PATH by NAME and adds none.
+ * WHERE THE ONE READ LIVES: the brain registry (`apps/host-mcp/src/brains/registry.ts`). It
+ * takes the environment once and hands it to every driver, each of which builds its child's
+ * environment from it by ALLOWLIST (ADR-0071 §3); whatever else needs the environment is
+ * handed that same object or reads a variable by name. Before the registry there were three
+ * — `resolveHome`, `createClaudeBrain`, `probeBrain` — each taking the parent environment
+ * for itself, and this gate caught the third the day it was written.
+ *
+ * WHY A SECOND IS A FINDING, not a number to raise: with one reader there is one place to
+ * review for "can the parent's environment reach a child?" (C1 — no API-key variable may).
+ * A second read means some module reached past the registry for the environment on its own
+ * — a driver spawning with what it found, a home resolved from an object nobody passed. The
+ * remedy is to hand that module the registry's object, never to edit this constant.
  */
-export const ALLOWED_WHOLE_ENV_READS = 3;
+export const ALLOWED_WHOLE_ENV_READS = 1;
 
 /**
  * The plugin directory's reviewer-hold line for a plugin's server bundle (the task's reading
@@ -137,8 +141,8 @@ export function checkBundle(source) {
   const whole = source.match(/process\.env(?!\s*(?:\.[A-Za-z_$]|\[["'`]))/g)?.length ?? 0;
   if (whole > ALLOWED_WHOLE_ENV_READS) {
     problems.push(
-      `the bundle reads the whole environment ${whole} times, but only ${ALLOWED_WHOLE_ENV_READS} are declared ` +
-        '(resolveHome, childEnvFor, probeBrain) — a new whole-env reader must be reviewed and the count raised deliberately',
+      `the bundle reads the whole environment ${whole} times, but ONE read is declared — the brain registry’s ` +
+        '(apps/host-mcp/src/brains/registry.ts). Hand the new reader the registry’s environment, or read a variable by name',
     );
   }
   if (!source.includes('snug_status')) problems.push('the bundle does not carry the tool surface — did the entry change?');
@@ -316,8 +320,13 @@ export function isolationEnv(tmp) {
   return { HOME: tmp, SNUG_HOME: path.join(tmp, 'Snug'), PATH: path.dirname(process.execPath) };
 }
 
-/** Start the launcher as a host does (`/bin/sh <launcher>`, cwd `/`) and speak JSON-RPC lines to it. */
-function startLauncher(launcher, env, requestTimeoutMs) {
+/**
+ * Start the launcher as a host does (`/bin/sh <launcher>`, cwd `/`) and speak JSON-RPC lines
+ * to it. Exported for the desktop-host walk (`walk-desktop-host.mjs`), which starts the same
+ * launcher the same way under an environment of its own: one client, so the walk and the
+ * gate cannot come to speak to the process differently.
+ */
+export function startLauncher(launcher, env, requestTimeoutMs) {
   const child = spawn(SH, [launcher], { cwd: '/', env, stdio: ['pipe', 'pipe', 'pipe'] });
   const waiting = new Map();
   let out = '';
@@ -554,50 +563,77 @@ export async function runDamagedPageLeg(pluginDir, options = {}) {
   return problems;
 }
 
-async function main() {
-  const problems = [];
-  if (!existsSync(BUNDLE_FILE)) {
-    console.error('check-host-mcp: CANNOT RUN — apps/host-mcp/dist/snug-mcp.mjs is missing (pnpm --filter host-mcp build)');
-    process.exit(1);
-  }
-  const source = readFileSync(BUNDLE_FILE, 'utf8');
-  const bundleBytes = Buffer.byteLength(source);
-  problems.push(...checkBundle(source));
-  problems.push(...checkInstructions(source, readFileSync(INSTRUCTIONS_FILE, 'utf8')));
+/** The legs the gate starts a tree with — named, so a test can pin that the defaults ARE these. */
+export const GATE_LEGS = Object.freeze({ launch: runLaunchLegs, damagedPage: runDamagedPageLeg });
 
-  // The tree is built HERE, every run: a missing input is CANNOT RUN by name — and the
-  // bundle's own problems, found above, are printed first rather than lost with the exit.
-  const buildProblems = await buildPlugin();
-  if (buildProblems.length > 0) {
-    for (const problem of problems) console.error(`check-host-mcp: ${problem}`);
-    for (const problem of buildProblems) console.error(`check-host-mcp: CANNOT RUN — ${problem}`);
-    process.exit(1);
+/**
+ * The gate, whole: sweep the bundle, build the tree, check it, START it, ask the validators.
+ *
+ * It is a function with its collaborators as parameters because of what the R2 verifier
+ * found (2026-10-03): with all of this inline in `main()`, deleting the call to the launch
+ * legs — or to the damaged-page leg — left every suite green. Each leg had its own tests;
+ * nothing tested that the gate runs them. The tests drive this over a real build of fixture
+ * inputs, with legs that record their calls and once with the real ones.
+ *
+ * @param {object} [options] every default is the real gate's; a test passes its own
+ * @param {string} [options.bundleFile] the release bundle: swept, then shipped in the tree
+ * @param {string} [options.pluginDir] the marketplace dir the tree is built into, checked in and started from
+ * @param {{ launch: typeof runLaunchLegs, damagedPage: typeof runDamagedPageLeg }} [options.legs]
+ * @param {typeof runValidators} [options.validators]
+ * @param {typeof SOURCES} [options.sources] the builder's other inputs (tests)
+ * @param {Record<string, string>} [options.skill] a pre-rendered skill tree (tests)
+ * @returns {Promise<{ lines: string[], problems: string[] }>} what to print, and what
+ *   failed — the gate passed when `problems` is empty
+ */
+export async function runGate(options = {}) {
+  const bundleFile = options.bundleFile ?? BUNDLE_FILE;
+  const pluginDir = options.pluginDir ?? PLUGIN_DIR;
+  const legs = options.legs ?? GATE_LEGS;
+  const validators = options.validators ?? runValidators;
+  const tree = options.skill !== undefined ? { skill: options.skill } : {};
+
+  if (!existsSync(bundleFile)) {
+    return { lines: [], problems: [`CANNOT RUN — ${path.relative(REPO, bundleFile)} is missing (pnpm --filter host-mcp build)`] };
   }
-  problems.push(...(await checkPluginTree(PLUGIN_DIR)));
+  const source = readFileSync(bundleFile, 'utf8');
+  const bundleBytes = Buffer.byteLength(source);
+  // Printed whatever the verdict, and never part of it.
+  const lines = [`SIZE — ${bundleSizeLine(bundleBytes)}`];
+  const problems = [...checkBundle(source), ...checkInstructions(source, readFileSync(INSTRUCTIONS_FILE, 'utf8'))];
+
+  // The tree is built HERE, every run: a missing input is CANNOT RUN by name — after the
+  // bundle's own problems, found above, so they are not lost with it.
+  const unbuilt = await buildPlugin(pluginDir, { ...(options.sources ?? SOURCES), bundle: bundleFile }, tree);
+  if (unbuilt.length > 0) return { lines, problems: [...problems, ...unbuilt.map((problem) => `CANNOT RUN — ${problem}`)] };
+
+  problems.push(...(await checkPluginTree(pluginDir, tree)));
   // Only a tree that is what it says it is gets STARTED.
   if (problems.length === 0) {
-    problems.push(...(await runLaunchLegs(path.join(PLUGIN_DIR, PLUGIN.name, LAUNCHER_PATH), { page: path.join(PLUGIN_DIR, PLUGIN.name, PAGE_PATH) })));
-    problems.push(...(await runDamagedPageLeg(path.join(PLUGIN_DIR, PLUGIN.name))));
+    const plugin = path.join(pluginDir, PLUGIN.name);
+    problems.push(...(await legs.launch(path.join(plugin, LAUNCHER_PATH), { page: path.join(plugin, PAGE_PATH) })));
+    problems.push(...(await legs.damagedPage(plugin)));
   }
 
-  const validators = runValidators(PLUGIN_DIR);
-  for (const v of validators) {
+  const verdicts = validators(pluginDir);
+  for (const v of verdicts) {
     if (v.status === 'failed') problems.push(`${v.name} refused the tree:\n${v.detail}`);
   }
+  if (problems.length > 0) return { lines, problems };
 
-  // Printed whatever the verdict, and never part of it.
-  console.log(`check-host-mcp: SIZE — ${bundleSizeLine(bundleBytes)}`);
-  if (problems.length > 0) {
-    for (const problem of problems) console.error(`check-host-mcp: ${problem}`);
-    process.exit(1);
-  }
-  const notVerified = validators.filter((v) => v.status === 'not verified');
-  console.log(
-    `check-host-mcp: ok (${bundleBytes} bytes; plugin tree built and checked — page pinned, directory rules kept, ${ARCHIVE_NAME} is the tree; ` +
+  lines.push(
+    `ok (${bundleBytes} bytes; plugin tree built and checked — page pinned, directory rules kept, ${ARCHIVE_NAME} is the tree; ` +
       `launched — the shipped page served, a second process attached, no home refused by name, a damaged page refused beside a tree that still led; ` +
-      `validators: ${validators.map((v) => `${v.name} ${v.status}`).join(', ')})`,
+      `validators: ${verdicts.map((v) => `${v.name} ${v.status}`).join(', ')})`,
   );
-  for (const v of notVerified) console.log(`check-host-mcp: NOT VERIFIED — ${v.name}: ${v.detail}`);
+  for (const v of verdicts.filter((verdict) => verdict.status === 'not verified')) lines.push(`NOT VERIFIED — ${v.name}: ${v.detail}`);
+  return { lines, problems };
+}
+
+async function main() {
+  const { lines, problems } = await runGate();
+  for (const line of lines) console.log(`check-host-mcp: ${line}`);
+  for (const problem of problems) console.error(`check-host-mcp: ${problem}`);
+  if (problems.length > 0) process.exit(1);
 }
 
 if (process.argv[1] !== undefined && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await main();

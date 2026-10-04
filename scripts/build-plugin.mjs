@@ -82,7 +82,7 @@ export function readme() {
     PLUGIN.description,
     '',
     'Snug apps are single-file micro apps your agent builds for you. Each one lives in your own',
-    'Snug file on this machine, runs in a sandboxed runner, and can think through your own Claude',
+    'Snug file on this machine, runs in a sandboxed runner, and can think through your own agent',
     'at runtime. You keep the app and everything it accumulates; nothing is uploaded.',
     '',
     '## What it needs',
@@ -90,9 +90,13 @@ export function readme() {
     '- **Node.js 20 or newer** on this machine. The plugin starts a small local process (it serves',
     '  the runner page on `127.0.0.1` and nothing else). If no Node is found, the process says so',
     '  in one line and where to get it: https://nodejs.org',
-    '- **Claude Code, logged in** (`claude` then `/login`), for your apps to think on your own',
-    '  subscription. Without it the runner opens with its demo brain and the brain chip says how to',
-    '  install Claude Code: https://code.claude.com/docs/en/quickstart',
+    // What ANSWERS the thinks, as it is (ADR-0071): Claude by default; Codex only by the
+    // user's own pin, and labelled experimental until a logged-in walk is journaled.
+    '- **An agent CLI of your own, logged in**, to answer your apps’ thinks on your own',
+    '  subscription: your own Claude Code CLI (or, experimentally, your own Codex CLI — pinned',
+    '  from the brain chip). For Claude Code that is `claude`, then `/login`. Until one is ready',
+    '  the runner opens with its demo brain and the brain chip says what to do. Claude Code:',
+    '  https://code.claude.com/docs/en/quickstart',
     '',
     'No API key, no account, no configuration. The plugin ships no hooks and no data-plane tools:',
     'the agent can open the runner and hand apps in; it can never fetch with your credentials or',
@@ -120,7 +124,12 @@ export function readme() {
     `- \`${PAGE_PATH}\` — the runner page: the process serves it, and the skill hands apps in to it.`,
     `- \`${PAGE_PIN_PATH}\` — that page’s sha256. The process serves the page only while it matches, so a`,
     '  partial or mixed-up install says so instead of running a page it was not built with.',
-    '- `../PROVENANCE.json` (the marketplace root) — the monorepo commit this tree was built from, and every file’s sha256.',
+    // Said as where it IS. The line used to point at `../PROVENANCE.json`, which exists for a
+    // marketplace clone and for nobody who installed with "Upload plugin" (D3: the archive
+    // is this folder alone).
+    '- `PROVENANCE.json` — not in this folder: it sits beside it in the marketplace repository',
+    `  (${PLUGIN.repository}) and names the monorepo commit this tree was built from and every`,
+    '  file’s sha256. It is not part of an uploaded archive.',
     '',
     `Source: ${PLUGIN.repository} · ${PLUGIN.homepage} · ${PLUGIN.license}`,
     '',

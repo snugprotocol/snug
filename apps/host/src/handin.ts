@@ -44,6 +44,7 @@ import {
 } from '@snugprotocol/db';
 import { appBundleId, parseAppBundle, type AppBundle } from '@snugprotocol/protocol';
 
+import { CONNECTIONS_UNAVAILABLE } from '@playground/platform/availability';
 import type { AgentHandInSeat, PendingAgentUpdate } from '@playground/platform/platform';
 
 import { BUNDLE_BLOCK_TYPE, LINEAGE_RULE, type BundleBlockRead } from '../../../scripts/lib/page-blocks.mjs';
@@ -121,7 +122,9 @@ export async function applyAgentBundles(db: UserDb, blocks: readonly HandInBlock
         reason:
           options.binding === 'local-host'
             ? `"${bundle.app.displayName}" asks for ${bundle.connections.length} connection(s) — connect it yourself in Snug, from the app's own connections door. A bundle cannot bring a connection.`
-            : `"${bundle.app.displayName}" asks for ${bundle.connections.length} connection(s) — connected apps are not available inside an artifact, so this hand-in was refused`,
+            : // The kit's ONE sentence for a host without connections (K4) — this core serves
+              // every binding that has none, and "inside an artifact" named only one of them.
+              `"${bundle.app.displayName}" asks for ${bundle.connections.length} connection(s) — ${CONNECTIONS_UNAVAILABLE}, so this hand-in was refused`,
       });
       continue;
     }

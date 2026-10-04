@@ -23,12 +23,11 @@
 import { randomBytes, createHash } from 'node:crypto';
 import { rmSync } from 'node:fs';
 import { createConnection } from 'node:net';
-import { homedir } from 'node:os';
 import path from 'node:path';
 
 import { parseAppBundle } from '@snugprotocol/protocol';
 
-import { createClaudeBrain, type Brain } from './brain-claude.js';
+import type { BrainRegistry } from './brains/registry.js';
 import { buildId, VERSION } from './build.js';
 import {
   acked,
@@ -48,7 +47,6 @@ import { ensureDirectory, RealHomeRefusedError } from './home.js';
 import { askToStop, isAlive, readCommandLine } from './identity.js';
 import { acquireLock, controlSocketPath, reassertLock, recordBoundPort, releaseLock, type LockDeps } from './lock.js';
 import { createLoopbackServer, type HandInReport, type LoopbackServer } from './loopback-server.js';
-import { readModelCatalog, type CatalogModel } from './model-catalog.js';
 import { nodeHttpsSend } from './node-transport.js';
 import { refusalFor, refusalSentence, type Refusal, type RefusalCode, type RefusalFacts } from './refusals.js';
 import { TOOL_NAMES, type ToolName } from './tools.js';
@@ -83,30 +81,22 @@ const DRAIN_WRITES_MS = 2_000;
  * the primary's own answer.
  */
 const HAND_IN_WAIT_MS = 5_000;
-/**
- * The least time between two brain probes (D4). A probe of a READY brain is a real, tiny
- * think on the user's subscription, and the page may ask for one after every failed think
- * and while the demo brain is answering — so the page's eagerness is bounded HERE, where
- * the cost is, and not only by the page's own manners.
- */
-const BRAIN_PROBE_FLOOR_MS = 30_000;
 
 export interface ToolCallResult {
   content: Array<{ type: 'text'; text: string }>;
   isError?: boolean;
 }
 
-export interface BrainReadinessReport {
-  state: string;
-  detail?: string;
-}
-
 export interface RunnerOptions {
   /**
-   * The chip's model list (ADR-0070). Defaults to the CLI's own catalogue in the user's home;
-   * injected so the TEST build never reads the developer's real `~/.claude` (D-B34's intent).
+   * The user's own agents that may answer a think (ADR-0071). REQUIRED, and never built
+   * here: a runner that made its own would probe the real machine, which is how the unit
+   * suite and the browser suite came to spawn the developer's real `claude` (found
+   * 2026-10-03). The release entry hands in the machine's drivers, the test entry fakes,
+   * a unit test its own. Probed LAZILY — at the first page contact, never at start (B1): a
+   * session that only speaks over stdio must spawn no CLI.
    */
-  models?: () => readonly CatalogModel[];
+  brains: BrainRegistry;
   /**
    * Where this runner keeps its state. REQUIRED (D-B34): it used to default to the live
    * `~/Snug`, which is how a test destroyed the owner's user file. A caller that wants the
@@ -127,17 +117,6 @@ export interface RunnerOptions {
    * never here — `check-host-mcp` sweeps the release bundle for its env names.
    */
   proxy?: { handle: FetchProxy['handle'] };
-  /** The brain, injected in tests so no CLI is ever spawned. */
-  brain?: Pick<Brain, 'stream'> & Partial<Pick<Brain, 'stop'>>;
-  /**
-   * The brain readiness probe (D-B35), run LAZILY — at the first page contact, never at
-   * start (B1): a session that only speaks over stdio must spawn no CLI. Absent → no probe
-   * at all, so a caller that forgets it can never reach the user's real CLI; the release
-   * entry passes the real one. Its answer is reported on `/status` and named by the page's
-   * chip, so a logged-out or missing CLI is a sentence the user can act on rather than a
-   * 502 at the first think.
-   */
-  brainState?: (context: { cwd: string }) => Promise<BrainReadinessReport>;
   /** How long after its own session leaves — with no other attached — before exiting. */
   graceMs?: number;
   /** The ports to try, in order. The fixed one, then any. */
@@ -152,8 +131,6 @@ export interface RunnerOptions {
   onStopRequested?(): void;
   /** How long `snug_hand_in` waits for the page's report. Tests shorten it. */
   handInWaitMs?: number;
-  /** The least time between two brain probes. Tests set it to zero, or far out. */
-  brainRecheckFloorMs?: number;
 }
 
 export interface RunnerStart {
@@ -297,15 +274,16 @@ export function createRunner(options: RunnerOptions): Runner {
   // Types stop a caller inside this repo; this stops a JS caller, a stale build and a
   // `as any` — the guard has to hold at runtime because the failure it prevents is silent.
   const home = options.home;
-  const modelsFor = options.models ?? (() => readModelCatalog(homedir()));
   if (typeof home !== 'string' || home === '') {
     throw new RealHomeRefusedError('createRunner needs an explicit home; it no longer defaults to the real ~/Snug (D-B34)');
   }
+  // The same kind of guard, for the same kind of reason: a default here would be the real
+  // machine's CLIs, and a forgotten option would spend the user's subscription.
+  const brains = options.brains;
+  if (typeof brains !== 'object' || brains === null) {
+    throw new Error('createRunner needs an explicit brain registry; it never builds one that probes the real machine (ADR-0071)');
+  }
   const hostDir = path.join(home, 'host');
-  // The children's working directory (ADR-0069 §5, security review): a neutral one under
-  // the Snug home, so no project's CLAUDE.md, hooks or MCP servers are discovered by a
-  // child answering an app.
-  const brainDir = path.join(hostDir, 'brain');
   const graceMs = options.graceMs ?? 3_000;
   const retryFloorMs = options.retryFloorMs ?? RETRY_FLOOR_MS;
   const callTimeoutMs = options.callTimeoutMs ?? CALL_TIMEOUT_MS;
@@ -313,7 +291,6 @@ export function createRunner(options: RunnerOptions): Runner {
   const cli = options.cli ?? 'sh <plugin>/scripts/snug';
   const open = options.openBrowser ?? (async (): Promise<void> => {});
   const handInWaitMs = options.handInWaitMs ?? HAND_IN_WAIT_MS;
-  const brainRecheckFloorMs = options.brainRecheckFloorMs ?? BRAIN_PROBE_FLOOR_MS;
 
   // 256 bits, memory only. It reaches the page in the launch URL's fragment and is written
   // nowhere: the lock keeps only its hash.
@@ -328,22 +305,12 @@ export function createRunner(options: RunnerOptions): Runner {
   let graceTimer: ReturnType<typeof setTimeout> | undefined;
   /** Set once this runner's own session is gone; called when the runner may go too. */
   let exitHook: (() => void) | undefined;
-  // Undefined until the probe answers; `/status` simply omits the field until then, which
-  // the page reads as "not known yet" rather than as a claim either way.
-  let brainReadiness: BrainReadinessReport | undefined;
-  // Created by the primary, held so `stop()` can reap its children (ADR-0069 §5).
-  let brain: RunnerOptions['brain'];
   /** This runner took over from a primary that went away: the agent must open the page again. */
   let reopenNote = false;
   /** Whether the listener holds the port a user registers as their OAuth redirect (D-B13). */
   let boundFixedPort = false;
   /** Hand-ins sent to the page and not yet reported on, by the id their event carried (K6). */
   const awaitingOutcome = new Map<string, (report: HandInReport) => void>();
-  /** The probe in flight, and when the last one started (D4: never two at once, never inside the floor). */
-  let probing: Promise<void> | undefined;
-  let lastProbeAt = Number.NEGATIVE_INFINITY;
-  /** A re-check asked for inside the floor: owed, and run when the floor allows. At most one. */
-  let owedRecheck: ReturnType<typeof setTimeout> | undefined;
 
   const lockDeps: LockDeps = {
     pid: process.pid,
@@ -414,6 +381,9 @@ export function createRunner(options: RunnerOptions): Runner {
 
   const statusDoc = (primary: Extract<State, { role: 'primary' }>): Record<string, unknown> => {
     const held = options.heldBy?.();
+    // READ, never probed: a status asked over stdio or the control socket must spawn no CLI
+    // (B1), so before the first page contact every brain says it has not been checked yet.
+    const { active, brains: known } = brains.statuses();
     return {
       running: true,
       ...whoami(),
@@ -424,6 +394,10 @@ export function createRunner(options: RunnerOptions): Runner {
       clients: primary.control.persistentCount(),
       ...(held !== undefined ? { heldBy: held } : {}),
       binding: 'local-host',
+      // Which of the user's own agents answers their apps — or `active` absent: none is
+      // ready, and the page's demo brain answers with the remedy shown.
+      ...(active !== undefined ? { active } : {}),
+      brains: known.map(({ id, name, state, detail, verified }) => ({ id, name, state, ...(detail !== undefined ? { detail } : {}), verified })),
       ...(reopenNote ? { note: 'The Snug runner this session was attached to went away, so this session now runs Snug. Call snug_open to open the page again.' } : {}),
     };
   };
@@ -562,63 +536,24 @@ export function createRunner(options: RunnerOptions): Runner {
   // ------------------------------------------------------------------ the start
 
   /**
-   * Ask the brain what it can do, and tell every open page. ONE probe at a time, and never
-   * two inside the floor: the first page contact and every re-check come through here, so a
-   * page cannot make the user's CLI think in a loop by asking in one.
+   * The first page contact (B1): start the brains' first probe round, and give a fast answer
+   * the chance to ride this read. A round that has to start a CLI lands later, as a
+   * `status` event.
    */
-  const probeBrain = (): Promise<void> | undefined => {
-    const probe = options.brainState;
-    if (probe === undefined) return undefined;
-    if (probing !== undefined) return probing;
-    if (Date.now() - lastProbeAt < brainRecheckFloorMs) return undefined;
-    lastProbeAt = Date.now();
-    probing = probe({ cwd: brainDir })
-      .then(
-        (readiness) => {
-          brainReadiness = readiness;
-          if (state.role === 'primary') state.server.emit('status', { brain: readiness, models: modelsFor() });
-        },
-        // A probe that throws leaves the last verdict standing rather than taking the runner down.
-        () => {},
-      )
-      .finally(() => {
-        probing = undefined;
-      });
-    return probing;
-  };
-
-  /**
-   * The page asked for the brain to be looked at again (D4): a think just failed, or the
-   * demo brain is answering in a real brain's place. Inside the floor the ask is OWED rather
-   * than dropped — one probe, when the floor allows — because "a failed think triggers a
-   * re-check" has to hold in the seconds after any probe too, which is when a page that
-   * just opened meets its first failed think. Asked five times, it is still one probe.
-   */
-  const recheckBrain = (): void => {
-    if (options.brainState === undefined || probing !== undefined || owedRecheck !== undefined) return;
-    const wait = lastProbeAt + brainRecheckFloorMs - Date.now();
-    if (wait <= 0) {
-      void probeBrain();
-      return;
-    }
-    owedRecheck = setTimeout(() => {
-      owedRecheck = undefined;
-      void probeBrain();
-    }, wait);
-    owedRecheck.unref?.();
-  };
-
-  /** The first page contact (B1): start the probe, and give a fast answer the chance to ride this read. */
   const firstContact = async (): Promise<void> => {
-    const started = probeBrain();
-    if (started === undefined) return;
     await Promise.race([
-      started,
+      brains.probe(),
       new Promise<void>((resolve) => {
         setTimeout(resolve, FIRST_CONTACT_WAIT_MS).unref?.();
       }),
     ]);
   };
+
+  // Every probe round — the first contact's and each re-check's — ends by telling the open
+  // pages what the brains can do now.
+  const unsubscribeBrains = brains.subscribe(() => {
+    if (state.role === 'primary') state.server.emitStatus();
+  });
 
   /** Bind the control socket. A path already there is either a live runner's (refuse) or litter (replace). */
   const listenControl = async (control: ControlSocket): Promise<{ code: RefusalCode; detail?: string } | undefined> => {
@@ -674,17 +609,14 @@ export function createRunner(options: RunnerOptions): Runner {
         page: options.page,
         proxy: options.proxy ?? createFetchProxy({ send: nodeHttpsSend }),
         store: createUserFileStore(home),
-        brainState: () => brainReadiness,
+        brains,
         onFirstContact: firstContact,
-        onBrainRecheck: recheckBrain,
+        // A think just failed, or the demo brain is answering in a real brain's place (D4).
+        // The floor is the registry's: asked in a loop, it is still one round per floor.
+        onBrainRecheck: () => brains.recheck(),
         oauthRedirect: () => boundFixedPort,
         onHandInOutcome: (report) => awaitingOutcome.get(report.id)?.(report),
         ...(options.heldBy !== undefined ? { heldBy: options.heldBy } : {}),
-        // The user's OWN CLI, on their own subscription (D5). Absent binary → the route
-        // answers a named refusal and the page falls back to the demo brain.
-        brain: (brain ??= options.brain ?? createClaudeBrain({ cwd: brainDir })),
-        // The chip's model list, re-read per `/status` (a page reload after a CLI update sees it).
-        models: modelsFor,
       });
 
       // The fixed port first; an ephemeral fallback keeps the runner usable, and the page
@@ -752,7 +684,8 @@ export function createRunner(options: RunnerOptions): Runner {
   const bringUp = async (): Promise<void> => {
     try {
       try {
-        ensureDirectory(brainDir);
+        // The lock, the control socket and each brain's own working directory live here.
+        ensureDirectory(hostDir);
       } catch (error) {
         degrade('home-unwritable', { detail: errnoOf(error) });
         return;
@@ -887,16 +820,16 @@ export function createRunner(options: RunnerOptions): Runner {
     async stop() {
       stopped = true;
       clearGrace();
-      if (owedRecheck !== undefined) clearTimeout(owedRecheck);
-      owedRecheck = undefined;
+      unsubscribeBrains();
       await pending;
       const current = state;
       state = { role: 'idle' };
       if (current.role === 'attached') current.leave();
       if (current.role !== 'primary') return;
-      // EVERY SPAWN OWES A REAP (lessons 2026-08-18/19): the pre-warmed children go first,
-      // before the listener that could hand out another.
-      brain?.stop?.();
+      // EVERY SPAWN OWES A REAP (lessons 2026-08-18/19): every brain's children go first,
+      // before the listener that could hand out another — and the registry owes no further
+      // probe once it is stopped.
+      brains.stop();
       current.server.emit('shutdown', {});
       // THE ORDER IS THE POINT (L4). Writes already in flight land BEFORE the lock goes —
       // a successor that took the lock mid-write would be a second writer on the user file.

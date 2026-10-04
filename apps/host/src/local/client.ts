@@ -61,43 +61,113 @@ export interface LocalClient {
   stopped: { get(): boolean; subscribe(listener: () => void): () => void };
 }
 
+/** One model a brain will take, with the thinking levels THAT model has, in the brain's own words. */
+export interface BrainWireModel {
+  id: string;
+  name: string;
+  /** Empty = this model has no thinking axis. */
+  efforts: readonly string[];
+}
+
+/**
+ * One brain the runner knows about, as it reports it (ADR-0071 §1, §6): the user's own
+ * `claude` CLI, their Codex CLI, whatever a later driver adds.
+ */
+export interface BrainWire {
+  /** The driver's id (`claude`, `codex`). Compared, never displayed. */
+  id: string;
+  name: string;
+  /** Whose it is, in words (`your Claude Code CLI`). */
+  via: string;
+  /**
+   * `ready | logged-out | outdated | absent | unknown` today. Kept as the string it is: a
+   * later driver may add a state, and the chip renders one it does not know as unknown.
+   */
+  state: string;
+  /** One sentence a person can act on. Present whenever the state is not `ready`. */
+  detail?: string;
+  /** Whether its tool-free posture was proven on a real, logged-in run. Unverified = pin only, never `auto`. */
+  verified: boolean;
+  /** Whether an answer arrives as it is written, or whole at the end. */
+  streaming: boolean;
+  /** The levels on offer while no model is chosen (the brain's default model's). */
+  efforts: readonly string[];
+  /** Empty = no catalogue could be read; the chip keeps free text as the whole model control. */
+  models: readonly BrainWireModel[];
+  /** The largest system prompt this brain can be handed, in UTF-8 bytes, where it has a limit. */
+  maxPromptBytes?: number;
+}
+
 export interface LocalStatus {
   binding: string;
   port: number;
   pages: number;
   heldBy?: string;
   /**
-   * What the user's own `claude` CLI can do, probed by the process at the first page
-   * contact (D-B35). ABSENT until the probe answers — the page must read that as "not
-   * known yet" rather than as a claim either way.
-   */
-  brain?: { state: string; detail?: string };
-  /**
-   * The models the chip may offer, read by the process from the CLI's own catalogue
-   * (TASK-20260922 S9). ABSENT or EMPTY means no list could be read — the chip keeps free
-   * text as its only rung rather than rendering an empty dropdown.
-   */
-  models?: readonly { id: string; name: string; effort: boolean }[];
-  /**
    * Whether an OAuth redirect can come back to this runner: false when the port a user
    * registers with a provider was taken and the runner fell back to another (ADR-0068
    * D-B13). The process always says; absent (an older wire) reads as available.
    */
   oauthRedirect?: boolean;
+  /**
+   * The brain a think sent NOW would run on under the default choice, `auto` (ADR-0071 §4).
+   * ABSENT = none is ready — including "the runner has not asked its brains yet", which is
+   * not a claim that one works.
+   */
+  active?: string;
+  /** Every brain the runner knows, ready or not. EMPTY until its first probe has answered. */
+  brains: readonly BrainWire[];
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 
-function brainOf(value: unknown): LocalStatus['brain'] {
-  if (!isRecord(value) || typeof value.state !== 'string') return undefined;
-  return { state: value.state, ...(typeof value.detail === 'string' ? { detail: value.detail } : {}) };
+const stringsOf = (value: unknown): readonly string[] | undefined =>
+  Array.isArray(value) && value.every((item): item is string => typeof item === 'string') ? value : undefined;
+
+function modelOf(value: unknown): BrainWireModel | undefined {
+  if (!isRecord(value) || typeof value.id !== 'string' || value.id === '' || typeof value.name !== 'string') return undefined;
+  const efforts = stringsOf(value.efforts);
+  return efforts === undefined ? undefined : { id: value.id, name: value.name, efforts };
 }
 
-function modelsOf(value: unknown): LocalStatus['models'] {
-  if (!Array.isArray(value)) return undefined;
-  const models = value.filter((model): model is { id: string; name: string; effort: boolean } => isRecord(model) && typeof model.id === 'string' && typeof model.name === 'string' && typeof model.effort === 'boolean');
-  return models.length === value.length ? models.map(({ id, name, effort }) => ({ id, name, effort })) : undefined;
+/**
+ * One brain entry, or `undefined` for anything that is not one. Nothing is defaulted: an
+ * entry with no `verified` is not read as verified, nor as unverified — it is not read.
+ */
+function brainOf(value: unknown): BrainWire | undefined {
+  if (!isRecord(value)) return undefined;
+  const { id, name, via, state, detail, verified, streaming, maxPromptBytes } = value;
+  if (typeof id !== 'string' || id === '' || typeof name !== 'string' || typeof via !== 'string' || typeof state !== 'string') return undefined;
+  if (typeof verified !== 'boolean' || typeof streaming !== 'boolean') return undefined;
+  const efforts = stringsOf(value.efforts);
+  if (efforts === undefined || !Array.isArray(value.models)) return undefined;
+  const models: BrainWireModel[] = [];
+  for (const entry of value.models) {
+    const model = modelOf(entry);
+    if (model === undefined) return undefined;
+    models.push(model);
+  }
+  return {
+    id,
+    name,
+    via,
+    state,
+    ...(typeof detail === 'string' ? { detail } : {}),
+    verified,
+    streaming,
+    efforts,
+    models,
+    ...(typeof maxPromptBytes === 'number' && Number.isFinite(maxPromptBytes) && maxPromptBytes > 0 ? { maxPromptBytes } : {}),
+  };
 }
+
+/** The brains of a status: each entry that is one, in the runner's order (its default brain first). */
+function brainsOf(value: unknown): readonly BrainWire[] {
+  if (!Array.isArray(value)) return [];
+  return value.map(brainOf).filter((brain): brain is BrainWire => brain !== undefined);
+}
+
+const activeOf = (value: unknown): { active?: string } => (typeof value === 'string' && value !== '' ? { active: value } : {});
 
 /**
  * The runner's `/status`, parsed — never cast (the wire is pinned by ONE fixture, read here
@@ -108,25 +178,25 @@ function modelsOf(value: unknown): LocalStatus['models'] {
  */
 export function parseLocalStatus(value: unknown): LocalStatus | undefined {
   if (!isRecord(value) || value.binding !== 'local-host' || typeof value.port !== 'number' || typeof value.pages !== 'number') return undefined;
-  const brain = brainOf(value.brain);
-  const models = modelsOf(value.models);
   return {
     binding: value.binding,
     port: value.port,
     pages: value.pages,
     ...(typeof value.heldBy === 'string' ? { heldBy: value.heldBy } : {}),
-    ...(brain !== undefined ? { brain } : {}),
-    ...(models !== undefined ? { models } : {}),
     ...(typeof value.oauthRedirect === 'boolean' ? { oauthRedirect: value.oauthRedirect } : {}),
+    ...activeOf(value.active),
+    brains: brainsOf(value.brains),
   };
 }
 
-/** What a `status` event carries: the same two seats `/status` does, late. */
-export function parseStatusEvent(value: unknown): Pick<LocalStatus, 'brain' | 'models'> {
-  if (!isRecord(value)) return {};
-  const brain = brainOf(value.brain);
-  const models = modelsOf(value.models);
-  return { ...(brain !== undefined ? { brain } : {}), ...(models !== undefined ? { models } : {}) };
+/**
+ * What a `status` event carries: the same brains `/status` does, late. `undefined` for a
+ * frame with no brains list — that is not a status, and applying it would read as "no brain
+ * is ready" and put the demo brain in front of a user whose agent is fine.
+ */
+export function parseStatusEvent(value: unknown): Pick<LocalStatus, 'active' | 'brains'> | undefined {
+  if (!isRecord(value) || !Array.isArray(value.brains)) return undefined;
+  return { ...activeOf(value.active), brains: brainsOf(value.brains) };
 }
 
 /**
