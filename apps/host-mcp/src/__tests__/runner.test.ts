@@ -40,7 +40,12 @@ const make = (over: Partial<Parameters<typeof createRunner>[0]> = {}): Runner =>
     page: () => '<!doctype html><title>kit</title>',
     openBrowser: async () => {},
     // Port 0: the fixed 43127 belongs to a developer's own running Snug, and a test that
-    // fights it for the port is a test that fails for the wrong reason.
+    // fights it for the port is a test that fails for the wrong reason. Said here and, until
+    // 2026-10-04, not DONE: the default list is [43127, 0], so on a CI runner where 43127 is
+    // free every runner in this file took it in turn, and `fetch`'s pooled keep-alive socket
+    // to the PREVIOUS runner was reused — "other side closed" on ubuntu only (PR #185; a
+    // shared fixed port reproduced it here, 8 tests). A test that needs a port names it.
+    ports: [0],
     lockDeps: { commandLineOf: () => 'node /x/snug-mcp.mjs' },
     ...over,
   });
@@ -1216,7 +1221,7 @@ describe('stop (L4)', () => {
     // Stopping closes the very socket the answer travels on. Ten rounds, because the
     // failure this guards against is an ordering one.
     for (let round = 0; round < 10; round += 1) {
-      const runner = createRunner({ home, brains: noBrains(), page: () => 'kit', openBrowser: async () => {} });
+      const runner = createRunner({ home, brains: noBrains(), page: () => 'kit', openBrowser: async () => {}, ports: [0] });
       await runner.start();
       expect(await controlCall(socketOf(), { op: 'stop' }), `round ${round}`).toEqual({ ok: true, op: 'stop', pid: process.pid });
       await vi.waitFor(() => expect(readLock(hostDir())).toBeUndefined());
