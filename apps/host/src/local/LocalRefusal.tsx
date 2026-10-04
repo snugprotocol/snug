@@ -17,7 +17,8 @@ export interface LocalRefusalProps {
 const COPY: Record<LocalRefusalProps['kind'], { title: string; body: string }> = {
   'no-token': {
     title: 'Open Snug from your agent',
-    body: 'This page needs a fresh address from the Snug runner. Ask your agent to open Snug, or run `snug-mcp open` in a terminal.',
+    // Only the agent route: the human CLI lives at a plugin path this page cannot know.
+    body: 'This page needs a fresh address from the Snug runner. Ask your agent to open Snug — it hands this page a new key.',
   },
   held: {
     title: 'Snug for Mac has your file',

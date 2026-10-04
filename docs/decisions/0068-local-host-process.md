@@ -1,6 +1,6 @@
 # 0068 — Binding B is a plugin-bundled local process: the desktop's native side, in Node, on loopback
 
-- **Status:** accepted (the owner approved the plan on 2026-09-07 with the recommended defaults for Q1–Q5; amended in the same session by the plan review's six blocking findings, folded as D-B13–D-B33 in the task file). Amends ADR-0065 §2 B. **Amended by [ADR-0069](0069-bindings-and-brains-two-axes.md)** (2026-09-13: bindings and brains as two axes; the `local-host` naming; the warm child; the five readiness states and the binary resolution).
+- **Status:** accepted (the owner approved the plan on 2026-09-07 with the recommended defaults for Q1–Q5; amended in the same session by the plan review's six blocking findings, folded as D-B13–D-B33 in the task file). Amends ADR-0065 §2 B. **Amended by [ADR-0069](0069-bindings-and-brains-two-axes.md)** (2026-09-13: bindings and brains as two axes; the `local-host` naming; the warm child; the five readiness states and the binary resolution). **Amended by [ADR-0071](0071-the-brain-registry.md) and [ADR-0072](0072-one-kit-every-binding.md)** (2026-10-04, TASK-20261003-host-bindings-complete: D-B1's second build of the kit is withdrawn — the process serves the one kit page; §2's "the control socket carries no bearer" was not true and is corrected; §3's lock and attach are made precise; §5's shim is one driver of a registry — see the amendment at the end).
 - **Date:** 2026-09-07
 - **Task:** TASK-20260907-binding-b-plugin-host (re-scopes T3 of TASK-20260904-skill-only-snug)
 - **Amended 2026-09-08** (same task, append-only per `docs/conventions.md`): (a) point 1 says
@@ -48,3 +48,44 @@ ADR-0065 §2 B delivers the local host as `scripts/snug-host.mjs` — a script t
 - Positive: connected apps on the skill-only path with zero by-hand setup; one process serves every session; the desktop's transport posture (redirects, OAuth port, file atomicity) reused rather than re-derived; the kit twins stay honest (the artifact kit is untouched, gate and all).
 - Negative / residuals: a loopback TCP listener is reachable by any local process (the bearer and the same-origin proof bound browsers, not same-user processes — the standard desktop trust boundary); the holder signal is a process-table check until a shared marker exists; the `claude -p` argv is `ps`-visible (as the desktop's authorize URL is); 41420 squatting is availability-only, as on desktop; DNS rebinding is not claimed defended (as on desktop); the `instructions` string is byte-compared by `check-host-mcp` until T6's `check-skill-sync` owns it; Codex needs an absolute path until `@snugprotocol/host-mcp` is published (an owner act).
 - Docs owed: ADR-0065 §2 B amendment; `threat-model-delta-local-host-process.md` + ledger; architecture/code-map/glossary; the program record's T3 row and D12 table.
+
+### Amendment (2026-10-04, TASK-20261003-host-bindings-complete — ADR-0071, ADR-0072)
+
+- **D-B1 / §1 — the second build is withdrawn (ADR-0072 §1).** `apps/host` has one Vite config,
+  one html entry and one output, `snug-host.html`; `vite.local.config.ts`, `local.html`,
+  `dist-local/` and `snug-host-local.html` are gone. The process finds the page through one
+  locator, `apps/host-mcp/src/page.ts` — in the plugin it is the skill's own
+  `skills/snug/assets/snug-host.html`, the same file the artifact route publishes — and the
+  binding is decided by the page at runtime: only at the literal origin `http://127.0.0.1:<port>`
+  does it ask its own origin for `/status` and become `local-host`. The page is pinned: the
+  plugin build writes `snug-host.html.sha256` beside it, the release entry reads the page once
+  at boot and serves only bytes that hash to the pin, and a mismatch is the `page-damaged`
+  refusal with no lock taken and no listener opened (D8 of the task).
+- **§2 — the control socket carried the bearer; now exactly one op does.** The plan review of
+  2026-10-03 found that the `open` op answered the tokened launch URL, so "the control plane …
+  carries no bearer" was false. Now `open` makes the primary open the browser and answers
+  `{ port }` only; `launch-url` is the one op that answers the bearer, and only the human CLI
+  asks for it (`snug open --print`), printing it only when stdout is a terminal — otherwise the
+  tokenless address and "run this in your own terminal". A token canary runs over every other
+  op's answers, error answers included (`apps/host-mcp/src/control-socket.ts`, `cli.ts`,
+  `runner.ts`). `snug_open` answers `Snug is open at http://127.0.0.1:<port>/`, never the
+  fragment. The control socket's row in the local-host threat-model delta describes the same
+  surface and is corrected with that delta, not here.
+- **§3 — the lock and attach, made precise.** A second process asks the socket the lock records
+  FIRST: a `tokenHash` match attaches with no command-line read. Presence is one held `attach`
+  connection per attached session; the primary exits, after the grace, only when its own
+  session is gone and no attached session remains; an attached session whose primary went away
+  promotes itself on its next tool call and tells the agent to call `snug_open` again. A live pid
+  is identified by its script argv token against a list of bundle basenames
+  (`apps/host-mcp/src/identity.ts`: `snug-mcp.mjs`, `snug-mcp.test.mjs`, `snug-local-host.mjs`),
+  never a substring; one of ours is signalled only after three failed socket probes over five
+  seconds and an unanswered port, then waited for; a stranger is never signalled; only
+  `<hostDir>/ctl.sock` is ever unlinked. A runner that can neither lead nor attach still answers
+  the MCP handshake and returns one row of a nine-row refusal table, with a remedy
+  (`apps/host-mcp/src/refusals.ts`). The human CLI is `snug status | open [--print] | stop
+  [--force]`; `stop` refuses while pages are open unless forced.
+- **§5 and D-B35 — the shim is one driver; the probe is lazy.** The `claude -p` shim is the
+  `claude` driver of the brain registry (`apps/host-mcp/src/brains/`, ADR-0071), behaviour-
+  identical (the frozen argv, the pool key, the env allowlist). The registry is injected into
+  the runner and probes on the first page contact, never at process start, and again when a page
+  asks — at most once per 30 s (`BRAIN_PROBE_FLOOR_MS`).

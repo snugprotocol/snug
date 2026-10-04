@@ -1,6 +1,6 @@
 # 0066 — Tool-free brains carry the authoring knowledge in the prompt: one `knowledge` seat, three deliveries
 
-- **Status:** accepted (the owner confirmed all seven interview points on 2026-09-06)
+- **Status:** accepted (the owner confirmed all seven interview points on 2026-09-06) — **amended 2026-10-04** (TASK-20261003-host-bindings-complete; [ADR-0071](0071-the-brain-registry.md), [ADR-0072](0072-one-kit-every-binding.md)): A8's chat-brain item is closed by that brain's removal, and decision 1's "never changes mid-session" does not hold on Binding B — see the amendment at the end
 - **Date:** 2026-09-06
 - **Task:** TASK-20260906-tool-free-kb-inlining (child of TASK-20260905-binding-a-artifacts / TASK-20260904-skill-only-snug)
 
@@ -43,3 +43,25 @@ Inlining the whole KB is not an option: rendered, it is 78,019 bytes against `sa
 - The webllm arm is now honest but still unaided; the `'none'` layer is the floor, and raising its window (context_window_size override, VRAM cost) is the only way to give it AC1.
 - Follow-up recorded in next-steps: under Binding A the post-turn connection recovery inferrer (`finalizeConnectionDeclaration`) can still fire on a build whose html merely defines `useConnectedFetch`, a paid viewer call for a connection that cannot exist there — the 35 layer now forbids the section outright (A4), and the pipeline-side skip is its own item.
 - **Lesson (docs/lessons.md 2026-09-06):** "which adapter" and "what did the prompt actually say" are different questions; a prompt assembled for a tool-free brain needs a test that reads it — both slots — as the model would.
+
+### Amendment (2026-10-04, TASK-20261003-host-bindings-complete — ADR-0071, ADR-0072)
+
+- **A8's chat-brain item is closed, not fixed.** The brain it named — `window.claude.complete`,
+  pinned `tools: false` with no cap — was removed with the September chat runtime it served,
+  which the owner measured gone on 2026-10-03 (a chat artifact is the hosted runtime, with
+  `sample`). A page that meets only `complete` gets the demo brain. ADR-0072 §5's budgeted chat
+  brain, which was to have amended this ADR, was withdrawn before it was built.
+- **`sample`'s cap moved.** Under contract 0.2.67 `limits().maxPromptBytes` answered 262,144
+  bytes (measured 2026-10-03; 262,145 was refused as `prompt_too_large`). The kit reads the live
+  number at boot and keeps 65,536 only as the fallback for a `limits()` that rejects
+  (`DEFAULT_MAX_PROMPT_BYTES`, `apps/host/src/brains/prompt.ts`). A1's rule is unchanged: a
+  declared cap below `HOST_BUILDER_SYSTEM_MAX_BYTES + HOST_BUILDER_RESERVED_MIN_BYTES` gets
+  `'none'`.
+- **Decision 1's "a brain's delivery never changes mid-session" holds per brain, not per session,
+  on Binding B.** There the brain that answers is resolved per think: the demo brain stands in
+  while no brain is ready, and the user can pin another of their agents (ADR-0071 §4). The
+  builder follows the brain through `brainRevision` (`apps/playground/src/platform/signals.ts`),
+  and `platform.brain` is a getter whose `maxPromptBytes` is the answering brain's
+  (`apps/host/src/local/compose-local.ts`), so the delivery follows the brain that will answer
+  the next build turn — the host arm (`tools: false`) gets `'inline'`, the demo brain `'tool'`.
+  One brain's delivery still never changes mid-session, so ADR-0012's discipline holds per brain.

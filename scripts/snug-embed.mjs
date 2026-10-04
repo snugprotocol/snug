@@ -16,10 +16,9 @@
 // skill, beside `assets/snug-host.html` — the kit page a first artifact starts from, and,
 // since the plugin carries that page once, the very file the local runner serves. Writing in
 // place is this script's default, so pointed at that file it would have rewritten it — and
-// nothing downstream would have caught it: the runner checks the page against a `.sha256`
-// pin only where one sits beside it (`apps/host-mcp` `page.ts`), and the plugin build does
-// not write one yet (D8, owed), so the rewritten page would simply be served, embedded apps
-// and all, to every later session. It refuses to write anywhere under its own skill's
+// the only downstream catch is too late: the plugin build writes a `.sha256` pin beside the
+// page (D8) and the runner refuses a mismatch as `page-damaged` (`apps/host-mcp` `page.ts`),
+// so a page rewritten in place would stop every later session's runner instead of serving it. It refuses to write anywhere under its own skill's
 // `assets/`, and an input that lives there needs `--out`.
 //
 // Merges `snug-app-bundle/1` documents into the page by lineage (replace the same lineage,

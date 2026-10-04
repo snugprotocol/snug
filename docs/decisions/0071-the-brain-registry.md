@@ -1,6 +1,6 @@
 # 0071 — The brain registry: any agent the user already has may answer, and none of them may act
 
-- **Status:** accepted (owner-delegated, 2026-10-03: the task's ask was "make your own decisions"; Q2 and Q3 of the task file are the defaults taken here, each reversible by one word). **Scope set by the owner the same day: the registry, the rule and the `codex` driver ship now; the `ollama`, `hermes` and `openclaw` drivers and the Hermes walk (S5) are deferred** ("skip … for now") — what was learned about them is recorded here so it is not re-derived.
+- **Status:** accepted (owner-delegated, 2026-10-03: the task's ask was "make your own decisions"; Q2 and Q3 of the task file are the defaults taken here, each reversible by one word). **Scope set by the owner the same day: the registry, the rule and the `codex` driver ship now; the `ollama`, `hermes` and `openclaw` drivers and the Hermes walk (S5) are deferred** ("skip … for now") — what was learned about them is recorded here so it is not re-derived. **Built 2026-10-04** on `feat/TASK-20261003-host-bindings-complete`: the registry, the `claude` driver and the `codex` driver, with Codex UNVERIFIED (pin-only, never `auto`) until the owner's logged-in walk is journaled — see "What shipped" at the end.
 - **Date:** 2026-10-03
 - **Task:** TASK-20261003-host-bindings-complete
 - **Amends:** ADR-0069 §1 and §5 (the brain axis gains a contract and its second member) · ADR-0070 (the model/effort choice becomes per brain) · ADR-0065 §4 / D15 (narrowly: a pin among brains the machine already has) · ADR-0068 §5 (the shim is one driver of several)
@@ -62,3 +62,40 @@ That is the decision's centre. An app's think is **untrusted input**: apps are L
 - Positive: a Cowork user with no Claude CLI but with Codex has a brain; one vocabulary for readiness; the next brain is a file, not a rewrite; the sandbox boundary does not depend on which agent the user owns.
 - Negative / residuals: Codex answers arrive whole, not streamed, and every think is a cold process; its posture and its system slot are verified against a logged-in CLI only by the opt-in live test until the owner walks it; the developer instruction rides argv (`ps`-visible, as Claude's system prompt is — R-43's residual, restated); Ollama, Hermes and OpenClaw users still have no brain of their own.
 - Docs owed (this task): the threat-model delta (the brain as a principal; the tripwire), architecture, code-map, glossary ("brain driver", "host hint"), the program record's T3 row (Codex done; three deferred), ADR-0069/0070 status lines, a next-steps entry carrying the three deferred drivers with this ADR's rule.
+
+## Amendment (2026-10-04, TASK-20261003-host-bindings-complete) — what shipped
+
+- **The contract and the registry.** `apps/host-mcp/src/brains/brain.ts` (`BrainDriver`, the
+  child-env allowlist, the argv limit), `registry.ts` (injected into the runner by both entries;
+  lazy — the first page contact, then on request, at most once per `BRAIN_PROBE_FLOOR_MS` =
+  30 s; `stop()` reaps every brain it made). `machineDrivers` is the one place the real machine is
+  read, with one whole-environment read, which `check-host-mcp` counts.
+- **Selection, as §4 says and no wider.** `auto` resolves to `claude` only, and only when it is
+  ready and verified; otherwise no brain answers and the page's demo brain does, with the remedy.
+  A pinned brain that is not ready is the same "none", never another brain. An unverified brain
+  answers only an explicit pin (`resolve` refuses it under `auto`). In the chip a brain that is
+  not ready cannot be picked.
+- **`claude`** — `brains/claude.ts`, `claude-child.ts`, `claude-catalog.ts`: the pre-registry
+  shim moved, its argv literal, pool key and allowlist pinned unchanged.
+- **`codex`** — `brains/codex.ts`, `codex-events.ts`: readiness from `codex login status` (ready
+  only on the ChatGPT login line); the catalogue from `codex debug models --bundled`; one think =
+  one child, spawned detached with the posture argv, the system prompt as one
+  `-c developer_instructions=<TOML basic string>`, the conversation on stdin; the allowlist
+  tripwire (`agent_message`, `reasoning` dropped; `error` a named failure; anything else kills the
+  process group and fails the think); the answer buffered until `turn.completed`; failures as
+  fixed sentences. Fixtures under `apps/host-mcp/src/__tests__/fixtures/codex/` are recorded from
+  the real CLI 0.160.0 logged out, and the success stream is transcribed — `PROVENANCE.md` there
+  says which is which. **`CODEX_VERIFIED_VERSIONS` is empty**, so the chip lists Codex as
+  "experimental — not yet verified on this machine". The owner's walk is printed in the header of
+  `apps/host-mcp/src/__tests__/brain-live.test.ts` (`SNUG_LIVE_BRAIN=codex`) and in
+  [the owner's walks](../runbooks/owner-walks-host-bindings.md), track C; a version goes into the
+  list only after that walk is journaled for it.
+- **The wire.** `/status` and the `status` event carry `brains[]` and `active`
+  (`apps/host-mcp/src/__tests__/fixtures/status-wire.json`, read by the process's and the page's
+  tests); the chat body takes `brain` and per-brain `prefs`; the answer names its brain in
+  `x-snug-brain`; a think no brain can take is a 503 `no-brain`, and the page's demo brain
+  answers.
+- **Deferred:** `ollama`, `hermes`, `openclaw` and the Hermes walk (S5) — queued in
+  `docs/next-steps.md` (2026-10-04) with §2's rule each must meet.
+- **The decisions index's summary of `auto`** ("the spawning host's brain, else the first ready
+  one") was the pre-review wording; §4 and the code are as above.

@@ -148,6 +148,17 @@ describe('the Snug skill picks the runner by SURFACE (R5: C5, D6)', () => {
     }
   });
 
+  // The launch protocol said "`snug_list_apps` tells you what the user already has" while the
+  // tool answers an empty list with a note (runner.ts) — an agent trusting it would see no apps
+  // and install a second copy (TASK-20261003 Phase 4 verifier). Tied to the tool's own answer.
+  it('describes `snug_list_apps` as it answers — an empty list today, so the agent asks the user', () => {
+    const runner = readFileSync(path.join(repoRoot, 'apps', 'host-mcp', 'src', 'runner.ts'), 'utf8');
+    const instructions = said(readFileSync(path.join(repoRoot, 'apps', 'host-mcp', 'src', 'instructions.md'), 'utf8'));
+    expect(runner, 'the tool still answers no apps — when it lists them, rewrite this test and the sentence').toContain('apps: [], note:');
+    expect(instructions).not.toMatch(/snug_list_apps` tells you what the user already has/);
+    expect(instructions).toMatch(/`snug_list_apps` does not list the user’s apps yet/);
+  });
+
   it('describes where the apps run truthfully on every surface it routes — chat included', () => {
     const never = said(skillSource()).split('## Never')[1] ?? '';
     expect(never).toMatch(/Say: Snug apps run inside Claude Code, Cowork, or an artifact in chat\./);

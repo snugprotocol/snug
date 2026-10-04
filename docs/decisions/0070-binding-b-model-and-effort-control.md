@@ -1,6 +1,6 @@
 # 0070 — The model and the thinking level on Binding B are the user's, per machine
 
-- **Status:** accepted (the owner answered Q2 and Q3 and approved the plan on 2026-09-22; Q1, Q4 and Q5 followed the recommendations, Q1's rewritten after a spike)
+- **Status:** accepted (the owner answered Q2 and Q3 and approved the plan on 2026-09-22; Q1, Q4 and Q5 followed the recommendations, Q1's rewritten after a spike) — **amended by [ADR-0071](0071-the-brain-registry.md)** (2026-10-04, TASK-20261003-host-bindings-complete: the choice is per brain, and the chip is the brain switcher — see the amendment at the end)
 - **Date:** 2026-09-22
 - **Task:** TASK-20260922-binding-b-model-and-thinking-control
 - **Relates to:** **ADR-0067** (the same question answered for Binding A — this is its sibling, not its extension) · ADR-0069 §5 (the child pool, the posture) · ADR-0068 (D5, the child env allowlist) · ADR-0059 (the chip is disclosure) · **ADR-0036 D1** (the per-app selector rejected the user file for the same reason, on the other binding). No existing ADR is amended: ADR-0067 already amended D15 to make the thinking level the user's, and this applies that settled principle to the second binding.
@@ -63,3 +63,28 @@ The child is spawned `--tools '' --disallowedTools '*' --max-turns 1 --no-sessio
 - **Effort follows the catalogue's per-model thinking axis**: a model without one (Haiku 4.5) gets no effort control and no `--effort`.
 - **The brain adapter reaches its own runner with the page's own `fetch`, never through `client.fetchImpl`.** That seam is the connected-apps network proxy, which refuses loopback by design; routing the brain through it broke every think on this binding (S5 → S10). The resolved model comes from the adapter's own result, not from re-reading the response.
 - **Pre-merge review (2026-10-03).** The pool key hashes the JSON tuple `[system, model, effort]` rather than a separator-joined string (§2's NUL separator was sound only while no field could hold a NUL); a model id must match `isModelId` — leading letter or digit, no whitespace or control characters — checked at the chat route's envelope boundary (C5) and again in `buildStreamArgs`, so a dash-led value can never read as a flag regardless of the CLI's parser; the envelope's `model` is the `claude` placeholder until the CLI reports what answered, never the requested id (D2); and a think teaches the chip only while the choice is still the one it carried, so overlapping thinks cannot leave a stale model or refusal on it.
+
+## Amendment (2026-10-04, TASK-20261003-host-bindings-complete — ADR-0071)
+
+- **§5 — the choice is per machine AND per brain.** The store
+  (`apps/host/src/brains/brainChoiceStore.ts`, key `snug-host:brain-choice`) now holds a
+  versioned shape, `{ v: 2, … }`: which brain answers (`auto`, or one pinned brain) and each
+  brain's own model and thinking level. The single-brain shape this ADR stored is migrated into
+  the `claude` entry. It is still never written to the user file, so `packages/protocol` is still
+  untouched. On the wire the chat body carries `brain` and per-brain `prefs`; the top-level
+  `model`/`effort` remain as the legacy form and mean the `claude` entry; only the resolved
+  brain's entry is applied, validated by that brain's driver.
+- **§7, §8 — the chip is the brain switcher** (`SnugPlatform.brainSwitch`,
+  `apps/playground/src/views/BrainChip.tsx`), present on the runner whatever answers: `auto`
+  first, then every brain with its state, and the remedy for one that is not ready (its row stays
+  focusable but cannot be picked). The model and thinking-level controls are the ANSWERING
+  brain's, from its own catalogue and its own vocabulary; with no brain answering there are none
+  (§8's rule, kept). What answered is still what the chip names: the runner sends `x-snug-brain`
+  and the page records the answer or refusal against that brain.
+- **The catalogue module moved** to `apps/host-mcp/src/brains/claude-catalog.ts` (was
+  `model-catalog.ts`); the amendment of 2026-10-02 is otherwise unchanged.
+- **Residual, recorded not fixed (§7's rule):** after a think, choosing ANOTHER model leaves
+  "thinking on <the model that last answered>" in the dock until the next think, while the dock's
+  header names the chosen model — the line reports what answered, and comparing a chosen id with
+  a resolved one (`claude-sonnet-5-5` against a `…[1m]` suffix) is alias-fuzzy. Queued in
+  `docs/next-steps.md` (2026-10-04).

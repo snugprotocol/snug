@@ -1,6 +1,21 @@
 # Snug — Threat Model
 
-- **Version:** 3.1 · **Date:** 2026-09-04 · **Tasks:** TASK-20260820-threat-model-v1 (v1) · TASK-20260821-hardening-polish (v2) · TASK-20260821-launch-security-review (v3) · TASK-20260904-app-sharing (v3.1)
+- **Version:** 3.2 · **Date:** 2026-10-04 · **Tasks:** TASK-20260820-threat-model-v1 (v1) · TASK-20260821-hardening-polish (v2) · TASK-20260821-launch-security-review (v3) · TASK-20260904-app-sharing (v3.1) · TASK-20261003-host-bindings-complete (v3.2)
+- **What v3.2 added (2026-10-04).** The local host process the agent plugin spawns can now
+  answer an app's think on a second agent the user already has — their own `codex` CLI beside
+  their own `claude` (ADR-0071) — so the brain is treated as a principal: every driver is
+  tool-free by construction, and Codex, whose posture no logged-in run has yet shown, answers
+  only when the user pins it. One kit page now serves every binding (ADR-0072); the runner's
+  lock and control socket were rebuilt (the control socket gained `launch-url`, the one op that
+  answers the bearer); the plugin pins its page by sha256; and chat was measured to run the
+  same hosted artifact runtime as a published artifact. §5's new "local runner and its brains"
+  table and residuals R-44 to R-48 carry it, with notes added to R-11, R-40 and R-42; the delta
+  `threat-model-delta-brains-and-chat.md` is the detailed record, and
+  `threat-model-delta-local-host-process.md` was revised for the lock and socket. A targeted
+  consolidation, not a re-attack: each row was traced to the code on the task's branch, and
+  each range's guards were mutation-checked by that range's own independent verifier
+  (journaled in the task file); no fresh adversarial lane attacked this surface for this
+  version, and v3's §9 boundary still describes the last full pass.
 - **What v3.1 added (2026-09-04).** App sharing (ADR-0063/0064): third-party app code can
   now enter a hub as a shared bundle and propose connections on its own `shared` channel;
   and the hosted instance runs its first endpoint — a content-blind relay for share links.
@@ -56,7 +71,8 @@ If you are evaluating whether to rely on Snug, read §2 (what is actually protec
 
 **In scope: the reference implementation in this repository** — the protocol bindings, the
 iframe runner, the SDK, the per-app database, the connected-fetch executor, the credential
-store, the Playground, the reference server, and the macOS desktop shell.
+store, the Playground, the reference server, the macOS desktop shell, and the local host
+process an agent plugin spawns (Binding B) with the brain drivers it starts.
 
 **The shipped desktop surface is macOS only, through alpha, beta and 1.0.** This is not a
 roadmap gap; it is a security decision recorded in
@@ -73,7 +89,7 @@ personal sync origin the user connected — that is [ADR-0014](decisions/0014-cr
 custody working as designed; denial of service against the user's own browser tab or own
 self-hosted server; and third-party self-hosted infrastructure misconfiguration.
 
-**This document consolidates fourteen per-change threat-model deltas** (§8). A delta is written
+**This document consolidates fifteen per-change threat-model deltas** (§8). A delta is written
 for someone who already knows the system and is reading one change; this is written for a
 stranger deciding whether to trust the whole thing. Where a delta's residual is restated
 here it is marked as inherited, because a model that re-sells an old residual as new is as
@@ -129,7 +145,12 @@ Five boundaries. Everything security-relevant happens at one of them.
 2. **Host page ↔ provider network.** One seat: the connected-fetch executor and its ten
    gates. It is the only host-side caller that both reads a credential and calls fetch.
 3. **Host page ↔ LLM.** What reaches a model is assembled host-side; credentials never do.
-   Untrusted content that must reach it is fenced and the instruction restated after.
+   Untrusted content that must reach it is fenced and the instruction restated after. Under
+   the local host process the model is reached through the user's own agent CLI, a child of
+   that process — an agent that could run a shell or read files unless its driver makes it
+   tool-free. Every driver does, by construction of our own (§5, "The local runner and its
+   brains"); the one whose posture is not yet proven on a real login answers only when the
+   user pins it (R-45).
 4. **Webview ↔ native shell** (desktop only). The Tauri IPC bridge, which CSP does not
    govern. Capabilities are main-window-scoped and the invoke key is absent in subframes —
    *on macOS*. On Windows it is not, which is why Windows does not ship.
@@ -218,6 +239,30 @@ Credentials never enter the app iframe, never reach the LLM, never reach a publi
 | A shipped release points at the PRODUCTION update endpoint — a dev-overlay build cannot pass the release gate | `apps/desktop/gate/run-release-gate.mjs` — MUST-APPEAR byte-scan of the endpoint in the release binary | `apps/desktop/gate/run-release-gate.mjs` (run by `pnpm --filter desktop gate:release`) — **cadence caveat: this is a release-time gate, not a per-commit one** |
 | The shell's own version cannot drift between its three declarations | `apps/desktop/package.json` · `src-tauri/tauri.conf.json` · `src-tauri/Cargo.toml`, bumped together by `scripts/release-desktop.mjs` | `apps/desktop/src/__tests__/versionSync.test.ts` |
 | An update relaunch reaps the WhatsApp helper first — `AppHandle::restart()` skips `RunEvent::Exit` on the main thread | `apps/desktop/src/app-updates.ts` — explicit `sidecar_ctl('stop')` before `relaunch()` | `apps/desktop/src/__tests__/appUpdates.test.ts` — call-order spy |
+
+### The local runner and its brains (Binding B — ADR-0068, ADR-0071, ADR-0072)
+
+An app's think is untrusted input, and the brain that reads it is the user's own agent: these
+rows hold that brain to answering and nothing else, and hold the runner's bearer, lock and
+page. The detailed record is `docs/security/threat-model-delta-brains-and-chat.md`.
+
+| Invariant | Enforcement | Test |
+|---|---|---|
+| An app's think cannot make the Claude brain act — no tools, one turn, no persisted session, no project or user settings, no MCP servers, never `--bare` | `apps/host-mcp/src/brains/claude.ts` — the frozen posture literal in `buildStreamArgs` | `apps/host-mcp/src/__tests__/brain-claude.test.ts` — argv byte-identical to the literal; the posture kept whole with a model and a level chosen |
+| Codex is held tool-free by four layers of our own, not by Codex's promise: the posture argv (18 tool-shaped features disabled, web search off, user config and rules ignored, project docs off, read-only sandbox, ephemeral, a neutral `0700` directory); an ALLOWLIST tripwire (any item but `agent_message` or `reasoning` fails the think); a SIGKILL to the child's whole process group; and an answer buffered until `turn.completed`. What this does not prove is R-45 and R-46 | `apps/host-mcp/src/brains/codex.ts` (`POSTURE`, `spawnInOwnGroup`); `apps/host-mcp/src/brains/codex-events.ts` (`createCodexTurn`) | `apps/host-mcp/src/__tests__/brain-codex.test.ts` — frozen posture; known and unknown items trip; the transcribed tool turn delivers nothing; nothing reaches the page before `turn.completed`; a real child that ignores SIGTERM and its grandchild are both dead when the think settles |
+| An app's instructions cannot leave the one TOML string Codex parses, and a chosen model or level can never read as a flag | `apps/host-mcp/src/brains/codex.ts` (`tomlBasicString`, `buildCodexArgs`); `apps/host-mcp/src/brains/brain.ts` (`isModelId`); `apps/host-mcp/src/loopback-server.ts` (`parseChatBody`) — only the resolved brain's entry is applied, judged by its own driver | `apps/host-mcp/src/__tests__/brain-codex.test.ts` — quote, backslash, newline, triple quote, U+007F, a lone surrogate, a line written to set the sandbox; `apps/host-mcp/src/__tests__/loopback-server.test.ts` |
+| No brain's child receives the parent environment: one whole-environment read, one allowlist shared by every driver, no API-key or agent-session variable; Codex is `ready` only on its ChatGPT login, never on a key | `apps/host-mcp/src/brains/registry.ts` (`machineDrivers`); `apps/host-mcp/src/brains/brain.ts` (`CHILD_ENV_ALLOWLIST`); the release gate's whole-environment-read count in `scripts/check-host-mcp.mjs` | `apps/host-mcp/src/__tests__/brains/registry.test.ts` — a hostile parent (twelve `CLAUDE_*` names, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `CODEX_API_KEY`, `CODEX_ACCESS_TOKEN` and more) reaches no child of either driver; `scripts/check-host-mcp.test.mjs` |
+| A think never moves to another vendor without a user act: `auto` is the default brain when it is ready and verified, else none (the demo brain answers); a pin is that brain or none; an unverified brain answers only a pin | `apps/host-mcp/src/brains/registry.ts` (`resolve`); the page's mirror, `apps/host/src/local/compose-local.ts` (`brainFor`) | `apps/host-mcp/src/__tests__/brains/registry.test.ts` — the selection matrix; `apps/host/src/__tests__/composeLocal.test.ts` |
+| Codex stays unverified until a journaled logged-in walk: `verified` is false, `auto` never takes it, and the chip labels it experimental | `apps/host-mcp/src/brains/codex.ts` — `CODEX_VERIFIED_VERSIONS` ships empty | `apps/host-mcp/src/__tests__/brain-codex.test.ts`; `apps/playground/src/__tests__/brainChip.test.tsx` |
+| A Codex failure reaches the page as one of Snug's own fixed sentences (`CODEX_SENTENCES` plus the bound, abort, cap and stopping sentences) — never the CLI's own text or its stderr (Claude's own text does pass: R-44) | `apps/host-mcp/src/brains/codex-events.ts` (`CODEX_SENTENCES`) | `apps/host-mcp/src/__tests__/brain-codex.test.ts` — the recorded logged-out run yields none of its bytes |
+| The one kit page tries the runner path — claiming a launch token and asking `/status` — ONLY at the literal origin `http://127.0.0.1`, and under the runner reads no embedded bundle or `snug-db` block | `apps/host/src/boot.tsx` (`isRunnerOrigin`, `askRunner`, `planBoot`) | `apps/host/src/__tests__/boot.test.tsx` — `localhost`, `[::1]`, `0.0.0.0`, another `127.x`, LAN, `https:` and `file:` neither fetch nor claim |
+| A plugin install whose page does not match its pinned sha256 refuses (`page-damaged`) and binds nothing — no lock, socket or listener. It catches a partial copy, not a same-user writer (R-40) | `apps/host-mcp/src/page.ts` (`locatePage`); `apps/host-mcp/src/process.ts` | `apps/host-mcp/src/__tests__/page.test.ts`; `apps/host-mcp/src/__tests__/lifecycle-interop.test.ts`; `scripts/check-host-mcp.test.mjs` — the gate's damaged-page leg |
+| The bearer leaves the process only to the page and through the control socket's `launch-url`, which the human CLI asks only when its stdout is a terminal | `apps/host-mcp/src/runner.ts` (`handleControl`); `apps/host-mcp/src/cli.ts` | `apps/host-mcp/src/__tests__/runner.test.ts` — a token canary over every other op's answer, errors and unknown ops included; `apps/host-mcp/src/__tests__/cli.test.ts` |
+| `stop` refuses while a page is open unless forced, and a stop drains in-flight `/userdb` writes before the lock is released | `apps/host-mcp/src/runner.ts` (`stop`); `apps/host-mcp/src/process.ts` (`EXIT_DEADLINE_MS`) | `apps/host-mcp/src/__tests__/runner.test.ts`; `apps/host-mcp/src/__tests__/lifecycle-interop.test.ts` |
+| A take-over cannot kill a healthy runner or a stranger: the socket's token hash is asked first, identity is read only for a live silent pid and only by the script's basename, a runner of ours is signalled only after three probes over five seconds and a silent port, then waited for; only the canonical `ctl.sock` is ever unlinked | `apps/host-mcp/src/lock.ts`; `apps/host-mcp/src/identity.ts` | `apps/host-mcp/src/__tests__/lock.test.ts`; `apps/host-mcp/src/__tests__/identity.test.ts` |
+| A kit save publishes only the bare kit page, lifted from the measured contract-0.2.67 skeleton byte for byte or refused by name (R-47) | `scripts/lib/page-blocks.mjs` (`unwrapViewerPage`); `apps/host/src/storage/artifactHtml.ts` | `scripts/lib/page-blocks.test.mjs` — two real read-backs; `apps/host/src/__tests__/artifactHtml.test.ts` |
+| No gate or suite spawns a real agent CLI or reaches the real `~/Snug`: the runner takes no default brain registry, and the gate's launch legs run the shipped process under a temp home and abort unless its status names that home and the leg's own pid | `apps/host-mcp/src/runner.ts`; `scripts/check-host-mcp.mjs` (`runLaunchLegs`) | `apps/host-mcp/src/__tests__/runner.test.ts`; `scripts/check-host-mcp.test.mjs` |
+| The desktop-host walk — opt-in, in no gate — refuses a `SNUG_HOME` that is or is inside the user's real Snug home, and believes only its own child | `scripts/walk-desktop-host.mjs` (`walkEnv`, `whyNotMine`) | `scripts/walk-desktop-host.test.mjs` |
 
 ---
 
@@ -399,6 +444,13 @@ measured), the literal `same-origin` for `Sec-Fetch-Site`, no CORS headers, and 
 preflight-forcing shape on every route — but a same-user process needs none of that. This is
 the standard desktop trust boundary and is not improvable at the app layer. See
 `docs/security/threat-model-delta-local-host-process.md`.
+*Note 2026-10-04 (TASK-20261003 R1):* the control socket is the same boundary with no bearer in
+front of it. Any process running as this user can ask it `launch-url` (the bearer — the CLI's
+"terminal only" rule binds the CLI, not the socket), `stop` with `force: true` while pages are
+open, or `call` any of the four tools; a hand-in sent that way is re-validated in the primary,
+and a bundle carrying a connection is refused. The page pin (D8) is in the same class: it
+catches a partial or mixed install, not a same-user writer who rewrites the page and its pin
+together.
 
 **R-41 — The local host process has no capability belt beneath its own gates.**
 Snug Desktop's outbound fetch sits behind a Tauri capability scope baked in at build time, a
@@ -412,7 +464,9 @@ The bearer reaches the page in a URL fragment so it need never touch disk. The c
 it persists in browser history, is readable by an extension with tab access, and lands in
 terminal scrollback when the CLI fallback prints it. The token dies with the process, which
 bounds the exposure to one session; a token file on disk was the alternative and was judged
-worse.
+worse. *Note 2026-10-04 (TASK-20261003 R1):* the CLI now prints the launch URL only when its
+stdout is a terminal — a pipe (an agent running the command through a shell tool) gets the
+address without its fragment — so the scrollback exposure is the user's own terminal only.
 
 **R-43 — The child-CLI brain keeps up to two idle `claude` processes per user (ADR-0069).**
 Each pre-warmed child is ~257 MB of memory holding one system prompt in `ps`-visible argv and
@@ -434,6 +488,54 @@ one of five literals; both ride before the posture, which stays last and unchang
 bearer-holding caller (the page) can send either. See
 `docs/security/threat-model-delta-local-host-process.md` (the 2026-09-13 amendments, and
 ADR-0070's).
+
+**R-44 — Claude's own words reach the page and the calling agent unsanitised (a C1
+residual).** The `claude` driver forwards the CLI's text: a readiness probe's `detail` (after
+our remedy, in brackets, for `outdated` and `logged-out`; verbatim for `unknown`) and a failed
+think's message (the CLI's `is_error` result or, when it exits before answering, the last 300
+characters of its stderr). It reaches the page in the chat route's 502/503 bodies and `/status`,
+and — since TASK-20261003 — the calling agent's context through `snug_status`. Nothing scrubs it. Kept deliberately
+(ADR-0071's 2026-10-03 amendment): the CLI's words carry the remedy (`Please run /login`,
+`run 'claude update'`), and it is the user's own CLI speaking to the user's own page and agent.
+*Bounded by:* no Snug credential being in the CLI's environment (the allowlist) or argv; what
+is not bounded is whatever the CLI itself prints in an error. Codex's text, by contrast, never
+travels (§5). *Full surface:* `docs/security/threat-model-delta-brains-and-chat.md` B7.
+
+**R-45 — Codex's tool-free posture is unproven until a logged-in walk.** Measured on the real
+CLI 0.160.0 logged OUT only: a successful turn has never been observed (its fixture is
+transcribed from upstream's event definitions, and marked so), nor whether each disabled
+feature really removes its tool, nor whether the developer instruction is honoured as the
+system slot. *Bounded by:* Codex answering only an explicit pin, never `auto`, labelled
+experimental on the chip; `verified: true` needs a version listed after a journaled walk on
+that version (a Chess move; "run `id`" and "search the web for …" producing zero non-answer
+items; a canary in `$CODEX_HOME/AGENTS.md` never answered) — printed for the owner, opt-in
+for the suite (`SNUG_LIVE_BRAIN=codex`), never run by a gate.
+
+**R-46 — The tripwire withholds Codex's answer, not its act.** It fires on the first item that
+is not an answer, but it can only react to a line Codex has already written: between a tool
+item's first line and the group SIGKILL, the tool may have run — within Codex's read-only
+sandbox, which still lets a model read files and run commands — and its output may have gone
+back to Codex's model in the CLI's own next request. Nothing of it reaches the app or the page.
+Two edges of the same window: the tripwire reads only `item.*` events, so a tool a future CLI
+reported as some other top-level event would not trip it; and a Codex think in flight when the
+runner itself is SIGKILLed is not reaped by the runner (the child leads its own process group,
+and its stdin is already closed) — a clean stop does reap it. *Bounded by:* the disabled
+features (the tool should not exist at all), the kill, and R-45's pin-only rule.
+
+**R-47 — The hosted-runtime skeleton is matched byte for byte.** A kit save lifts the kit page
+out of the contract-0.2.67 skeleton only when the skeleton's 536 bytes match exactly (taken
+from two real read-backs, 2026-10-03). If the platform changes one byte of its reset, every
+save from a published or chat-created kit refuses with "export to keep a copy" until the
+constant is re-measured. It fails closed — availability, never integrity — and export is
+unaffected. The reader is a shape check, not an integrity control.
+
+**R-48 — An app's instructions ride `ps`-visible argv on both brains.** R-43's residual, now
+twice: Claude's system prompt (`--system-prompt`) and Codex's developer instruction
+(`-c developer_instructions=`) are command-line arguments; the conversation goes on stdin. No
+credential is in either. The kernel caps a command line, so each driver advertises
+`maxPromptBytes` (120,000 bytes on Linux, 900,000 on macOS) and names an `E2BIG` spawn as "too
+large"; Codex's cap counts the prompt before TOML escaping, so a quote-heavy prompt near it
+fails with that named sentence — safe, not silent.
 
 
 **R-38 — Shared docs may carry the sharer's personal data.** `memory` is off by default
@@ -602,6 +704,11 @@ engine the hosted Playground ships to (no `e2e` turbo task on the web path); and
 `apps/server`'s CSP-header assertion lives in `smoke.ts`, which CI never invokes. The
 unit-level pins (policy text, decision functions) do run everywhere; what remains
 unproven in CI is *actual webview behaviour* on the engine most users meet.
+*Note 2026-10-04 (TASK-20261003):* one more runtime rests on a measurement rather than a test.
+Inside a claude.ai chat artifact — the hosted artifact runtime, measured by the owner on
+2026-10-03 — the app frame was at origin `null`, its `fetch` raised `securitypolicyviolation`
+(one from its own `connect-src 'none'`) and reaching `parent.document` threw: C2 held. No suite
+reproduces claude.ai; re-measuring is a person running `scripts/runtime-probe.html`.
 
 **R-12 — Per-command IPC proof is a rule that does not cover every command.** The gate
 identifies commands individually, precisely so a new command inherits nothing.
@@ -752,6 +859,14 @@ amended this model in place without leaving one, which is exactly the gap this l
 exists to make visible and which the ledger could not see (a delta that never existed
 cannot fail a hash check). Its content is not new; the record is.
 
+**v3.2 note (2026-10-04).** One row added (`threat-model-delta-brains-and-chat.md`) and one
+re-hashed: `threat-model-delta-local-host-process.md` had its lock, control-socket and
+bearer-custody rows rewritten in place for TASK-20261003's R1 — they described a runner whose
+shipped build could not read a command line, whose socket answered the tokened launch address
+to any caller, and whose take-over signalled after one silent probe — with a dated amendment
+recording what changed. The blank line that had split the last ledger row into a second,
+headerless table is gone.
+
 <!-- DELTA-LEDGER:BEGIN -->
 
 | Delta | Pinned hash | Consolidated into |
@@ -769,8 +884,8 @@ cannot fail a hash check). Its content is not new; the record is.
 | `docs/security/threat-model-delta-multi-provider-byok.md` | `540490f88a1c` | §5 authoring · R-32 |
 | `docs/security/threat-model-delta-desktop-update-channel.md` | `2f6321918cce` | §5 C2 + authoring · R-28, R-29, R-30, R-33 |
 | `docs/security/threat-model-delta-app-sharing.md` | `806ca935aa18` | §4 boundary 5 · §5 C1 + C2 + authoring · R-34, R-35, R-36, R-37, R-38, R-39 |
-
-| `docs/security/threat-model-delta-local-host-process.md` | `6ebdde883763` | §6 R-40 · R-41 · R-42 · R-43 (R-43 amended for ADR-0070) |
+| `docs/security/threat-model-delta-local-host-process.md` | `733d328bec13` | §5 local runner (lock, socket, bearer) · §6 R-40 · R-41 · R-42 · R-43 (R-43 amended for ADR-0070; R-40 and R-42 noted for R1) |
+| `docs/security/threat-model-delta-brains-and-chat.md` | `8092c284d23d` | §4 boundary 3 · §5 local runner and its brains · R-11 note · R-40 note · R-44, R-45, R-46, R-47, R-48 |
 <!-- DELTA-LEDGER:END -->
 
 ---

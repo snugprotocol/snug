@@ -1,6 +1,6 @@
 # 0072 — One kit, every binding: a single page, a capability-true shelf, and the chat delivery
 
-- **Status:** accepted (owner-delegated, 2026-10-03: Q4, Q5, Q6 and Q7 of the task file are the defaults taken here, each reversible by one word)
+- **Status:** accepted (owner-delegated, 2026-10-03: Q4, Q5, Q6 and Q7 of the task file are the defaults taken here, each reversible by one word) — **amended 2026-10-04** (TASK-20261003-host-bindings-complete): §1–§4 are built and §7 stands (no `.mcpb`; the chat tab takes the artifact runner); **§5 (the chat brain, the learned cap, the measure act, `PromptBudgetSeat`) and §6 (the chat delivery: the script build, the npm layout, the bootstrap) are WITHDRAWN** — the owner's measurement of 2026-10-03 found the chat runtime is the hosted runtime — and Q6 is withdrawn with them; §2's router wording is corrected. See the amendment at the end.
 - **Date:** 2026-10-03
 - **Task:** TASK-20261003-host-bindings-complete
 - **Amends:** ADR-0068 §1 / D-B1 (the second build of the kit is withdrawn) · ADR-0065 §2 A2 (the chat delivery is built) and §3 (what a binding without connections does with a connected app) · ADR-0066 A8 (the chat brain is budgeted) · ADR-0021 D9 (the platform seam gains the availability derivation)
@@ -47,3 +47,63 @@ Measured on the real viewers (T1, 2026-09-05): a chat artifact is an `about:srcd
 - Positive: one artifact to build, gate, ship and reason about; the plugin halves; Binding B's hand-in works as Binding A's does; every "cannot run here" has a reason; the chat binding fails by name instead of hanging or cutting.
 - Negative / residuals: the artifact page now carries the local composition as live code (it always carried its bytes) — reachable only from a loopback origin whose own server answers `/status`; a connected starter can no longer be previewed where it cannot connect; the chat walk (the cap's real number, `RUNNER_CSP` inside the chat frame, storage before publish) is still a person's to do, and until the npm publish only the file route can deliver the kit in chat; ADR-0068's "the kit twins stay honest" consequence is withdrawn with the twin.
 - Docs owed (this task): architecture ("Host kit", "The local host process", the dependency graph), code-map, glossary ("availability", "host passport"), ADR-0065/0068 status lines, the threat-model delta (the one page; the chat brain's measure act), next-steps.
+
+## Amendment (2026-10-04, TASK-20261003-host-bindings-complete)
+
+**What changed the decision.** On 2026-10-03 the owner ran a probe in claude.ai (Chrome) three
+times. A chat artifact no longer runs where T1 measured it in September: it is served from a real
+`https://<id>.frame.claudeusercontent.com` origin, `window.claude` is `{ use, hot }` with no
+`complete`, there is no `window.storage`, the History API and browser storage work, and a
+chat-created artifact declared with capabilities resolves `sample`, `artifact` and `downloads`.
+Read back through the Artifact tool, a chat-created artifact is stored exactly as a tool-published
+one — the contract-0.2.67 skeleton (536 bytes through `<body>`) around the page. `sample.limits()`
+answered `{ maxPromptBytes: 262144, tools: { maxCount: 16 } }`, and the cap was confirmed
+inclusive at exactly 262,144 bytes. The nested `sandbox="allow-scripts"` frame inside a chat
+artifact is at origin `null`, its `fetch` is blocked by CSP and `parent.document` throws — C2
+holds there, measured. So the chat binding is the hosted runtime, and Binding A2 is A1's code
+path.
+
+- **§5 is WITHDRAWN.** Nothing it describes exists in the code: no `complete` adapter, no learned
+  cap, no measure act, no `PromptBudgetSeat` (added by the task's contracts commit and removed in
+  the same task). The `complete` adapter (`brains/complete.ts`), the `window-storage` backend
+  (`storage/windowStorage.ts`) and the `artifact-chat` binding were deleted; the bindings are
+  `artifact`, `artifact-static`, `local-host` and `file` (`apps/host/src/probe.ts`). A page that
+  meets only `window.claude.complete` is composed like any page with no host brain, and the demo
+  brain answers. `sample`'s cap is read from `limits().maxPromptBytes` at boot; 65,536 is kept only
+  as the fallback for a `limits()` that rejects (`DEFAULT_MAX_PROMPT_BYTES`,
+  `apps/host/src/brains/prompt.ts`). Every `SampleErrorCode` of contract 0.2.67 (19) maps to a
+  named result; nothing retries by itself. Q6 is withdrawn with §5.
+- **§6 is WITHDRAWN.** No `snug-host.js`, no npm layout for `@snugprotocol/host`, no bootstrap.
+  Chat takes the artifact runner, as every other surface with an `Artifact` tool does: the skill
+  publishes its own `assets/snug-host.html` BY FILE, private, titled `Snug`, with
+  `{ sample, artifact, downloads }`, and hands apps in with `scripts/snug-embed.mjs` and a
+  republish (`packages/knowledge/prompts/skills/snug/SKILL.md`). The save stays a BARE full
+  document: contract 0.2.67's `artifact.d.ts` asks for the complete replacement page starting
+  with `<!doctype html>`; `unwrapViewerPage` (`scripts/lib/page-blocks.mjs`) reads the 0.2.67
+  skeleton around the kit page and still refuses any other shape by name. Not yet observed:
+  whether chat-Claude, with the plugin's skill loaded, can reach the asset file and publish it —
+  the owner's walk ([runbook](../runbooks/owner-walks-host-bindings.md), track B). If it cannot,
+  the delivery question is its own task (`docs/next-steps.md`, 2026-10-04), not this ADR.
+- **§2's router sentence is corrected.** It said the History API "refuses a hash URL" in "an
+  opaque `about:srcdoc` document — every chat artifact". Two corrections: react-router's
+  `HashRouter` does not throw when `pushState` is refused — it falls back to `location.assign`, a
+  navigation of the document rather than a route change; and chat artifacts are no longer such
+  documents. The memory-router decision stands, for any document where it holds: the kit tries
+  `history.replaceState` with the current fragment once, and mounts a `MemoryRouter` seeded from
+  `location.hash` only where that throws (`apps/host/src/router.tsx`). §2's "an artifact, a chat,
+  a static page" reads "an artifact or a static page" — there is no separate chat binding.
+- **§7's chat tab** loads the plugin's skill, which takes the artifact-runner recipe above — not a
+  separate A2 route.
+- **The Amends line, read now.** "ADR-0065 §2 A2 (the chat delivery is built)" and "ADR-0066 A8
+  (the chat brain is budgeted)" did not happen; ADR-0065 and ADR-0066 carry their own 2026-10-04
+  amendments saying what did.
+- **What §1–§4 built.** One page (`apps/host/vite.config.ts` → `snug-host.html`; the process finds
+  it through `apps/host-mcp/src/page.ts`, pinned by sha256); one boot (`mountKit`,
+  `apps/host/src/boot.tsx`) whose first branch is the `/oauth/callback` document; the runner path
+  tried only at the literal `http://127.0.0.1`; one capability table (`hostCapabilities()`,
+  `apps/playground/src/platform/hostCapabilities.ts`); one guarded accessor for storage globals
+  (`apps/host/src/safeStorage.ts`); one hand-in core for both bindings (`applyAgentBundles`,
+  `apps/host/src/handin.ts`), with `snug_hand_in` answering what the page did; host-to-UI signals
+  as stores (`apps/playground/src/platform/signals.ts`); and the availability derivation
+  (`apps/playground/src/platform/availability.ts`) behind the shelf, the run route, the wizard's
+  walls and the host passport (`apps/playground/src/views/HostPassport.tsx`).

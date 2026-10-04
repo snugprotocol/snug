@@ -26,7 +26,10 @@
 
 import { StringDecoder } from 'node:string_decoder';
 
-/** Every sentence the `codex` driver can send a page. One line each, nothing interpolated. */
+/**
+ * The sentences for what Codex itself reported — one line each, nothing interpolated. `codex.ts`
+ * adds Snug's own bound, abort, concurrency-cap and stopping sentences; none carries the CLI's text.
+ */
 export const CODEX_SENTENCES = {
   loggedOut: 'Your Codex CLI is not logged in — run `codex login`, then check again.',
   apiKeyLogin: 'Your Codex CLI is logged in with an API key. Snug uses your ChatGPT login, not an API key — run `codex login`, choose ChatGPT, then check again.',

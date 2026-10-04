@@ -26,8 +26,9 @@ An explicit hand-in installs the app again even if the user had deleted it.
 update waits for them in the app's run header. `refused: <reason>`: nothing changed — fix the
 reason. `sent … — not confirmed`: the page did not report back; ask the user what they see.
 
-`snug_list_apps` tells you what the user already has, so an edit goes to the right app
-rather than installing a second copy of it.
+`snug_list_apps` does not list the user’s apps yet — it answers an empty list. Before handing
+in an edit, ask the user which app it is for, so it goes to that app rather than installing a
+second copy of it.
 
 ## What you do not do here
 
