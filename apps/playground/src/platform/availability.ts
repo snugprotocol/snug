@@ -20,7 +20,7 @@
 // `offersOf` on its REAL platform object (apps/desktop, apps/host) rather than on a fixture.
 
 import { lookupWellKnownProvider } from '@snugprotocol/auth';
-import type { ConnectionRow } from '@snugprotocol/db';
+import { authConnectionCredentialSecretKey, authConnectionStateSecretKey, type ConnectionRow, type UserDb } from '@snugprotocol/db';
 import type { ConnectionRequirement } from '@snugprotocol/protocol';
 
 import type { SnugPlatform } from './platform.js';
@@ -29,7 +29,7 @@ import type { SnugPlatform } from './platform.js';
  * What an app may need from its host beyond a sandbox and a brain.
  *  - `network`      — a connected fetch to a provider over the internet
  *  - `native-fetch` — that provider cannot be called from a browser page (no CORS)
- *  - `oauth`        — an OAuth redirect has to come back to this host
+ *  - `oauth`        — an OAuth redirect has to come back to this host (a sign-in is still owed)
  *  - `lan`          — a device on the user's own network (pinned TLS)
  *  - `helper`       — the linked-device helper process
  */
@@ -94,18 +94,57 @@ export function needsOfRequirement(requirement: ConnectionRequirement | undefine
   return needs;
 }
 
+/** Whether one row's provider sign-in has already happened — see `signedIn`. */
+export type SignedIn = (row: Pick<ConnectionRow, 'appId' | 'slot'>) => boolean;
+
 /**
  * What an INSTALLED app asks of its host, from its connection rows: the same rule per row,
  * as a union. `declared` and `approved` rows count; a `revoked` row is a tombstone the user
  * said no to, so it asks for nothing; an app with no row needs nothing.
+ *
+ * `oauth` is a need only while the sign-in is OWED — a `declared` row, or an `approved` one
+ * whose sign-in has not finished. The redirect is what SIGNING IN needs; an app that has
+ * signed in runs on its stored tokens over the network. Counted for every OAuth row, a
+ * runner that fell back off its fixed port (`oauthRedirect: false`) blocked every app the
+ * user had already connected, with a reason that was false for them (Gate 5 seams/F1).
+ * `signedIn` is required, not defaulted, so no surface can forget to ask.
  */
-export function needsOfConnections(rows: readonly Pick<ConnectionRow, 'status' | 'requirement'>[]): readonly AppNeed[] {
+export function needsOfConnections(rows: readonly Pick<ConnectionRow, 'appId' | 'slot' | 'status' | 'requirement'>[], signedIn: SignedIn): readonly AppNeed[] {
   const found = new Set<AppNeed>();
   for (const row of rows) {
     if (row.status !== 'declared' && row.status !== 'approved') continue;
-    for (const need of needsOfRequirement(row.requirement)) found.add(need);
+    for (const need of needsOfRequirement(row.requirement)) {
+      if (need === 'oauth' && row.status === 'approved' && signedIn(row)) continue;
+      found.add(need);
+    }
   }
   return NEED_ORDER.filter((need) => found.has(need));
+}
+
+/**
+ * Has this row's provider sign-in already happened? Read from the user db the way the OAuth
+ * service decides it can run on stored tokens (`OAuthService.getAccessToken`, packages/auth):
+ * the slot's connection state is present and not `pending` (a sign-in begun and not
+ * finished — the service refuses it even over an older token), and the slot holds an access
+ * token. `expired` counts as signed in: the service refreshes over the network, no redirect.
+ *
+ * The token is checked by KEY, never read: this decides a tile, and has no use for a
+ * credential's value. A state that does not parse is owed, as the service reads it.
+ */
+export function signedIn(secrets: Pick<UserDb, 'getSecret' | 'listSecretKeys'>): SignedIn {
+  let keys: ReadonlySet<string> | undefined;
+  return ({ appId, slot }) => {
+    keys ??= new Set(secrets.listSecretKeys());
+    if (!keys.has(authConnectionCredentialSecretKey(appId, slot, 'access_token'))) return false;
+    const raw = secrets.getSecret(authConnectionStateSecretKey(appId, slot));
+    if (raw === undefined) return false;
+    try {
+      const state = JSON.parse(raw) as { status?: unknown } | null;
+      return typeof state?.status === 'string' && state.status !== 'pending';
+    } catch {
+      return false;
+    }
+  };
 }
 
 /**

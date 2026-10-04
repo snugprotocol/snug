@@ -315,6 +315,17 @@ describe('S3 — installed tiles get the verdict their connection rows earn', ()
   const coinbase = { slot: 'coinbase', provider: { name: 'Coinbase' }, kind: 'api_key', declaredApiHosts: ['api.coinbase.com'] };
   const weather = { slot: 'openweather', provider: { name: 'OpenWeather' }, kind: 'api_key', declaredApiHosts: ['api.openweathermap.org'] };
   const hue = { slot: 'hue', provider: { name: 'Philips Hue' }, kind: 'api_key', lanHost: { class: 'rfc1918-ipv4-literal', label: 'Bridge IP address' } };
+  // examples/spotify/connection.json, byte for byte in shape.
+  const spotify = { slot: 'spotify', provider: { name: 'Spotify', docsUrl: 'https://developer.spotify.com/documentation/web-api' }, kind: 'oauth2_auth_code', declaredApiHosts: ['api.spotify.com'] };
+
+  /** A finished sign-in, as `OAuthService` persists it: through the slot's credential store. */
+  async function signInWithSpotify(db: UserDb, appId: string): Promise<void> {
+    const { SlotScopedCredentialStore, UserDbCredentialStore } = await import('@snugprotocol/auth');
+    const store = new SlotScopedCredentialStore(new UserDbCredentialStore(db), 'spotify');
+    await store.setCredential(appId, 'access_token', 'at-from-spotify');
+    await store.setCredential(appId, 'refresh_token', 'rt-from-spotify');
+    await store.setConnectionState(appId, { status: 'connected', obtainedAt: Date.now(), expiresIn: 3600 });
+  }
 
   function install(db: UserDb, name: string, requirement?: Record<string, unknown>): string {
     const app = db.installApp({ displayName: name, html: `<p>${name}</p>` });
@@ -465,6 +476,27 @@ describe('S3 — installed tiles get the verdict their connection rows earn', ()
 
     expect(installedTile('Portfolio').querySelector('.tile-link')?.tagName).toBe('A');
     expect(reason(installedTile('Lights'))).toBe('needs your home network');
+  });
+
+  it('a runner whose sign-in port was taken: an OAuth app already signed in RUNS on its tokens; one still owed its sign-in does not', async () => {
+    // Gate 5 seams/F1: the redirect is needed to sign IN. Counting it for every OAuth row
+    // blocked every connected Spotify/Gmail app on a runner that fell back to an ephemeral
+    // port, with "that sign-in has no way back to this host" — false for an app that needs
+    // no sign-in. The tokens are written by the store classes the OAuth service writes through.
+    const harness = await fresh(runner({ oauthRedirect: false }));
+    const rewind = install(harness.db, 'Rewind', spotify);
+    const pending = install(harness.db, 'Pending', spotify);
+    const declared = install(harness.db, 'Declared', spotify);
+    harness.db.approveConnection(rewind, 'spotify');
+    harness.db.approveConnection(pending, 'spotify');
+    await signInWithSpotify(harness.db, rewind);
+    await renderHub(harness);
+
+    expect(installedTile('Rewind').querySelector('.tile-link')?.tagName, 'signed in: a link to its run route').toBe('A');
+    expect(installedTile('Rewind').querySelector('[data-testid="tile-blocked-reason"]')).toBeNull();
+    expect(reason(installedTile('Pending')), 'approved, never signed in').toBe('needs a provider sign-in');
+    expect(reason(installedTile('Declared')), 'not even approved').toBe('needs a provider sign-in');
+    expect(harness.db.getConnection(declared, 'spotify')?.status).toBe('declared');
   });
 
   it('reads every app’s rows in ONE listConnections() call — never one per tile', async () => {

@@ -21,7 +21,7 @@
 
 import type { BrainDriver } from '../../brains/brain.js';
 import { CODEX_SENTENCES, createJsonlReader } from '../../brains/codex-events.js';
-import type { SpawnCodex } from '../../brains/codex.js';
+import { codexVersionOf, type SpawnCodex } from '../../brains/codex.js';
 
 /** One think's child, as its stdout showed it. */
 export interface CodexTrace {
@@ -67,7 +67,12 @@ export function observeCodex(inner: SpawnCodex): { spawn: SpawnCodex; thinks: Co
     spawn,
     thinks,
     cwd: () => first?.options.cwd,
-    /** `codex --version`, as the driver's own children would run it. The driver asks only when it has a walked version to compare with. */
+    /**
+     * `codex --version`, as the driver's own children would run it — and READ as the driver
+     * reads it (`codexVersionOf`): the string the walk records is the string the list must
+     * hold. It used to be the raw `codex-cli 0.160.0`, which no entry could match (Gate 5,
+     * truth/F2). The driver asks only when it has a walked version to compare with.
+     */
     version: () =>
       new Promise((resolve) => {
         if (first === undefined) {
@@ -84,7 +89,7 @@ export function observeCodex(inner: SpawnCodex): { spawn: SpawnCodex; thinks: Co
         child.on('error', () => resolve(undefined));
         child.on('close', () => {
           clearTimeout(bound);
-          resolve(out.trim() === '' ? undefined : out.trim());
+          resolve(codexVersionOf(out));
         });
         child.stdin.on('error', () => {});
         child.stdin.end();
@@ -131,6 +136,7 @@ export interface CodexWalkThink {
 }
 
 export interface CodexWalkReport {
+  /** As the driver reads it — `0.160.0`, never `codex-cli 0.160.0`: the exact `CODEX_VERIFIED_VERSIONS` entry. */
   version?: string;
   thinks: CodexWalkThink[];
   /** No answer held a planted string. */
@@ -165,6 +171,11 @@ export async function walkCodex(input: {
   version?: string | undefined;
 }): Promise<CodexWalkReport> {
   const report: CodexWalkReport = { ...(input.version !== undefined ? { version: input.version } : {}), thinks: [], canaryClean: true, instructionHonoured: false, problems: [] };
+  // A PASS says "add this version to the list". With no version the driver can read, there is
+  // nothing to add that could ever match — that is a failed walk, not a passed one.
+  if (input.version === undefined) {
+    report.problems.push('version: `codex --version` printed nothing the driver reads as a version, so no entry in CODEX_VERIFIED_VERSIONS could ever match this CLI');
+  }
   const brain = input.driver.create();
   try {
     for (const { name, kind, system, user } of CODEX_WALK_THINKS) {
@@ -224,7 +235,8 @@ export function formatCodexWalk(report: CodexWalkReport): string {
   lines.push(`canary: ${report.canaryClean ? 'in no answer' : 'FOUND in an answer'}`);
   lines.push(`developer_instructions: ${report.instructionHonoured ? 'honoured' : 'NOT honoured'}`);
   if (report.problems.length === 0) {
-    lines.push('verdict: PASS — journal the lines above, then add this version to CODEX_VERIFIED_VERSIONS');
+    // A PASS has a version (`walkCodex` fails one without): named exactly as the entry is written.
+    lines.push(`verdict: PASS — journal the lines above, then add '${report.version ?? ''}' to CODEX_VERIFIED_VERSIONS`);
   } else {
     lines.push('problems:', ...report.problems.map((problem) => `  - ${problem}`), 'verdict: FAIL — do not verify this version');
   }

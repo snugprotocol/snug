@@ -21,7 +21,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { custodyDisclosure } from '@playground/platform/copy';
 
 import { upsertBundleBlock, writeDbBlock, DB_BLOCK_FORMAT } from '../../../../scripts/lib/page-blocks.mjs';
-import { OAUTH_CALLBACK_PATH, RUNNER_STATUS_BOUND_MS, askRunner, isRunnerOrigin, planBoot, type BootWindow } from '../boot.js';
+import { OAUTH_CALLBACK_PATH, RUNNER_STATUS_BOUND_MS, RUNNER_STATUS_RETRY_BOUNDS_MS, askRunner, isRunnerOrigin, planBoot, type BootWindow } from '../boot.js';
 import type { ComposeDocument } from '../compose.js';
 import { RUNNER_MARKER_HEADER, parseLocalStatus, type LocalClient } from '../local/client.js';
 import { decideBinding, readBindingEnv, type ProbeResult } from '../probe.js';
@@ -72,6 +72,13 @@ const refusal = (status: number): Response => new Response('', { status, headers
 /** A runner: the wire fixture for the right bearer, its marked 401 for anything else. */
 const runner = (status: Record<string, unknown> = WIRE) => (path: string, init?: RequestInit): Response =>
   path === '/status' && new Headers(init?.headers).get('authorization') === `Bearer ${TOKEN}` ? json(status) : refusal(401);
+/** An origin that takes the connection and says nothing until the page gives up on it. */
+const silent = (_path: string, init?: RequestInit): Promise<Response> =>
+  new Promise<Response>((_resolve, reject) => {
+    init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+  });
+/** The ask's bounds and pause, shrunk so a test of three silent asks takes milliseconds. */
+const QUICK = { boundMs: 20, retryBoundsMs: [20, 20], pauseMs: 1 } as const;
 
 // ---------------------------------------------------------------- the runner's one origin
 
@@ -188,6 +195,51 @@ describe('askRunner at http://127.0.0.1 — one bounded GET of /status', () => {
     expect(Date.now() - began).toBeLessThan(1_000);
     expect(aborted, 'the request is abandoned, not left open behind the page').toBe(true);
     expect(RUNNER_STATUS_BOUND_MS).toBe(1_500);
+  });
+
+  it('tokenless, an origin that never answers is asked ONCE — K2’s static-server case falls through as before', async () => {
+    const fake = windowAt('http://127.0.0.1:43123/snug-host.html', silent);
+    expect(await askRunner(fake.win, QUICK)).toEqual({ kind: 'none' });
+    expect(fake.requests).toHaveLength(1);
+  });
+
+  it('with a token CLAIMED, an origin that never answers is asked again, each time for longer — and then it is "not answering", never "not a runner"', async () => {
+    // Gate 5 security/F5: the runner's first `/status` can outlast 1.5 s on a machine
+    // waking from sleep (it waits up to 250 ms for the brain probe, and every status runs
+    // a synchronous `/bin/ps` bounded at 2 s). Falling through there opened the runner's
+    // OWN page as a plain file, on browser storage — the user's work landed outside
+    // ~/Snug/user.snug, and the token was already stripped from the address bar.
+    const fake = windowAt(`http://127.0.0.1:43127/#token=${TOKEN}`, silent);
+    expect(await askRunner(fake.win, QUICK)).toEqual({ kind: 'not-answering' });
+    expect(fake.requests.map((request) => request.path)).toEqual(['/status', '/status', '/status']);
+    for (const request of fake.requests) expect(request.headers.get('authorization')).toBe(`Bearer ${TOKEN}`);
+    // The defaults: a growing bound, so an answer that takes 1.8 s every time is still heard.
+    expect(RUNNER_STATUS_RETRY_BOUNDS_MS).toEqual([3_000, 6_000]);
+  });
+
+  it('…the token remembered for this tab counts as claimed too (a reload)', async () => {
+    const fake = windowAt('http://127.0.0.1:43127/#/settings', silent, { 'snug-host-token': TOKEN });
+    expect(await askRunner(fake.win, QUICK)).toEqual({ kind: 'not-answering' });
+    expect(fake.requests).toHaveLength(3);
+  });
+
+  it('…and nothing listening at all is no answer either', async () => {
+    const fake = windowAt(`http://127.0.0.1:43127/#token=${TOKEN}`);
+    expect(await askRunner(fake.win, QUICK)).toEqual({ kind: 'not-answering' });
+    expect(fake.requests).toHaveLength(3);
+  });
+
+  it('…a slow runner that answers on a later ask IS the runner', async () => {
+    let asked = 0;
+    const fake = windowAt(`http://127.0.0.1:43127/#token=${TOKEN}`, (path, init) => (++asked === 1 ? silent(path, init) : runner()(path, init)));
+    expect(await askRunner(fake.win, QUICK)).toMatchObject({ kind: 'runner', token: TOKEN });
+    expect(fake.requests).toHaveLength(2);
+  });
+
+  it('…while an ANSWER that is not a runner’s still is not one: a 404 is asked once, token or no token', async () => {
+    const fake = windowAt(`http://127.0.0.1:43123/snug-host.html#token=${TOKEN}`, () => new Response('not served: /status', { status: 404 }));
+    expect(await askRunner(fake.win, QUICK)).toEqual({ kind: 'none' });
+    expect(fake.requests).toHaveLength(1);
   });
 
   it('a 200 with the runner’s shape but NO bearer held is not believed — a runner never answers that', async () => {
@@ -344,6 +396,30 @@ describe('planBoot — the order', () => {
     const probe = probeStub();
     expect(await planBoot(fake.win, emptyDoc, { probe, wasm })).toEqual({ kind: 'refusal', refusal: { kind: 'no-token' } });
     expect(probe).not.toHaveBeenCalled();
+  });
+
+  it('(2) a token was claimed and the runner never answered → "not answering — reload", NEVER a plain file on browser storage', async () => {
+    // Gate 5 security/F5. The page was handed a key by the runner, so it IS the runner's
+    // page: composing it as `file` would put everything the user does next in this
+    // browser's storage at 127.0.0.1, invisible to the runner's ~/Snug/user.snug.
+    const fake = windowAt(`http://127.0.0.1:43127/#token=${TOKEN}`, silent);
+    const probe = probeStub();
+    const { doc, reads } = documentWithBlocks();
+    expect(await planBoot(fake.win, doc, { probe, wasm, ask: QUICK })).toEqual({ kind: 'refusal', refusal: { kind: 'not-answering' } });
+    expect(probe, 'no probe — so no file binding, no browser storage').not.toHaveBeenCalled();
+    expect(reads, 'and no document read').toEqual([]);
+    // The key stays this tab's, so the reload the page asks for is let in.
+    expect(fake.stored.get('snug-host-token')).toBe(TOKEN);
+  });
+
+  it('(3) …the tokenless twin: an origin that never answers still boots file-class, as K2 wrote it', async () => {
+    const fake = windowAt('http://127.0.0.1:43123/snug-host.html', silent);
+    const probe = probeStub();
+    const plan = await planBoot(fake.win, emptyDoc, { probe, wasm, ask: QUICK });
+    expect(plan.kind).toBe('hosted');
+    if (plan.kind !== 'hosted') return;
+    expect(probe).toHaveBeenCalledTimes(1);
+    expect(plan.composition.platform.binding).toBe('file');
   });
 
   it('(3) a loopback STATIC server is file-class, and its custody copy says "in this browser" — not "on this Mac"', async () => {

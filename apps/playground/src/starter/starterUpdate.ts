@@ -31,7 +31,7 @@ import { isNamedLoadRefusal } from '../run/copy.js';
 import { STARTER_PREFIX, loadStarterHtml } from './starterApps.js';
 import { installStarterConnections, normalizeStarterHtml } from './starterDeclaration.js';
 import { installStarterDocs } from './starterDocs.js';
-import { bundledStarterContracts } from './starterRuntimeContract.js';
+import { bundledStarterContracts, recordStarterContract, starterWrittenContract } from './starterRuntimeContract.js';
 import { starterMetaFor, type StarterMeta } from './starterMeta.js';
 
 const STARTER_SOURCE_PREFIX = 'starter:';
@@ -42,7 +42,10 @@ export interface StarterUpdateStatus {
   installedVersion: number;
   latestVersion: number;
   updateAvailable: boolean;
-  /** The running version has diverged from the newest factory pin — the user re-authored. */
+  /**
+   * The user re-authored their copy: its running html differs from the newest factory pin's,
+   * or its runtime contract differs from the one the starter last wrote (Gate 5 seams/F2).
+   */
   edited: boolean;
   /** The bundle's release metadata, for the header chip and the release-notes sheet. */
   meta: StarterMeta;
@@ -86,10 +89,32 @@ async function bundledHtml(folder: string): Promise<string | undefined> {
   }
 }
 
+/** The newest factory pin's version number (`listAppVersions` is DESC ⇒ the first pin). */
+function newestPin(db: UserDb, appId: string): number | undefined {
+  return db.listAppVersions(appId).find((version) => version.pinned)?.version;
+}
+
 /** The newest factory pin's html — fact 1's subject, shared with the vouch's semantics. */
 function newestPinnedHtml(db: UserDb, appId: string): string | undefined {
-  const pinned = db.listAppVersions(appId).find((version) => version.pinned); // DESC ⇒ newest pin
-  return pinned === undefined ? undefined : db.getAppHtml(appId, pinned.version);
+  const pinned = newestPin(db, appId);
+  return pinned === undefined ? undefined : db.getAppHtml(appId, pinned);
+}
+
+const canonicalOrNull = (contract: RuntimeContract | undefined): string | null => (contract === undefined ? null : canonicalRuntimeContract(contract));
+
+/**
+ * Has the user re-authored this copy's contract? Compared with what the starter last WROTE
+ * (`starterContract:`), not with the pin: the builder's `runtime_contract_write` rewrites the
+ * CURRENT version in place, and on an unedited copy that is the pin itself, so the pin would
+ * agree with any re-author. R5's contract-only branch then replaced a re-authored contract on
+ * a docs-only release with no confirmation (Gate 5 seams/F2). A copy older than the record
+ * is judged against its newest pin's contract — the best witness it has.
+ */
+function contractEdited(db: UserDb, appId: string): boolean {
+  const written = starterWrittenContract(db, appId);
+  const pinned = newestPin(db, appId);
+  const factory = written !== undefined ? written : canonicalOrNull(pinned === undefined ? undefined : db.getRuntimeContract(appId, pinned));
+  return canonicalOrNull(db.getRuntimeContract(appId)) !== factory;
 }
 
 function recordedVersion(db: UserDb, appId: string): number | undefined {
@@ -125,7 +150,7 @@ export async function starterUpdateStatus(db: UserDb, appId: string): Promise<St
     installedVersion,
     latestVersion: meta.version,
     updateAvailable: meta.version > installedVersion,
-    edited: normalizeStarterHtml(running) !== normalizeStarterHtml(factory),
+    edited: normalizeStarterHtml(running) !== normalizeStarterHtml(factory) || contractEdited(db, appId),
     meta,
   };
 }
@@ -180,6 +205,10 @@ export async function applyStarterUpdate(db: UserDb, appId: string): Promise<Sta
     // deliberately does NOT run in this branch — nothing in a docs-only release changes
     // connections (decision recorded in the task file, plan-review findings 6+12).
     await installStarterDocs(db, appId);
+    // The copy already holds this release's contract, which is the starter's word on it: a
+    // copy older than the `starterContract:` record learns it here, so a later re-author
+    // is seen. A release with no contract wrote nothing, and leaves the record alone.
+    if (contract !== undefined) recordStarterContract(db, appId, contract);
     if (recordedVersion(db, appId) !== meta.version) {
       db.setSetting(starterVersionSettingKey(appId), meta.version);
     }
@@ -190,6 +219,9 @@ export async function applyStarterUpdate(db: UserDb, appId: string): Promise<Sta
     pinned: true,
     ...(contract === undefined ? {} : { contract }),
   });
+  // What the starter wrote, for `contractEdited`. A release with no contract copies the
+  // user's forward — that is not the starter's word, so the record keeps the last one.
+  if (contract !== undefined) recordStarterContract(db, appId, contract);
   // Same order and same posture as the install act: the declared-only connection refresh
   // runs against the freshly-vouchable copy (newest pin = current = bundle), and the docs
   // seed stays absent-only. Both decline quietly rather than fail the update.

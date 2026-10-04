@@ -15,8 +15,13 @@
 //   · the npm `codex` is a `#!/usr/bin/env node` shim: exit 127 under an empty PATH, the
 //     same finding as `claude`, with the same cure (this Node's directory on the child's PATH).
 // NOT measured, because it needs the owner's ChatGPT login: a successful turn, whether each
-// disabled feature really removes its tool, and whether `developer_instructions` is honoured
-// as the system slot. That is why this brain is `verified: false`.
+// disabled feature really removes its tool, whether `developer_instructions` is honoured
+// as the system slot — and the logged-IN `login status` line that `ready` rests on.
+// `Logged in using ChatGPT` (and the API-key line) are TRANSCRIBED from upstream's
+// `codex-rs/cli/src/login.rs` at `rust-v0.160.0`, never seen printed (fixtures/codex/
+// PROVENANCE.md; Gate 5, tests/F3). If the real CLI says otherwise, a logged-in Codex reads
+// as not ready — safe, and walk B7's first step shows it. That is why this brain is
+// `verified: false`.
 //
 // ONE THINK = ONE CHILD. Codex `exec` is single-shot and its start-up is part of every think;
 // nothing is pre-warmed and nothing is reused (the warm app server is experimental upstream —
@@ -64,6 +69,19 @@ export const CODEX_INSTALL_REMEDY = 'No `codex` CLI found on this machine. Insta
  * the owner's steps; it runs THIS driver and prints the lines to journal.
  */
 export const CODEX_VERIFIED_VERSIONS: readonly string[] = [];
+
+/**
+ * The version `codex --version` reports, in the form `CODEX_VERIFIED_VERSIONS` holds — the ONE
+ * place that output is read, by the probe and by the owner's walk alike. Measured on 0.160.0:
+ * `codex-cli 0.160.0` → `0.160.0`. Anything else is no version, and so never a walked one.
+ *
+ * One reading because there were two (Gate 5, truth/F2): the walk printed the raw line and
+ * said "add this version"; the probe compared the bare number. A pasted `codex-cli 0.160.0`
+ * would have left Codex unverified for ever, with nothing failing.
+ */
+export function codexVersionOf(output: string): string | undefined {
+  return /^codex-cli (\S+)$/.exec(output.trim())?.[1];
+}
 
 /**
  * Every tool-shaped feature, off (ADR-0071 §2). The stable ones that default ON in 0.160.0
@@ -488,8 +506,7 @@ export function createCodexDriver(deps: CodexDriverDeps): BrainDriver {
       ensureCwd();
       if (verifiedVersions.length > 0) {
         const said = await run(binary, ['--version'], VERSION_MS);
-        // Measured: `codex-cli 0.160.0`. Anything else is no version, and so not a walked one.
-        version = said.kind === 'exited' && said.code === 0 ? /^codex-cli (\S+)$/.exec(said.stdout.trim())?.[1] : undefined;
+        version = said.kind === 'exited' && said.code === 0 ? codexVersionOf(said.stdout) : undefined;
       }
       const verdict = readiness(await run(binary, ['login', 'status'], deps.loginStatusMs ?? LOGIN_STATUS_MS));
       if (verdict.state !== 'ready') {

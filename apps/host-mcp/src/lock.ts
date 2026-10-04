@@ -50,6 +50,17 @@
 //
 // Each of those is asked of the record that is there NOW. When it changes hands while it is
 // being judged, the judging starts again with whoever holds it — a bounded number of times.
+//
+// SILENT IS NOT ABSENT (Gate 5, security/F3). Every take-over used to unlink the canonical
+// socket once its record's owner was judged gone — on ONE missed 1.5 s probe when the pid was
+// dead. But the socket need not be that pid's: a live runner whose lock went missing listens
+// there too, and its event loop can sit in a synchronous `/bin/ps` (`holder.ts`, up to 2 s, on
+// every `/status`) right through a probe. The reviewer proved it on this function: a live
+// listener that never answers, a dead pid's record → `primary`, the live socket gone from
+// disk, and the newcomer then bound its own and led — two primaries on one user file. So no
+// take-over unlinks a path anything still LISTENS on (a connect, where unsure is live), nor
+// one beside a port that still answers: it keeps the socket, and the newcomer meets it in
+// `listenControl` — joins it, or refuses `socket-in-use`.
 
 import { closeSync, linkSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -74,6 +85,12 @@ export interface LockDeps {
   probeSocket(socket: string): Promise<{ tokenHash: string; port: number } | undefined>;
   /** Whether anything still answers on the recorded port — a wedged control socket is not a dead runner. */
   probePort(port: number): Promise<boolean>;
+  /**
+   * Whether anything LISTENS on a socket path — a connect, not a conversation, and an unsure
+   * answer is `true`. Asked of the canonical path before a take-over may unlink it: a busy
+   * runner misses a probe and still accepts a connection.
+   */
+  socketListens(socket: string): Promise<boolean>;
   /** Injected so the tests of a five-second rule take no five seconds. */
   sleep(ms: number): Promise<void>;
   /** Ask one of OURS to shut down (SIGTERM). Never called for a stranger. */
@@ -229,9 +246,15 @@ function enterTakeover(dir: string): boolean {
  *
  * `judged` is `undefined` for a lock that could not be read at all.
  *
- * `keepSocket` is for the one record whose owner is gone while the control socket is NOT
- * litter: another runner answers on it. Unlinking there would cut a live runner's socket
- * out from under it — every later attach would fail and its session count would freeze.
+ * `keepSocket` is for a record whose owner is gone while the control socket is NOT litter:
+ * another runner answers on it, or something still listens there (Gate 5, security/F3).
+ * Unlinking there would cut a live runner's socket out from under it — every later attach
+ * would fail, its session count would freeze, and the newcomer would lead beside it.
+ *
+ * The listening question is asked BEFORE the mutex, not under it: the mutex guards a few
+ * synchronous file operations, and a connect may take its whole bound. Nothing can begin
+ * listening on the canonical path in between — binding it takes the lock, and a lock that
+ * changed hands is `moved` below.
  */
 function replaceRecord(
   dir: string,
@@ -251,7 +274,8 @@ function replaceRecord(
       return createLock(dir, record) ? { role: 'primary' } : 'moved';
     }
     if (typeof now === 'string' || now.tokenHash !== judged.tokenHash) return 'moved';
-    // The canonical path, never `judged.socket`; and only now that its owner is proven gone.
+    // The canonical path, never `judged.socket`; and only once nothing listens on it
+    // (`takeOver` asked, at connect level, before this mutex was entered).
     if (!keepSocket) rmSync(controlSocketPath(dir), { force: true });
     // RENAMED over the old record, not removed-then-created: the lock is never absent in
     // between, so no process starting at this instant can create one of its own.
@@ -285,6 +309,17 @@ export async function acquireLock(
   const mine = (): LockRecord => ({ port: claim.port, pid: deps.pid, tokenHash: claim.tokenHash, startedAt: deps.now(), socket: claim.socket });
   /** Whether the lock still holds the record being judged. */
   const stillHolds = (held: LockRecord): boolean => readLock(dir)?.tokenHash === held.tokenHash;
+
+  /**
+   * Take over from a record whose owner is judged gone — and keep the canonical socket if
+   * anything still listens on it, or if the record's port still answers (`serving`): either is
+   * a live runner that missed its probes, not litter. Kept, the newcomer meets it at
+   * `listenControl` and joins it or refuses; only a socket nothing listens on is removed.
+   */
+  const takeOver = async (held: LockRecord, serving = false): Promise<{ role: 'primary' } | 'moved'> => {
+    const keepSocket = serving || (await deps.socketListens(controlSocketPath(dir)));
+    return replaceRecord(dir, held, mine(), { keepSocket });
+  };
 
   /**
    * The questions, asked of ONE record. `patient` is the first record this acquire judges:
@@ -327,7 +362,7 @@ export async function acquireLock(
     }
 
     // 2. Silent and dead.
-    if (!deps.isAlive(held.pid)) return replaceRecord(dir, held, mine());
+    if (!deps.isAlive(held.pid)) return takeOver(held);
 
     // 3. Silent and ALIVE — the only place identity is read. A live stranger owns this pid (a
     //    recycled number): never signal it, never take over from it.
@@ -338,7 +373,7 @@ export async function acquireLock(
     // own pid was left by a runner that is gone — a dead one whose number came to us, or
     // this very process in a start that failed half-way. Its next step below is a signal,
     // and that signal would be to ourselves.
-    if (held.pid === deps.pid) return replaceRecord(dir, held, mine());
+    if (held.pid === deps.pid) return takeOver(held);
     // The runner that beat this acquire to a take-over and has not come up. Its start is its
     // own to finish: the next tool call asks again, with every question below to ask.
     if (!patient) return contended(held.pid);
@@ -351,10 +386,11 @@ export async function acquireLock(
     }
     const serving = await deps.probePort(held.port);
     // Gone while it was being asked — and asked AFTER the port, so nothing is awaited between
-    // this look and the refusal below. A dead runner protects no page, whatever answers on
-    // its port number now is somebody else's listener, and a refusal built from this record
-    // would name a process that no longer exists.
-    if (!deps.isAlive(held.pid)) return replaceRecord(dir, held, mine());
+    // this look and the refusal below. A dead runner protects no page, and a refusal built
+    // from this record would name a process that no longer exists: take over. But whatever
+    // answers on its port number now is alive — perhaps the runner that owns the socket — so
+    // that answer is not discarded: the socket is kept for `listenControl` to judge.
+    if (!deps.isAlive(held.pid)) return takeOver(held, serving);
     // Its control socket is gone, but a runner still answering on its port has pages open
     // and a user file in hand. That one is the user's to stop (`snug stop`), not ours to kill.
     if (serving) return contended(held.pid);
@@ -369,7 +405,7 @@ export async function acquireLock(
       if (waited >= TAKEOVER_EXIT_WAIT_MS) return contended(held.pid);
       await deps.sleep(EXIT_POLL_MS);
     }
-    return replaceRecord(dir, held, mine());
+    return takeOver(held);
   };
 
   let patient = true;

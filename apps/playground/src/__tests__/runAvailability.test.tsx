@@ -155,6 +155,8 @@ async function waitFor(done: () => boolean, label: string): Promise<void> {
 }
 
 const coinbase = { slot: 'coinbase', provider: { name: 'Coinbase' }, kind: 'api_key', declaredApiHosts: ['api.coinbase.com'] };
+// examples/spotify/connection.json, in shape.
+const spotify = { slot: 'spotify', provider: { name: 'Spotify', docsUrl: 'https://developer.spotify.com/documentation/web-api' }, kind: 'oauth2_auth_code', declaredApiHosts: ['api.spotify.com'] };
 
 function install(db: UserDb, name: string, requirement?: Record<string, unknown>): string {
   const app = db.installApp({ displayName: name, html: `<!doctype html><title>${name}</title><p>${name}</p>` });
@@ -333,5 +335,29 @@ describe('an installed app this host cannot run', () => {
     await openRoute(harness, appId);
     await waitFor(() => frame() !== null, 'the frame under the runner');
     expect(byTestId('run-blocked')).toBeNull();
+  });
+
+  it('a runner whose sign-in port was taken: an OAuth app already signed in RUNS on its tokens (Gate 5 seams/F1)', async () => {
+    // The redirect is needed to sign IN; an app with a finished sign-in runs on the network.
+    const harness = await fresh(runner({ oauthRedirect: false }));
+    const appId = install(harness.db, 'Rewind', spotify);
+    harness.db.approveConnection(appId, 'spotify');
+    const { SlotScopedCredentialStore, UserDbCredentialStore } = await import('@snugprotocol/auth');
+    const store = new SlotScopedCredentialStore(new UserDbCredentialStore(harness.db), 'spotify');
+    await store.setCredential(appId, 'access_token', 'at-from-spotify');
+    await store.setConnectionState(appId, { status: 'connected', obtainedAt: Date.now(), expiresIn: 3600 });
+    await openRoute(harness, appId);
+    await waitFor(() => frame() !== null, 'the signed-in app’s frame');
+    expect(byTestId('run-blocked')).toBeNull();
+  });
+
+  it('…and the one still owed its sign-in is blocked for the redirect, by name', async () => {
+    const harness = await fresh(runner({ oauthRedirect: false }));
+    const appId = install(harness.db, 'Rewind', spotify);
+    harness.db.approveConnection(appId, 'spotify');
+    await openRoute(harness, appId);
+    await waitFor(() => byTestId('run-blocked') !== null, 'the blocked panel');
+    expect(byTestId('run-blocked')!.textContent).toContain('needs a provider sign-in');
+    expect(sawFrame).toBe(false);
   });
 });

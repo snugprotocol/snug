@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer as createHttpServer, type Server as HttpServer } from 'node:http';
-import { createServer as createNetServer, type Server as NetServer, type Socket } from 'node:net';
+import { createConnection, createServer as createNetServer, type Server as NetServer, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -587,6 +587,42 @@ describe('the SOCKET is the last word on who the runner is', () => {
     expect(await statusOf(first)).toMatchObject({ running: true, clients: 1 });
     expect(readLock(hostDir())).toMatchObject({ pid: process.pid, port: a.port, tokenHash: hashOf(first) });
   });
+
+  it('a lock naming a DEAD pid beside a live runner too BUSY to answer: its socket is NOT unlinked, and the newcomer does not lead (Gate 5, security/F3)', async () => {
+    // The reviewer's case, on the real `acquireLock` and the real connect-level check: the
+    // runner is alive and listening but its event loop is elsewhere (a synchronous `ps` in
+    // `heldBy` takes up to 2 s), so the 1.5 s probe goes unanswered. Take-over used to unlink
+    // the socket on that one silence; the newcomer then bound its own and LED — two
+    // primaries on one user file. Here the "busy runner" accepts connections and never answers.
+    mkdirSync(hostDir(), { recursive: true });
+    let connections = 0;
+    const busy: NetServer = createNetServer((peer) => {
+      connections += 1;
+      peer.on('error', () => {}).resume();
+    });
+    await new Promise<void>((resolve) => busy.listen(socketOf(), resolve));
+    closers.push(() => new Promise((resolve) => busy.close(resolve)));
+    const DEAD = 4_000_002;
+    writeFileSync(path.join(hostDir(), 'lock.json'), JSON.stringify({ port: 43999, pid: DEAD, tokenHash: 'left-by-a-newcomer-that-died', startedAt: 1, socket: socketOf() }));
+
+    const started = await make({ retryFloorMs: 60_000, lockDeps: { isAlive: (pid) => pid !== DEAD } }).start();
+    // It met the busy runner's socket and refused rather than lead beside it.
+    expect(started.role).not.toBe('primary');
+    expect(started.refusal).toMatchObject({ code: 'socket-in-use' });
+    // The path is still the busy runner's: a connect there reaches IT, not a newcomer's socket.
+    const before = connections;
+    await new Promise<void>((resolve, reject) => {
+      const peer = createConnection(socketOf(), () => {
+        peer.destroy();
+        resolve();
+      });
+      peer.on('error', reject);
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(connections).toBe(before + 1);
+    // …and the lock was given back, so the next attempt asks again.
+    expect(readLock(hostDir())).toBeUndefined();
+  }, 15_000);
 
   it('a lock that goes missing DURING the start is put back the moment the socket is bound', async () => {
     const ports = [0];

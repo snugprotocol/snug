@@ -62,6 +62,8 @@ const deps = (over: Partial<LockDeps> = {}): LockDeps => {
     commandLineOf: () => undefined,
     probeSocket: async () => undefined,
     probePort: async () => false,
+    // Nothing listens on the canonical socket unless a case says so: a file there is litter.
+    socketListens: async () => false,
     sleep: async () => {
       if (++slept > 1_000) throw new Error('acquire is waiting for ever');
     },
@@ -857,6 +859,72 @@ describe('the runner puts a MISSING lock back (the socket is the last word)', ()
     writeFileSync(lockFile(), '{not json');
     reassertLock(dir, mine);
     expect(readFileSync(lockFile(), 'utf8')).toBe('{not json');
+  });
+});
+
+// ------------------------------------------------------------------ a LIVE listener is never unlinked
+//
+// Gate 5 (security/F3). A take-over judged "dead pid + silent socket" from ONE probe of the
+// record's socket and then unlinked the canonical ctl.sock. Silent is not absent: a live
+// runner whose event loop is inside a synchronous `/bin/ps` (holder.ts, up to 2 s, on every
+// `/status`) misses a 1.5 s probe while it still listens. Proven by the reviewer on the real
+// `acquireLock`: a live listener that never answers, a lock naming a dead pid → `primary`,
+// and the live runner's socket GONE from disk — the newcomer then binds its own and leads,
+// and two primaries write one user file. So before any unlink the path is asked at CONNECT
+// level, where "unsure is live" (runner.ts's own check), and a live one is left in place:
+// the newcomer meets it in `listenControl` and joins it, or refuses `socket-in-use`.
+
+describe('a take-over never unlinks a socket something LISTENS on (Gate 5, security/F3)', () => {
+  it('a dead record and a silent probe — but a listener on the canonical path: the record is replaced, the socket is left exactly where it is', async () => {
+    writeHeld();
+    writeFileSync(controlSocketPath(dir), 'a BUSY live runner’s socket');
+    const socketListens = vi.fn(async () => true);
+    const got = await acquireLock(dir, claim(), deps({ isAlive: () => false, socketListens }));
+    // The lock is the newcomer's; what it does next is `listenControl`'s — it meets this socket.
+    expect(got).toEqual({ role: 'primary' });
+    expect(readLock(dir)).toMatchObject({ tokenHash: 'new', pid: 4242 });
+    // The mutant: drop the check, and this is the ordinary take-over's unlink.
+    expect(readFileSync(controlSocketPath(dir), 'utf8')).toBe('a BUSY live runner’s socket');
+    // The CANONICAL path is asked — never the path a lock record names.
+    expect(socketListens).toHaveBeenCalledWith(controlSocketPath(dir));
+  });
+
+  it('…the same when the record names some OTHER socket path: it is the canonical one that is asked, and kept', async () => {
+    writeHeld({ socket: path.join(dir, 'elsewhere.sock') });
+    writeFileSync(controlSocketPath(dir), 'a BUSY live runner’s socket');
+    const socketListens = vi.fn(async (asked: string) => asked === controlSocketPath(dir));
+    expect((await acquireLock(dir, claim(), deps({ isAlive: () => false, socketListens }))).role).toBe('primary');
+    expect(socketListens.mock.calls.map(([asked]) => asked)).toEqual([controlSocketPath(dir)]);
+    expect(existsSync(controlSocketPath(dir))).toBe(true);
+  });
+
+  it('a record naming THIS pid (a failed start of ours, or a recycled number) keeps a listened-on socket too', async () => {
+    writeHeld({ pid: 4242, tokenHash: 'left-behind' });
+    writeFileSync(controlSocketPath(dir), 'a BUSY live runner’s socket');
+    const got = await acquireLock(dir, claim(), deps({ pid: 4242, isAlive: () => true, commandLineOf: () => OURS, socketListens: async () => true }));
+    expect(got.role).toBe('primary');
+    expect(existsSync(controlSocketPath(dir))).toBe(true);
+  });
+
+  it('a runner of ours that died while being probed, its PORT still answering: the port answer is not discarded — the socket is kept', async () => {
+    // `serving` was computed and then ignored on this branch. A port that still answers is
+    // something alive on the record's number — perhaps the very runner that owns the socket
+    // — so the socket is left for `listenControl`'s connect to judge, which removes litter.
+    writeHeld({ port: 51234 });
+    writeFileSync(controlSocketPath(dir), 'a socket beside a port that still answers');
+    let asked = 0;
+    const got = await acquireLock(dir, claim(), deps({ isAlive: () => ++asked <= 1, commandLineOf: () => OURS, probePort: async () => true }));
+    expect(got.role).toBe('primary');
+    expect(existsSync(controlSocketPath(dir))).toBe(true);
+  });
+
+  it('a socket NOTHING listens on is still litter, and still removed — the check keeps live sockets, not every file', async () => {
+    writeHeld();
+    writeFileSync(controlSocketPath(dir), 'a dead runner’s socket');
+    const socketListens = vi.fn(async () => false);
+    expect((await acquireLock(dir, claim(), deps({ isAlive: () => false, socketListens }))).role).toBe('primary');
+    expect(socketListens).toHaveBeenCalledTimes(1);
+    expect(existsSync(controlSocketPath(dir))).toBe(false);
   });
 });
 

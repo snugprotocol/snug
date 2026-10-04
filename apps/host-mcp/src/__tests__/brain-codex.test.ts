@@ -36,6 +36,7 @@ import {
   CODEX_INSTALL_REMEDY,
   CODEX_MAX_LIVE,
   CODEX_VERIFIED_VERSIONS,
+  codexVersionOf,
   createCodexDriver,
   parseCodexCatalog,
   spawnInOwnGroup,
@@ -46,6 +47,8 @@ import {
   CODEX_FEATURES_LIST,
   CODEX_LOGGED_OUT_STDERR,
   CODEX_LOGGED_OUT_STREAM,
+  CODEX_LOGIN_STATUS_API_KEY_TRANSCRIBED,
+  CODEX_LOGIN_STATUS_CHATGPT_TRANSCRIBED,
   CODEX_LOGIN_STATUS_LOGGED_OUT,
   CODEX_MODELS_BUNDLED,
   CODEX_SUCCESS_STREAM,
@@ -455,7 +458,12 @@ describe('the reader is safe at EVERY byte boundary', () => {
 
 // ------------------------------------------------------------------- the driver
 
-const LOGGED_IN: FakeCodexScript = { stdout: 'Logged in using ChatGPT\n' };
+/**
+ * The logged-in CLI every driver test below starts from. TRANSCRIBED, not recorded (Gate 5,
+ * tests/F3): upstream's `login.rs` at `rust-v0.160.0`, never seen printed by a real CLI —
+ * see `CODEX_LOGIN_STATUS_CHATGPT_TRANSCRIBED` and `fixtures/codex/PROVENANCE.md`.
+ */
+const LOGGED_IN: FakeCodexScript = CODEX_LOGIN_STATUS_CHATGPT_TRANSCRIBED;
 const isLoginStatus = (args: readonly string[]): boolean => args[0] === 'login' && args[1] === 'status';
 const isCatalog = (args: readonly string[]): boolean => args[0] === 'debug' && args[1] === 'models';
 const isVersion = (args: readonly string[]): boolean => args[0] === '--version';
@@ -512,6 +520,18 @@ describe('the driver says what it is', () => {
     expect(children.some((child) => isVersion(child.args))).toBe(false);
   });
 
+  it('`codex --version` is read in ONE place — and every listed entry is in the form that reading yields (Gate 5, truth/F2)', () => {
+    // Measured on 0.160.0: `codex-cli 0.160.0`. The probe and the owner's walk both read it
+    // through `codexVersionOf`, so what the walk prints is what the list must hold.
+    expect(codexVersionOf('codex-cli 0.160.0\n')).toBe('0.160.0');
+    expect(codexVersionOf('codex-cli 0.160.0-alpha.1 (unknown build)')).toBeUndefined();
+    expect(codexVersionOf('')).toBeUndefined();
+    // An entry pasted as the CLI prints it — `codex-cli 0.160.0` — could never match, and the
+    // chip would say "not yet verified" with nothing failing. This turns that into a red test
+    // the moment the list is edited.
+    for (const entry of CODEX_VERIFIED_VERSIONS) expect(codexVersionOf(`codex-cli ${entry}\n`), `CODEX_VERIFIED_VERSIONS entry ${entry}`).toBe(entry);
+  });
+
   it('a walked version verifies ONLY the CLI that reports exactly it', async () => {
     const versioned = (version: string, verifiedVersions: readonly string[]) => {
       const spawner = fakeCodexSpawner((args) => (isVersion(args) ? { stdout: `codex-cli ${version}\n` } : isLoginStatus(args) ? LOGGED_IN : { stdout: CODEX_MODELS_BUNDLED }));
@@ -545,7 +565,26 @@ describe('readiness is asked of `codex login status` — never of a think (ADR-0
     expect(children.map((child) => child.args)).toEqual([['login', 'status']]);
   });
 
+  it('the logged-in lines readiness rests on are TRANSCRIBED — and the provenance says so, and from where (Gate 5, tests/F3)', () => {
+    // Only the logged-OUT line was ever recorded. A provenance that listed only the
+    // `*.transcribed.jsonl` streams let the ready line pass for a measurement.
+    const provenance = readFileSync(path.join(__dirname, 'fixtures', 'codex', 'PROVENANCE.md'), 'utf8');
+    const section = provenance.slice(provenance.indexOf('**Logged-in `login status` lines — TRANSCRIBED'));
+    expect(section.startsWith('**Logged-in'), 'PROVENANCE.md has a section for the transcribed login lines').toBe(true);
+    for (const [script, line] of [
+      [CODEX_LOGIN_STATUS_CHATGPT_TRANSCRIBED, 'Logged in using ChatGPT'],
+      [CODEX_LOGIN_STATUS_API_KEY_TRANSCRIBED, 'Logged in using an API key'],
+    ] as const) {
+      expect(script.stderr.startsWith(line), line).toBe(true);
+      expect(section, line).toContain(line);
+    }
+    expect(section).toContain('codex-rs/cli/src/login.rs');
+    expect(section).toContain('rust-v0.160.0');
+  });
+
   it('is READY only on exit 0 AND the ChatGPT login line — on either stream', async () => {
+    // TRANSCRIBED (tests/F3): upstream prints this line on stderr; the driver reads both
+    // streams, so both are fed here. No real logged-in CLI has printed it for this suite.
     expect(await probeWith({ stdout: 'Logged in using ChatGPT\n' }).driver.probe()).toEqual({ state: 'ready' });
     expect(await probeWith({ stderr: 'Logged in using ChatGPT\n' }).driver.probe()).toEqual({ state: 'ready' });
     // The line with a non-zero exit is not a login.
@@ -553,12 +592,15 @@ describe('readiness is asked of `codex login status` — never of a think (ADR-0
   });
 
   it('a login by API KEY is not the user’s own agent: logged-out, saying so — and the key’s line is never repeated', async () => {
-    const { driver } = probeWith({ stdout: 'Logged in using an API key - sk-proj-abc123***xyz\n' });
+    // TRANSCRIBED (tests/F3), now in upstream's own shape and stream: the key's first 8 and
+    // last 5 characters around `***`, on stderr. The old sample (`sk-proj-abc123***xyz`, on
+    // stdout) was invented in neither.
+    const { driver } = probeWith(CODEX_LOGIN_STATUS_API_KEY_TRANSCRIBED);
     const readiness = await driver.probe();
     expect(readiness.state).toBe('logged-out');
     expect(readiness.detail).toMatch(/ChatGPT login, not an API key/);
     expect(readiness.detail).toMatch(/codex login/);
-    expect(readiness.detail).not.toMatch(/sk-|abc123/);
+    expect(readiness.detail).not.toMatch(/sk-|ABCDE/);
   });
 
   it('exit 1 saying anything at all is logged-out; exit 0 saying nothing readable is UNKNOWN — never ready', async () => {

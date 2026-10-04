@@ -49,7 +49,7 @@ import { SharedDocsPanel } from '../share/SharedDocsPanel.js';
 import { SharedUpdateControls } from '../share/SharedUpdateControls.js';
 import { bundleIdFromSharedRouteId, getSharedEntry, isSharedId, isUnownedId, sharedInboxStore } from '../share/sharedInbox.js';
 import { desktopLinkFor } from '../share/relayClient.js';
-import { availabilityOf, needsOfConnections, needsOfRequirement, offersOf, type AppNeed } from '../platform/availability.js';
+import { availabilityOf, needsOfConnections, needsOfRequirement, offersOf, signedIn, type AppNeed } from '../platform/availability.js';
 import { getPlatform, allows } from '../platform/platform.js';
 import { installStarterConnections, starterDeclarationForStarterId } from '../starter/starterDeclaration.js';
 import { installStarterRuntimeContract } from '../starter/starterRuntimeContract.js';
@@ -470,7 +470,7 @@ export default function RunView(): ReactElement {
       const rows = db.listConnections(id);
       if (cancelled) return;
       setConnectionSlots(rows.length);
-      setRowNeeds({ id, needs: needsOfConnections(rows) });
+      setRowNeeds({ id, needs: needsOfConnections(rows, signedIn(db)) });
       if (rows.some((row) => row.requirement.kind === 'linked_device')) {
         const status = await refreshHelperStatus(WHATSAPP_HELPER);
         if (!cancelled) setHelperWanted(helperNeedsInstall(status));

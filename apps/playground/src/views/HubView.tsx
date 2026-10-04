@@ -6,7 +6,7 @@ import { parseBuildPrompt } from '../agent/chips.js';
 import { ProtectionOffer } from '../vault/ProtectionOffer.js';
 import { DesktopWelcome } from '../desktop/DesktopWelcome.js';
 import { useDesktopFirstRun } from '../desktop/firstRun.js';
-import { availabilityOf, needsOfConnections, needsOfRequirement, offersOf, type AppNeed } from '../platform/availability.js';
+import { availabilityOf, needsOfConnections, needsOfRequirement, offersOf, signedIn, type AppNeed } from '../platform/availability.js';
 import { getPlatform } from '../platform/platform.js';
 import { useLibraryRevision } from '../platform/signals.js';
 import { refreshAppMeta, useAppMetaMap } from '../state/appMeta.js';
@@ -169,8 +169,11 @@ function HubHome(): ReactElement {
           if (rows === undefined) rowsByApp.set(row.appId, [row]);
           else rows.push(row);
         }
+        // A finished OAuth sign-in is read from the same db: the redirect is a need only
+        // while a sign-in is owed (Gate 5 seams/F1).
+        const signIns = signedIn(db);
         const needs = new Map<string, readonly AppNeed[]>();
-        for (const [appId, rows] of rowsByApp) needs.set(appId, needsOfConnections(rows));
+        for (const [appId, rows] of rowsByApp) needs.set(appId, needsOfConnections(rows, signIns));
         if (!cancelled) setLoad({ phase: 'ready', entries, needs });
       })
       .catch(() => {

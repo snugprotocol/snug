@@ -24,3 +24,20 @@ definitions (`codex-rs/exec/src/exec_events.rs` at 0.160.0: `ThreadEvent`, `Thre
 `ThreadItemDetails`, `Usage`), so they are right about the SHAPE the CLI documents and prove
 nothing about what a real turn emits. The owner's logged-in walk (criterion B7) replaces
 them with recordings; until then the driver is `verified: false`.
+
+**Logged-in `login status` lines — TRANSCRIBED, NOT recorded** (marked 2026-10-04, Gate 5
+tests/F3). Only the logged-OUT `login status` above was ever run. The driver's `ready` rests on
+the ChatGPT line alone (criterion B5), and every test that reaches `ready` feeds a
+transcription of it — kept in `fake-codex-child.ts`, not in a file here:
+
+| Constant | Line | Where it came from |
+|---|---|---|
+| `CODEX_LOGIN_STATUS_CHATGPT_TRANSCRIBED` | `Logged in using ChatGPT` (stderr, exit 0) | `run_login_status` in `codex-rs/cli/src/login.rs` at tag `rust-v0.160.0` (read 2026-10-04): `eprintln!("Logged in using ChatGPT")` on the `AuthMode::Chatgpt \| AuthMode::ChatgptAuthTokens` branch, then `exit(0)` |
+| `CODEX_LOGIN_STATUS_API_KEY_TRANSCRIBED` | `Logged in using an API key - sk-proj-***ABCDE` (stderr, exit 0) | the same function's `AuthMode::ApiKey` branch: `eprintln!("Logged in using an API key - {}", safe_format_key(&api_key))` — the first 8 and last 5 characters around `***`; the key shown is invented in that shape |
+
+The same function prints the RECORDED `Not logged in` with the same `eprintln!` and exit 1, which
+is the one check the transcription has against reality. Used by: `brain-codex.test.ts`
+(`LOGGED_IN`, which every logged-in driver test starts from, and the readiness and API-key
+cases) and `brain-live.test.ts` (the walk's fake CLI). The owner's walk (criterion B7, step 1)
+is the first time the line is seen printed: record it as `login-status-chatgpt.recorded.stdout`
+/ `.stderr` and point `CODEX_LOGIN_STATUS_CHATGPT_TRANSCRIBED` at the files.

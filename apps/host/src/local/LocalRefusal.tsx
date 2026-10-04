@@ -1,4 +1,4 @@
-// The three states in which this page will not take the user's work — each naming what to
+// The four states in which this page will not take the user's work — each naming what to
 // do next, because a page that renders nothing is indistinguishable from one that is broken.
 
 import type { ReactElement } from 'react';
@@ -8,9 +8,13 @@ export interface LocalRefusalProps {
    * `no-token` — a runner answered and will not let this page in (a bookmark, a second tab,
    *              a page left open across a restart);
    * `held`     — another product has the user's file open;
-   * `stopped`  — the runner this page was talking to went away (K7).
+   * `stopped`  — the runner this page was talking to went away (K7);
+   * `not-answering` — the page holds the runner's key and `/status` got no answer to any
+   *              ask (Gate 5 security/F5). It stops here because the only other way to
+   *              open was as a plain file, on this browser's storage — work the user would
+   *              then not find in their Snug file.
    */
-  kind: 'no-token' | 'held' | 'stopped';
+  kind: 'no-token' | 'held' | 'stopped' | 'not-answering';
   heldBy?: string;
 }
 
@@ -29,6 +33,11 @@ const COPY: Record<LocalRefusalProps['kind'], { title: string; body: string }> =
     // that kept taking edits after the runner went would lose every one of them in silence.
     title: 'The Snug runner stopped',
     body: 'Reopen Snug from your agent — ask it to open Snug again. Everything saved before the runner stopped is in your file; this page takes no further edits.',
+  },
+  'not-answering': {
+    // True by construction: this refusal is decided before any platform or db is composed.
+    title: 'The Snug runner is not answering',
+    body: 'This page came from the Snug runner, but the runner did not answer when the page asked for your file. Reload this page — nothing has been opened or saved yet. If it still does not answer, ask your agent to open Snug again.',
   },
 };
 

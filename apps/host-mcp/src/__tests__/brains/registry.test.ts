@@ -21,6 +21,7 @@ import { BRAIN_PROBE_FLOOR_MS, createBrainRegistry, machineDrivers, NOT_PROBED_D
 import { brainOf, fakeDriver } from '../fixtures/fake-brains.js';
 import { fakeSpawner } from '../fixtures/fake-claude-child.js';
 import { CODEX_SUCCESS_STREAM, fakeCodexSpawner } from '../fixtures/fake-codex-child.js';
+import { HOSTILE_PARENT } from '../fixtures/hostile-env.js';
 
 const answeringBrain = (stop: () => void = () => {}): Brain => brainOf(undefined, stop);
 
@@ -407,44 +408,8 @@ describe('the shipped drivers (the release entry’s registry)', () => {
     rmSync(home, { recursive: true, force: true });
   });
 
-  /**
-   * THE HOSTILE PARENT (B4). The twelve `CLAUDE_*` names were measured in a live Claude Code
-   * session on 2026-09-07 — the messaging token and socket are a live IPC channel back into
-   * it — and the keys are every credential variable either vendor's CLI reads. A brain on a
-   * key is not "the user's own agent" (D15), and a key that reached a child would be one
-   * process away from an app's think.
-   */
-  const HOSTILE_PARENT: Record<string, string> = {
-    HOME: '/Users/x',
-    PATH: '/usr/bin',
-    SHELL: '/bin/zsh',
-    USER: 'x',
-    LANG: 'en_US.UTF-8',
-    TMPDIR: '/tmp/x',
-    TERM: 'xterm-256color',
-    CLAUDECODE: 'canary-1',
-    CLAUDE_CODE_ENTRYPOINT: 'canary-2',
-    CLAUDE_CODE_SESSION_ID: 'canary-3',
-    CLAUDE_CODE_CHILD_SESSION: 'canary-4',
-    CLAUDE_CODE_EXECPATH: 'canary-5',
-    CLAUDE_CODE_MESSAGING_SOCKET: 'canary-6',
-    CLAUDE_CODE_MESSAGING_TOKEN: 'canary-7',
-    CLAUDE_CODE_ENABLE_TASKS: 'canary-8',
-    CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING: 'canary-9',
-    CLAUDE_AGENT_SDK_VERSION: 'canary-10',
-    CLAUDE_PID: 'canary-11',
-    CLAUDE_EFFORT: 'canary-12',
-    ANTHROPIC_API_KEY: 'canary-sk-ant',
-    ANTHROPIC_AUTH_TOKEN: 'canary-ant-token',
-    ANTHROPIC_BASE_URL: 'https://canary.example',
-    OPENAI_API_KEY: 'canary-sk-openai',
-    OPENAI_BASE_URL: 'https://canary.example',
-    CODEX_API_KEY: 'canary-codex-key',
-    CODEX_ACCESS_TOKEN: 'canary-codex-token',
-    CODEX_HOME: '/Users/x/canary-codex-home',
-    SNUG_HOME: '/Users/x/canary-snug-home',
-    NODE_OPTIONS: '--require /canary.js',
-  };
+  // THE HOSTILE PARENT (B4) is `fixtures/hostile-env.ts` — shared with the browser opener's
+  // test since Gate 5: the opener is a child too, and the two lists must not drift apart.
 
   /** Every environment any driver handed to any child it started. */
   const shipped = () => {

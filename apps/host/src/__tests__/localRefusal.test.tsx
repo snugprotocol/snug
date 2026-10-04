@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest';
 
 import { LocalRefusal, type LocalRefusalProps } from '../local/LocalRefusal.js';
 
-const KINDS: LocalRefusalProps['kind'][] = ['no-token', 'held', 'stopped'];
+const KINDS: LocalRefusalProps['kind'][] = ['no-token', 'held', 'stopped', 'not-answering'];
 
 const textOf = (kind: LocalRefusalProps['kind']): string => renderToStaticMarkup(<LocalRefusal kind={kind} />).replace(/<[^>]+>/g, ' ');
 
@@ -24,5 +24,14 @@ describe('LocalRefusal — every refusal names a step that exists', () => {
     const text = textOf('no-token');
     expect(text).toContain('Open Snug from your agent');
     expect(text).toMatch(/ask your agent to open Snug/i);
+  });
+
+  it('not-answering: says the runner did not answer, that reloading is the step — and that nothing was written meanwhile', () => {
+    // Gate 5 security/F5: a page that holds a launch key and gets no answer from /status
+    // stops HERE instead of opening on browser storage. Reloading re-asks with the same key.
+    const text = textOf('not-answering');
+    expect(text).toContain('The Snug runner is not answering');
+    expect(text).toMatch(/reload this page/i);
+    expect(text).toMatch(/nothing has been opened or saved/i);
   });
 });

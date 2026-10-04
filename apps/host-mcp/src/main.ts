@@ -9,7 +9,7 @@
 // build is allowed that nothing else is: the user's real home, their real browser, their
 // real agent CLIs, and the process table that says whether Snug for Mac holds their file.
 
-import { createBrainRegistry, machineDrivers } from './brains/registry.js';
+import { createBrainRegistry, machineDrivers, machineEnvironment } from './brains/registry.js';
 import { detectHolder } from './holder.js';
 import { openInBrowser } from './opener.js';
 import { startProcess } from './process.js';
@@ -19,7 +19,9 @@ void startProcess({
     // The shipped process is the ONE caller that may reach the user's real home (D-B34).
     allowRealHome: true,
     heldBy: detectHolder,
-    openBrowser: openInBrowser,
+    // The user's real browser, through an opener whose child gets an ALLOWLISTED copy of the
+    // ONE environment read — never Node's default, which is the whole parent (Gate 5, F2).
+    openBrowser: (url) => openInBrowser(url, { parentEnv: machineEnvironment() }),
     // The user's OWN agents, on their own logins (D5, ADR-0071): `claude`, then `codex`.
     // Nothing is probed here — the first page contact does that.
     brains: ({ home }) => createBrainRegistry({ drivers: machineDrivers({ home }) }),

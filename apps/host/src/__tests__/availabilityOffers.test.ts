@@ -8,10 +8,12 @@
 // availability.test.ts) proves the derivation; only this proves that what the kit actually
 // hands the playground yields those offers. Cut `fetchImpl` from the local composition and
 // the playground's suite stays green while Trade Copilot is locked on every runner.
+import { SlotScopedCredentialStore, UserDbCredentialStore } from '@snugprotocol/auth';
 import { createMemoryBackend } from '@snugprotocol/db';
 import { describe, expect, it } from 'vitest';
 
-import { HOST_OFFERS, availabilityOf, needsOfRequirement, offersOf, type HostOffers } from '@playground/platform/availability';
+import { installTestUserDb } from '@playground/__tests__/userdbTestHelper';
+import { HOST_OFFERS, availabilityOf, needsOfConnections, needsOfRequirement, offersOf, signedIn, type HostOffers } from '@playground/platform/availability';
 
 import type { LocalClient, LocalStatus } from '../local/client.js';
 import { composeLocalPlatform } from '../local/compose-local.js';
@@ -75,6 +77,37 @@ describe('composeLocalPlatform — the runner offers connections through the pro
     const { platform } = composeLocalPlatform(client, status({ active: 'claude', brains: [claude] }), undefined, undefined, 't');
     expect(platform.brain?.kind).toBe('host');
     expect(offersOf(platform)).toEqual(RUNNER);
+  });
+
+  it('its sign-in port taken (`oauthRedirect: false`): an approved OAuth app whose sign-in FINISHED runs; one still owed its sign-in is blocked for the redirect', async () => {
+    // Gate 5 seams/F1, on the composition the runner's page really mounts. `oauthRedirect`
+    // is false whenever the runner fell back off its fixed port (another runner, any other
+    // process on it). Running on stored tokens needs the network, not the redirect — only
+    // signing in needs it to come back. The tokens go in through the store classes the OAuth
+    // service persists through, into a real user db.
+    const offers = offersOf(composeLocalPlatform(client, status({ oauthRedirect: false })).platform);
+    expect(offers.oauth, 'the premise: this runner cannot take a redirect').toBe(false);
+
+    const db = await installTestUserDb();
+    const spotify = { slot: 'spotify', provider: { name: 'Spotify', docsUrl: 'https://developer.spotify.com/documentation/web-api' }, kind: 'oauth2_auth_code', declaredApiHosts: ['api.spotify.com'] };
+    const install = (name: string): string => {
+      const app = db.installApp({ displayName: name, html: `<p>${name}</p>` });
+      db.putDeclaredConnection(app.appId, 'spotify', spotify, 'inference');
+      db.approveConnection(app.appId, 'spotify');
+      return app.appId;
+    };
+    const rewind = install('Rewind');
+    const owed = install('Owed');
+    const store = new SlotScopedCredentialStore(new UserDbCredentialStore(db), 'spotify');
+    await store.setCredential(rewind, 'access_token', 'at-from-spotify');
+    await store.setConnectionState(rewind, { status: 'connected', obtainedAt: Date.now(), expiresIn: 3600 });
+
+    const verdict = (appId: string) => availabilityOf(needsOfConnections(db.listConnections(appId), signedIn(db)), offers);
+    expect(verdict(rewind)).toEqual({ ok: true });
+    const blocked = verdict(owed);
+    expect(blocked.ok).toBe(false);
+    if (blocked.ok) return;
+    expect(blocked.blockers.map((blocker) => [blocker.need, blocker.title])).toEqual([['oauth', 'needs a provider sign-in']]);
   });
 
   it('when another product holds the file, connections go and so does everything that rides them', () => {

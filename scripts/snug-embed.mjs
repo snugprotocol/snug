@@ -34,7 +34,7 @@
 // inside an artifact. Warnings by default; `--strict` refuses. It says nothing about
 // whether the code is safe — the sandbox (C2) is the safety boundary, unchanged.
 
-import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -157,33 +157,65 @@ export function parseArgs(argv) {
   return args;
 }
 
-/** The real path of a file that may not exist yet: its nearest existing ancestor, resolved, plus the rest. */
-function realPathOf(file) {
+/**
+ * The real path of a file that may not exist yet: its nearest existing ancestor, resolved, plus
+ * the rest. Resolved by `realpathSync.native` (realpath(3)), which answers with the volume's own
+ * spelling — the JS `realpathSync` resolves links but keeps the caller's letter case, so on
+ * macOS's case-insensitive APFS `…/ASSETS/x` stayed `…/ASSETS/x` while naming `…/assets/x`
+ * (Gate 5 security F4; measured 2026-10-04 — APFS even folds `ſ` to `s`, which no JS case mapping does).
+ */
+function realPathOf(file, realpath = realpathSync.native) {
   const absolute = path.resolve(file);
   try {
-    return realpathSync(absolute);
+    return realpath(absolute);
   } catch {
     const parent = path.dirname(absolute);
-    return parent === absolute ? absolute : path.join(realPathOf(parent), path.basename(absolute));
+    return parent === absolute ? absolute : path.join(realPathOf(parent, realpath), path.basename(absolute));
+  }
+}
+
+/**
+ * Does `dir`'s volume fold letter case? Measured, never assumed from the platform: is `dir` the
+ * same directory when its name is spelled with every letter's case swapped? (macOS's default
+ * APFS folds; Linux's ext4 does not, and there `ASSETS/` beside `assets/` is another directory.)
+ * `dir` is the guarded `assets/`, so its name always has letters to swap.
+ */
+function foldsCase(dir) {
+  const name = path.basename(dir);
+  const swapped = [...name].map((c) => (c === c.toLowerCase() ? c.toUpperCase() : c.toLowerCase())).join('');
+  try {
+    const a = statSync(dir);
+    const b = statSync(path.join(path.dirname(dir), swapped));
+    return a.dev === b.dev && a.ino === b.ino;
+  } catch {
+    return false;
   }
 }
 
 /**
  * Why this run may not write `out`, or undefined when it may. The guarded directory is the
  * `assets/` beside this script's own `scripts/` — the skill it ships in. Compared by REAL
- * path on both sides: a symlink to the page, or into the directory, is the same file.
- * Run from the monorepo there is no such directory, and nothing is guarded.
+ * path on both sides: a symlink to the page, or into the directory, is the same file; so is
+ * another letter case of it on a volume that folds case (F4). Run from the monorepo there is
+ * no such directory, and nothing is guarded. `realpath` is a seam: the test stands in one that
+ * keeps the caller's spelling, to reach the case fold below.
  */
-export function ownAssetsRefusal({ page, out }, scriptFile = fileURLToPath(import.meta.url)) {
+export function ownAssetsRefusal({ page, out }, scriptFile = fileURLToPath(import.meta.url), realpath = realpathSync.native) {
   let assets;
   try {
-    assets = realpathSync(path.resolve(path.dirname(scriptFile), '..', 'assets'));
+    assets = realpath(path.resolve(path.dirname(scriptFile), '..', 'assets'));
   } catch {
     return undefined;
   }
+  // The native realpath already answers in the volume's spelling on macOS; the fold is for a
+  // realpath that keeps the typed one (glibc's builds its answer from the typed names, so a
+  // case-folding mount there would leave `ASSETS/` unequal). Only where the volume folds: on a
+  // case-sensitive one `ASSETS/` is a different directory, and refusing it would be wrong.
+  const fold = foldsCase(assets) ? (p) => p.toLowerCase() : (p) => p;
+  const guarded = fold(assets);
   const within = (file) => {
-    const real = realPathOf(file);
-    return real === assets || real.startsWith(`${assets}${path.sep}`);
+    const real = fold(realPathOf(file, realpath));
+    return real === guarded || real.startsWith(`${guarded}${path.sep}`);
   };
   if (out === undefined) {
     return within(page) ? `${page} is this skill's own copy of the kit page — pass --out <file> to write the merged page somewhere else (the default writes in place)` : undefined;

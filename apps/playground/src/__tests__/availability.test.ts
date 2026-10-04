@@ -24,6 +24,7 @@ import {
   needsOfConnections,
   needsOfRequirement,
   offersOf,
+  signedIn,
   type AppNeed,
   type HostOffers,
   type RunsIn,
@@ -145,26 +146,90 @@ describe('needsOfRequirement — what one declared connection asks of its host',
 });
 
 describe('needsOfConnections — an installed app, from its rows', () => {
-  const row = (status: 'declared' | 'approved' | 'revoked', req: ConnectionRequirement) => ({ status, requirement: req });
+  const row = (status: 'declared' | 'approved' | 'revoked', req: ConnectionRequirement) => ({ appId: 'app-1', slot: req.slot, status, requirement: req });
   const coinbase = requirement({ kind: 'api_key', provider: { name: 'Coinbase' } });
-  const spotify = requirement({ kind: 'oauth2_auth_code', provider: { name: 'Spotify' } });
+  const spotify = requirement({ kind: 'oauth2_auth_code', slot: 'spotify', provider: { name: 'Spotify' } });
+  /** No row has finished a sign-in — the reading every row got before Gate 5 seams/F1. */
+  const nobody = (): boolean => false;
+  const everybody = (): boolean => true;
 
   it('an app with no row needs nothing', () => {
-    expect(needsOfConnections([])).toEqual([]);
+    expect(needsOfConnections([], nobody)).toEqual([]);
   });
 
   it('declared and approved rows count; a revoked row does not', () => {
-    expect(needsOfConnections([row('declared', coinbase)])).toEqual(['network', 'native-fetch']);
-    expect(needsOfConnections([row('approved', coinbase)])).toEqual(['network', 'native-fetch']);
-    expect(needsOfConnections([row('revoked', coinbase)])).toEqual([]);
+    expect(needsOfConnections([row('declared', coinbase)], nobody)).toEqual(['network', 'native-fetch']);
+    expect(needsOfConnections([row('approved', coinbase)], nobody)).toEqual(['network', 'native-fetch']);
+    expect(needsOfConnections([row('revoked', coinbase)], nobody)).toEqual([]);
   });
 
   it('several rows are a union, each need once, in the order a tile reads them', () => {
-    expect(needsOfConnections([row('approved', spotify), row('declared', coinbase), row('revoked', requirement({ kind: 'linked_device' }))])).toEqual([
+    expect(needsOfConnections([row('approved', spotify), row('declared', coinbase), row('revoked', requirement({ kind: 'linked_device' }))], nobody)).toEqual([
       'network',
       'native-fetch',
       'oauth',
     ]);
+  });
+
+  it('the sign-in is a need only while it is OWED: an approved row whose sign-in finished needs the network, not the redirect', () => {
+    // Gate 5 seams/F1. Running an app on its stored tokens needs the network; the redirect
+    // is needed to SIGN IN. Counted for every OAuth row, a runner that lost its fixed port
+    // (`oauthRedirect: false`) blocked every app the user had already connected — with a
+    // reason that was false for them.
+    expect(needsOfConnections([row('approved', spotify)], everybody)).toEqual(['network']);
+    expect(needsOfConnections([row('approved', spotify)], nobody)).toEqual(['network', 'oauth']);
+    // A declared row still owes it whatever is stored: approval comes before any sign-in.
+    expect(needsOfConnections([row('declared', spotify)], everybody)).toEqual(['network', 'oauth']);
+    // The reader is asked about THIS row, by app and slot.
+    const asked: string[] = [];
+    needsOfConnections([row('approved', spotify)], (r) => (asked.push(`${r.appId}/${r.slot}`), true));
+    expect(asked).toEqual(['app-1/spotify']);
+  });
+});
+
+describe('signedIn — has a row’s provider sign-in happened? Read from what the OAuth service stores', () => {
+  // The service's own precondition for running on stored tokens (packages/auth
+  // `OAuthService.getAccessToken`): a connection state that is not `pending`, and an access
+  // token, both in the SLOT's slice. These rows are written through the store classes the
+  // wizard hands the service (`SlotScopedCredentialStore` over `UserDbCredentialStore`).
+  async function db() {
+    const helper = await import('./userdbTestHelper.js');
+    return helper.installTestUserDb();
+  }
+  const signIn = async (userDb: Awaited<ReturnType<typeof db>>, appId: string, slot: string, state: { status: 'pending' | 'connected' | 'expired' | 'error' } | 'corrupt', token = true) => {
+    const { SlotScopedCredentialStore, UserDbCredentialStore } = await import('@snugprotocol/auth');
+    const store = new SlotScopedCredentialStore(new UserDbCredentialStore(userDb), slot);
+    if (token) await store.setCredential(appId, 'access_token', 'at-from-the-provider');
+    if (state === 'corrupt') userDb.setSecret(`auth:${appId}:${slot}:_connection`, '{not json');
+    else await store.setConnectionState(appId, { ...state, obtainedAt: Date.now(), expiresIn: 3600 });
+  };
+
+  it('a finished sign-in (connected, or expired — the service refreshes over the network) is signed in', async () => {
+    const userDb = await db();
+    await signIn(userDb, 'app-1', 'spotify', { status: 'connected' });
+    await signIn(userDb, 'app-2', 'spotify', { status: 'expired' });
+    const reader = signedIn(userDb);
+    expect(reader({ appId: 'app-1', slot: 'spotify' })).toBe(true);
+    expect(reader({ appId: 'app-2', slot: 'spotify' })).toBe(true);
+  });
+
+  it('owed: nothing stored, a sign-in still pending (even over an old token), no token, a corrupt state, another slot’s token', async () => {
+    const userDb = await db();
+    await signIn(userDb, 'pending', 'spotify', { status: 'pending' });
+    await signIn(userDb, 'tokenless', 'spotify', { status: 'connected' }, false);
+    await signIn(userDb, 'corrupt', 'spotify', 'corrupt');
+    await signIn(userDb, 'other-slot', 'gmail', { status: 'connected' });
+    const reader = signedIn(userDb);
+    for (const appId of ['nothing', 'pending', 'tokenless', 'corrupt', 'other-slot']) expect(reader({ appId, slot: 'spotify' }), appId).toBe(false);
+  });
+
+  it('never reads a credential’s VALUE — only whether it is there', async () => {
+    const userDb = await db();
+    await signIn(userDb, 'app-1', 'spotify', { status: 'connected' });
+    const read: string[] = [];
+    const watched = { getSecret: (key: string) => (read.push(key), userDb.getSecret(key)), listSecretKeys: () => userDb.listSecretKeys() };
+    expect(signedIn(watched)({ appId: 'app-1', slot: 'spotify' })).toBe(true);
+    expect(read).toEqual(['auth:app-1:spotify:_connection']);
   });
 });
 

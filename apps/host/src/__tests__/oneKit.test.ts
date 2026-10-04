@@ -44,6 +44,26 @@ const sources = (dir: string): string[] =>
 
 const read = (file: string): string => readFileSync(path.join(REPO, file), 'utf8');
 
+/**
+ * K4: does this code read a browser storage global other than through `safeStorage.ts`?
+ *
+ * Four spellings of the one read. BARE skips a name after `.`, so a parameter's member
+ * (`win.sessionStorage`) is not counted — which on its own also let the global through
+ * when written off the global object (`window.sessionStorage`, Gate 5 tests/F1), so the
+ * global object's members, its bracket form and a destructure off it are arms of their own.
+ * `(?<![.\w$])` keeps `win.window.x` and `mywindow.x` (members, not the global) out.
+ */
+function readsAStorageGlobal(code: string): boolean {
+  const bare = /(^|[^.\w'"`])(sessionStorage|localStorage|indexedDB)\s*(\.|\[|\)|,|;|$)/m;
+  const viaNavigator = /navigator\??\.storage\b/;
+  const globalObject = String.raw`(?<![.\w$])(?:(?:window|globalThis|self)\s*\??\.\s*)*(?:window|globalThis|self)`;
+  const member = new RegExp(String.raw`${globalObject}\s*\??\.\s*(sessionStorage|localStorage|indexedDB)\b`);
+  const bracket = new RegExp(String.raw`${globalObject}\s*(?:\?\.)?\[\s*['"\`](sessionStorage|localStorage|indexedDB)['"\`]\s*\]`);
+  const destructured = new RegExp(String.raw`\{[^}]*\b(sessionStorage|localStorage|indexedDB)\b[^}]*\}\s*=\s*${globalObject}\b`);
+  const navigatorDestructured = new RegExp(String.raw`\{[^}]*\bstorage\b[^}]*\}\s*=\s*(?:${globalObject}\s*\??\.\s*)?navigator\b`);
+  return [bare, viaNavigator, member, bracket, destructured, navigatorDestructured].some((pattern) => pattern.test(code));
+}
+
 describe('K1 — one Vite config, one html entry, one output', () => {
   const top = readdirSync(HOST);
 
@@ -145,19 +165,44 @@ describe('K4 — one of everything the bindings share', () => {
     // after them (`win.sessionStorage`, `sessionStorage: …`, `sessionStorage?.`) are not reads
     // of the global; `host.<name>` inside the accessor is the one place that is.
     const bare = /(^|[^.\w'"`])(sessionStorage|localStorage|indexedDB)\s*(\.|\[|\)|,|;|$)/m;
-    const viaNavigator = /navigator\??\.storage\b/;
-    const offenders = kit
-      .filter((file) => file !== 'apps/host/src/safeStorage.ts')
-      .filter((file) => {
-        const code = stripComments(read(file));
-        return bare.test(code) || viaNavigator.test(code);
-      });
+    const offenders = kit.filter((file) => file !== 'apps/host/src/safeStorage.ts').filter((file) => readsAStorageGlobal(stripComments(read(file))));
     expect(offenders).toEqual([]);
     // The positive twin: the pattern catches the read this rule exists for.
     expect(bare.test('const x = compose(location, sessionStorage, y);')).toBe(true);
     expect(bare.test('sessionStorage.setItem(KEY, note);')).toBe(true);
     expect(bare.test('win.sessionStorage?.getItem(KEY)')).toBe(false);
     expect(bare.test('sessionStorage: safeSessionStorage(win),')).toBe(false);
+  });
+
+  it('…and the global read through window / globalThis / self, or destructured off them, is a read too', () => {
+    // Gate 5 (tests/F1): the rule above skips any name after a `.` so that a PARAMETER's
+    // member (`win.sessionStorage`) passes — and with it the commonest way to write a read
+    // of the real global. Each of these throws exactly where the bare read throws.
+    for (const spelling of [
+      'window.sessionStorage.getItem(K)',
+      'globalThis.localStorage.setItem(K, v)',
+      'self.indexedDB.open("x")',
+      'window?.localStorage',
+      'globalThis.window.sessionStorage',
+      "window['localStorage'].getItem(K)",
+      'const { sessionStorage } = window;',
+      'const { localStorage: store, indexedDB } = globalThis;',
+      'const { storage } = navigator;',
+      'const { storage } = window.navigator;',
+    ]) {
+      expect(readsAStorageGlobal(spelling), spelling).toBe(true);
+    }
+    // The negative twins: a parameter's member, a property name, a destructure off a parameter.
+    for (const spelling of [
+      'win.sessionStorage?.getItem(KEY)',
+      'sessionStorage: safeSessionStorage(win),',
+      'host.indexedDB',
+      'const { sessionStorage } = win;',
+      'mywindow.localStorage',
+      'safeNavigatorStorage(win)',
+    ]) {
+      expect(readsAStorageGlobal(spelling), spelling).toBe(false);
+    }
   });
 
   it('one base64 decoder — the db package’s; no private atob loop in the kit', () => {

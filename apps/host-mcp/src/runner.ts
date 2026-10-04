@@ -324,6 +324,9 @@ export function createRunner(options: RunnerOptions): Runner {
       return typeof answer?.tokenHash === 'string' && typeof answer.port === 'number' ? { tokenHash: answer.tokenHash, port: answer.port } : undefined;
     },
     probePort: portAnswers,
+    // The same connect `listenControl` asks — "unsure is live" — so a take-over and a bind
+    // judge the canonical socket by one rule (Gate 5, security/F3).
+    socketListens: somethingListens,
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     kill: askToStop,
     now: () => Date.now(),

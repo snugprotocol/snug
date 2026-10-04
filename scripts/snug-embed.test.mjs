@@ -3,7 +3,7 @@
 // and linting for the artifact viewer's narrower CDN policy (a LOADING aid, never safety).
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,7 +11,7 @@ import { test } from 'node:test';
 
 import { VIEWER_WRAPPER_HEAD, VIEWER_WRAPPER_TAIL, wrapAsViewerPage } from './fixtures/viewer-wrapper.mjs';
 import { ARTIFACT_SKELETON_OPEN, DB_BLOCK_FORMAT, readBundleBlocks, readDbBlock, unwrapViewerPage, writeDbBlock } from './lib/page-blocks.mjs';
-import { ARTIFACT_SCRIPT_ALLOWLIST, BUNDLE_MAX_BYTES, BUNDLE_MAX_HTML_CHARS, embed, lintBundleHtml, listBlocks, parseArgs } from './snug-embed.mjs';
+import { ARTIFACT_SCRIPT_ALLOWLIST, BUNDLE_MAX_BYTES, BUNDLE_MAX_HTML_CHARS, embed, lintBundleHtml, listBlocks, ownAssetsRefusal, parseArgs } from './snug-embed.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const STAMP = '0.1.0 abcdef1';
@@ -195,25 +195,30 @@ test('parseArgs: the flags, both spellings; a missing page is a usage error', ()
 });
 
 test('CLI: merges into --out, exit 0; a refusal exits 2 and writes nothing', () => {
+  // Removed in `finally`, as its siblings are: without it every run left one directory behind (214 found, 2026-10-04).
   const dir = mkdtempSync(path.join(tmpdir(), 'snug-embed-'));
-  const live = path.join(dir, 'live.html');
-  const out = path.join(dir, 'out.html');
-  const a = path.join(dir, 'a.json');
-  writeFileSync(live, withDb);
-  writeFileSync(a, bundle(A, HOSTILE));
-  const ok = spawnSync(process.execPath, [path.join(HERE, 'snug-embed.mjs'), live, '--bundle', a, '--out', out], { encoding: 'utf8' });
-  assert.equal(ok.status, 0, ok.stderr);
-  assert.match(ok.stdout, /1 bundle\(s\) merged/);
-  assert.deepEqual(readBundleBlocks(readFileSync(out, 'utf8')).map((b) => b.lineage), [A]);
-  assert.equal(readFileSync(live, 'utf8'), withDb); // --out leaves the input alone
-  const bad = path.join(dir, 'bad.json');
-  writeFileSync(bad, '{nope');
-  const refused = spawnSync(process.execPath, [path.join(HERE, 'snug-embed.mjs'), live, '--bundle', bad, '--out', path.join(dir, 'never.html')], { encoding: 'utf8' });
-  assert.equal(refused.status, 2);
-  assert.match(refused.stderr, /nothing written/);
-  const listed = spawnSync(process.execPath, [path.join(HERE, 'snug-embed.mjs'), out, '--list'], { encoding: 'utf8' });
-  assert.equal(listed.status, 0);
-  assert.match(listed.stdout, new RegExp(`${A}\\s+Pomodoro`));
+  try {
+    const live = path.join(dir, 'live.html');
+    const out = path.join(dir, 'out.html');
+    const a = path.join(dir, 'a.json');
+    writeFileSync(live, withDb);
+    writeFileSync(a, bundle(A, HOSTILE));
+    const ok = spawnSync(process.execPath, [path.join(HERE, 'snug-embed.mjs'), live, '--bundle', a, '--out', out], { encoding: 'utf8' });
+    assert.equal(ok.status, 0, ok.stderr);
+    assert.match(ok.stdout, /1 bundle\(s\) merged/);
+    assert.deepEqual(readBundleBlocks(readFileSync(out, 'utf8')).map((b) => b.lineage), [A]);
+    assert.equal(readFileSync(live, 'utf8'), withDb); // --out leaves the input alone
+    const bad = path.join(dir, 'bad.json');
+    writeFileSync(bad, '{nope');
+    const refused = spawnSync(process.execPath, [path.join(HERE, 'snug-embed.mjs'), live, '--bundle', bad, '--out', path.join(dir, 'never.html')], { encoding: 'utf8' });
+    assert.equal(refused.status, 2);
+    assert.match(refused.stderr, /nothing written/);
+    const listed = spawnSync(process.execPath, [path.join(HERE, 'snug-embed.mjs'), out, '--list'], { encoding: 'utf8' });
+    assert.equal(listed.status, 0);
+    assert.match(listed.stdout, new RegExp(`${A}\\s+Pomodoro`));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('(N, D4) a bundle carrying connections, a bundle with no app/connections seat, or an html over the per-field cap is refused at EMBED time — never merged to be refused at boot', () => {
@@ -258,7 +263,7 @@ function skillLayout() {
   writeFileSync(asset, PAGE);
   const app = path.join(dir, 'a.json');
   writeFileSync(app, bundle(A, '<p>a</p>'));
-  const run = (...args) => spawnSync(process.execPath, [path.join(skill, 'scripts', 'snug-embed.mjs'), ...args], { encoding: 'utf8', cwd: dir });
+  const run = (...args) => spawnSync(process.execPath, [path.join(skill, 'scripts', 'snug-embed.mjs'), ...args], { encoding: 'utf8', cwd: dir, env: { ...process.env, HOME: dir, SNUG_HOME: path.join(dir, 'snug-home') } });
   return { dir, skill, asset, app, run, remove: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
@@ -349,4 +354,89 @@ test('the CLI RUNS when it is reached through a symlinked path — it used to ex
 
 test('(K6) run from the repo (no assets/ beside scripts/) the rule constrains nothing', () => {
   assert.equal(existsSync(path.join(HERE, '..', 'assets')), false, 'this repo has no top-level assets/ — if one appears, this rule would start guarding it');
+});
+
+// ---- Gate 5 security F4: letter case is no way round the K6 rule ------------------------
+// The guard compared the JS `realpathSync` of each side, which resolves links but keeps the
+// caller's letter case: on macOS's default (case-insensitive) APFS `…/Assets/snug-host.html`
+// IS the guarded page, yet compared unequal — and the run rewrote the page the runner serves.
+
+/** Measured, never assumed from the platform: does the temp volume fold letter case? (macOS's default APFS does; Linux CI's ext4 does not.) */
+const TMP_FOLDS_CASE = (() => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'snug-embed-case-'));
+  try {
+    writeFileSync(path.join(dir, 'probe'), '');
+    return existsSync(path.join(dir, 'PROBE'));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+})();
+const ON_A_CASE_SENSITIVE_VOLUME = 'this volume is case-sensitive: ASSETS/ beside assets/ is ANOTHER directory here, not a spelling of it — the case-sensitive twin runs instead';
+
+test('(N, K6, F4) a case-variant spelling of the skill’s assets/ is refused — as the page, as --out over the page, as a new file beside it, and spelled differently ABOVE assets/', { skip: TMP_FOLDS_CASE ? false : ON_A_CASE_SENSITIVE_VOLUME }, (t) => {
+  const s = skillLayout();
+  try {
+    const live = path.join(s.dir, 'live.html');
+    writeFileSync(live, PAGE);
+    // As the input with no --out: the default writes in place.
+    const asPage = s.run(path.join('skills', 'snug', 'ASSETS', 'snug-host.html'), '--bundle', s.app);
+    assert.equal(asPage.status, 2, asPage.stdout);
+    assert.match(asPage.stderr, /pass --out/);
+    assert.match(asPage.stderr, /nothing written/);
+    const outs = [path.join(s.skill, 'Assets', 'snug-host.html'), path.join(s.skill, 'aSSets', 'merged.html'), path.join(s.dir, 'SKILLS', 'Snug', 'assets', 'merged.html')];
+    // APFS folds by Unicode, not by ASCII: the long s (U+017F) is an `s` to it, which no JS case
+    // mapping makes it — only the volume's own spelling (`realpathSync.native`) catches this one.
+    const longS = path.join(s.skill, 'aſſets', 'merged.html');
+    const assetsDir = statSync(path.join(s.skill, 'assets'));
+    const longSDir = statSync(path.dirname(longS), { throwIfNoEntry: false });
+    if (longSDir !== undefined && longSDir.dev === assetsDir.dev && longSDir.ino === assetsDir.ino) outs.push(longS);
+    else t.diagnostic('this volume does not fold ſ to s — the long-s spelling is another directory here, not asserted');
+    for (const out of outs) {
+      const refused = s.run(live, '--bundle', s.app, '--out', out);
+      assert.equal(refused.status, 2, `${out}: ${refused.stdout}`);
+      assert.match(refused.stderr, /inside this skill's own assets\//, out);
+      assert.match(refused.stderr, /nothing written/, out);
+    }
+    assert.deepEqual(readdirSync(path.join(s.skill, 'assets')), ['snug-host.html'], 'nothing was written into assets/');
+    assert.equal(readFileSync(s.asset, 'utf8'), PAGE, 'the skill’s page is byte-identical');
+  } finally {
+    s.remove();
+  }
+});
+
+test('(N, K6, F4) on a case-folding volume the comparison folds case too — a realpath that KEEPS the caller’s spelling is no way round', { skip: TMP_FOLDS_CASE ? false : ON_A_CASE_SENSITIVE_VOLUME }, () => {
+  // `realpathSync.native` returns the on-disk spelling on macOS; a realpath that keeps the typed
+  // spelling instead would leave `ASSETS/` unequal to `assets/`. The JS `realpathSync` behaves
+  // exactly so (measured, 2026-10-04) — it stands in for one here, through the guard's seam.
+  const s = skillLayout();
+  try {
+    const script = path.join(s.skill, 'scripts', 'snug-embed.mjs');
+    const live = path.join(s.dir, 'live.html');
+    writeFileSync(live, PAGE);
+    assert.match(ownAssetsRefusal({ page: path.join(s.skill, 'ASSETS', 'snug-host.html') }, script, realpathSync) ?? '', /pass --out/);
+    assert.match(ownAssetsRefusal({ page: live, out: path.join(s.skill, 'Assets', 'merged.html') }, script, realpathSync) ?? '', /own assets\//);
+    assert.match(ownAssetsRefusal({ page: live, out: path.join(s.dir, 'SKILLS', 'snug', 'assets', 'snug-host.html') }, script, realpathSync) ?? '', /own assets\//);
+    // The fold refuses no more than the same directory: a sibling whose name only STARTS like it is not inside it.
+    assert.equal(ownAssetsRefusal({ page: live, out: path.join(s.skill, 'ASSETS-old', 'merged.html') }, script, realpathSync), undefined);
+    assert.equal(ownAssetsRefusal({ page: live, out: path.join(s.dir, 'artifact.html') }, script, realpathSync), undefined);
+  } finally {
+    s.remove();
+  }
+});
+
+test('(K6, F4) the case-sensitive twin: ASSETS/ beside assets/ is ANOTHER directory, and writing there is not refused', { skip: TMP_FOLDS_CASE ? 'this volume folds case: ASSETS/ IS assets/ here — the refusal above runs instead' : false }, () => {
+  const s = skillLayout();
+  try {
+    mkdirSync(path.join(s.skill, 'ASSETS'));
+    const live = path.join(s.dir, 'live.html');
+    writeFileSync(live, PAGE);
+    const out = path.join(s.skill, 'ASSETS', 'merged.html');
+    const ok = s.run(live, '--bundle', s.app, '--out', out);
+    assert.equal(ok.status, 0, ok.stderr);
+    assert.deepEqual(readBundleBlocks(readFileSync(out, 'utf8')).map((b) => b.lineage), [A]);
+    assert.deepEqual(readdirSync(path.join(s.skill, 'assets')), ['snug-host.html']);
+    assert.equal(readFileSync(s.asset, 'utf8'), PAGE);
+  } finally {
+    s.remove();
+  }
 });

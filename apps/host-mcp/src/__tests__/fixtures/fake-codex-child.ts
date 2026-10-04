@@ -7,7 +7,8 @@
 //
 // Where the bytes come from is in `fixtures/codex/PROVENANCE.md`: `*.recorded.*` files are
 // the real CLI 0.160.0, logged out; `*.transcribed.jsonl` are written from the upstream
-// event definitions and marked so.
+// event definitions and marked so — as are the two logged-IN `login status` lines below,
+// which no recording ever produced (Gate 5, tests/F3).
 
 import { EventEmitter } from 'node:events';
 import { readFileSync } from 'node:fs';
@@ -30,6 +31,21 @@ export const CODEX_SUCCESS_TEXT = '{"move":"e7e5","message":"Classical — your 
 export const CODEX_TOOL_ATTEMPT_STREAM = fixture('exec-tool-attempt.transcribed.jsonl');
 /** RECORDED: `codex login status`, logged out (exit 1; the line is on stderr). */
 export const CODEX_LOGIN_STATUS_LOGGED_OUT = { stdout: fixture('login-status.recorded.stdout'), stderr: fixture('login-status.recorded.stderr'), exitCode: 1 };
+/**
+ * TRANSCRIBED — NOT recorded (Gate 5, tests/F3). No logged-in `codex login status` has ever
+ * been run for this task, yet `ready` rests on this line alone (B5). It is upstream's
+ * `run_login_status` in `codex-rs/cli/src/login.rs` at tag `rust-v0.160.0`, read 2026-10-04:
+ * `eprintln!("Logged in using ChatGPT")`, then exit 0 — on STDERR, the same macro and stream
+ * as the `Not logged in` line that WAS recorded. Walk B7's step 1 is where it is first seen
+ * printed; record it then as `login-status-chatgpt.recorded.*` and point this at the file.
+ */
+export const CODEX_LOGIN_STATUS_CHATGPT_TRANSCRIBED: { stderr: string; exitCode: number } = { stderr: 'Logged in using ChatGPT\n', exitCode: 0 };
+/**
+ * TRANSCRIBED — NOT recorded: the same function's API-key branch, `eprintln!("Logged in using
+ * an API key - {}", safe_format_key(&api_key))`, exit 0. `safe_format_key` keeps the first 8
+ * and the last 5 characters around `***`; the key here is invented in that shape.
+ */
+export const CODEX_LOGIN_STATUS_API_KEY_TRANSCRIBED: { stderr: string; exitCode: number } = { stderr: 'Logged in using an API key - sk-proj-***ABCDE\n', exitCode: 0 };
 /** RECORDED, trimmed: `codex debug models --bundled`. */
 export const CODEX_MODELS_BUNDLED = fixture('debug-models-bundled.trimmed.json');
 /** RECORDED: `codex features list`. */

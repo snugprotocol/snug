@@ -13,10 +13,16 @@
 //      it is a popup whose whole job is to post one message and close.
 //   2. THE RUNNER, asked for ONLY at the literal `http://127.0.0.1` — the one origin the
 //      local host process serves. The page claims a launch token if the address carries
-//      one and asks its own origin for `/status`, once, bounded. A runner's status → the
-//      local composition. A refusal carrying the runner's marker → "open it from your
-//      agent". Anything else — another status, not JSON, no answer inside the bound — is
-//      NOT a runner, and falls through.
+//      one and asks its own origin for `/status`, bounded. A runner's status → the local
+//      composition. A refusal carrying the runner's marker → "open it from your agent".
+//      Any other ANSWER — another status, not JSON — is NOT a runner, and falls through.
+//      NO answer is two cases. Without a token it is K2's static server that accepts and
+//      says nothing, and falls through. With a token CLAIMED (the address carried one, or
+//      this tab kept one) the page is the runner's own, so it asks again, each time for
+//      longer, and then says "the runner is not answering — reload" — it never opens as a
+//      plain file, whose browser storage would quietly take the user's work away from
+//      ~/Snug/user.snug (Gate 5 security/F5: a first `/status` on a machine waking from
+//      sleep can outlast the first bound while the runner is fine).
 //   3. EVERYTHING ELSE: the probe (an artifact — published or chat-created, one hosted
 //      runtime — a static copy, a plain file) and the hosted composition, as before.
 //
@@ -54,9 +60,21 @@ export const OAUTH_CALLBACK_PATH = '/oauth/callback';
  * How long the page waits for its own origin to answer `/status`. A runner on loopback
  * answers in a few milliseconds (it waits at most 250 ms for a fast brain probe to ride
  * the same read); a static server answers its 404 as fast. The bound is for the origin
- * that accepts the connection and says nothing — the page must still open, as a plain file.
+ * that accepts the connection and says nothing — a tokenless page must still open, as a
+ * plain file.
  */
 export const RUNNER_STATUS_BOUND_MS = 1_500;
+
+/**
+ * With a launch token claimed, the bounds of the asks after a first one that got NO answer.
+ * Each is longer than the last because what makes a runner slow repeats on every ask: every
+ * status runs a synchronous `/bin/ps` bounded at 2 s (`holder.ts`), so an answer that takes
+ * 1.8 s takes it every time and a retry at the same 1.5 s would never hear it.
+ */
+export const RUNNER_STATUS_RETRY_BOUNDS_MS: readonly number[] = [3_000, 6_000];
+
+/** The pause before the first of those retries; doubled before each one after it. */
+export const RUNNER_STATUS_RETRY_PAUSE_MS = 250;
 
 /** What the boot reads off `window`. */
 export interface BootWindow extends ProbeWindowLike, RouterWindow {
@@ -81,18 +99,51 @@ export type RunnerAnswer =
   | { kind: 'none' }
   /** A runner answered and will not let this page in. */
   | { kind: 'refused' }
+  /** The page holds a launch token and its origin answered none of the asks: the runner's page, with no runner to hear. */
+  | { kind: 'not-answering' }
   | { kind: 'runner'; token: string; status: LocalStatus };
 
-/** Ask the page's own origin whether it is the runner. ONE request, bounded; never throws. */
-export async function askRunner(win: Pick<BootWindow, 'location' | 'history' | 'fetch' | 'sessionStorage'>, options: { boundMs?: number } = {}): Promise<RunnerAnswer> {
+/** The ask's timing. Every field defaults to the constants above; a test shrinks them. */
+export interface AskRunnerOptions {
+  /** The first ask's bound. */
+  boundMs?: number;
+  /** With a token claimed: the bounds of the asks after a first one that got no answer. */
+  retryBoundsMs?: readonly number[];
+  /** The pause before the first retry; doubled before each one after it. */
+  pauseMs?: number;
+}
+
+/**
+ * Ask the page's own origin whether it is the runner. Never throws. ONE request for a
+ * tokenless page, and for any page whose origin ANSWERED; a page holding a token asks
+ * again, for longer each time, only while nothing answers (see the header, case 2).
+ */
+export async function askRunner(win: Pick<BootWindow, 'location' | 'history' | 'fetch' | 'sessionStorage'>, options: AskRunnerOptions = {}): Promise<RunnerAnswer> {
   if (!isRunnerOrigin(win.location)) return { kind: 'none' };
   // Claimed BEFORE the request, and before anything reads `location.hash`: the fragment is
   // stripped from the address bar here, so the router never sees `#token=…` as a route.
   const token = claimTokenFromFragment({ location: win.location, history: win.history, sessionStorage: safeSessionStorage(win) });
+  const bounds = [options.boundMs ?? RUNNER_STATUS_BOUND_MS, ...(token === undefined ? [] : (options.retryBoundsMs ?? RUNNER_STATUS_RETRY_BOUNDS_MS))];
+  let pauseMs = options.pauseMs ?? RUNNER_STATUS_RETRY_PAUSE_MS;
+  for (const [attempt, boundMs] of bounds.entries()) {
+    if (attempt > 0) {
+      await new Promise((resolve) => setTimeout(resolve, pauseMs));
+      pauseMs *= 2;
+    }
+    const answer = await askOnce(win, token, boundMs);
+    if (answer !== undefined) return answer;
+  }
+  return token === undefined ? { kind: 'none' } : { kind: 'not-answering' };
+}
+
+/** One bounded GET of `/status`: what the answer means, or `undefined` for NO answer. */
+async function askOnce(win: Pick<BootWindow, 'fetch'>, token: string | undefined, boundMs: number): Promise<RunnerAnswer | undefined> {
   const controller = new AbortController();
-  const bound = setTimeout(() => controller.abort(), options.boundMs ?? RUNNER_STATUS_BOUND_MS);
+  const bound = setTimeout(() => controller.abort(), boundMs);
+  let answered = false;
   try {
     const response = await win.fetch('/status', { headers: token === undefined ? {} : { authorization: `Bearer ${token}` }, cache: 'no-store', signal: controller.signal });
+    answered = true;
     if (response.status === 200) {
       const status = parseLocalStatus(await response.json());
       // A 200 that is not the runner's shape is some other server's `/status`.
@@ -102,8 +153,9 @@ export async function askRunner(win: Pick<BootWindow, 'location' | 'history' | '
     if ((response.status === 401 || response.status === 403) && isRunnerRefusal(response)) return { kind: 'refused' };
     return { kind: 'none' };
   } catch {
-    // No answer inside the bound, nothing listening, a body that is not JSON.
-    return { kind: 'none' };
+    // No answer inside the bound (headers or body), or nothing listening: no answer. A body
+    // that arrived and is not JSON IS an answer — and not a runner's.
+    return !answered || controller.signal.aborted ? undefined : { kind: 'none' };
   } finally {
     clearTimeout(bound);
   }
@@ -120,6 +172,8 @@ export interface BootDeps {
   /** The sql.js engine as bytes. A test hands in a stub rather than the real megabyte. */
   wasm?: () => Uint8Array;
   createClient?: typeof createLocalClient;
+  /** The `/status` ask's timing (a test shrinks it; the page uses the constants). */
+  ask?: AskRunnerOptions;
 }
 
 /** The decision (see the header). Reads the document ONLY on the hosted path. */
@@ -127,8 +181,11 @@ export async function planBoot(win: BootWindow, doc: ComposeDocument, deps: Boot
   if (win.location.pathname === OAUTH_CALLBACK_PATH) return { kind: 'oauth-callback' };
 
   const wasm = deps.wasm ?? sqlJsWasmBinary;
-  const runner = await askRunner(win);
+  const runner = await askRunner(win, deps.ask);
   if (runner.kind === 'refused') return { kind: 'refusal', refusal: { kind: 'no-token' } };
+  // The runner's page with no runner to hear it: said, and nothing composed — no platform,
+  // no db, so nothing the user does here can land in this browser's storage instead.
+  if (runner.kind === 'not-answering') return { kind: 'refusal', refusal: { kind: 'not-answering' } };
   if (runner.kind === 'runner') {
     // UNDER THE RUNNER THE PAGE'S OWN BLOCKS ARE NOT READ (K6): no embedded bundle, no
     // `snug-db`. The file is the runner's, and apps arrive as its events. The page it

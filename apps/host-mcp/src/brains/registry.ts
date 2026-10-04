@@ -249,22 +249,32 @@ export interface MachineSeams {
 }
 
 /**
+ * THE ONE WHOLE-ENVIRONMENT READ OF THE PROCESS (the release gate counts them, and allows one).
+ * The brains below build their children's environment from it, and the browser opener is
+ * HANDED it by the release entry (`main.ts`) to build its own child's by allowlist
+ * (`opener.ts`, Gate 5 security/F2) — two consumers, one read, so there is still one place to
+ * review for "can the parent's environment reach a child?". A reader that needs the
+ * environment is handed this, never given a `process.env` of its own.
+ */
+export const machineEnvironment = (): Readonly<Record<string, string | undefined>> => process.env;
+
+/**
  * The brains of the machine this process runs on: the user's own `claude`, then their own
  * `codex`. Only the release entry calls this without seams.
  *
- * THE ONE WHOLE-ENVIRONMENT READ OF THE PROCESS'S BRAINS IS HERE (the release gate counts
- * them). The child environment is built once, by allowlist, and the SAME object is handed
- * to every driver — a driver cannot read the parent's environment itself, so a new one
- * cannot leak it by forgetting to filter (ADR-0071 §3). The binary lookup reads HOME and
- * PATH out of the same object by name: the user's own PATH, not the child's, so adding this
- * process's Node directory for the children did not change where a CLI is looked for.
+ * The child environment is built once from `machineEnvironment()`, by allowlist, and the
+ * SAME object is handed to every driver — a driver cannot read the parent's environment
+ * itself, so a new one cannot leak it by forgetting to filter (ADR-0071 §3). The binary
+ * lookup reads HOME and PATH out of the parent object by name: the user's own PATH, not the
+ * child's, so adding this process's Node directory for the children did not change where a
+ * CLI is looked for.
  *
  * Each driver gets its own neutral directory under the Snug home: a plugin process inherits
  * the agent host's working directory, and a child started there would discover that
  * project's instructions, hooks and MCP servers (ADR-0069 §5).
  */
 export function machineDrivers(context: { home: string }, seams: MachineSeams = {}): BrainDriver[] {
-  const parent = seams.parentEnv ?? process.env;
+  const parent = seams.parentEnv ?? machineEnvironment();
   const env = childEnvFor(parent, seams.execDir ?? EXEC_DIR);
   const lookup = defaultResolveDeps(parent);
   const hostDir = path.join(context.home, 'host');

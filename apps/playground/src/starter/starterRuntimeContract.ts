@@ -19,9 +19,41 @@
  */
 
 import type { UserDb } from '@snugprotocol/db';
-import { runtimeContractSchema } from '@snugprotocol/protocol';
+import { canonicalRuntimeContract, runtimeContractSchema, type RuntimeContract } from '@snugprotocol/protocol';
 
 import { starterSource } from './starterSource.js';
+
+/**
+ * `starterContract:<appId>` — the contract a starter install or update last WROTE onto this
+ * copy, as canonical bytes (`null`: it wrote none). Gate 5 seams/F2: the builder's
+ * `runtime_contract_write` re-authors a contract IN PLACE on the current version, and on an
+ * unedited copy that version IS the starter's pin — so the pin cannot witness what the
+ * starter wrote, and "has the user re-authored it?" needs the fact recorded when it is true.
+ *
+ * Defined here rather than beside `starterVersion:` in packages/db's settings-key module,
+ * which the Gate 5 fix could not touch — so that module's obligation is still OWED for this
+ * key: `deleteApp`'s cascade removes it. Until then a deleted app leaves this row behind; it
+ * is read only for a starter install of the SAME app id, whose install act writes it afresh.
+ */
+export function starterContractSettingKey(appId: string): string {
+  if (appId.length === 0) throw new Error('appId must be non-empty');
+  return `starterContract:${appId}`;
+}
+
+/** Record what the starter just wrote (`undefined`: no contract). Never throws — a missing record only means the copy is judged as before. */
+export function recordStarterContract(db: UserDb, appId: string, contract: RuntimeContract | undefined): void {
+  try {
+    db.setSetting(starterContractSettingKey(appId), contract === undefined ? null : canonicalRuntimeContract(contract));
+  } catch {
+    /* the copy keeps its contract; the edit check falls back to the newest pin */
+  }
+}
+
+/** What the starter last wrote: canonical bytes, `null` for none, `undefined` for no record (a copy older than the record). */
+export function starterWrittenContract(db: UserDb, appId: string): string | null | undefined {
+  const stored = db.getSetting(starterContractSettingKey(appId));
+  return typeof stored === 'string' || stored === null ? stored : undefined;
+}
 
 /** Test seam: starter folder → raw contract JSON. */
 let fixtures: Record<string, string> | undefined;
@@ -69,10 +101,17 @@ export async function installStarterRuntimeContract(db: UserDb, appId: string): 
 
   try {
     const raw = (await bundledStarterContracts())[folder];
-    if (raw === undefined) return; // LLM-free starter — nothing to copy.
+    if (raw === undefined) {
+      // LLM-free starter — nothing to copy. Recorded all the same: a contract that appears
+      // on this copy later was written by someone else (seams/F2).
+      recordStarterContract(db, appId, undefined);
+      return;
+    }
     const parsed = runtimeContractSchema.safeParse(JSON.parse(raw));
     if (!parsed.success) return; // a starter contract the runtime would reject is worse than none
     db.putRuntimeContract(appId, app.currentVersion, parsed.data);
+    // AFTER the write it describes: a failed write records nothing.
+    recordStarterContract(db, appId, parsed.data);
   } catch {
     // Malformed JSON, a write refusal, a glob miss — all the same outcome: no contract.
   }
