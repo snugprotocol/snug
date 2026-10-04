@@ -264,13 +264,33 @@ test('journey 4 — oauth2_auth_code: register (redirect uri) → connect popup 
   // The RENDERED label is `connect my ${provider.name} account`. The old selector was
   // /connect my account/i — no wildcard between "my" and "account" — so it could never
   // match and this journey was statically incapable of passing. It had never been run.
-  const popupPromise = page.context().waitForEvent('page');
+  // The popup's navigations are recorded from the moment it exists: the callback page
+  // delivers the code and CLOSES ITSELF (OAuthCallbackPage's `window.close()`), so on a fast
+  // run it is gone before a `popup.waitForURL` resolves — "Target page … has been closed",
+  // 5 of 10 runs (measured 2026-10-04, TASK-20261003 integration). The claim is unchanged:
+  // the popup went THROUGH /oauth/callback, whether or not it is still open.
+  const callbackReached = new Promise<void>((resolve) => {
+    page.context().once('page', (popup) => {
+      popup.on('framenavigated', (frame) => {
+        if (frame === popup.mainFrame() && /\/oauth\/callback/.test(frame.url())) resolve();
+      });
+    });
+  });
   await wizard(page).getByRole('button', { name: /connect my .* account/i }).click();
 
   // ---- CONNECT screen: the waiting state names the provider (an ancestor system's grammar).
   await expect(wizard(page)).toContainText(/waiting for .* sign-in/i);
-  const popup = await popupPromise;
-  await popup.waitForURL(/\/oauth\/callback/, { timeout: 15_000 });
+  let bound: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      callbackReached,
+      new Promise<never>((_, reject) => {
+        bound = setTimeout(() => reject(new Error('the popup never reached /oauth/callback within 15 s')), 15_000);
+      }),
+    ]);
+  } finally {
+    clearTimeout(bound);
+  }
 
   await expect(wizard(page)).toContainText(/connected/i, { timeout: 15_000 });
   expect(await page.content()).not.toContain('e2e-access-token-abc');
@@ -340,7 +360,13 @@ test('the run surface carries NO inference affordance in any wizard session (P3-
   //
   // This passed alone and failed after its five siblings — the shape of a race,
   // not of a broken assertion: a warm page won the race, a loaded one lost it.
-  const connectCta = page.getByRole('button', { name: /connect/i }).first();
+  //
+  // And the wait itself raced (measured 2026-10-04, TASK-20261003 integration: 3 of 5
+  // runs failed ALONE on a clean main, 2 of 5 on the branch): `/connect/i` also names the
+  // run header's "connections" door, which renders at once — so the wait was satisfied by
+  // the door, the click opened the door, and the banner's CTA mounted behind it. The CTA
+  // this test means is the banner's, by its whole name.
+  const connectCta = page.getByRole('button', { name: /^connect this app$/i });
   await expect(connectCta).toBeVisible({ timeout: 20_000 });
   await connectCta.click();
   await expect(wizard(page)).toBeVisible();
