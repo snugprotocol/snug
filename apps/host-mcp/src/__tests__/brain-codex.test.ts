@@ -28,14 +28,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { argvPromptLimit, BrainStreamError, childEnvFor, splitChatRequest, type BrainDriver } from '../brains/brain.js';
 import { CODEX_SENTENCES, createCodexTurn, type CodexOutcome } from '../brains/codex-events.js';
+import { machineDrivers } from '../brains/registry.js';
 import {
   buildCodexArgs,
   CODEX_DISABLED_FEATURES,
   CODEX_FIRST_OUTPUT_MS,
   CODEX_IDLE_MS,
-  CODEX_INSTALL_REMEDY,
   CODEX_MAX_LIVE,
   CODEX_VERIFIED_VERSIONS,
+  codexInstallRemedy,
+  codexLoginRemedy,
   codexVersionOf,
   createCodexDriver,
   parseCodexCatalog,
@@ -69,6 +71,8 @@ afterEach(() => {
   rmSync(home, { recursive: true, force: true });
 });
 const cwd = (): string => path.join(home, 'host', 'brain-codex');
+/** Snug's OWN Codex home (B7 walk, 2026-10-05) — never the user's `~/.codex`. */
+const codexHome = (): string => path.join(home, 'host', 'codex-home');
 
 // ------------------------------------------------------------- the TOML basic string
 
@@ -475,7 +479,7 @@ function driverWith(exec: FakeCodexScript | ((args: readonly string[]) => FakeCo
     if (isCatalog(args)) return { stdout: CODEX_MODELS_BUNDLED };
     return typeof exec === 'function' ? exec(args) : exec;
   });
-  const driver = createCodexDriver({ env: ENV, cwd: cwd(), resolveBinary: () => '/Users/x/.local/bin/codex', spawn: spawner.spawn, ...over });
+  const driver = createCodexDriver({ env: ENV, cwd: cwd(), codexHome: codexHome(), resolveBinary: () => '/Users/x/.local/bin/codex', spawn: spawner.spawn, ...over });
   return { driver, ...spawner, thinks: () => spawner.children.filter((child) => child.args[0] === 'exec') };
 }
 
@@ -535,7 +539,7 @@ describe('the driver says what it is', () => {
   it('a walked version verifies ONLY the CLI that reports exactly it', async () => {
     const versioned = (version: string, verifiedVersions: readonly string[]) => {
       const spawner = fakeCodexSpawner((args) => (isVersion(args) ? { stdout: `codex-cli ${version}\n` } : isLoginStatus(args) ? LOGGED_IN : { stdout: CODEX_MODELS_BUNDLED }));
-      return createCodexDriver({ env: ENV, cwd: cwd(), resolveBinary: () => '/x/codex', spawn: spawner.spawn, verifiedVersions });
+      return createCodexDriver({ env: ENV, cwd: cwd(), codexHome: codexHome(), resolveBinary: () => '/x/codex', spawn: spawner.spawn, verifiedVersions });
     };
     const walked = versioned('0.160.0', ['0.160.0']);
     expect(walked.verified, 'not before it has been asked').toBe(false);
@@ -552,16 +556,72 @@ describe('the driver says what it is', () => {
   });
 });
 
+// The owner's B7 walk (2026-10-05) FAILED: a canary planted in their real `~/.codex/AGENTS.md`
+// came back in every answer. Codex loads its GLOBAL instructions file (codex-home's loader,
+// not the project-doc one `project_doc_max_bytes` governs) into every think, and no config key
+// turns it off — measured offline with `codex debug prompt-input` (the two recorded renders
+// below). Only a different CODEX_HOME keeps it out, so Snug's Codex has its OWN home: the
+// user's instructions, config, skills and plugins never reach an app, and Snug logs in to it
+// once. Snug never reads the login Codex keeps there.
+describe("Snug's own Codex home — the user's ~/.codex never reaches an app's think (B7 walk, 2026-10-05)", () => {
+  it('the recorded renders: the global AGENTS.md rides the shared home, and is absent under a home of its own', () => {
+    const render = (name: string) => JSON.parse(readFileSync(path.join(__dirname, 'fixtures', 'codex', `${name}.recorded.json`), 'utf8')) as { role: string; starts: string[] }[];
+    const agentsMd = (items: { role: string; starts: string[] }[]) => items.filter((item) => item.starts.some((start) => start.startsWith('# AGENTS.md instructions')));
+    expect(agentsMd(render('prompt-input-shared-home')).map((item) => item.role)).toEqual(['user']);
+    expect(agentsMd(render('prompt-input-own-codex-home'))).toEqual([]);
+    // developer_instructions is the system slot in both — the walk's other finding.
+    const [first] = render('prompt-input-own-codex-home');
+    expect(first!.role).toBe('developer');
+    expect(first!.starts[0]).toBe('SNUG-DEVELOPER-INSTRUCTIONS');
+  });
+
+  it('EVERY child runs with CODEX_HOME = Snug’s own home — the login check, the catalogue and the think — and HOME stays the user’s', async () => {
+    const { driver, children } = driverWith();
+    expect((await driver.probe()).state).toBe('ready');
+    await think(driver);
+    expect(children.map((child) => child.args[0]).sort()).toEqual(expect.arrayContaining(['debug', 'exec', 'login']));
+    for (const child of children) {
+      expect(child.options.env.CODEX_HOME, child.args.join(' ')).toBe(codexHome());
+      expect(child.options.env.HOME).toBe(ENV.HOME);
+    }
+  });
+
+  it('a parent CODEX_HOME never reaches a child — the user’s own (or anyone’s) is replaced, not inherited', async () => {
+    const spawner = fakeCodexSpawner(() => ({ stdout: 'Logged in using ChatGPT\n' }));
+    const [, codex] = machineDrivers({ home }, { parentEnv: { HOME: '/Users/x', PATH: '/usr/bin', CODEX_HOME: '/Users/x/.codex' }, codex: { resolveBinary: () => '/x/codex', spawn: spawner.spawn } });
+    await codex!.probe();
+    expect(spawner.children[0]!.options.env.CODEX_HOME).toBe(path.join(home, 'host', 'codex-home'));
+    expect(Object.values(spawner.children[0]!.options.env)).not.toContain('/Users/x/.codex');
+  });
+
+  it('the home is created — private to the user — before the first child, beside (never inside) the brain’s working directory', async () => {
+    const spawner = fakeCodexSpawner(() => ({ stdout: 'Logged in using ChatGPT\n' }));
+    const driver = createCodexDriver({ env: ENV, cwd: cwd(), codexHome: codexHome(), resolveBinary: () => '/x/codex', spawn: spawner.spawn });
+    expect(existsSync(codexHome())).toBe(false);
+    await driver.probe();
+    expect(statSync(codexHome()).mode & 0o777).toBe(0o700);
+    expect(path.relative(cwd(), codexHome()).startsWith('..')).toBe(true);
+  });
+
+  it('the remedy is ONE command a person can paste — the path quoted for a shell when it must be — and says why', () => {
+    expect(codexLoginRemedy('/Users/x/Snug/host/codex-home')).toContain('`CODEX_HOME=/Users/x/Snug/host/codex-home codex login`');
+    expect(codexLoginRemedy('/Users/x y/Snug/host/codex-home')).toContain("`CODEX_HOME='/Users/x y/Snug/host/codex-home' codex login`");
+    expect(codexLoginRemedy("/Users/o'brien/Snug/host/codex-home")).toContain(`\`CODEX_HOME='/Users/o'\\''brien/Snug/host/codex-home' codex login\``);
+    expect(codexLoginRemedy('/p')).toMatch(/own Codex login/);
+    expect(codexLoginRemedy('/p')).toMatch(/then check again\.$/);
+  });
+});
+
 describe('readiness is asked of `codex login status` — never of a think (ADR-0071 §6)', () => {
   const probeWith = (script: FakeCodexScript, over: Partial<CodexDriverDeps> = {}) => {
     const spawner = fakeCodexSpawner((args) => (isLoginStatus(args) ? script : { stdout: CODEX_MODELS_BUNDLED }));
-    const driver = createCodexDriver({ env: ENV, cwd: cwd(), resolveBinary: () => '/Users/x/.local/bin/codex', spawn: spawner.spawn, ...over });
+    const driver = createCodexDriver({ env: ENV, cwd: cwd(), codexHome: codexHome(), resolveBinary: () => '/Users/x/.local/bin/codex', spawn: spawner.spawn, ...over });
     return { driver, ...spawner };
   };
 
   it('the RECORDED logged-out CLI (exit 1, "Not logged in" on stderr) is logged-out, with `codex login`', async () => {
     const { driver, children } = probeWith(CODEX_LOGIN_STATUS_LOGGED_OUT);
-    expect(await driver.probe()).toEqual({ state: 'logged-out', detail: 'Your Codex CLI is not logged in — run `codex login`, then check again.' });
+    expect(await driver.probe()).toEqual({ state: 'logged-out', detail: codexLoginRemedy(codexHome()) });
     expect(children.map((child) => child.args)).toEqual([['login', 'status']]);
   });
 
@@ -613,27 +673,27 @@ describe('readiness is asked of `codex login status` — never of a think (ADR-0
     const spawn = vi.fn(() => {
       throw new Error('never called');
     });
-    const driver = createCodexDriver({ env: ENV, cwd: cwd(), resolveBinary: () => undefined, spawn });
+    const driver = createCodexDriver({ env: ENV, cwd: cwd(), codexHome: codexHome(), resolveBinary: () => undefined, spawn });
     const readiness = await driver.probe();
-    expect(readiness).toEqual({ state: 'absent', detail: CODEX_INSTALL_REMEDY });
+    expect(readiness).toEqual({ state: 'absent', detail: codexInstallRemedy(codexHome()) });
     expect(spawn).not.toHaveBeenCalled();
-    expect(CODEX_INSTALL_REMEDY).toContain('https://developers.openai.com/codex/cli');
-    expect(CODEX_INSTALL_REMEDY).toMatch(/codex login/);
-    expect(CODEX_INSTALL_REMEDY).not.toMatch(/curl|\| *(ba)?sh|npm i/);
+    expect(readiness.detail).toContain('https://developers.openai.com/codex/cli');
+    expect(readiness.detail).toContain(`CODEX_HOME=${codexHome()} codex login`);
+    expect(readiness.detail).not.toMatch(/curl|\| *(ba)?sh|npm i/);
   });
 
   it('a binary that cannot start is absent too — whether the spawn throws or the child reports it', async () => {
     const enoent = Object.assign(new Error('spawn /x/codex ENOENT'), { code: 'ENOENT' });
-    expect(await probeWith({ spawnError: enoent }).driver.probe()).toEqual({ state: 'absent', detail: CODEX_INSTALL_REMEDY });
+    expect(await probeWith({ spawnError: enoent }).driver.probe()).toEqual({ state: 'absent', detail: codexInstallRemedy(codexHome()) });
     const thrower = createCodexDriver({
       env: ENV,
-      cwd: cwd(),
+      cwd: cwd(), codexHome: codexHome(),
       resolveBinary: () => '/x/codex',
       spawn: () => {
         throw enoent;
       },
     });
-    expect(await thrower.probe()).toEqual({ state: 'absent', detail: CODEX_INSTALL_REMEDY });
+    expect(await thrower.probe()).toEqual({ state: 'absent', detail: codexInstallRemedy(codexHome()) });
   });
 
   it('a CLI that never answers the check is unknown at its bound, and its group is killed', async () => {
@@ -650,7 +710,7 @@ describe('readiness is asked of `codex login status` — never of a think (ADR-0
 
     // The same bound on the catalogue: no list, Codex still ready.
     const spawner = fakeCodexSpawner((args) => (isLoginStatus(args) ? LOGGED_IN : { stdout: [CODEX_MODELS_BUNDLED, flood], lingers: true }));
-    const driver = createCodexDriver({ env: ENV, cwd: cwd(), resolveBinary: () => '/x/codex', spawn: spawner.spawn });
+    const driver = createCodexDriver({ env: ENV, cwd: cwd(), codexHome: codexHome(), resolveBinary: () => '/x/codex', spawn: spawner.spawn });
     expect(await driver.probe()).toEqual({ state: 'ready' });
     expect(driver.catalog()).toEqual({ efforts: [], models: [] });
     expect(spawner.children[1]!.kills).toBe(1);
@@ -662,7 +722,8 @@ describe('readiness is asked of `codex login status` — never of a think (ADR-0
     expect(children.map((child) => child.args[0])).toEqual(['login', 'debug']);
     for (const child of children) {
       expect(child.binary).toBe('/Users/x/.local/bin/codex');
-      expect(child.options).toEqual({ env: ENV, cwd: cwd() });
+      // MIGRATED (B7 walk, 2026-10-05): the allowlist PLUS Snug's own Codex home — nothing else.
+      expect(child.options).toEqual({ env: { ...ENV, CODEX_HOME: codexHome() }, cwd: cwd() });
       expect(child.stdin.writableEnded).toBe(true);
     }
   });
@@ -690,7 +751,7 @@ describe('the catalogue is the CLI’s own (`codex debug models --bundled`), and
 
   it('is empty until Codex is ready — a brain that cannot think offers no controls', async () => {
     const spawner = fakeCodexSpawner((args) => (isLoginStatus(args) ? CODEX_LOGIN_STATUS_LOGGED_OUT : { stdout: CODEX_MODELS_BUNDLED }));
-    const driver = createCodexDriver({ env: ENV, cwd: cwd(), resolveBinary: () => '/x/codex', spawn: spawner.spawn });
+    const driver = createCodexDriver({ env: ENV, cwd: cwd(), codexHome: codexHome(), resolveBinary: () => '/x/codex', spawn: spawner.spawn });
     expect(driver.catalog()).toEqual({ efforts: [], models: [] });
     await driver.probe();
     expect(driver.catalog()).toEqual({ efforts: [], models: [] });
@@ -700,7 +761,7 @@ describe('the catalogue is the CLI’s own (`codex debug models --bundled`), and
   it('a catalogue from a login that has since gone is dropped', async () => {
     let loggedIn = true;
     const spawner = fakeCodexSpawner((args) => (isLoginStatus(args) ? (loggedIn ? LOGGED_IN : CODEX_LOGIN_STATUS_LOGGED_OUT) : { stdout: CODEX_MODELS_BUNDLED }));
-    const driver = createCodexDriver({ env: ENV, cwd: cwd(), resolveBinary: () => '/x/codex', spawn: spawner.spawn });
+    const driver = createCodexDriver({ env: ENV, cwd: cwd(), codexHome: codexHome(), resolveBinary: () => '/x/codex', spawn: spawner.spawn });
     await driver.probe();
     expect(driver.catalog().models).toHaveLength(8);
     loggedIn = false;
@@ -716,7 +777,7 @@ describe('the catalogue is the CLI’s own (`codex debug models --bundled`), and
     ['a spawn that fails', { spawnError: Object.assign(new Error('EACCES'), { code: 'EACCES' }) }],
   ] as Array<[string, FakeCodexScript]>)('%s is NO LIST — and Codex is still ready', async (_label, script) => {
     const spawner = fakeCodexSpawner((args) => (isLoginStatus(args) ? LOGGED_IN : script));
-    const driver = createCodexDriver({ env: ENV, cwd: cwd(), resolveBinary: () => '/x/codex', spawn: spawner.spawn, catalogMs: 20 });
+    const driver = createCodexDriver({ env: ENV, cwd: cwd(), codexHome: codexHome(), resolveBinary: () => '/x/codex', spawn: spawner.spawn, catalogMs: 20 });
     expect(await driver.probe()).toEqual({ state: 'ready' });
     expect(driver.catalog()).toEqual({ efforts: [], models: [] });
   });
@@ -728,7 +789,7 @@ describe('the catalogue is the CLI’s own (`codex debug models --bundled`), and
     expect(expected.models).toEqual([{ id: 'gpt-ok', name: 'Modèle — ♞ 🙂', efforts: ['low'] }]);
     for (let cut = 0; cut <= bytes.length; cut += 1) {
       const spawner = fakeCodexSpawner((args) => (isLoginStatus(args) ? LOGGED_IN : { stdout: [bytes.subarray(0, cut), bytes.subarray(cut)] }));
-      const driver = createCodexDriver({ env: ENV, cwd: cwd(), resolveBinary: () => '/x/codex', spawn: spawner.spawn });
+      const driver = createCodexDriver({ env: ENV, cwd: cwd(), codexHome: codexHome(), resolveBinary: () => '/x/codex', spawn: spawner.spawn });
       await driver.probe();
       expect(driver.catalog(), `cut at byte ${cut}`).toEqual(expected);
     }
@@ -778,7 +839,7 @@ describe('the catalogue is the CLI’s own (`codex debug models --bundled`), and
   });
 
   it('with NO catalogue a model is free text held to the conservative id shape, and no level is accepted', () => {
-    const driver = createCodexDriver({ env: ENV, cwd: cwd(), resolveBinary: () => '/x/codex', spawn: fakeCodexSpawner().spawn });
+    const driver = createCodexDriver({ env: ENV, cwd: cwd(), codexHome: codexHome(), resolveBinary: () => '/x/codex', spawn: fakeCodexSpawner().spawn });
     expect(driver.acceptsModel('gpt-7-nova')).toBe(true);
     expect(driver.acceptsModel('--oss')).toBe(false);
     expect(driver.acceptsModel('gpt 7')).toBe(false);
@@ -795,7 +856,8 @@ describe('a think is ONE child: the posture, the instructions in argv once, the 
     const child = thinks()[0]!;
     expect(child.binary).toBe('/Users/x/.local/bin/codex');
     expect(child.args).toEqual(buildCodexArgs({ system: 'you are a chess app', model: 'gpt-6-sol', effort: 'high', cwd: cwd() }));
-    expect(child.options.env).toBe(ENV);
+    // MIGRATED (B7 walk, 2026-10-05): was the allowlist object itself; now the allowlist plus Snug's own Codex home.
+    expect(child.options.env).toEqual({ ...ENV, CODEX_HOME: codexHome() });
     expect(child.options.cwd).toBe(cwd());
   });
 
@@ -979,9 +1041,9 @@ describe('a think that fails says one fixed sentence, delivers nothing and kills
     const spawn = vi.fn(() => {
       throw new Error('never called');
     });
-    const driver = createCodexDriver({ env: ENV, cwd: cwd(), resolveBinary: () => undefined, spawn });
+    const driver = createCodexDriver({ env: ENV, cwd: cwd(), codexHome: codexHome(), resolveBinary: () => undefined, spawn });
     const { error } = await think(driver);
-    expect((error as BrainStreamError).message).toBe(CODEX_INSTALL_REMEDY);
+    expect((error as BrainStreamError).message).toBe(codexInstallRemedy(codexHome()));
     expect(spawn).not.toHaveBeenCalled();
   });
 
@@ -1104,7 +1166,7 @@ describe('the whole process GROUP dies at once (a real child that ignores SIGTER
     const env = childEnvFor({ PATH: process.env.PATH, TMPDIR: home });
     const driver = createCodexDriver({
       env,
-      cwd: cwd(),
+      cwd: cwd(), codexHome: codexHome(),
       resolveBinary: () => process.execPath,
       spawn: (binary, _args, options) => spawnInOwnGroup(binary, [script, mode], options),
     });

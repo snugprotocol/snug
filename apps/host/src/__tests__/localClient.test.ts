@@ -193,7 +193,8 @@ describe('the status wire — ONE fixture, read by the process’s route test an
       ['claude-sonnet-5-5', 5],
       ['claude-haiku-4-5-20251001', 0],
     ]);
-    expect(status?.brains[1]?.detail).toBe('Your Codex CLI is not logged in — run `codex login`, then check again.');
+    // MIGRATED (B7 walk, 2026-10-05): Snug's own Codex home — the remedy names the one login it needs.
+    expect(status?.brains[1]?.detail).toBe('Snug keeps its own Codex login, so your own Codex instructions and settings never reach an app — run `CODEX_HOME=/Users/x/Snug/host/codex-home codex login` and choose ChatGPT, then check again.');
   });
 
   it('reads the optional seats when they are well-formed, and drops them when they are not', () => {

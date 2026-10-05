@@ -245,7 +245,7 @@ export interface MachineSeams {
   parentEnv?: Record<string, string | undefined>;
   execDir?: string;
   claude?: Partial<Pick<ClaudeDriverDeps, 'resolveBinary' | 'models' | 'spawnBinary'>>;
-  codex?: Partial<Pick<CodexDriverDeps, 'resolveBinary' | 'spawn'>>;
+  codex?: Partial<Pick<CodexDriverDeps, 'resolveBinary' | 'spawn' | 'codexHome'>>;
 }
 
 /**
@@ -289,6 +289,9 @@ export function machineDrivers(context: { home: string }, seams: MachineSeams = 
     createCodexDriver({
       env,
       cwd: path.join(hostDir, 'brain-codex'),
+      // Snug's OWN Codex home, beside its working directory (the B7 walk, 2026-10-05): Codex
+      // reads the global AGENTS.md of whatever home it runs with into every think.
+      codexHome: path.join(hostDir, 'codex-home'),
       resolveBinary: () => resolveBinary('codex', lookup),
       ...seams.codex,
     }),

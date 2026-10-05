@@ -127,3 +127,9 @@ That is the decision's centre. An app's think is **untrusted input**: apps are L
   (`apps/host-mcp/src/__tests__/fixtures/codex-walk.ts`). `brain-codex.test.ts` fails any list
   entry the driver's parse would not yield, so the raw `codex-cli 0.160.0` cannot be pasted in
   and leave Codex unverified with every test green.
+
+### Amendment (2026-10-05, the owner's B7 walk — TASK-20261003-host-bindings-complete)
+
+- **The walk FAILED, and the finding changes §3.** A canary in the owner's real `~/.codex/AGENTS.md` came back in every answer; no command ran and no tool item fired. Codex loads the GLOBAL `AGENTS.md` of whatever home it runs with into every think — the project-doc switch (`project_doc_max_bytes=0`) holds, `--ignore-user-config` covers `config.toml` only, and nothing turns the global loader off (measured offline, `codex debug prompt-input`; `fixtures/codex/prompt-input-*.recorded.json`).
+- **Decided by the owner:** the `codex` driver runs every child with Snug's OWN `CODEX_HOME` (`<Snug home>/host/codex-home`, created `0700`), logged in once by `CODEX_HOME=<it> codex login` — the remedy the brain menu shows. §3's "CODEX_HOME is not forwarded: Codex finds its login through HOME" is superseded: the parent's `CODEX_HOME` is still never forwarded; the driver sets its own. Rejected: copying or linking the user's `auth.json` (custody of a token; refresh-token rotation logs one side out).
+- `CODEX_VERIFIED_VERSIONS` stays empty until the walk is re-run against this and journaled.

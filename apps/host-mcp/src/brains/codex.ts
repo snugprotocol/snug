@@ -17,6 +17,15 @@
 // NOT measured, because it needs the owner's ChatGPT login: a successful turn, whether each
 // disabled feature really removes its tool, whether `developer_instructions` is honoured
 // as the system slot — and the logged-IN `login status` line that `ready` rests on.
+// MEASURED by the owner's walk B7 (2026-10-05) and reproduced offline (`codex debug
+// prompt-input`, fixtures/codex/prompt-input-*.recorded.json): Codex loads its GLOBAL
+// instructions file — `AGENTS.md`/`AGENTS.override.md` under its home — into EVERY think, as a
+// user message, whatever `--ignore-user-config` and `project_doc_max_bytes` say (those govern
+// `config.toml` and project docs; the global file has its own loader and no switch). The
+// user's `~/.codex/AGENTS.md` would steer every app reply and could be repeated to an app. So
+// this brain runs with Snug's OWN Codex home (`codexHome`) and its own login into it: the
+// user's instructions, config, skills and plugins never reach an app. Snug never reads the
+// login Codex keeps there.
 // `Logged in using ChatGPT` (and the API-key line) are TRANSCRIBED from upstream's
 // `codex-rs/cli/src/login.rs` at `rust-v0.160.0`, never seen printed (fixtures/codex/
 // PROVENANCE.md; Gate 5, tests/F3). If the real CLI says otherwise, a logged-in Codex reads
@@ -46,8 +55,25 @@ import {
 } from './brain.js';
 import { CODEX_SENTENCES, createCodexTurn, type CodexOutcome } from './codex-events.js';
 
+/** A path as ONE shell word: bare when it is plainly safe, single-quoted otherwise. */
+function shellWord(value: string): string {
+  return /^[A-Za-z0-9_./~+-]+$/.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+/** The one login Snug's Codex needs: into Snug's OWN Codex home, never the user's `~/.codex`. */
+export const codexLoginCommand = (codexHome: string): string => `CODEX_HOME=${shellWord(codexHome)} codex login`;
+
 /** The remedy when there is no CLI at all — a page to visit, then one command. Never a curl pipe. */
-export const CODEX_INSTALL_REMEDY = 'No `codex` CLI found on this machine. Install Codex (https://developers.openai.com/codex/cli), then run `codex login`, and check again.';
+export const codexInstallRemedy = (codexHome: string): string =>
+  `No \`codex\` CLI found on this machine. Install Codex (https://developers.openai.com/codex/cli), then run \`${codexLoginCommand(codexHome)}\`, and check again.`;
+
+/** Logged out of Snug's own Codex home. Says WHY there is a second login — or a person would use their own. */
+export const codexLoginRemedy = (codexHome: string): string =>
+  `Snug keeps its own Codex login, so your own Codex instructions and settings never reach an app — run \`${codexLoginCommand(codexHome)}\` and choose ChatGPT, then check again.`;
+
+/** Snug's Codex home holds an API-key login: not the user's own agent (D15). */
+export const codexApiKeyRemedy = (codexHome: string): string =>
+  `Snug's Codex is logged in with an API key. Snug uses your ChatGPT login, not an API key — run \`${codexLoginCommand(codexHome)}\`, choose ChatGPT, then check again.`;
 
 /**
  * The Codex CLI versions whose tool-free posture has been WALKED on a real ChatGPT login.
@@ -290,8 +316,14 @@ export function parseCodexCatalog(text: string): BrainCatalog {
 // ------------------------------------------------------------------- the driver
 
 export interface CodexDriverDeps {
-  /** The child environment — the registry's ONE allowlisted read (ADR-0071 §3). `CODEX_HOME` is not in it: Codex finds its login through HOME. */
+  /** The child environment — the registry's ONE allowlisted read (ADR-0071 §3). Never carries a `CODEX_HOME`: the driver sets its own. */
   env: Record<string, string>;
+  /**
+   * Snug's OWN Codex home, set as `CODEX_HOME` on every child (the B7 walk, 2026-10-05): Codex
+   * reads its global `AGENTS.md` from its home into every think, so the user's `~/.codex`
+   * would steer every app. Created private on first use; Snug logs in to it once.
+   */
+  codexHome: string;
   /** A neutral, EMPTY directory under the Snug home — never the agent host's project, and never another brain's. */
   cwd: string;
   /** Where the CLI is: PATH, then the installers' known directories (ADR-0069 §6). */
@@ -322,13 +354,18 @@ export function createCodexDriver(deps: CodexDriverDeps): BrainDriver {
 
   /** Created on first use, private to the user, and never written into: the read-only sandbox can still READ its directory. */
   const ensureCwd = (): void => void mkdirSync(deps.cwd, { recursive: true, mode: 0o700 });
+  /** Snug's own Codex home — where Codex keeps the login Snug asked for (never read by Snug). */
+  const ensureHome = (): void => void mkdirSync(deps.codexHome, { recursive: true, mode: 0o700 });
+  /** Every child's environment: the allowlist, and Snug's own Codex home — whatever the parent had. */
+  const childEnv: Record<string, string> = { ...deps.env, CODEX_HOME: deps.codexHome };
 
   /** One short, bounded command: its output and exit code, or why there is none. */
   const run = (binary: string, args: readonly string[], timeoutMs: number): Promise<CommandResult> =>
     new Promise((resolve) => {
       let child: CodexProcess;
       try {
-        child = spawnCodex(binary, args, { env: deps.env, cwd: deps.cwd });
+        ensureHome();
+        child = spawnCodex(binary, args, { env: childEnv, cwd: deps.cwd });
       } catch {
         resolve({ kind: 'not-started' });
         return;
@@ -363,15 +400,15 @@ export function createCodexDriver(deps: CodexDriverDeps): BrainDriver {
 
   /** `codex login status`: `ready` ONLY for the ChatGPT login. The CLI's own line is never repeated — an API-key login prints part of the key. */
   const readiness = (status: CommandResult): BrainReadiness => {
-    if (status.kind === 'not-started') return { state: 'absent', detail: CODEX_INSTALL_REMEDY };
+    if (status.kind === 'not-started') return { state: 'absent', detail: codexInstallRemedy(deps.codexHome) };
     if (status.kind === 'timed-out') return { state: 'unknown', detail: CODEX_SENTENCES.statusTimedOut };
     if (status.kind === 'too-much-output') return { state: 'unknown', detail: CODEX_SENTENCES.unreadableStatus };
     // Measured: the logged-out line is on STDERR and stdout is empty. Both are read.
     const lines = `${status.stdout}\n${status.stderr}`.split('\n').map((line) => line.trim());
     if (status.code === 0 && lines.some((line) => line.startsWith('Logged in using ChatGPT'))) return { state: 'ready' };
     // A brain on a key is not "the user's own agent" (D15), and no key is ever forwarded to it.
-    if (status.code === 0 && lines.some((line) => line.startsWith('Logged in using'))) return { state: 'logged-out', detail: CODEX_SENTENCES.apiKeyLogin };
-    if (status.code === 1 || lines.some((line) => line.startsWith('Not logged in'))) return { state: 'logged-out', detail: CODEX_SENTENCES.loggedOut };
+    if (status.code === 0 && lines.some((line) => line.startsWith('Logged in using'))) return { state: 'logged-out', detail: codexApiKeyRemedy(deps.codexHome) };
+    if (status.code === 1 || lines.some((line) => line.startsWith('Not logged in'))) return { state: 'logged-out', detail: codexLoginRemedy(deps.codexHome) };
     return { state: 'unknown', detail: CODEX_SENTENCES.unreadableStatus };
   };
 
@@ -387,12 +424,13 @@ export function createCodexDriver(deps: CodexDriverDeps): BrainDriver {
         if (live.size >= maxLive) throw new BrainStreamError(`Snug is already answering ${maxLive} thinks — try again in a moment`, false);
         const { system, prompt } = splitChatRequest(request);
         const binary = deps.resolveBinary();
-        if (binary === undefined) throw new BrainStreamError(CODEX_INSTALL_REMEDY, false);
+        if (binary === undefined) throw new BrainStreamError(codexInstallRemedy(deps.codexHome), false);
 
         let child: CodexProcess;
         try {
           ensureCwd();
-          child = spawnCodex(binary, buildCodexArgs({ system, model: request.model, effort: request.effort, cwd: deps.cwd }), { env: deps.env, cwd: deps.cwd });
+          ensureHome();
+          child = spawnCodex(binary, buildCodexArgs({ system, model: request.model, effort: request.effort, cwd: deps.cwd }), { env: childEnv, cwd: deps.cwd });
         } catch (error) {
           // Node THROWS E2BIG rather than emitting it (measured: a 2 MiB argument).
           throw new BrainStreamError(isArgvTooBig(error) ? CODEX_SENTENCES.tooLarge : CODEX_SENTENCES.couldNotStart, false);
@@ -501,7 +539,7 @@ export function createCodexDriver(deps: CodexDriverDeps): BrainDriver {
       if (binary === undefined) {
         catalog = NO_CATALOG;
         version = undefined;
-        return { state: 'absent', detail: CODEX_INSTALL_REMEDY };
+        return { state: 'absent', detail: codexInstallRemedy(deps.codexHome) };
       }
       ensureCwd();
       if (verifiedVersions.length > 0) {

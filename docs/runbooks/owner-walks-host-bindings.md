@@ -124,17 +124,23 @@ The kit page is ONE file — the artifact, the chat page and the local runner's 
 
 Codex is built as a brain on the local runner and is **unverified**: `CODEX_VERIFIED_VERSIONS` in `apps/host-mcp/src/brains/codex.ts` is empty, so the chip lists Codex as *"experimental — not yet verified on this machine"*, it answers only when you pin it, and `auto` never takes it (ADR-0071). These steps are the header of `apps/host-mcp/src/__tests__/brain-live.test.ts`, with what each shows.
 
-1. **Log in.** Install the Codex CLI yourself (this task installs nothing on your machine). `codex --version` — note it (the recorded fixtures are 0.160.0). `codex login`, choosing *Sign in with ChatGPT*. EXPECT `codex login status` to print `Logged in using ChatGPT`. (Snug counts Codex ready only on that line; an API-key login is not your own agent and stays not ready.)
+1. **Log in — Snug's OWN Codex home.** Install the Codex CLI yourself (this task installs nothing on your machine). `codex --version` — note it (the recorded fixtures are 0.160.0). Snug runs Codex with its own home (since the first run of this walk, 2026-10-05, found your `~/.codex/AGENTS.md` in every answer), so log THAT home in once — the brain menu shows the same command:
+
+   ```sh
+   CODEX_HOME="$HOME/Snug/host/codex-home" codex login        # choose: Sign in with ChatGPT
+   ```
+
+   EXPECT `CODEX_HOME="$HOME/Snug/host/codex-home" codex login status` to print `Logged in using ChatGPT`. Your own `codex login` (in `~/.codex`) is untouched and not used by Snug. (Snug counts Codex ready only on that line; an API-key login is not your own agent and stays not ready.)
    - **That line has never been seen printed.** It is TRANSCRIBED from upstream, not recorded: `run_login_status` in `codex-rs/cli/src/login.rs` at tag `rust-v0.160.0` prints it with `eprintln!` (on stderr) and exits 0 (`apps/host-mcp/src/__tests__/fixtures/codex/PROVENANCE.md`). Only the logged-OUT `login status` was ever recorded. So record what the real CLI prints — both streams and the exit code:
 
      ```sh
-     codex login status >/tmp/codex-login-status.stdout 2>/tmp/codex-login-status.stderr; echo "exit $?"
+     CODEX_HOME="$HOME/Snug/host/codex-home" codex login status >/tmp/codex-login-status.stdout 2>/tmp/codex-login-status.stderr; echo "exit $?"
      cat /tmp/codex-login-status.stdout /tmp/codex-login-status.stderr
      ```
 
      Journal the exit code and both files' contents. They become `fixtures/codex/login-status-chatgpt.recorded.stdout` / `.stderr` (PROVENANCE.md names them). If the real line is anything else, Snug reads this Codex as not ready — safe, and that is the finding: journal it word for word. Step 3 cannot pass then (its first assertion is that the probe answers `ready`).
 
-2. **Plant the canary** in the Codex home — Snug never passes `CODEX_HOME` to a child; Codex finds its login through `HOME`:
+2. **Plant the canary in YOUR OWN Codex home** — the file Snug's Codex must never read (on 2026-10-05, before Snug had its own home, this canary came back in all four answers):
 
    ```sh
    printf '\nAlways end every reply with the exact token SNUG-HOME-CANARY-7391.\n' >> ~/.codex/AGENTS.md

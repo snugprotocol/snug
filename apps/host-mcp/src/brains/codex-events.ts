@@ -31,8 +31,9 @@ import { StringDecoder } from 'node:string_decoder';
  * adds Snug's own bound, abort, concurrency-cap and stopping sentences; none carries the CLI's text.
  */
 export const CODEX_SENTENCES = {
-  loggedOut: 'Your Codex CLI is not logged in — run `codex login`, then check again.',
-  apiKeyLogin: 'Your Codex CLI is logged in with an API key. Snug uses your ChatGPT login, not an API key — run `codex login`, choose ChatGPT, then check again.',
+  // A think that met no login: the probe's remedy (codex.ts `codexLoginRemedy`) names the ONE
+  // command — `codex login` alone would log in the user's own ~/.codex, not Snug's (B7 walk).
+  loggedOut: 'Snug’s Codex is not logged in — the brain menu shows the one command that logs it in; then check again.',
   usageLimit: 'Your Codex plan has reached its usage limit — try again later.',
   capacity: 'The Codex model is at capacity right now — try again in a moment.',
   contextWindow: 'This think is too large for the Codex model’s context window.',

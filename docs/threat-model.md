@@ -509,7 +509,7 @@ feature really removes its tool, nor whether the developer instruction is honour
 system slot. *Bounded by:* Codex answering only an explicit pin, never `auto`, labelled
 experimental on the chip; `verified: true` needs a version listed after a journaled walk on
 that version (a Chess move; "run `id`" and "search the web for …" producing zero non-answer
-items; a canary in `$CODEX_HOME/AGENTS.md` never answered) — printed for the owner, opt-in
+items; a canary in the user's own `~/.codex/AGENTS.md` never answered — the first run, 2026-10-05, FAILED this, and Codex now runs with Snug's own `CODEX_HOME`) — printed for the owner, opt-in
 for the suite (`SNUG_LIVE_BRAIN=codex`), never run by a gate.
 
 **R-46 — The tripwire withholds Codex's answer, not its act.** It fires on the first item that
@@ -908,7 +908,7 @@ macOS, and a Linux opener exists, untested on a real Linux desktop.
 | `docs/security/threat-model-delta-desktop-update-channel.md` | `2f6321918cce` | §5 C2 + authoring · R-28, R-29, R-30, R-33 |
 | `docs/security/threat-model-delta-app-sharing.md` | `806ca935aa18` | §4 boundary 5 · §5 C1 + C2 + authoring · R-34, R-35, R-36, R-37, R-38, R-39 |
 | `docs/security/threat-model-delta-local-host-process.md` | `b7ddc88afd9a` | §5 local runner (lock, socket, bearer) · §6 R-40 · R-41 · R-42 · R-43 · R-49 (R-43 amended for ADR-0070; R-40 and R-42 noted for R1; R-49 and the take-over row added at Gate 5) |
-| `docs/security/threat-model-delta-brains-and-chat.md` | `4305f1f75d89` | §4 boundary 3 · §5 local runner and its brains · R-11 note · R-40 note · R-44, R-45, R-46, R-47, R-48, R-49 (Gate 5) |
+| `docs/security/threat-model-delta-brains-and-chat.md` | `d168df71c3f0` | §4 boundary 3 · §5 local runner and its brains · R-11 note · R-40 note · R-44, R-45, R-46, R-47, R-48, R-49 (Gate 5) |
 <!-- DELTA-LEDGER:END -->
 
 ---

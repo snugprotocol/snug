@@ -505,7 +505,9 @@ Linux, 900,000 B elsewhere; `E2BIG` is a named refusal). **`claude`** (`brains/c
 and streaming. **`codex`** (`brains/codex.ts`, `codex-events.ts`) is one child per think,
 answering whole: the posture argv (every tool-shaped feature disabled, web search off, user
 config and rules ignored, project docs off, `--sandbox read-only`, `--ephemeral`, a neutral
-directory), the system prompt as ONE TOML-escaped `-c developer_instructions=`, the
+directory, and Snug's OWN `CODEX_HOME` — `<Snug home>/host/codex-home`, logged in once with
+`CODEX_HOME=… codex login` — because Codex loads the global `AGENTS.md` of its home into every
+think and the owner's B7 walk, 2026-10-05, found theirs in every answer), the system prompt as ONE TOML-escaped `-c developer_instructions=`, the
 conversation on stdin; readiness from `codex login status` (ready only on the ChatGPT login),
 the catalogue from `codex debug models --bundled`; an ALLOWLIST tripwire — `agent_message` is
 the answer, `reasoning` is dropped, any other item kills the detached child's process group

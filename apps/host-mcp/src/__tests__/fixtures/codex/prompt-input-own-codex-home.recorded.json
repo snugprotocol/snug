@@ -1,0 +1,40 @@
+[
+ {
+  "type": "message",
+  "role": "developer",
+  "starts": [
+   "SNUG-DEVELOPER-INSTRUCTIONS",
+   "<skills_instructions>\n## Skills\nA skill is a set of local instructions",
+   "<permissions instructions>\nFilesystem sandboxing defines which files c",
+   "<collaboration_mode># Collaboration Mode: Default\n\nYou are now in Defa"
+  ]
+ },
+ {
+  "type": "message",
+  "role": "developer",
+  "starts": [
+   "<multi_agent_role>You are `/root`, the primary agent in a team of agen"
+  ]
+ },
+ {
+  "type": "message",
+  "role": "developer",
+  "starts": [
+   "<multi_agent_mode>Any earlier instruction enabling proactive multi-age"
+  ]
+ },
+ {
+  "type": "message",
+  "role": "user",
+  "starts": [
+   "<environment_context>\n  <cwd><scratch>"
+  ]
+ },
+ {
+  "type": "message",
+  "role": "user",
+  "starts": [
+   "the app's turn"
+  ]
+ }
+]

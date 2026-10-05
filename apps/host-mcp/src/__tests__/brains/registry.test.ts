@@ -16,7 +16,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { argvPromptLimit, CHILD_ENV_ALLOWLIST, type Brain, type BrainDriver, type BrainReadiness } from '../../brains/brain.js';
 import { PROMPT_TOO_LARGE } from '../../brains/claude.js';
-import { CODEX_SENTENCES } from '../../brains/codex-events.js';
+import { codexLoginRemedy } from '../../brains/codex.js';
 import { BRAIN_PROBE_FLOOR_MS, createBrainRegistry, machineDrivers, NOT_PROBED_DETAIL } from '../../brains/registry.js';
 import { brainOf, fakeDriver } from '../fixtures/fake-brains.js';
 import { fakeSpawner } from '../fixtures/fake-claude-child.js';
@@ -460,8 +460,9 @@ describe('the shipped drivers (the release entry’s registry)', () => {
     expect(drivers.map((driver) => driver.maxPromptBytes)).toEqual([argvPromptLimit(), argvPromptLimit()]);
     // Claude's levels are its CLI's five; a model with no thinking axis has none.
     expect(drivers[0]!.catalog().efforts).toEqual(wire.brains[0]!.efforts);
-    // Codex's not-logged-in sentence is the one the fixture shows.
-    expect(wire.brains[1]!.detail).toBe(CODEX_SENTENCES.loggedOut);
+    // Codex's not-logged-in remedy is the one the fixture shows — for the fixture's own home,
+    // `/Users/x` (MIGRATED, B7 walk 2026-10-05: it names Snug's own Codex home now).
+    expect(wire.brains[1]!.detail).toBe(codexLoginRemedy('/Users/x/Snug/host/codex-home'));
   });
 
   it('Claude’s catalogue becomes per-model levels: the five where the model has a thinking axis, none where it does not', () => {
@@ -529,12 +530,14 @@ describe('the shipped drivers (the release entry’s registry)', () => {
     // claude: a probe, a think and its pre-warmed replacement; codex: `login status`, a think.
     expect(claude.children.length).toBeGreaterThanOrEqual(3);
     expect(codex.children.length).toBeGreaterThanOrEqual(2);
+    // MIGRATED (B7 walk, 2026-10-05): Codex's children carry ONE name beyond the allowlist —
+    // CODEX_HOME, set by the driver to Snug's own home; the parent's (a canary here) never.
+    const snugCodexHome = path.join(home, 'host', 'codex-home');
+    for (const env of claude.children.map((child) => child.env)) expect(env).not.toHaveProperty('CODEX_HOME');
+    for (const env of codex.children.map((child) => child.options.env)) expect(env.CODEX_HOME).toBe(snugCodexHome);
     for (const env of envs) {
-      expect(Object.keys(env).filter((name) => !(CHILD_ENV_ALLOWLIST as readonly string[]).includes(name))).toEqual([]);
+      expect(Object.keys(env).filter((name) => name !== 'CODEX_HOME' && !(CHILD_ENV_ALLOWLIST as readonly string[]).includes(name))).toEqual([]);
       expect(JSON.stringify(env)).not.toContain('canary');
-      // Codex finds its login through HOME; a CODEX_HOME of the parent's would point it at
-      // somebody else's.
-      expect(env).not.toHaveProperty('CODEX_HOME');
       expect(env.HOME).toBe('/Users/x');
       // The Node that runs this process leads the child's PATH: both CLIs' npm installs are
       // `#!/usr/bin/env node` shims (measured, exit 127 without one).
@@ -566,7 +569,12 @@ describe('the shipped drivers (the release entry’s registry)', () => {
   it('the whole child env is ONE object, built once and shared — not one read per driver', async () => {
     const { drivers, claude, codex } = shipped();
     for (const driver of drivers) await driver.probe();
-    expect(codex.children[0]!.options.env).toBe(claude.children[0]!.env);
+    // MIGRATED (B7 walk, 2026-10-05): Codex's env is the shared object PLUS Snug's own
+    // CODEX_HOME — a copy, so identity no longer holds; that there is ONE whole-environment
+    // read is held by the source count above, and this holds that nothing else differs.
+    const { CODEX_HOME, ...rest } = codex.children[0]!.options.env;
+    expect(CODEX_HOME).toBe(path.join(home, 'host', 'codex-home'));
+    expect(rest).toEqual(claude.children[0]!.env);
   });
 
   it('each driver thinks in its OWN neutral directory under the Snug home — created 0700 for Codex, and empty', async () => {
