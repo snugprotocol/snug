@@ -423,6 +423,7 @@ export function createCodexDriver(deps: CodexDriverDeps): BrainDriver {
         // The cap counts what is ANSWERING. Refused by name, never queued.
         if (live.size >= maxLive) throw new BrainStreamError(`Snug is already answering ${maxLive} thinks — try again in a moment`, false);
         const { system, prompt } = splitChatRequest(request);
+        ensureHome(); // the install remedy below names it (see `probe`)
         const binary = deps.resolveBinary();
         if (binary === undefined) throw new BrainStreamError(codexInstallRemedy(deps.codexHome), false);
 
@@ -534,6 +535,9 @@ export function createCodexDriver(deps: CodexDriverDeps): BrainDriver {
     maxPromptBytes: argvPromptLimit(),
 
     async probe() {
+      // FIRST, whatever follows: every remedy this answers with names Snug's Codex home, and
+      // Codex refuses a CODEX_HOME that does not exist (the owner met exactly that, 2026-10-05).
+      ensureHome();
       const binary = deps.resolveBinary();
       // No binary anywhere is decided WITHOUT a spawn (ADR-0069 §6).
       if (binary === undefined) {

@@ -127,6 +127,7 @@ Codex is built as a brain on the local runner and is **unverified**: `CODEX_VERI
 1. **Log in — Snug's OWN Codex home.** Install the Codex CLI yourself (this task installs nothing on your machine). `codex --version` — note it (the recorded fixtures are 0.160.0). Snug runs Codex with its own home (since the first run of this walk, 2026-10-05, found your `~/.codex/AGENTS.md` in every answer), so log THAT home in once — the brain menu shows the same command:
 
    ```sh
+   mkdir -p -m 700 "$HOME/Snug/host/codex-home"                # Codex refuses a CODEX_HOME that does not exist
    CODEX_HOME="$HOME/Snug/host/codex-home" codex login        # choose: Sign in with ChatGPT
    ```
 

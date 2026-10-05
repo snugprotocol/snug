@@ -17,6 +17,8 @@
 //   1. `codex --version` — note it (the fixtures are 0.160.0). Log Snug's OWN Codex home in
 //      (Snug runs Codex with its own home since this walk's first run, 2026-10-05 — your
 //      ~/.codex reached every think; the brain menu shows the same command):
+//        mkdir -p -m 700 "$HOME/Snug/host/codex-home"   (Codex refuses a CODEX_HOME that does not exist;
+//                                                     Snug creates it at its first check, but the walk may come first)
 //        CODEX_HOME="$HOME/Snug/host/codex-home" codex login        (choose "Sign in with ChatGPT")
 //      EXPECT `CODEX_HOME="$HOME/Snug/host/codex-home" codex login status` to print
 //      "Logged in using ChatGPT".

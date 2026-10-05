@@ -603,6 +603,21 @@ describe("Snug's own Codex home — the user's ~/.codex never reaches an app's t
     expect(path.relative(cwd(), codexHome()).startsWith('..')).toBe(true);
   });
 
+  it('every remedy names a home that EXISTS — Codex refuses a CODEX_HOME that does not (measured 2026-10-05), so a person pasting it must not meet that', async () => {
+    // The owner ran the remedy before Snug had ever probed: "CODEX_HOME points to … but that
+    // path does not exist". The install remedy is decided WITHOUT a spawn, so it creates too.
+    const absent = createCodexDriver({ env: ENV, cwd: cwd(), codexHome: codexHome(), resolveBinary: () => undefined, spawn: () => { throw new Error('never'); } });
+    expect((await absent.probe()).state).toBe('absent');
+    expect(statSync(codexHome()).mode & 0o777).toBe(0o700);
+    rmSync(codexHome(), { recursive: true, force: true });
+    const loggedOut = createCodexDriver({ env: ENV, cwd: cwd(), codexHome: codexHome(), resolveBinary: () => '/x/codex', spawn: fakeCodexSpawner(CODEX_LOGIN_STATUS_LOGGED_OUT).spawn });
+    expect((await loggedOut.probe()).detail).toBe(codexLoginRemedy(codexHome()));
+    expect(existsSync(codexHome())).toBe(true);
+    rmSync(codexHome(), { recursive: true, force: true });
+    await expect(absent.create().complete(THINK)).rejects.toThrow(codexInstallRemedy(codexHome()));
+    expect(existsSync(codexHome()), 'a think with no binary names the home too').toBe(true);
+  });
+
   it('the remedy is ONE command a person can paste — the path quoted for a shell when it must be — and says why', () => {
     expect(codexLoginRemedy('/Users/x/Snug/host/codex-home')).toContain('`CODEX_HOME=/Users/x/Snug/host/codex-home codex login`');
     expect(codexLoginRemedy('/Users/x y/Snug/host/codex-home')).toContain("`CODEX_HOME='/Users/x y/Snug/host/codex-home' codex login`");
