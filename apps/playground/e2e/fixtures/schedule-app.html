@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<!--
+  e2e/fixtures/schedule-app.html — the SCHEDULED-RUN fixture app (TASK-20261009-scheduling-framework
+  A8). Not a starter: the embedded hooks block below is the copy-exactly block of
+  packages/knowledge/prompts/knowledge-base/app-authoring/20-html-template.md, byte-identical after
+  the kb-sync normalisation (it is packages/sdk/embedded/snug-hooks.js, indented), and the schedule
+  listener beside it is the 85-scheduled-runs.md snippet, rendered. The app's one job: answer a
+  `schedule-run` hint by doing ONE connected GET through the net stub (stub.snug.test, the AL-03
+  fixture) when the run's input says {fetch:true}, ONE POST when it says {post:true} — which the
+  host's refusing gate denies unattended, so the run lands as *needs you* — and otherwise nothing,
+  answering { ok, summary } either way. A visible open shows the runs it answered and a button
+  that SUGGESTS a daily schedule (a user act — never on load).
+-->
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Schedule App</title>
+  <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7/babel.min.js"></script>
+  <style>
+    :root { --bg: #ffffff; --fg: #17171f; --muted: #6b7280; --card: #f4f4f8; --border: #e2e2ea; --accent: #6c5ce7; }
+    :root[data-theme="dark"] { --bg: #15151d; --fg: #ececf4; --muted: #9a9aad; --card: #20202c; --border: #32323f; --accent: #8b7cf7; }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 16px; background: var(--bg); color: var(--fg); font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+    button { min-width: 44px; min-height: 44px; cursor: pointer; }
+    ul { padding-left: 1.2em; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useEffect, useCallback, useMemo, useRef } = React;
+
+    // ============================================================
+    // 1. SNUG BRIDGE RUNTIME (MANDATORY — copy exactly, never edit)
+    // ============================================================
+    const SnugBridge = {
+      instanceId: null,
+      theme: 'light',
+      capabilities: {},
+      ready: false,
+      pending: new Map(),    // requestId -> { resolve, onStream }
+      dbPending: new Map(),  // requestId -> resolve
+      netPending: new Map(), // requestId -> resolve
+      listeners: new Set(),  // re-render triggers for hooks
+
+      post(frame) {
+        window.parent.postMessage({ v: 1, instanceId: this.instanceId, ...frame }, '*');
+      },
+      notify() { for (const fn of this.listeners) fn(); },
+    };
+
+    window.addEventListener('message', (event) => {
+      const data = event.data;
+      if (!data || data.v !== 1) return;
+
+      if (data.type === 'snug:host-ready') {
+        SnugBridge.instanceId = data.instanceId;
+        if (data.theme) SnugBridge.theme = data.theme;
+        if (data.capabilities) SnugBridge.capabilities = data.capabilities;
+        SnugBridge.ready = true;
+        SnugBridge.notify();
+        return;
+      }
+
+      if (data.type === 'snug:app-response') {
+        const entry = SnugBridge.pending.get(data.requestId);
+        if (!entry) return; // unknown or superseded requestId — ignore
+        if (data.streaming) {
+          // Cumulative provisional text — display only. NEVER resolve here.
+          if (entry.onStream && typeof data.text === 'string') entry.onStream(data.text);
+          return;
+        }
+        SnugBridge.pending.delete(data.requestId); // terminal — exactly one per requestId
+        entry.resolve(data.ok ? { ok: true, data: data.data } : { ok: false, error: data.error });
+        return;
+      }
+
+      if (data.type === 'snug:db-response') {
+        const resolve = SnugBridge.dbPending.get(data.requestId);
+        if (!resolve) return;
+        SnugBridge.dbPending.delete(data.requestId);
+        // Result fields (rows/columns/value/bytesBase64) live at the TOP LEVEL of the frame.
+        resolve(data.ok
+          ? { ok: true, rows: data.rows, columns: data.columns, value: data.value, bytesBase64: data.bytesBase64 }
+          : { ok: false, error: data.error });
+        return;
+      }
+
+      if (data.type === 'snug:net-response') {
+        const resolve = SnugBridge.netPending.get(data.requestId);
+        if (!resolve) return;
+        SnugBridge.netPending.delete(data.requestId);
+        // Result fields (status/headers/body/truncated) live at the TOP LEVEL of the frame.
+        resolve(data.ok
+          ? { ok: true, status: data.status, headers: data.headers, body: data.body, truncated: data.truncated }
+          : { ok: false, error: data.error });
+        return;
+      }
+
+      if (data.type === 'snug:host-event') {
+        if (data.event === 'theme-change' && data.data && data.data.theme) {
+          SnugBridge.theme = data.data.theme;
+          SnugBridge.notify();
+        }
+        // Unknown host events MUST be ignored (the protocol is additive).
+      }
+    });
+
+    function snugDbRequest(op, args) {
+      return new Promise((resolve) => {
+        const requestId = crypto.randomUUID();
+        SnugBridge.dbPending.set(requestId, resolve);
+        SnugBridge.post({ type: 'snug:db-request', requestId, op, ...args });
+      });
+    }
+
+    function snugNetRequest(fields) {
+      if (!SnugBridge.ready) return Promise.resolve({ ok: false, error: { code: 'HOST_ERROR', message: 'not connected to host yet', retryable: true } });
+      return new Promise((resolve) => {
+        const requestId = crypto.randomUUID();
+        SnugBridge.netPending.set(requestId, resolve);
+        SnugBridge.post({ type: 'snug:net-request', requestId, ...fields });
+      });
+    }
+
+    // ============================================================
+    // 2. useSnugApp (MANDATORY — copy exactly, never edit)
+    // ============================================================
+    function useSnugApp(meta) {
+      const [, setTick] = useState(0);
+      const [isWaiting, setIsWaiting] = useState(false);
+      const [lastResponse, setLastResponse] = useState(null);
+      const inFlight = useRef(0);
+      const metaRef = useRef(meta);
+
+      useEffect(() => {
+        const rerender = () => setTick((n) => n + 1);
+        SnugBridge.listeners.add(rerender);
+        const m = metaRef.current;
+        SnugBridge.post({
+          type: 'snug:app-announce',
+          appId: m.appId,
+          displayName: m.displayName,
+          description: m.description,
+          iconEmoji: m.iconEmoji,
+          iconColor: m.iconColor,
+        });
+        return () => SnugBridge.listeners.delete(rerender);
+      }, []);
+
+      const sendMessage = useCallback((action, payload, opts) => {
+        if (!SnugBridge.ready) return Promise.resolve({ ok: false, error: { code: 'HOST_ERROR', message: 'not connected to host yet', retryable: true } });
+        const requestId = crypto.randomUUID(); // fresh per request — multiple in flight are legal
+        inFlight.current += 1;
+        setIsWaiting(true);
+        return new Promise((resolve) => {
+          SnugBridge.pending.set(requestId, {
+            onStream: opts && opts.onStream,
+            resolve: (result) => {
+              inFlight.current -= 1;
+              if (inFlight.current === 0) setIsWaiting(false);
+              setLastResponse(result);
+              resolve(result);
+            },
+          });
+          SnugBridge.post({
+            type: 'snug:app-message',
+            requestId,
+            appId: metaRef.current.appId,
+            action,
+            payload,
+            state: opts && opts.state,
+            responseSchema: opts && opts.responseSchema,
+          });
+        });
+      }, []);
+
+      return {
+        isReady: SnugBridge.ready,
+        theme: SnugBridge.theme,
+        isWaiting,
+        lastResponse,
+        sendMessage,
+      };
+    }
+
+    // ============================================================
+    // 3. usePersistedState (MANDATORY — copy exactly, never edit)
+    // Storage is HOST-BROKERED key-value. The sandboxed iframe has a
+    // null origin: no browser storage API works here.
+    // ============================================================
+    function usePersistedState(key, initialValue) {
+      const [state, setState] = useState(initialValue);
+      // Tracks WHICH key hydrated: a key change must re-hydrate before any write-back,
+      // or the old key's state would overwrite the new key's stored value.
+      const [hydratedKey, setHydratedKey] = useState(null);
+      const initialRef = useRef(initialValue);
+
+      useEffect(() => {
+        let cancelled = false;
+        const hydrate = async () => {
+          const result = await snugDbRequest('kvGet', { key });
+          if (cancelled) return;
+          if (result.ok && result.value != null) {
+            const stored = result.value;
+            const init = initialRef.current;
+            // Merge objects with defaults so fields added in newer code are never undefined.
+            setState(
+              stored && typeof stored === 'object' && !Array.isArray(stored) &&
+              init && typeof init === 'object' && !Array.isArray(init)
+                ? { ...init, ...stored }
+                : stored
+            );
+          } else {
+            setState(initialRef.current); // nothing stored under this key — back to defaults
+          }
+          setHydratedKey(key);
+        };
+        const onReady = () => {
+          if (!SnugBridge.ready) return;
+          SnugBridge.listeners.delete(onReady);
+          hydrate();
+        };
+        if (SnugBridge.ready) hydrate();
+        else SnugBridge.listeners.add(onReady);
+        return () => { cancelled = true; SnugBridge.listeners.delete(onReady); };
+      }, [key]);
+
+      useEffect(() => {
+        if (hydratedKey !== key) return;
+        snugDbRequest('kvSet', { key, value: state }); // fire-and-forget; host acks via db-response
+      }, [hydratedKey, key, state]);
+
+      return [state, setState];
+    }
+
+    // ============================================================
+    // 4. useAppDB (copy exactly when the app needs SQL; omit otherwise)
+    // ============================================================
+    function useAppDB() {
+      return useMemo(() => ({
+        async exec(sql, params) {
+          const result = await snugDbRequest('exec', { sql, params });
+          if (!result.ok) throw new Error((result.error && result.error.message) || 'db exec failed');
+          return { rows: result.rows, columns: result.columns }; // { rows: unknown[][], columns: string[] }
+        },
+        async exportDb() {
+          const result = await snugDbRequest('export', {});
+          if (!result.ok) throw new Error((result.error && result.error.message) || 'db export failed');
+          return result.bytesBase64;
+        },
+        async importDb(bytesBase64) {
+          const result = await snugDbRequest('import', { bytesBase64 });
+          if (!result.ok) throw new Error((result.error && result.error.message) || 'db import failed');
+        },
+      }), []);
+    }
+
+    // ============================================================
+    // 5. useConnectedFetch (copy exactly when the app calls an approved API; omit otherwise)
+    // The sandboxed app has NO network of its own. This reaches ONLY your app's APPROVED
+    // hosts THROUGH the host, which injects your saved credentials, caps sizes, asks you
+    // before any write, and scrubs the response. You never see a token.
+    // A connection whose host only the USER knows (a device on their network): address it as
+    // snug-connection://<slot>/<path> — the host resolves the approved address; you never learn it.
+    // ALWAYS resolves: { ok:true, status, headers, body } or { ok:false, error }.
+    // ============================================================
+    function useConnectedFetch() {
+      return useMemo(() => ({
+        fetch(url, opts) {
+          return snugNetRequest({
+            url,
+            method: (opts && opts.method) || 'GET',
+            headers: opts && opts.headers,
+            body: opts && opts.body,
+          });
+        },
+      }), []);
+    }
+
+    // ============================================================
+    // 6. RESPONSE SCHEMA — this app never thinks; kept for the template's shape
+    // ============================================================
+    const RESPONSE_SCHEMA = { message: 'string' };
+
+    // ============================================================
+    // 7. YOUR APP
+    // ============================================================
+    // The net stub of the AL-03 e2e (e2e/fixtures/net-stub.mjs), addressed by the name the
+    // spec's resolver rule maps to 127.0.0.1; the connection the bundle declares freezes it.
+    const STUB_URL = 'https://stub.snug.test:43120/data';
+    const RUN_LOG = []; // what this page answered, newest last — read by the visible open
+    const runListeners = new Set();
+    const noteRun = (entry) => { RUN_LOG.push(entry); for (const fn of runListeners) fn(); };
+
+    async function onScheduledRun({ runId, taskId, input }) {
+      const wants = input && typeof input === 'object' ? input : {};
+      if (wants.post) {
+        const res = await snugNetRequest({ url: STUB_URL, method: 'POST', body: '{}' });
+        // Unattended, the host refuses the write (NET_CONFIRM_DENIED): say what was tried.
+        return res.ok
+          ? { ok: true, summary: 'POST ' + res.status + ' — the stub took the digest' }
+          : { ok: false, summary: 'post the digest to the stub — ' + (res.error && res.error.code) };
+      }
+      if (wants.fetch) {
+        const res = await snugNetRequest({ url: STUB_URL, method: 'GET' });
+        if (!res.ok) return { ok: false, summary: 'GET failed: ' + (res.error && res.error.code) };
+        let body = {};
+        try { body = JSON.parse(res.body); } catch (err) { body = {}; }
+        return {
+          ok: true,
+          summary: 'GET ' + res.status + ' ' + body.path + ' — the stub saw key ' + body.sawApiKey,
+          notify: { title: 'Schedule App', body: 'fetched the stub' },
+        };
+      }
+      return { ok: true, summary: 'ran with no input' };
+    }
+
+    // ============================================================
+    // SCHEDULED RUNS — the host's scheduler wakes this app; see "Scheduled Runs"
+    // ============================================================
+    const SCHEDULE_HANDLED = new Set(); // runIds already answered on this page
+
+    window.addEventListener('message', async (event) => {
+      const data = event.data;
+      if (event.source !== window.parent || !data || data.v !== 1) return;
+      if (data.type !== 'snug:host-event' || data.event !== 'schedule-run') return;
+      const hint = data.data;
+      if (!hint || typeof hint.runId !== 'string' || typeof hint.taskId !== 'string') return;
+      if (SCHEDULE_HANDLED.has(hint.runId)) return; // a repeated hint: the first answer stands
+      SCHEDULE_HANDLED.add(hint.runId);
+      const stored = await snugDbRequest('kvGet', { key: 'snug:schedule:' + hint.runId });
+      const input = stored.ok && stored.value && typeof stored.value === 'object' ? stored.value.input : undefined;
+      let result;
+      try {
+        result = await onScheduledRun({ runId: hint.runId, taskId: hint.taskId, input });
+      } catch (err) {
+        result = { ok: false, summary: (err && err.message) || 'the scheduled run failed' };
+      }
+      const answer = { ok: !!(result && result.ok) };
+      if (result && typeof result.summary === 'string' && result.summary) answer.summary = result.summary;
+      if (result && result.notify && result.notify.title && result.notify.body) {
+        answer.notify = { title: String(result.notify.title), body: String(result.notify.body) };
+      }
+      noteRun({ runId: hint.runId, input, ...answer });
+      SnugBridge.post({ type: 'snug:app-event', event: 'schedule-result', data: answer });
+    });
+
+    function App() {
+      const { isReady, theme } = useSnugApp({
+        appId: 'e2e-schedule-app',
+        displayName: 'Schedule App',
+        description: 'Answers scheduled runs with one connected GET or POST against the e2e stub.',
+        iconEmoji: '⏰',
+        iconColor: '#3ba36f',
+      });
+      const [suggested, setSuggested] = usePersistedState('schedule-suggested', false);
+      const [, setTick] = useState(0);
+      useEffect(() => {
+        const rerender = () => setTick((n) => n + 1);
+        runListeners.add(rerender);
+        return () => runListeners.delete(rerender);
+      }, []);
+      useEffect(() => {
+        document.documentElement.dataset.theme = theme;
+      }, [theme]);
+
+      // A user act, once: the app SUGGESTS a daily run of itself; the host shows the strip.
+      const suggest = () => {
+        if (suggested) return;
+        SnugBridge.post({
+          type: 'snug:app-event',
+          event: 'schedule-request',
+          data: {
+            title: 'Morning stub check',
+            steps: [{ kind: 'app-run', appId: 'e2e-schedule-app', input: { fetch: true } }],
+            spec: { kind: 'daily', time: '07:00', tz: 'device' },
+          },
+        });
+        setSuggested(true);
+      };
+
+      if (!isReady) return <div id="status">connecting</div>;
+      return (
+        <main>
+          <div id="status">ready</div>
+          <button type="button" id="suggest" onClick={suggest} disabled={suggested}>
+            {suggested ? 'suggested' : 'suggest a daily run'}
+          </button>
+          <ul id="runs">
+            {RUN_LOG.map((entry) => (
+              <li key={entry.runId} data-run-id={entry.runId} data-ok={String(entry.ok)}>
+                {entry.summary || '(no summary)'}
+              </li>
+            ))}
+          </ul>
+        </main>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>

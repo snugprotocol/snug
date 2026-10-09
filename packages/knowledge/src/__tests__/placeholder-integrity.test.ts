@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { SNUG_APP_REQUEST_TAG } from '@snugprotocol/protocol';
 
 import { APP_BUILDER_TOOL_NAME } from '../index.js';
-import { isVendored, packageRoot, promptFilesOnDisk, renderedStore, walkFiles } from './helpers.js';
+import { isVendored, packageRoot, promptFilesOnDisk, renderedStore, walkFiles, withoutNonFrameSnugMentions } from './helpers.js';
 
 describe('placeholder integrity — raw prompt sources', () => {
   it('no raw source retypes the envelope tag or the app-builder tool name', () => {
@@ -36,8 +36,8 @@ describe('placeholder integrity — raw prompt sources', () => {
     const violations: string[] = [];
     for (const file of promptFilesOnDisk()) {
       if (isVendored(file.rel)) continue;
-      // Remove reserved-namespace wildcard mentions (e.g. `snug:*`) before scanning.
-      const scannable = file.content.replace(/snug:[a-z-]*\*/g, '');
+      // Wildcard mentions (`snug:*`) are prose; the scheduled-run kv KEY is not a frame (helpers.ts).
+      const scannable = withoutNonFrameSnugMentions(file.content);
       const matches = scannable.match(/snug:[a-z][a-z-]*[a-z]/g) ?? [];
       for (const m of matches) violations.push(`${file.rel}: literal "${m}"`);
     }

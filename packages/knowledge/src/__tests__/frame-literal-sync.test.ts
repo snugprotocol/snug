@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { FRAME_TYPES } from '@snugprotocol/protocol';
 
 import { getKnowledgeBase } from '../index.js';
+import { withoutNonFrameSnugMentions } from './helpers.js';
 
 const KNOWN_FRAME_TYPES = new Set<string>(Object.values(FRAME_TYPES));
 
@@ -11,8 +12,8 @@ describe('frame-literal sync (rendered KB vs FRAME_TYPES)', () => {
   it('every snug:* frame literal in the rendered KB is a FRAME_TYPES value', () => {
     const violations: string[] = [];
     for (const section of getKnowledgeBase()) {
-      // Reserved-namespace wildcard mentions (`snug:*`, `snug:app-*`) are prose, not frames.
-      const scannable = section.text.replace(/snug:[a-z-]*\*/g, '');
+      // Wildcard mentions (`snug:*`) are prose; the scheduled-run kv KEY is not a frame (helpers.ts).
+      const scannable = withoutNonFrameSnugMentions(section.text);
       const matches = scannable.match(/snug:[a-z][a-z-]*[a-z]/g) ?? [];
       for (const literal of new Set(matches)) {
         if (!KNOWN_FRAME_TYPES.has(literal)) {

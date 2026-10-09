@@ -92,6 +92,21 @@ export function isVendored(rel: string): boolean {
   return rel.startsWith(SKILL_CREATOR_PREFIX);
 }
 
+/**
+ * The `snug:` strings the frame-literal scanners (raw sources in placeholder-integrity,
+ * the rendered store in frame-literal-sync) must NOT read as frame types, removed before
+ * the scan:
+ *  - reserved-namespace wildcard mentions (`snug:*`, `snug:app-*`) — prose, not frames;
+ *  - the scheduled-run kv key `snug:schedule:<runId>` (ADR-0074 §3, taught verbatim in
+ *    85-scheduled-runs.md) — a KEY in the app's own key-value store, written by the host
+ *    and read back through an ordinary `kvGet`; it never rides a frame's `type` seat.
+ *    Only the prefix WITH its trailing colon is exempt, so a frame-shaped `snug:schedule-x`
+ *    would still be caught.
+ */
+export function withoutNonFrameSnugMentions(text: string): string {
+  return text.replace(/snug:[a-z-]*\*/g, '').replace(/snug:schedule:/g, '');
+}
+
 export interface RenderedStoreEntry {
   /** Posix path relative to prompts/ ('' only for synthesized text with no single file). */
   file: string;

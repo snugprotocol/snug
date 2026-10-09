@@ -29,7 +29,9 @@ Apps that DO think through the agent send structured actions (a chess move, a qu
 a data question) and turn the structured JSON replies back into UI state. See "Choosing an
 App Type" for deciding, per app, whether a turn needs the model at all. Every such request
 is a USER act — never send one from a timer, an interval, or on load: a host may bill the
-viewer for each call (see "Never Think on a Timer" under CDN Compatibility).
+viewer for each call (see "Never Think on a Timer" under CDN Compatibility). The host's
+scheduler is the one timer: when the user has scheduled a run of the app, the host wakes it
+itself, and the schedule listener in "Scheduled Runs" is the only way an app takes part.
 
 An app cannot: call `fetch`/`XMLHttpRequest` (network is blocked by CSP), use browser
 storage (the sandbox has a null origin — storage exists only via the host bridge), open
@@ -92,3 +94,4 @@ present; the fourth appears only in apps that call an external API:
 - "Defensive Coding" — what NOT to do; crash-proofing rules
 - "CDN Compatibility" — UMD vs ESM and the pinned known-good library table
 - "Connected APIs" — `useConnectedFetch`, declaring auth, credentials the host holds
+- "Scheduled Runs" — the host's scheduler as the one timer, the run handshake, suggesting a schedule

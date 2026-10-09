@@ -34,9 +34,18 @@ interface BridgeState {
   netPending: Map<string, (result: ConnectedFetchResult) => void>;
   /** Re-render triggers for mounted hooks. */
   listeners: Set<() => void>;
+  /**
+   * Named host-event subscribers (the open additive channel, R2) — `schedule-run` for the
+   * scheduled-run hook (TASK-20261009, ADR-0074 §3). `theme-change` is handled by the bridge
+   * itself, before any subscriber, exactly as the embedded form handles it.
+   */
+  hostEventListeners: Map<string, Set<HostEventListener>>;
 }
 
-const initialState = (): Omit<BridgeState, 'pending' | 'dbPending' | 'netPending' | 'listeners'> => ({
+/** A subscriber to one named host-event; receives the frame's `data` seat (unknown — validate it). */
+export type HostEventListener = (data: unknown) => void;
+
+const initialState = (): Omit<BridgeState, 'pending' | 'dbPending' | 'netPending' | 'listeners' | 'hostEventListeners'> => ({
   instanceId: null,
   theme: 'light',
   capabilities: {},
@@ -49,6 +58,7 @@ export const bridge: BridgeState = {
   dbPending: new Map(),
   netPending: new Map(),
   listeners: new Set(),
+  hostEventListeners: new Map(),
 };
 
 function notify(): void {
@@ -118,12 +128,39 @@ function onMessage(event: MessageEvent): void {
           notify();
         }
       }
-      // Unknown host events MUST be ignored (the protocol is additive).
+      // Unknown host events MUST be ignored (the protocol is additive) — by the bridge. A
+      // subscriber that asked for an event by name gets it; nothing else changes.
+      dispatchHostEvent(frame.event, frame.data);
       return;
     }
     default:
       return; // app-origin frame types echoed on this window — not ours to handle
   }
+}
+
+function dispatchHostEvent(event: string, data: unknown): void {
+  const subscribers = bridge.hostEventListeners.get(event);
+  if (!subscribers) return;
+  for (const fn of [...subscribers]) fn(data); // a copy: a subscriber may unsubscribe mid-dispatch
+}
+
+/**
+ * Subscribe to one named host-event (host-event frames carry `{event, data}`).
+ * Returns the unsubscribe. The bridge keeps handling `theme-change` itself; a subscriber to it
+ * simply observes. Idempotent listener install, like every hook.
+ */
+export function onHostEvent(event: string, listener: HostEventListener): () => void {
+  ensureListener();
+  let subscribers = bridge.hostEventListeners.get(event);
+  if (!subscribers) {
+    subscribers = new Set();
+    bridge.hostEventListeners.set(event, subscribers);
+  }
+  subscribers.add(listener);
+  return () => {
+    subscribers.delete(listener);
+    if (subscribers.size === 0) bridge.hostEventListeners.delete(event);
+  };
 }
 
 let listenerInstalled = false;
@@ -189,4 +226,5 @@ export function __resetSnugBridgeForTests(): void {
   bridge.dbPending.clear();
   bridge.netPending.clear();
   bridge.listeners.clear();
+  bridge.hostEventListeners.clear();
 }
