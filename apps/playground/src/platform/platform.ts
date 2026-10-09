@@ -214,12 +214,44 @@ export interface AgentHandInSeat {
 }
 
 /**
+ * THE SCHEDULER SEAT (TASK-20261009-scheduling-framework C7, ADR-0074 §5/§7). What a host
+ * can do for a schedule beyond ticking while its page is open — which every host does, with
+ * or without this seat, because the engine (`schedule/`) runs in the playground itself.
+ *
+ * OPTIONAL, and absence is the in-page story: no notification channel, `wakeMode: 'page'`,
+ * and the honesty line falls back to the platform's `kind` for its subject. Web and today's
+ * desktop carry no seat; a desktop that ships `tauri-plugin-notification` carries one with
+ * `notify`; the host kit carries one for its label. A seat without `notify` is a host that
+ * can name itself but cannot raise a notification — the inbox result still lands.
+ *
+ * `notify` is host-DECIDED (§6): plain text, length-capped, prefixed with the app's or the
+ * schedule's name, rate-limited by the engine before it reaches here; the host answers what
+ * happened — `shown`, `denied` (the user said no to notifications) or `unavailable` (no
+ * channel on this host right now) — and never throws for either refusal.
+ *
+ * `wakeMode` is what the host can promise: `page` = a run happens only while this page is
+ * open (every host today); `background` = the host keeps the scheduler alive with its window
+ * closed (deferred to the background-mode task — ADR-0074 §8 — but the seat names it now so
+ * the honesty line cannot inherit the page sentence by accident).
+ *
+ * `hostLabel` is the SUBJECT of the honesty line — "this tab", "Snug for Mac", "this
+ * artifact" — in the host's own words, because the one fact a scheduled run must say in
+ * words is WHO has to be open for it to happen.
+ */
+export interface SchedulerSeat {
+  notify?(n: { title: string; body: string }): Promise<'shown' | 'denied' | 'unavailable'>;
+  wakeMode: 'page' | 'background';
+  hostLabel: string;
+}
+
+/**
  * The surfaces a host may switch off; `allows()` is the ONE reader. `appExport` (T4 AC6)
  * is the per-app bundle download — the share sheet's download-only mode; `share` gates the
  * LINK acts. The kit keeps `appExport` on while `share` is off, so a kit-edited app can be
- * handed back to the agent.
+ * handed back to the agent. `schedule` (TASK-20261009 C7) gates EVERY scheduling surface —
+ * the page, the editor route, the run-header strip, the chat offer, the missed card.
  */
-export type HostSurface = 'brainSettings' | 'account' | 'sync' | 'connections' | 'share' | 'appExport';
+export type HostSurface = 'brainSettings' | 'account' | 'sync' | 'connections' | 'share' | 'appExport' | 'schedule';
 
 /**
  * Structurally identical to connectionWizard's `ConnectionChannelLike`, defined
@@ -352,6 +384,8 @@ export interface SnugPlatform {
   custody?: CustodySeat;
   /** Offered agent hand-ins for edited copies (T4 AC8). Host kit only; the run header renders nothing without it. */
   agentHandIns?: AgentHandInSeat;
+  /** The scheduler's host seat — see `SchedulerSeat`. Absent → in-page only, no notifications, the kind names the host. */
+  scheduler?: SchedulerSeat;
   /** OAuth transport. Web: undefined → popup + BroadcastChannel + `${origin}/oauth/callback`. */
   oauth?: {
     /** Recorded-string lifecycle: byte-identical across both OAuthService call sites. */
@@ -456,6 +490,13 @@ export interface SnugPlatform {
     connections?: boolean;
     share?: boolean;
     appExport?: boolean;
+    /**
+     * The scheduling surface (TASK-20261009 C7, ADR-0074 §7). Optional, and ABSENCE MEANS
+     * ENABLED like the flags above: web, desktop and every test-constructed platform keep
+     * the Schedule page and its strips; the kit says `true` in `hostCapabilities()` (it ticks
+     * while its page is open); only a host that says `false` hides every scheduling surface.
+     */
+    schedule?: boolean;
     /**
      * Whether an OAuth redirect can come back to this host (TASK-20261003, ADR-0072 §4).
      * Optional, and ABSENCE MEANS AVAILABLE, like the surface flags: web and desktop keep their

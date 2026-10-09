@@ -30,7 +30,7 @@ describe('createHostPlatform', () => {
     expect(platform.sqlJsWasmBinary).toBe(wasm);
   });
 
-  it('sets the four launch booleans explicitly false and every host surface flag false — except appExport, which stays ON (T4 AC6: the bundle download is how a kit-edited app goes back to the agent)', () => {
+  it('sets the four launch booleans explicitly false and every host surface flag false — except appExport, which stays ON (T4 AC6: the bundle download is how a kit-edited app goes back to the agent), and schedule, which is ON (TASK-20261009 C7: the scheduler runs while the page is open)', () => {
     const { capabilities } = createHostPlatform(probe(), wasm);
     expect(capabilities).toEqual({
       subscriptionMode: false,
@@ -43,6 +43,7 @@ describe('createHostPlatform', () => {
       connections: false,
       share: false,
       appExport: true,
+      schedule: true,
     });
   });
 

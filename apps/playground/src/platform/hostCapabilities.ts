@@ -26,6 +26,12 @@ export type HostCapabilities = SnugPlatform['capabilities'];
  * A binding states only what it does DIFFERENTLY — the runner turns `connections` on and
  * says whether an OAuth redirect can come back; a page that refuses to open turns
  * `appExport` off.
+ *
+ * `schedule` is ON (TASK-20261009 C7, ADR-0074 §7): the scheduler lives in the playground,
+ * so the kit binding runs it while its page is open under every binding — an artifact, the
+ * local runner, a plain file. Stated `true` rather than left absent for the same reason as the
+ * launch booleans: a reader that compares against `true` and one that compares against
+ * `false` must agree.
  */
 export function hostCapabilities(overrides: Partial<HostCapabilities> = {}): HostCapabilities {
   return {
@@ -39,6 +45,7 @@ export function hostCapabilities(overrides: Partial<HostCapabilities> = {}): Hos
     connections: false,
     share: false,
     appExport: true,
+    schedule: true,
     ...overrides,
   };
 }
