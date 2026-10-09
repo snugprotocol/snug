@@ -85,6 +85,7 @@ import { EULA_TEXT } from '../legal/eula.js';
 import { isLocalEndpointHost, localEndpointHostOf } from '../security/privateHost.js';
 import { LICENSE_URL, PRIVACY_PATH, TERMS_PATH, THREAT_MODEL_URL } from '../legal/legalShared.js';
 import { ConnectionSlotsCard } from './ConnectionSlotsCard.js';
+import { ScheduleSettingsCard } from '../schedule/ScheduleSettingsCard.js';
 
 const MODE_LABELS: Record<PlaygroundMode, string> = {
   byok: 'bring your own key',
@@ -287,6 +288,15 @@ export function SettingsView(): ReactElement {
             two apps is two independent grants, and the old card could not say so.
           */}
           <ConnectionSlotsCard />
+        </Section>
+      ) : null}
+
+      {allows('schedule') ? (
+        <Section label="schedule">
+          {/* TASK-20261009 U6: the global pause, the browser-notification opt-in (asked for on
+              the click, never at boot), the host's honesty line, clear history, and the
+              never-let-apps-suggest switch. Gated like every scheduling surface (C7). */}
+          <ScheduleSettingsCard />
         </Section>
       ) : null}
 

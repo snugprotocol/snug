@@ -12,6 +12,7 @@ import { useStore } from '../state/store.js';
 import { Button } from '../ui/Button.js';
 import { Card } from '../ui/Card.js';
 import { AuthChoiceCard } from './AuthChoiceCard.js';
+import { ScheduleOffer } from '../schedule/ScheduleOffer.js';
 import { ReportErrorLink } from '../feedback/ReportErrorLink.js';
 import { StatusLine, type StatusPhase } from './StatusLine.js';
 
@@ -113,6 +114,14 @@ export function ChatLog({
               </div>
             ) : null}
           </div>
+          {/*
+            THE SCHEDULE OFFER (TASK-20261009 E10, ADR-0074 §4): a user message that reads like
+            a schedule gets one deterministic, dismissible line under its bubble — on every
+            brain, because it never calls one. This is the one place both chats pass through
+            (the builder view and the run rail), so it renders once per message; the component
+            memoises its parse per message and owns its own dismissal.
+          */}
+          {message.role === 'user' && allows('schedule') ? <ScheduleOffer text={message.displayText} /> : null}
           {message.directive !== undefined ? (
             <Card className="artifact-card" data-testid="auth-directive-card">
               <span aria-hidden="true" style={{ fontSize: '1.5rem' }}>

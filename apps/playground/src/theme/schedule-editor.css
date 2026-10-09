@@ -1,0 +1,289 @@
+/* schedule-editor.css — the schedule editor route and the run-header schedule sheet
+   (TASK-20261009-scheduling-framework U3, U5, U8). Its own sheet so the editor can change
+   without contending for app.css; imported by the two surfaces that use it. TOKENS ONLY —
+   every colour, radius, space and duration comes from tokens.css; the controls reuse `.chip`,
+   `.btn`, `.card`, `.field`, `.hint`, `.error-note`, `.connection-note` from app.css. */
+
+.schedule-editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.schedule-editor-page h1 {
+  font-family: var(--font-display);
+  font-size: var(--text-xl);
+}
+
+.schedule-section {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.schedule-section > .section-title,
+.schedule-section > legend.section-title {
+  margin: 0 0 var(--space-2);
+  padding: 0;
+}
+
+.schedule-section .chip-row {
+  margin-bottom: 0;
+}
+
+/* The sentence box reads like the hub's create bar: one line, generous type. */
+.schedule-sentence {
+  font-size: var(--text-m);
+}
+
+.schedule-editor .field input,
+.schedule-editor .field select,
+.schedule-editor .field textarea,
+.schedule-sheet .field input,
+.schedule-sheet .field select,
+.schedule-sheet .field textarea {
+  color: var(--fg);
+  font-family: var(--font-ui);
+  font-size: var(--text-s);
+  min-height: var(--tap);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-s);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  min-width: 0;
+}
+
+.schedule-editor .field textarea,
+.schedule-sheet .field textarea {
+  resize: vertical;
+  font-family: var(--font-ui);
+}
+
+.schedule-queries textarea {
+  font-family: var(--font-mono);
+}
+
+.schedule-editor .field input:focus,
+.schedule-editor .field select:focus,
+.schedule-editor .field textarea:focus,
+.schedule-sheet .field input:focus,
+.schedule-sheet .field textarea:focus {
+  outline: none;
+  border-color: var(--ember);
+  box-shadow: 0 0 0 3px var(--ember-glow);
+}
+
+.schedule-editor .field input[aria-invalid='true'],
+.schedule-editor .field textarea[aria-invalid='true'] {
+  border-color: var(--danger);
+}
+
+.schedule-editor .field-row {
+  align-items: flex-end;
+}
+
+.schedule-editor .field-row > .field {
+  flex: 1 1 140px;
+  min-width: 0;
+}
+
+.schedule-radio-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3) var(--space-5);
+}
+
+.schedule-radio-legend {
+  font-size: var(--text-s);
+  font-weight: 700;
+}
+
+.check-label input[type='radio'] {
+  min-height: 0;
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  accent-color: var(--ember);
+}
+
+/* ---------------------------------------------------------------- steps */
+
+.schedule-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  counter-reset: schedule-step;
+}
+
+.schedule-step {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+}
+
+.schedule-step-head {
+  margin-top: 0;
+  justify-content: space-between;
+}
+
+.schedule-step-body {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/* A step that cannot run here (a later release, a missing app): dimmed, never hidden —
+   the reason sits beside it in words, so the dimming is not the only signal. */
+.schedule-step-off {
+  border-style: dashed;
+}
+
+.schedule-step-off .schedule-step-body {
+  opacity: 0.6;
+}
+
+.schedule-queries {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/* ---------------------------------------------------------------- preview and cost */
+
+.schedule-preview {
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-4);
+}
+
+.schedule-preview-list {
+  margin: 0;
+  padding-left: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-variant-numeric: tabular-nums;
+}
+
+.schedule-honesty {
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-3);
+}
+
+.schedule-zone .hint {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------------------------------------------------------------- consent */
+
+/* The calm attention form (`.connection-note`): an ember rule down the leading edge, the
+   app's own surface — a decision, not an alarm. */
+.schedule-consent {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--ember);
+  background: var(--surface);
+  border-radius: var(--radius-m);
+  padding: var(--space-4);
+  box-shadow: var(--inner-glow);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  animation: reveal-in var(--dur-2) var(--ease-out);
+}
+
+.schedule-consent-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.schedule-consent-app {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--text-m);
+}
+
+.schedule-consent-rows {
+  margin: var(--space-2) 0 0;
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--space-2) var(--space-4);
+  font-size: var(--text-s);
+}
+
+.schedule-consent-rows dt {
+  color: var(--fg-muted);
+}
+
+.schedule-consent-rows dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.schedule-consent-prompt {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-left: 2px solid var(--border-strong);
+  white-space: pre-wrap;
+}
+
+.schedule-consent-queries {
+  margin: 0;
+  padding-left: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.schedule-consent-queries code,
+.schedule-consent-rows code {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  white-space: pre-wrap;
+}
+
+.schedule-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/* ---------------------------------------------------------------- the sheet */
+
+.schedule-sheet {
+  width: min(100%, 440px);
+}
+
+.schedule-sheet-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+/* Phone width: the consent rows stack, the step head wraps. */
+@media (max-width: 480px) {
+  .schedule-consent-rows {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .schedule-consent {
+    animation: none;
+  }
+}

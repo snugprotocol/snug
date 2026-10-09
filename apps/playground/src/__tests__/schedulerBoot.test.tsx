@@ -55,11 +55,15 @@ const { initSchedulerSpy, order, recoverFreshMode, nodeLocateWasm } = await vi.h
 });
 
 // The spy IS the scheduler module: nothing of the engine (or the executors it composes) loads here.
+// `useScheduler` is the one READ the mounted tree makes at render (the header's running chip
+// and nav item, the hub section) — it answers the engine's initial view, so those surfaces
+// render their nothing; the acts are referenced on click only and need no stub.
 vi.mock('../schedule/scheduler.js', () => ({
   initScheduler: (...args: unknown[]) => {
     order.push('initScheduler');
     return initSchedulerSpy(...(args as []));
   },
+  useScheduler: () => ({ ready: false, leader: undefined, tasks: [], runsByTask: {}, state: undefined, pending: 0, unseen: 0, running: undefined, queued: 0 }),
 }));
 
 vi.mock('../state/mode.js', async (importOriginal) => {

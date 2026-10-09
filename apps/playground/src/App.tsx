@@ -20,6 +20,7 @@ import { initDemoCallout } from './state/demoCallout.js';
 import { login, refreshAuth, useAuth } from './state/auth.js';
 import { initSettings } from './state/mode.js';
 import { initScheduler } from './schedule/scheduler.js';
+import { RunningChip } from './schedule/RunningChip.js';
 import { refreshOllama } from './state/ollama.js';
 import { useStore } from './state/store.js';
 import { initWebllm } from './state/webllm.js';
@@ -52,6 +53,9 @@ import { BuilderView } from './views/BuilderView.js';
 import { DownloadView } from './views/DownloadView.js';
 import { HubView } from './views/HubView.js';
 import { SettingsView } from './views/SettingsView.js';
+import { ScheduleGate, ScheduleNavItem, ScheduleView } from './views/ScheduleView.js';
+import { ScheduleEditorView } from './schedule/ScheduleEditorView.js';
+import { ResultDetail } from './schedule/ResultDetail.js';
 import { SharedLinkView } from './views/SharedLinkView.js';
 import { WebllmBanner } from './views/WebllmBanner.js';
 import { hydrateSharedInbox, sharedOpenRequestStore } from './share/sharedInbox.js';
@@ -216,6 +220,10 @@ export function App(): ReactElement {
           >
             ⚙️
           </NavLink>
+          {/* TASK-20261009 U1: the calendar beside the gear — a monochrome icon item named
+              "schedule" (", N unread" while results wait). Renders nothing where the host
+              says allows('schedule') === false; measured at 375 px by e2e/schedule-ui.spec.ts. */}
+          <ScheduleNavItem />
           {/* ADR-0059: the always-on "what's thinking" status chip — the demo brain is
               never active without saying so, on any route. Sits by the gear because
               the chip's menu routes to Settings for every switch that needs config. */}
@@ -233,6 +241,9 @@ export function App(): ReactElement {
               flow may occupy the screen, and only because the user clicked. */}
           <AppUpdateSurface />
           <HelperSurface />
+          {/* TASK-20261009 U10 (security F15): a header whisper while a scheduled job is in
+              flight — renders nothing otherwise; its one act is cancel. On every route. */}
+          <RunningChip />
           <Button variant="ghost" onClick={toggleTheme} aria-label={`switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}>
             {theme === 'dark' ? '☀' : '☾'}
           </Button>
@@ -287,6 +298,41 @@ export function App(): ReactElement {
             }
           />
           <Route path="/settings" element={<SettingsView />} />
+          {/* TASK-20261009 U2/U3 (ADR-0074): the schedule page, the editor as a ROUTE (new and
+              by id — deep-linkable, survives reload) and a result's detail. Every one sits
+              behind ScheduleGate, the one reader of allows('schedule') for these routes. */}
+          <Route
+            path="/schedule"
+            element={
+              <ScheduleGate>
+                <ScheduleView />
+              </ScheduleGate>
+            }
+          />
+          <Route
+            path="/schedule/new"
+            element={
+              <ScheduleGate>
+                <ScheduleEditorView />
+              </ScheduleGate>
+            }
+          />
+          <Route
+            path="/schedule/:id"
+            element={
+              <ScheduleGate>
+                <ScheduleEditorView />
+              </ScheduleGate>
+            }
+          />
+          <Route
+            path="/schedule/:id/result/:dueAt"
+            element={
+              <ScheduleGate>
+                <ResultDetail />
+              </ScheduleGate>
+            }
+          />
           <Route path="/download" element={<DownloadView />} />
           <Route path="/oauth/callback" element={<OAuthCallbackPage />} />
           {/* ADR-0055 §1: disclosure, never a gate — ordinary routes, footer-linked,
