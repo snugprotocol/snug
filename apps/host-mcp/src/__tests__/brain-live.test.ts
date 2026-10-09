@@ -37,11 +37,11 @@
 //      move. EXPECT black to answer with a move of its own (not "it answered off-script"),
 //      and the chip to read "Codex · your CLI" with its "experimental" mark.
 //   5. Remove the canary line from ~/.codex/AGENTS.md.
-//   6. Journal in the task file: the version; the printed report (the item types the normal
-//      turn emitted, its cold-start and answer times, both adversarial outcomes, "canary: in
-//      no answer", "developer_instructions: honoured"); the Chess move. ONLY THEN add the
-//      version to `CODEX_VERIFIED_VERSIONS` (src/brains/codex.ts) exactly as the PASS line
-//      names it — `brain-codex.test.ts` fails an entry in any other form.
+//   6. Journal in the program record (docs/tasks/active/TASK-20260904-skill-only-snug.md):
+//      the version; the printed report (the item types the normal turn emitted, its
+//      cold-start and answer times, both adversarial outcomes, "canary: in no answer",
+//      "developer_instructions: honoured"); the Chess move. ONLY THEN add the version
+//      to `CODEX_VERIFIED_VERSIONS` (src/brains/codex.ts) exactly as the PASS line names it — `brain-codex.test.ts` fails an entry in any other form.
 
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir, userInfo } from 'node:os';

@@ -1,7 +1,8 @@
 # 0037 — Sidecar durable thread cache and launch-time sync resume
 
-- **Status:** proposed (drafted at Gate 2 of TASK-20260818-telepath-linking-sync; awaiting owner
-  approval with the task plan)
+- **Status:** accepted (owner-approved with the task plan 2026-08-18; shipped in PR #71 `7054dfc`;
+  addenda 2026-08-19 and 2026-08-22 — the latter shipped in PR #114). Status line updated 2026-10-08
+  by TASK-20261008-p0-clearance; body unchanged.
 - **Date:** 2026-08-18
 - **Task:** TASK-20260818-telepath-linking-sync
 
