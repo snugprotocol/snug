@@ -19,6 +19,23 @@
         "weather": "wkJQFIqf0lLGQ4sYyu+I3R2viNz/tzysgZk0pAnhZey61xkyPLFoCJ5MzLtaWKGZ",
         "whatsapp": "BoJ9q5UUk2cZ9+XXQfneMosJUfCzYETQ+3TptRNLk8uqqWyF7zONGJNpTknqpSJj"
       }
+    },
+    "0.1.1": {
+      "published": false,
+      "starters": {
+        "adventure-quest": "buvQBr8eKBXn75ZTnJfFaxygjQJGq+pU3rrz2HRxIzMZCrX5AU3LrxCyzilsX6LQ",
+        "chess": "Ob9bA8uxsZGFED2KT/lQIU5SMXalaUQ8WjfFXm9la6hU970KKsck8UW9dNrPk6OK",
+        "flying-pig": "T83D56AHqxRkjivL8i1rQiDmKVnIt0eph6a2L/NxmMqwirmb+nIUBdwAYWlLD+Qw",
+        "github": "JY3Ke0GFYNSDSTXDOcSyh8g+rrWVy/9kiSwOfn4V2VBFw1M2gihpaAMhOb8EAtYj",
+        "gmail": "z7J3IaM3Bi84MK3Vqcv0BOOlp0rmJXH2M0aA+tlL1x9W52H/wqynbcqHKfQ/Q1kC",
+        "hue": "4ClVXXdSWlImaWXW/IRX10wqBvQ9iwYzA6KRG1sWts7y75JLuwdskVFBX5owBcDK",
+        "ledger": "nU2k6t5h8SfmkhK5Eb0fUjCxMd0oU0D+ZpttwOjf7kQORWv27mKEw/nySKkQ920r",
+        "quiz-me": "W7ttYh6hE/2hbIyIXP+Mwf46MApGDEKnebrGDH74JU+UmyBBbodcnaWmoKC84Lsh",
+        "spotify": "VVobotC/UMVLslZ215wn5O44jUf836ZFJ9/jQ1pLOE25XvD4dxrUlyWsBo6tRn4i",
+        "trade-copilot": "pSVuar0eLfuG37Cxk+MH5cFFJTka8isr64wei3+qvd8pLfieg3qdXQEf+IOjnP2a",
+        "weather": "BTe2DNMeqTsqV4uGgsO2rSNd+HLINewPfeedA//nUb6d9zmBwEdwS4qgmGd4lN+p",
+        "whatsapp": "pak6tfgLKvSWT2gmGZISL4XSsEXV8ayMrvS/1ynNB6UZ/KxWXivEXijY9zLfXKe3"
+      }
     }
   }
 }
