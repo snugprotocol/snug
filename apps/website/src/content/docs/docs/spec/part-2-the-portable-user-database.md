@@ -79,7 +79,16 @@ content id; never per-app), `sharedBundle:<appId>` (which bundle an installed sh
 copy currently reflects, so a re-share is detected by identity), and
 `shareLink:<appId>:<linkId>` (the public record of a link the user minted: id and
 expiry; the revoke token and decryption key live in `snug_secrets` under `share:<linkId>`
-and never travel with a hub-bound copy). The per-app keys are cascaded on app delete.
+and never travel with a hub-bound copy). The scheduling revision (2026-10-09, ADR-0074) adds
+three more, all host-internal — scheduling is a host feature, and a host that never schedules
+is still conforming: `schedule:<taskId>` (a scheduled task the user created or enabled — its
+steps, its schedule and the compiled cron; a host that imports a file it does not trust lands
+such a row disabled unless it is byte-identical to one it already holds), `scheduleRuns:<taskId>`
+(that task's bounded run history, newest first; pending data-change proposals a run may carry
+are host-local and are stripped on every import, pull and export) and `schedulerState` (the
+host's reconcile watermark, its global pause and the day's call counters) — plus two per-app
+rows, `scheduleDeclined:<appId>:<hash>` and `scheduleMuted:<appId>` (the user's answers to an
+app's schedule suggestions). The per-app keys are cascaded on app delete.
 
 ### 8.2 Per-app data: native namespaced tables
 
