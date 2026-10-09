@@ -8,7 +8,7 @@
 
 import { useEffect, useState } from 'react';
 import type { ReactElement } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 
 import { getUserDb } from '../state/userdb.js';
 import { useStore } from '../state/store.js';

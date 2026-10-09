@@ -15,7 +15,7 @@
 // in front of it: what the demo brain is stays the first thing said.
 
 import type { ReactElement } from 'react';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 
 import { useActiveBrain } from '../state/activeBrain.js';
 import { dismissDemoCallout, useDemoCallout } from '../state/demoCallout.js';

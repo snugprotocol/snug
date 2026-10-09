@@ -6,7 +6,7 @@
 // opens on this computer, so silencing it forever would hide a fact that stays true.
 
 import type { ReactElement } from 'react';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 
 import { allows } from '../platform/platform.js';
 import { dismissModeCoercionNote, useModeCoerced } from '../state/mode.js';

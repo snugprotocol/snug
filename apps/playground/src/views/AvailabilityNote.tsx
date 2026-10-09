@@ -13,7 +13,7 @@
 // styled as a link.
 
 import type { ReactElement } from 'react';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 
 import { RUNS_IN_LABEL, type AppNeed, type AvailabilityBlocker, type RunsIn } from '../platform/availability.js';
 import { getPlatform } from '../platform/platform.js';

@@ -17,13 +17,13 @@
 // sandbox moves the kit with it.
 
 import type { ReactElement, ReactNode } from 'react';
-import { HashRouter, MemoryRouter } from 'react-router-dom';
+import { HashRouter, MemoryRouter } from 'react-router';
 
 export type RouterChoice = { kind: 'hash' } | { kind: 'memory'; initialEntries: [string] };
 
-/** What the probe reads: the address's fragment and the History API. */
+/** What the probe reads: the address (fragment, href) and the History API. */
 export interface RouterWindow {
-  location: { hash: string };
+  location: { hash: string; href: string };
   history: { state: unknown; replaceState(state: unknown, unused: string, url: string): void };
 }
 
@@ -47,6 +47,14 @@ export function pickRouter(win: RouterWindow): RouterChoice {
   try {
     hash = win.location.hash;
     win.history.replaceState(win.history.state, '', hash || '#/');
+    // react-router 7.18 resolves every navigation target against the document URL —
+    // `history.createURL('/')`, i.e. `new URL('/', origin === 'null' ? href : origin)` — so a
+    // document whose History API accepts the hash but whose URL cannot serve as a base
+    // (`about:srcdoc` at origin null) would throw `Invalid URL` on EVERY navigate. A document
+    // with a real origin always has a resolvable href, so probing the href alone is the same
+    // question; `file://` (origin "null" too) resolves and keeps the hash router.
+    // (TASK-20261008-p0-clearance W2, Gate 5.)
+    new URL('/', win.location.href);
     return { kind: 'hash' };
   } catch {
     return { kind: 'memory', initialEntries: [entryFromHash(hash)] };

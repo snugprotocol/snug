@@ -12,7 +12,7 @@
 // of a download button — offering the DMG to someone inside the DMG is noise.
 
 import type { ReactElement } from 'react';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 
 import { getPlatform } from '../platform/platform.js';
 import { newestBundledRelease } from '../desktop/desktopReleases.js';

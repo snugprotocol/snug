@@ -8,7 +8,7 @@
 // way; trying the one call the router needs, once, is the fact itself.
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { Link, Route, Routes, useLocation } from 'react-router-dom';
+import { Link, Route, Routes, useLocation } from 'react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { KitRouter, entryFromHash, pickRouter, type RouterWindow } from '../router.js';
@@ -22,12 +22,12 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 /** A window whose History API accepts a hash URL — every origin with a real one. */
 const working = (hash: string): { win: RouterWindow; replaced: unknown[][] } => {
   const replaced: unknown[][] = [];
-  return { replaced, win: { location: { hash }, history: { state: { idx: 3 }, replaceState: (...args: unknown[]) => void replaced.push(args) } } };
+  return { replaced, win: { location: { hash, href: `https://artifact.example/${hash}` }, history: { state: { idx: 3 }, replaceState: (...args: unknown[]) => void replaced.push(args) } } };
 };
 
 /** A window whose History API refuses every URL — an opaque-origin document. */
 const opaque = (hash: string): RouterWindow => ({
-  location: { hash },
+  location: { hash, href: `about:srcdoc${hash}` },
   history: {
     state: null,
     replaceState: () => {
@@ -60,6 +60,21 @@ describe('pickRouter — a capability probe, not an origin check', () => {
     expect(pickRouter(opaque('#/settings'))).toEqual({ kind: 'memory', initialEntries: ['/settings'] });
     expect(pickRouter(opaque(''))).toEqual({ kind: 'memory', initialEntries: ['/'] });
     expect(pickRouter(opaque('#/run/starter--chess?x=1'))).toEqual({ kind: 'memory', initialEntries: ['/run/starter--chess?x=1'] });
+  });
+
+  // react-router 7.18 resolves every navigation target against the document URL
+  // (`history.createURL('/')` → `new URL('/', origin === 'null' ? href : origin)`), so a
+  // document whose History API accepts the hash but whose URL cannot be a base throws
+  // `Invalid URL` on EVERY navigate — a HashRouter there would be dead (Gate 5, W2).
+  it('an opaque `about:srcdoc` document whose History API ACCEPTS the hash is still a memory router (v7 cannot resolve URLs there)', () => {
+    const replaced: unknown[][] = [];
+    const win: RouterWindow = { location: { hash: '#/settings', href: 'about:srcdoc#/settings' }, history: { state: null, replaceState: (...a: unknown[]) => void replaced.push(a) } };
+    expect(pickRouter(win)).toEqual({ kind: 'memory', initialEntries: ['/settings'] });
+  });
+
+  it('`file://` (origin "null" too, but a resolvable URL) keeps HashRouter', () => {
+    const win: RouterWindow = { location: { hash: '#/', href: 'file:///Users/me/snug-host.html#/' }, history: { state: null, replaceState: () => undefined } };
+    expect(pickRouter(win)).toEqual({ kind: 'hash' });
   });
 
   it('a `history` that cannot even be READ is a memory router too — the probe never throws', () => {

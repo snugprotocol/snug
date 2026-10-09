@@ -26,7 +26,7 @@
 
 import type { ReactElement } from 'react';
 import { useId, useRef, useSyncExternalStore } from 'react';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 
 import {
   BRAIN_AUTO,
