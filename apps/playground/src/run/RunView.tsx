@@ -703,6 +703,7 @@ export default function RunView(): ReactElement {
       dispatchReveal(frame);
       recordAppMeta(id, {
         displayName: frame.displayName,
+        announcedAppId: frame.appId,
         ...(frame.description !== undefined ? { description: frame.description } : {}),
         ...(frame.iconEmoji !== undefined ? { iconEmoji: frame.iconEmoji } : {}),
         ...(frame.iconColor !== undefined ? { iconColor: frame.iconColor } : {}),

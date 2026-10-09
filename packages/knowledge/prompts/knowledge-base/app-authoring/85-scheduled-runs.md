@@ -135,7 +135,8 @@ module SDK get the same handshake typed as `useSnugSchedule(handler)` and
 An app may ask the host for a schedule of its own — propose-only. It posts ONE
 `{{frameType:appEvent}}` frame with `event: 'schedule-request'` whose `data` is a schedule
 proposal: a `title`, the `steps` (which may name only THIS app — `kind: 'app-run'` with your
-`appId` and an optional `input` the handler above will receive), and a `spec`:
+`appId`, the one you pass to `useSnugApp` — the host maps it to the id it holds the app under —
+and an optional `input` the handler above will receive), and a `spec`:
 
 ```javascript
 SnugBridge.post({
