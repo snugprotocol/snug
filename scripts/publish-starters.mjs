@@ -81,11 +81,15 @@ function nodePreflight(deps) {
   }
 }
 
-function cleanTreePreflight(deps) {
+const LOCK_PATH = 'examples/starters-lock.json';
+
+/** `allowLock`: --stage's own output may be uncommitted (stage two versions, commit once). */
+function cleanTreePreflight(deps, { allowLock = false } = {}) {
   const status = deps.exec('git', ['status', '--porcelain']);
   if (status.status !== 0) throw new Refusal(`git status failed: ${status.stderr ?? ''}`.trim());
-  if (status.stdout.trim() !== '') {
-    throw new Refusal(`the tree has uncommitted changes — publish and stage build from a commit, so commit or remove them first:\n${status.stdout.trimEnd()}`);
+  const dirty = status.stdout.split('\n').filter((line) => line.trim() !== '' && !(allowLock && line.slice(3) === LOCK_PATH));
+  if (dirty.length > 0) {
+    throw new Refusal(`the tree has uncommitted changes — publish and stage build from a commit, so commit or remove them first:\n${dirty.join('\n')}`);
   }
 }
 
@@ -152,7 +156,7 @@ function expectedFiles(index) {
 
 async function stage(opts, deps) {
   nodePreflight(deps);
-  cleanTreePreflight(deps);
+  cleanTreePreflight(deps, { allowLock: true });
   const pin = deps.readPin();
   let ref;
   if (opts.ref !== undefined) {

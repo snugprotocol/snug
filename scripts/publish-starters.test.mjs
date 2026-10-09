@@ -252,6 +252,15 @@ test('--stage REFUSES to rewrite an entry the lock marks published', async () =>
   await assert.rejects(run(['--stage'], w), /published/);
 });
 
+test('--stage tolerates an uncommitted lock — its own output — so two versions stage back to back; anything else still refuses', async () => {
+  const w = world({ porcelain: '?? examples/starters-lock.json\n', lock: { format: 'snug-starters-lock/1', name: NAME, versions: {} } });
+  assert.equal((await run(['--stage'], w)).status, 'staged');
+  const dirty = world({ porcelain: ' M examples/starters-lock.json\n M examples/chess/app.html\n' });
+  await assert.rejects(run(['--stage'], dirty), /uncommitted/);
+  const pub = world({ porcelain: ' M examples/starters-lock.json\n' });
+  await assert.rejects(run([], pub), /uncommitted/, 'the dry run and --publish never tolerate it');
+});
+
 test('--stage REFUSES a dirty tree (the build reads HEAD, not the working tree)', async () => {
   const w = world({ porcelain: '?? examples/new/app.html\n' });
   await assert.rejects(run(['--stage'], w), /uncommitted/);
