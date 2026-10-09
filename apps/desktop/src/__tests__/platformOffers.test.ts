@@ -60,11 +60,18 @@ describe('the desktop platform offers every need an app can have', () => {
   });
 });
 
-describe('the scheduler seat (TASK-20261009 H3; ADR-0074 §7)', () => {
-  it('createDesktopPlatform() names itself as the subject of the honesty line — "Snug for Mac" — and promises only the page; no notify until PR-B’s plugin brings one', async () => {
+describe('the scheduler seat (TASK-20261009 H3 + H1; ADR-0074 §7)', () => {
+  it('createDesktopPlatform() names itself as the subject of the honesty line — "Snug for Mac" — promises only the page, and carries `notify` (the plugin seat, src/notify.ts)', async () => {
     const { createDesktopPlatform } = await import('../platform-desktop.js');
     const { scheduler } = createDesktopPlatform();
-    expect(scheduler).toEqual({ wakeMode: 'page', hostLabel: 'Snug for Mac' });
-    expect(scheduler?.notify).toBeUndefined();
+    expect(scheduler).toMatchObject({ wakeMode: 'page', hostLabel: 'Snug for Mac' });
+    expect(Object.keys(scheduler ?? {}).sort()).toEqual(['hostLabel', 'notify', 'wakeMode']);
+    expect(typeof scheduler?.notify, 'the H1 seat: a deleted `notify` line here would silently put the desktop back to inbox-only').toBe('function');
+  });
+
+  it('the seat’s `notify` is the one the engine reads per run — present on the object, not reached through a getter', async () => {
+    const { createDesktopPlatform } = await import('../platform-desktop.js');
+    const { scheduler } = createDesktopPlatform();
+    expect(Object.getOwnPropertyDescriptor(scheduler, 'notify')?.get).toBeUndefined();
   });
 });

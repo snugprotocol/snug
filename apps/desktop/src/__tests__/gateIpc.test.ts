@@ -30,7 +30,10 @@ import {
   UPDATER_INSTALL_COMMAND,
   HELPER_INSTALL_COMMAND,
   HELPER_STATUS_COMMAND,
+  NOTIFICATION_NOTIFY_COMMAND,
+  NOTIFICATION_PERMISSION_COMMAND,
   decideHelperStatusDispatchable,
+  decideNotificationDispatchable,
 } from '../gate/ipc.js';
 
 const reachable = {
@@ -43,6 +46,7 @@ const reachable = {
   updaterInstallCallbackFired: false,
   relaunchCallbackFired: false,
   helperInstallCallbackFired: false,
+  notificationCallbackFired: false,
 };
 
 describe('decideInvokeRefused — the sentinel is the sensor', () => {
@@ -439,5 +443,85 @@ describe('helper seat rows (ADR-0060 §7)', () => {
     expect(decideHelperStatusDispatchable({ resolved: true, detail: 'resolved' }).pass).toBe(true);
     expect(decideHelperStatusDispatchable({ resolved: false, detail: "'x' is not a helper this build knows" }).pass).toBe(true);
     expect(decideHelperStatusDispatchable({ resolved: false, detail: 'Command helper_status not found' }).pass).toBe(false);
+  });
+});
+
+// PER-COMMAND IPC unreachability for the notification plugin (TASK-20261009-scheduling-framework
+// H1; ADR-0074 §6–§7).
+//
+// WHY THIS ROW EXISTS: `plugin:notification|notify` raises an OS banner signed as Snug. An app
+// iframe that reached it could put any sentence on the user's screen under the shell's own icon
+// — the phishing surface §6 closes by making notifications host-decided (one seat, the engine's
+// text, after a Settings opt-in). Amendment 16: registration is per-command, so only a
+// per-command probe can see this plugin's command, and it reads its OWN callback slot.
+describe('ipc-notification-refused — plugin:notification|notify specifically', () => {
+  const row = (report: Parameters<typeof decideUpdateChannelCommandRefused>[3], keyReachable: boolean) =>
+    decideUpdateChannelCommandRefused('ipc-notification-refused', NOTIFICATION_NOTIFY_COMMAND, 'app code can raise OS notifications signed as Snug', report, keyReachable);
+
+  it('FAILS when a keyless notify resolved a callback into the subframe — and names the command and the trigger', () => {
+    const result = row({ ...reachable, notificationCallbackFired: true, fired: true }, false);
+    expect(result.pass).toBe(false);
+    expect(result.detail).toContain(NOTIFICATION_NOTIFY_COMMAND);
+    expect(result.detail).toContain('STRUCTURAL BREAKAGE');
+  });
+
+  it('cannot vouch for refusal while the invoke key is reachable', () => {
+    expect(row({ ...reachable, fired: false }, true).pass).toBe(false);
+  });
+
+  it('FAILS when the probe never reported — an unanswerable sensor is not a pass', () => {
+    expect(row(undefined, false).pass).toBe(false);
+  });
+
+  it('passes only with its own slot silent AND an unreachable key', () => {
+    const result = row({ ...reachable, fired: false }, false);
+    expect(result.pass).toBe(true);
+    expect(result.detail).toContain('key-gated per command');
+  });
+
+  it("a helper_install refusal alone can never grant the notification verdict — each row reads its own slot", () => {
+    const helperRefusedButNotifyReached = { ...reachable, helperInstallCallbackFired: false, notificationCallbackFired: true };
+    expect(
+      decideUpdateChannelCommandRefused('ipc-helper-install-refused', HELPER_INSTALL_COMMAND, 's', { ...helperRefusedButNotifyReached, fired: helperRefusedButNotifyReached.helperInstallCallbackFired }, false).pass,
+    ).toBe(true);
+    expect(row({ ...helperRefusedButNotifyReached, fired: helperRefusedButNotifyReached.notificationCallbackFired }, false).pass).toBe(false);
+  });
+
+  it('the command names match the plugin’s registrations (its JS shim and init script post exactly these)', () => {
+    expect(NOTIFICATION_NOTIFY_COMMAND).toBe('plugin:notification|notify');
+    expect(NOTIFICATION_PERMISSION_COMMAND).toBe('plugin:notification|is_permission_granted');
+  });
+
+  it('both ids are REQUIRED — the derive-based driver expects them, and a missing verdict is a fail', () => {
+    expect(IPC_CHECK_IDS).toContain('ipc-notification-refused');
+    expect(IPC_CHECK_IDS).toContain('ipc-notification-dispatchable');
+  });
+});
+
+describe('decideNotificationDispatchable — the POSITIVE twin, over is_permission_granted', () => {
+  // A refusal check over an unregistered plugin vouches for nothing (the eight-seam defect), so
+  // the main window must be shown to reach the plugin. The twin drives the permission read, not
+  // `notify`: a dispatched notify would put a banner on the runner's screen and prove no more.
+
+  it('passes when the invoke RESOLVES — the plugin answered from the main frame', () => {
+    const result = decideNotificationDispatchable({ resolved: true, detail: 'answered true' });
+    expect(result.pass).toBe(true);
+    expect(result.detail).toContain(NOTIFICATION_PERMISSION_COMMAND);
+  });
+
+  it('passes when the command BODY answers with an error — the body ran, which is the question', () => {
+    expect(decideNotificationDispatchable({ resolved: false, detail: 'notification permission state unavailable' }).pass).toBe(true);
+  });
+
+  it('FAILS on the unregistered/uncapable shapes — the exact defect this twin exists for', () => {
+    for (const detail of [
+      'Command plugin:notification|is_permission_granted not found',
+      'plugin:notification|is_permission_granted not allowed. Permissions associated with this command: notification:allow-is-permission-granted',
+      'unknown command plugin:notification|is_permission_granted',
+    ]) {
+      const result = decideNotificationDispatchable({ resolved: false, detail });
+      expect(result.pass, detail).toBe(false);
+      expect(result.detail).toContain('vouching for nothing');
+    }
   });
 });

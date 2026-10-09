@@ -33,6 +33,7 @@ import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import type { SnugPlatform } from '@playground/platform/platform';
 
 import { createAppUpdates } from './app-updates.js';
+import { createDesktopNotifySeat } from './notify.js';
 import { createOnOpenShareLink } from './share-links.js';
 import { createTauriFileFs } from './fs.js';
 import { lanFetch, lanPair } from './lan-fetch.js';
@@ -297,12 +298,13 @@ export function createDesktopPlatform(): SnugPlatform {
     // plugin (artifact-signature verified in Rust); relaunch reaps the sidecar first
     // — the ordering is pinned by appUpdates.test.ts's call-order spy, never by prose.
     appUpdates: createAppUpdates(),
-    // THE SCHEDULER SEAT (TASK-20261009 H3; ADR-0074 §7). The shell names itself as the
+    // THE SCHEDULER SEAT (TASK-20261009 H3 + H1; ADR-0074 §7). The shell names itself as the
     // subject of the honesty line ("runs while Snug for Mac is open") and promises only the
     // page: background mode is the deferred task (§8), and stating `page` here is what keeps
-    // the line from inheriting a background sentence by accident. No `notify` yet — PR-B's
-    // `tauri-plugin-notification` brings it; until then the inbox result is the alert.
-    scheduler: { wakeMode: 'page', hostLabel: 'Snug for Mac' },
+    // the line from inheriting a background sentence by accident. `notify` is the
+    // `tauri-plugin-notification` seat (notify.ts): it reads the Settings opt-in per call and
+    // never asks — the inbox result lands either way, the notification is the extra.
+    scheduler: { wakeMode: 'page', hostLabel: 'Snug for Mac', notify: createDesktopNotifySeat() },
     // hubAuth stays absent-and-off by design (ADR-0052 §5): the shell has no hub
     // login surface — BYOK/local only — and stating it here would imply a knob.
     capabilities: { subscriptionMode: false, hubSyncOrigin: false, lanHttpPrivate: true },
