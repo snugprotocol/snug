@@ -10,6 +10,13 @@
 // from the content-pinned `@snugprotocol/starters` package on jsDelivr `/npm/` — the one
 // CDN both artifact viewers allow (T1 S2).
 //
+// NOT HERE: `StarterSource.requirement()` (TASK-20261003 S2). It is answered from the same
+// inline manifest, but by `starterSource.ts`, which composes it over this loader — because
+// its parse is a playground VALUE, and this file is imported by the Vite config itself
+// (`plugins/starters-index.ts` reads `STARTERS_INDEX_FORMAT` from here), where the
+// `@playground` alias does not exist yet. A value import here fails the config load with
+// ERR_MODULE_NOT_FOUND before any test runs (measured 2026-10-03); type imports are erased.
+//
 // THE PROTOCOL. `load(folder)` appends exactly ONE classic `<script>` with `src`,
 // `integrity="sha384-…"` (the hash baked from `index.json`) and `crossorigin="anonymous"`
 // (SRI needs CORS). The wrapper calls `window.__snugStarterRegister(payload)`; the hook is
@@ -157,7 +164,8 @@ function parsePayload(value: unknown, version: string): StarterPayload | undefin
   };
 }
 
-export interface OnDemandStarterSource extends StarterSource {
+/** Everything a `StarterSource` answers except `requirement()` — see the header for why that one is composed in `starterSource.ts`. */
+export interface OnDemandStarterSource extends Omit<StarterSource, 'requirement'> {
   /** The folders whose wrapper has registered — what `authoring()` covers. */
   loaded(): string[];
 }

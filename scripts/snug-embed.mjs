@@ -2,12 +2,24 @@
 // snug-embed.mjs — hand apps in to a live Snug artifact page (TASK-20260905-binding-a-artifacts
 // AC9, ADR-0065 §6). The agent's session reads the live page (the Artifact tool's read),
 // runs this over it, and publishes the result: an edit is a republish, never a second runner.
-// The read-back is the VIEWER-WRAPPED page (the viewer's skeleton and injected runtime
-// around the kit's whole document — measured on the real artifact, AC13 2026-09-06): this
-// script unwraps it through the one grammar, merges into the KIT document, and writes the
-// BARE kit page — the form a republish takes (the viewer wraps it again). Never re-wrap.
+// The read-back is the WRAPPED page — under contract 0.2.67 the platform's skeleton (charset,
+// viewport, a reset) around the kit's whole document (two real read-backs, 2026-10-03; the
+// September viewer's wrapper, AC13 2026-09-06, is still read): this script unwraps it through
+// the one grammar, merges into the KIT document, and writes the BARE kit page — the form a
+// republish takes (the platform wraps it again). Never re-wrap: a skeleton sent back would be
+// stored inside a second one. A read-back whose skeleton carries a page FRAGMENT is not the
+// kit page and is refused by name.
 //
 //   node scripts/snug-embed.mjs <live.html> --bundle app.json [--bundle …] [--remove <lineage>] [--out file] [--strict]
+//
+// THE SKILL'S OWN PAGE IS NEVER AN OUTPUT (TASK-20261003 K6). This script ships inside the
+// skill, beside `assets/snug-host.html` — the kit page a first artifact starts from, and,
+// since the plugin carries that page once, the very file the local runner serves. Writing in
+// place is this script's default, so pointed at that file it would have rewritten it — and
+// the only downstream catch is too late: the plugin build writes a `.sha256` pin beside the
+// page (D8) and the runner refuses a mismatch as `page-damaged` (`apps/host-mcp` `page.ts`),
+// so a page rewritten in place would stop every later session's runner instead of serving it. It refuses to write anywhere under its own skill's
+// `assets/`, and an input that lives there needs `--out`.
 //
 // Merges `snug-app-bundle/1` documents into the page by lineage (replace the same lineage,
 // append a new one, remove on request) through the ONE grammar (`lib/page-blocks.mjs`) —
@@ -22,7 +34,7 @@
 // inside an artifact. Warnings by default; `--strict` refuses. It says nothing about
 // whether the code is safe — the sandbox (C2) is the safety boundary, unchanged.
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -85,10 +97,10 @@ export function parseBundleText(text, label = 'bundle') {
 export function embed({ page: input, bundles = [], remove = [], strict = false }) {
   const warnings = [];
   const errors = [];
-  // The Artifact tool's read-back is viewer-wrapped: lift the kit document out first, and
-  // refuse a wrapper of any other shape rather than embed into it.
+  // The Artifact tool's read-back is wrapped: lift the kit document out first, and refuse a
+  // wrapper of any other shape (or a fragment inside one) rather than embed into it.
   const lifted = unwrapViewerPage(input);
-  if (lifted.html === undefined) errors.push(`the page is inside a viewer wrapper this script does not recognise (${lifted.problem})`);
+  if (lifted.html === undefined) errors.push(`the page is not one platform wrapper around the kit page (${lifted.problem})`);
   const page = lifted.html ?? input;
   if (!/^\s*<!doctype html>/i.test(page)) errors.push('the page does not start with <!doctype html> — is this the live artifact page?');
   if (!/<\/body\s*>/i.test(page)) errors.push('the page has no </body> — nothing to embed into');
@@ -145,12 +157,85 @@ export function parseArgs(argv) {
   return args;
 }
 
+/**
+ * The real path of a file that may not exist yet: its nearest existing ancestor, resolved, plus
+ * the rest. Resolved by `realpathSync.native` (realpath(3)), which answers with the volume's own
+ * spelling — the JS `realpathSync` resolves links but keeps the caller's letter case, so on
+ * macOS's case-insensitive APFS `…/ASSETS/x` stayed `…/ASSETS/x` while naming `…/assets/x`
+ * (Gate 5 security F4; measured 2026-10-04 — APFS even folds `ſ` to `s`, which no JS case mapping does).
+ */
+function realPathOf(file, realpath = realpathSync.native) {
+  const absolute = path.resolve(file);
+  try {
+    return realpath(absolute);
+  } catch {
+    const parent = path.dirname(absolute);
+    return parent === absolute ? absolute : path.join(realPathOf(parent, realpath), path.basename(absolute));
+  }
+}
+
+/**
+ * Does `dir`'s volume fold letter case? Measured, never assumed from the platform: is `dir` the
+ * same directory when its name is spelled with every letter's case swapped? (macOS's default
+ * APFS folds; Linux's ext4 does not, and there `ASSETS/` beside `assets/` is another directory.)
+ * `dir` is the guarded `assets/`, so its name always has letters to swap.
+ */
+function foldsCase(dir) {
+  const name = path.basename(dir);
+  const swapped = [...name].map((c) => (c === c.toLowerCase() ? c.toUpperCase() : c.toLowerCase())).join('');
+  try {
+    const a = statSync(dir);
+    const b = statSync(path.join(path.dirname(dir), swapped));
+    return a.dev === b.dev && a.ino === b.ino;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Why this run may not write `out`, or undefined when it may. The guarded directory is the
+ * `assets/` beside this script's own `scripts/` — the skill it ships in. Compared by REAL
+ * path on both sides: a symlink to the page, or into the directory, is the same file; so is
+ * another letter case of it on a volume that folds case (F4). Run from the monorepo there is
+ * no such directory, and nothing is guarded. `realpath` is a seam: the test stands in one that
+ * keeps the caller's spelling, to reach the case fold below.
+ */
+export function ownAssetsRefusal({ page, out }, scriptFile = fileURLToPath(import.meta.url), realpath = realpathSync.native) {
+  let assets;
+  try {
+    assets = realpath(path.resolve(path.dirname(scriptFile), '..', 'assets'));
+  } catch {
+    return undefined;
+  }
+  // The native realpath already answers in the volume's spelling on macOS; the fold is for a
+  // realpath that keeps the typed one (glibc's builds its answer from the typed names, so a
+  // case-folding mount there would leave `ASSETS/` unequal). Only where the volume folds: on a
+  // case-sensitive one `ASSETS/` is a different directory, and refusing it would be wrong.
+  const fold = foldsCase(assets) ? (p) => p.toLowerCase() : (p) => p;
+  const guarded = fold(assets);
+  const within = (file) => {
+    const real = fold(realPathOf(file, realpath));
+    return real === guarded || real.startsWith(`${guarded}${path.sep}`);
+  };
+  if (out === undefined) {
+    return within(page) ? `${page} is this skill's own copy of the kit page — pass --out <file> to write the merged page somewhere else (the default writes in place)` : undefined;
+  }
+  return within(out) ? `--out ${out} is inside this skill's own assets/ — the kit page there is the one the runner serves; write the merged page somewhere else` : undefined;
+}
+
 export function main(argv, io = { log: console.log, error: console.error }) {
   const args = parseArgs(argv);
   const page = readFileSync(args.page, 'utf8');
   if (args.list) {
     for (const b of listBlocks(page)) io.log(`${b.lineage}  ${b.displayName ?? '(unnamed)'}  ${b.bytes} B`);
     return 0;
+  }
+  // Before anything is merged: a run that may not write must not get as far as a result.
+  const refusal = ownAssetsRefusal({ page: args.page, out: args.out });
+  if (refusal !== undefined) {
+    io.error(`error: ${refusal}`);
+    io.error('snug-embed: nothing written');
+    return 2;
   }
   const bundles = args.bundles.map((file) => ({ name: path.basename(file), text: readFileSync(file, 'utf8') }));
   const result = embed({ page, bundles, remove: args.remove, strict: args.strict });
@@ -162,11 +247,14 @@ export function main(argv, io = { log: console.log, error: console.error }) {
   }
   const out = args.out ?? args.page;
   writeFileSync(out, result.html);
-  io.log(`snug-embed: ${bundles.length} bundle(s) merged${args.remove.length ? `, ${args.remove.length} removed` : ''} → ${out}${result.unwrapped ? ' (the viewer wrapper was lifted off — publish this bare page as it is)' : ''}${result.warnings.length ? ` (${result.warnings.length} warning(s))` : ''}`);
+  io.log(`snug-embed: ${bundles.length} bundle(s) merged${args.remove.length ? `, ${args.remove.length} removed` : ''} → ${out}${result.unwrapped ? ' (the platform wrapper was lifted off — publish this bare page as it is)' : ''}${result.warnings.length ? ` (${result.warnings.length} warning(s))` : ''}`);
   return 0;
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+// Is this file the program being run? Compared by REAL path: Node resolves the main module's
+// own URL through symlinks, so a script reached by a linked path (macOS's /var → /private/var,
+// a plugin cache behind a link) used to compare unequal here — and exit 0 having done nothing.
+if (process.argv[1] && realPathOf(process.argv[1]) === realPathOf(fileURLToPath(import.meta.url))) {
   try {
     process.exit(main(process.argv.slice(2)));
   } catch (error) {

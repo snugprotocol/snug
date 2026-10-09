@@ -98,7 +98,7 @@ describe('createExportSeat', () => {
     expect(dl.calls).toHaveLength(2);
   });
 
-  it('without downloads (a chat artifact) the wrapper text is COPIED and the note names the size and the file name', async () => {
+  it('without downloads (a plain file, a static copy) the wrapper text is COPIED and the note names the size and the file name', async () => {
     const bytes = await userFile();
     const copied: string[] = [];
     const store = createCustodyStore();

@@ -37,6 +37,7 @@ import {
 import {
   __resetRuntimeContractFixturesForTests,
   __setRuntimeContractFixturesForTests,
+  installStarterRuntimeContract,
 } from '../starter/starterRuntimeContract.js';
 import { installTestUserDb } from './userdbTestHelper.js';
 
@@ -261,6 +262,140 @@ describe('applyStarterUpdate — the update act (AC5, AC7)', () => {
     const result = await applyStarterUpdate(db, app.appId);
     expect(result).toMatchObject({ status: 'already-current' });
     expect(db.getSetting(starterVersionSettingKey(app.appId))).toBe(2);
+  });
+});
+
+describe('contract-only releases — identical html, a new runtime contract (TASK-20261003 R5, C7)', () => {
+  // Chess v3 as first shipped: the bytes of v2, only `responseGuidance` corrected. The act
+  // compared bytes alone, took its already-current branch for every unedited copy, recorded
+  // v3 — and never wrote the contract, so the copy kept the guidance the release existed to
+  // replace. A factory update ships factory contract (ADR-0045 §4), whatever else moved.
+  const OLD_GUIDANCE = { overview: 'chess', responseGuidance: 'Reply {"from":"e7","to":"e5","say":"…"}.' };
+  const NEW_GUIDANCE = { overview: 'chess', responseGuidance: 'Reply {"move":{"from":"e7","to":"e5"},"message":"…"}.' };
+
+  it('the unedited copy takes the release’s contract — as a NEW pinned version, the old one keeping the old contract', async () => {
+    setBundle(HTML_V1, 2, { contractRaw: JSON.stringify(NEW_GUIDANCE) });
+    const appId = installAtV1();
+    db.putRuntimeContract(appId, 1, OLD_GUIDANCE);
+    expect(await starterUpdateStatus(db, appId)).toMatchObject({ installedVersion: 1, latestVersion: 2, updateAvailable: true, edited: false });
+
+    const result = await applyStarterUpdate(db, appId);
+    expect(result).toMatchObject({ status: 'updated', version: 2 });
+    expect(db.getRuntimeContract(appId)?.responseGuidance).toBe(NEW_GUIDANCE.responseGuidance);
+    expect(db.getSetting(starterVersionSettingKey(appId))).toBe(2);
+    // Non-destructive as every update is: same bytes on a new pin, the old contract revertable.
+    expect(db.getAppHtml(appId)).toBe(HTML_V1);
+    const versions = db.listAppVersions(appId);
+    expect(versions[0]).toMatchObject({ pinned: true, note: 'starter update to v2' });
+    expect(db.getRuntimeContract(appId, 1)).toEqual(OLD_GUIDANCE);
+    // Converges: a second apply finds bytes AND contract at the release — nothing more written.
+    expect(await applyStarterUpdate(db, appId)).toMatchObject({ status: 'already-current', version: 2 });
+    expect(db.listAppVersions(appId)).toHaveLength(versions.length);
+  });
+
+  it('a contract the user re-authored is not overwritten in place — it stays on the version they can revert to', async () => {
+    setBundle(HTML_V1, 2, { contractRaw: JSON.stringify(NEW_GUIDANCE) });
+    const appId = installAtV1();
+    db.putRuntimeContract(appId, 1, { overview: 'mine — rewritten in the builder' });
+    await applyStarterUpdate(db, appId);
+    expect(db.getRuntimeContract(appId)?.responseGuidance).toBe(NEW_GUIDANCE.responseGuidance);
+    expect(db.getRuntimeContract(appId, 1)?.overview).toBe('mine — rewritten in the builder');
+  });
+
+  it('the same contract in other key order is the same contract — no version minted', async () => {
+    // `settings` is a record, so its key order survives the schema: compared canonically.
+    setBundle(HTML_V1, 2, { contractRaw: JSON.stringify({ ...NEW_GUIDANCE, settings: { persona: 'rival', depth: 2 } }) });
+    const appId = installAtV1();
+    db.putRuntimeContract(appId, 1, { ...NEW_GUIDANCE, settings: { depth: 2, persona: 'rival' } });
+    expect(await applyStarterUpdate(db, appId)).toMatchObject({ status: 'already-current', version: 2 });
+    expect(db.listAppVersions(appId)).toHaveLength(1);
+  });
+});
+
+describe('a contract the user re-authored is an EDIT — the confirmation runs before a release replaces it (Gate 5 seams/F2)', () => {
+  // The builder's `runtime_contract_write` (agent/tools.ts) re-authors a contract IN PLACE on
+  // the current version, html untouched — and on an unedited copy that version IS the
+  // starter's pin. R5's contract-only branch then replaced it on a docs-only release in one
+  // click (on main that release kept it): `edited` compared html alone, so the "you've
+  // customized this app" confirmation never ran. Installed here through the real install
+  // act's contract step, and re-authored exactly as the tool does it.
+  const FACTORY = { overview: 'chess', responseGuidance: 'Reply {"move":{"from":"e7","to":"e5"},"message":"…"}.' };
+  const NEXT_FACTORY = { overview: 'chess', responseGuidance: 'Reply {"move":{"from":"e7","to":"e5"},"message":"…"} — and nothing else.' };
+  const MINE = { overview: 'chess', personaNote: 'Trash-talks in French.', responseGuidance: 'Reply {"move":{"from":"e7","to":"e5"},"message":"…"} in French.' };
+
+  async function installWithContract(contract: object | undefined): Promise<string> {
+    __setRuntimeContractFixturesForTests(contract === undefined ? {} : { [FOLDER]: JSON.stringify(contract) });
+    const appId = installAtV1();
+    await installStarterRuntimeContract(db, appId);
+    return appId;
+  }
+  /** What `runtime_contract_write` does: the current version's contract, in place. */
+  const reauthor = (appId: string, contract: typeof MINE): void => db.putRuntimeContract(appId, db.getApp(appId)!.currentVersion, contract);
+
+  it('docs-only release + a re-authored contract → edited (the confirmation runs), and the html alone is unchanged', async () => {
+    const appId = await installWithContract(FACTORY);
+    reauthor(appId, MINE);
+    setBundle(HTML_V1, 2, { contractRaw: JSON.stringify(FACTORY) }); // v2: same bytes, same contract — a docs-only release
+    expect(db.getAppHtml(appId)).toBe(HTML_V1);
+    expect(await starterUpdateStatus(db, appId)).toMatchObject({ updateAvailable: true, edited: true });
+  });
+
+  it('the unedited twin: a docs-only release is not an edit, and a CONTRACT-ONLY release still lands silently (R5)', async () => {
+    const appId = await installWithContract(FACTORY);
+    setBundle(HTML_V1, 2, { contractRaw: JSON.stringify(FACTORY) });
+    expect(await starterUpdateStatus(db, appId)).toMatchObject({ updateAvailable: true, edited: false });
+
+    setBundle(HTML_V1, 2, { contractRaw: JSON.stringify(NEXT_FACTORY) });
+    expect(await starterUpdateStatus(db, appId)).toMatchObject({ updateAvailable: true, edited: false });
+    expect(await applyStarterUpdate(db, appId)).toMatchObject({ status: 'updated', version: 2 });
+    expect(db.getRuntimeContract(appId)).toEqual(NEXT_FACTORY);
+    // What the update wrote is now the factory's word: still not an edit.
+    expect(await starterUpdateStatus(db, appId)).toMatchObject({ updateAvailable: false, edited: false });
+  });
+
+  it('once the user confirms, the release lands and THEIR contract stays on the version they can revert to', async () => {
+    const appId = await installWithContract(FACTORY);
+    reauthor(appId, MINE);
+    setBundle(HTML_V1, 2, { contractRaw: JSON.stringify(FACTORY) });
+    expect(await applyStarterUpdate(db, appId)).toMatchObject({ status: 'updated', version: 2 });
+    expect(db.getRuntimeContract(appId)).toEqual(FACTORY);
+    expect(db.getRuntimeContract(appId, 1)).toEqual(MINE);
+    expect(await starterUpdateStatus(db, appId)).toMatchObject({ updateAvailable: false, edited: false });
+    // …and re-authoring the updated copy is an edit again.
+    reauthor(appId, MINE);
+    expect((await starterUpdateStatus(db, appId))?.edited).toBe(true);
+  });
+
+  it('a starter that ships NO contract: a contract written onto it afterwards is the user’s', async () => {
+    const appId = await installWithContract(undefined);
+    expect(db.getRuntimeContract(appId)).toBeUndefined();
+    setBundle(HTML_V1, 2);
+    expect((await starterUpdateStatus(db, appId))?.edited).toBe(false);
+    reauthor(appId, MINE);
+    expect((await starterUpdateStatus(db, appId))?.edited).toBe(true);
+  });
+
+  it('a release that ships no contract carries the user’s forward — and it stays THEIRS, not the starter’s word', async () => {
+    const appId = await installWithContract(undefined);
+    reauthor(appId, MINE);
+    setBundle(HTML_V2, 2); // new bytes, no contract: the update copies the current one forward
+    expect(await applyStarterUpdate(db, appId)).toMatchObject({ status: 'updated', version: 2 });
+    expect(db.getRuntimeContract(appId)).toEqual(MINE);
+    expect((await starterUpdateStatus(db, appId))?.edited).toBe(true);
+  });
+
+  it('a copy installed before the record existed is judged against its newest pin, and learns the record from a release whose contract it already holds', async () => {
+    // No record: the install act's contract step predates it. The pin is the only witness,
+    // and an in-place re-author overwrote it — so such a copy reads unedited, as it did.
+    const appId = installAtV1();
+    db.putRuntimeContract(appId, 1, FACTORY);
+    setBundle(HTML_V1, 2, { contractRaw: JSON.stringify(FACTORY) });
+    expect((await starterUpdateStatus(db, appId))?.edited).toBe(false);
+    // Taking the docs-only release (bytes and contract already the factory's) records it…
+    expect(await applyStarterUpdate(db, appId)).toMatchObject({ status: 'already-current', version: 2 });
+    // …so the NEXT re-author is seen.
+    reauthor(appId, MINE);
+    expect((await starterUpdateStatus(db, appId))?.edited).toBe(true);
   });
 });
 

@@ -7,10 +7,9 @@
   "license": "MIT",
   "scripts": {
     "build:starters": "node ../../scripts/build-starters-pkg.mjs",
-    "build": "pnpm build:starters && tsc -p tsconfig.json --noEmit && vite build && pnpm build:local",
+    "build": "pnpm build:starters && tsc -p tsconfig.json --noEmit && vite build",
     "test": "tsc -p tsconfig.test.json && vitest run",
-    "test:e2e": "playwright test",
-    "build:local": "vite build --config vite.local.config.ts"
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@snugprotocol/adapters": "workspace:*",

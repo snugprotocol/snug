@@ -19,7 +19,7 @@ import type { AgentAdapter } from '@snugprotocol/adapters';
 import { createStore } from '../state/store.js';
 
 import type { ChatMessage } from '../agent/useBuilderChat.js';
-import type { CliEffort, CliModelSeat, CliModelState, PlatformBrain, SnugPlatform, TierChoice, TierSeat, TierState } from '../platform/platform.js';
+import type { BrainOptionView, BrainSwitchSeat, BrainSwitchState, PlatformBrain, SnugPlatform, TierChoice, TierSeat, TierState } from '../platform/platform.js';
 import { hostPlatform as hostFixture } from './fixtures/hostPlatform.js';
 
 declare global {
@@ -127,14 +127,25 @@ describe('the run header cluster (P3: ModelSelect, connections door, share)', ()
 });
 
 describe('the starter install disclosure tail (copy pass: never instruct a hidden control)', () => {
-  it('names the review under web and the sample-mode consequence under host', async () => {
+  // MIGRATED (TASK-20261003, ADR-0072 §4 — named in the plan). The host arm used to end
+  // ", so it runs in its sample mode": false for `weather`, which has none, and no longer what
+  // the route does — a connected starter on a host without connections shows why it cannot
+  // run instead of a frame. The web arm is unchanged, byte for byte.
+  it('names the review under web; under host it says connections are unavailable and promises NO sample mode', async () => {
     const { starterInstallDisclosureTail } = await import('../run/copy.js');
     expect(starterInstallDisclosureTail(true)).toBe(
       '. installing only copies the app — nothing is connected until you review and approve it yourself.',
     );
-    expect(starterInstallDisclosureTail(false)).toBe(
-      '. installing only copies the app — connections aren’t available in this host, so it runs in its sample mode.',
-    );
+    expect(starterInstallDisclosureTail(false)).toBe('. installing only copies the app — connections aren’t available in this host.');
+    expect(starterInstallDisclosureTail(false)).not.toMatch(/sample mode/);
+  });
+
+  it('the sentence has ONE home: the disclosure and the chat card say it through the same constant', async () => {
+    const { CONNECTIONS_UNAVAILABLE } = await import('../platform/availability.js');
+    const { starterInstallDisclosureTail } = await import('../run/copy.js');
+    expect(starterInstallDisclosureTail(false)).toContain(CONNECTIONS_UNAVAILABLE);
+    // The chat log's directive card renders the same constant — pinned on the DOM below.
+    expect(CONNECTIONS_UNAVAILABLE).toBe('connections aren’t available in this host');
   });
 });
 
@@ -164,7 +175,7 @@ describe('the brain chip (AC5: disclosure only)', () => {
     await click(chip);
     expect(byTestId('brain-menu')?.textContent).toContain(HOST_LABEL);
     expect(byTestId('brain-menu-settings')).toBeNull();
-    // TASK-20260906 AC5 twin: a host brain WITHOUT a tier seat (the chat brain) shows no thinking-level control.
+    // TASK-20260906 AC5 twin: a host brain WITHOUT a tier seat shows no thinking-level control.
     expect(byTestId('brain-menu-tier')).toBeNull();
     expect(chip?.getAttribute('data-tier')).toBeNull();
   });
@@ -294,22 +305,38 @@ describe('the mode-coercion note (its copy points at the hidden brain section)',
 });
 
 describe('the CLI model + effort control (ADR-0070, TASK-20260922 S7)', () => {
-  function fakeCliSeat(initial: CliModelState): CliModelSeat & { models_: (string | undefined)[]; efforts_: (CliEffort | undefined)[] } {
-    const store = createStore<CliModelState>(initial);
+  // MIGRATED 2026-10-03 (TASK-20261003 R4, ADR-0071 — `cliModel` → `brainSwitch`, named in
+  // the plan), claim by claim. The control hung off the HOST BRAIN as `cliModel`, existed
+  // only while Claude was ready, and offered a hard-coded five levels. It is the platform's
+  // `brainSwitch` now: the controls are the ANSWERING brain's, the models and levels are the
+  // ones the runner lists for it, and every test id is kept. Each test below keeps its
+  // claim; where the words changed the test says so. What the switcher ADDS (the rows, auto,
+  // the remedies, "check again") is brainChip.test.tsx.
+  const FIVE = ['low', 'medium', 'high', 'xhigh', 'max'];
+  const CLAUDE: BrainOptionView = {
+    id: 'claude',
+    name: 'Claude',
+    via: 'your Claude Code CLI',
+    state: 'ready',
+    verified: true,
+    efforts: FIVE,
+    models: [
+      { id: 'claude-opus-5-5', name: 'Opus 5.5', efforts: FIVE },
+      { id: 'claude-haiku-4-5-20251001', name: 'Haiku 4.5', efforts: [] },
+    ],
+  };
+  const NOTE = 'Thinking itself is never shown. A switch takes effect on your next think and spends nothing; that think may start a little slower, because a brain kept ready for the old choice is started again.';
+
+  function fakeSwitch(initial: Partial<BrainSwitchState> = {}): BrainSwitchSeat & { models_: (string | undefined)[]; efforts_: (string | undefined)[] } {
+    const store = createStore<BrainSwitchState>({ choice: 'auto', active: 'claude', brains: [CLAUDE], checking: false, ...initial });
     const models_: (string | undefined)[] = [];
-    const efforts_: (CliEffort | undefined)[] = [];
+    const efforts_: (string | undefined)[] = [];
     return {
       models_,
       efforts_,
-      efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
-      models: [
-        { id: 'claude-opus-5-5', name: 'Opus 5.5', effort: true },
-        { id: 'claude-haiku-4-5-20251001', name: 'Haiku 4.5', effort: false },
-      ],
-      effortApplies: initial.model !== 'claude-haiku-4-5-20251001',
-      activeLabel: initial.activeModel === undefined ? 'thinking on the CLI’s default model, effort the CLI’s default effort' : `thinking on ${initial.activeModel}, effort ${initial.effort ?? 'the CLI’s default effort'}`,
-      note: 'Thinking itself is never shown. A switch takes effect on your next think and spends nothing, but the ready-and-waiting brain is started again, so that think is a little slower.',
+      note: NOTE,
       state: { get: store.get, subscribe: store.subscribe },
+      choose: (choice) => store.set({ ...store.get(), choice }),
       setModel: (model) => {
         models_.push(model);
         store.set({ ...store.get(), model });
@@ -318,12 +345,14 @@ describe('the CLI model + effort control (ADR-0070, TASK-20260922 S7)', () => {
         efforts_.push(effort);
         store.set({ ...store.get(), effort });
       },
+      recheck: async () => undefined,
     };
   }
-  const withCli = (seat: CliModelSeat): SnugPlatform => hostPlatform({ kind: 'host', label: HOST_LABEL, adapter: idleAdapter, streaming: false, tools: false, cliModel: seat });
+  const hostBrain: PlatformBrain = { kind: 'host', label: HOST_LABEL, adapter: idleAdapter, streaming: false, tools: false };
+  const withCli = (seat: BrainSwitchSeat, brain: PlatformBrain = hostBrain): SnugPlatform => hostFixture({ binding: 'local-host', brain, brainSwitch: seat });
 
   it('renders the effort select and the model field, and says what is ACTIVE', async () => {
-    const seat = fakeCliSeat({ activeModel: 'claude-haiku-4-5-20251001', effort: 'low' });
+    const seat = fakeSwitch({ answered: { brain: 'claude', model: 'claude-haiku-4-5-20251001' }, effort: 'low' });
     const g = await fresh(withCli(seat));
     await render(<g.BrainChip />);
     await click(byTestId('brain-chip'));
@@ -335,7 +364,7 @@ describe('the CLI model + effort control (ADR-0070, TASK-20260922 S7)', () => {
   });
 
   it('a chosen model shows in the field, and the switch reaches the seat', async () => {
-    const seat = fakeCliSeat({ model: 'haiku' });
+    const seat = fakeSwitch({ model: 'haiku' });
     const g = await fresh(withCli(seat));
     await render(<g.BrainChip />);
     await click(byTestId('brain-chip'));
@@ -350,7 +379,7 @@ describe('the CLI model + effort control (ADR-0070, TASK-20260922 S7)', () => {
   });
 
   it('choosing an effort reaches the seat, and the empty option clears it', async () => {
-    const seat = fakeCliSeat({});
+    const seat = fakeSwitch();
     const g = await fresh(withCli(seat));
     await render(<g.BrainChip />);
     await click(byTestId('brain-chip'));
@@ -368,7 +397,7 @@ describe('the CLI model + effort control (ADR-0070, TASK-20260922 S7)', () => {
   });
 
   it('shows a refusal in the CLI’s own words', async () => {
-    const seat = fakeCliSeat({ refusal: 'There’s an issue with the selected model (nope-not-a-model).' });
+    const seat = fakeSwitch({ refusal: 'There’s an issue with the selected model (nope-not-a-model).' });
     const g = await fresh(withCli(seat));
     await render(<g.BrainChip />);
     await click(byTestId('brain-chip'));
@@ -376,7 +405,7 @@ describe('the CLI model + effort control (ADR-0070, TASK-20260922 S7)', () => {
   });
 
   it('says thinking is never shown and what a switch costs (Q4/Q5)', async () => {
-    const g = await fresh(withCli(fakeCliSeat({})));
+    const g = await fresh(withCli(fakeSwitch()));
     await render(<g.BrainChip />);
     await click(byTestId('brain-chip'));
     expect(byTestId('brain-menu-cli-hint')?.textContent).toMatch(/thinking/i);
@@ -384,18 +413,19 @@ describe('the CLI model + effort control (ADR-0070, TASK-20260922 S7)', () => {
   });
 
   it('S9/S10: lists the CLI\u2019s own models by display name, default first, and NO other\u2026 rung (owner, 2026-10-02)', async () => {
-    const g = await fresh(withCli(fakeCliSeat({})));
+    const g = await fresh(withCli(fakeSwitch()));
     await render(<g.BrainChip />);
     await click(byTestId('brain-chip'));
     const options = Array.from((byTestId('brain-menu-model-select') as HTMLSelectElement).options);
     // No `other\u2026`: it swapped the dropdown for a text field with no way back (owner's walk).
-    expect(options.map((o) => o.textContent)).toEqual(['the CLI\u2019s default', 'Opus 5.5', 'Haiku 4.5']);
+    // (The default's words were "the CLI\u2019s default"; the brain is named now \u2014 there is more than one.)
+    expect(options.map((o) => o.textContent)).toEqual(['Claude\u2019s default', 'Opus 5.5', 'Haiku 4.5']);
     // The VALUES are the exact ids, which is what makes a typo impossible.
     expect(options[1]?.value).toBe('claude-opus-5-5');
   });
 
   it('S9: choosing a model sends its EXACT id, never the display name', async () => {
-    const seat = fakeCliSeat({});
+    const seat = fakeSwitch();
     const g = await fresh(withCli(seat));
     await render(<g.BrainChip />);
     await click(byTestId('brain-chip'));
@@ -408,16 +438,23 @@ describe('the CLI model + effort control (ADR-0070, TASK-20260922 S7)', () => {
   });
 
   it('S9: with NO catalogue the model control is free text alone, never an empty dropdown', async () => {
-    const seat = { ...fakeCliSeat({}), models: [] as never };
+    const seat = fakeSwitch({ brains: [{ ...CLAUDE, models: [] }] });
     const g = await fresh(withCli(seat));
     await render(<g.BrainChip />);
     await click(byTestId('brain-chip'));
     expect(byTestId('brain-menu-model-select')).toBeNull();
-    expect(byTestId('brain-menu-model')).not.toBeNull();
+    const field = byTestId('brain-menu-model');
+    if (!(field instanceof HTMLInputElement)) throw new Error('expected the free-text model field');
+    // React listens for a text field's change through the native `input` event.
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(field, 'claude-some-future-model');
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(seat.models_).toContain('claude-some-future-model');
   });
 
   it('S9: a model with no effort axis (Haiku) hides the thinking-level control (AC8)', async () => {
-    const g = await fresh(withCli(fakeCliSeat({ model: 'claude-haiku-4-5-20251001' })));
+    const g = await fresh(withCli(fakeSwitch({ model: 'claude-haiku-4-5-20251001' })));
     await render(<g.BrainChip />);
     await click(byTestId('brain-chip'));
     expect(byTestId('brain-menu-effort')).toBeNull();
@@ -426,7 +463,7 @@ describe('the CLI model + effort control (ADR-0070, TASK-20260922 S7)', () => {
   });
 
   it('S12: the chip shows the thinking level in a smaller line under its label', async () => {
-    const g = await fresh(withCli(fakeCliSeat({ effort: 'low' })));
+    const g = await fresh(withCli(fakeSwitch({ effort: 'low' })));
     await render(<g.BrainChip />);
     expect(byTestId('brain-chip-effort')?.textContent).toBe('thinking · low');
     // The label line itself is untouched — it is an API (tests, AT, docs).
@@ -434,13 +471,13 @@ describe('the CLI model + effort control (ADR-0070, TASK-20260922 S7)', () => {
   });
 
   it('S12: with no level chosen it says "default" — the CLI reports its default level nowhere, so none is invented', async () => {
-    const g = await fresh(withCli(fakeCliSeat({})));
+    const g = await fresh(withCli(fakeSwitch()));
     await render(<g.BrainChip />);
     expect(byTestId('brain-chip-effort')?.textContent).toBe('thinking · default');
   });
 
   it('S12: the line follows a switch made in the popover, live', async () => {
-    const seat = fakeCliSeat({});
+    const seat = fakeSwitch();
     const g = await fresh(withCli(seat));
     await render(<g.BrainChip />);
     await click(byTestId('brain-chip'));
@@ -453,30 +490,50 @@ describe('the CLI model + effort control (ADR-0070, TASK-20260922 S7)', () => {
   });
 
   it('S12: the accessible name carries the level too', async () => {
-    const g = await fresh(withCli(fakeCliSeat({ effort: 'high' })));
+    const g = await fresh(withCli(fakeSwitch({ effort: 'high' })));
     await render(<g.BrainChip />);
     expect(byTestId('brain-chip')?.getAttribute('aria-label')).toMatch(/thinking level high$/);
   });
 
   it('S12: NO level line for a model without an effort axis (Haiku) — a level it ignores is noise (AC8)', async () => {
-    const g = await fresh(withCli(fakeCliSeat({ model: 'claude-haiku-4-5-20251001', effort: 'low' })));
+    const g = await fresh(withCli(fakeSwitch({ model: 'claude-haiku-4-5-20251001', effort: 'low' })));
     await render(<g.BrainChip />);
     expect(byTestId('brain-chip-effort')).toBeNull();
   });
 
-  it('S12: NO level line on a host brain without the CLI seat (the chat brain, a non-ready CLI)', async () => {
-    const g = await fresh(hostPlatform({ kind: 'host', label: HOST_LABEL, adapter: idleAdapter, streaming: false, tools: false }));
+  it('S12: NO level line on a host brain without the seat, nor while no brain answers (a non-ready CLI)', async () => {
+    const chat = await fresh(hostPlatform({ kind: 'host', label: HOST_LABEL, adapter: idleAdapter, streaming: false, tools: false }));
+    await render(<chat.BrainChip />);
+    expect(byTestId('brain-chip-effort')).toBeNull();
+    await act(async () => root?.unmount());
+    container?.remove();
+    // The runner, its one brain logged out: the demo brain stands in, and there is no level to name.
+    const { active: _none, ...standingIn } = fakeSwitch({ brains: [{ ...CLAUDE, state: 'logged-out' }], effort: 'low' }).state.get();
+    const seat = fakeSwitch();
+    const g = await fresh(withCli({ ...seat, state: { get: () => standingIn, subscribe: seat.state.subscribe } }, { kind: 'demo' }));
+    g.mode.providerStore.set('mock');
     await render(<g.BrainChip />);
+    expect(byTestId('brain-chip')?.getAttribute('data-brain')).toBe('demo');
     expect(byTestId('brain-chip-effort')).toBeNull();
   });
 
-  it('a host brain with NO cli seat shows no control — the chat brain, and every non-ready CLI (AC8)', async () => {
-    const g = await fresh(hostPlatform({ kind: 'host', label: HOST_LABEL, adapter: idleAdapter, streaming: false, tools: false }));
-    await render(<g.BrainChip />);
+  it('a host brain with NO seat shows no control; and neither does the runner while no brain answers (AC8)', async () => {
+    const chat = await fresh(hostPlatform({ kind: 'host', label: HOST_LABEL, adapter: idleAdapter, streaming: false, tools: false }));
+    await render(<chat.BrainChip />);
     await click(byTestId('brain-chip'));
     expect(byTestId('brain-menu-effort')).toBeNull();
     expect(byTestId('brain-menu-model')).toBeNull();
     expect(byTestId('brain-menu-model-select')).toBeNull();
+    await act(async () => root?.unmount());
+    container?.remove();
+    const { active: _none, ...standingIn } = fakeSwitch({ brains: [{ ...CLAUDE, state: 'logged-out' }] }).state.get();
+    const seat = fakeSwitch();
+    const g = await fresh(withCli({ ...seat, state: { get: () => standingIn, subscribe: seat.state.subscribe } }, { kind: 'demo' }));
+    g.mode.providerStore.set('mock');
+    await render(<g.BrainChip />);
+    await click(byTestId('brain-chip'));
+    expect(byTestId('brain-menu')).not.toBeNull();
+    for (const control of ['brain-menu-effort', 'brain-menu-model', 'brain-menu-model-select', 'brain-menu-active', 'brain-menu-cli-hint']) expect(byTestId(control), control).toBeNull();
   });
 });
 

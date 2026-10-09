@@ -448,7 +448,14 @@ describe('(e) browserCallable:false discloses on the WEB wizard before credentia
   });
 
   it('the SAME Coinbase row on desktop shows no disclosure — the wall does not exist there', async () => {
+    // MIGRATED (TASK-20261003 S4 — named in the plan). This used to pass because the fixture
+    // is CALLED `desktop`: the disclosure read `kind !== 'desktop'`. It reads the transport
+    // now (`fetchImpl` — the native fetch that makes the wall not exist), so the fixture
+    // carries the seat the real shell carries (apps/desktop platform-desktop.ts). The claim
+    // is unchanged; `wizardWalls.test.tsx` pins the other half — a shell named desktop
+    // WITHOUT the seat discloses.
     const desktop = fakeDesktop();
+    desktop.platform.fetchImpl = async () => new Response('');
     const harness = await fresh(desktop.platform);
     const coinbase = lookupWellKnownProvider('Coinbase')!;
     const requirement = requirementFromRegistryEntry(coinbase, 'Coinbase', 'coinbase');

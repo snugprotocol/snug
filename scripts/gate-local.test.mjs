@@ -257,3 +257,26 @@ test('every declared leg has commands and a description', () => {
     assert.ok(leg.description, `${leg.name} needs a description (it is shown in the close-session prompt)`);
   }
 });
+
+// ---------------------------------------------------------------------------
+// TASK-20261003 K1 — the e2e leg's preconditions name ONE kit page
+// ---------------------------------------------------------------------------
+
+test('K1: the e2e leg cannot run without the ONE kit page and BOTH process builds — each by name', () => {
+  const leg = LEGS.find((candidate) => candidate.name === 'e2e');
+  assert.ok(leg, 'the e2e leg exists');
+  assert.deepEqual(leg.commands, ['pnpm --filter playground test:e2e', 'pnpm --filter host test:e2e']);
+
+  // The precondition reads the real tree, so its VERDICT here depends on what is built. What
+  // must not depend on it is which files it asks for: the kit page (one — the second build of
+  // it is gone, and a precondition still naming it would make the leg un-runnable for ever),
+  // the release bundle, and the TEST bundle the browser specs actually spawn (it was never
+  // checked, so a missing one surfaced as a spec failure rather than as CANNOT RUN).
+  const source = leg.precondition.toString();
+  assert.match(source, /'apps', 'host', 'dist', 'snug-host\.html'/);
+  assert.match(source, /'snug-mcp\.mjs', 'snug-mcp\.test\.mjs'/);
+  assert.equal(source.match(/'apps', 'host', '[^']+', '[^']+\.html'/g).length, 1, 'exactly ONE page is a precondition');
+
+  const verdict = leg.precondition();
+  assert.ok(verdict === null || /missing — /.test(verdict), `a refusal names what is missing: ${String(verdict)}`);
+});

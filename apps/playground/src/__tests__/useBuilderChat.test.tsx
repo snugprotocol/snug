@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { stopThread } from '../agent/threadSessions.js';
 import { useBuilderChat, type BuilderChat } from '../agent/useBuilderChat.js';
+import { HOST_BRAIN_REFUSED_CODE } from '../platform/platform.js';
 import { modeStore } from '../state/mode.js';
 import { installTestUserDb } from './userdbTestHelper.js';
 
@@ -141,6 +142,46 @@ describe('useBuilderChat (server mode)', () => {
     const agent = r.chat().messages.find((m) => m.role === 'agent');
     expect(agent?.streaming).toBe(false);
     expect(agent?.displayText).toBe('hello there');
+  });
+
+  // TASK-20261003 R5, C4: contract 0.2.67's `refused` WITHDRAWS what streamed ("clear what
+  // you showed"). The kit's adapter keeps no partial for it (brains.test.ts); the bubble that
+  // already rendered the deltas is this hook's, so the clearing is too. Driven through the
+  // SSE leg, as the rest of this file is — the hook branches on the result's code, not the leg.
+  it('a host brain’s REFUSAL after streaming withdraws the streamed text — the bubble keeps only the error', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      sseResponse([
+        'event: delta\ndata: {"text":"Sure, here is "}\n\n',
+        'event: delta\ndata: {"text":"how to"}\n\n',
+        `event: error\ndata: {"code":"${HOST_BRAIN_REFUSED_CODE}","message":"Claude declined to answer this request","retryable":false}\n\n`,
+      ]),
+    );
+    const r = renderChat();
+    act(() => {
+      r.chat().send('hi');
+    });
+    await settle();
+    const agent = r.chat().messages.find((m) => m.role === 'agent');
+    expect(agent?.streaming).toBe(false);
+    expect(agent?.displayText).toBe('');
+    expect(agent?.error).toMatchObject({ code: HOST_BRAIN_REFUSED_CODE, message: 'Claude declined to answer this request', retryable: false });
+  });
+
+  it('any OTHER failure after streaming keeps what was shown — only a refusal withdraws it', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      sseResponse([
+        'event: delta\ndata: {"text":"Sure, here is "}\n\n',
+        'event: error\ndata: {"code":"HOST_BRAIN_UPSTREAM","message":"Claude could not be reached","retryable":true}\n\n',
+      ]),
+    );
+    const r = renderChat();
+    act(() => {
+      r.chat().send('hi');
+    });
+    await settle();
+    const agent = r.chat().messages.find((m) => m.role === 'agent');
+    expect(agent?.displayText).toBe('Sure, here is ');
+    expect(agent?.error).toMatchObject({ code: 'HOST_BRAIN_UPSTREAM' });
   });
 
   it('still prefers the done text when it is non-empty', async () => {

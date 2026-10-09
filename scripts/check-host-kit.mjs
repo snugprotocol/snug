@@ -4,10 +4,10 @@
 // parsed, it carries no `<script src>`, no `<link>` of any kind (stylesheet, preload,
 // modulepreload, icon), no `<base>`, no `@import` or non-data `url(…)` in a top-level
 // `<style>`, exactly one inline module script, a build stamp of the shape
-// `<version> <sha>[-dirty]`, is the only file in `dist/`, and sits under two caps: the
-// 16 MiB artifact limit and a ceiling measured from the real build (2,219,519 bytes on
-// 2026-09-05 with the starter swap; 3,255,702 without it — the ceiling is what makes a
-// dead swap, or the 6 MB WebLLM engine, red).
+// `<version> <sha>[-dirty]`, is the only file in `dist/` — the kit's ONLY output directory
+// (K1) — and sits under two caps: the 16 MiB artifact limit and a ceiling measured from the
+// real build (2,219,519 bytes on 2026-09-05 with the starter swap; 3,255,702 without it —
+// the ceiling is what makes a dead swap, or the 6 MB WebLLM engine, red).
 //
 // STRUCTURAL, NEVER A STRING SWEEP (lesson, TASK-20260905-host-kit): the inlined page
 // legitimately contains dozens of `<script src=` and `https://` strings — React's own DOM
@@ -21,7 +21,8 @@ import { fileURLToPath } from 'node:url';
 import { externalCssRefs, tokenizeTopLevel } from './lib/page-blocks.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-export const KIT_DIST_DIR = path.join(ROOT, 'apps/host/dist');
+export const KIT_HOST_DIR = path.join(ROOT, 'apps/host');
+export const KIT_DIST_DIR = path.join(KIT_HOST_DIR, 'dist');
 export const KIT_FILE_NAME = 'snug-host.html';
 /** The artifact viewer's hard limit. */
 export const KIT_HARD_CAP_BYTES = 16 * 1024 * 1024;
@@ -92,8 +93,20 @@ export function checkHostKitDist(distDir = KIT_DIST_DIR) {
   return problems;
 }
 
+/**
+ * ONE output (TASK-20261003 K1, ADR-0072 §1): `dist/` and no other `dist*` directory beside
+ * it. The kit was built twice — a second config wrote the runner's page into its own output
+ * directory, which the rule above never saw because it reads `dist/` alone.
+ */
+export function checkHostKitOutputs(hostDir = KIT_HOST_DIR) {
+  if (!existsSync(hostDir)) return [`${hostDir} does not exist`];
+  return readdirSync(hostDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && entry.name.startsWith('dist') && entry.name !== 'dist')
+    .map((entry) => `apps/host/${entry.name}/ exists — the kit has one output, dist/${KIT_FILE_NAME}; a second build of the page was withdrawn (delete the directory, and the config that wrote it)`);
+}
+
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const problems = checkHostKitDist();
+  const problems = [...checkHostKitOutputs(), ...checkHostKitDist()];
   if (problems.length > 0) {
     for (const p of problems) console.error(`check-host-kit: ${p}`);
     process.exit(1);

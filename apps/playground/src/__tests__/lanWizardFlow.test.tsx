@@ -770,18 +770,37 @@ describe('the verify read (ADR-0025 §1-2) — pairing proves the key it minted'
   });
 
   it('a platform whose shell ships lanPair but no lanFetch cannot claim connected', async () => {
+    // MIGRATED 2026-10-03 (TASK-20261003 S4, round-1 verifier finding). This used to walk
+    // the Sheet to the pair button. The LAN wall now reads the `lan` OFFER, which needs both
+    // seats (`platform/availability.ts`), so on this shell the Sheet walls before it asks for
+    // an address — asserted at the end. The claim in the title is the pairing FUNCTION's, and
+    // it must hold without the wall in front of it, so the same three acts the screens
+    // perform (collect → approve → pair) are driven on the store, the way "REFUSES pairing
+    // on web even when driven directly" drives them.
     const desktop = fakeDesktop();
     delete (desktop.platform as { lanFetch?: unknown }).lanFetch;
     const harness = await fresh(desktop.platform);
     harness.wizard.openConnectionWizard({ appId: APP, slot: SLOT, source: 'settings' });
-    await render(<harness.Sheet />);
-    await collectAndApprove(harness);
+    expect((await harness.wizard.recordLanHost(BRIDGE)).ok, 'the address is collected').toBe(true);
+    expect((await harness.wizard.advanceFromReview()).ok, 'the row is approved').toBe(true);
+    expect(harness.db.getConnection(APP, SLOT)?.allowedHosts).toEqual([BRIDGE]);
 
-    await click(button(/i pressed the button/i));
-    await settleUntil(() => testId('lan-pair-error') !== null);
+    const outcome = await harness.wizard.runLanPairing();
 
+    // The exchange RAN — the pairing seat is there, and the device minted its key …
+    expect(desktop.pairCalls).toHaveLength(1);
+    // … but with no pinned transport the verify read cannot happen, so nothing is claimed,
+    // and the sentence names the cause ADR-0025 gives it.
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.message).toMatch(/couldn't reach the device to check/i);
     expect(connState(harness)['status']).toBe('pending');
     expect(connState(harness)['lanVerifiedAt']).toBeUndefined();
+    expect(await harness.wizard.lanConnectionVerified(harness.db, APP, SLOT)).toBe(false);
+
+    // What the user meets on this shell: the wall — no pair button, and no claim on screen.
+    await render(<harness.Sheet />);
+    expect(testId('lan-desktop-wall')).not.toBeNull();
+    expect(button(/i pressed the button/i)).toBeUndefined();
     expect(container?.textContent ?? '').not.toMatch(/paired and verified/i);
   });
 });

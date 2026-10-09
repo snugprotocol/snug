@@ -9,9 +9,14 @@
 // Both are SCRIPT DATA whose bodies can never end the element early: base64 and a JSON
 // manifest carry no `<`; a bundle's JSON is emitted with every `<` as `<`.
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 
 import {
+  ARTIFACT_SKELETON_OPEN,
   DB_BLOCK_FORMAT,
   BUNDLE_BLOCK_TYPE,
   escapeForInlineScript,
@@ -161,6 +166,14 @@ test('verifyKitPage: the kit page with its data blocks passes; a foreign script,
   assert.match(verifyKitPage('<html><body></body></html>', { expectedStamp: STAMP })[0], /doctype/);
 });
 
+test('(N) verifyKitPage refuses a page that still carries a platform wrapper: the 0.2.67 skeleton injects no script, so the <html> count is what tells it from the kit page', () => {
+  // Without this, a save whose unwrap failed would publish the skeleton around the kit page
+  // and the platform would store a skeleton inside a skeleton (C3).
+  const problems = verifyKitPage(`${ARTIFACT_SKELETON_OPEN}\n${PAGE}\n</body></html>`, { expectedStamp: STAMP });
+  assert.equal(problems.length, 1, problems.join('\n'));
+  assert.match(problems[0], /2 <html> elements/);
+});
+
 test('parseDbBlockBody validates every manifest field — a hand-edited counter is corrupt, never NaN (correctness review 13)', () => {
   const good = { format: DB_BLOCK_FORMAT, bytes: 3, sha256: 'ab'.repeat(32), saved: 4, savedAt: '2026-09-05T00:00:00Z' };
   assert.deepEqual(parseDbBlockBody(`${JSON.stringify(good)}\nAAEC`), { manifest: good, base64: 'AAEC' });
@@ -211,10 +224,13 @@ test('unwrapViewerPage: the viewer-wrapped page yields the kit document byte-for
     const wrapped = wrapAsViewerPage(kit);
     assert.deepEqual(unwrapViewerPage(wrapped), { html: kit, wrapped: true });
     assert.deepEqual(verifyKitPage(kit, { expectedStamp: STAMP }), []);
-    // The strict check is unchanged: the wrapped form carries two foreign scripts.
+    // The strict check still refuses the wrapped form: two foreign scripts, and (R5 C3) the
+    // wrapper's own <html> beside the kit's.
     const problems = verifyKitPage(wrapped, { expectedStamp: STAMP });
-    assert.equal(problems.length, 2);
+    assert.equal(problems.length, 3);
     assert.match(problems[0], /unknown inline <script>/);
+    assert.match(problems[1], /unknown inline <script>/);
+    assert.match(problems[2], /2 <html> elements/);
   }
   // Blocks written AFTER the unwrap land inside the kit body — and survive a re-wrap + unwrap.
   const saved = writeDbBlock(unwrapViewerPage(wrapAsViewerPage(PAGE)).html, { manifest: WRAP_MANIFEST, base64: 'AAEC' });
@@ -235,5 +251,113 @@ test('unwrapViewerPage: refuses by name — a wrapper inside a wrapper, content 
     const out = unwrapViewerPage(bad);
     assert.equal(out.html, undefined);
     assert.equal(out.wrapped, true);
+  }
+});
+
+test('unwrapViewerPage: a September wrapper whose head is not the September viewer’s (no frame runtime, a third script, a missing fence) is refused by name — the head is part of the measured shape', () => {
+  const kit = PAGE;
+  const emptyHead = `<!doctype html><html><head></head><body>\n${kit}\n</body></html>`;
+  const thirdScript = wrapAsViewerPage(kit).replace('<!-- /frame-runtime -->', '<script>third()</script><!-- /frame-runtime -->');
+  const extraAfterFence = wrapAsViewerPage(kit).replace('<meta charset=utf8>', '<meta charset=utf8><script>late()</script>');
+  // The same elements with other text between them: the fence is part of the shape.
+  const noClosingFence = wrapAsViewerPage(kit).replace('<!-- /frame-runtime -->', '');
+  // The same text between the elements, but an element that is not the measured kind.
+  const loadedRuntime = wrapAsViewerPage(kit).replace('<script>(function', '<script src="https://cdn.test/runtime.js">(function');
+  for (const [label, bad] of [['an empty head', emptyHead], ['three runtime scripts', thirdScript], ['a script after the fence', extraAfterFence], ['no closing fence', noClosingFence], ['a runtime script with a src', loadedRuntime]]) {
+    const out = unwrapViewerPage(bad);
+    assert.equal(out.html, undefined, label);
+    assert.equal(out.wrapped, true, label);
+    assert.match(out.problem, /head is neither the measured 0\.2\.67 skeleton .* nor the September viewer/, label);
+  }
+});
+
+// ------------------------------------------------- the 0.2.67 skeleton (R5 C3, measured 2026-10-03)
+// Under runtime contract 0.2.67 the platform stores EVERY artifact page inside one skeleton —
+// charset, viewport, a small reset, no injected script — and `fetch(location.href)` and the
+// Artifact tool's read hand that form back. Two REAL read-backs are the fixtures
+// (`scripts/fixtures/readback-0.2.67/`, PROVENANCE.md): a chat-created artifact whose page is a
+// COMPLETE document (the kit's own case — accepted, the document lifted out byte-for-byte) and
+// a tool-published FRAGMENT (not a kit document — refused by name).
+
+const READBACKS = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'fixtures', 'readback-0.2.67');
+const CHAT_CREATED = readFileSync(path.join(READBACKS, 'chat-created-nested-document.html'), 'utf8');
+const TOOL_FRAGMENT = readFileSync(path.join(READBACKS, 'tool-published-fragment.html'), 'utf8');
+/** The platform's own form, as both read-backs show it: the skeleton, a newline, the page, a newline, the closers. */
+const skeleton = (page) => `${ARTIFACT_SKELETON_OPEN}\n${page}\n</body></html>`;
+const sha256 = (text) => createHash('sha256').update(text, 'utf8').digest('hex');
+
+test('ARTIFACT_SKELETON_OPEN is the measured skeleton: both real read-backs open with exactly its 536 bytes and close with \\n</body></html>; its head holds charset, viewport and a reset — nothing else', () => {
+  assert.equal(Buffer.byteLength(ARTIFACT_SKELETON_OPEN, 'utf8'), 536);
+  assert.equal(sha256(CHAT_CREATED), '83658d639ff224334382621407fd4a4fabcf5a6a7fdd33676ac1e10cf2d47b44', 'the fixture is the read-back, unedited');
+  assert.equal(sha256(TOOL_FRAGMENT), 'd67b8b25b91aa2198f23297a643cacd23c3cd992dedd84c5181b534d0293aa14', 'the fixture is the read-back, unedited');
+  for (const readBack of [CHAT_CREATED, TOOL_FRAGMENT]) {
+    assert.equal(readBack.startsWith(`${ARTIFACT_SKELETON_OPEN}\n`), true);
+    assert.equal(readBack.endsWith('\n</body></html>'), true);
+  }
+  const head = tokenizeTopLevel(ARTIFACT_SKELETON_OPEN).map((e) => [e.name, e.attrs]);
+  assert.deepEqual(head, [
+    ['html', {}],
+    ['head', {}],
+    ['meta', { charset: 'utf8' }],
+    ['meta', { name: 'viewport', content: 'width=device-width,initial-scale=1,viewport-fit=cover' }],
+    ['style', {}],
+    ['body', {}],
+  ]);
+  assert.equal(/<script/i.test(ARTIFACT_SKELETON_OPEN), false, 'no injected script in the stored source');
+});
+
+test('unwrapViewerPage: the REAL chat-created read-back yields the complete document inside the skeleton, byte-for-byte (the 11,867-byte v2 probe file)', () => {
+  const out = unwrapViewerPage(CHAT_CREATED);
+  assert.equal(out.problem, undefined);
+  assert.equal(out.wrapped, true);
+  assert.equal(Buffer.byteLength(out.html, 'utf8'), 11_867);
+  assert.equal(sha256(out.html), '55a81a94d751dcbaaeedcf93f608920d5279d850185ff5b57c4218ee797090ff', 'the v2 probe file, as published');
+  assert.equal(out.html.startsWith('<!doctype html>\n<html lang="en">'), true);
+  assert.equal(out.html.endsWith('</html>\n'), true);
+  // The platform's form, re-derived from what came out, is the read-back again: nothing lost, nothing added.
+  assert.equal(skeleton(out.html), CHAT_CREATED);
+});
+
+test('unwrapViewerPage: the kit page inside the 0.2.67 skeleton is lifted out byte-for-byte; blocks written after the unwrap survive the platform’s re-wrap', () => {
+  const withBlocks = upsertBundleBlock(writeDbBlock(PAGE, { manifest: WRAP_MANIFEST, base64: 'AAEC' }), LINEAGE_A, '{"format":"snug-app-bundle/1"}');
+  for (const kit of [PAGE, withBlocks]) {
+    assert.deepEqual(unwrapViewerPage(skeleton(kit)), { html: kit, wrapped: true });
+    assert.deepEqual(verifyKitPage(unwrapViewerPage(skeleton(kit)).html, { expectedStamp: STAMP }), []);
+  }
+  const saved = writeDbBlock(unwrapViewerPage(skeleton(PAGE)).html, { manifest: WRAP_MANIFEST, base64: 'AAEC' });
+  assert.equal(unwrapViewerPage(skeleton(saved)).html, saved);
+  assert.equal(readDbBlock(saved).base64, 'AAEC');
+  // A kit document that does not end in a newline gains the platform's one, once — and is stable from then on.
+  const unterminated = PAGE.trimEnd();
+  const once = unwrapViewerPage(skeleton(unterminated)).html;
+  assert.equal(once, `${unterminated}\n`);
+  assert.equal(unwrapViewerPage(skeleton(once)).html, once);
+});
+
+test('(N) unwrapViewerPage: the REAL tool-published FRAGMENT read-back is refused by name — a fragment is not a kit document', () => {
+  const out = unwrapViewerPage(TOOL_FRAGMENT);
+  assert.equal(out.html, undefined);
+  assert.equal(out.wrapped, true);
+  assert.match(out.problem, /the 0\.2\.67 skeleton carries a page fragment, not a kit document/);
+});
+
+test('(N) unwrapViewerPage refuses every other skeleton by name: around nothing, a skeleton inside a skeleton, content after the inner </html>, a head that carries anything but the measured charset/viewport/reset', () => {
+  const cases = [
+    ['around nothing', `${ARTIFACT_SKELETON_OPEN}\n\n</body></html>`, /the 0\.2\.67 skeleton carries nothing/],
+    ['around nothing, no newlines', `${ARTIFACT_SKELETON_OPEN}</body></html>`, /the 0\.2\.67 skeleton carries nothing/],
+    ['two skeletons around the kit', skeleton(skeleton(PAGE)), /a skeleton inside a skeleton/],
+    ['two skeletons around a fragment (the fragment read-back wrapped again)', skeleton(TOOL_FRAGMENT), /a skeleton inside a skeleton/],
+    ['content after the inner </html>', `${ARTIFACT_SKELETON_OPEN}\n${PAGE}<script>injected()</script>\n</body></html>`, /after the kit document/],
+    ['a script in the head', skeleton(PAGE).replace('</style></head>', '</style><script>runtime()</script></head>'), /head is neither the measured 0\.2\.67 skeleton/],
+    ['another viewport', skeleton(PAGE).replace('viewport-fit=cover', 'viewport-fit=auto'), /head is neither the measured 0\.2\.67 skeleton/],
+    ['another reset', skeleton(PAGE).replace('margin:0;padding:0', 'margin:0'), /head is neither the measured 0\.2\.67 skeleton/],
+    ['an extra meta', skeleton(PAGE).replace('<meta charset=utf8>', '<meta charset=utf8><meta name=referrer content=no-referrer>'), /head is neither the measured 0\.2\.67 skeleton/],
+    ['a body that does not open with the document', `${ARTIFACT_SKELETON_OPEN}\n<div id="banner"></div>${PAGE}\n</body></html>`, /does not open with the kit document/],
+  ];
+  for (const [label, bad, problem] of cases) {
+    const out = unwrapViewerPage(bad);
+    assert.equal(out.html, undefined, label);
+    assert.equal(out.wrapped, true, label);
+    assert.match(out.problem ?? '', problem, label);
   }
 });

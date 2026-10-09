@@ -55,6 +55,30 @@ describe('the instructions string', () => {
     expect(text).toMatch(/snug_open/);
   });
 
+  it('says what to do when snug_status carries a `refusal` or a `note` — pass it on, never loop (L2, L7)', () => {
+    // A refused runner ANSWERS `snug_status` — a row with a code, a message and a remedy —
+    // and that answer is not an error, so nothing else tells an agent it is the end of the
+    // road. Left unsaid, the next step of the protocol is `snug_open`, which says the same
+    // sentence again, and again. The `note` is the other field an agent must not skim past:
+    // after a succession it says the page has to be opened again.
+    const lines = instructionsText().split('\n');
+    const first = lines.findIndex((line) => line.includes('`refusal`'));
+    const last = lines.map((line) => line.includes('`note`')).lastIndexOf(true);
+    expect(first, 'the instructions never mention a `refusal`').toBeGreaterThanOrEqual(0);
+    expect(last, 'the instructions never mention a `note`').toBeGreaterThanOrEqual(first);
+    // Three plain lines at most: this text is in every session's context.
+    const passage = lines.slice(first, last + 1);
+    expect(passage.length).toBeLessThanOrEqual(3);
+    const said = passage.join(' ');
+    expect(said).toMatch(/message/);
+    expect(said).toMatch(/remedy/);
+    expect(said).toMatch(/one line/);
+    expect(said).toMatch(/do not retry in a loop/);
+    // It belongs to the step that calls `snug_status`, before the step that opens.
+    expect(first).toBeGreaterThan(lines.findIndex((line) => line.includes('Call `snug_status` first')));
+    expect(last).toBeLessThan(lines.findIndex((line) => line.includes('call `snug_open`')));
+  });
+
   it('never says "MCP server" or "built on MCP" in product copy (ADR-0061, D-B9)', () => {
     // The positioning rule is a test because copy drifts: MCP is the spawn channel, not
     // what Snug is. The word may appear nowhere a user-facing sentence would carry it.

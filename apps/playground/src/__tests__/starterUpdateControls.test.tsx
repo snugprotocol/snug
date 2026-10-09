@@ -19,6 +19,11 @@ import {
 } from '../starter/starterDeclaration.js';
 import { __resetStarterMetaFixturesForTests, __setStarterMetaFixturesForTests } from '../starter/starterMeta.js';
 import {
+  __resetRuntimeContractFixturesForTests,
+  __setRuntimeContractFixturesForTests,
+  installStarterRuntimeContract,
+} from '../starter/starterRuntimeContract.js';
+import {
   __resetStarterUpdateFixturesForTests,
   __setStarterUpdateFixturesForTests,
 } from '../starter/starterUpdate.js';
@@ -176,6 +181,52 @@ describe('the edited-copy confirm (AC6)', () => {
     expect(db.listAppVersions(appId)).toHaveLength(versionsBefore);
     expect(db.getAppHtml(appId)).toBe('<html>my remix</html>');
     expect(updatedWith).toEqual([]);
+  });
+
+  describe('a re-authored CONTRACT is a customization too (Gate 5 seams/F2)', () => {
+    // A docs-only release (same bytes, same contract) on a copy whose contract the builder
+    // rewrote in place: R5's contract branch replaced it in one click. The confirm must run,
+    // and "keep my version" must keep THEIR contract.
+    const FACTORY = { overview: 'weather — the factory voice' };
+    const MINE = { overview: 'weather — rewritten in the builder, mine' };
+
+    async function reauthoredCopy(): Promise<string> {
+      __setRuntimeContractFixturesForTests({ [FOLDER]: JSON.stringify(FACTORY) });
+      const appId = installAt(HTML_V1, 1);
+      await installStarterRuntimeContract(db, appId); // the install act's contract step
+      db.putRuntimeContract(appId, db.getApp(appId)!.currentVersion, MINE); // what runtime_contract_write does
+      setBundle(HTML_V1, 2); // v2: the same bytes…
+      __setRuntimeContractFixturesForTests({ [FOLDER]: JSON.stringify(FACTORY) }); // …and the same contract
+      return appId;
+    }
+
+    afterEach(() => __resetRuntimeContractFixturesForTests());
+
+    it('the update asks first; "keep my version" keeps the user’s contract and writes nothing', async () => {
+      const appId = await reauthoredCopy();
+      const versionsBefore = db.listAppVersions(appId).length;
+      await render(appId);
+      act(() => button('update this app to v2')!.click());
+      await settle();
+      expect(container.querySelector('.net-confirm-card')?.textContent).toContain('customized');
+      act(() => button('keep my version')!.click());
+      await settle();
+      expect(db.getRuntimeContract(appId)).toEqual(MINE);
+      expect(db.listAppVersions(appId)).toHaveLength(versionsBefore);
+      expect(updatedWith).toEqual([]);
+    });
+
+    it('"update anyway" lands the release; the user’s contract stays on the version they can revert to', async () => {
+      const appId = await reauthoredCopy();
+      await render(appId);
+      act(() => button('update this app to v2')!.click());
+      await settle();
+      act(() => button('update and keep my edits in history')!.click());
+      await settleUntil(() => updatedWith.length > 0, 'the confirmed update to complete');
+      expect(db.getRuntimeContract(appId)).toEqual(FACTORY);
+      expect(db.getRuntimeContract(appId, 1)).toEqual(MINE);
+      expect(updatedWith).toEqual([2]);
+    });
   });
 
   it('confirm applies the update; the edited version stays in history', async () => {

@@ -1,6 +1,13 @@
 // e2e/static-server.mjs — a loopback server for the kit's Playwright suite that serves
-// EXACTLY one thing: the built page. Anything else the page asks its own origin for is a
-// self-containment defect and 404s here (the spec's request log catches it too).
+// EXACTLY one thing: the built page. Anything else the page asks its own origin for 404s
+// here — and with ONE exception that is a self-containment defect (the spec's request log
+// catches it too).
+//
+// The exception (MIGRATED 2026-10-03, K2): served from the literal `http://127.0.0.1`, the
+// one page asks its own origin for `/status`, once, to find out whether it is the local
+// runner's page. This server's 404 IS the answer — "no" — and the page then boots as what
+// it is here: a plain page, file-class, whose file lives in this browser. (Before, any
+// loopback origin was called `local-host` and this page said "your file: on this Mac".)
 import http from 'node:http';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';

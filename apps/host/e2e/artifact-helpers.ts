@@ -1,9 +1,14 @@
-// artifact-helpers.ts — fakes of the two Claude artifact runtimes, installed BEFORE the
-// page's script runs (`addInitScript`), so the BUILT kit page boots as it would inside a
-// viewer (TASK-20260905-binding-a-artifacts AC1/AC2/AC5/AC6/AC8/AC10/AC12). Every fake
-// RECORDS what the page did — calls, inputs, options, published html, saved files — on
-// `window.__snugFake`, which the specs read back. Nothing here is the real runtime: the
-// real hosted walk is the owner's (AC13), and it is journaled with the artifact URL.
+// artifact-helpers.ts — a fake of the Claude artifact runtime, installed BEFORE the page's
+// script runs (`addInitScript`), so the BUILT kit page boots as it would inside a viewer
+// (TASK-20260905-binding-a-artifacts AC1/AC5/AC6/AC8/AC10/AC12). Every fake RECORDS what the
+// page did — calls, inputs, options, published html, saved files — on `window.__snugFake`,
+// which the specs read back. Nothing here is the real runtime: the real hosted walk is the
+// owner's (AC13), and it is journaled with the artifact URL.
+//
+// ONE runtime (TASK-20261003 R5 C2): a chat artifact runs in the same hosted runtime as a
+// published one (measured 2026-10-03), so the hosted fake serves both. The September chat
+// runtime — a flat `window.claude.complete` and `window.storage` — survives here only as the
+// fake that proves the kit IGNORES it.
 //
 // Two fidelities the Gate-5 review asked for: the fakes install in the TOP frame only (a
 // viewer never hands the app iframe a `window.claude`; an init script would otherwise run
@@ -33,7 +38,7 @@ export interface FakeRecord {
   published: string[];
   saved: { filename: string; data: string }[];
   completeCalls: string[];
-  storage: Record<string, string>;
+  storageCalls: string[];
 }
 
 const DEFAULT_REPLY = '```json\n{"move":{"from":"e7","to":"e5"},"message":"the fake viewer answers"}\n```';
@@ -43,7 +48,7 @@ export async function installHostedFake(page: Page, options: HostedFakeOptions =
   await page.addInitScript(
     ({ reply, publish, nulls, substitute }) => {
       if (window !== window.top) return; // top frame only
-      const record = { sampleCalls: [], published: [], saved: [], completeCalls: [], storage: {} } as unknown as FakeRecord;
+      const record = { sampleCalls: [], published: [], saved: [], completeCalls: [], storageCalls: [] } as unknown as FakeRecord;
       (window as unknown as { __snugFake: FakeRecord }).__snugFake = record;
       const NO_TEMPLATE = 'the prompt carried no "## Full Template" fence — the fake viewer has nothing to copy';
       /**
@@ -108,11 +113,16 @@ export async function installHostedFake(page: Page, options: HostedFakeOptions =
   );
 }
 
-/** The chat runtime: a flat `window.claude.complete` and `window.storage` (T1 S2/S10 shapes). */
-export async function installChatFake(page: Page, reply = DEFAULT_REPLY): Promise<void> {
+/**
+ * The September chat runtime's whole surface (T1 S2/S10): a flat `window.claude.complete` and a
+ * per-view `window.storage`, with no `use`. Measured GONE 2026-10-03; a page that still meets
+ * it must boot as a plain page on the demo brain. Every member RECORDS being touched — the
+ * spec's claim is that nothing is: `completeCalls` and `storageCalls` stay empty.
+ */
+export async function installSeptemberChatFake(page: Page): Promise<void> {
   await page.addInitScript((replyText) => {
     if (window !== window.top) return; // top frame only
-    const record = { sampleCalls: [], published: [], saved: [], completeCalls: [], storage: {} } as unknown as FakeRecord;
+    const record = { sampleCalls: [], published: [], saved: [], completeCalls: [], storageCalls: [] } as unknown as FakeRecord;
     (window as unknown as { __snugFake: FakeRecord }).__snugFake = record;
     const claude = {
       complete(this: unknown, prompt: string): Promise<string> {
@@ -122,33 +132,14 @@ export async function installChatFake(page: Page, reply = DEFAULT_REPLY): Promis
       },
     };
     (window as unknown as { claude: unknown }).claude = claude;
-    // The real `window.storage` PERSISTS across reloads (T1 S10); an init script runs afresh
-    // on every navigation, so the fake keeps its rows in the page's localStorage.
-    const PREFIX = 'snug-fake-window-storage:';
-    const keys = (): string[] => Object.keys(localStorage).filter((k) => k.startsWith(PREFIX)).map((k) => k.slice(PREFIX.length));
-    const snapshot = (): void => {
-      for (const k of keys()) record.storage[k] = localStorage.getItem(PREFIX + k) ?? '';
-    };
-    snapshot();
-    (window as unknown as { storage: unknown }).storage = {
-      get: async (key: string) => {
-        const value = localStorage.getItem(PREFIX + key);
-        if (value === null) throw new Error('Storage get failed: Unexpected response type');
-        return { key, value };
-      },
-      set: async (key: string, value: string) => {
-        localStorage.setItem(PREFIX + key, value);
-        snapshot();
-        return { key, value };
-      },
-      delete: async (key: string) => {
-        localStorage.removeItem(PREFIX + key);
-        delete record.storage[key];
-        return { key };
-      },
-      list: async (prefix?: string) => ({ keys: keys().filter((k) => prefix === undefined || k.startsWith(prefix)), prefix: prefix ?? '', shared: false }),
-    };
-  }, reply);
+    const touched =
+      (name: string) =>
+      async (...args: unknown[]): Promise<never> => {
+        record.storageCalls.push(`${name}(${args.map((arg) => String(arg)).join(', ')})`);
+        throw new Error('Storage get failed: Unexpected response type');
+      };
+    (window as unknown as { storage: unknown }).storage = { get: touched('get'), set: touched('set'), delete: touched('delete'), list: touched('list') };
+  }, DEFAULT_REPLY);
 }
 
 export async function fakeRecord(page: Page): Promise<FakeRecord> {

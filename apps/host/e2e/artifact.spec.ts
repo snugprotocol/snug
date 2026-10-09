@@ -1,16 +1,19 @@
-// artifact.spec.ts — the host kit inside the two Claude artifact runtimes, FAKED on the
-// real built page (TASK-20260905-binding-a-artifacts). The fakes record every call; the
+// artifact.spec.ts — the host kit inside the Claude artifact runtime, FAKED on the real
+// built page (TASK-20260905-binding-a-artifacts) — and, since the September chat runtime was
+// measured gone (TASK-20261003 R5 C2), a page that still meets that runtime's flat
+// `window.claude.complete` booting as a plain page. The fakes record every call; the
 // page is the real one, served by the suite's static server and, for the hand-in and the
 // seed, re-served with blocks spliced in through `page.route` (never by writing into
 // dist/ — check-host-kit refuses a second file). The REAL runtimes are the owner's walk
 // (AC13), journaled with the artifact URL.
 import fs from 'node:fs';
+import path from 'node:path';
 
-import { expect, test, type FrameLocator, type Locator, type Page } from '@playwright/test';
+import { expect, test, type Browser, type FrameLocator, type Locator, type Page } from '@playwright/test';
 
 import { wrapAsViewerPage } from '../../../scripts/fixtures/viewer-wrapper.mjs';
-import { readBundleBlocks, readDbBlock, unwrapViewerPage, upsertBundleBlock } from '../../../scripts/lib/page-blocks.mjs';
-import { fakeRecord, installChatFake, installHostedFake } from './artifact-helpers';
+import { readBundleBlocks, readDbBlock, tokenizeTopLevel, unwrapViewerPage, upsertBundleBlock } from '../../../scripts/lib/page-blocks.mjs';
+import { fakeRecord, installHostedFake, installSeptemberChatFake } from './artifact-helpers';
 import { KIT_DIST_FILE, KIT_URL, buildProbeUserFile, capsAppHtml, installRoutePolicy, watchConsole } from './helpers';
 
 const frameElement = (page: Page): Locator => page.locator('[data-testid="frame-wrap"] iframe').first();
@@ -20,14 +23,32 @@ const LINEAGE = '0f5e1a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b';
 
 const builtPage = (): string => fs.readFileSync(KIT_DIST_FILE, 'utf8');
 
+type Wrap = (kitHtml: string) => string;
+
 /**
- * Serve `html` at the kit URL instead of dist/ — WRAPPED the way the artifact viewer stores
- * and serves a published page (its skeleton and injected runtime around the kit's whole
- * document; measured on the real artifact, AC13 2026-09-06). Every hosted test that reads
- * the page's own source (the save act's fetch, the hand-in's blocks) runs against that shape.
+ * The contract-0.2.67 stored form (TASK-20261003 R5 C3), cut from a REAL read-back — the
+ * chat-created artifact of 2026-10-03, a complete document inside the platform's skeleton
+ * (`scripts/fixtures/readback-0.2.67/`) — never restated: the exact bytes before and after
+ * the document it carries, put around the kit page instead.
  */
-async function servePage(page: Page, html: string): Promise<void> {
-  await page.route(KIT_URL, (route) => route.fulfill({ status: 200, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' }, body: wrapAsViewerPage(html) }));
+const wrapInSkeleton: Wrap = (() => {
+  const readBack = fs.readFileSync(path.resolve(path.dirname(KIT_DIST_FILE), '../../../scripts/fixtures/readback-0.2.67/chat-created-nested-document.html'), 'utf8');
+  const carried = unwrapViewerPage(readBack).html;
+  if (carried === undefined) throw new Error('the 0.2.67 read-back no longer unwraps — the grammar and its fixture disagree');
+  const at = readBack.indexOf(carried);
+  const [before, after] = [readBack.slice(0, at), readBack.slice(at + carried.length)];
+  return (kitHtml) => `${before}${kitHtml}${after}`;
+})();
+
+/**
+ * Serve `html` at the kit URL instead of dist/ — WRAPPED the way the platform stores and
+ * serves a published page. The default is the September viewer's wrapper (its skeleton and
+ * injected runtime around the kit's whole document; measured on the real artifact, AC13
+ * 2026-09-06); `wrapInSkeleton` is 0.2.67's. Every hosted test that reads the page's own
+ * source (the save act's fetch, the hand-in's blocks) runs against a wrapped page.
+ */
+async function servePage(page: Page, html: string, wrap: Wrap = wrapAsViewerPage): Promise<void> {
+  await page.route(KIT_URL, (route) => route.fulfill({ status: 200, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' }, body: wrap(html) }));
 }
 
 async function installChessAndMove(page: Page): Promise<void> {
@@ -45,6 +66,59 @@ async function installChessAndMove(page: Page): Promise<void> {
 const bundle = (html: string, name = 'Pomodoro'): string =>
   JSON.stringify({ format: 'snug-app-bundle/1', lineage: LINEAGE, sharedAt: '2026-09-05T00:00:00.000Z', app: { displayName: name, usesDb: false }, html, connections: [] });
 const appHtml = (body: string): string => `<!doctype html><html><head><meta charset="utf-8"><title>Pomodoro</title></head><body><h1 id="body">${body}</h1></body></html>`;
+
+/**
+ * AC5's save and seed, against the platform's stored form `wrap`: the save act fetches the
+ * served (wrapped) page, lifts the kit document out, verifies it, splices the file in and
+ * publishes the BARE page ONCE; a fresh browser seeds from the published page served wrapped
+ * again.
+ */
+async function saveAndSeed(page: Page, browser: Browser, wrap: Wrap): Promise<void> {
+  await installHostedFake(page);
+  await installRoutePolicy(page, { allowJsDelivr: true });
+  await servePage(page, builtPage(), wrap);
+  await installChessAndMove(page);
+  await page.getByTestId('your-file-chip').click();
+  await expect(page.getByTestId('your-file-status')).toContainText('unsaved changes');
+  await page.getByTestId('your-file-save').click();
+  await expect.poll(async () => (await fakeRecord(page)).published.length, { timeout: 30_000 }).toBe(1);
+  const published = (await fakeRecord(page)).published[0]!;
+  expect(published.startsWith('<!doctype html>\n<html lang="en">')).toBe(true);
+  // The BARE kit page went to publish — never a wrapper or its injected runtime. Read by
+  // STRUCTURE (MIGRATED 2026-10-03, TASK-20261003 R5 C3 — was `not.toContain('frame-runtime')`):
+  // since C3 the kit's own script carries the grammar that recognises both wrappers, their
+  // measured markers included, so a substring search finds the kit's READER of a wrapper.
+  // One <html>, and no classic <script> — the kind the September viewer injected.
+  const top = tokenizeTopLevel(published);
+  expect(top.filter((e) => e.name === 'html')).toHaveLength(1);
+  expect(top.filter((e) => e.name === 'script' && e.attrs.type === undefined)).toEqual([]);
+  expect(unwrapViewerPage(published)).toEqual({ html: published, wrapped: false });
+  const block = readDbBlock(published);
+  expect(block?.manifest).toMatchObject({ format: 'snug-db-block/1', saved: 1 });
+  expect(block!.manifest!.bytes).toBeGreaterThan(10_000);
+  // Strip through the tokenizer, never a regex: the kit's own script carries the literal
+  // `<script type="text/plain" id="snug-db">` text (compose.ts), which a regex would start at.
+  const stripped = `${published.slice(0, block!.index!)}${published.slice(block!.end! + 1)}`;
+  expect(stripped.length).toBe(builtPage().length);
+  expect(stripped).toBe(builtPage());
+  // The real runtime reloads the view on publish, so the record STASHES the outcome for the
+  // page that comes back (the fake does not reload; the stash is what proves it). The chip's
+  // own status may already read "unsaved" again — the running chess app keeps flushing its
+  // state to the bucket, which is exactly the working-copy design.
+  expect(await page.evaluate(() => sessionStorage.getItem('snug-host:custody-note'))).toContain('saved to this artifact (save #1)');
+
+  // A different browser (empty bucket) opening the PUBLISHED page finds the chess app: the seed.
+  const context = await browser.newContext();
+  const fresh = await context.newPage();
+  await installHostedFake(fresh);
+  await installRoutePolicy(fresh, { allowJsDelivr: true });
+  await servePage(fresh, published, wrap);
+  await fresh.goto(KIT_URL);
+  await expect(fresh.getByTestId('installed-tile').filter({ hasText: /chess/i })).toHaveCount(1, { timeout: 20_000 });
+  await fresh.getByTestId('your-file-chip').click();
+  await expect(fresh.getByTestId('your-file-status')).toHaveCount(0);
+  await context.close();
+}
 
 test.describe('A1 — the hosted artifact runtime (faked on the built page)', () => {
   test('AC1/AC10: the brain is Claude via sample — no call on load, ONE call per move on quick with cache off; the app frame cannot reach the page’s claude; net/auth false', async ({ page }) => {
@@ -97,44 +171,11 @@ test.describe('A1 — the hosted artifact runtime (faked on the built page)', ()
   });
 
   test('AC5: "save to this artifact" fetches the served (viewer-wrapped) page, lifts the kit document out, verifies it, splices the file in, publishes the BARE page ONCE; a fresh browser seeds from the published page served wrapped again', async ({ page, browser }) => {
-    await installHostedFake(page);
-    await installRoutePolicy(page, { allowJsDelivr: true });
-    await servePage(page, builtPage()); // the real shape: the viewer's wrapper around the kit page
-    await installChessAndMove(page);
-    await page.getByTestId('your-file-chip').click();
-    await expect(page.getByTestId('your-file-status')).toContainText('unsaved changes');
-    await page.getByTestId('your-file-save').click();
-    await expect.poll(async () => (await fakeRecord(page)).published.length, { timeout: 30_000 }).toBe(1);
-    const published = (await fakeRecord(page)).published[0]!;
-    expect(published.startsWith('<!doctype html>\n<html lang="en">')).toBe(true);
-    // The BARE kit page went to publish — never the viewer's wrapper or its injected runtime.
-    expect(published).not.toContain('frame-runtime');
-    expect(unwrapViewerPage(published)).toEqual({ html: published, wrapped: false });
-    const block = readDbBlock(published);
-    expect(block?.manifest).toMatchObject({ format: 'snug-db-block/1', saved: 1 });
-    expect(block!.manifest!.bytes).toBeGreaterThan(10_000);
-    // Strip through the tokenizer, never a regex: the kit's own script carries the literal
-    // `<script type="text/plain" id="snug-db">` text (compose.ts), which a regex would start at.
-    const stripped = `${published.slice(0, block!.index!)}${published.slice(block!.end! + 1)}`;
-    expect(stripped.length).toBe(builtPage().length);
-    expect(stripped).toBe(builtPage());
-    // The real runtime reloads the view on publish, so the record STASHES the outcome for the
-    // page that comes back (the fake does not reload; the stash is what proves it). The chip's
-    // own status may already read "unsaved" again — the running chess app keeps flushing its
-    // state to the bucket, which is exactly the working-copy design.
-    expect(await page.evaluate(() => sessionStorage.getItem('snug-host:custody-note'))).toContain('saved to this artifact (save #1)');
+    await saveAndSeed(page, browser, wrapAsViewerPage);
+  });
 
-    // A different browser (empty bucket) opening the PUBLISHED page finds the chess app: the seed.
-    const context = await browser.newContext();
-    const fresh = await context.newPage();
-    await installHostedFake(fresh);
-    await installRoutePolicy(fresh, { allowJsDelivr: true });
-    await servePage(fresh, published);
-    await fresh.goto(KIT_URL);
-    await expect(fresh.getByTestId('installed-tile').filter({ hasText: /chess/i })).toHaveCount(1, { timeout: 20_000 });
-    await fresh.getByTestId('your-file-chip').click();
-    await expect(fresh.getByTestId('your-file-status')).toHaveCount(0);
-    await context.close();
+  test('AC5 under contract 0.2.67 (TASK-20261003 R5 C3): the same save and seed when the page is served in the platform’s SKELETON — a real read-back’s bytes around the kit page', async ({ page, browser }) => {
+    await saveAndSeed(page, browser, wrapInSkeleton);
   });
 
   test('TASK-20260906 AC2/AC6: the thinking level — auto sends quick for a move; switching to complex makes no call and the next move carries complex; the choice survives a reload', async ({ page }) => {
@@ -289,44 +330,51 @@ test.describe('A1 — the hosted artifact runtime (faked on the built page)', ()
   });
 });
 
-test.describe('A2 — the chat artifact runtime (faked on the built page)', () => {
-  test('AC2/AC4/AC7: window.claude.complete is the brain (one string per move, streaming false), window.storage is the file’s home across a reload, export copies', async ({ page }) => {
-    await installChatFake(page);
-    await installRoutePolicy(page, { allowJsDelivr: true });
+test.describe('C2 — a page that meets only the September chat runtime (faked on the built page)', () => {
+  // MIGRATED 2026-10-03 (TASK-20261003 R5 C2) from "A2 — the chat artifact runtime:
+  // window.claude.complete is the brain (one string per move, streaming false), window.storage
+  // is the file's home across a reload, export copies". That runtime was measured GONE: a chat
+  // artifact runs in the hosted runtime (`window.claude = { use }`, no `complete`, no
+  // `window.storage`), which the A1 legs above fake. A page that still meets the old shape is a
+  // page with no host brain, and says exactly what a plain page says.
+  test('flat window.claude.complete + window.storage: the demo brain answers and says so, the passport names a page in your browser, and neither complete nor storage is ever touched', async ({ page }) => {
+    await installSeptemberChatFake(page);
+    const policy = await installRoutePolicy(page, { allowJsDelivr: true });
     await page.goto(KIT_URL);
-    await expect(page.getByTestId('brain-chip')).toContainText('Claude · this chat');
-    // TASK-20260906 AC6(d): the chat brain has no tier in its contract — no thinking-level control.
+    await expect(page.getByTestId('brain-chip')).toContainText('demo brain');
+    await expect(page.getByTestId('brain-chip')).toHaveAttribute('data-brain', 'demo');
     await page.getByTestId('brain-chip').click();
-    await expect(page.getByTestId('brain-menu')).toBeVisible();
+    await expect(page.getByTestId('brain-menu')).toContainText('no host brain wired yet');
+    await expect(page.getByTestId('brain-menu')).not.toContainText(/chat/i);
     await expect(page.getByTestId('brain-menu-tier')).toHaveCount(0);
     await page.keyboard.press('Escape');
-    await expect(page.getByTestId('your-file-chip')).toContainText('in this chat');
-    expect((await fakeRecord(page)).completeCalls).toHaveLength(0);
+    await expect(page.getByTestId('your-file-chip')).toContainText('your file: in this browser');
 
-    const file = await buildProbeUserFile();
-    await page.goto(`${KIT_URL}#/settings`);
-    page.on('dialog', (dialog) => void dialog.accept());
-    await page.locator('label.file-btn', { hasText: 'import snug file' }).locator('input[type="file"]').setInputFiles({ name: 'probe.snug', mimeType: 'application/octet-stream', buffer: file });
-    await page.goto(`${KIT_URL}#/`);
-    await page.getByTestId('installed-tile').filter({ hasText: 'caps probe' }).locator('a.tile-link').click();
-    const app = appFrame(page);
-    await expect(app.locator('#status')).toHaveText(/done|error/, { timeout: 30_000 });
-    const caps = JSON.parse(await app.locator('#caps').textContent().then((t) => t ?? '{}')) as Record<string, unknown>;
-    expect(caps.streaming).toBe(false);
+    await page.getByTestId('host-passport').click();
+    const passport = page.getByTestId('host-passport-menu');
+    await expect(passport).toContainText('a page in your browser');
+    await expect(page.getByTestId('host-passport-row-thinks')).toHaveAttribute('data-can', 'false');
+    await expect(page.getByTestId('host-passport-row-thinks')).toContainText('no brain is wired into this host yet — the demo brain answers, from a script.');
+    await expect(passport).not.toContainText(/chat/i);
+    await page.keyboard.press('Escape');
+    // Booting touched nothing (the next navigation re-installs the fake with a fresh record).
+    expect(await fakeRecord(page)).toMatchObject({ completeCalls: [], storageCalls: [] });
+
+    // A move is answered by the demo brain — off-script by design, so chess plays a legal
+    // move for it — and the page's `complete` is never called, its `storage` never read.
+    await installChessAndMove(page);
+    await expect(appFrame(page).getByText(/a legal move was played/)).toBeVisible({ timeout: 30_000 });
     const record = await fakeRecord(page);
-    expect(record.completeCalls).toHaveLength(1);
-    expect(record.completeCalls[0]).toContain('[SNUG_APP_REQUEST]');
-    // The file lives in window.storage: chunks + manifest under the kit's prefix, and a reload
-    // finds the app. The write sits behind the persist debounce — poll the fake's record.
-    await expect.poll(async () => Object.keys((await fakeRecord(page)).storage).some((k) => k.startsWith('snug-user/user.snug'))).toBe(true);
-    await page.goto(`${KIT_URL}#/`);
-    await page.reload();
-    await expect(page.getByTestId('installed-tile').filter({ hasText: 'caps probe' })).toHaveCount(1, { timeout: 20_000 });
+    expect(record.completeCalls).toEqual([]);
+    expect(record.storageCalls).toEqual([]);
 
-    // Export: no downloads namespace → the copy path, named on the chip.
+    // Export with no `downloads` namespace — this page is `file`-class, as a plain file and a
+    // static copy are: the text is copied and the chip names the size. Kept from the migrated
+    // A2 leg, the suite's one browser-level check of the copy path.
     await page.goto(`${KIT_URL}#/settings`);
     await page.getByRole('button', { name: /export/i }).first().click();
     await page.getByTestId('your-file-chip').click();
     await expect(page.getByTestId('your-file-note')).toContainText(/copied \d+ KB/, { timeout: 20_000 });
+    expect(policy.blocked).toEqual([]);
   });
 });

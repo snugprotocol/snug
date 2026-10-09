@@ -5,6 +5,7 @@ import { Link } from 'react-router-dom';
 
 import { sanitizeCardText, type ChatCardState } from '../agent/cards.js';
 import type { BuildStepView, ChatMessage, DataWriteCardState } from '../agent/useBuilderChat.js';
+import { CONNECTIONS_UNAVAILABLE } from '../platform/availability.js';
 import { allows } from '../platform/platform.js';
 import { netConfirmStore, registerChatConfirmSurface, resolveNetConfirm } from '../state/net.js';
 import { useStore } from '../state/store.js';
@@ -121,7 +122,7 @@ export function ChatLog({
               {!allows('connections') ? (
                 // D4: no connected apps inside an artifact — the card names the ask and says
                 // why nothing can be done about it here (never a dead button).
-                <span className="hint">connections aren’t available in this host</span>
+                <span className="hint">{CONNECTIONS_UNAVAILABLE}</span>
               ) : onDirectiveConnect !== undefined ? (
                 <Button onClick={() => onDirectiveConnect()}>connect</Button>
               ) : (

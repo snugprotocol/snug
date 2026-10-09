@@ -16,6 +16,16 @@
 // nothing deeper — ADR-0031 AC9, ADR-0035, ADR-0045). `?raw`: Vite never parses these at
 // transform time, so a malformed file degrades to "this starter ships none" instead of
 // breaking the build.
+//
+// ONE glob is EAGER: the connection manifests (TASK-20261003 S2). The shelf decides at first
+// paint whether each starter can run on this host, and a lazy chunk would make a tile change
+// its enabled state after mount. Measured 2026-10-03: the eight manifests are 3,127 bytes in
+// total — that is what moves from a lazy chunk into the entry. It is the SAME pattern as
+// before, so there are still exactly five globs, which `examples/validate.test.mjs` counts.
+
+import type { ConnectionRequirement } from '@snugprotocol/protocol';
+
+import { parseStarterRequirement } from './starterRequirement.js';
 
 const htmlModules = import.meta.glob('../../../../examples/*/app.html', {
   query: '?raw',
@@ -32,10 +42,11 @@ const contractModules = import.meta.glob('../../../../examples/*/runtime-contrac
   import: 'default',
 }) as Record<string, () => Promise<string>>;
 
-const manifestModules = import.meta.glob('../../../../examples/*/connection.json', {
+const manifestTexts = import.meta.glob('../../../../examples/*/connection.json', {
   query: '?raw',
   import: 'default',
-}) as Record<string, () => Promise<string>>;
+  eager: true,
+}) as Record<string, string>;
 
 const docModules = import.meta.glob('../../../../examples/*/authoring/{docs,prompts}/*.md', {
   query: '?raw',
@@ -54,11 +65,15 @@ export interface StarterAuthoringBundle {
  *
  * `appFolders()` is synchronous on purpose: the shelf renders its cards from it at first
  * paint, so an implementation must know its catalogue without a round trip (the glob knows
- * it at build time; the kit ships the card metadata inline). Everything else is async and
- * resolves `undefined` for a folder that ships no such file.
+ * it at build time; the kit ships the card metadata inline). `requirement()` is synchronous
+ * for the same reason — a tile is enabled or disabled at first paint, never after it
+ * (TASK-20261003 S2) — and answers `undefined` for a starter that declares no connection or
+ * whose manifest does not parse. Everything else is async and resolves `undefined` for a
+ * folder that ships no such file.
  */
 export interface StarterSource {
   appFolders(): string[];
+  requirement(folder: string): ConnectionRequirement | undefined;
   html(folder: string): Promise<string | undefined>;
   meta(folder: string): Promise<string | undefined>;
   contract(folder: string): Promise<string | undefined>;
@@ -82,7 +97,19 @@ function byFolder(modules: Record<string, () => Promise<string>>, file: string):
 const html = byFolder(htmlModules, 'app.html');
 const meta = byFolder(metaModules, 'starter.json');
 const contracts = byFolder(contractModules, 'runtime-contract.json');
-const manifests = byFolder(manifestModules, 'connection.json');
+
+const manifests = new Map<string, string>();
+for (const [path, text] of Object.entries(manifestTexts)) {
+  const folder = folderOf(path, 'connection.json');
+  if (folder !== undefined) manifests.set(folder, text);
+}
+
+/** Parsed once per folder, on first ask: a tile re-renders far more often than a manifest changes. */
+const requirements = new Map<string, ConnectionRequirement | undefined>();
+function requirementOf(folder: string): ConnectionRequirement | undefined {
+  if (!requirements.has(folder)) requirements.set(folder, parseStarterRequirement(manifests.get(folder)));
+  return requirements.get(folder);
+}
 
 const load = async (table: Map<string, () => Promise<string>>, folder: string): Promise<string | undefined> => {
   const loader = table.get(folder);
@@ -91,10 +118,11 @@ const load = async (table: Map<string, () => Promise<string>>, folder: string): 
 
 const GLOB_SOURCE: StarterSource = {
   appFolders: () => [...html.keys()].sort((a, b) => a.localeCompare(b)),
+  requirement: requirementOf,
   html: (folder) => load(html, folder),
   meta: (folder) => load(meta, folder),
   contract: (folder) => load(contracts, folder),
-  manifest: (folder) => load(manifests, folder),
+  manifest: async (folder) => manifests.get(folder),
   async authoring() {
     const out: Record<string, StarterAuthoringBundle> = {};
     for (const [path, loader] of Object.entries(docModules)) {

@@ -16,9 +16,9 @@ survive.
 | **Loopback HTTP data plane** (`127.0.0.1:43127`, fixed) | Any page in any browser on this machine can address it; a DNS rebind makes an attacker's page same-origin to it | A 256-bit per-launch bearer on every data-plane call, plus `Host` equal to the served `127.0.0.1:<port>`. **Measured 2026-09-07** with headless Chromium under `--host-resolver-rules=MAP evil.test 127.0.0.1`: after a rebind the attacker's GET carries **no `Origin` and no `Sec-Fetch-Site`**, and `Host` is the only header naming it — so `Host` is the wall, not a belt. `Origin` is checked where sent; `Sec-Fetch-Site` must be the literal `same-origin`, never `same-site` (a different loopback PORT reads as same-site, so accepting it would admit every other local service). No CORS headers are sent at all. |
 | **Preflight as a structural guard** | A route reachable by a *simple* request lets a foreign page cause a side effect it cannot read | Every data-plane route requires the bearer header, which forces a CORS preflight; the preflight is answered without CORS headers, so the real request never follows. This is load-bearing: moving auth to a cookie or query parameter would silently remove it. |
 | **`/oauth/callback`, unauthenticated by necessity** | An open route on the data plane's own origin, reachable by any local page | It serves the kit DOCUMENT and nothing else — the same bytes as `/`, no state read, no state written, no query parameter interpreted server-side. It must be open because a provider's redirect carries only what the *provider* put in the query, so there is no bearer to present and gating it would 401 every real callback. The code in that URL is delivered to the wizard by the page over `BroadcastChannel` (same-origin) and exchanged for a token through `/fetch`, which IS bearer-gated: reaching this route buys an attacker the page's public HTML, which they could fetch from `/` anyway. |
-| **The bearer's custody** | A token on disk is a token a second local process can read | Memory in the primary, `sessionStorage` in the page, and the launch URL's **fragment** — which a browser never sends to a server. It is in no lock file, no log, no MCP message and no tool result: `snug_open` makes the *process* open the browser, and the CLI fallback prints the URL into the *user's own terminal*. The lock keeps only its SHA-256. |
-| **The control socket** (`~/Snug/host/ctl.sock`, `0600`) | An attached session or the human CLI would otherwise need the bearer | A unix socket, so there is no port to squat and no network path: the filesystem decides who connects (the WhatsApp helper's posture). It carries no bearer and answers only control operations; data-plane paths are not routed on it. |
-| **The lock and take-over** | Two processes writing one user file; a recycled pid; a live primary's socket unlinked from under it | `O_EXCL` decides the winner **before** any bind (two ephemeral binds never collide, so bind-then-write would let both "win"). Take-over verifies the holder's **command line**, never the pid alone — the desktop's own rule, because killing a stranger is worse than the conflict it repairs. Only a proven-dead owner's socket is removed. |
+| **The bearer's custody** | A token on disk is a token a second local process can read | Memory in the primary, `sessionStorage` in the page, and the launch URL's **fragment** — which a browser never sends to a server. It is in no lock file, no log, no MCP message and no tool result: `snug_open` makes the *process* open the browser, and the CLI fallback (`snug open --print`) prints the URL only when its stdout is a terminal — a pipe gets the address without its fragment, and the CLI does not ask for the token. The lock keeps only its SHA-256. **Not sealed:** to open the browser the process passes the launch URL, fragment and bearer included, as an argv entry of the opener (`apps/host-mcp/src/opener.ts`) — `/usr/bin/open` on macOS, for the moment it runs; `/usr/bin/xdg-open` on Linux, where a browser it starts may keep the URL in its own argv for the browser's whole life — and a process listing shows argv to every local OS account, not only this user's (residual 12). |
+| **The control socket** (`~/Snug/host/ctl.sock`, `0600`) | An attached session or the human CLI would otherwise need the bearer; a client reading an older build's success-shaped answer as "done" | A unix socket, so there is no port to squat and no network path: the filesystem decides who connects (the WhatsApp helper's posture). It answers seven control operations and nothing else — `hello`, `status`, `open`, `launch-url`, `call`, `attach`, `stop`; data-plane paths are not routed on it, and lines are capped. Every known op answers an ack written by the socket after the handler — `{ ok: true, op }`, or `{ ok: false, op, error }` when the handler refuses (e.g. `stop` with a page open), an unknown op answers `unknown op` and reaches no handler, and an older build's hello carries no ack, so it is never read as success. **It carries the bearer on exactly one op**, `launch-url`, whose only caller is the human CLI (see the bearer row); `open` makes the primary open the browser and answers the port alone, and a token canary sweeps every other op's answer. `call` runs one of the four tools in the primary's own code, so an attached session's hand-in is re-validated there. `stop` refuses while a page holds the event stream unless the request carries a literal `force: true`. `attach` marks a connection as a session, counted until it closes; nothing else counts as presence. |
+| **The lock and take-over** | Two processes writing one user file; a recycled pid; a live primary's socket unlinked from under it; a healthy runner killed by a newcomer that judged it wedged | The lock is written to a temp file and **linked** into place — exclusive like `O_EXCL`, and never visible empty — **before** any bind (two ephemeral binds never collide, so bind-then-write would let both "win"). A newcomer asks the recorded **socket first**: an answer carrying the token hash the lock records is the owner, and it attaches without reading the process table. A silent socket and a dead pid is taken over. A silent socket and a **live** pid is the one place identity is read (`/bin/ps -ww -o command= -p <pid>` by absolute path; `/proc/<pid>/cmdline` on Linux): the basename of the script Node was given must be one of `snug-mcp.mjs`, `snug-mcp.test.mjs`, `snug-local-host.mjs` — never a substring of the line — and an unreadable line is a stranger. A stranger is refused and never signalled — killing a stranger is worse than the conflict it repairs. One of ours is signalled only after **three failed probes spread over five seconds** and only if its recorded port is silent too, then **waited for** (5 s); if it does not exit, the newcomer refuses with the `snug stop` remedy rather than become a second writer. Replacing a record is one step under a take-over mutex. Only the canonical `<host>/ctl.sock` is ever unlinked — never the path `lock.json` names — and not while another runner answers on it, while anything LISTENS on it (a connect, not a conversation, asked before the mutex is entered; an unsure answer counts as listening — `socketListens` in `lock.ts`, wired to the runner's `somethingListens`), or while the dead record's port still answers. A kept socket is met by the newcomer's `listenControl`, which joins it or refuses `socket-in-use`. |
 | **Read-only custody** | Snug Desktop holding the same file | The page **refuses to open** and names the holder. It does not open read-only: both of `packages/db`'s save paths swallow a failed write with a bare `catch` and no persist-error seam exists, so a read-only page would take an hour of work and lose it silently on tab close. Writes are additionally refused with `423`. |
 | **The store's default target** | A test, a script or a stray import reaching the user's real `~/Snug` by doing nothing | There is no default. `resolveHome()` requires either `SNUG_HOME` or an explicit `allowRealHome`, which exactly one caller passes — the shipped entry a host spawns; the test-hooks build passes neither and can never reach a real home. Enforced in the type AND at runtime, because the failure it prevents is silent. **This is a repair:** on 2026-09-07 a `/userdb` test wrote 2 MiB of zeros over the owner's live user file, and two weeks of data were lost. |
 | **The `claude -p` child** | A spawned CLI inheriting the parent session's credentials | The child's environment is built from an **allowlist** (`HOME`, `PATH`, and terminal basics), not a denylist. **Measured 2026-09-07**: a Claude Code session exports twelve `CLAUDE_*` variables including `CLAUDE_CODE_MESSAGING_TOKEN` and `CLAUDE_CODE_MESSAGING_SOCKET` — together a live IPC channel back into the running session. A denylist against an undocumented, version-varying namespace drifts on the next CLI release; an allowlist cannot. |
@@ -56,7 +56,12 @@ survive.
   process, while reading, and both sides trip at the same protocol constant.
 - It does not claim the LAN rungs are covered. The page carries neither `lanFetch` nor
   `lanHttpPrivate`, so a LAN row gets the executor's own named refusal.
-- It does not claim anything about Windows. This process is macOS-only, as the desktop is.
+- It does not claim anything about Windows: the opener knows no Windows program and refuses
+  ("no browser opener is known for this platform"), so `snug_open` answers with the printed
+  fallback. The shipped surface is macOS, as the desktop's is. A Linux opener exists since
+  TASK-20261003 (`/usr/bin/xdg-open`, by absolute path), exercised only by unit tests with the
+  platform injected (`apps/host-mcp/src/__tests__/opener.test.ts`) — untested on a real Linux
+  desktop.
 
 ## Amendment — 2026-09-13 (TASK-20260913-binding-b-marketplace-plugin, ADR-0069)
 
@@ -84,3 +89,82 @@ remedy); (9) the page advertises an 8,192-token output cap the CLI does not enfo
 | **Provenance** | A commit that cannot reproduce the hashes (a dirty tree); the root marketplace manifest outside the hashes | `PROVENANCE.json` sits at the MARKETPLACE root and covers every shipped file including `.claude-plugin/marketplace.json`; its commit is suffixed `-dirty` when the tree differs from HEAD — the owner's push refuses that (next-steps); the gate accepts it (a developer's tree is dirty by definition). The Agent Skills validator the gate runs is pinned (`skills-ref==0.1.1`). |
 
 **Residual added:** (10) the user's own hooks and memory are OUT of app thinks by default (`local`) — a user who wants their CLAUDE.md in every app's context has no switch; Q8.
+
+## Amendment — 2026-10-04 (TASK-20261003-host-bindings-complete, R1)
+
+The **control socket** and **lock and take-over** rows above, and the CLI sentence of the
+**bearer's custody** row, were rewritten in place to describe R1's code (`lock.ts`,
+`control-socket.ts`, `identity.ts`, `refusals.ts`, `cli.ts`, `runner.ts` under
+`apps/host-mcp/src/`). The wording they replace described the runner before R1 and is in git
+history. What was untrue of it, found 2026-10-03:
+
+- the shipped build wired `commandLineOf: () => undefined`, so every live holder read as a
+  stranger and a second window was always refused; the identity rule was a substring
+  (`/snug-mcp/`), which `tail -f snug-mcp.log` satisfies;
+- the socket's `open` answered the launch address WITH its token to any caller, and the CLI
+  printed it wherever stdout pointed — the row's "it carries no bearer" was false;
+- take-over read the command line first, signalled after ONE silent probe, did not wait for
+  the exit, and unlinked the socket path the lock record named.
+
+A runner that can neither lead nor attach now answers the MCP handshake and names its cause
+from one refusal table (`home-unresolved`, `home-unwritable`, `lock-held-by-stranger`,
+`lock-contended`, `older-build`, `socket-path-too-long`, `socket-in-use`, `listen-failed`,
+`page-damaged`), each with a remedy; `lock-held-by-stranger` claims only that the process
+could not be identified, and its remedy quits the session before the lock file is deleted.
+
+**Residual added:** (11) the control socket is residual 1's boundary with no bearer in front of
+it: any process running as this user can ask `launch-url` for the bearer, `stop` with
+`force: true` while pages are open, and `call` any of the four tools. The brains, the one page
+and the page pin are in [the brains-and-chat delta](threat-model-delta-brains-and-chat.md).
+
+## Amendment — 2026-10-04 (TASK-20261003-host-bindings-complete, Gate 5)
+
+The Gate 5 review of the branch found four things this delta said or left out. The
+**bearer's custody** row, the last sentence of the **lock and take-over** row and the Windows
+line under "What this delta does NOT claim" were edited in place; the wording they replace is
+in git history.
+
+- **The opener's argv carries the bearer.** `openInBrowser` (`apps/host-mcp/src/opener.ts`)
+  spawns the opener with the launch URL `http://127.0.0.1:<port>/#token=<bearer>`
+  (`apps/host-mcp/src/runner.ts`, `url()`) as its one argument. That was already true on `main`
+  (`spawn('open', [url])` in `main.ts`); the Linux opener is new. The row listed where the
+  bearer is not, and did not say that a process listing shows it.
+- **The opener's child is built like a brain's.** It runs by absolute path —
+  `/usr/bin/open` on macOS, `/usr/bin/xdg-open` on Linux, where a missing program is the printed
+  fallback, never a PATH lookup (an empty or `.` PATH entry is the agent's current project) —
+  with an environment built from nothing by allowlist (`openerEnvFor`: the brains'
+  `CHILD_ENV_ALLOWLIST` plus `DISPLAY`, `WAYLAND_DISPLAY`, `XAUTHORITY`,
+  `DBUS_SESSION_BUS_ADDRESS`, `DESKTOP_SESSION`, `BROWSER` and the `XDG_` and `LC_` families;
+  PATH keeps its absolute entries only). Its input is the process's one whole-environment read,
+  `machineEnvironment()` in `apps/host-mcp/src/brains/registry.ts`, which `machineDrivers` reads
+  for the brains and `main.ts` hands to the opener; with no parent environment the child gets an
+  empty one. Before the fix the child inherited the whole parent environment, including the
+  agent session's `CLAUDE_CODE_MESSAGING_*` and any API key. Proven by
+  `apps/host-mcp/src/__tests__/opener.test.ts`. Residual: an `xdg-open` installed only outside
+  `/usr/bin` (`/usr/local/bin`, NixOS) is treated as no opener.
+- **A take-over keeps a socket something listens on.** A dead record whose socket missed one
+  bounded probe — a live runner busy in a synchronous `/bin/ps` (`holder.ts`, bounded at 2 s)
+  misses it — used to have its canonical `ctl.sock` unlinked, and the newcomer then led beside a
+  live runner: two primaries writing one user file. `takeOver` (`apps/host-mcp/src/lock.ts`) now
+  asks at connect level whether anything listens there (`socketListens`, "unsure is live") and
+  keeps the socket when anything does, or when the dead record's port still answers; the
+  newcomer meets the socket in `listenControl` (`runner.ts`) and attaches to the runner on it or
+  refuses `socket-in-use`. Proven by `apps/host-mcp/src/__tests__/lock.test.ts` ("a take-over
+  never unlinks a socket something LISTENS on") and `apps/host-mcp/src/__tests__/runner.test.ts`.
+- **"This process is macOS-only" was no longer true.** The shipped surface is still macOS, but
+  the opener now has a Linux path (`/usr/bin/xdg-open`), run only by unit tests with the
+  platform injected — never on a real Linux desktop. The line now says that.
+
+**Residual added:** (12) **the launch URL is readable in process listings by OTHER local OS
+accounts.** The bearer is the loopback data plane's only guard against a non-browser client
+(residual 1), and the port is reachable from every account on the machine. While the opener
+runs — briefly on macOS; on Linux, for the life of a browser `xdg-open` started — any local
+account can read the URL from `ps` or `/proc/<pid>/cmdline`, then call the data plane with the
+bearer: the user file (plaintext `snug_secrets`, R-3), `/fetch`, the chat route on the user's
+own agent. This is outside residual 1's same-user boundary. Severity minor (Gate 5 skeptic):
+it needs a second account on the machine and a listing taken at the right moment. Follow-up: a
+one-time launch code in the fragment instead of the bearer — single use, a short TTL, held in
+memory, exchanged for the bearer on a POST that passes the `Host`/`Origin` gate — so a code read
+from a listing after the page claimed it is worthless, and a code someone else claims first
+makes the user's page refuse visibly. Consolidated as R-49; the brains-and-chat delta carries it
+as its residual 8.

@@ -4,7 +4,8 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
@@ -14,6 +15,7 @@ import {
   KIT_FILE_NAME,
   KIT_SIZE_CEILING_BYTES,
   checkHostKitDist,
+  checkHostKitOutputs,
   checkHostKitPage,
   tokenizeTopLevel,
 } from './check-host-kit.mjs';
@@ -95,6 +97,29 @@ test('the dist rule: exactly one file, named as the kit', () => {
   const problems = checkHostKitDist(path.join(REPO, 'scripts'));
   assert.ok(problems.some((p) => /must contain exactly snug-host\.html/.test(p)));
   assert.ok(checkHostKitDist(path.join(REPO, 'no-such-dir'))[0].includes('does not exist'));
+});
+
+test('K1: the kit has ONE output directory — a second `dist*` beside it is a second page', () => {
+  // The second build of the kit wrote the runner's page into a directory of its own, which
+  // the dist rule above never looked at (it scans `dist/` alone). A leftover from before
+  // the build was withdrawn — or a new config that grows one — is named here.
+  const host = mkdtempSync(path.join(tmpdir(), 'snug-kit-outputs-'));
+  try {
+    mkdirSync(path.join(host, 'dist'));
+    mkdirSync(path.join(host, 'src'));
+    mkdirSync(path.join(host, 'e2e'));
+    writeFileSync(path.join(host, 'distribution-notes.md'), 'a file is not an output directory');
+    assert.deepEqual(checkHostKitOutputs(host), []);
+    mkdirSync(path.join(host, 'dist-second'));
+    const problems = checkHostKitOutputs(host);
+    assert.equal(problems.length, 1);
+    assert.match(problems[0], /dist-second/);
+    assert.match(problems[0], /one output/);
+  } finally {
+    rmSync(host, { recursive: true, force: true });
+  }
+  // …and the real tree has exactly the one.
+  assert.deepEqual(checkHostKitOutputs(HOST), []);
 });
 
 // ---- the real page, and reproducibility ----------------------------------------------

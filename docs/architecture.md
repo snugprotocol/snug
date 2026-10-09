@@ -115,16 +115,37 @@ named hard prerequisites — both LANDED with TASK-20260812 (guard in
 ## Host kit — the third shell (TASK-20260905-host-kit, ADR-0065)
 
 `apps/host` builds **`snug-host.html`** — one self-contained page over the SAME playground
-source, the way the desktop is built (vite alias, `HashRouter`, a platform installed before
-React boots) — for the skill-delivered bindings: a Claude artifact, a local host page, a
-plain file. What differs is the OUTPUT and what the platform carries:
+source, the way the desktop is built (vite alias, a platform installed before React boots)
+— for every skill-delivered binding. Since TASK-20261003 (ADR-0072 §1) it has ONE Vite
+config, ONE html entry and ONE output: the same file is the Claude artifact page (published
+by a tool or created in chat — one hosted runtime), the plain file, and the page the local
+host process serves; `src/__tests__/oneKit.test.ts` fails on a second config or entry. What
+differs from the playground is the OUTPUT and what the platform carries:
 
+- **The boot** (`src/boot.tsx`, ADR-0072 §2): the binding is a runtime fact, decided once,
+  in order. (1) `location.pathname === '/oauth/callback'` → the callback page ALONE — no
+  token claim, no `/status`, no platform, no db (under the hash router that document used to
+  render the hub, so a runner sign-in could never complete). (2) Only at the literal origin
+  `http://127.0.0.1` (never `localhost`, another address, `https:` or `file:`): claim the
+  launch token from the fragment, then `GET /status` to its own origin, bounded at 1.5 s — a
+  tokenless page asks once; a page holding a token asks again (3 s, then 6 s) and, with no
+  answer, renders "the Snug runner is not answering" (`LocalRefusal`'s `not-answering`)
+  rather than open on this browser's storage (TASK-20261003 Gate 5) — a `200` in the runner's pinned shape composes the local platform
+  (`src/local/compose-local.ts`); a `401`/`403` carrying `x-snug-runner: 1` renders "open
+  it from your agent" (`src/local/LocalRefusal.tsx`); anything else falls through. (3) The
+  probe and the hosted composition (`src/compose.ts`). Both compositions mount through one
+  `mountKit`. The router is chosen by a guarded capability probe (`src/router.tsx`): the
+  page replaces its own history entry with itself, and where that throws (an opaque-origin
+  document) it mounts a `MemoryRouter` seeded from `location.hash`, else `HashRouter` as
+  before. Every read of a storage global goes through `src/safeStorage.ts` (those getters
+  throw at an opaque origin).
 - **The probe** (`src/probe.ts`, before boot): when `window.claude.use` is a function the
   host namespaces are asked TOGETHER behind one guard (`sample`, `artifact`, `downloads` —
   `resolved` or `null`; `use()` and `limits()` prompt nothing and spend nothing); the
-  binding decided purely from five facts (protocol, hostname, the two claude globals, what
-  the host answered — `artifact-static` when `use` exists but sample AND artifact are
-  `null`: the page served top-level on the artifact host); storage TRIED rung by rung with
+  binding decided purely from five facts (protocol, hostname, the `use` global, what the
+  host answered, whether a runner answered — `artifact-static` when `use` exists but sample
+  AND artifact are `null`: the page served top-level on the artifact host; a loopback page
+  with no runner behind it is `file`); storage TRIED rung by rung with
   a real write/read round trip (OPFS → IndexedDB → memory — never presence-detected:
   `file://` exposes OPFS and rejects it; `getDirectory` invoked as a method, an unbound
   call is "Illegal invocation"); the brain PINNED from what resolved (TASK-20260905-binding-a-artifacts):
@@ -136,21 +157,30 @@ plain file. What differs is the OUTPUT and what the platform carries:
   records a substituted answer (`modelTierApplied`) so the chip disables and annotates the
   tier the plan lacks; the brain itself is still never chosen — D15 amended narrowly), the ONE shaper
   (`src/brains/prompt.ts`: system + messages as one user turn; `measurePrompt` = the bytes
-  sent) as the seat's ruler, the cap from `limits()` (65,536 fallback); `window.claude.complete`
-  → the chat adapter (`src/brains/complete.ts`, no streaming); nothing → the demo brain with
-  every leg recorded. Every runtime error code maps to a NAMED adapter error, `retryable`
-  only on a transient upstream failure — the runner never loops on a host brain. Nothing
-  asks the user anything (D15).
+  sent) as the seat's ruler, the cap from `limits()` (262,144 B measured on contract 0.2.67;
+  `DEFAULT_MAX_PROMPT_BYTES` = 65,536 when `limits()` is missing, throws or never answers);
+  nothing → the demo brain with every leg recorded. A chat artifact is this same hosted
+  runtime (measured 2026-10-03: a real origin, `window.claude = { use }`); the September
+  chat runtime (`window.claude.complete`, a per-view `window.storage`) is gone, and the kit's
+  adapter, storage backend and binding for it were removed (TASK-20261003 R5 C2) — a
+  page that meets only `complete` boots `file` with the demo brain and never touches it.
+  The 19 `SampleErrorCode`s of 0.2.67 each map to a NAMED adapter error
+  (`src/brains/errors.ts`), `retryable` only for `upstream_error` and only as a manual hint
+  — the runner never loops on a host brain. Nothing asks the user anything (D15).
 - **The platform** (`src/platform-host.ts`, composed by `src/compose.ts`): `kind:'host'`,
   the binding, the pinned brain, the engine as bytes, the backend that WORKED (or the
-  record composed over it — below), the four launch booleans explicit, every surface flag
-  off except `appExport` (the download-only share sheet — how a kit-edited app goes back to
-  the agent; the LINK acts stay off), plus three seats the playground renders from:
+  record composed over it — below), the capability block from the ONE table every host
+  binding composes from (`hostCapabilities()` in `apps/playground/src/platform/hostCapabilities.ts`,
+  ADR-0072 §3 — a lint refuses a capability literal anywhere else under the kit or the
+  runner): the four launch booleans explicit, every surface flag off except `appExport`
+  (the download-only share sheet — how a kit-edited app goes back to the agent; the LINK
+  acts stay off), plus three seats the playground renders from:
   `custody` (the "your file" chip — state and acts), `saveFile` (`src/exportSeat.ts`: a user
   file leaves as the `snug-user-file/1` wrapper `snug-user.snug.json` through `downloads.save`,
   or copied where the host has no downloads; every code owned, one prompt at a time) and
   `agentHandIns` (the run header's offered update). No transport seat a host cannot honour
-  (no fetch, LAN, sidecar, helper, OAuth, update seats). The playground's own readers do the
+  (no fetch, LAN, sidecar, helper, OAuth, update seats — the local composition alone adds
+  `fetchImpl` and turns `connections` on, below). The playground's own readers do the
   rest: `allows()`, `secretsUsable()`, `resolveBrain()` — the kit is a clone of the
   playground / Snug Desktop minus the brain, model/provider and account controls, builder
   included (A5). Under a capped host brain the builder BUDGETS OR REFUSES a turn on the
@@ -160,57 +190,68 @@ plain file. What differs is the OUTPUT and what the platform carries:
   knowledge IN the prompt (ADR-0066):** `knowledgeDeliveryFor(brain)`
   (`agent/knowledgeDelivery.ts`) is the one derivation both slots of a build turn consume —
   the system prompt's `knowledge` delivery (`'inline'` = the 35 layer + the five-file KB
-  core, ~41 KB under `sample`'s 65,536-byte cap, pinned under a 44 KiB ceiling on the kit's
-  own ruler; `'none'` = the honest unaided layer for webllm or a brain whose declared cap
-  cannot hold the core) and the matching user-message template; the edit turn's context
-  block follows it too. The cost is room: ~23 KB beside the system text on an edit turn,
-  so a starter-sized app cannot be edited under the host brain while the template rides
-  whole on edit turns (ADR-0066 A8 — an open owner decision).
-- **Binding A — two storage seams, one file** (`src/storage/`): inside a hosted artifact the
-  browser bucket stays the WORKING copy and the page's own `<script type="text/plain"
-  id="snug-db">` block is the DURABLE copy (`artifactHtml.ts`, a record OVER the bucket:
-  seed-on-empty with one counted save and a magic-prefixed custody sidecar; a divergence
-  with a direction from the block's save counter, resolved only by an explicit act; "save
-  to this artifact" fetches the page's canonical source — never the live DOM, which carries
-  the viewer's injected runtime — LIFTS THE KIT DOCUMENT OUT OF THE VIEWER'S WRAPPER (the
-  viewer stores and serves a published page inside its own skeleton with two injected
-  scripts ahead of the kit's whole document — measured on the real artifact 2026-09-06;
-  `unwrapViewerPage` in the one grammar, a shape check that refuses any other wrapper by
-  name), verifies the kit document with the shared tokenizer, republishes the BARE page
-  (the viewer wraps it again), refuses a projected
+  core, ~41 KB — inside even the 65,536-byte fallback cap — pinned under a 44 KiB ceiling on
+  the kit's own ruler; `'none'` = the honest unaided layer for webllm or a brain whose
+  declared cap cannot hold the core) and the matching user-message template; the edit
+  turn's context block follows it too. The cost is room: ~23 KB beside the system text on
+  an edit turn, so at September's 65,536-byte cap a starter-sized app could not be edited
+  under the host brain while the template rode whole on edit turns (ADR-0066 A8 — an open
+  owner decision); no edit turn has been measured under 0.2.67's 262,144 B.
+- **Binding A — the artifact record, one file** (`src/storage/`): inside a hosted artifact
+  (published or chat-created) the browser bucket stays the WORKING copy and the page's own
+  `<script type="text/plain" id="snug-db">` block is the DURABLE copy (`artifactHtml.ts`, a
+  record OVER the bucket: seed-on-empty with one counted save and a magic-prefixed custody
+  sidecar; a divergence with a direction from the block's save counter, resolved only by an
+  explicit act; "save to this artifact" fetches the page's canonical source — never the
+  live DOM, which carries the viewer's injected runtime — LIFTS THE KIT DOCUMENT OUT OF THE
+  PLATFORM'S WRAPPER (`unwrapViewerPage` in the one grammar reads exactly two measured
+  wrappers: the contract-0.2.67 skeleton — 536 bytes of charset, viewport and reset through
+  `<body>`, no injected script in the stored source, byte-matched against two real
+  read-backs in `scripts/fixtures/readback-0.2.67/` — and the September viewer's, which put
+  two injected scripts ahead of the kit's whole document (measured 2026-09-06); a fragment,
+  a skeleton inside a skeleton, trailing content and any other head are refused by name),
+  verifies the kit document with the shared tokenizer, republishes the BARE page — 0.2.67's
+  `artifact.d.ts` requires a complete document starting with `<!doctype html>`, and the
+  platform wraps it again — refuses a projected
   page over the cap naming its three parts, maps every runtime code, stashes the conflict
   note across the reload — and only across a conflict; "load the page's copy" is TERMINAL
   and reloads, since the open db would otherwise flush the browser copy straight back). The
   seed TRUSTS the block's bytes (sha-verified for self-consistency only): the page is the
   publisher's output, and `verifyKitPage` is a SHAPE check on the fetched source, not a
-  security control. Inside a chat artifact `window.storage` IS the file's home
-  (`windowStorage.ts`: generation-numbered base64 chunks, the manifest flipped LAST, absence
-  proven by `list()` — a `list()` that itself throws is CORRUPT, not absent — corrupt never
-  fresh). Both are `PersistenceKind`s appended without a version bump. Under a viewer that
-  denies third-party storage the working copy is memory only, and the chip says so.
-- **The hand-in** (`src/handin.ts`, ADR-0065 §6): the page's `snug-app-bundle+json` blocks
-  (written by `scripts/snug-embed.mjs` through the ONE grammar `scripts/lib/page-blocks.mjs`,
-  which also owns the top-level tokenizer every reader uses) resolve at boot — before the
-  first paint when the db opens promptly — to an `agent:<lineage>` app, the app the bundle
-  was lifted from, or a new OWNED install; an unedited copy takes the update, an edited
-  copy is OFFERED in the run header (`AgentUpdateControls`, ADR-0045 §7's confirm), a
-  deleted app stays deleted (`agentDismissed:` tombstone), a bundle with connections is
-  refused (D4) at the boundary, before any pending offer. A `share:` copy is never a
+  security control. `artifact-html` is a `PersistenceKind` appended without a version bump;
+  `packages/db` still lists `window-storage` beside it (a persisted enum is append-only),
+  which nothing in the kit reaches since the September chat backend was removed. Under a
+  viewer that denies third-party storage the working copy is memory only, and the chip
+  says so.
+- **The hand-in** (`src/handin.ts`, ADR-0065 §6; one core since ADR-0072 §3): the page's
+  `snug-app-bundle+json` blocks (written by `scripts/snug-embed.mjs` through the ONE grammar
+  `scripts/lib/page-blocks.mjs`, which also owns the top-level tokenizer every reader uses)
+  resolve at boot — before the first paint when the db opens promptly — through
+  `applyAgentBundles` to an `agent:<lineage>` app, the app the bundle was lifted from, or a
+  new OWNED install; an unedited copy takes the update, an edited copy is OFFERED in the
+  run header (`AgentUpdateControls`, ADR-0045 §7's confirm), a deleted app stays deleted
+  (`agentDismissed:` tombstone), a bundle with connections is refused (D4) at the boundary,
+  before any pending offer. Under the local runner the same core takes the runner's
+  `hand-in` events while the page is up (`src/local/handinEvents.ts`): the hub refreshes in
+  place (`libraryRevision`), a running app whose version changed offers a reload, an
+  explicit runner hand-in clears the tombstone (the one rule the bindings do not share),
+  and the page reports each outcome to `POST /hand-in/outcome`; the page reads no embedded
+  block there at all. A `share:` copy is never a
   lifted-from target (its id is the sharer's lineage). The trust boundary is the artifact's
   write permission — a page writer could replace the kit's own script — so the guards that
   hold are the ones inside it. One residual is the viewer's own bridge: an app frame can
   `postMessage` a runtime-shaped message to `top`; the kit page never answers one (e2e), and
   whether the viewer does is answerable only by the hosted walk.
-- **One file** (`vite.config.ts` + `src/plugins/`): `inlineDynamicImports`, every asset a
-  data URL, the sql.js engine through `?inline` (Vite 6 must be told `.wasm` is an asset),
-  the entry script and stylesheet folded into the html by `inline-single-file` with its
-  refusals (a surviving `</script`, an UNCLOSED `<!--`, `</style`, Vite's unresolved
-  `__VITE_PRELOAD__` marker — which is why the hook is `order:'post'`, after Vite's own
-  generateBundle — any other emitted file, any leftover `./assets/` reference), and the
-  build stamp `<version> <sha>[-dirty]`. Two modules are swapped by RESOLVED path
-  (`swap-resolved`, a dead swap fails the build): the starter source and the sql.js locator.
-  WebLLM is aliased to a stub. Measured 2,219,519 B (2026-09-05); 3,255,702 B without the
-  starter swap; sha-identical across clean builds.
+- **One file** (`vite.config.ts` — the only config — + `src/plugins/`):
+  `inlineDynamicImports`, every asset a data URL, the sql.js engine through `?inline` (Vite
+  6 must be told `.wasm` is an asset), the entry script and stylesheet folded into the html
+  by `inline-single-file` with its refusals (a surviving `</script`, an UNCLOSED `<!--`,
+  `</style`, Vite's unresolved `__VITE_PRELOAD__` marker — which is why the hook is
+  `order:'post'`, after Vite's own generateBundle — any other emitted file, any leftover
+  `./assets/` reference), and the build stamp `<version> <sha>[-dirty]`. Two modules are
+  swapped by RESOLVED path (`swap-resolved`, a dead swap fails the build): the starter
+  source and the sql.js locator. WebLLM is aliased to a stub. Measured 2,219,519 B
+  (2026-09-05); 3,255,702 B without the starter swap; sha-identical across clean builds.
 - **Starters on demand** (AC14, A3): `src/starterSource.ts` implements the playground's
   `StarterSource` over the index the build bakes in (`starters-pkg/index.json`, emitted by
   `scripts/build-starters-pkg.mjs` from `examples/`) — the catalogue, release meta,
@@ -220,22 +261,47 @@ plain file. What differs is the OUTPUT and what the platform carries:
   and NAMED refusals (offline, timeout, bad payload, wrong version) the run view renders —
   never a dead control. Publishing the package is an owner act; the version pin lives in
   `examples/starters-package.json`.
+- **A host offers only what it can run** (`apps/playground/src/platform/availability.ts`,
+  ADR-0072 §4 — every shell, not only the kit): one pure derivation. An app's NEEDS
+  (`network`, `native-fetch` — the registry says its provider refuses browsers — `oauth`,
+  `lan`, `helper`) come from a starter's `connection.json`, read synchronously at first
+  paint through `StarterSource.requirement(folder)` (`starter/starterRequirement.ts`), or
+  from an installed app's connection rows (`declared` and `approved` count, `revoked` does
+  not), fetched with ONE `listConnections()`. A host's OFFERS are read from seats its
+  platform already carries (`offersOf`: `connections` → network, `fetchImpl` → native-fetch,
+  `lanFetch` + `lanPair` → lan, the three sidecar seats → helper, `connections` and
+  `capabilities.oauthRedirect !== false` → oauth), never from `kind`; each shell's test
+  feeds its REAL platform object through it. A blocked app is disabled on the shelf with its
+  reason as visible text (`views/AvailabilityNote.tsx`) and on its run route, which replaces
+  the app frame with the reason and keeps the header, so a blocked app can still be exported
+  (a blocked starter offers no `install`). The web shelf keeps its `desktop` badge; the
+  wizard's walls read the same offers, and a source lint keeps capability decisions off
+  `kind !== 'desktop'`. The host passport (`views/HostPassport.tsx`) says the same table in
+  words beside the chips on host platforms. Under the runner the `oauth` offer follows
+  `/status`'s `oauthRedirect`, false when the process fell back from its fixed port.
 - **Gates**: `scripts/check-host-kit.mjs` (a top-level DOM tokenizer that never scans
   script/style bodies; AC1's rules, the 16 MiB cap and a 2,750,000-byte ceiling, the stamp,
   exactly one file in `dist/`, two clean builds sha-compared) in root `test`, gate-local's
   workspace leg and ci.yml — its tokenizer now lives in `scripts/lib/page-blocks.mjs`, and
   the root chain also runs `page-blocks.test.mjs` and `snug-embed.test.mjs`;
-  `apps/host/e2e/kit.spec.ts` on the BUILT page — served over loopback (the artifact shape)
-  and from `file://` — with every request aborted except jsDelivr `/npm/` and the
+  `apps/host/e2e/kit.spec.ts` on the BUILT page — served by a loopback static server
+  (file-class since K2) and from `file://` — with every request aborted except jsDelivr `/npm/` and the
   intercepted starters package (gate-local's e2e leg; a missing dist is CANNOT RUN by name);
-  `apps/host/e2e/artifact.spec.ts` — the two Claude runtimes FAKED on the built page
-  (`window.claude.use` with recording `sample` / `artifact` / `downloads`; the flat
-  `window.claude.complete` + a `window.storage` that persists like the real one), spliced
-  pages served through `page.route`: no call on load, one call per move, the save round trip
-  and the seed in a fresh browser, read-only after the first refusal, the wrapper export,
-  the hand-in (install, update, idempotence), `artifact-static`, the chat brain and storage
-  across a reload, and the C2 reach test (the app frame's `parent`/`top` are opaque). The
-  REAL runtimes are the owner's walk, journaled with the artifact URL.
+  `apps/host/e2e/artifact.spec.ts` — the hosted runtime FAKED on the built page
+  (`window.claude.use` with recording `sample` / `artifact` / `downloads`), spliced pages
+  served through `page.route`: no call on load, one call per move, the save round trip and
+  the seed in a fresh browser — inside the September wrapper and inside the 0.2.67 skeleton
+  cut from a real read-back — read-only after the first refusal, the wrapper export, the
+  hand-in (install, update, idempotence), `artifact-static`, a page that meets only the
+  September chat runtime booting with the demo brain and touching neither `complete` nor
+  `storage`, and the C2 reach test (the app frame's `parent`/`top` are opaque);
+  `kit-boot.spec.ts` (K2 — a loopback page with no runner asks `/status` once and boots
+  `file`; `file://` asks nothing) and `kit-availability.spec.ts` (the blocked shelf, the run
+  route, the host passport, the 375 px fit, screenshots in both themes at 1280 and 375).
+  The local-host Playwright project (`local*.spec.ts`) runs the same built page served by
+  the process's TEST build. The REAL runtimes are the owner's walk, journaled with the
+  artifact URL; `scripts/runtime-probe.html` (`snug-chat-probe/3`, in the `check-host-kit`
+  chain) is the maintained diagnostic that measured this one.
 
 Steps 1–4 of the task landed the seams the kit needs in the packages and the playground,
 all additive and all "absence = today's behavior": `kind:'host'`, `binding`, a pinned
@@ -249,18 +315,21 @@ file before adoption — C1), the runner's `host-ready` advertising `streaming` 
 
 ## The local host process — Binding B (TASK-20260907-binding-b-plugin-host, ADR-0068)
 
-`apps/host-mcp` builds **one `dist/snug-mcp.mjs`** that the agent's host (Claude Code,
-Cowork, Codex) spawns over stdio when the `snug` plugin is installed. It is Snug Desktop's
+`apps/host-mcp` builds **one `dist/snug-mcp.mjs`** that the agent's host (Claude Code — in
+a terminal or Claude Desktop's Code tab — and Cowork) spawns over stdio when the `snug`
+plugin is installed. It is Snug Desktop's
 native side written in Node and reached over `127.0.0.1` — nothing more ambitious than that.
 It has three jobs.
 
-- **Serve the kit.** A SECOND build of `apps/host` (`vite.local.config.ts` →
-  `dist-local/snug-host-local.html`) with `connections` on. A second *input* in the kit's own
-  config is impossible — `inlineDynamicImports` refuses multiple inputs, `inline-single-file`
-  throws on more than one page, and `check-host-kit` requires exactly one file in `dist/` — so
-  it is a second CONFIG derived from the kit's, differing only in entry, output name and
-  directory. `turbo.json` declares `dist-local/**` as a build output; without that a cache hit
-  restored the artifact kit and left the local page missing.
+- **Serve the kit.** The ONE page (ADR-0072 §1 withdrew the second build ADR-0068 had): the
+  plugin ships `snug-host.html` once, as the skill's asset
+  (`skills/snug/assets/snug-host.html`), with its sha256 beside it (`<page>.sha256`, written
+  by `scripts/build-plugin.mjs`). `src/page.ts` is the one locator — the plugin layout, the
+  repo layout (`apps/host/dist/`), then a sibling of the bundle — and the process reads the
+  page ONCE at boot and serves only bytes that match the pin; a mismatch is the
+  `page-damaged` refusal, and that process takes no lock and binds nothing (D8: it catches a
+  partial copy or a stale mix, not a same-user writer). What makes the page the runner's is
+  the kit's runtime boot, not the build: there it composes `connections` on and `fetchImpl`.
 - **Be the network side of the executor.** The page's `connected-fetch.ts` stays THE seat that
   reads a credential and calls fetch, with all ten gates. What crosses to the process is the
   platform's raw `fetchImpl` (`/fetch`), the user file (`/userdb/*`, `createFileBackend` over
@@ -275,41 +344,112 @@ It has three jobs.
   `snug_list_apps`, frozen by an allowlist test. There is no data-plane tool, as a rule: an
   agent that could fetch with the user's credentials would be a network principal, which C1
   forbids. The bearer appears in no tool result — `snug_open` makes the process open the
-  browser, and the CLI fallback prints the URL into the user's own terminal.
+  browser, and the CLI fallback prints the URL into the user's own terminal. `snug_hand_in`
+  answers with what the page reported (`installed`, `updated` to vN, `current`, `offered`,
+  `refused: <reason>`) or, past a 5 s bound, `sent … — not confirmed`; `snug_list_apps`
+  still answers an empty list with a note (the page owns the database).
 
 **Inbound trust.** `Host` must equal the served `127.0.0.1:<port>`. Measured: after a DNS
 rebind an attacker's page is same-origin to the browser and sends no `Origin` and no
 `Sec-Fetch-Site`, so `Host` is the only header naming it. `Sec-Fetch-Site` must be the
-literal `same-origin` — a different loopback PORT reads as `same-site`. Every route requires
-the bearer header, which forces a CORS preflight that is answered without CORS headers.
+literal `same-origin` — a different loopback PORT reads as `same-site`. Every route but the
+documents (`/`, and `/oauth/callback`, which a provider's redirect reaches with no bearer)
+requires the bearer header, which forces a CORS preflight that is answered without CORS
+headers.
 
-**One process, one file.** `~/Snug/host/lock.json` with `O_EXCL`, a `0600` control socket for
-attached sessions and the CLI, and a lifetime that is the union of attached sessions — two
-agent windows are one Snug, and the first to leave does not take it away. If Snug Desktop
-holds the file the page **refuses to open** and names the holder rather than running
-read-only, because both of `packages/db`'s save paths swallow a failed write.
+**One process, one file — lead, attach, succession (TASK-20261003 R1).**
+`~/Snug/host/lock.json` is created exclusively before anything binds — written whole to a temp
+file and linked into place, so an existing lock fails the link and no reader sees it half-written —
+and records the port,
+the pid, the bearer's SHA-256 and the control socket. `acquireLock` (`src/lock.ts`) asks the
+recorded control socket FIRST: an answer carrying the lock's token hash is the owner, and the
+newcomer ATTACHES without reading any process table; silence and a dead pid is taken over
+(replacing a record is one step under the `lock.takeover` mutex); silence and a LIVE pid is
+the one place identity is read (`src/identity.ts`: `/bin/ps -ww -o command=`, or
+`/proc/<pid>/cmdline`; the script argv token must be a file named on `BUNDLE_BASENAMES` —
+`snug-mcp.mjs`, `snug-mcp.test.mjs`, `snug-local-host.mjs` — never a substring match). A
+stranger is refused and never signalled; a wedged runner of ours is signalled only after
+three socket probes over 5 s fail AND its recorded port is silent, then waited for (≤ 5 s)
+before its lock is taken; only the canonical `<home>/host/ctl.sock` is ever unlinked. Two
+agent windows are one Snug: an attached session holds ONE persistent `attach` connection,
+and the primary exits, after a 3 s grace, only when its own session is gone AND no attached
+session remains — re-decided on every change; transient ops (a status poll, a forwarded
+hand-in) neither hold it nor reset the grace. **Succession:** an attached session whose
+primary went re-runs the start on its agent's next tool call, becomes the primary, and its
+`snug_status` carries a note to call `snug_open` again (a new runner is a new bearer). If
+Snug Desktop holds the file the page **refuses to open** and names the holder rather than
+running read-only, because both of `packages/db`'s save paths swallow a failed write.
 
-Threat surface: `docs/security/threat-model-delta-local-host-process.md`.
+**Handshake first; the refusal table.** No failure after Node is found precedes the MCP
+handshake. A runner that can neither lead nor attach answers `initialize` and `tools/list`;
+`snug_status` returns `{ running: false, refusal: { code, message, remedy } }` and every
+other tool returns that sentence as an error; each tool call re-runs the start (at most once
+a second), so a cause the user fixed clears without restarting the agent — except no home
+and a damaged page, which cannot change inside a running process. The rows
+(`src/refusals.ts`): `home-unresolved`, `home-unwritable`, `lock-held-by-stranger`,
+`lock-contended`, `older-build`, `socket-path-too-long`, `socket-in-use`, `listen-failed`,
+`page-damaged`. No Node at all is the launcher's sentence, not the process's. One
+`startProcess({ hooks })` (`src/process.ts`) composes the release entry (`src/main.ts`: the
+real home, browser and brains) and the test entry (`src/main.test-hooks.ts`), whose hooks
+all share the `SNUG_MCP_TEST_` prefix `check-host-mcp` sweeps out of the release bundle.
+
+**The control socket and `snug status | open | stop`.** A `0600` unix socket for attached
+sessions and the human CLI (`src/control-socket.ts`), ops `hello`, `status`, `open`,
+`launch-url`, `call`, `attach`, `stop`: every known op answers
+an ack written by the socket after the handler — `{ ok: true, op }`, or `{ ok: false, op, error }` when the handler refuses (e.g. `stop` with a page open), an unknown one `{ error: 'unknown op' }`, and a `hello` without a
+`build` is an older build — the `older-build` row, never a false success. `call` runs the
+PRIMARY's own `callTool` (a forwarded bundle is re-validated there), so an attached session
+and the primary cannot drift. `open` makes the primary open the browser (`src/opener.ts`:
+`/usr/bin/open` on macOS, `/usr/bin/xdg-open` on Linux — absolute paths; the child's
+environment an allowlist (`openerEnvFor`, from `machineEnvironment()` via `main.ts`); an
+`error` listener for the child's whole life) and answers
+`{ port }`; `launch-url` is the ONE op that answers the bearer, used only by the human CLI
+(`src/cli.ts`), which prints it only when stdout is a terminal. `snug status` reports the
+version, the build (`src/build.ts`: the first seven hex digits of the sha256 of the running
+bundle, hashed as it loads), pid, platform, home, sessions, pages and brains. `snug stop`
+refuses while a page is open unless `--force`, then reaps every brain child, emits
+`shutdown`, drains in-flight `/userdb` writes (≤ 2 s), closes the control socket, releases
+the lock and closes the listener — the process exits regardless at 5 s (`EXIT_DEADLINE_MS`); against an older build it sends SIGTERM only when the socket's hash matches the
+lock AND the lock's pid has our command line. An unknown verb prints usage and exits 2. A
+page whose runner went (`shutdown`, an event stream lost past 4 s, a refused `/userdb`
+write) says "the runner stopped" and takes no further edits (K7).
+
+Threat surface: `docs/security/threat-model-delta-local-host-process.md`; the brains, the one
+page, the runner's lifecycle and the chat runtime: `docs/security/threat-model-delta-brains-and-chat.md`.
 
 ### Bindings and brains are two axes (TASK-20260913-binding-b-marketplace-plugin, ADR-0069)
 
 A **binding** is where the body runs and how the host reaches it: **A** the kit as an
 artifact page, **B** the kit served on loopback by the plugin-spawned local host process,
-**C** a widget. A **brain** is what answers the apps' thinks: the viewer-billed `sample` /
-`window.claude.complete` (A only), **the user's own agent CLI as a child process** (B —
-`claude` today; `codex exec` / Hermes / OpenClaw / Ollama are T3's remainder), or the demo
-brain. MCP is B's spawn-and-control channel and nothing else — never the brain (sampling is
-unsupported) and never the network path (the page's executor calls the process over
-loopback). The process and its artefacts are being renamed `local-host` in a follow-up PR so
-no name says "mcp" for a thing whose identity is not MCP.
+**C** a widget. A **brain** is what answers the apps' thinks: the viewer-billed `sample` (A
+only — a chat-created artifact is the same hosted runtime; September's
+`window.claude.complete` is gone), **the user's own agent CLI as a child process** (B —
+through the brain registry below: `claude`, and `codex`, built and unverified; Hermes /
+OpenClaw / Ollama are deferred), or the demo brain. MCP is B's spawn-and-control channel and
+nothing else — never the brain (sampling is unsupported) and never the network path (the
+page's executor calls the process over loopback). The process and its artefacts are being
+renamed `local-host` in a follow-up PR so no name says "mcp" for a thing whose identity is
+not MCP.
+
+**Which runner a surface gets (ADR-0072 §7, as amended by TASK-20261003 C5/D6).** The skill
+(`packages/knowledge/prompts/skills/snug/SKILL.md`) routes by surface: Claude Code in a
+terminal or in Claude Desktop's Code tab, and the Cowork tab, run the local runner (B); a
+surface that loads the plugin but shows no Snug tools is told "Snug needs Node.js 20 or
+newer"; claude.ai chat and the Desktop chat tab take the ARTIFACT runner (A) — publish the
+skill's own `assets/snug-host.html` with `{ sample, artifact, downloads }`, hand apps in with
+`scripts/snug-embed.mjs` and a republish — because a chat-created artifact is the same
+artifact system (measured 2026-10-03: the same stored skeleton, the same capabilities). No
+separate chat delivery is built. Not yet walked: the Cowork tab, and whether chat-Claude can
+reach and publish the skill's asset file.
 
 **The child-CLI brain pre-warms its children; every child serves exactly one request.**
 Measured 2026-09-13 on CLI 2.1.270: a cold `claude -p` costs ~3.5 s of process overhead on
 top of the model's time; a `--input-format stream-json` child left idle for five seconds
 answers its first message in 1.7 s wall — the CLI does its start-up before any input, at
-~257 MB of idle memory. So `apps/host-mcp/src/brain-child.ts` keeps a `ChildPool` keyed
-by `sha256(system prompt)` (an app's runtime contract rides as the **system** prompt on this
-binding, so its key is stable across thinks): a request takes the pre-warmed virgin child
+~257 MB of idle memory. So `apps/host-mcp/src/brains/claude-child.ts` keeps a `ChildPool`
+keyed by the sha256 of the system prompt, the model and the level (ADR-0070; an app's
+runtime contract rides as the **system** prompt on this binding, so its key is stable across
+thinks): a request takes the pre-warmed virgin child
 for its key or spawns one, sends its whole rendered conversation as ONE stream-json user
 message, and the child is reaped when the request ends while a replacement is pre-warmed.
 No transcript is ever reused — on this binding the builder's system prompt carries the app's
@@ -320,14 +460,69 @@ bound between deltas. The shim `stream()`s each `text_delta` as its own SSE fram
 `JSON.stringify` per frame, so a delta cannot forge a boundary); the chat route writes the
 first chunk with the 200 and each later one as it arrives, answers a failure before any
 delta with a 502 and ends a failure after one with no finish (the adapter reads that as a
-dropped stream, never a complete answer). `probeBrain()` names five states —
-`ready | logged-out | outdated | absent | unknown` — and finds the binary itself
-(`brain-resolve.ts`, from `install-roots.json`: PATH, then the installers' directories),
+dropped stream, never a complete answer). The `claude` driver's probe (`probeBrain()` in
+`src/brains/claude.ts`, a real one-word think on the brain's own wire) names five states —
+`ready | logged-out | outdated | absent | unknown` — and every agent CLI is found by
+`src/brain-resolve.ts` from `install-roots.json` (PATH, then the installers' directories),
 because a process a desktop host spawns has **no user PATH** (measured: empty on the
 owner's Mac). The plugin's `.mcp.json` runs `/bin/sh scripts/snug`, a launcher generated
 from the same list that finds a Node ≥ 20 the same way. The skill (`skills/snug/`) is built
 from its prompt-store source by `scripts/lib/skill-build.mjs` into the gitignored plugin
-tree, which `check-host-mcp` builds and validates on every run.
+tree, which `check-host-mcp` builds and validates on every run — and, since TASK-20261003,
+STARTS under an isolation contract (a positive leg and a no-home leg, a second process
+attaching), serves a copy with one page byte changed to prove the pin, writes
+`dist/plugin/snug.zip` (`scripts/lib/zip.mjs`, byte-reproducible, re-read and CRC-checked —
+the archive Claude's "Upload plugin" takes), holds the directory's install-blocking rules,
+and prints the bundle's size against the 256 KiB reviewer-hold line.
+`scripts/walk-desktop-host.mjs` is the opt-in desktop-host walk (never in a gate — it spends
+the user's subscription): the shipped launcher under a GUI-shaped environment and a temp
+`SNUG_HOME`, one Chess move on the real brain, then a leg with every brain hidden.
+
+**The brain registry — one contract, two drivers (TASK-20261003, ADR-0071).** A brain is a
+`BrainDriver` (`src/brains/brain.ts`: `id`, `name`, `via`, `verified`, `streaming`,
+`maxPromptBytes?`, `probe()`, `catalog()` in the brain's own vocabulary,
+`acceptsModel`/`acceptsEffort`, `create()` → the `Brain` the chat route streams from). The
+registry (`src/brains/registry.ts`) is a REQUIRED, injected dependency of the runner: the
+release entry passes `machineDrivers` — the one whole-environment read; the child
+environment is built once by allowlist (`CHILD_ENV_ALLOWLIST`, this Node's directory
+prepended to PATH) and handed to every driver — and the test entry passes fake drivers from
+`SNUG_MCP_TEST_BRAINS`; nothing defaults to the real machine. Probes are LAZY: the first page
+contact starts a round and waits at most 250 ms for a fast verdict; later rounds come when
+the page asks (`POST /brain/recheck`, at most one per 30 s floor, an ask inside it owed
+once); every round reaches the page as a `status` event. Selection never changes vendor
+without a user act: `auto` is the default brain (`claude`) when it is ready and verified,
+else NONE; a pin is that one brain while it is ready, else NONE; NONE answers `503
+no-brain`. The page mirrors the rule and sends nothing while no brain resolves — its demo
+brain answers, with the remedy shown — and a think the runner could not place is a named
+error that makes the page look again (D4: never a 502, never a mid-turn substitution).
+`/status` and the `status` event carry `brains[]` (state, detail, verified, streaming, each
+model with its own levels, `maxPromptBytes`) and `active`; the chat body adds `brain` and
+per-brain `prefs` (a top-level `model`/`effort` is the `claude` entry's legacy form); only
+the resolved brain's entry is applied, validated by its own driver, and `x-snug-brain` names
+the brain that answered. Both drivers report the argv limit as `maxPromptBytes` (120,000 B on
+Linux, 900,000 B elsewhere; `E2BIG` is a named refusal). **`claude`** (`brains/claude.ts`,
+`claude-child.ts`, `claude-catalog.ts`) is behaviour-identical to the shim above, `verified`
+and streaming. **`codex`** (`brains/codex.ts`, `codex-events.ts`) is one child per think,
+answering whole: the posture argv (every tool-shaped feature disabled, web search off, user
+config and rules ignored, project docs off, `--sandbox read-only`, `--ephemeral`, a neutral
+directory, and Snug's OWN `CODEX_HOME` — `<Snug home>/host/codex-home`, logged in once with
+`CODEX_HOME=… codex login` — because Codex loads the global `AGENTS.md` of its home into every
+think and the owner's B7 walk, 2026-10-05, found theirs in every answer), the system prompt as ONE TOML-escaped `-c developer_instructions=`, the
+conversation on stdin; readiness from `codex login status` (ready only on the ChatGPT login),
+the catalogue from `codex debug models --bundled`; an ALLOWLIST tripwire — `agent_message` is
+the answer, `reasoning` is dropped, any other item kills the detached child's process group
+and fails the think; failures reach the page only as fixed sentences; at most four live
+children. It is `verified: false` — `CODEX_VERIFIED_VERSIONS` stays empty until a logged-in
+walk is journaled — so it answers only when pinned and is labelled experimental. Ollama,
+Hermes and OpenClaw are deferred; ADR-0071 §2 records the rule they must meet. On the
+page, `apps/host/src/local/compose-local.ts` derives `platform.brain` (a live getter: the
+host arm while the choice resolves to a ready brain, the demo arm otherwise;
+`brainRevision` tells the UI to re-read) and the `brainSwitch` seat the chip renders as a
+switcher (`apps/playground/src/views/BrainChip.tsx`): every brain with its state and
+remedy, `auto` first, the chosen brain's model and level from ITS catalogue, and what
+ANSWERED. The choice is per machine and per brain
+(`apps/host/src/brains/brainChoiceStore.ts`, `localStorage`, `{ v: 2, … }` migrated from
+the single-brain shape) and never enters the user file.
 
 ## Desktop shell (TASK-20260812-desktop-hub-scaffold, ADR-0021)
 
@@ -650,7 +845,7 @@ Until 2026-09-03 every piece of a builder turn — messages, busy flag, step tim
 - `runner` ← `playground`, `server`; `adapters`/`db`/`sdk` dev-depend on it (their suites exercise it)
 - `auth` depends on `protocol` + `db` (CredentialStore seats on the user DB); `playground` now consumes it (AL-03 wires the connected-fetch executor into the runner's NetHandler seam) — change `auth` → run `auth` + `playground`. `runner` does NOT depend on `auth` (value-blind by lint, R4).
 - `desktop` (apps/desktop) consumes the playground SOURCE (vite alias) + ALL seven @snugprotocol packages (protocol/runner/sdk/db/knowledge/adapters/auth per its package.json) — change any of those → run `desktop` too (`pnpm --filter desktop test`, plus `test:rust` and the `gate` script for shell-level changes).
-- `host-mcp` (apps/host-mcp, TASK-20260907-binding-b-plugin-host) consumes `@snugprotocol/auth` (DEEP-imported: `dist/net-guards.js` + `dist/scrub.js`, because the barrel reaches `db` and drags in sql.js and the provider registry — 4,368 B against 329,902 B measured) and `@snugprotocol/protocol` (the bundle parser). It serves `apps/host`'s second build → change either package, or the local page, and run `host-mcp` too (`pnpm --filter host-mcp test`, then `pnpm --filter host-mcp build`); root `check-host-mcp` sweeps the release bundle for test hooks.
+- `host-mcp` (apps/host-mcp, TASK-20260907-binding-b-plugin-host) consumes `@snugprotocol/auth` (DEEP-imported: `dist/net-guards.js` + `dist/scrub.js`, because the barrel reaches `db` and drags in sql.js and the provider registry — 4,368 B against 329,902 B measured) and `@snugprotocol/protocol` (the bundle parser). It serves `apps/host`'s ONE page (`snug-host.html`, ADR-0072 §1) — turbo runs `host-mcp#test` after `host#build` → change either package, or the kit page, and run `host-mcp` too (`pnpm --filter host-mcp test`, then `pnpm --filter host-mcp build`); root `check-host-mcp` sweeps the release bundle for the `SNUG_MCP_TEST_` prefix, builds the plugin tree and starts it.
 - `host` (apps/host, TASK-20260905-host-kit) consumes the playground SOURCE (vite alias, two modules swapped by resolved path) + ALL seven @snugprotocol packages, like `desktop` — change any of those, or playground source, → run `host` too (`pnpm --filter host test`, then `pnpm --filter host build` + `test:e2e` on the built page); root `check-host-kit` rebuilds the page twice and reads the runner's built `dist/csp.js` in the e2e.
 - `share-relay` (apps/share-relay, ADR-0064) is a standalone Worker with NO workspace dependencies — plain `.mjs`, tested with `node:test`; its only contract with the playground is the HTTP shape in `handler.mjs` and the id/key grammar restated in `apps/playground/src/share/relayClient.ts` (a change to either → run both).
 - `website` (apps/website, ADR-0048) is the public marketing + docs/spec site — a static Astro build OUTSIDE the runtime product. It reads the playground source read-only via the same `@playground` alias (`releaseChannel.ts` constants, theme tokens) and derives its docs pages from `docs/spec-drafts/` + `packages/protocol/schemas/` + the whitepaper; drift is gated by root `check-website-sync` (manifest `apps/website/docs-sync.json`, remedy `/sync-website`). Change `releaseChannel.ts`, the spec draft, the schemas, `docs/product-vision.md`, or the whitepaper → the gate names the website pages owed an update. Both the website and the playground deploy to Cloudflare Pages as static direct uploads via `scripts/deploy-web.mjs` (ADR-0054; runbook `docs/runbooks/deploy-web.md`) — production only from merged `main`, hosted-posture invariants (ADR-0013) enforced by the script. **Live since 2026-08-24**: `snugprotocol.org` (project `snug-website`, whose `pages.dev` subdomain is `snug-website-c7z.pages.dev` — Cloudflare suffixed it) and `playground.snugprotocol.org` (project `snug-playground`). The zone's script-injecting features are OFF and read back from the API, which is how ADR-0013's no-telemetry claim is actually falsified — the `cdn-cgi` response grep alone does not prove it.

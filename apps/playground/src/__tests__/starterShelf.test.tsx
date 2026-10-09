@@ -38,8 +38,9 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 const KEEPER_FOLDERS = ['chess', 'flying-pig', 'adventure-quest', 'quiz-me'];
 /**
  * The CONNECTED five (TASK-20260815-starter-apps-rebuild, ADR-0031): one per credential
- * shape — Coinbase (api_key + CDP signing, desktop-only), Spotify (oauth2_auth_code),
- * Hue (LAN-class lanHost, desktop-only), OpenWeather (api_key), GitHub (bearer_token).
+ * shape — Coinbase (api_key + CDP signing; no browser CORS), Spotify (oauth2_auth_code),
+ * Hue (LAN-class lanHost), OpenWeather (api_key), GitHub (bearer_token). Which hosts run
+ * each is derived from those declarations (`availability.test.ts` holds the matrix).
  * They reach the shelf through the same `examples/*` glob as every other folder — which
  * is exactly why the count assertion below had to move with them rather than be relaxed.
  */
@@ -106,6 +107,26 @@ describe('the curated starters register through the ONE definition (AC3)', () =>
     // EXTENDS the pinned membership rather than relaxing the check: each folder is
     // named above, so the count still fails on a folder nobody declared.
     expect(ids).toHaveLength(KEEPER_FOLDERS.length + CONNECTED_FOLDERS.length);
+  });
+
+  // TASK-20261003 S2 (ADR-0072 §4): the shelf entry CARRIES what the starter declares, and
+  // `listStarterApps()` is synchronous — so whether this host can run a starter is decided
+  // in the same pass that paints its tile, never a render later. (What the hub does with it
+  // is `hubAvailability.test.tsx`; the needs × hosts matrix is `availability.test.ts`.)
+  it('every connected starter carries its declared requirement at first paint; the keepers carry none', () => {
+    const byId = new Map(listStarterApps().map((starter) => [starter.id, starter]));
+    for (const folder of CONNECTED_FOLDERS) {
+      const declared = byId.get(`${STARTER_PREFIX}${folder}`)?.requirement;
+      expect(declared, `examples/${folder}/connection.json must reach the shelf entry`).toBeDefined();
+      expect(declared!.provider.name).not.toBe('');
+    }
+    for (const folder of KEEPER_FOLDERS) {
+      expect(byId.get(`${STARTER_PREFIX}${folder}`)?.requirement, `${folder} declares no connection`).toBeUndefined();
+    }
+    // The three shapes the availability derivation branches on, read off the real manifests.
+    expect(byId.get(`${STARTER_PREFIX}hue`)?.requirement?.lanHost).toBeDefined();
+    expect(byId.get(`${STARTER_PREFIX}whatsapp`)?.requirement?.kind).toBe('linked_device');
+    expect(byId.get(`${STARTER_PREFIX}gmail`)?.requirement?.kind).toBe('oauth2_auth_code');
   });
 
   // The loop covers every curated folder (TASK-20260807-connection-reachability

@@ -21,7 +21,7 @@ import { createStore } from '@playground/state/store';
 export type { HostModelTier, TierChoice, TierSeat, TierState };
 
 export const TIER_STORAGE_KEY = 'snug-host:tier';
-/** The contract's three tiers, in the order the chip lists them (sample.d.ts 0.2.41). */
+/** The contract's three tiers, in the order the chip lists them (sample.d.ts — the same three in 0.2.41 and 0.2.67). */
 export const HOST_TIER_OPTIONS: readonly HostModelTier[] = ['quick', 'default', 'complex'];
 /** `modelTier` omitted = `default` — "the balanced everyday model" (sample.d.ts). */
 export const VIEWER_DEFAULT_TIER: HostModelTier = 'default';

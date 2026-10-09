@@ -39,8 +39,24 @@ test.describe('the host kit served over http — the artifact shape', () => {
     await expect(page.getByTestId('brain-chip')).toContainText('demo brain');
     const folders = Object.keys(startersIndex().starters);
     await expect(page.getByTestId('starter-tile')).toHaveCount(folders.length);
-    // The three desktop-locked starters keep their badge (AC4).
-    await expect(page.getByTestId('desktop-only-badge')).toHaveCount(3);
+    // MIGRATED 2026-10-03 (TASK-20261003 S2, the migration the plan names) from "the three
+    // desktop-locked starters keep their badge". The `desktop` badge is the WEB shelf's; a
+    // host with no connections at all blocks every connected starter — eight of the twelve
+    // — each with ITS reason as visible text (platform/availability.ts: the network for a
+    // provider on the internet, the home network for a LAN device, the helper for a linked
+    // phone). The four that declare nothing play.
+    await expect(page.getByTestId('desktop-only-badge')).toHaveCount(0);
+    const reasons = page.getByTestId('tile-blocked-reason');
+    await expect(reasons).toHaveCount(8);
+    await expect(reasons.filter({ hasText: 'needs live connections' })).toHaveCount(6);
+    await expect(reasons.filter({ hasText: 'needs your home network' })).toHaveCount(1);
+    await expect(reasons.filter({ hasText: 'needs the phone helper' })).toHaveCount(1);
+    await expect(page.locator('[data-testid="starter-tile"] .tile-card-button:not([aria-disabled="true"])')).toHaveCount(4);
+    // MIGRATED 2026-10-03 (K2): this page is served from loopback http by a STATIC server.
+    // It used to be called `local-host` for that, and its chip said "your file: on this
+    // Mac" — true only of the runner. With no runner behind it the page is file-class.
+    await expect(page.getByTestId('your-file-chip')).toContainText('in this browser');
+    await expect(page.getByTestId('your-file-chip')).not.toContainText('on this Mac');
     expect(policy.blocked).toEqual([]);
     expect(policy.passed).toEqual([]);
     expect(policy.starters).toEqual([]);

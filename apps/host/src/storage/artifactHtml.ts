@@ -16,23 +16,40 @@
 // the act stashes its note and reloads (correctness review 1).
 //
 // The page source for a republish is FETCHED (`canonicalSource`) — never serialized from
-// the live DOM (artifact.d.ts 0.2.41). What the fetch returns is the VIEWER-WRAPPED page
-// (measured on the real artifact, AC13 2026-09-06: the viewer's own skeleton and two
-// injected scripts around the kit's whole document), so the record UNWRAPS it through the
-// shared grammar first and then runs the shape check on the kit document alone — a check
-// that catches a foreign page and the viewer's runtime, never a control against a page
-// writer (they own the kit's script). The publish sends the BARE kit page: the viewer
-// wraps it again on its side. A fetched page whose block is NEWER than the
-// one this view booted from is a conflict (another view saved meanwhile — security
-// review 6). A projected page over the artifact cap is refused with its three parts named;
-// nothing in the bucket is "nothing to save". Every runtime code is mapped; the stashed
-// note survives only the codes whose reload the contract guarantees (correctness review 3).
+// the live DOM (artifact.d.ts, 0.2.41 and 0.2.67 alike). What the fetch returns is WRAPPED:
+// under contract 0.2.67 the platform's skeleton (charset, viewport, a reset — no injected
+// script; two real read-backs, 2026-10-03) around the kit's whole document; the September
+// viewer's wrapper (AC13, 2026-09-06) is still read. The record UNWRAPS it through the shared
+// grammar first and then runs the shape check on the kit document alone — a check that
+// catches a foreign page, a fragment and a wrapper still in place, never a control against a
+// page writer (they own the kit's script).
+//
+// THE SAVE SHAPE (TASK-20261003 C3, decided from the contract): the publish sends the BARE kit
+// page. `artifact.d.ts` 0.2.67 REQUIRES of `publish(html)` "the COMPLETE replacement page — a
+// full document starting with `<!doctype html>`", and the bare kit page is exactly that. The
+// skeleton form — "sends its whole document in exactly the shape the Artifact tool publishes,
+// so a later publish from the tool recognizes and replaces the skeleton instead of nesting
+// it" — is the 0.2.67 capability guide's authoring advice, not in the type definitions, and
+// its purpose is met here already: every writer of this page (this record, `snug-embed`)
+// unwraps before it writes, so a tool publish is handed the bare page and wraps it once.
+// Sending the skeleton would RISK the nest it exists to avoid: the September viewer was
+// measured wrapping a republished page again, whether 0.2.67's publish path recognises a
+// skeleton is unmeasured, and a page stored as a skeleton inside a skeleton is one this
+// record refuses to save. Bare, the stored page is the kit page or the skeleton around it,
+// whichever the platform does, and save → read-back → save never grows (artifactHtml.test).
+//
+// A fetched page whose block is NEWER than the one this view booted from is a conflict
+// (another view saved meanwhile — security review 6). A projected page over the artifact
+// cap is refused with its three parts named; nothing in the bucket is "nothing to save".
+// Every runtime code is mapped; the stashed note survives only the codes whose reload the
+// contract guarantees (correctness review 3).
 
 import { SYNC_SIDECAR_MAGIC, bytesToBase64, base64ToBytes, sha256Hex, type PersistenceBackend } from '@snugprotocol/db';
 import { USERDB_FILE } from '@snugprotocol/protocol';
 
 import { DB_BLOCK_FORMAT, readBundleBlocks, readDbBlock, unwrapViewerPage, verifyKitPage, writeDbBlock, type DbBlockManifest, type DbBlockRead } from '../../../../scripts/lib/page-blocks.mjs';
 import type { CustodyStore } from './custodyStore.js';
+import { safeSessionStorage } from '../safeStorage.js';
 
 /** The viewer's 16 MiB page cap, minus a margin for the runtime the viewer injects. */
 export const ARTIFACT_MAX_PAGE_BYTES = 16 * 1024 * 1024 - 512 * 1024;
@@ -88,15 +105,15 @@ const utf8 = (s: string): number => new TextEncoder().encode(s).length;
 
 function stashNote(note: string): void {
   try {
-    sessionStorage.setItem(CUSTODY_NOTE_STASH_KEY, note);
+    safeSessionStorage()?.setItem(CUSTODY_NOTE_STASH_KEY, note);
   } catch {
-    /* no session storage here — the store still carries the note */
+    /* a storage that refuses the write — the store still carries the note */
   }
 }
 
 function dropStash(): void {
   try {
-    sessionStorage.removeItem(CUSTODY_NOTE_STASH_KEY);
+    safeSessionStorage()?.removeItem(CUSTODY_NOTE_STASH_KEY);
   } catch {
     /* nothing to drop */
   }
@@ -225,8 +242,8 @@ export function createArtifactRecord(options: ArtifactRecordOptions): ArtifactRe
       } catch (error) {
         return refuse('failed', `the page’s own source could not be read (${(error as Error).message}) — nothing was saved`);
       }
-      // The viewer serves the kit page inside its own wrapper; the kit document is what is
-      // verified, spliced and republished (the viewer wraps it again).
+      // The platform serves the kit page inside its wrapper; the kit document is what is
+      // verified, spliced and republished — bare (the header says why).
       const unwrapped = unwrapViewerPage(fetched);
       if (unwrapped.html === undefined) {
         return refuse('not-the-kit-page', `the page’s source is not the Snug page this view is running (${unwrapped.problem}) — nothing was saved; export to keep a copy`);

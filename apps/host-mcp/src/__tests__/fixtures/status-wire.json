@@ -1,0 +1,57 @@
+{
+  "binding": "local-host",
+  "port": 43127,
+  "pages": 1,
+  "version": "0.1.0",
+  "build": "0000000",
+  "oauthRedirect": true,
+  "active": "claude",
+  "brains": [
+    {
+      "id": "claude",
+      "name": "Claude",
+      "via": "your Claude Code CLI",
+      "state": "ready",
+      "verified": true,
+      "streaming": true,
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "models": [
+        {
+          "id": "claude-sonnet-5-5",
+          "name": "Sonnet 5.5",
+          "efforts": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ]
+        },
+        {
+          "id": "claude-haiku-4-5-20251001",
+          "name": "Haiku 4.5",
+          "efforts": []
+        }
+      ],
+      "maxPromptBytes": 900000
+    },
+    {
+      "id": "codex",
+      "name": "Codex",
+      "via": "your Codex CLI",
+      "state": "logged-out",
+      "verified": false,
+      "streaming": false,
+      "detail": "Snug keeps its own Codex login, so your own Codex instructions and settings never reach an app — run `CODEX_HOME=/Users/x/Snug/host/codex-home codex login` and choose ChatGPT, then check again.",
+      "efforts": [],
+      "models": [],
+      "maxPromptBytes": 900000
+    }
+  ]
+}

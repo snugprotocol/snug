@@ -1,6 +1,8 @@
 // sample.ts — the hosted artifact's brain (TASK-20260905-binding-a-artifacts AC1): an
-// `AgentAdapter` over the artifact runtime's `sample` (`await claude.use('sample')`,
-// contract 0.2.41), reached ONLY through `createTurnAdapter`'s `'host'` arm — never given a
+// `AgentAdapter` over the artifact runtime's `sample` (`await claude.use('sample')`; written
+// to contract 0.2.41, read against 0.2.67 end to end by TASK-20261003 R5 C4 — the contract
+// claude.ai serves, in a published AND a chat-created artifact, measured 2026-10-03), reached
+// ONLY through `createTurnAdapter`'s `'host'` arm — never given a
 // key, a URL or a header (C1 by construction), consumed by the same `createDirectAppTransport`
 // / `createDirectBuilder` every other brain is, so the R-9 egress scrub and the F15 skip
 // apply exactly as they do for webllm.
@@ -17,10 +19,14 @@
 //
 // The text verb, never `sample.json`: only the text verb reports `truncated` (→
 // `stopReason: 'max_tokens'`, never a parse strike — lesson 2026-08-12) and
-// `modelTierApplied` (the model name the inspector shows). `cache: false` always: a live
-// turn must never replay a five-minute-old answer. `onText` hands the WHOLE text so far;
-// the adapter contract wants deltas, so the adapter diffs. Never called on load: the
-// first think is the first call, and the consent dialog appears there (S3, S11).
+// `modelTierApplied` (the model name the inspector shows). `cache: false` always — 0.2.67's
+// own rule for "every turn of a chat": a live turn must never replay a five-minute-old
+// answer. `onText` hands the WHOLE text so far; the adapter contract wants deltas, so the
+// adapter diffs. `signal` is the caller's, one per call (an aborted one is never passed on —
+// 0.2.67: a reused aborted signal rejects every later call). Never called on load: the first
+// think is the first call, and the consent dialog appears there (S3, S11). On 0.2.67 a
+// `quick` reply to a real app turn still came back FENCED (2026-10-03) — the graduated
+// parser's fence rung stays load-bearing.
 
 import type { HostModelTier } from '@playground/platform/platform';
 import type { AdapterResult, AgentAdapter, ToolCall } from '@snugprotocol/adapters';

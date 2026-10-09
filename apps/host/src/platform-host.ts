@@ -6,20 +6,19 @@
 // is the truth — no `fetchImpl` (connections are off and the artifact viewer's CSP would
 // refuse the call anyway), no LAN, sidecar, helper, OAuth, file-open or update seats.
 //
-// The four launch booleans are set EXPLICITLY false rather than left to the web default
-// (review minor 5): a reader that compares against `true` and one that compares against
-// `false` must agree. The five host surface flags are false — the ONLY platform that says
-// so; web, desktop and every test-constructed platform keep every surface by absence.
-// `appExport` stays ON: the bundle download is how a kit-edited app goes back to the agent.
+// The capability block is `hostCapabilities()` — the ONE table every host binding composes
+// from (K4), which records why each flag stands as it does. This binding changes nothing in
+// it: connections stay off, and the per-app export stays on.
 
 import type { PersistenceBackend } from '@snugprotocol/db';
 
+import { hostCapabilities } from '@playground/platform/hostCapabilities';
 import type { AgentHandInSeat, CustodySeat, SnugPlatform } from '@playground/platform/platform';
 
 import type { ProbeResult } from './probe.js';
 
 export interface HostPlatformSeats {
-  /** The file's home as composed (the artifact record, window storage, or the probed bucket). Absent → the probed bucket. */
+  /** The file's home as composed (the artifact record, or the probed bucket). Absent → the probed bucket. */
   userdbBackend?: PersistenceBackend;
   custody?: CustodySeat;
   saveFile?: (bytes: Uint8Array, suggestedName: string) => Promise<void>;
@@ -31,7 +30,7 @@ export function createHostPlatform(probe: ProbeResult, sqlJsWasmBinary: Uint8Arr
     kind: 'host',
     binding: probe.binding,
     // The brain the ONE derivation honours ahead of the user file (P2): demo, or the
-    // host brain the probe pinned (T4: `sample` / `window.claude.complete`).
+    // host brain the probe pinned (T4: `sample`).
     brain: probe.brain.brain,
     // The engine as bytes (P4/AC8): both sql.js callers pass it beside the locator and
     // no request for sql-wasm.wasm is ever made.
@@ -41,21 +40,6 @@ export function createHostPlatform(probe: ProbeResult, sqlJsWasmBinary: Uint8Arr
     ...(seats.custody !== undefined ? { custody: seats.custody } : {}),
     ...(seats.saveFile !== undefined ? { saveFile: seats.saveFile } : {}),
     ...(seats.agentHandIns !== undefined ? { agentHandIns: seats.agentHandIns } : {}),
-    capabilities: {
-      subscriptionMode: false,
-      hubSyncOrigin: false,
-      lanHttpPrivate: false,
-      hubAuth: false,
-      // D15: nothing to choose.
-      brainSettings: false,
-      account: false,
-      // Capability truth: nothing reachable, nothing rendered.
-      sync: false,
-      connections: false,
-      share: false,
-      // T4 AC6: the per-app bundle download stays — it is how a kit-edited app goes back
-      // to the agent (plan review A5); only the LINK acts (`share`) are off.
-      appExport: true,
-    },
+    capabilities: hostCapabilities(),
   };
 }

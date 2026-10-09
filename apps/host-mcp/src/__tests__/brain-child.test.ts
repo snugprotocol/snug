@@ -7,8 +7,8 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { ClaudeChild, POOL_IDLE_MS, POOL_MAX_LIVE, POOL_MAX_WARM, poolKey, ChildPool, userMessageLine } from '../brain-child.js';
-import type { BrainSpec } from '../brain-child.js';
+import { ClaudeChild, POOL_IDLE_MS, POOL_MAX_LIVE, POOL_MAX_WARM, poolKey, ChildPool, userMessageLine } from '../brains/claude-child.js';
+import type { BrainSpec } from '../brains/claude-child.js';
 import { createHash } from 'node:crypto';
 import { delta, fakeSpawner, FakeClaudeChild, line, result, thinkingDelta } from './fixtures/fake-claude-child.js';
 

@@ -1,6 +1,6 @@
 # 0069 — Bindings and brains are two axes; MCP is Binding B's spawn channel, never a binding and never a brain
 
-- **Status:** accepted (the owner's direction of 2026-09-13: "focus on path 2 first; record the other path for a later phase; keep the distinction clear"; the naming half is Q1 of the task and lands as its own follow-up PR)
+- **Status:** accepted (the owner's direction of 2026-09-13: "focus on path 2 first; record the other path for a later phase; keep the distinction clear"; the naming half is Q1 of the task and lands as its own follow-up PR) — **amended by [ADR-0071](0071-the-brain-registry.md) and [ADR-0072](0072-one-kit-every-binding.md)** (2026-10-04, TASK-20261003-host-bindings-complete: the brain axis gains a contract and a registry; `window.claude.complete` is no longer a brain; readiness is re-checked after boot; the plugin ships one page — see the amendment at the end)
 - **Date:** 2026-09-13
 - **Task:** TASK-20260913-binding-b-marketplace-plugin
 - **Amends:** ADR-0065 §2 (the binding table gains its second axis) · ADR-0068 (naming; the brain shim's lifetime; the readiness states)
@@ -55,3 +55,29 @@ Measured this session, on the owner's Mac:
 - Positive: one vocabulary (binding × brain) that answers "is this another AI mode?" — yes, the brain axis — without inventing a binding; the merged work stays merged; a plugin that starts under a GUI-spawned PATH; a brain that names its own failure; builds that stream; every think after the first on an app ~3 s faster.
 - Negative / residuals: a Cowork user without Claude Code has the demo brain until they install it and log in (the chip says so, in words); pre-warmed children are idle `claude` processes at ~257 MB each (capped at two, reaped after five idle minutes) with a `ps`-visible argv (ADR-0068's residual); the system prompt on argv would hit Linux's 128 KiB per-argument limit for a very large app — moot on macOS, noted for the Codex phase (`--system-prompt-file` is the remedy); the page advertises an 8,192-token output cap the CLI does not enforce; the rename is its own follow-up PR; the community marketplace's review is Anthropic's, on its clock; D6's committed staging tree is gone, so a reviewer of the distribution repo reads generated files by design, tied to a commit by `PROVENANCE.json`.
 - Docs owed (this task): ADR-0065/0068 status lines; architecture (the two axes), code-map, glossary ("binding" and "brain" as separate entries, "local host process"), the threat-model delta (the warm child), the program record's T3/T6/T8 rows, next-steps.
+
+## Amendment (2026-10-04, TASK-20261003-host-bindings-complete — ADR-0071, ADR-0072)
+
+- **§1 — the brain axis.** On Binding A the brain is `sample` alone: `window.claude.complete` went
+  with the September chat runtime, which the owner measured gone on 2026-10-03 (a chat artifact
+  is the hosted runtime). On Binding B "the user's own agent CLI" is now a `BrainDriver` in one
+  registry (`apps/host-mcp/src/brains/`, ADR-0071): `claude` as before, `codex` built and
+  unverified (pin-only), `ollama`, `hermes` and `openclaw` deferred by the owner.
+- **§3 — the rename stays its own PR,** and is now rename-proof for a running runner: the identity
+  a take-over reads is a list of bundle basenames that already includes `snug-local-host.mjs`
+  (`apps/host-mcp/src/identity.ts`).
+- **§5 — the warm child is the `claude` driver,** moved to `apps/host-mcp/src/brains/claude.ts`
+  and `claude-child.ts` with its behaviour pinned identical (the frozen argv literal, the pool
+  key, the env allowlist).
+- **§6 — readiness is no longer decided at boot only.** The registry probes on the first page
+  contact (never at process start, so a session that only speaks over stdio spawns no CLI) and
+  again when a page asks — after a failed think; while the demo brain stands in, when that
+  begins and whenever the page regains focus; and on the chip's "check again" — at most once per
+  30 s (`BRAIN_PROBE_FLOOR_MS`). A CLI installed, logged in or updated after the runner started
+  is picked up without restarting it (`apps/host/src/local/compose-local.ts`).
+- **§7 — the plugin layout.** The plugin ships ONE page: `skills/snug/assets/snug-host.html`, the
+  same file the artifact route publishes and the process serves, with its sha256 pin beside it;
+  `scripts/` holds the launcher `snug` and the bundle `snug-mcp.mjs` (the rename to
+  `snug-local-host.mjs` is §3's PR). `scripts/build-plugin.mjs` also writes `dist/plugin/snug.zip`
+  — the plugin folder as the archive's single top-level entry, for Claude's
+  **Customize → Plugins → Add → Upload plugin**.

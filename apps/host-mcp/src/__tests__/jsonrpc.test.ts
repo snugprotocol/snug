@@ -56,6 +56,18 @@ describe('createLineFramer — newline-delimited JSON over a stream', () => {
     framer.push(Buffer.from('rest-of-the-giant-line\n{"a":1}\n'));
     expect(seen).toEqual(['{"a":1}']);
   });
+
+  it('takes another channel’s cap — the control socket frames with this same splitter', () => {
+    const seen: string[] = [];
+    const onOverflow = vi.fn();
+    const framer = createLineFramer((line) => seen.push(line), { onOverflow, maxBytes: 8 });
+    framer.push(Buffer.from('12345678'));
+    expect(onOverflow).not.toHaveBeenCalled();
+    framer.push(Buffer.from('9'));
+    expect(onOverflow).toHaveBeenCalledWith(9);
+    framer.push(Buffer.from('\n{"a":1}\n'));
+    expect(seen).toEqual(['{"a":1}']);
+  });
 });
 
 describe('parseRpcMessage — what a malformed frame becomes', () => {

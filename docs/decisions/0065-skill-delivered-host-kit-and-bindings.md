@@ -1,6 +1,6 @@
 # 0065 — A skill-delivered host kit and the host bindings: Snug apps run inside the agent the user already has
 
-- **Status:** proposed (the owner approved D0–D15 on 2026-09-05 — "go ahead with defaults"; becomes `accepted` when T7 lands the documentation) — **amended by [ADR-0069](0069-bindings-and-brains-two-axes.md)** (2026-09-13: §2's binding table gains the brain axis; D6's committed staging tree and D11's Release fetch are superseded for now — that ADR's §7)
+- **Status:** proposed (the owner approved D0–D15 on 2026-09-05 — "go ahead with defaults"; becomes `accepted` when T7 lands the documentation) — **amended by [ADR-0069](0069-bindings-and-brains-two-axes.md)** (2026-09-13: §2's binding table gains the brain axis; D6's committed staging tree and D11's Release fetch are superseded for now — that ADR's §7) — **amended by [ADR-0071](0071-the-brain-registry.md) and [ADR-0072](0072-one-kit-every-binding.md)** (2026-10-04: §2 B's brains are a registry with `codex` built and unverified, and pass-through to a gateway is rejected; §2 A2 is A1's recipe, because a chat artifact is the hosted runtime; §3's "connected starters run their sample mode" is superseded — see the amendment at the end)
 - **Date:** 2026-09-05
 - **Task:** TASK-20260904-skill-only-snug (program) — children T1–T9
 
@@ -89,3 +89,35 @@ binding may CLAIM and DO, never what its bundle contains.
   validates on every run, tied to a commit by `PROVENANCE.json`; both kits ride inside it.
 - **§8's launch protocol (D12) is rewritten in the program record**: the plugin's tools first,
   the artifact route as the fallback, the install line when neither exists.
+
+### Amendment (2026-10-04, TASK-20261003-host-bindings-complete — ADR-0071, ADR-0072)
+
+- **§3 is superseded in part.** The posture stands: nothing in A or C claims connected apps
+  (the page has no connections surface there; a bundle that carries a connection is refused).
+  The clause "connected starters run their sample mode" does not: it was false for `weather`,
+  which has no sample mode. A starter or an installed app whose needs the binding cannot meet
+  is now DISABLED on the shelf and on its run route, with the reason and where it does run —
+  one derivation, `apps/playground/src/platform/availability.ts`, over the seats the platform
+  already carries (ADR-0072 §4). The run route keeps its header, so a blocked app can still be
+  exported.
+- **§2 A2 is A1's recipe.** Measured by the owner on 2026-10-03 (claude.ai in Chrome): a chat
+  artifact runs in the hosted runtime — a real `frame.claudeusercontent.com` origin,
+  `window.claude = { use, hot }`, `sample`, `artifact` and `downloads` resolving, no
+  `window.claude.complete` and no `window.storage` — and a chat-created artifact is stored
+  exactly as a tool-published one (the contract-0.2.67 skeleton around the page). So the
+  bootstrap, the jsDelivr `/npm/` kit, the `complete` brain and the per-view `window.storage`
+  store described in §2 A2 and D10 are withdrawn; the `complete` adapter and the
+  `window-storage` backend were removed from `apps/host` (`packages/db` keeps the
+  `window-storage` persistence kind, because a persisted enum is append-only). Chat takes the
+  artifact runner: the skill publishes its own `assets/snug-host.html` by file, with
+  `{ sample, artifact, downloads }`, and hands apps in with `scripts/snug-embed.mjs` and a
+  republish. `sample`'s live cap is `limits().maxPromptBytes` — 262,144 bytes measured under
+  contract 0.2.67, with 65,536 kept only as the fallback (`DEFAULT_MAX_PROMPT_BYTES`,
+  `apps/host/src/brains/prompt.ts`). Whether chat-Claude can reach and publish the asset file
+  is not yet walked ([the owner's walks](../runbooks/owner-walks-host-bindings.md), track B).
+- **§2 B's brains.** The brains are drivers in one registry (`apps/host-mcp/src/brains/`,
+  ADR-0071). `claude` is unchanged in behaviour; `codex` is built and is `verified: false`
+  (selectable only by an explicit pin, never by `auto`) until the owner's logged-in walk is
+  journaled; `ollama`, `hermes` and `openclaw` are deferred by the owner. Passing a request
+  through to a Hermes or OpenClaw gateway as it is — §2 B's wording — is rejected: those
+  gateways answer with the agent's own tools (ADR-0071 §2).

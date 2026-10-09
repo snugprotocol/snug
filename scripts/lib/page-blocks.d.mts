@@ -58,6 +58,9 @@ export function upsertBundleBlock(html: string, lineage: string, json: string): 
 export function removeBundleBlock(html: string, lineage: string): string;
 export function verifyKitPage(html: string, options: { expectedStamp: string }): string[];
 
-/** The kit document lifted out of the artifact viewer's wrapper (a bare page passes through); a named `problem` when the wrapper is not the measured shape. */
+/** The contract-0.2.67 skeleton through `<body>`, byte-for-byte as both real read-backs of 2026-10-03 open (536 bytes). */
+export const ARTIFACT_SKELETON_OPEN: string;
+
+/** The kit document lifted out of the platform's wrapper — the 0.2.67 skeleton or the September viewer's (a bare page passes through); a named `problem` for any other shape, a fragment or nothing inside a skeleton, and a skeleton inside a skeleton. */
 export type UnwrapResult = { html: string; wrapped: boolean; problem?: undefined } | { html?: undefined; wrapped: true; problem: string };
 export function unwrapViewerPage(html: string): UnwrapResult;

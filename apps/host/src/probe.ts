@@ -7,21 +7,29 @@
 //              `use()` resolves `null` after 10 s where nothing answers; the guard covers a
 //              `use` that never settles at all). Asked only when `window.claude.use` is a
 //              function; nothing is prompted and nothing is spent (`use()` and `limits()`
-//              ask the viewer nothing — sample.d.ts).
-//   binding  — `decideBinding(env)` is pure over five facts (protocol, hostname, the two
-//              claude globals, what the host answered) and matrix-tested. Disclosure and
-//              the per-binding recipes read it; nothing routes on it (the surface flags do).
+//              ask the viewer nothing — sample.d.ts). A chat-created artifact is the SAME
+//              hosted runtime (measured 2026-10-03: a real origin, `window.claude = { use }`,
+//              `sample`/`artifact`/`downloads` resolving), so it takes this path too.
+//   binding  — `decideBinding(env)` is pure over five facts (protocol, hostname, the `use`
+//              global, what the host answered, whether a runner answered) and
+//              matrix-tested. Disclosure and the per-binding recipes read it; nothing routes
+//              on it (the surface flags do).
 //              `'artifact-static'`: `use` exists but sample AND artifact are `null` — the
 //              page served top-level on the artifact's own host (claude.d.ts:17-20), where
 //              nothing can save and no brain exists; the chip says so and no save act renders.
 //   storage  — `probeStorage()` TRIES each rung of the ladder (OPFS → IndexedDB → memory)
 //              with a real write/read round trip and hands back the first that WORKS.
 //              Never presence-based (review #1/#15/#30 of T2).
-//   brain    — `probeBrain(env, host, complete)` PINS the host brain from what resolved:
-//              `sample` → two adapters (envelopes on `quick`, the builder on `default`),
-//              the shaper as the ruler, the cap from `limits()`; `window.claude.complete`
-//              → the chat adapter, no streaming, no cap; nothing → the demo brain, with
-//              every leg recorded so the chip's provenance is truthful (ADR-0059).
+//   brain    — `probeBrain(env, host)` PINS the host brain from what resolved: `sample` →
+//              two adapters (envelopes on `quick`, the builder on `default`), the shaper as
+//              the ruler, the cap from `limits()`; nothing → the demo brain, with every leg
+//              recorded so the chip's provenance is truthful (ADR-0059).
+//
+// ONE hosted runtime (TASK-20261003 R5 C2). The September chat runtime — a flat
+// `window.claude.complete`, a per-view `window.storage`, an `about:srcdoc` origin (T1) — was
+// measured gone on 2026-10-03, and its adapter, storage backend and binding were removed. A
+// page that still meets only `complete` is not read for it at all: it is decided, composed
+// and disclosed like any page with no host brain, and the demo brain answers.
 //
 // Nothing here asks the user anything, and nothing here throws: a kit that cannot probe
 // still boots on memory with the demo brain and says so.
@@ -30,12 +38,11 @@ import { createIdbBackend, createMemoryBackend, createOpfsBackend, type Persiste
 import { USERDB_OPFS_DIR } from '@snugprotocol/protocol';
 
 import type { PlatformBrain, SnugPlatform } from '@playground/platform/platform';
-import { isLocalEndpointHost } from '@playground/security/privateHost';
 
-import { createCompleteAdapter, type CompleteFn } from './brains/complete.js';
-import { measurePrompt } from './brains/prompt.js';
+import { DEFAULT_MAX_PROMPT_BYTES, measurePrompt } from './brains/prompt.js';
 import { createSampleAdapter, type SampleFn } from './brains/sample.js';
 import { createTierStore, type TierStorage } from './brains/tierStore.js';
+import { safeIndexedDB, safeLocalStorage, safeNavigatorStorage, type StorageHost } from './safeStorage.js';
 
 // ---------------------------------------------------------------------------- binding
 
@@ -46,12 +53,15 @@ export type Binding = NonNullable<SnugPlatform['binding']>;
 export interface BindingEnv {
   protocol: string;
   hostname: string;
-  /** `window.claude.use` is a function — the HOSTED artifact runtime (`sample`, `artifact`). */
+  /** `window.claude.use` is a function — the HOSTED artifact runtime (`sample`, `artifact`), published or chat-created. */
   claudeUse: boolean;
-  /** `window.claude.complete` is a function — the CHAT artifact runtime. */
-  claudeComplete: boolean;
   /** What `use()` answered, once asked: absent when it was never asked or never answered (guard). */
   hostAnswered?: { sample: boolean; artifact: boolean };
+  /**
+   * The page's own origin answered `/status` as the local runner (the boot asked — and only
+   * at the literal `http://127.0.0.1`, `boot.tsx`). The ONE thing that makes `local-host`.
+   */
+  runner?: boolean;
 }
 
 export interface BindingWindowLike {
@@ -62,44 +72,47 @@ export interface BindingWindowLike {
 const isFunction = (value: unknown): boolean => typeof value === 'function';
 
 export function readBindingEnv(win: BindingWindowLike): BindingEnv {
-  const claude = (win.claude ?? undefined) as { use?: unknown; complete?: unknown } | undefined;
+  const claude = (win.claude ?? undefined) as { use?: unknown } | undefined;
   return {
     protocol: win.location.protocol,
     hostname: win.location.hostname,
     claudeUse: isFunction(claude?.use),
-    claudeComplete: isFunction(claude?.complete),
   };
 }
 
 /**
- * The host globals outrank the origin: an artifact viewer is always https, and a page
- * served from anywhere ELSE with nothing wired is, for every purpose the kit has, a plain
- * file — `'file'` names "no host", not the scheme. A loopback http(s) origin with no host
- * globals is the local host (T3) or a developer's static server, which is the same thing
- * to the kit. `use` present with NOTHING resolving is the artifact host serving the page
- * top-level: `'artifact-static'` (nothing saves, no brain). No answer at all (the guard
- * tripped, or the sync path) keeps `'artifact'` — the T2 shape.
+ * A runner that ANSWERED is the host, first: its page is its own, whatever globals an
+ * extension put on the window. Then the host globals outrank the origin: an artifact viewer
+ * is always https, and a page served from anywhere ELSE with nothing wired is, for every
+ * purpose the kit has, a plain file — `'file'` names "no host", not the scheme. `use`
+ * present with NOTHING resolving is the artifact host serving the page top-level:
+ * `'artifact-static'` (nothing saves, no brain). No answer at all (the guard tripped, or
+ * the sync path) keeps `'artifact'` — the T2 shape.
+ *
+ * A LOOPBACK ORIGIN IS NOT A BINDING (K2). This used to answer `local-host` for any
+ * loopback http(s) origin — "the local host or a developer's static server, which is the
+ * same thing to the kit". It is not the same thing: `local-host` composes nothing here, but
+ * it names where the user's file lives, and a static server got "on this Mac, in
+ * ~/Snug/user.snug" for a file that lives in the browser. With no runner behind it a
+ * loopback page is file-class, like any other page somebody served.
  */
 export function decideBinding(env: BindingEnv): Binding {
+  if (env.runner === true) return 'local-host';
   if (env.claudeUse) {
     if (env.hostAnswered !== undefined && !env.hostAnswered.sample && !env.hostAnswered.artifact) return 'artifact-static';
     return 'artifact';
   }
-  if (env.claudeComplete) return 'artifact-chat';
-  if (env.protocol === 'file:') return 'file';
-  // The repo's ONE host classifier (security/privateHost.ts) — not a second loopback regex.
-  if ((env.protocol === 'http:' || env.protocol === 'https:') && isLocalEndpointHost(env.hostname)) return 'local-host';
   return 'file';
 }
 
 // ---------------------------------------------------------------------- host namespaces
 
-/** The `artifact` namespace slice the record uses (artifact.d.ts 0.2.41: the html form). */
+/** The `artifact` namespace slice the record uses (artifact.d.ts — the html form; the same shape in 0.2.41 and 0.2.67). */
 export interface ArtifactNamespace {
   publish(html: string): Promise<{ version: string }>;
 }
 
-/** The `downloads` namespace slice the export seat uses (downloads.d.ts 0.2.41). */
+/** The `downloads` namespace slice the export seat uses (downloads.d.ts — the same shape in 0.2.41 and 0.2.67). */
 export interface DownloadsNamespace {
   save(request: { filename: string; data: Uint8Array | string | Blob }): Promise<unknown>;
 }
@@ -317,14 +330,37 @@ export type BrainLeg = 'absent' | 'detected' | 'resolved' | 'null';
 
 export interface BrainProbeResult {
   brain: PlatformBrain;
-  /** The typed seats: `sample` (hosted), `complete` (chat), `local` (T3's boot config). */
-  legs: { sample: BrainLeg; complete: BrainLeg; local: 'absent' };
+  /** The typed seats: `sample` (the hosted runtime), `local` (T3's boot config). */
+  legs: { sample: BrainLeg; local: 'absent' };
 }
 
 export const HOSTED_BRAIN_LABEL = 'Claude · this artifact’s viewer';
-export const CHAT_BRAIN_LABEL = 'Claude · this chat';
-/** The documented cap when `limits()` cannot be read (T4 S11 measured exactly this value). */
-export const DEFAULT_MAX_PROMPT_BYTES = 65_536;
+/** A cap is a positive whole number of bytes; anything else from `limits()` is no answer. */
+const capFrom = (limits: unknown): number => {
+  const cap = (limits as { maxPromptBytes?: unknown } | null | undefined)?.maxPromptBytes;
+  return typeof cap === 'number' && Number.isSafeInteger(cap) && cap > 0 ? cap : DEFAULT_MAX_PROMPT_BYTES;
+};
+
+/**
+ * The cap, read so that nothing here throws or waits for ever (the header's promise): a
+ * `sample` with no `limits`, one that throws from it at once, rejects or never answers is the
+ * fallback, under the same guard as `use()` — an unguarded call let such a runtime stop the
+ * boot (TASK-20261003 R5 verifier).
+ */
+async function readCap(sample: NonNullable<HostNamespaces['sample']>, guardMs: number): Promise<number> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const guard = new Promise<number>((resolve) => {
+    timer = setTimeout(() => resolve(DEFAULT_MAX_PROMPT_BYTES), guardMs);
+  });
+  try {
+    const asked = Promise.resolve()
+      .then(() => sample.limits())
+      .then(capFrom, () => DEFAULT_MAX_PROMPT_BYTES);
+    return await Promise.race([asked, guard]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
 
 /**
  * The brain, pinned from what resolved. Async only because `sample.limits()` is: the cap is
@@ -333,14 +369,17 @@ export const DEFAULT_MAX_PROMPT_BYTES = 65_536;
  * the adapters and mutated later named 65,536 in its refusal while the builder budgeted on
  * the real cap).
  */
-export async function probeBrain(env: BindingEnv, host?: HostNamespaces, complete?: CompleteFn, tierStorage?: TierStorage): Promise<BrainProbeResult> {
+export async function probeBrain(
+  env: BindingEnv,
+  host?: HostNamespaces,
+  tierStorage?: TierStorage,
+  /** `guardMs` is a test seam; production takes HOST_ANSWER_GUARD_MS. */
+  options: { guardMs?: number } = {},
+): Promise<BrainProbeResult> {
   const sampleLeg: BrainLeg = env.claudeUse ? (host === undefined ? 'detected' : host.legs.sample) : 'absent';
   if (host?.sample !== undefined) {
     const sample = host.sample;
-    const maxPromptBytes = await sample
-      .limits()
-      .then((limits) => (typeof limits?.maxPromptBytes === 'number' && limits.maxPromptBytes > 0 ? limits.maxPromptBytes : DEFAULT_MAX_PROMPT_BYTES))
-      .catch(() => DEFAULT_MAX_PROMPT_BYTES);
+    const maxPromptBytes = await readCap(sample, options.guardMs ?? HOST_ANSWER_GUARD_MS);
     // The thinking level (ADR-0067): ONE store per boot, read by both adapters at call time
     // and rendered by the chip through the seat; `auto` is the per-purpose pins T4 measured.
     const tiers = createTierStore({ storage: tierStorage });
@@ -356,23 +395,9 @@ export async function probeBrain(env: BindingEnv, host?: HostNamespaces, complet
       promptBytes: measurePrompt,
       tiers: tiers.seat(),
     };
-    return { brain, legs: { sample: 'resolved', complete: env.claudeComplete ? 'detected' : 'absent', local: 'absent' } };
+    return { brain, legs: { sample: 'resolved', local: 'absent' } };
   }
-  if (!env.claudeUse && env.claudeComplete && complete !== undefined) {
-    const brain: PlatformBrain = {
-      kind: 'host',
-      label: CHAT_BRAIN_LABEL,
-      adapter: createCompleteAdapter(complete),
-      streaming: false,
-      tools: false,
-      promptBytes: measurePrompt,
-    };
-    return { brain, legs: { sample: 'absent', complete: 'resolved', local: 'absent' } };
-  }
-  return {
-    brain: { kind: 'demo' },
-    legs: { sample: sampleLeg, complete: env.claudeComplete ? 'detected' : 'absent', local: 'absent' },
-  };
+  return { brain: { kind: 'demo' }, legs: { sample: sampleLeg, local: 'absent' } };
 }
 
 // --------------------------------------------------------------------------- together
@@ -385,39 +410,31 @@ export interface ProbeResult {
   host?: HostNamespaces;
 }
 
-export interface ProbeWindowLike extends BindingWindowLike {
-  navigator?: { storage?: { getDirectory?: unknown } | undefined } | undefined;
-  indexedDB?: IDBFactory | undefined;
-  /** Where the thinking-level choice lives (this browser, this origin). Absent or throwing → memory for this boot. */
-  localStorage?: TierStorage | undefined;
-}
-
-/** `window.localStorage` is a THROWING getter where third-party storage is denied (Safari) — read it once, guarded. */
-function readLocalStorage(win: ProbeWindowLike): TierStorage | undefined {
-  try {
-    return win.localStorage ?? undefined;
-  } catch {
-    return undefined;
-  }
-}
+/**
+ * What the probe reads off `window`. The three storage seats are GETTERS that throw where a
+ * page has no storage (an opaque origin; Safari with third-party storage denied), so they
+ * are read through `safeStorage.ts` and nowhere else: absent or throwing → the next rung,
+ * and memory for the thinking-level choice.
+ */
+export type ProbeWindowLike = BindingWindowLike & StorageHost;
 
 /**
  * The whole probe, from `window`, in the order the kit boots: host, binding, storage, brain.
- * `use` and `complete` are invoked AS METHODS of `window.claude` — an unbound call is
- * "Illegal invocation" on a this-dependent runtime, the `getDirectory` class of defect the
- * T2 walk found (correctness review 6). A `use` that rejects, like one that never answers,
- * leaves the binding at `artifact`: only an ANSWER of `null` makes a static page.
+ * `use` is invoked AS A METHOD of `window.claude` — an unbound call is "Illegal invocation"
+ * on a this-dependent runtime, the `getDirectory` class of defect the T2 walk found
+ * (correctness review 6). A `use` that rejects, like one that never answers, leaves the
+ * binding at `artifact`: only an ANSWER of `null` makes a static page.
  */
 export async function runProbe(win: ProbeWindowLike, options: { guardMs?: number } = {}): Promise<ProbeResult> {
   const env = readBindingEnv(win);
-  const claude = (win.claude ?? undefined) as { use?: (name: string) => Promise<unknown>; complete?: CompleteFn } | undefined;
+  const claude = (win.claude ?? undefined) as { use?: (name: string) => Promise<unknown> } | undefined;
   let host: HostNamespaces | undefined;
   if (env.claudeUse && claude?.use !== undefined) {
     host = await resolveHostNamespaces((name) => claude.use!(name), options);
     if (!host.guardTripped && !host.rejected) env.hostAnswered = { sample: host.sample !== undefined, artifact: host.artifact !== undefined };
   }
-  const complete = !env.claudeUse && env.claudeComplete && claude?.complete !== undefined ? (prompt: string) => claude.complete!(prompt) : undefined;
-  const storage = await probeStorage({ storage: win.navigator?.storage, indexedDB: win.indexedDB });
-  const brain = await probeBrain(env, host, complete, readLocalStorage(win));
+  const storage = await probeStorage({ storage: safeNavigatorStorage(win), indexedDB: safeIndexedDB(win) });
+  // Where the thinking-level choice lives (this browser, this origin); memory when there is none.
+  const brain = await probeBrain(env, host, safeLocalStorage(win));
   return { binding: decideBinding(env), storage, brain, ...(host !== undefined ? { host } : {}) };
 }

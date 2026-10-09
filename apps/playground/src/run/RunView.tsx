@@ -30,6 +30,7 @@ import {
   openConnectionWizardForApp,
   openConnectionWizardForNetError,
 } from '../state/connectionWizard.js';
+import { useLibraryRevision } from '../platform/signals.js';
 import { useStore } from '../state/store.js';
 import { getAppMeta, recordAppMeta, useAppMetaMap } from '../state/appMeta.js';
 import { userLibrary } from '../state/library.js';
@@ -38,7 +39,8 @@ import { hostReadyStreaming, useBrain, useTurnMode } from '../state/webllm.js';
 import { getUserDb } from '../state/userdb.js';
 import { toggleTheme, useTheme } from '../state/theme.js';
 import { toggleRailShown, useRailShown } from '../state/railLayout.js';
-import { STARTER_PREFIX, isStarterId, listStarterApps, loadStarterHtml, starterInstallSource } from '../starter/starterApps.js';
+import { STARTER_PREFIX, isStarterId, listStarterApps, loadStarterHtml, starterInstallSource, starterRequirement } from '../starter/starterApps.js';
+import { starterLook } from '../starter/starterLooks.js';
 import { createConsentGateTransport } from '../share/consentTransport.js';
 import { applySharedUpdate, installSharedEntry, installedCopyForBundle, type InstalledCopyForBundle } from '../share/installShared.js';
 import { ConfirmOverlay } from '../ui/ConfirmOverlay.js';
@@ -47,6 +49,7 @@ import { SharedDocsPanel } from '../share/SharedDocsPanel.js';
 import { SharedUpdateControls } from '../share/SharedUpdateControls.js';
 import { bundleIdFromSharedRouteId, getSharedEntry, isSharedId, isUnownedId, sharedInboxStore } from '../share/sharedInbox.js';
 import { desktopLinkFor } from '../share/relayClient.js';
+import { availabilityOf, needsOfConnections, needsOfRequirement, offersOf, signedIn, type AppNeed } from '../platform/availability.js';
 import { getPlatform, allows } from '../platform/platform.js';
 import { installStarterConnections, starterDeclarationForStarterId } from '../starter/starterDeclaration.js';
 import { installStarterRuntimeContract } from '../starter/starterRuntimeContract.js';
@@ -71,6 +74,7 @@ import { initialInspectorState, inspectorReduce, type InspectorState } from './i
 import { useMediaQuery } from './useMediaQuery.js';
 import { isNamedLoadRefusal, missingAppCopy, starterInstallDisclosureTail } from './copy.js';
 import { sqlJsEngineOptions } from './sqlJsEngine.js';
+import { RunBlocked } from '../views/AvailabilityNote.js';
 import { ChatLog } from '../views/ChatLog.js';
 
 type HtmlState = { phase: 'loading' } | { phase: 'ready'; html: string } | { phase: 'missing'; reason?: string };
@@ -453,12 +457,20 @@ export default function RunView(): ReactElement {
    * `helperNeedsInstall` is the single rule; web (no seat) never sets it.
    */
   const [helperWanted, setHelperWanted] = useState(false);
+  /**
+   * What an OWNED app asks of its host, from the same rows (S3, ADR-0072 §4). Keyed by the
+   * id it was read for: the route element is not keyed by id, so `/run/A` → `/run/B` would
+   * otherwise judge B by A's rows for a render — long enough to mount a frame the verdict
+   * was about to refuse. `undefined` until the rows are read, and the frame waits for it.
+   */
+  const [rowNeeds, setRowNeeds] = useState<{ id: string; needs: readonly AppNeed[] } | undefined>(undefined);
   useEffect(() => {
     let cancelled = false;
     void getUserDb().then(async (db) => {
       const rows = db.listConnections(id);
       if (cancelled) return;
       setConnectionSlots(rows.length);
+      setRowNeeds({ id, needs: needsOfConnections(rows, signedIn(db)) });
       if (rows.some((row) => row.requirement.kind === 'linked_device')) {
         const status = await refreshHelperStatus(WHATSAPP_HELPER);
         if (!cancelled) setHelperWanted(helperNeedsInstall(status));
@@ -614,6 +626,54 @@ export default function RunView(): ReactElement {
     };
   }, [id, contentEpoch]);
 
+  /**
+   * THE VERSION CAN CHANGE UNDERNEATH THIS VIEW (K6). On the local runner the agent hands a
+   * new version in while the user is inside the app: an unedited copy takes it at once, in
+   * the file — and the frame on screen is still the old html. The host bumps
+   * `libraryRevision`; this re-reads the app's code and, when it is no longer what is
+   * mounted, OFFERS the reload. It never swaps the frame itself: what the user was doing in
+   * the app is theirs until they say so.
+   *
+   * Compared against the html this view LOADED, so a version this view brought in itself (a
+   * chat edit, a revert, an update taken from the header — all `contentEpoch`) is never
+   * announced as the agent's: by the time it is mounted it is what the file holds.
+   */
+  const libraryRevision = useLibraryRevision();
+  const mountedHtml = htmlState.phase === 'ready' ? htmlState.html : undefined;
+  const [agentUpdated, setAgentUpdated] = useState(false);
+  useEffect(() => {
+    if (isUnownedId(id) || mountedHtml === undefined) {
+      setAgentUpdated(false);
+      return;
+    }
+    let cancelled = false;
+    userLibrary()
+      .getHtml(id)
+      .then((html) => {
+        if (!cancelled) setAgentUpdated(html !== undefined && html !== mountedHtml);
+      })
+      .catch(() => {
+        /* a read that fails offers nothing; the next bump reads again */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [id, libraryRevision, mountedHtml]);
+  /**
+   * The reload the user asked for lands when the app is IDLE: a frame remounted while a
+   * think is in flight drops the reply it was promised (the host's `post()` to a destroyed
+   * frame goes nowhere), and a chat turn still editing this app is about to write a version
+   * of its own. So the click ARMS it and this takes it the moment nothing is in flight.
+   */
+  const [reloadArmed, setReloadArmed] = useState(false);
+  const idle = inspector.inFlight === 0 && !chat.busy;
+  useEffect(() => {
+    if (!reloadArmed || !idle) return;
+    setReloadArmed(false);
+    setContentEpoch((epoch) => epoch + 1);
+    setFrameEpoch((epoch) => epoch + 1);
+  }, [reloadArmed, idle]);
+
   // Capability reveal has a floor: host-ready seen but no announce after the grace
   // period → show the library name in plain style instead of shimmering forever.
   useEffect(() => {
@@ -705,6 +765,37 @@ export default function RunView(): ReactElement {
 
   const meta = reveal.phase === 'live' ? reveal.meta : undefined;
   const stageStyle = { '--app-color': meta?.iconColor ?? 'var(--ember)' } as CSSProperties;
+
+  /**
+   * CAN THIS HOST RUN IT? (S3, ADR-0072 §4.) The same verdict the tile shows, taken again
+   * HERE because a route is reachable without a tile: `#/run/starter--hue` used to walk
+   * straight past the shelf's lock. A starter's needs come from the connection it declares
+   * (synchronous — the answer is in the first render); an owned app's from its rows, and
+   * until those are read the verdict is `undefined` and the frame does not mount. A shared
+   * preview is not judged here: it has no row and no net handler until it is installed,
+   * and the copy it installs is judged like any owned app.
+   */
+  const needs: readonly AppNeed[] | undefined = isStarterId(id)
+    ? needsOfRequirement(starterRequirement(id))
+    : isSharedId(id)
+      ? []
+      : rowNeeds?.id === id
+        ? rowNeeds.needs
+        : undefined;
+  const verdict = needs === undefined ? undefined : availabilityOf(needs, offersOf(getPlatform()));
+  /**
+   * The blocked app's identity. Its frame never mounts, so it never announces: the name and
+   * emoji come from where the shelf got them — the starter's look, or the stored app meta.
+   */
+  const blocked = (() => {
+    if (verdict === undefined || verdict.ok) return undefined;
+    if (isStarterId(id)) {
+      const look = starterLook(id.slice(STARTER_PREFIX.length));
+      return { blockers: verdict.blockers, name: look.name ?? fallbackName ?? 'this starter', emoji: look.emoji };
+    }
+    const stored = getAppMeta(id);
+    return { blockers: verdict.blockers, name: stored?.displayName ?? fallbackName ?? 'this app', emoji: stored?.iconEmoji ?? '⬡' };
+  })();
 
   const railContent = (
     <>
@@ -877,15 +968,17 @@ export default function RunView(): ReactElement {
                 {meta.description !== undefined ? <div className="run-desc">{meta.description}</div> : null}
               </div>
             </div>
-          ) : announceTimedOut ? (
+          ) : announceTimedOut || blocked !== undefined ? (
             // The app never announced — plain library-name header, no shimmer, and no
-            // reveal animation (that stays reserved for genuine announces).
+            // reveal animation (that stays reserved for genuine announces). A BLOCKED app
+            // lands here at once: its frame never mounts, so the "connecting…" shimmer
+            // below would wait for an announce that cannot come.
             <div className="run-identity">
               <span className="run-emoji" aria-hidden="true">
-                ⬡
+                {blocked?.emoji ?? '⬡'}
               </span>
               <div style={{ minWidth: 0 }}>
-                <div className="run-name">{fallbackName ?? 'snug app'}</div>
+                <div className="run-name">{blocked?.name ?? fallbackName ?? 'snug app'}</div>
               </div>
             </div>
           ) : (
@@ -982,7 +1075,11 @@ export default function RunView(): ReactElement {
                 )}
               </>
             ) : null}
-            {isStarterId(id) ? (
+            {/*
+              Not for a starter this host cannot run: the panel below has just said so, and
+              installing it only makes a tile that is blocked the moment it appears.
+            */}
+            {isStarterId(id) && blocked === undefined ? (
               <Button
                 variant="primary"
                 data-testid="starter-install"
@@ -1145,9 +1242,38 @@ export default function RunView(): ReactElement {
             this shared app is no longer on your shelf — <Link to="/">back to your apps</Link>.
           </div>
         ) : null}
+        {agentUpdated ? (
+          // K6: said in the calm form — a new version is good news, not a failure — with one
+          // act. `status`, not `alert`: it must not interrupt whatever the app is saying.
+          //
+          // A STRIP IN THE STAGE'S COLUMN, directly above the frame it speaks about — not a
+          // child of `.run-layout`. That element is a flex ROW (stage | divider | rail), and
+          // there this note became a full-height column beside the stage: 583 px taken from
+          // the app at 1280, the frame pushed off-screen at 375 (measured 2026-10-03). Here
+          // it costs the app a strip of height and none of its width — "never swaps the frame
+          // underneath the user" has to hold for where the frame IS, too.
+          <div className="connection-note is-strip" role="status" data-testid="agent-updated">
+            <div className="connection-note-lead">
+              <p className="connection-note-title">your agent updated this app</p>
+              <p className="connection-note-body">
+                what is running is the version from before. reload to run the new one — your data, chats and docs stay.
+              </p>
+            </div>
+            <div className="connection-note-actions">
+              <Button variant="primary" data-testid="agent-updated-reload" disabled={reloadArmed} onClick={() => setReloadArmed(true)}>
+                {reloadArmed ? 'reloading when the app finishes thinking…' : 'reload'}
+              </Button>
+            </div>
+          </div>
+        ) : null}
 
         <div className={`frame-wrap${inspector.inFlight > 0 ? ' thinking' : ''}`} data-testid="frame-wrap">
-          {htmlState.phase === 'loading' || db === null ? (
+          {blocked !== undefined ? (
+            // The reason REPLACES the frame — and only the frame. The header above keeps
+            // export, versions, docs and the connections door, so an app this host cannot
+            // run can still be taken to one that can.
+            <RunBlocked name={blocked.name} emoji={blocked.emoji} blockers={blocked.blockers} />
+          ) : htmlState.phase === 'loading' || db === null || verdict === undefined ? (
             <div className="run-overlay">
               <Skeleton width="60%" height="1.25rem" />
               <Skeleton width="40%" height="1rem" />

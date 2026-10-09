@@ -1,14 +1,15 @@
-// prompt.ts — the ONE turn shaper for the host brains (TASK-20260905-binding-a-artifacts
+// prompt.ts — the ONE turn shaper for the host brain (TASK-20260905-binding-a-artifacts
 // AC1/AC3), and the budget's ruler.
 //
-// Neither host brain has a system slot: `sample` takes a prompt string or user/assistant
-// turns (sample.d.ts 0.2.41 — "put the instruction, the page's data and the output format
-// in `input`"), and `window.claude.complete` takes one string. So the system prompt the
-// playground assembles (identity + runtime doctrine + response format + the app's contract,
-// or the builder layers) rides at the FRONT of the user content. T1 S3 measured the two
-// shapes equivalent (one concatenated string ≡ a leading user turn: 48/48 legal moves);
-// T4 S11 measured the input cap on the one-string shape to the byte (65,536 accepted,
-// 65,537 refused). ADR-0018 D3's authority downgrade (system slot → user turn) is
+// `sample` has no system slot: it takes a prompt string or user/assistant turns starting and
+// ending on a user turn ("there is no system prompt the page controls: put the instruction,
+// the page's data and the output format you want in `input`" — sample.d.ts, 0.2.41 and
+// 0.2.67 alike). So the system prompt the playground assembles (identity + runtime doctrine
+// + response format + the app's contract, or the builder layers) rides at the FRONT of the
+// user content. T1 S3 measured the two shapes equivalent (one concatenated string ≡ a
+// leading user turn: 48/48 legal moves); the input cap was measured on the one-string shape
+// to the byte — 65,536 under 0.2.41 (T4 S11), 262,144 under 0.2.67 (2026-10-03), the number
+// `limits()` reports. ADR-0018 D3's authority downgrade (system slot → user turn) is
 // disclosed in ADR-0065 and owed a threat-model row (T7).
 //
 // `measurePrompt` counts the bytes of EXACTLY what `shapeInput` sends — the same function
@@ -18,6 +19,17 @@
 import type { AdapterMessage } from '@snugprotocol/adapters';
 
 export const PROMPT_SEPARATOR = '\n\n';
+
+/**
+ * The cap when `limits()` cannot be read — it rejects, or answers something that is not a
+ * byte count. The live number is `limits().maxPromptBytes`: 262,144 under contract 0.2.67
+ * (measured 2026-10-03, inclusive to the byte, in a chat-created and a tool-published
+ * artifact alike). This is the 0.2.41 cap T4 S11 measured to the byte: the smallest a viewer
+ * has been seen to take, and the one the builder's knowledge delivery is sized against
+ * (ADR-0066), so a page that cannot learn its cap still budgets on a number that was true.
+ * ONE home: the probe falls back to it and the `prompt_too_large` sentence names it.
+ */
+export const DEFAULT_MAX_PROMPT_BYTES = 65_536;
 
 export interface HostTurn {
   role: 'user' | 'assistant';
@@ -51,19 +63,7 @@ export function shapeInput(system: string, messages: readonly AdapterMessage[]):
   return [{ role: 'user', content: system }, ...turns];
 }
 
-/**
- * The same conversation as ONE string, for a host with no turn API (`window.claude.complete`):
- * the first user turn rides bare after the system text; later turns are labelled.
- */
-export function shapeString(system: string, messages: readonly AdapterMessage[]): string {
-  const shaped = shapeInput(system, messages);
-  if (typeof shaped === 'string') return shaped;
-  const [, first, ...rest] = shaped;
-  const head = `${system}${PROMPT_SEPARATOR}${first?.content ?? ''}`;
-  return rest.reduce((acc, turn) => `${acc}${PROMPT_SEPARATOR}[${turn.role}]\n${turn.content}`, head);
-}
-
-/** UTF-8 bytes of what `shapeInput` sends: the string's bytes, or every turn's content summed. */
+/** UTF-8 bytes of what `shapeInput` sends: the string's bytes, or every turn's content summed — the measure `limits().maxPromptBytes` is stated in. */
 export function measurePrompt(system: string, messages: readonly AdapterMessage[]): number {
   const shaped = shapeInput(system, messages);
   return typeof shaped === 'string' ? utf8(shaped) : shaped.reduce((sum, turn) => sum + utf8(turn.content), 0);

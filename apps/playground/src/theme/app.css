@@ -2,6 +2,11 @@
    No component library anywhere near this file (design brief, binding).
    Mobile-first: single column at 375px; rails become sheets under 760px. */
 
+/* Two surfaces keep their own sheet so the shelf and the brain dock can change without
+   contending for this file (TASK-20261003). @import must precede every rule. */
+@import './availability.css';
+@import './brain-dock.css';
+
 /* ---------------------------------------------------------------- shell */
 
 .shell {
@@ -527,8 +532,9 @@
   font: inherit;
 }
 
-/* A locked (web-side desktopOnly) starter reads as unavailable, not broken: greyed,
-   no pointer, the badge carries the plain-words reason (TASK-20260812 P3 item 5). */
+/* A starter the WEB shelf locks reads as unavailable, not broken: greyed, no pointer,
+   the badge carries the plain-words reason (TASK-20260812 P3 item 5). Every other host
+   uses the visible tile note instead — availability.css (TASK-20261003). */
 .app-tile .tile-card-button:disabled {
   cursor: default;
   opacity: 0.55;
@@ -863,6 +869,28 @@
 
 .connection-note.is-error .connection-note-title {
   color: var(--danger);
+}
+
+/* THE STRIP (TASK-20261003 K6): the same note laid ALONG the top of the run stage, above
+   the app's frame — "your agent updated this app". The stage is a flex column whose frame
+   takes whatever height is left, so the strip costs the app its own height and none of its
+   width; the words lead, the one act trails, and the row wraps when a phone has no room
+   for both. Its side margins are the frame's own, so the two read as one column. */
+.connection-note.is-strip {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  margin: var(--space-3) var(--space-4) 0;
+  padding: var(--space-3) var(--space-4);
+}
+
+.connection-note.is-strip .connection-note-lead {
+  /* Grows into the row; wraps the act onto its own line before the words get narrower than this. */
+  flex: 1 1 24ch;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
 }
 
 /* THE AUTH-REPAIR CHIP (TASK-20260819) — the run header's standing note that a provider
@@ -1787,6 +1815,11 @@
     min-height: 62dvh;
   }
 
+  /* The strip above the frame keeps the frame's (narrower) gutters here too. */
+  .connection-note.is-strip {
+    margin: var(--space-3) var(--space-3) 0;
+  }
+
   /* The either/or full-view swap rules (.is-mobile-think / .mobile-think) live in
      their OWN ≤1000px media block at the end of this file — the swap covers phone
      landscape and tablet portrait, not just this ≤760px shell breakpoint
@@ -2174,40 +2207,6 @@ img.identity-avatar {
   font-size: var(--text-s);
 }
 .brain-menu-tier .brain-menu-hint {
-  padding: var(--space-1) 0 0;
-}
-/* The CLI model + effort control (ADR-0070, Binding B). Reuses the tier control's type scale
-   and tap targets so the two read as the same control in the same slot — no binding ever shows
-   both, but a user moving between them should not feel a different chip. */
-.brain-menu-cli {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  padding: 0 var(--space-2) var(--space-2);
-}
-.brain-menu-cli-active {
-  font-size: var(--text-xs);
-  color: var(--fg-muted);
-  /* The resolved model id is long and must not widen the popover past the 375px header. */
-  overflow-wrap: anywhere;
-}
-.brain-menu-cli-row {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-}
-.brain-menu-cli-row select,
-.brain-menu-cli-input {
-  min-height: var(--tap);
-  min-width: 0;
-  padding: 0 var(--space-2);
-  border-radius: var(--radius-s);
-  border: 1px solid var(--border);
-  background: var(--surface);
-  color: var(--fg);
-  font-size: var(--text-s);
-}
-.brain-menu-cli .brain-menu-hint {
   padding: var(--space-1) 0 0;
 }
 /* The first-contact callout (ADR-0059, AC6): an inline NOTE above the builder chat —

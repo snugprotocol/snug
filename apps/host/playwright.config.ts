@@ -14,6 +14,9 @@ import { KIT_DIST_FILE, KIT_ORIGIN, KIT_PORT, STARTERS_PKG_DIR } from './e2e/hel
 if (!fs.existsSync(KIT_DIST_FILE)) throw new Error(`${KIT_DIST_FILE} missing — run \`pnpm --filter host build\` first`);
 if (!fs.existsSync(`${STARTERS_PKG_DIR}/index.json`)) throw new Error(`${STARTERS_PKG_DIR}/index.json missing — run \`pnpm --filter host build:starters\``);
 
+/** The Binding-B specs: `local.spec.ts` and its siblings (`local-oauth`, `local-handin`, `local-brain`) — the SAME page, served by the real process. */
+const LOCAL_SPECS = /local(-[a-z]+)?\.spec\.ts$/;
+
 export default defineConfig({
   testDir: './e2e',
   fullyParallel: false,
@@ -33,10 +36,10 @@ export default defineConfig({
   },
   projects: [
     // The kit's own suite: nothing outside the page's origin may be reachable.
-    { name: 'chromium', use: { ...devices['Desktop Chrome'] }, testIgnore: /local\.spec\.ts/ },
+    { name: 'chromium', use: { ...devices['Desktop Chrome'] }, testIgnore: LOCAL_SPECS },
     // Binding B (ADR-0068): its own project because it launches its OWN browser with a
     // self-signed allowance for the stub — an allowance that must never leak into the
     // project above, whose whole assertion is that nothing else is reachable.
-    { name: 'local-host', use: { ...devices['Desktop Chrome'] }, testMatch: /local\.spec\.ts/ },
+    { name: 'local-host', use: { ...devices['Desktop Chrome'] }, testMatch: LOCAL_SPECS },
   ],
 });

@@ -1,7 +1,21 @@
 {
-  "version": 2,
-  "appHash": "9931148a675f6157ec5b042ae9814f84e063325c5747e05ac44ca0643ebc5301",
+  "version": 3,
+  "appHash": "2b697122f8f9edf169a7a4e22390f061ecc5ad848175ab15f1345dc14fb058bd",
   "changelog": [
+    {
+      "version": 3,
+      "date": "2026-10-04",
+      "title": "Your opponent picks its own moves again",
+      "sections": [
+        {
+          "title": "What's fixed",
+          "items": [
+            "The opponent's instructions described one reply and the board read another, so a quick model's move could be swapped for a random legal one with \"it answered off-script\". Both now ask for the same reply.",
+            "The board also takes a move sent in the shorter form a quick model used before this fix, so a move it meant is played, not replaced."
+          ]
+        }
+      ]
+    },
     {
       "version": 2,
       "date": "2026-08-21",

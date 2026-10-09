@@ -408,6 +408,15 @@ function useConnectedFetch() {
       const f = FILES.indexOf(s[0].toLowerCase()), r = 8 - Number(s[1]);
       return f < 0 || r < 0 || r > 7 || Number.isNaN(r) ? -1 : r * 8 + f;
     };
+    // The agent's move from its reply, as square indexes, or null when it named no squares.
+    // RESPONSE_SCHEMA asks for {"move":{"from","to"}}; a quick model has also been measured
+    // sending the squares at the TOP level ({"from":"e7","to":"e5",…} — 2026-10-03, while this
+    // app's runtime contract still described that shape), so both are read, the schema's first.
+    const isObject = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
+    const replyMove = (d) => {
+      const squares = isObject(d.move) ? d.move : d;
+      return typeof squares.from === 'string' && typeof squares.to === 'string' ? [sqIndex(squares.from), sqIndex(squares.to)] : null;
+    };
     const colorOf = (p) => (p === p.toUpperCase() ? 'w' : 'b');
 
     function parseFen(fen) {
@@ -577,12 +586,12 @@ function useConnectedFetch() {
           return;
         }
         const d = result.data && typeof result.data === 'object' ? result.data : {};
-        const wanted = d.move ? [sqIndex(d.move.from), sqIndex(d.move.to)] : null;
+        const wanted = replyMove(d);
         let mv = wanted && replies.some(([f, t]) => f === wanted[0] && t === wanted[1]) ? wanted : null;
         let note = '';
         if (!mv) { // raw / malformed / illegal reply — play a legal move for it and say so
           mv = replies[Math.floor(Math.random() * replies.length)];
-          note = d.move ? 'it suggested an illegal move — a legal one was played instead.' : 'it answered off-script — a legal move was played for it.';
+          note = wanted ? 'it suggested an illegal move — a legal one was played instead.' : 'it answered off-script — a legal move was played for it.';
         }
         setGame((prev) => {
           const { board: b } = parseFen(fen);

@@ -43,7 +43,7 @@ import type { ReactElement } from 'react';
 import encodeQr from '@paulmillr/qr';
 import { CONNECTION_STATUS, type ConnectionField, type ConnectionRequirement } from '@snugprotocol/protocol';
 import { type ConnectionRow } from '@snugprotocol/db';
-import { lookupWellKnownProvider, resolveRegistryEntryByName } from '@snugprotocol/auth';
+import { resolveRegistryEntryByName } from '@snugprotocol/auth';
 
 import { getUserDb } from '../state/userdb.js';
 import { useStore } from '../state/store.js';
@@ -99,6 +99,7 @@ import {
 } from '../state/connectionWizard.js';
 import { chooseAuthOption } from '../state/authKindChoice.js';
 import { hasLiveAppHost, notifyAppRefresh } from '../state/appHosts.js';
+import { needsOfRequirement, offersOf } from '../platform/availability.js';
 import { getPlatform } from '../platform/platform.js';
 import { Button } from '../ui/Button.js';
 import { HelperInstallCard } from './HelperInstallCard.js';
@@ -1256,12 +1257,14 @@ function CredentialsScreen({
    * The BYOK-CORS disclosure (2026-08-12 advisory; AC6's `browserCallable` half),
    * BEFORE credentials are pasted. Tri-state on purpose: only a REVIEWED `false` in the
    * registry earns the line — an absent seat is unknown and makes no claim either way,
-   * because "works in a browser" is exactly the promise an absent fact cannot back. On
-   * desktop the wall does not exist (native fetch), so nothing is claimed there either.
+   * because "works in a browser" is exactly the promise an absent fact cannot back.
+   *
+   * Read from the ONE derivation (TASK-20261003 S4, ADR-0072 §4): the row needs
+   * `native-fetch`, and this host does not offer it. It used to be `kind !== 'desktop'`,
+   * which told a user of the local runner — where a Node process carries the request and
+   * the wall does not exist — that their connection "may fail here".
    */
-  const disclosedBrowserWall =
-    // Any non-desktop shell is a browser page for this purpose (the host kit included).
-    getPlatform().kind !== 'desktop' && lookupWellKnownProvider(requirement.provider.name)?.browserCallable === false;
+  const disclosedBrowserWall = needsOfRequirement(requirement).includes('native-fetch') && !offersOf(getPlatform())['native-fetch'];
 
   /**
    * THE POPUP IS OPENED SYNCHRONOUSLY, INSIDE THE CLICK, BEFORE ANY AWAIT.
@@ -2053,7 +2056,7 @@ export function ConnectionWizardSheet(): ReactElement | null {
    * same reason `showDiff` is derived rather than stored.
    */
   const isLanRow = row !== undefined && isLanRequirement(row.requirement);
-  /** Web: disclose and stop. `canPairLanDevice` is the honest capability test. */
+  /** Web, or any host without both LAN seats: disclose and stop. `canPairLanDevice` is the `lan` offer the shelf reads. */
   const lanWall = isLanRow && !canPairLanDevice();
   /** Pre-collection: no address on the row yet, so nothing to review or freeze. */
   const lanNeedsHost = isLanRow && !lanWall && !lanHostCollected(row.requirement);

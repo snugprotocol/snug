@@ -106,6 +106,31 @@ export interface AdapterRoute {
   hasKey: boolean;
 }
 
+/**
+ * The code a turn answers with when it was routed to the platform's host brain and that
+ * brain is no longer there (TASK-20261003 D4). Not a protocol code — the wire takes any
+ * string and an app renders an unknown one as HOST_ERROR, honouring `retryable`.
+ */
+export const HOST_BRAIN_GONE_CODE = 'BRAIN_UNAVAILABLE';
+
+/**
+ * The host arm's answer when the pin is gone. A RESULT, never a throw, and never the demo
+ * script standing in: on the local runner the brain is the user's own CLI, which can log
+ * out or disappear between the moment a turn was routed (`mode: 'host'`) and the moment its
+ * adapter is built here. This used to be "loud on drift" — a throw, which at exactly that
+ * moment surfaced as a crashed turn. The turn says what happened and may be retried; the
+ * NEXT one is routed by a platform that already answers `demo`. No mid-turn substitution:
+ * a reply must come from the brain the turn was sent to, or from none.
+ */
+const hostBrainGone: AgentAdapter = {
+  complete: async () => ({
+    ok: false,
+    code: HOST_BRAIN_GONE_CODE,
+    message: 'the brain this turn was sent to went away before it could answer — try again',
+    retryable: true,
+  }),
+};
+
 /** The ONE config→route mapping — both the constructor and the stamp go through it. */
 export function routeOf(config: Pick<TurnAdapterConfig, 'mode' | 'provider' | 'key'>): AdapterRoute {
   return { mode: config.mode, provider: config.provider, hasKey: config.key !== undefined };
@@ -138,12 +163,11 @@ export function createTurnAdapter(config: TurnAdapterConfig, purpose: ByokPurpos
   switch (kind) {
     case 'host': {
       // The adapter the HOST supplied (TASK-20260905-host-kit P2) — reached only through
-      // the brain seat, never constructed here, never given a key. Loud on drift, like
-      // the keyed case below: `resolveBrain` names 'host' only when the seat is set.
+      // the brain seat, never constructed here, never given a key. `resolveBrain` names
+      // 'host' only when the seat answered a host brain, but the seat may be a getter and
+      // is read again here: a pin that changed in between is a named result (above).
       const pinned = getPlatform().brain;
-      if (pinned === undefined || pinned.kind !== 'host') {
-        throw new Error("adapterKindFor said 'host' without a platform-pinned host brain");
-      }
+      if (pinned === undefined || pinned.kind !== 'host') return hostBrainGone;
       // One adapter per PURPOSE (TASK-20260905-binding-a-artifacts AC1): the builder and
       // the inferrer ('chat') take the host's chat adapter when it carries one; app
       // envelopes ('app') and a host with a single adapter take `adapter`.

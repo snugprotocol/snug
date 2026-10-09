@@ -15,7 +15,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { admitDataPlaneRequest, type InboundRequest } from '../loopback-gates.js';
+import { admitDataPlaneRequest, RUNNER_MARKER_HEADER, RUNNER_REFUSAL_HEADERS, type InboundRequest } from '../loopback-gates.js';
 
 const PORT = 43127;
 const TOKEN = 'a'.repeat(64);
@@ -137,5 +137,15 @@ describe('every data-plane route forces a CORS preflight', () => {
   it('answers a preflight OPTIONS without CORS headers, so the real request never follows', () => {
     const out = admitDataPlaneRequest(inbound({ method: 'OPTIONS' }), { port: PORT, token: TOKEN });
     expect(out).toEqual({ ok: false, status: 403 });
+  });
+});
+
+describe('the marker a refusal carries (ADR-0072 §2)', () => {
+  it('is one constant: the header name the R0 contract fixed, and the value 1', () => {
+    // The page reads this name. It is the same object on every refusal, so there is no
+    // per-status or per-route variant for a prober to learn anything from.
+    expect(RUNNER_MARKER_HEADER).toBe('x-snug-runner');
+    expect(RUNNER_REFUSAL_HEADERS).toEqual({ 'x-snug-runner': '1' });
+    expect(Object.isFrozen(RUNNER_REFUSAL_HEADERS)).toBe(true);
   });
 });

@@ -5,7 +5,9 @@
 import { IDBFactory } from 'fake-indexeddb';
 import { describe, expect, it } from 'vitest';
 
-import { measurePrompt } from '../brains/prompt.js';
+import { fitHostTurn } from '@playground/agent/promptBudget';
+
+import { DEFAULT_MAX_PROMPT_BYTES, measurePrompt } from '../brains/prompt.js';
 import type { SampleFn } from '../brains/sample.js';
 import { decideBinding, probeBrain, probeStorage, readBindingEnv, resolveHostNamespaces, runProbe, type BindingEnv } from '../probe.js';
 
@@ -13,27 +15,71 @@ const env = (over: Partial<BindingEnv>): BindingEnv => ({
   protocol: 'https:',
   hostname: 'example.test',
   claudeUse: false,
-  claudeComplete: false,
   ...over,
 });
+
+/**
+ * The September chat runtime's whole surface (T1 S2/S10): a flat `window.claude.complete` and a
+ * per-view `window.storage`, at an `about:srcdoc` origin. Measured GONE 2026-10-03 (a chat
+ * artifact now runs in the hosted runtime, `window.claude = { use }`), so a page that still
+ * meets it is just a page with no host brain. Every member records being touched: the kit
+ * must never call `complete` and never read or write `storage`.
+ */
+function septemberChatWindow(): { win: { location: { protocol: string; hostname: string }; claude: unknown; storage: unknown; navigator: undefined; indexedDB: undefined }; touched: string[] } {
+  const touched: string[] = [];
+  const claude = {
+    complete(this: unknown, prompt: string): Promise<string> {
+      touched.push(`complete(${prompt.length})`);
+      return Promise.resolve('{"move":{"from":"e7","to":"e5"}}');
+    },
+  };
+  const storage = Object.fromEntries(
+    ['get', 'set', 'delete', 'list'].map((name) => [name, async () => void touched.push(`storage.${name}`)]),
+  );
+  return { win: { location: { protocol: 'about:', hostname: '' }, claude, storage, navigator: undefined, indexedDB: undefined }, touched };
+}
 
 describe('decideBinding — the matrix', () => {
   it('a hosted artifact (claude.use present) is `artifact`, whatever the origin', () => {
     expect(decideBinding(env({ claudeUse: true }))).toBe('artifact');
-    expect(decideBinding(env({ claudeUse: true, claudeComplete: true }))).toBe('artifact');
     expect(decideBinding(env({ claudeUse: true, protocol: 'file:' }))).toBe('artifact');
   });
-  it('a chat artifact (window.claude.complete, no use) is `artifact-chat`', () => {
-    expect(decideBinding(env({ claudeComplete: true }))).toBe('artifact-chat');
+  it('C2: a page that meets ONLY window.claude.complete is decided like any page with no host brain — `file`', () => {
+    // MIGRATED 2026-10-03 (TASK-20261003 R5 C2) from "a chat artifact (window.claude.complete,
+    // no use) is the chat binding": that runtime was measured gone, its binding removed.
+    for (const location of [
+      { protocol: 'about:', hostname: '' },
+      { protocol: 'https:', hostname: 'x.frame.claudeusercontent.com' },
+      { protocol: 'file:', hostname: '' },
+    ]) {
+      const flat = decideBinding(readBindingEnv({ location, claude: { complete: async () => 'reply' } }));
+      expect(flat, location.protocol).toBe(decideBinding(readBindingEnv({ location })));
+      expect(flat, location.protocol).toBe('file');
+    }
+    // And with `use` beside it, `use` decides — `complete` adds nothing either way.
+    expect(decideBinding(readBindingEnv({ location: { protocol: 'https:', hostname: 'h' }, claude: { use: async () => null, complete: async () => '' } }))).toBe('artifact');
   });
   it('file:// with no host globals is `file`', () => {
     expect(decideBinding(env({ protocol: 'file:', hostname: '' }))).toBe('file');
   });
-  it('http(s) on a loopback host with no host globals is `local-host`', () => {
-    for (const hostname of ['localhost', '127.0.0.1', '[::1]', '127.0.0.5']) {
-      expect(decideBinding(env({ protocol: 'http:', hostname }))).toBe('local-host');
+  it('a loopback origin with NO runner is FILE-class — a static server, a dev server, a page somebody served', () => {
+    // MIGRATED 2026-10-03 (TASK-20261003 K2, the migration the plan names) from
+    // "http(s) on a loopback host with no host globals is `local-host`". That made
+    // `local-host` mean two things — the runner, or anything served from loopback — and the
+    // second got the runner's custody copy: "your file: on this Mac, in ~/Snug/user.snug"
+    // on a page whose file lives in the browser. The binding is `local-host` only when a
+    // runner ANSWERED (the boot asks, at the literal `http://127.0.0.1` alone).
+    for (const hostname of ['localhost', '127.0.0.1', '[::1]', '127.0.0.5', 'snug.localhost', '0.0.0.0']) {
+      expect(decideBinding(env({ protocol: 'http:', hostname })), hostname).toBe('file');
     }
-    expect(decideBinding(env({ protocol: 'https:', hostname: 'localhost' }))).toBe('local-host');
+    expect(decideBinding(env({ protocol: 'https:', hostname: 'localhost' }))).toBe('file');
+    expect(decideBinding(env({ protocol: 'https:', hostname: '127.0.0.1' }))).toBe('file');
+  });
+  it('the RUNNER fact makes `local-host` — and outranks everything, because the runner’s page is the runner’s', () => {
+    expect(decideBinding(env({ protocol: 'http:', hostname: '127.0.0.1', runner: true }))).toBe('local-host');
+    // A runner that answered is the host, whatever globals an extension or a test put on the window.
+    expect(decideBinding(env({ protocol: 'http:', hostname: '127.0.0.1', runner: true, claudeUse: true }))).toBe('local-host');
+    expect(decideBinding(env({ protocol: 'http:', hostname: '127.0.0.1', runner: false }))).toBe('file');
   });
   it('any other origin with nothing wired reads as `file` — a plain page, no host', () => {
     expect(decideBinding(env({}))).toBe('file');
@@ -42,18 +88,15 @@ describe('decideBinding — the matrix', () => {
 });
 
 describe('readBindingEnv', () => {
-  it('reads protocol/hostname and detects the claude globals by function-ness, never by presence', () => {
-    const read = readBindingEnv({
-      location: { protocol: 'https:', hostname: 'h' },
-      claude: { use: () => undefined, complete: 'not a function' },
-    });
-    expect(read).toEqual({ protocol: 'https:', hostname: 'h', claudeUse: true, claudeComplete: false });
-    expect(readBindingEnv({ location: { protocol: 'file:', hostname: '' } })).toEqual({
-      protocol: 'file:',
-      hostname: '',
-      claudeUse: false,
-      claudeComplete: false,
-    });
+  it('reads protocol/hostname and detects `use` by function-ness, never by presence', () => {
+    expect(readBindingEnv({ location: { protocol: 'https:', hostname: 'h' }, claude: { use: () => undefined } })).toEqual({ protocol: 'https:', hostname: 'h', claudeUse: true });
+    expect(readBindingEnv({ location: { protocol: 'https:', hostname: 'h' }, claude: { use: 'not a function' } })).toEqual({ protocol: 'https:', hostname: 'h', claudeUse: false });
+    expect(readBindingEnv({ location: { protocol: 'file:', hostname: '' } })).toEqual({ protocol: 'file:', hostname: '', claudeUse: false });
+  });
+  it('C2: `window.claude.complete` is not a fact the kit reads — the env is the same with it or without it', () => {
+    const location = { protocol: 'https:', hostname: 'h' };
+    expect(readBindingEnv({ location, claude: { complete: async () => 'x' } })).toEqual(readBindingEnv({ location }));
+    expect(readBindingEnv({ location, claude: { use: () => undefined, complete: async () => 'x' } })).toEqual(readBindingEnv({ location, claude: { use: () => undefined } }));
   });
 });
 
@@ -187,13 +230,13 @@ describe('probeStorage — tries the ladder, never trusts presence', () => {
 
 describe('probeBrain — the demo brain when nothing answered; the legs record what was seen', () => {
   it('with no host namespaces it is the demo brain; a detected-but-unresolved leg stays `detected` (the T2 shape)', async () => {
-    expect(await probeBrain(env({}))).toMatchObject({
+    expect(await probeBrain(env({}))).toEqual({
       brain: { kind: 'demo' },
-      legs: { sample: 'absent', complete: 'absent', local: 'absent' },
+      legs: { sample: 'absent', local: 'absent' },
     });
-    expect(await probeBrain(env({ claudeUse: true, claudeComplete: true }))).toMatchObject({
+    expect(await probeBrain(env({ claudeUse: true }))).toEqual({
       brain: { kind: 'demo' },
-      legs: { sample: 'detected', complete: 'detected', local: 'absent' },
+      legs: { sample: 'detected', local: 'absent' },
     });
   });
 });
@@ -252,7 +295,7 @@ describe('probeBrain with host namespaces — the pinned brains (AC1/AC2)', () =
   it('sample resolved → the host brain: two adapters (quick app, default chat), the ruler, the cap from limits()', async () => {
     const sample = fakeSample({ maxPromptBytes: 65536 });
     const result = await probeBrain(env({ claudeUse: true }), { sample, legs: { sample: 'resolved', artifact: 'null', downloads: 'null' }, guardTripped: false, rejected: false });
-    expect(result.legs).toEqual({ sample: 'resolved', complete: 'absent', local: 'absent' });
+    expect(result.legs).toEqual({ sample: 'resolved', local: 'absent' });
     const brain = result.brain;
     expect(brain.kind).toBe('host');
     if (brain.kind !== 'host') return;
@@ -276,7 +319,7 @@ describe('probeBrain with host namespaces — the pinned brains (AC1/AC2)', () =
     sample.json = async () => ({});
     const written: [string, string][] = [];
     const storage = { getItem: () => null, setItem: (k: string, v: string) => void written.push([k, v]) };
-    const result = await probeBrain(env({ claudeUse: true }), { sample, legs: { sample: 'resolved', artifact: 'null', downloads: 'null' }, guardTripped: false, rejected: false }, undefined, storage);
+    const result = await probeBrain(env({ claudeUse: true }), { sample, legs: { sample: 'resolved', artifact: 'null', downloads: 'null' }, guardTripped: false, rejected: false }, storage);
     const brain = result.brain;
     if (brain.kind !== 'host') throw new Error('expected the sample brain');
     const seat = brain.tiers;
@@ -301,7 +344,7 @@ describe('probeBrain with host namespaces — the pinned brains (AC1/AC2)', () =
     sample.limits = async () => ({ maxPromptBytes: 65536 });
     sample.json = async () => ({});
     const storage = { getItem: () => 'complex', setItem: () => {} };
-    const result = await probeBrain(env({ claudeUse: true }), { sample, legs: { sample: 'resolved', artifact: 'null', downloads: 'null' }, guardTripped: false, rejected: false }, undefined, storage);
+    const result = await probeBrain(env({ claudeUse: true }), { sample, legs: { sample: 'resolved', artifact: 'null', downloads: 'null' }, guardTripped: false, rejected: false }, storage);
     const brain = result.brain;
     if (brain.kind !== 'host' || brain.tiers === undefined) throw new Error('expected the seat');
     expect(brain.tiers.state.get().choice).toBe('complex');
@@ -312,7 +355,7 @@ describe('probeBrain with host namespaces — the pinned brains (AC1/AC2)', () =
     const wire = (async (_input: unknown, options?: { modelTier?: string }) => (asked.push(options?.modelTier), { text: 'ok', truncated: false, modelTierApplied: 'default' as const })) as unknown as SampleFn;
     wire.limits = async () => ({ maxPromptBytes: 65536 });
     wire.json = async () => ({});
-    const again = await probeBrain(env({ claudeUse: true }), { sample: wire, legs: { sample: 'resolved', artifact: 'null', downloads: 'null' }, guardTripped: false, rejected: false }, undefined, storage);
+    const again = await probeBrain(env({ claudeUse: true }), { sample: wire, legs: { sample: 'resolved', artifact: 'null', downloads: 'null' }, guardTripped: false, rejected: false }, storage);
     if (again.brain.kind !== 'host' || again.brain.tiers === undefined) throw new Error('expected the seat');
     await again.brain.adapter.complete({ system: 's', messages: [{ role: 'user', content: 'x' }] }); // complex → substituted
     await again.brain.chatAdapter!.complete({ system: 's', messages: [{ role: 'user', content: 'x' }] }); // the fallback, honoured
@@ -320,16 +363,70 @@ describe('probeBrain with host namespaces — the pinned brains (AC1/AC2)', () =
     expect(again.brain.tiers.state.get().applied).toEqual({ asked: 'complex', answered: 'default' });
   });
 
-  it('TASK-20260906 AC1 (twin): the chat brain and the demo brain carry NO tier seat', async () => {
-    const chat = await probeBrain(env({ claudeComplete: true }), undefined, async () => 'reply');
-    expect(chat.brain.kind === 'host' && chat.brain.tiers).toBeUndefined();
+  it('TASK-20260906 AC1 (twin): the demo brain carries NO tier seat', async () => {
     const demo = await probeBrain(env({}));
     expect(demo.brain).toEqual({ kind: 'demo' });
   });
 
-  it('limits() rejecting → the documented 65,536 fallback', async () => {
-    const result = await probeBrain(env({ claudeUse: true }), { sample: fakeSample('reject'), legs: { sample: 'resolved', artifact: 'null', downloads: 'null' }, guardTripped: false, rejected: false });
-    expect(result.brain.kind === 'host' && result.brain.maxPromptBytes).toBe(65536);
+  it('C4: the cap IS limits().maxPromptBytes — the 262,144 contract 0.2.67 reports (measured 2026-10-03), and the builder budgets on it to the byte', async () => {
+    const result = await probeBrain(env({ claudeUse: true }), { sample: fakeSample({ maxPromptBytes: 262_144 }), legs: { sample: 'resolved', artifact: 'null', downloads: 'null' }, guardTripped: false, rejected: false });
+    const brain = result.brain;
+    if (brain.kind !== 'host' || brain.promptBytes === undefined || brain.maxPromptBytes === undefined) throw new Error('expected the sample brain with a ruler and a cap');
+    expect(brain.maxPromptBytes).toBe(262_144);
+    // ADR-0066: the builder's budget-or-refuse reads THIS seat — the probe's cap and the
+    // adapters' own ruler — so a turn of exactly the cap goes out and one byte more is refused.
+    const system = 'S';
+    const fill = (bytes: number): string => 'x'.repeat(bytes - measurePrompt(system, [{ role: 'user', content: '' }]));
+    const seat = { maxPromptBytes: brain.maxPromptBytes, promptBytes: brain.promptBytes };
+    expect(fitHostTurn({ system, history: [], message: fill(262_144) }, seat)).toMatchObject({ ok: true, bytes: 262_144 });
+    expect(fitHostTurn({ system, history: [], message: fill(262_145) }, seat)).toEqual({ ok: false, bytes: 262_145, maxPromptBytes: 262_144 });
+  });
+
+  it.each([
+    ['rejects', 'reject'],
+    ['answers a string', { maxPromptBytes: '262144' }],
+    ['answers no member', {}],
+    ['answers null', null],
+    ['answers NaN', { maxPromptBytes: Number.NaN }],
+    ['answers zero', { maxPromptBytes: 0 }],
+    ['answers a negative number', { maxPromptBytes: -1 }],
+    ['answers a fraction', { maxPromptBytes: 1024.5 }],
+    ['answers Infinity', { maxPromptBytes: Number.POSITIVE_INFINITY }],
+  ] as const)('C4: limits() that %s → the 65,536 fallback, never a cap that is not a byte count', async (_label, limits) => {
+    const result = await probeBrain(env({ claudeUse: true }), { sample: fakeSample(limits as never), legs: { sample: 'resolved', artifact: 'null', downloads: 'null' }, guardTripped: false, rejected: false });
+    expect(DEFAULT_MAX_PROMPT_BYTES).toBe(65_536);
+    expect(result.brain.kind === 'host' && result.brain.maxPromptBytes).toBe(65_536);
+  });
+
+  // The probe promises nothing here throws (header): a runtime whose `sample` has no `limits`,
+  // throws from it at once, or never answers it still boots, on the fallback (R5 verifier).
+  it.each([
+    [
+      'has no limits member',
+      (fn: SampleFn): void => {
+        Reflect.deleteProperty(fn, 'limits');
+      },
+    ],
+    [
+      'throws synchronously from limits()',
+      (fn: SampleFn): void => {
+        fn.limits = () => {
+          throw new Error('no limits here');
+        };
+      },
+    ],
+    [
+      'never settles limits()',
+      (fn: SampleFn): void => {
+        fn.limits = () => new Promise<never>(() => undefined);
+      },
+    ],
+  ] as const)('C4: a sample that %s → the host brain on the 65,536 fallback, the boot never stopped', async (_label, breakIt) => {
+    const sample = fakeSample({ maxPromptBytes: 262_144 });
+    breakIt(sample);
+    const result = await probeBrain(env({ claudeUse: true }), { sample, legs: { sample: 'resolved', artifact: 'null', downloads: 'null' }, guardTripped: false, rejected: false }, undefined, { guardMs: 20 });
+    expect(result.brain.kind).toBe('host');
+    expect(result.brain.kind === 'host' && result.brain.maxPromptBytes).toBe(DEFAULT_MAX_PROMPT_BYTES);
   });
 
   it('sample null (artifact resolved or not) → the demo brain, leg `null`', async () => {
@@ -338,18 +435,15 @@ describe('probeBrain with host namespaces — the pinned brains (AC1/AC2)', () =
     expect(result.legs.sample).toBe('null');
   });
 
-  it('window.claude.complete alone → the chat brain: one adapter, no streaming, no cap (unmeasured), the ruler still pinned', async () => {
-    const complete = async (): Promise<unknown> => 'reply';
-    const result = await probeBrain(env({ claudeComplete: true }), undefined, complete);
-    expect(result.legs).toEqual({ sample: 'absent', complete: 'resolved', local: 'absent' });
-    const brain = result.brain;
-    if (brain.kind !== 'host') throw new Error('expected the chat brain');
-    expect(brain.label).toBe('Claude · this chat');
-    expect(brain.streaming).toBe(false);
-    expect(brain.tools).toBe(false);
-    expect(brain.maxPromptBytes).toBeUndefined();
-    expect(brain.chatAdapter).toBeUndefined();
-    expect(brain.promptBytes).toBe(measurePrompt);
+  it('C2: window.claude.complete alone → the demo brain, exactly as a page with no claude at all', async () => {
+    // MIGRATED 2026-10-03 (TASK-20261003 R5 C2) from "window.claude.complete alone → the chat
+    // brain: one adapter, no streaming, no cap": the September runtime it pinned is gone.
+    const { win, touched } = septemberChatWindow();
+    const flat = await runProbe(win);
+    const plain = await runProbe({ ...win, claude: undefined });
+    expect(flat.brain).toEqual({ brain: { kind: 'demo' }, legs: { sample: 'absent', local: 'absent' } });
+    expect(flat.brain).toEqual(plain.brain);
+    expect(touched).toEqual([]);
   });
 
   it('neither brain makes a call when pinned (never on load)', async () => {
@@ -396,11 +490,15 @@ describe('runProbe — the whole boot, from a window', () => {
     expect(result.host?.guardTripped).toBe(true);
   });
 
-  it('a chat viewer (flat window.claude): artifact-chat with the chat brain', async () => {
-    const win = { ...baseWindow(), claude: { complete: async () => 'ok' } };
-    const result = await runProbe(win);
-    expect(result.binding).toBe('artifact-chat');
-    expect(result.brain.brain.kind === 'host' && result.brain.brain.label).toBe('Claude · this chat');
+  it('C2: a page that meets only the September chat runtime (flat window.claude.complete + window.storage): the binding a plain page gets, the demo brain, nothing asked, nothing touched', async () => {
+    // MIGRATED 2026-10-03 (TASK-20261003 R5 C2) from "a chat viewer (flat window.claude): the
+    // chat binding with the chat brain".
+    const { win, touched } = septemberChatWindow();
+    const result = await runProbe({ ...win, location: baseWindow().location });
+    expect(result.binding).toBe('file');
+    expect(result.brain.brain).toEqual({ kind: 'demo' });
+    expect(result.host).toBeUndefined();
+    expect(touched).toEqual([]);
   });
 
   it('a plain file: nothing asked, nothing waited for', async () => {
@@ -414,7 +512,7 @@ describe('runProbe — the whole boot, from a window', () => {
 describe('the runtime is invoked as a METHOD; a rejecting use is never a static page (correctness review 6)', () => {
   const baseWindow = () => ({ location: { protocol: 'https:', hostname: 'x.frame.claudeusercontent.com' }, navigator: undefined, indexedDB: undefined });
 
-  it('a this-dependent `use` / `complete` still works — the kit calls them on window.claude', async () => {
+  it('a this-dependent `use` still works — the kit calls it on window.claude', async () => {
     const sample = fakeSample({ maxPromptBytes: 4096 });
     const claude = {
       use(this: unknown, name: string): Promise<unknown> {
@@ -425,17 +523,6 @@ describe('the runtime is invoked as a METHOD; a rejecting use is never a static 
     const hosted = await runProbe({ ...baseWindow(), claude }, { guardMs: 50 });
     expect(hosted.binding).toBe('artifact');
     expect(hosted.brain.brain.kind === 'host' && hosted.brain.brain.maxPromptBytes).toBe(4096);
-    const chat = {
-      complete(this: unknown, prompt: string): Promise<unknown> {
-        if (this !== chat) throw new TypeError('Illegal invocation');
-        return Promise.resolve(`echo ${prompt.length}`);
-      },
-    };
-    const chatProbe = await runProbe({ ...baseWindow(), claude: chat });
-    expect(chatProbe.brain.brain.kind).toBe('host');
-    if (chatProbe.brain.brain.kind !== 'host') return;
-    const result = await chatProbe.brain.brain.adapter.complete({ system: 'S', messages: [{ role: 'user', content: 'hi' }] });
-    expect(result).toMatchObject({ ok: true, text: 'echo 5' }); // 'S' + PROMPT_SEPARATOR + 'hi'
   });
 
   it('a `use` that REJECTS leaves the binding at artifact with the demo brain — only an answer of null makes a static page', async () => {
@@ -459,5 +546,29 @@ describe('the runtime is invoked as a METHOD; a rejecting use is never a static 
     expect(refusal.ok).toBe(false);
     if (!refusal.ok) expect(refusal.message).toContain('1,000');
     expect(result.brain.maxPromptBytes).toBe(1000);
+  });
+});
+
+// ---- the storage globals are read through the ONE guarded accessor (K4) ----------------
+
+describe('runProbe at an opaque origin — every storage getter THROWS', () => {
+  it('still answers: memory, the demo brain, `file` — the page boots and says so', async () => {
+    // An `about:srcdoc` document at origin `null` (where T1 measured September's chat
+    // artifacts): `localStorage`, `indexedDB` and `navigator.storage` are getters that throw a
+    // SecurityError there. `runProbe` read two of the three bare.
+    const deny = (name: string) => ({
+      get(): never {
+        throw new DOMException(`The document is sandboxed and lacks the 'allow-same-origin' flag (${name}).`, 'SecurityError');
+      },
+    });
+    const navigator = {};
+    Object.defineProperty(navigator, 'storage', deny('storage'));
+    const win = { location: { protocol: 'about:', hostname: '' }, navigator };
+    Object.defineProperty(win, 'indexedDB', deny('indexedDB'));
+    Object.defineProperty(win, 'localStorage', deny('localStorage'));
+    const result = await runProbe(win as Parameters<typeof runProbe>[0]);
+    expect(result.storage.kind).toBe('memory');
+    expect(result.brain.brain).toEqual({ kind: 'demo' });
+    expect(result.binding).toBe('file');
   });
 });

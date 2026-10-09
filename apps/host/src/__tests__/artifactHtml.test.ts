@@ -5,12 +5,16 @@
 // FETCHED and verified, never serialized from the live DOM (the contract forbids it: the
 // viewer injects its runtime). Every refusal is named; nothing here overwrites a copy.
 
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import { createMemoryBackend, sha256Hex } from '@snugprotocol/db';
 import { USERDB_FILE } from '@snugprotocol/protocol';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { VIEWER_WRAPPER_HEAD, VIEWER_WRAPPER_TAIL, wrapAsViewerPage } from '../../../../scripts/fixtures/viewer-wrapper.mjs';
-import { DB_BLOCK_FORMAT, readDbBlock, unwrapViewerPage, writeDbBlock } from '../../../../scripts/lib/page-blocks.mjs';
+import { ARTIFACT_SKELETON_OPEN, DB_BLOCK_FORMAT, readDbBlock, unwrapViewerPage, writeDbBlock } from '../../../../scripts/lib/page-blocks.mjs';
 import { ARTIFACT_MAX_PAGE_BYTES, BEFORE_LOAD_FILE, CUSTODY_NOTE_STASH_KEY, CUSTODY_SIDECAR_FILE, createArtifactRecord } from '../storage/artifactHtml.js';
 import { createCustodyStore } from '../storage/custodyStore.js';
 
@@ -347,6 +351,101 @@ describe('publish — the one explicit act', () => {
     const record = createArtifactRecord({ bucket: createMemoryBackend(), pageBlock: undefined, canonicalSource: async () => KIT_PAGE, expectedStamp: STAMP, publish: undefined, store });
     expect(record.canSave()).toBe(false);
     expect(store.get().readOnly).toBe(true);
+  });
+});
+
+// ---- TASK-20261003 R5 C3: the canonical source under contract 0.2.67 ---------------------
+// `fetch(location.href)` now returns the page inside the platform's 0.2.67 skeleton (charset,
+// viewport, a reset — no injected script), the kit's whole document in its body: measured on
+// two REAL read-backs (scripts/fixtures/readback-0.2.67/). The save lifts the kit document out
+// and publishes it BARE (the decision and its contract text are in artifactHtml.ts's header).
+
+const READBACKS = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../../../scripts/fixtures/readback-0.2.67');
+/** The platform's form of a page, as both real read-backs show it. */
+const inSkeleton = (page: string): string => `${ARTIFACT_SKELETON_OPEN}\n${page}\n</body></html>`;
+const htmlCount = (page: string): number => (page.match(/<html[\s>]/gi) ?? []).length;
+
+describe('publish under contract 0.2.67 — the skeleton read back, the bare page sent', () => {
+  it('the fetched source is the 0.2.67 SKELETON around the kit page: the save lifts the kit document out, verifies it, and publishes the BARE kit page with the block', async () => {
+    const bucket = createMemoryBackend();
+    const store = createCustodyStore();
+    const pub = recorder();
+    const record = createArtifactRecord({ bucket, pageBlock: undefined, canonicalSource: async () => inSkeleton(KIT_PAGE), expectedStamp: STAMP, publish: pub.publish, store });
+    await record.backend.save(USERDB_FILE, bytesOf(8));
+    expect(await record.publish()).toMatchObject({ ok: true, saved: 1 });
+    const published = pub.calls[0]!;
+    expect(published.startsWith('<!doctype html>\n<html lang="en">')).toBe(true);
+    expect(published).not.toContain(ARTIFACT_SKELETON_OPEN);
+    expect(htmlCount(published)).toBe(1);
+    const block = readDbBlock(published)!;
+    if (block.corrupt !== undefined) throw new Error(block.corrupt);
+    expect(block.manifest.saved).toBe(1);
+    expect(`${published.slice(0, block.index)}${published.slice(block.end + 1)}`).toBe(KIT_PAGE);
+  });
+
+  it('(N) the REAL tool-published fragment read-back is not the kit page: refused by name, nothing published', async () => {
+    const fragment = readFileSync(path.join(READBACKS, 'tool-published-fragment.html'), 'utf8');
+    const bucket = createMemoryBackend();
+    const store = createCustodyStore();
+    const pub = recorder();
+    const record = createArtifactRecord({ bucket, pageBlock: undefined, canonicalSource: async () => fragment, expectedStamp: STAMP, publish: pub.publish, store });
+    await record.backend.save(USERDB_FILE, bytesOf(8));
+    expect(await record.publish()).toMatchObject({ ok: false, reason: 'not-the-kit-page' });
+    expect(store.get().note).toMatch(/page fragment, not a kit document/);
+    expect(pub.calls).toHaveLength(0);
+    expect(store.get().dirty).toBe(true);
+  });
+
+  it('(N) a skeleton inside a skeleton, or around nothing, is refused by name with nothing published', async () => {
+    const pub = recorder();
+    for (const [label, source, problem] of [
+      ['two skeletons', inSkeleton(inSkeleton(KIT_PAGE)), /a skeleton inside a skeleton/],
+      ['around nothing', inSkeleton(''), /carries nothing/],
+    ] as const) {
+      const bucket = createMemoryBackend();
+      const store = createCustodyStore();
+      const record = createArtifactRecord({ bucket, pageBlock: undefined, canonicalSource: async () => source, expectedStamp: STAMP, publish: pub.publish, store });
+      await record.backend.save(USERDB_FILE, bytesOf(8));
+      expect(await record.publish(), label).toMatchObject({ ok: false, reason: 'not-the-kit-page' });
+      expect(store.get().note, label).toMatch(problem);
+    }
+    expect(pub.calls).toHaveLength(0);
+  });
+
+  it('save → read-back → save is byte-stable whatever the platform does with a bare publish (stores it as sent, or wraps it in the skeleton): the page never grows a second skeleton', async () => {
+    const asSent = (html: string): string => html;
+    const platforms = { 'stores as sent': [asSent, asSent, asSent, asSent], 'wraps in the skeleton': [inSkeleton, inSkeleton, inSkeleton, inSkeleton], 'a tool publish between page saves': [inSkeleton, asSent, inSkeleton, asSent] };
+    for (const [label, sequence] of Object.entries(platforms)) {
+      const bucket = createMemoryBackend();
+      let stored = inSkeleton(KIT_PAGE); // the first artifact, as the tool published it
+      const published: string[] = [];
+      for (const [round, store] of sequence.entries()) {
+        const record = createArtifactRecord({
+          bucket,
+          pageBlock: readDbBlock(stored),
+          canonicalSource: async () => stored,
+          expectedStamp: STAMP,
+          publish: async (html) => {
+            published.push(html);
+            stored = store(html);
+            return { version: `v${round + 1}` };
+          },
+          store: createCustodyStore(),
+          custodyStart: { saved: round },
+        });
+        await record.backend.load(USERDB_FILE);
+        await record.backend.save(USERDB_FILE, bytesOf(48, round + 2));
+        expect(await record.publish(), `${label} round ${round + 1}`).toMatchObject({ ok: true, saved: round + 1 });
+        // What was sent is the bare kit page; what the platform keeps unwraps to exactly it.
+        expect(htmlCount(published[round]!), label).toBe(1);
+        expect(published[round], label).not.toContain(ARTIFACT_SKELETON_OPEN);
+        expect(unwrapViewerPage(stored).html, label).toBe(published[round]);
+        expect(htmlCount(stored), label).toBeLessThanOrEqual(2);
+      }
+      // Same-sized files, single-digit counters: every save is the same length — nothing accumulates.
+      expect(new Set(published.map((p) => p.length)).size, label).toBe(1);
+      expect(published.map((p) => readDbBlock(p)?.manifest?.saved), label).toEqual([1, 2, 3, 4]);
+    }
   });
 });
 

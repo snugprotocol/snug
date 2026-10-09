@@ -16,13 +16,36 @@
 // to the chosen provider, never to Snug's servers. It deliberately does NOT say
 // "never leaves your device": the key travels to the provider, and a critical
 // reader who catches an overclaim stops believing the honest claims too.
+//
+// TWO CHIPS, ONE SLOT (TASK-20261003 R4, ADR-0071 §4). Where the platform carries a brain
+// switcher — the local runner, where the brain is one of the user's OWN agents — the chip is
+// the switcher: every agent the runner knows with its state and its remedy, `auto` first,
+// and the answering agent's model and thinking level. Everywhere else it is the status chip
+// it has always been, unchanged. The platform is set once before boot, so which of the two
+// this is never changes under a mounted tree.
 
 import type { ReactElement } from 'react';
-import { useSyncExternalStore } from 'react';
+import { useId, useRef, useSyncExternalStore } from 'react';
 import { Link } from 'react-router-dom';
 
-import { tierAutoLabel, tierLabel, tierSubstitutionNote } from '../platform/copy.js';
-import { allows, getPlatform, type CliEffort, type TierChoice } from '../platform/platform.js';
+import {
+  BRAIN_AUTO,
+  BRAIN_MARK_WORD,
+  BRAIN_UNVERIFIED_BODY,
+  BRAIN_UNVERIFIED_LABEL,
+  autoChoiceLine,
+  brainLevels,
+  brainMark,
+  brainReadyState,
+  brainRemedy,
+  demoStandIn,
+  proseParts,
+  standInBody,
+  tierAutoLabel,
+  tierLabel,
+  tierSubstitutionNote,
+} from '../platform/copy.js';
+import { allows, getPlatform, type BrainOptionView, type BrainSwitchSeat, type TierChoice } from '../platform/platform.js';
 import { setMode } from '../state/mode.js';
 import { useActiveBrain, type ActiveBrainKind } from '../state/activeBrain.js';
 import { useOllama } from '../state/ollama.js';
@@ -108,6 +131,12 @@ function copyFor(brain: ActiveBrainKind): { label: string; aria: string; headlin
 const noSubscription = (): (() => void) => () => undefined;
 
 export function BrainChip(): ReactElement {
+  const seat = getPlatform().brainSwitch;
+  return seat === undefined ? <StatusChip /> : <BrainSwitcher seat={seat} />;
+}
+
+/** The chip on every platform without a brain switcher: web, desktop, the artifact kit. */
+function StatusChip(): ReactElement {
   const brain = useActiveBrain();
   const ollama = useOllama();
   // The webllm override outranks the configured mode (ADR-0015), so while it is
@@ -127,22 +156,8 @@ export function BrainChip(): ReactElement {
     () => tierSeat?.state.get(),
     () => tierSeat?.state.get(),
   );
-  // The user's own CLI as the brain (ADR-0070): model + effort. Mutually exclusive with the
-  // tier seat in practice — a Binding B runner has no artifact `sample` contract and a Binding
-  // A one spawns no CLI — and absent entirely wherever the CLI cannot think, so this renders
-  // no dead control (AC8).
-  const cliSeat = brain === 'host' && pinned?.kind === 'host' ? pinned.cliModel : undefined;
-  const cliState = useSyncExternalStore(
-    cliSeat?.state.subscribe ?? noSubscription,
-    () => cliSeat?.state.get(),
-    () => cliSeat?.state.get(),
-  );
 
   const copy = copyFor(brain);
-  const effortLine =
-    cliSeat !== undefined && cliState !== undefined && cliSeat.effortApplies ? `thinking · ${cliState.effort ?? 'default'}` : undefined;
-  // The accessible name carries the level too — the visible line may be compacted away.
-  const chipAria = effortLine === undefined ? copy.aria : `${copy.aria}, thinking level ${cliState?.effort ?? 'default'}`;
   const models = ollama !== 'unknown' && ollama.running ? ollama.models : [];
   const tierNote = tierSubstitutionNote(tierState?.applied);
 
@@ -156,8 +171,8 @@ export function BrainChip(): ReactElement {
         data-brain={brain}
         aria-haspopup="true"
         aria-expanded={open}
-        aria-label={chipAria}
-        title={chipAria}
+        aria-label={copy.aria}
+        title={copy.aria}
         {...(tierState !== undefined ? { 'data-tier': tierState.choice } : {})}
         onClick={toggle}
       >
@@ -174,15 +189,6 @@ export function BrainChip(): ReactElement {
         ) : (
           <span className="brain-chip-text">
             <span className="brain-chip-label">{copy.label}</span>
-            {/* The thinking level, smaller, under the label (S12). Only where the CLI control
-                exists and the chosen model HAS an effort axis — Haiku 4.5 does not, and naming a
-                level it ignores would be noise (AC8). An unchosen level is "default": the CLI
-                reports its default level nowhere, so none is invented. */}
-            {effortLine !== undefined ? (
-              <span className="brain-chip-sub" data-testid="brain-chip-effort">
-                {effortLine}
-              </span>
-            ) : null}
           </span>
         )}
       </button>
@@ -213,85 +219,6 @@ export function BrainChip(): ReactElement {
               ) : null}
             </label>
           ) : null}
-          {cliSeat !== undefined && cliState !== undefined ? (
-            <div className="brain-menu-cli">
-              {/* What is RUNNING, not what was asked: the chip's one line of truth (ADR-0059
-                  rule 2). A chosen model does not appear here until a think has answered on it. */}
-              <span className="brain-menu-cli-active" data-testid="brain-menu-active">
-                {/* Derived from the LIVE state, not from `activeLabel`: that string is built
-                    when the seat is, and the seat outlives a think — so rendering it showed a
-                    stale "default" even after the model was known. */}
-                {`thinking on ${cliState.activeModel ?? 'the CLI’s default (known after the first think)'}, effort ${cliState.effort ?? 'the CLI’s default'}`}
-                {cliState.refusal === undefined ? '' : ` — ${cliState.refusal}`}
-              </span>
-              <label className="brain-menu-cli-row">
-                <span className="brain-menu-tier-label">model</span>
-                {/* A dropdown of the CLI's OWN catalogue (S9) — exact ids, so a typo cannot
-                    break a call. No `other…` rung: it swapped the dropdown for a text field with
-                    no way back (owner's walk, 2026-10-02). Free text survives ONLY as the whole
-                    control when no catalogue could be read (it is an internal cache and may move),
-                    because the alternative there is no control at all. */}
-                {cliSeat.models.length > 0 ? (
-                  <select
-                    aria-label="model"
-                    data-testid="brain-menu-model-select"
-                    value={cliState.model ?? ''}
-                    onChange={(event) => cliSeat.setModel(event.currentTarget.value === '' ? undefined : event.currentTarget.value)}
-                  >
-                    <option value="">the CLI’s default</option>
-                    {cliSeat.models.map((model) => (
-                      <option key={model.id} value={model.id}>
-                        {model.name}
-                      </option>
-                    ))}
-                    {/* A model stored earlier that this CLI no longer lists stays visible and
-                        selectable-away, rather than silently reading as "default". */}
-                    {cliState.model !== undefined && !cliSeat.models.some((m) => m.id === cliState.model) ? (
-                      <option value={cliState.model}>{cliState.model}</option>
-                    ) : null}
-                  </select>
-                ) : (
-                  <input
-                    type="text"
-                    aria-label="model"
-                    data-testid="brain-menu-model"
-                    className="brain-menu-cli-input"
-                    placeholder="the CLI’s default"
-                    defaultValue={cliState.model ?? ''}
-                    onChange={(event) => cliSeat.setModel(event.currentTarget.value)}
-                  />
-                )}
-              </label>
-              {/* Not every model HAS an effort axis (Haiku 4.5 does not), and a control the
-                  model ignores is a dead control (AC8). */}
-              {cliSeat.effortApplies ? (
-              <label className="brain-menu-cli-row">
-                <span className="brain-menu-tier-label">thinking level</span>
-                <select
-                  aria-label="thinking level"
-                  data-testid="brain-menu-effort"
-                  value={cliState.effort ?? ''}
-                  onChange={(event) => cliSeat.setEffort(event.currentTarget.value === '' ? undefined : (event.currentTarget.value as CliEffort))}
-                >
-                  <option value="">the CLI’s default</option>
-                  {cliSeat.efforts.map((effort) => (
-                    <option key={effort} value={effort}>
-                      {effort}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              ) : null}
-              {cliState.refusal !== undefined ? (
-                <span className="brain-menu-hint" data-testid="brain-menu-cli-note">
-                  {cliState.refusal}
-                </span>
-              ) : null}
-              <span className="brain-menu-hint" data-testid="brain-menu-cli-hint">
-                {cliSeat.note}
-              </span>
-            </div>
-          ) : null}
           {/* The BRAIN switch affordances exist only where a brain can be chosen (D15): under
               the host kit the brain is the host's; the thinking level above is the one control
               the chip carries there (ADR-0067). */}
@@ -319,6 +246,328 @@ export function BrainChip(): ReactElement {
             </button>
           ) : null}
           {brain === 'demo' && allows('brainSettings') ? <span className="brain-menu-hint">{BYOK_HONESTY_COPY}</span> : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+// ------------------------------------------------------------------ the brain switcher
+
+/**
+ * A thinking-level row shows every level at once while there are few enough to read as one
+ * row at 375 px (Claude has five; with "default" that is six segments at about 50 px each).
+ * Past that it is the plain dropdown.
+ */
+const MAX_SEGMENTED_LEVELS = 6;
+
+/** A sentence from the runner, its commands set as code. */
+function Prose({ text }: { text: string }): ReactElement {
+  return (
+    <>
+      {proseParts(text).map((part, index) => (part.code ? <code key={index}>{part.text}</code> : <span key={index}>{part.text}</span>))}
+    </>
+  );
+}
+
+function BrainRow({ brain, chosen, answering, checking, onChoose }: { brain: BrainOptionView; chosen: boolean; answering: boolean; checking: boolean; onChoose: () => void }): ReactElement {
+  const id = useId();
+  const mark = brainMark(brain.state);
+  const ready = mark === 'ready';
+  // A brain that is not checked yet, while a check is running, is being checked — not in
+  // need of the user's attention. (Every brain is in that state for the first seconds of a
+  // page: the runner looks at its brains when the first page asks, never before.)
+  const word = answering ? 'answering' : checking && brainReadyState(brain.state) === 'unknown' ? 'checking…' : BRAIN_MARK_WORD[mark];
+  return (
+    // The whole row is the control: a ready brain's row pins it. A brain that is not ready
+    // cannot be picked — a pin that cannot answer is a dead control — but its row stays
+    // FOCUSABLE (`aria-disabled`, not `disabled`), because the remedy inside it is the one
+    // thing a keyboard or screen-reader user came here for.
+    <button
+      type="button"
+      className="brain-row"
+      data-testid={`brain-option-${brain.id}`}
+      data-state={brainReadyState(brain.state)}
+      data-mark={mark}
+      data-answering={answering}
+      aria-pressed={chosen}
+      aria-disabled={!ready}
+      aria-labelledby={`${id}-name`}
+      aria-describedby={`${id}-state ${id}-notes`}
+      onClick={ready && !chosen ? onChoose : undefined}
+    >
+      <span className="brain-row-main">
+        <span className="brain-row-name" id={`${id}-name`}>
+          {brain.name}
+        </span>
+        <span className="brain-row-via">{brain.via}</span>
+      </span>
+      <span className="brain-row-state" id={`${id}-state`}>
+        <span className="brain-mark" aria-hidden="true" />
+        {/* The answering brain is necessarily ready, so "answering" is the more useful word. */}
+        {word}
+      </span>
+      <span className="brain-row-notes" id={`${id}-notes`}>
+        {!brain.verified ? (
+          <span className="brain-row-note brain-row-experimental" data-testid={`brain-experimental-${brain.id}`}>
+            <strong>{BRAIN_UNVERIFIED_LABEL}</strong> {BRAIN_UNVERIFIED_BODY}
+          </span>
+        ) : null}
+        {!ready ? (
+          <span className="brain-row-note brain-row-remedy" data-testid={`brain-remedy-${brain.id}`}>
+            <Prose text={brainRemedy(brain)} />
+          </span>
+        ) : null}
+      </span>
+    </button>
+  );
+}
+
+function LevelPicker({ levels, value, onChange }: { levels: readonly string[]; value: string | undefined; onChange: (level: string | undefined) => void }): ReactElement {
+  const native = useRef<HTMLSelectElement>(null);
+  const segmented = levels.length <= MAX_SEGMENTED_LEVELS;
+  return (
+    <div className="brain-dock-field">
+      <span className="brain-dock-field-label">thinking level</span>
+      {/* ONE control, shown two ways. The native select is the control: its keyboard, its
+          accessible name and value, and what a test selects. While the levels fit a row it is
+          laid transparently over a row of segments — the same options, one tap each — which
+          are a pointer affordance only, hidden from assistive technology so the level is
+          never announced twice. */}
+      <div className="brain-dock-levels" data-segmented={segmented}>
+        <select
+          ref={native}
+          aria-label="thinking level"
+          data-testid="brain-menu-effort"
+          value={value ?? ''}
+          onChange={(event) => onChange(event.currentTarget.value === '' ? undefined : event.currentTarget.value)}
+        >
+          <option value="">default</option>
+          {levels.map((level) => (
+            <option key={level} value={level}>
+              {level}
+            </option>
+          ))}
+        </select>
+        {segmented ? (
+          <div className="brain-dock-segments" aria-hidden="true">
+            {[undefined, ...levels].map((level) => (
+              <span
+                key={level ?? ''}
+                className="brain-dock-segment"
+                data-testid={`brain-level-${level ?? 'default'}`}
+                data-selected={level === value}
+                onClick={() => {
+                  onChange(level);
+                  // The keyboard continues from the real control.
+                  native.current?.focus();
+                }}
+              >
+                {level ?? 'default'}
+              </span>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function BrainSwitcher({ seat }: { seat: BrainSwitchSeat }): ReactElement {
+  const brain = useActiveBrain();
+  const state = useSyncExternalStore(seat.state.subscribe, seat.state.get, seat.state.get);
+  const { open, toggle, triggerRef, menuRef } = useDismissableMenu();
+
+  // The label is the host arm's own, read LIVE: it is a getter over the same two sources
+  // this state is derived from, and the state changing is what re-renders this.
+  const pinned = getPlatform().brain;
+  const answering = state.brains.find((candidate) => candidate.id === state.active);
+  const label = answering !== undefined && pinned?.kind === 'host' ? pinned.label : undefined;
+  const standIn = demoStandIn(state);
+  // The levels of the model the answering brain would run — per model, in its own words.
+  const levels = answering === undefined ? [] : brainLevels(answering, state.model);
+  const level = state.effort ?? 'default';
+  const experimental = answering !== undefined && !answering.verified;
+
+  const aria =
+    label === undefined
+      ? `what’s thinking: demo brain — ${standIn?.why ?? 'no agent is answering'}`
+      : `what’s thinking: ${label}${experimental ? ` (${BRAIN_UNVERIFIED_LABEL})` : ''}${levels.length > 0 ? `, thinking level ${level}` : ''}`;
+  // What ANSWERED, never what was asked (ADR-0059 rule 2): a chosen model is not named here
+  // until a think has come back on it — and what another brain answered on is not this one's.
+  const ran = answering !== undefined && state.answered?.brain === answering.id ? state.answered.model : undefined;
+  // …and a CHOSEN model nothing has answered on yet is said as asked for: "thinking on the
+  // default model" there was untrue — the next think carries the choice.
+  const asked = answering === undefined || ran !== undefined || state.model === undefined ? undefined : (answering.models.find((model) => model.id === state.model)?.name ?? state.model);
+  const levelWords = levels.length > 0 ? `, level ${level}` : '';
+
+  const refusal =
+    state.refusal !== undefined ? (
+      <p className="brain-dock-refusal" data-testid="brain-menu-cli-note">
+        <Prose text={state.refusal} />
+      </p>
+    ) : null;
+
+  return (
+    <div className="identity-menu-wrap brain-dock-wrap">
+      <button
+        type="button"
+        ref={triggerRef}
+        className="brain-chip"
+        data-testid="brain-chip"
+        data-brain={brain}
+        data-experimental={experimental}
+        aria-haspopup="true"
+        aria-expanded={open}
+        aria-label={aria}
+        title={aria}
+        onClick={toggle}
+      >
+        <span className="brain-dot" aria-hidden="true" />
+        {label === undefined ? (
+          // The demo brain is standing in: the chip says so, and — where there is room — WHY.
+          // The 375px header has none (see app.css), so there it is the one word, as on web.
+          <span className="brain-chip-text">
+            <span className="brain-chip-label brain-chip-label-full">demo brain</span>
+            <span className="brain-chip-label brain-chip-label-short">demo</span>
+            {standIn !== undefined ? (
+              <span className="brain-chip-sub" data-testid="brain-chip-why">
+                {standIn.why}
+              </span>
+            ) : null}
+          </span>
+        ) : (
+          <span className="brain-chip-text">
+            <span className="brain-chip-label">{label}</span>
+            {/* Under the label, smaller (S12): that the brain is experimental, and the thinking
+                level — only where the model HAS levels (Haiku 4.5 has none, and naming a level
+                it ignores would be noise). An unchosen level is "default": a brain reports its
+                default level nowhere, so none is invented. */}
+            {experimental || levels.length > 0 ? (
+              <span className="brain-chip-sub">
+                {experimental ? <span data-testid="brain-chip-experimental">experimental</span> : null}
+                {experimental && levels.length > 0 ? ' · ' : null}
+                {levels.length > 0 ? <span data-testid="brain-chip-effort">{`thinking · ${level}`}</span> : null}
+              </span>
+            ) : null}
+          </span>
+        )}
+      </button>
+      {open ? (
+        <div className="identity-menu brain-dock" data-testid="brain-menu" ref={menuRef} role="group" aria-label="what’s thinking" data-checking={state.checking}>
+          <div className="brain-dock-head">
+            <div className="brain-dock-now" data-testid="brain-dock-now">
+              <span className="brain-dock-kicker">answering now</span>
+              <span className="brain-dock-title">{label ?? 'the demo brain'}</span>
+            </div>
+            {/* In the head, so nothing above it can grow and move it from under the pointer. */}
+            <button
+              type="button"
+              className="brain-dock-recheck"
+              data-testid="brain-recheck"
+              aria-busy={state.checking}
+              aria-disabled={state.checking}
+              title="ask the runner to look at your agents again"
+              onClick={state.checking ? undefined : () => void seat.recheck()}
+            >
+              <span className="brain-dock-spin" aria-hidden="true" />
+              {state.checking ? 'checking…' : 'check again'}
+            </button>
+          </div>
+          {standIn !== undefined ? (
+            <p className="brain-dock-standin" data-testid="brain-dock-standin">
+              {/* Never "nothing to configure": on the runner there is always something to do. */}
+              <strong>{standIn.why}.</strong> {standInBody(standIn, state.brains)}
+              {/* A reason that is about ONE agent has its remedy on that agent's row, below. */}
+              {standIn.brain === undefined ? <span className="brain-dock-standin-remedy"> {standIn.remedy}</span> : null}
+            </p>
+          ) : null}
+          {answering === undefined ? refusal : null}
+          <div className="brain-dock-list" role="group" aria-label="which agent answers">
+            <button
+              type="button"
+              className="brain-row brain-row-auto"
+              data-testid="brain-switch-auto"
+              aria-pressed={state.choice === BRAIN_AUTO}
+              onClick={state.choice === BRAIN_AUTO ? undefined : () => seat.choose(BRAIN_AUTO)}
+            >
+              <span className="brain-row-main">
+                <span className="brain-row-name">auto</span>
+                <span className="brain-row-via">{autoChoiceLine(state)}</span>
+              </span>
+            </button>
+            {state.brains.map((candidate) => (
+              <BrainRow
+                key={candidate.id}
+                brain={candidate}
+                chosen={state.choice === candidate.id}
+                answering={candidate.id === state.active}
+                checking={state.checking}
+                onChoose={() => seat.choose(candidate.id)}
+              />
+            ))}
+            {state.brains.length === 0 ? (
+              <p className="brain-dock-empty" data-testid="brain-dock-empty">
+                your agents will be listed here.
+              </p>
+            ) : null}
+          </div>
+          {answering !== undefined ? (
+            <div className="brain-dock-controls" data-testid="brain-dock-controls">
+              <label className="brain-dock-field">
+                <span className="brain-dock-field-label">model</span>
+                {/* A dropdown of the brain's OWN catalogue (S9) — exact ids, so a typo cannot
+                    break a call. No `other…` rung: it swapped the dropdown for a text field with
+                    no way back (owner's walk, 2026-10-02). Free text survives ONLY as the whole
+                    control when no catalogue could be read (it is an internal cache and may move),
+                    because the alternative there is no control at all. */}
+                {answering.models.length > 0 ? (
+                  <select
+                    aria-label="model"
+                    data-testid="brain-menu-model-select"
+                    value={state.model ?? ''}
+                    onChange={(event) => seat.setModel(event.currentTarget.value === '' ? undefined : event.currentTarget.value)}
+                  >
+                    <option value="">{`${answering.name}’s default`}</option>
+                    {answering.models.map((model) => (
+                      <option key={model.id} value={model.id}>
+                        {model.name}
+                      </option>
+                    ))}
+                    {/* A model stored earlier that this brain no longer lists stays visible and
+                        selectable-away, rather than silently reading as "default". */}
+                    {state.model !== undefined && !answering.models.some((model) => model.id === state.model) ? (
+                      <option value={state.model}>{state.model}</option>
+                    ) : null}
+                  </select>
+                ) : (
+                  <input
+                    // Uncontrolled, so typing is not fought by a re-render; keyed, so another
+                    // brain's field does not open holding this one's text.
+                    key={answering.id}
+                    type="text"
+                    aria-label="model"
+                    data-testid="brain-menu-model"
+                    placeholder={`${answering.name}’s default`}
+                    defaultValue={state.model ?? ''}
+                    onChange={(event) => seat.setModel(event.currentTarget.value)}
+                  />
+                )}
+              </label>
+              {/* Not every model HAS a thinking level (Haiku 4.5 does not), and a control the
+                  model ignores is a dead control (AC8). */}
+              {levels.length > 0 ? <LevelPicker levels={levels} value={state.effort} onChange={(next) => seat.setEffort(next)} /> : null}
+              <p className="brain-dock-active" data-testid="brain-menu-active">
+                {asked !== undefined
+                  ? `next think asks for ${asked}${levelWords} — what answers is shown here after it`
+                  : `thinking on ${ran ?? `${answering.name}’s default model (known after the first think)`}${levelWords}`}
+              </p>
+              {refusal}
+              <p className="brain-dock-hint" data-testid="brain-menu-cli-hint">
+                {seat.note}
+              </p>
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>

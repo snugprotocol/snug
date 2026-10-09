@@ -41,7 +41,7 @@ vi.mock('../agent/webllm/webllmAdapter.js', () => ({
   })),
 }));
 
-const { ADAPTER_KINDS, adapterKindFor, createTurnAdapter, routeOf } = await import('../agent/adapter.js');
+const { ADAPTER_KINDS, HOST_BRAIN_GONE_CODE, adapterKindFor, createTurnAdapter, routeOf } = await import('../agent/adapter.js');
 
 const constructedKind = (config: TurnAdapterConfig): string => {
   const adapter = createTurnAdapter(config, 'chat') as { __kind?: string };
@@ -110,10 +110,15 @@ describe('adapterKindFor mirrors createTurnAdapter (AC1)', () => {
     expect(adapterKindFor({ mode: 'host', provider: 'mock', hasKey: false })).toBe('host');
   });
 
-  it("constructing a 'host' adapter with NO platform-pinned brain throws — loud on drift, never a silent reroute", () => {
-    // The seat is set once, before boot; `resolveBrain` names 'host' only when it is set,
-    // so reaching this dispatch without it means the derivation and the seat disagree.
-    // The pinned path itself is proven end-to-end in hostBrain.test.ts (a fresh graph).
-    expect(() => createTurnAdapter({ mode: 'host', provider: 'mock' }, 'chat')).toThrow(/without a platform-pinned host brain/);
+  it("a 'host' adapter with NO platform-pinned brain answers a NAMED error result — still never a silent reroute, no longer a throw", async () => {
+    // MIGRATED 2026-10-03 (TASK-20261003 D4) from "…throws — loud on drift". The seat used
+    // to be a value set once; on the local runner it is a getter that answers `demo` while
+    // the user's CLI is known not ready, so "the derivation and the seat disagree" is now an
+    // ordinary moment (the brain went away between routing a turn and building its adapter),
+    // and a throw there was a crashed turn. What is kept: the turn is NOT rerouted to
+    // another brain — it fails by name, retryably. brainFollowsRevision.test.tsx drives the
+    // flip itself; the pinned path is proven end-to-end in hostBrain.test.ts.
+    const result = await createTurnAdapter({ mode: 'host', provider: 'mock' }, 'chat').complete({ system: 's', messages: [{ role: 'user', content: 'hi' }] });
+    expect(result).toMatchObject({ ok: false, code: HOST_BRAIN_GONE_CODE, retryable: true });
   });
 });

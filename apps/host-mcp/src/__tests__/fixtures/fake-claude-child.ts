@@ -7,7 +7,7 @@
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 
-import type { ChildLike } from '../../brain-child.js';
+import type { ChildLike } from '../../brains/claude-child.js';
 
 export interface FakeChildScript {
   /** Lines to emit, in order, when the first user message arrives. */

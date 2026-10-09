@@ -28,3 +28,13 @@ stays in voice.
 `{id, emoji, label, prompt}` objects plus a payload field; the contract's
 `personaNote` tells the model to voice whichever persona the request names. Adding a
 fourth character is adding an object, not forking the app.
+
+**One reply shape, said once.** The model is told what to send back twice — by the
+runtime contract's `responseGuidance` and by the `responseSchema` riding on every
+request. From August to October 2026 they disagreed (`{from, to, say}` against
+`{move: {from, to}, message}`), and a quick model followed the contract: its moves
+landed at the top level, the reader found no `d.move`, and a random legal move was
+played with "it answered off-script". Both now name the schema's shape, and
+`examples/reply-shape.test.mjs` fails any starter whose two descriptions part ways
+again. The reader also takes the squares at the top level, so a move the model meant is
+played whichever of the two shapes a tier sends.

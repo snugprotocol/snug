@@ -3,11 +3,20 @@
 // a control the host hides is a lie in waiting, so the variant is chosen where the
 // control's gate is known. Pure, so both arms are pinned byte-for-byte.
 
-/** The install disclosure's closing sentence (RunView, §V2-6). */
+import { CONNECTIONS_UNAVAILABLE } from '../platform/availability.js';
+
+/**
+ * The install disclosure's closing sentence (RunView, §V2-6).
+ *
+ * Where connections are off it says so and stops (TASK-20261003, ADR-0072 §4). It used to add
+ * "so it runs in its sample mode" — a promise the product could not keep for every starter
+ * (`weather` has no sample mode), and one the route no longer makes at all: a connected
+ * starter on such a host shows why it cannot run instead of a frame.
+ */
 export function starterInstallDisclosureTail(connectionsAllowed: boolean): string {
   return connectionsAllowed
     ? '. installing only copies the app — nothing is connected until you review and approve it yourself.'
-    : '. installing only copies the app — connections aren’t available in this host, so it runs in its sample mode.';
+    : `. installing only copies the app — ${CONNECTIONS_UNAVAILABLE}.`;
 }
 
 /**

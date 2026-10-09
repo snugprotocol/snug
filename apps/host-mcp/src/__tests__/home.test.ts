@@ -10,9 +10,13 @@
 // not the next one written. The other half is here: reaching a real home must take an
 // EXPLICIT act, so that forgetting can only ever produce a refusal, never a write.
 
-import { describe, expect, it } from 'vitest';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 
-import { resolveHome, RealHomeRefusedError } from '../home.js';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
+import { ensureDirectory, resolveHome, RealHomeRefusedError } from '../home.js';
 
 const REAL = '/Users/someone';
 
@@ -46,10 +50,79 @@ describe('resolveHome', () => {
     expect(resolveHome({ env: { HOME: REAL, SNUG_HOME: '/tmp/iso' }, allowRealHome: true })).toBe('/tmp/iso');
   });
 
+  it('with no env handed in it reads the process’s own two variables — by name, never the whole environment', () => {
+    // The release gate counts whole-environment reads in the shipped bundle and allows ONE,
+    // the brain registry's (ADR-0071 §3). This one must stay two named reads.
+    const before = { SNUG_HOME: process.env.SNUG_HOME, HOME: process.env.HOME };
+    try {
+      process.env.SNUG_HOME = '/tmp/iso-from-the-process';
+      expect(resolveHome()).toBe('/tmp/iso-from-the-process');
+      delete process.env.SNUG_HOME;
+      process.env.HOME = REAL;
+      expect(() => resolveHome()).toThrow(RealHomeRefusedError);
+      expect(resolveHome({ allowRealHome: true })).toBe(`${REAL}/Snug`);
+    } finally {
+      for (const [name, value] of Object.entries(before)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+    const source = readFileSync(path.join(__dirname, '..', 'home.ts'), 'utf8').replace(/\/\/.*$/gm, '');
+    expect(source.match(/process\.env(?!\.[A-Z_]+\b)/g) ?? []).toEqual([]);
+  });
+
   it('refuses rather than inventing a relative home when HOME itself is absent', () => {
     // The old code fell back to `'.'`, which turns a missing HOME into a `./Snug` written
     // wherever the process happened to be started — a surprise store, not a safe one.
     expect(() => resolveHome({ env: {} })).toThrow(RealHomeRefusedError);
     expect(() => resolveHome({ env: {}, allowRealHome: true })).toThrow(/HOME/);
+  });
+});
+
+describe('ensureDirectory — two windows opening at once both make the home', () => {
+  let root: string;
+  beforeEach(() => {
+    root = mkdtempSync(path.join(tmpdir(), 'snug-home-'));
+  });
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+  const eexist = (): Error => Object.assign(new Error('EEXIST: file already exists'), { code: 'EEXIST' });
+
+  it('creates the directory and its parents', () => {
+    const dir = path.join(root, 'Snug', 'host', 'brain');
+    ensureDirectory(dir);
+    expect(statSync(dir).isDirectory()).toBe(true);
+    // …and again, with it there, is not an error.
+    expect(() => ensureDirectory(dir)).not.toThrow();
+  });
+
+  it('an EEXIST from a mkdir that LOST THE RACE is success — the directory is there, which is what was wanted', () => {
+    // Seen 2 rounds in 80 on the built bundle: the other process created a component a
+    // moment earlier, and the agent was told "Snug cannot use its folder (EEXIST)".
+    const dir = path.join(root, 'Snug', 'host', 'brain');
+    expect(() =>
+      ensureDirectory(dir, (target) => {
+        mkdirSync(target, { recursive: true }); // the other process got there first
+        throw eexist();
+      }),
+    ).not.toThrow();
+  });
+
+  it('an EEXIST with a FILE in the way is still an error — that folder cannot be used', () => {
+    const dir = path.join(root, 'Snug');
+    writeFileSync(dir, 'a file where the home should be');
+    expect(() =>
+      ensureDirectory(dir, () => {
+        throw eexist();
+      }),
+    ).toThrow(/EEXIST/);
+    // And with the real mkdir, whatever it calls it:
+    expect(() => ensureDirectory(dir)).toThrow();
+  });
+
+  it('every other failure is thrown as it is', () => {
+    writeFileSync(path.join(root, 'blocker'), 'x');
+    expect(() => ensureDirectory(path.join(root, 'blocker', 'Snug'))).toThrow(/ENOTDIR/);
   });
 });

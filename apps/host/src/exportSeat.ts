@@ -8,10 +8,11 @@
 // the db package writes and re-sniffs on the way back in. A BUNDLE (already JSON) leaves
 // as `<stem>.snug.json`. With the `downloads` namespace the viewer confirms the save
 // (declined is silent — the viewer said no); a second click while a prompt is open is
-// refused by name; every other code is a note. Without it (a chat artifact: the download
-// link is inert, the async clipboard blocked — T1 S10) the text is COPIED with the one
-// primitive that works, `execCommand('copy')`, and the note says so with the size. The
-// seat owns every outcome: `downloadBlob` fires it with `void`.
+// refused by name; every other code is a note. Without it (a plain file, a static copy — and
+// September's chat artifacts, where T1 S10 found the download link inert and the async
+// clipboard blocked; a chat-created artifact now resolves `downloads`, measured 2026-10-03)
+// the text is COPIED with the one primitive that works, `execCommand('copy')`, and the note
+// says so with the size. The seat owns every outcome: `downloadBlob` fires it with `void`.
 
 import { USER_FILE_WRAPPER_FILE_NAME, sniffSnugFile, wrapUserFile } from '@snugprotocol/db';
 
