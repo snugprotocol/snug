@@ -19,6 +19,7 @@ import { refreshAppMeta } from './state/appMeta.js';
 import { initDemoCallout } from './state/demoCallout.js';
 import { login, refreshAuth, useAuth } from './state/auth.js';
 import { initSettings } from './state/mode.js';
+import { initScheduler } from './schedule/scheduler.js';
 import { refreshOllama } from './state/ollama.js';
 import { useStore } from './state/store.js';
 import { initWebllm } from './state/webllm.js';
@@ -75,6 +76,14 @@ export function App(): ReactElement {
     // same settings, so it follows hydration.
     void refreshOllama()
       .then(() => initSettings())
+      // TASK-20261009 E1 (ADR-0074 §5): the scheduler boots once the file is open and settings
+      // are hydrated — its own exported act (the initAppUpdateLaunchCheck precedent) so the
+      // composition-root test can spy the wire; idempotent, so StrictMode's second effect run
+      // and the re-init chains find the same promise; fire-and-forget, so a slow leader probe
+      // never delays the latches below.
+      .then(() => {
+        void initScheduler();
+      })
       .then(() => initDesktopFirstRun())
       // AFTER settings hydrate: the offer latch reads its keys out of the user file,
       // so it cannot run before the file is open and read. Web AND desktop (D3) —
@@ -160,6 +169,9 @@ export function App(): ReactElement {
                       await initSettings();
                       await refreshAppMeta();
                       await initSync();
+                      // The fresh file gets its own scheduler (TASK-20261009 E1): the swap seam
+                      // inside recoverFresh already reset the engine; this is the re-init.
+                      void initScheduler();
                     });
                   }}
                 >

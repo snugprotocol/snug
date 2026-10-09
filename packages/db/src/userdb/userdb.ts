@@ -777,6 +777,13 @@ export interface UserDb {
   /** Every settings key, sorted — for namespaced-prefix readers (`sharedApp:`, `shareLink:`) that parse the key rather than trusting a prefix test. */
   listSettingKeys(): string[];
   /**
+   * The file's own identity — the `db_id` row `seedMeta` writes once (TASK-20261009 R1).
+   * The scheduler keys its per-origin leader lock on it (`snug-scheduler:<id>`), so two
+   * user files open on one origin never share a ticker. `undefined` only for a file whose
+   * meta row is missing, which `seedMeta` repairs on the next open.
+   */
+  getFileId(): string | undefined;
+  /**
    * Every app that has PINNED a model, as `{ [appId]: modelId }` (TASK-20260817).
    * Apps that inherit the global `model` setting are simply absent — inheritance is an
    * absence, not a stored copy, so a later change to the default reaches them.
@@ -3308,6 +3315,11 @@ function construct(
     listSettingKeys() {
       assertOpen();
       return select(`SELECT key FROM ${USERDB_TABLES.settings} ORDER BY key`).map((row) => String(row[0]));
+    },
+    getFileId() {
+      assertOpen();
+      const row = select(`SELECT value FROM ${USERDB_TABLES.meta} WHERE key = 'db_id'`)[0]?.[0];
+      return row === undefined || row === null || String(row) === '' ? undefined : String(row);
     },
     listAppModels() {
       assertOpen();

@@ -638,3 +638,19 @@ describe('exportUserDb — proposals never leave the device (TASK-20261009 C4)',
     await db.close();
   });
 });
+
+describe('getFileId — the file identity the scheduler keys its leader lock on (TASK-20261009 R1)', () => {
+  it('answers the seeded db_id, a UUID, stable across a close and reopen of the same bytes', async () => {
+    const backend = createMemoryBackend();
+    const first = await openUserDb({ backend, locateWasm, persistDebounceMs: 1 });
+    if (first.status !== 'ok') throw new Error('open failed');
+    const id = first.userDb.getFileId();
+    expect(id).toMatch(/^[0-9a-f-]{36}$/);
+    await first.userDb.flush();
+    await first.userDb.close();
+    const second = await openUserDb({ backend, locateWasm, persistDebounceMs: 1 });
+    if (second.status !== 'ok') throw new Error('reopen failed');
+    expect(second.userDb.getFileId()).toBe(id);
+    await second.userDb.close();
+  });
+});
