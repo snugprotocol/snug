@@ -115,8 +115,10 @@ test.describe('share an app as a .snug attachment, receive it, install it', () =
 
     // 6. The shelf card sits between "your apps" and "starter apps".
     await page.getByRole('link', { name: 'your apps' }).click();
-    const titles = await page.locator('.section-title').allTextContents();
-    expect(titles).toEqual(['your apps', 'shared with you', 'starter apps']);
+    // The hub's sections render after its async library load — the array form of `toHaveText`
+    // waits for all three, where `allTextContents()` read whatever was painted at that instant
+    // (an empty list under load; TASK-20261009 PR-B gate).
+    await expect(page.locator('.section-title')).toHaveText(['your apps', 'shared with you', 'starter apps']);
     await expect(page.getByTestId('shared-badge')).toHaveText('shared');
     await page.getByTestId('shared-open-card').click();
     await expect(page).toHaveURL(/\/run\/shared--[0-9a-f]{64}/);
