@@ -2,8 +2,9 @@
 // design F3): `/schedule/new` and `/schedule/:id`, deep-linkable, surviving a reload. The view
 // reads the query string — `?text=` (the create bar, the chat offer, the run-header sheet),
 // `?template=nudge|spend-review|friday-review|morning-weather` (the templates), `?app=<id>` (the
-// sheet's preselected app) — loads the library and, on `:id`, the schedule, and hands ONE draft
-// to `ScheduleEditor`. A save navigates to `/schedule`.
+// sheet's preselected app), `?suggestion=<JSON>` + `?back=<path>` (the chat's suggestion card,
+// TASK-20261009 P1) — loads the library and, on `:id`, the schedule, and hands ONE draft to
+// `ScheduleEditor`. A save navigates to `/schedule`, or back to the thread a card came from.
 //
 // Where the host says `allows('schedule') === false` the route is a named refusal, never an
 // empty main region (the `/s/:id` precedent in App.tsx).
@@ -19,8 +20,9 @@ import { allows } from '../platform/platform.js';
 import { getUserDb } from '../state/userdb.js';
 import '../theme/schedule-editor.css';
 import { EmptyState } from '../ui/EmptyState.js';
-import { EDITOR_HEADING, STATES } from './copy.editor.js';
+import { EDITOR_HEADING, FROM_SUGGESTION, STATES } from './copy.editor.js';
 import { draftFromTask, initialDraft, type EditorDraft } from './editorModel.js';
+import { isBackPath } from './routes.js';
 import { ScheduleEditor } from './ScheduleEditor.js';
 
 type Load =
@@ -54,7 +56,14 @@ export function ScheduleEditorView(): ReactElement {
           return;
         }
         const params = new URLSearchParams(query);
-        const { draft, parseFailed } = initialDraft({ text: params.get('text'), template: params.get('template'), app: params.get('app'), apps, now });
+        const { draft, parseFailed } = initialDraft({
+          text: params.get('text'),
+          template: params.get('template'),
+          app: params.get('app'),
+          proposal: params.get('suggestion'),
+          apps,
+          now,
+        });
         setLoad({ phase: 'ready', db, apps, draft, parseFailed });
       })
       .catch((err: unknown) => {
@@ -87,6 +96,10 @@ export function ScheduleEditorView(): ReactElement {
       {STATES.back}
     </Link>
   );
+  // The chat's suggestion card says where it came from; the save and the cancel return there.
+  const params = new URLSearchParams(query);
+  const backTo = isBackPath(params.get('back')) ? params.get('back')! : '/schedule';
+  const fromSuggestion = params.get('suggestion') !== null;
 
   return (
     <div className="settings schedule-editor-page" data-testid="schedule-editor-view">
@@ -102,16 +115,23 @@ export function ScheduleEditorView(): ReactElement {
           {load.message}
         </div>
       ) : (
-        <ScheduleEditor
-          key={load.task?.id ?? query}
-          initial={load.draft}
-          parseFailed={load.parseFailed}
-          apps={load.apps}
-          db={load.db}
-          {...(load.task !== undefined ? { task: load.task } : {})}
-          onSaved={() => navigate('/schedule')}
-          onCancel={() => navigate('/schedule')}
-        />
+        <>
+          {fromSuggestion ? (
+            <p className="hint" role="status" data-testid="from-suggestion-note">
+              {FROM_SUGGESTION.note}
+            </p>
+          ) : null}
+          <ScheduleEditor
+            key={load.task?.id ?? query}
+            initial={load.draft}
+            parseFailed={load.parseFailed}
+            apps={load.apps}
+            db={load.db}
+            {...(load.task !== undefined ? { task: load.task } : {})}
+            onSaved={() => navigate(backTo)}
+            onCancel={() => navigate(backTo)}
+          />
+        </>
       )}
     </div>
   );

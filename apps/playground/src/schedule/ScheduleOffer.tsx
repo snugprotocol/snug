@@ -22,9 +22,15 @@ import { newScheduleHref } from './routes.js';
 export interface ScheduleOfferProps {
   /** The user's message, exactly as sent — what the editor route receives. */
   text: string;
+  /**
+   * One line under the offer when this offer is the ONLY way from the chat to a schedule —
+   * under a host brain there is no classifier and no `schedule` lane (TASK-20261009 P2), and
+   * the UI says so (`copy.page.OFFER.hostBrain`) rather than leaving the agent's silence unexplained.
+   */
+  note?: string;
 }
 
-export const ScheduleOffer = memo(function ScheduleOffer({ text }: ScheduleOfferProps): ReactElement | null {
+export const ScheduleOffer = memo(function ScheduleOffer({ text, note }: ScheduleOfferProps): ReactElement | null {
   // `now` matters only to relative phrases ("in 20 minutes"), and only for the phrase quoted
   // back; the editor re-parses the text at its own `now`.
   const offer = useMemo(() => scheduleOffer(text, pageClock.now(), 'device'), [text]);
@@ -40,6 +46,11 @@ export const ScheduleOffer = memo(function ScheduleOffer({ text }: ScheduleOffer
       <button type="button" className="btn btn-ghost" aria-label={OFFER.dismissName} onClick={() => setDismissed(true)}>
         {OFFER.dismiss}
       </button>
+      {note !== undefined ? (
+        <span className="hint schedule-offer-note" data-testid="schedule-offer-note">
+          {note}
+        </span>
+      ) : null}
     </div>
   );
 });

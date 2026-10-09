@@ -330,6 +330,38 @@ export const SUGGESTION_ACTIONS = {
   mute: 'stop suggestions from this app',
 } as const;
 
+/** The strip after its one act: scheduled (with the next time), declined, or muted. */
+export const SUGGESTION_OUTCOME = {
+  scheduled: (whenWords: string): string => `scheduled — next ${whenWords}`,
+  declined: 'not now — nothing was scheduled',
+  muted: (appName: string): string => `${appName} won’t suggest ${WORDS.items} again — change that in Settings`,
+  open: 'open',
+} as const;
+
+// ---------------------------------------------------------------------------------------------
+// The schedule card (ADR-0074 §4) — the builder's and the chat lane's suggestion, in the rail
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * The card a `schedule_propose` call stages on the agent's message: the provenance line (every
+ * agent-authored card opens with one — the inline choice card's rule), the states after the
+ * one act, and the acts themselves. *Schedule it* and *not now* read the same as the consent
+ * surface's, because they are the same decision.
+ */
+export const SCHEDULE_CARD = {
+  lead: `the agent suggests a ${WORDS.item}:`,
+  next: (whenWords: string): string => `next ${whenWords}`,
+  noNext: 'no next time within 400 days',
+  accept: CONSENT.enable,
+  edit: 'edit…',
+  decline: CONSENT.notNow,
+  open: 'open',
+  scheduled: (whenWords: string): string => `scheduled — next ${whenWords}`,
+  declined: 'not now — nothing was scheduled',
+  /** The app the suggestion was for is gone, or its one time has passed. */
+  stale: `this ${WORDS.suggestion} is out of date — the app is gone or the time has passed`,
+} as const;
+
 // ---------------------------------------------------------------------------------------------
 // The chat offer (E10) — deterministic, inline, dismissible
 // ---------------------------------------------------------------------------------------------

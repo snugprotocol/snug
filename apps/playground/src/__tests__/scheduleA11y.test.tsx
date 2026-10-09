@@ -179,13 +179,13 @@ describe('the result detail', () => {
 });
 
 describe('the Settings card', () => {
-  it('names every control; the switch is role=switch named by its row label (the suggestions switch waits for PR-B)', async () => {
+  it('names every control; each switch is role=switch named by its row label (the suggestions switch arrived with PR-B)', async () => {
     schedulerStore.set({ ...initialSchedulerView(), ready: true, leader: { leader: true, canSeeSiblings: false, reason: 'no-locks' } });
     const el = await mount(<ScheduleSettingsCard />);
     expectEveryControlNamed(el);
     const switches = [...el.querySelectorAll('[role="switch"]')];
-    expect(switches).toHaveLength(1);
-    expect(switches.map((s) => accessibleName(s))).toEqual(['pause all schedules']);
+    expect(switches).toHaveLength(2);
+    expect(switches.map((s) => accessibleName(s))).toEqual(['pause all schedules', 'never let apps suggest schedules']);
     // The armed confirm is a named group, and its controls are named too.
     await act(async () => {
       el.querySelector<HTMLButtonElement>('[data-testid="schedule-clear-history"]')?.click();

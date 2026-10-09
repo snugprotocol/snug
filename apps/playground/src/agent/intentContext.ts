@@ -104,10 +104,12 @@ export async function buildIntentTurnContext(
 
   const docs = db.listAppDocs(appId);
   if (docs.length > 0) {
-    if (lane === 'data' || lane === 'provider') {
+    if (lane === 'data' || lane === 'provider' || lane === 'schedule') {
       // TITLES only. A data/provider answer is grounded in rows or provider responses,
       // not the app's design notes — doc bodies are the largest thing such a turn could
-      // carry for no gain.
+      // carry for no gain. A schedule turn (TASK-20261009 P2) needs the overview and the
+      // DDL to phrase a suggestion, and nothing more: it holds one propose tool, and doc
+      // bodies would be the largest untrusted text on a turn that stages a suggestion.
       parts.push('### Documentation pages (titles only)', docs.map((doc) => doc.title ?? doc.slug).join(', '));
     } else {
       // `app_question`/`other`: the docs ARE the answer surface, so they come in full.

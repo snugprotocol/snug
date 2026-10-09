@@ -29,8 +29,10 @@ import {
   MISSED_ACTIONS,
   RESULT_STATUS_WORD,
   RUNNING_CHIP,
+  SCHEDULE_CARD,
   STEP_STATUS_WORD,
   SUGGESTION_ACTIONS,
+  SUGGESTION_OUTCOME,
   WORDS,
   aiCalls,
   alertLabel,
@@ -291,6 +293,28 @@ describe('suggestions (ADR-0074 §4) — the run-header strip, never a modal', (
     expect(SUGGESTION_ACTIONS).toEqual({ accept: 'schedule it', decline: 'not now', mute: 'stop suggestions from this app' });
     expect(SUGGESTION_ACTIONS.accept).toBe(CONSENT.enable);
     expect(SUGGESTION_ACTIONS.decline).toBe(CONSENT.notNow);
+  });
+
+  it('SUGGESTION_OUTCOME: the strip after its one act (PR-B P3)', () => {
+    expect(SUGGESTION_OUTCOME.scheduled('Sat, Oct 10, 7:00 AM UTC')).toBe('scheduled — next Sat, Oct 10, 7:00 AM UTC');
+    expect(SUGGESTION_OUTCOME.declined).toBe('not now — nothing was scheduled');
+    expect(SUGGESTION_OUTCOME.muted('Weather')).toBe('Weather won’t suggest schedules again — change that in Settings');
+    expect(SUGGESTION_OUTCOME.open).toBe('open');
+  });
+});
+
+describe('the schedule card (ADR-0074 §4) — the builder’s and the chat lane’s suggestion (PR-B P1)', () => {
+  it('SCHEDULE_CARD: the provenance line, the acts (the consent surface’s), the states', () => {
+    expect(SCHEDULE_CARD.lead).toBe('the agent suggests a schedule:');
+    expect(SCHEDULE_CARD.next('Sat, Oct 10, 8:00 AM UTC')).toBe('next Sat, Oct 10, 8:00 AM UTC');
+    expect(SCHEDULE_CARD.noNext).toBe('no next time within 400 days');
+    expect(SCHEDULE_CARD.accept).toBe(CONSENT.enable);
+    expect(SCHEDULE_CARD.decline).toBe(CONSENT.notNow);
+    expect(SCHEDULE_CARD.edit).toBe('edit…');
+    expect(SCHEDULE_CARD.open).toBe('open');
+    expect(SCHEDULE_CARD.scheduled('Sat, Oct 10, 8:00 AM UTC')).toBe('scheduled — next Sat, Oct 10, 8:00 AM UTC');
+    expect(SCHEDULE_CARD.declined).toBe('not now — nothing was scheduled');
+    expect(SCHEDULE_CARD.stale).toBe('this suggestion is out of date — the app is gone or the time has passed');
   });
 });
 

@@ -13,7 +13,7 @@ import { appProviderPinFor, resolveModelForApp } from '../state/appModel.js';
 import { endpointsNeedConfirm, getByokKey, type ByokProvider } from '../state/mode.js';
 import { adapterKindFor, createTurnAdapter, routeOf, type AdapterKind, type DirectMode } from './adapter.js';
 import type { ArtifactSink } from './artifactSink.js';
-import { buildByokTools } from './tools.js';
+import { buildByokTools, type ByokToolHooks } from './tools.js';
 import { knowledgeDeliveryFor } from './knowledgeDelivery.js';
 import { PROMPT_TOO_LARGE_CODE, fitHostTurn, promptTooLargeMessage } from './promptBudget.js';
 import { extractAppHtml, WEBLLM_BUILD_SUFFIX } from './webllm/appHtml.js';
@@ -91,6 +91,11 @@ export interface BuildHandlers {
    * it (subscription turns are the hub's story and are never scripted).
    */
   onBrain?: (kind: AdapterKind) => void;
+  /**
+   * A `schedule_propose` call staged a suggestion (TASK-20261009 P1, ADR-0074 §4). Direct
+   * mode only; `false` tells the tool the surface declined to stage it (one card per turn).
+   */
+  onScheduleProposal?: ByokToolHooks['onScheduleProposal'];
 }
 
 export type BuildResult =
@@ -306,6 +311,7 @@ export function createDirectBuilder(options: DirectBuilderOptions): BuilderAgent
               handlers.onArtifact?.({ artifactId: artifact.id, displayName: artifact.displayName, version: artifact.version }),
             onSchemaApplied: () => handlers.onKnowledge?.(),
             onDocWritten: () => handlers.onKnowledge?.(),
+            ...(handlers.onScheduleProposal !== undefined ? { onScheduleProposal: handlers.onScheduleProposal } : {}),
           });
       const activityLabels: Record<string, string> = {
         artifact_write: 'writing the app file…',

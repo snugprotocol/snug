@@ -7,7 +7,7 @@
 // vocabulary scan (`scheduleCopy.test.ts`) covers this file: a person reads *schedule*,
 // *result*, *suggestion* — never the engine's words.
 
-import { SCHEDULE_DAILY_CEILINGS, SCHEDULE_MAX_STEPS, SCHEDULE_TITLE_MAX_CHARS } from '@snugprotocol/protocol';
+import { SCHEDULE_APP_INPUT_MAX_BYTES, SCHEDULE_DAILY_CEILINGS, SCHEDULE_MAX_STEPS, SCHEDULE_TITLE_MAX_CHARS } from '@snugprotocol/protocol';
 
 import { CONSENT, aiCalls, stepLabel } from './copy.js';
 
@@ -98,9 +98,11 @@ export const STEPS = {
   queryHint: 'one read-only SELECT each — typed by you, never written by a brain',
   queryInvalid: 'each query must be one read-only SELECT',
   maxRows: 'rows per query, at most',
-  /** `app-run` steps arrive with PR-B: shown, never saved. */
-  laterRelease: 'running an app on a schedule is available in a later release',
-  laterReleaseRefusal: 'this can’t be saved yet — running an app on a schedule arrives in a later release; remove that step to continue',
+  /** The *run <app>* step (PR-B): an optional input the app reads at that run, and the note that the app must handle it. */
+  runInput: 'input (optional)',
+  runInputHint: `JSON or text the app reads when it runs — at most ${SCHEDULE_APP_INPUT_MAX_BYTES} bytes`,
+  runInputTooLong: `the input must be at most ${SCHEDULE_APP_INPUT_MAX_BYTES} bytes`,
+  runNote: (appName: string): string => `${appName} must handle scheduled runs — apps built after today do`,
   /** A template step whose app is not in this file. */
   appMissing: (appName: string): string => `add ${appName} first — this step is off until it’s installed`,
   needStep: 'add at least one step',
@@ -138,6 +140,12 @@ export const ACTIONS = {
   moreOptions: 'more options',
   close: 'close',
   scheduled: (whenWords: string): string => `scheduled — next ${whenWords}`,
+} as const;
+
+/** The editor opened from a suggestion card (`?proposal=`): where the save and cancel go back to. */
+export const FROM_SUGGESTION = {
+  note: 'opened from a suggestion in the chat — schedule it here, or go back',
+  back: 'back to the chat',
 } as const;
 
 /** The run-header action (icon button; the label is its accessible name). */

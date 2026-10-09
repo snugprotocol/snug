@@ -16,13 +16,20 @@
 // title and as the one step's own words (a reminder's title and message, an app's prompt), so
 // the editor opens one click from *schedule it*.
 //
-// `app-run` IS PR-B. A template may name one (morning weather); the step renders with the
-// later-release note and `prepareSteps` refuses the save — nothing here can persist a kind the
-// engine does not run yet.
+// `app-run` (PR-B, A-UI): *run <app>* is a step like the others — the app, and an optional small
+// `input` the app reads at that run (JSON when it parses, the text otherwise; ≤ 1 KiB). The
+// editor notes that the app must handle scheduled runs (`STEPS.runNote`); the engine's
+// `no-handler` result says so after the fact for an app that does not.
+//
+// A SUGGESTION (TASK-20261009 P1): `?suggestion=<JSON>` from the chat's card opens the editor
+// prefilled with the proposal — read through `parseScheduleProposal`, never trusted raw — so
+// *edit…* on the card is one click from the full form; the save is the user's own
+// (`provenance: 'user'`), because once edited the schedule is theirs.
 
 import type { AppRecord, UserDb } from '@snugprotocol/db';
 import {
   CONNECTION_STATUS,
+  SCHEDULE_APP_INPUT_MAX_BYTES,
   SCHEDULE_CONTEXT_DEFAULT_ROWS,
   SCHEDULE_CONTEXT_MAX_ROWS,
   SCHEDULE_CONTEXT_SQL_MAX_STATEMENTS,
@@ -32,8 +39,10 @@ import {
   SCHEDULE_PROMPT_MAX_CHARS,
   SCHEDULE_TITLE_MAX_CHARS,
   isReadOnlySelect,
+  parseScheduleProposal,
   type AlertKind,
   type MissedPolicy,
+  type ScheduleProposal,
   type ScheduleSpec,
   type ScheduleStep,
 } from '@snugprotocol/protocol';
@@ -71,7 +80,13 @@ export type StepDraft =
       /** A template step whose app is not installed: named here, disabled in the UI, dropped at save. */
       missingApp?: string;
     }
-  | { kind: 'app-run'; appId: string; missingApp?: string };
+  | {
+      kind: 'app-run';
+      appId: string;
+      /** The input as typed — JSON when it parses, the text otherwise (`parseRunInput`). */
+      input: string;
+      missingApp?: string;
+    };
 
 export interface EditorDraft {
   text: string;
@@ -179,6 +194,30 @@ export function titleFromSteps(steps: readonly StepDraft[], appNames: ReadonlyMa
 }
 
 export const emptyNotify = (): StepDraft => ({ kind: 'notify', title: '', body: '' });
+export const emptyRun = (appId = ''): StepDraft => ({ kind: 'app-run', appId, input: '' });
+
+/** A persisted `app-run` input as the editor's text: a string verbatim, anything else as JSON. */
+export const runInputText = (input: unknown): string => (input === undefined ? '' : typeof input === 'string' ? input : JSON.stringify(input));
+
+export type ParsedRunInput = { ok: true; input?: Extract<ScheduleStep, { kind: 'app-run' }>['input'] } | { ok: false; reason: string };
+
+/**
+ * The typed input as the protocol's `input`: empty → none; JSON when it parses (so `{"units":
+ * "metric"}` reaches the app as an object), the text itself otherwise; refused over 1 KiB
+ * serialised — the kv handshake carries these bytes verbatim.
+ */
+export function parseRunInput(text: string): ParsedRunInput {
+  const trimmed = text.trim();
+  if (trimmed === '') return { ok: true };
+  let value: unknown = trimmed;
+  try {
+    value = JSON.parse(trimmed);
+  } catch {
+    // Plain text is a fine input too.
+  }
+  if (new TextEncoder().encode(JSON.stringify(value)).length > SCHEDULE_APP_INPUT_MAX_BYTES) return { ok: false, reason: STEPS.runInputTooLong };
+  return { ok: true, input: value as Extract<ScheduleStep, { kind: 'app-run' }>['input'] };
+}
 export const emptyThink = (appId = ''): StepDraft => ({
   kind: 'app-think',
   appId,
@@ -206,7 +245,7 @@ export function draftsFromSteps(steps: readonly ScheduleStep[]): StepDraft[] {
         };
       }
       case 'app-run':
-        return { kind: 'app-run', appId: step.appId };
+        return { kind: 'app-run', appId: step.appId, input: runInputText(step.input) };
       default: {
         const never: never = step;
         return never;
@@ -219,13 +258,12 @@ export type PreparedSteps = { ok: true; steps: ScheduleStep[] } | { ok: false; r
 
 /**
  * The drafts as the protocol's steps, or the FIRST refusal in words. A step whose template app
- * is missing is dropped (it is disabled on screen); an `app-run` step refuses the whole save
- * (PR-B). Lengths are cut to the protocol's bounds rather than refused — the inputs cap them
- * already, and a pasted overrun should not block a save.
+ * is missing is dropped (it is disabled on screen). Lengths are cut to the protocol's bounds
+ * rather than refused — the inputs cap them already, and a pasted overrun should not block a
+ * save; an `app-run` input over its byte bound IS refused, because cutting JSON would corrupt it.
  */
 export function prepareSteps(drafts: readonly StepDraft[]): PreparedSteps {
   const live = drafts.filter((draft) => draft.kind === 'notify' || draft.missingApp === undefined);
-  if (live.some((draft) => draft.kind === 'app-run')) return { ok: false, reason: STEPS.laterReleaseRefusal };
   if (live.length === 0) return { ok: false, reason: STEPS.needStep };
   if (live.length > SCHEDULE_MAX_STEPS) return { ok: false, reason: STEPS.tooMany };
   const steps: ScheduleStep[] = [];
@@ -238,7 +276,13 @@ export function prepareSteps(drafts: readonly StepDraft[]): PreparedSteps {
       steps.push({ kind: 'notify', title, body });
       continue;
     }
-    if (draft.kind === 'app-run') continue; // refused above; unreachable
+    if (draft.kind === 'app-run') {
+      if (draft.appId === '') return { ok: false, reason: STEPS.needApp };
+      const input = parseRunInput(draft.input);
+      if (!input.ok) return { ok: false, reason: input.reason };
+      steps.push({ kind: 'app-run', appId: draft.appId, ...(input.input !== undefined ? { input: input.input } : {}) });
+      continue;
+    }
     if (draft.appId === '') return { ok: false, reason: STEPS.needApp };
     const prompt = draft.prompt.trim();
     if (prompt === '') return { ok: false, reason: STEPS.needPrompt };
@@ -345,7 +389,7 @@ const thinkStep = (apps: readonly TemplateAppCandidate[], app: TemplateApp, prom
 
 const runStep = (apps: readonly TemplateAppCandidate[], app: TemplateApp): StepDraft => {
   const installed = findTemplateApp(apps, app);
-  return { kind: 'app-run', appId: installed?.appId ?? '', ...(installed === undefined ? { missingApp: app.name } : {}) };
+  return { kind: 'app-run', appId: installed?.appId ?? '', input: '', ...(installed === undefined ? { missingApp: app.name } : {}) };
 };
 
 export interface TemplateFill {
@@ -503,8 +547,27 @@ export interface InitialDraftInput {
   text?: string | null;
   template?: string | null;
   app?: string | null;
+  /** `?suggestion=` — a `ScheduleProposal` as JSON, from the chat's suggestion card (TASK-20261009 P1). */
+  proposal?: string | null;
   apps: readonly TemplateAppCandidate[];
   now: Date;
+}
+
+/** What fills a fresh form: a template's whole fill, or a suggestion's title, steps and spec. */
+type Fill = Pick<TemplateFill, 'title' | 'steps' | 'spec'> & { alert?: AlertKind };
+
+/** A suggestion as the editor's fill: its title, its steps as drafts, its spec. `undefined` for anything that does not parse. */
+export function proposalFill(raw: string | null | undefined, apps: readonly TemplateAppCandidate[]): Fill | undefined {
+  const proposal: ScheduleProposal | undefined = parseScheduleProposal(raw);
+  if (proposal === undefined) return undefined;
+  const known = new Set(apps.map((record) => record.appId));
+  return {
+    title: proposal.title,
+    // A step naming an app this file no longer holds is disabled by its id — the same off
+    // state a template step gets, so the save drops it rather than refusing by surprise.
+    steps: draftsFromSteps(proposal.steps).map((step) => (step.kind !== 'notify' && !known.has(step.appId) ? { ...step, missingApp: step.appId } : step)),
+    spec: proposal.spec,
+  };
 }
 
 export interface InitialDraft {
@@ -521,9 +584,10 @@ export interface InitialDraft {
  * *schedule it* (design F1). A sentence that is only a schedule keeps itself as the title and
  * leaves the step to the user; a template's steps are its own.
  */
-export function initialDraft({ text, template, app, apps, now }: InitialDraftInput): InitialDraft {
+export function initialDraft({ text, template, app, proposal, apps, now }: InitialDraftInput): InitialDraft {
   const appNames = new Map(apps.map((record) => [record.appId, record.displayName] as const));
-  const fill = isTemplateName(template) ? templateFill(template, apps) : undefined;
+  // A suggestion fills the form the way a template does, and wins over one.
+  const fill: Fill | undefined = proposalFill(proposal, apps) ?? (isTemplateName(template) ? templateFill(template, apps) : undefined);
   const preselected = app !== null && app !== undefined && appNames.has(app) ? app : undefined;
   const sentence = text ?? '';
   const typed = sentence.trim() !== '';

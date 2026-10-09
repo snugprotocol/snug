@@ -15,10 +15,11 @@
 import { useCallback, useEffect, useMemo } from 'react';
 
 import type { AgentTool, AgentTurnEvent } from '@snugprotocol/adapters';
-import { AUTH_WIZARD_DIRECTIVE_KIND, type AuthWizardDirective, type RenderDirective } from '@snugprotocol/protocol';
+import type { UserDb } from '@snugprotocol/db';
+import { AUTH_WIZARD_DIRECTIVE_KIND, type AuthWizardDirective, type RenderDirective, type ScheduleProposal } from '@snugprotocol/protocol';
 
 import { directiveToMeta, metaToDirective, scanForRenderDirective } from './renderDirective.js';
-import { HOST_BRAIN_REFUSED_CODE } from '../platform/platform.js';
+import { HOST_BRAIN_REFUSED_CODE, allows } from '../platform/platform.js';
 import { createServerArtifactFetch } from '../state/library.js';
 import { resolveModelForApp } from '../state/appModel.js';
 import { applyBuilderPickToApp, useBuilderPick } from '../state/builderModel.js';
@@ -29,7 +30,7 @@ import { initialLlmInspectorState, llmInspectorReduce, type LlmInspectorState } 
 import { patchSession, peekThreadSession, stopThread, useThreadSession } from './threadSessions.js';
 import { buildAppTurnContext } from './appContext.js';
 import { buildIntentTurnContext } from './intentContext.js';
-import { classifierApplies, routeChatMessage, type ChatRoute } from './chatRouter.js';
+import { classifierApplies, routeChatMessage, type ChatRoute, type RoutedLane } from './chatRouter.js';
 import { HOST_CONTEXT_CAPS } from './promptBudget.js';
 import type { PendingWriteProposal } from './dataTools.js';
 import { createAppTargetSink } from './artifactSink.js';
@@ -38,6 +39,8 @@ import { finalizeConnectionDeclaration } from './connectionPipeline.js';
 import { knowledgeDeliveryFor } from './knowledgeDelivery.js';
 import { authChoiceForPersistedRow, metaToAuthChoice, type AuthChoiceSeed } from './authChoiceCard.js';
 import { buildPresentCardTool, metaToCard, sanitizeCardText, type ChatCardState } from './cards.js';
+import { metaToScheduleCard, scheduleCardToMeta, stageScheduleCard, type ScheduleCardState } from './scheduleCard.js';
+import { buildScheduleProposeTool } from './tools.js';
 import { ADAPTER_KINDS, type AdapterKind } from './adapter.js';
 import {
   createDirectBuilder,
@@ -93,6 +96,13 @@ export interface ChatMessage {
    * pick becomes the next USER MESSAGE, routed like any other — never a capability.
    */
   card?: ChatCardState;
+  /**
+   * A schedule SUGGESTION staged by `schedule_propose` (TASK-20261009 P1, ADR-0074 §4) —
+   * the builder's or the chat lane's. Present only because the tool's sink accepted a
+   * proposal the protocol's schema parsed; the card can enable nothing itself (the one
+   * consent surface and the one writer do), and `resolution` records the user's answer.
+   */
+  schedule?: ScheduleCardState;
   /**
    * What this turn actually ran on (TASK-20260826, ADR-0059 rule 3) — stamped by the
    * builder's `onBrain` from the resolved adapter config, persisted in message meta,
@@ -205,6 +215,8 @@ interface PersistedMeta {
   authChoice?: AuthChoiceSeed;
   /** A presented (and possibly resolved) inline choice card (TASK-20260815-inline-cards). */
   card?: ChatCardState;
+  /** A staged (and possibly answered) schedule suggestion (TASK-20261009 P1) — `scheduleCardToMeta`'s shape. */
+  schedule?: Omit<ScheduleCardState, 'messageRowId'>;
   /** The brain this turn ran on (TASK-20260826) — 'demo' is what the tag renders from. */
   brainKind?: AdapterKind;
 }
@@ -307,6 +319,7 @@ const STEP_LABELS: Record<string, string> = {
   data_propose_write: 'preparing a data change…',
   provider_request: 'calling the connected service…',
   present_card: 'asking you to choose…',
+  schedule_propose: 'suggesting a schedule…',
 };
 
 const stepLabel = (tool: string): string => STEP_LABELS[tool] ?? `${tool.replace(/_/g, ' ')}…`;
@@ -334,6 +347,89 @@ function applyStep(current: BuildStepView[], step: BuildStep): BuildStepView[] {
   const next = current.slice();
   next[index] = { ...(next[index] as BuildStepView), done: true };
   return next;
+}
+
+/** What the lane tool selection needs from the turn — the seams, never React state. */
+export interface LaneToolDeps {
+  db: UserDb;
+  /** The app the message sits beside (the thread's pin); every routed lane has one. */
+  contextTarget: string | undefined;
+  threadId: string;
+  /** The turn's abort signal — the provider lane threads it so a cancelled turn denies its own parked confirm (AC6). */
+  signal: AbortSignal;
+  /** The inline choice card, offered to every routed non-feature lane but the schedule lane. */
+  presentCardTool: AgentTool;
+  /** One data-write proposal per turn; `false` ⇒ not staged. */
+  onDataProposal: (proposal: PendingWriteProposal) => boolean;
+  /** Provider-lane request failures, code-keyed (TASK-20260815 AC5). */
+  onProviderFailureCode: (appId: string, code: string) => void;
+  /** One schedule suggestion per turn; `false` ⇒ not staged (TASK-20261009 P1). */
+  onScheduleProposal: (proposal: ScheduleProposal, appId: string | undefined) => boolean;
+}
+
+/**
+ * LANE-SCOPED TOOLS (ADR-0019 D9) — the second lock, as ONE EXHAUSTIVE SWITCH over the lane
+ * (TASK-20261009 P2, feasibility F2). `undefined` means "the builder's own set" and is answered
+ * ONLY by the feature lane and by an unrouted turn: the else-chain this replaces let any lane
+ * it did not name fall through to the full builder set — `artifact_write` in hand — which is
+ * the exact failure the lane design exists to prevent. A new lane now fails to compile until
+ * this switch names its tools.
+ *
+ *  - data: the two data tools (`data_read` drops the write tool — a question is not permission
+ *    to propose a change) + the choice card.
+ *  - feature: the builder set (its trust story is versioning, not cards).
+ *  - provider: the governed request tool (read-only unless `provider_write`) + the choice card.
+ *  - schedule: ONLY `schedule_propose` — no card, no data tool, nothing that writes; where the
+ *    host does not schedule at all the turn runs tool-free and the model answers in words.
+ *  - answer: the choice card alone.
+ */
+export async function laneToolsFor(route: RoutedLane | undefined, deps: LaneToolDeps): Promise<AgentTool[] | undefined> {
+  if (route === undefined || deps.contextTarget === undefined) return undefined;
+  const target = deps.contextTarget;
+  switch (route.lane) {
+    case 'data': {
+      const { buildDataTools } = await import('./dataTools.js');
+      return [
+        ...buildDataTools({
+          appId: target,
+          getDb: () => Promise.resolve(deps.db),
+          allowWrites: route.intent === 'data_write',
+          onProposal: deps.onDataProposal,
+        }),
+        deps.presentCardTool,
+      ];
+    }
+    case 'feature':
+      return undefined;
+    case 'provider': {
+      const { buildProviderTools } = await import('./providerTools.js');
+      return [
+        ...buildProviderTools({
+          appId: target,
+          getDb: () => Promise.resolve(deps.db),
+          allowWrites: route.intent === 'provider_write',
+          signal: deps.signal,
+          onFailureCode: (code) => deps.onProviderFailureCode(target, code),
+        }),
+        deps.presentCardTool,
+      ];
+    }
+    case 'schedule':
+      if (!allows('schedule')) return [];
+      return [
+        buildScheduleProposeTool({
+          getDb: () => Promise.resolve(deps.db),
+          resolveAppId: () => Promise.resolve(target),
+          onProposal: deps.onScheduleProposal,
+        }),
+      ];
+    case 'answer':
+      return [deps.presentCardTool];
+    default: {
+      const never: never = route;
+      return never;
+    }
+  }
 }
 
 function metaToArtifact(meta: unknown): ArtifactEvent | undefined {
@@ -479,6 +575,7 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
                 const dataWrite = metaToDataWrite(m.meta);
                 const authChoice = metaToAuthChoice(m.meta);
                 const card = metaToCard(m.meta);
+                const schedule = metaToScheduleCard(m.meta);
                 const brainKind = metaToBrainKind(m.meta);
                 return {
                   id: ++messageSeq,
@@ -491,6 +588,9 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
                   // The DB row id rides along so resolving a REHYDRATED card can persist
                   // (the view id above is synthetic; the row id is the durable address).
                   ...(card !== undefined ? { card: { ...card, messageRowId: m.id } } : {}),
+                  // TASK-20261009 P1: the suggestion card outlives the React tree the same
+                  // way, re-validated through the protocol's parser on every read.
+                  ...(schedule !== undefined ? { schedule: { ...schedule, messageRowId: m.id } } : {}),
                   // Row provenance (ADR-0059 rule 3): the demo tag must survive a reload.
                   ...(brainKind !== undefined ? { brainKind } : {}),
                 };
@@ -570,6 +670,8 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
       const stagedProposal: { current: DataWriteCardState | undefined } = { current: undefined };
       /** One presented card per turn (TASK-20260815-inline-cards) — same single-seat rule. */
       const stagedCard: { current: ChatCardState | undefined } = { current: undefined };
+      /** One schedule suggestion per turn (TASK-20261009 P1) — the same single-seat rule again. */
+      const stagedSchedule: { current: ScheduleCardState | undefined } = { current: undefined };
       /** Per-turn state for bootstrap pinning (F9) + artifact-card persistence. */
       const turn: { userDbId?: number; artifact?: ArtifactEvent; installedV1: boolean; brainKind?: AdapterKind } = {
         installedV1: false,
@@ -689,7 +791,6 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
          * `data_read` also drops the write tool: a question is not permission to propose
          * a change, and the narrower set is the cheaper prompt.
          */
-        let laneTools: AgentTool[] | undefined;
         /**
          * The inline choice card, offered to every ROUTED non-feature lane
          * (TASK-20260815-inline-cards): asking-as-UI is lane-agnostic, and the feature
@@ -704,54 +805,54 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
             return true;
           },
         });
-        if (route?.lane === 'data' && contextTarget !== undefined) {
-          const { buildDataTools } = await import('./dataTools.js');
-          laneTools = buildDataTools({
-            appId: contextTarget,
-            getDb: () => Promise.resolve(db),
-            allowWrites: route.intent === 'data_write',
-            /**
-             * ONE PROPOSAL PER TURN (whole-surface review, 2026-08-11).
-             *
-             * `ChatMessage.dataWrite` is a single slot and the tool loop allows several
-             * tool calls per turn, so a second `data_propose_write` used to silently
-             * REPLACE the first: the earlier proposal vanished with no trace and the user
-             * approved whichever the model happened to stage last. Keeping the FIRST and
-             * refusing the rest makes the card and the tool result agree — the model is
-             * told, in its own tool result, that the extra proposal was not staged, so it
-             * can tell the user rather than believing both are pending.
-             */
-            onProposal: (proposal) => {
-              if (stagedProposal.current !== undefined) return false;
-              stagedProposal.current = proposal;
-              patchMessage(agentId, { dataWrite: proposal });
-              return true;
-            },
-          });
-          laneTools = [...laneTools, presentCardTool];
-        } else if (route?.lane === 'provider' && contextTarget !== undefined) {
+        /**
+         * ONE SCHEDULE SUGGESTION PER TURN (TASK-20261009 P1) — the data-write card's rule:
+         * the first is staged on the message, the rest are refused in the tool result so
+         * the model tells the user rather than believing both are pending. The same closure
+         * serves the builder's set (through the agent's handlers) and the schedule lane
+         * (through `laneToolsFor`), so the card knows which channel staged it.
+         */
+        const onScheduleProposal = (proposal: ScheduleProposal, appId: string | undefined): boolean => {
+          if (stagedSchedule.current !== undefined) return false;
+          const card = stageScheduleCard(proposal, { ...(appId !== undefined ? { appId } : {}), channel: route?.lane === 'schedule' ? 'chat' : 'builder', threadId });
+          stagedSchedule.current = card;
+          patchMessage(agentId, { schedule: card });
+          return true;
+        };
+        /**
+         * THE EXHAUSTIVE LANE SWITCH (`laneToolsFor`, TASK-20261009 P2): the clarify lane
+         * settled above, so what reaches here is a routed lane or no route at all.
+         *
+         * THE PROVIDER LANE (TASK-20260815, ADR-0031 §2) gets one governed tool, the same
+         * connected-fetch assembly the app runtime uses, read-only unless `provider_write`;
+         * each mutating call still parks at the executor's user-confirm gate.
+         */
+        const laneTools: AgentTool[] | undefined = await laneToolsFor(route, {
+          db,
+          contextTarget,
+          threadId,
+          signal: controller.signal,
+          presentCardTool,
           /**
-           * THE PROVIDER LANE (TASK-20260815, ADR-0031 §2): one governed tool, the same
-           * connected-fetch assembly the app runtime uses. `provider_read` turns get the
-           * tool read-only; `provider_write` unlocks mutating methods, each of which
-           * still parks at the executor's user-confirm gate. The turn's abort signal is
-           * threaded so a cancelled turn denies its own parked confirm (AC6).
+           * ONE PROPOSAL PER TURN (whole-surface review, 2026-08-11).
+           *
+           * `ChatMessage.dataWrite` is a single slot and the tool loop allows several
+           * tool calls per turn, so a second `data_propose_write` used to silently
+           * REPLACE the first: the earlier proposal vanished with no trace and the user
+           * approved whichever the model happened to stage last. Keeping the FIRST and
+           * refusing the rest makes the card and the tool result agree — the model is
+           * told, in its own tool result, that the extra proposal was not staged, so it
+           * can tell the user rather than believing both are pending.
            */
-          const { buildProviderTools } = await import('./providerTools.js');
-          const providerTarget = contextTarget;
-          laneTools = [
-            ...buildProviderTools({
-              appId: providerTarget,
-              getDb: () => Promise.resolve(db),
-              allowWrites: route.intent === 'provider_write',
-              signal: controller.signal,
-              onFailureCode: (code) => options.onProviderNetError?.(providerTarget, code),
-            }),
-            presentCardTool,
-          ];
-        } else if (route?.lane === 'answer') {
-          laneTools = [presentCardTool];
-        }
+          onDataProposal: (proposal) => {
+            if (stagedProposal.current !== undefined) return false;
+            stagedProposal.current = proposal;
+            patchMessage(agentId, { dataWrite: proposal });
+            return true;
+          },
+          onProviderFailureCode: (appId, code) => options.onProviderNetError?.(appId, code),
+          onScheduleProposal,
+        });
 
         const result = await agent.send(
           {
@@ -803,6 +904,9 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
               turn.brainKind = kind;
               patchMessage(agentId, { brainKind: kind });
             },
+            // TASK-20261009 P1: the builder's set carries `schedule_propose` too — the same
+            // single-seat staging the schedule lane uses.
+            onScheduleProposal,
           },
           controller.signal,
         );
@@ -959,6 +1063,7 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
               directive !== undefined ||
               stagedProposal.current !== undefined ||
               stagedCard.current !== undefined ||
+              stagedSchedule.current !== undefined ||
               authChoice !== undefined ||
               turn.brainKind !== undefined
                 ? {
@@ -983,6 +1088,9 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
                     // TASK-20260815-inline-cards AC2: the card outlives the React tree;
                     // re-validated via metaToCard on every read.
                     ...(stagedCard.current !== undefined ? { card: stagedCard.current } : {}),
+                    // TASK-20261009 P1: the suggestion outlives the React tree too;
+                    // re-validated via metaToScheduleCard on every read.
+                    ...(stagedSchedule.current !== undefined ? scheduleCardToMeta(stagedSchedule.current) : {}),
                     // ADR-0059 rule 3: what this turn ran on, as row provenance — a
                     // later settings change must not relabel history, and the demo tag
                     // must survive a reload.
@@ -1005,6 +1113,12 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
               const rowId = stored.id;
               patchMessage(agentId, (m) => ({
                 card: { ...(m.card ?? stagedCard.current!), messageRowId: rowId },
+              }));
+            }
+            if (stagedSchedule.current !== undefined) {
+              const rowId = stored.id;
+              patchMessage(agentId, (m) => ({
+                schedule: { ...(m.schedule ?? stagedSchedule.current!), messageRowId: rowId },
               }));
             }
           }

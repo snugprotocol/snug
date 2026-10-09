@@ -3,9 +3,9 @@
 // parsed deterministically; a reading fills the controls, a failure leaves them as they are and
 // says so), the title, the when (`SpecControls`), the steps (`StepsEditor`), the catch-up
 // sentence with its three choices pre-set from cost (Q12), the alert choice, the live preview
-// and cost (`PreviewAndCost`), and — before the FIRST save of anything that asks the AI, or
-// when an imported schedule is being turned on — the consent panel (`EnableConsent`), then the
-// one act. The save goes through the engine's own writers (`createTask` / `updateTask`), and a
+// and cost (`PreviewAndCost`), and — before the FIRST save of anything that spends (asks the AI
+// or runs an app — U8: the prompt, the queries, the input, the hosts), or when an imported
+// schedule is being turned on — the consent panel (`EnableConsent`), then the one act. The save goes through the engine's own writers (`createTask` / `updateTask`), and a
 // refusal comes back in words.
 //
 // THE DRAFT (`editorModel.ts`) is the whole state: one object, one `setDraft`, every control a
@@ -29,7 +29,7 @@ import { useBrain } from '../state/webllm.js';
 import { Button } from '../ui/Button.js';
 import { brainChipLabel } from '../views/BrainChip.js';
 import { EMPTY, alertLabel, alertSentence, imported, missedPolicyLabel, missedPolicySentence } from './copy.js';
-import { ACTIONS, SENTENCE, STEPS, TITLE } from './copy.editor.js';
+import { ACTIONS, SENTENCE, TITLE } from './copy.editor.js';
 import { compileSpec, listWords, parseCron } from './cron.js';
 import {
   appBrainKind,
@@ -118,9 +118,8 @@ export function ScheduleEditor({ initial, parseFailed: initialParseFailed, apps,
   const compiled = compileSpec(draft.spec, now);
   const title = draft.title.trim();
   const titleProblem = title === '' ? TITLE.required : title.length > SCHEDULE_TITLE_MAX_CHARS ? TITLE.tooLong : undefined;
-  const laterRelease = !prepared.ok && prepared.reason === STEPS.laterReleaseRefusal ? prepared.reason : undefined;
-  // Named top to bottom as the form reads: the hard refusal, then the title, then the steps, then the when.
-  const blocker = laterRelease ?? titleProblem ?? (prepared.ok ? undefined : prepared.reason) ?? (compiled === undefined ? 'this schedule cannot be compiled — check the when' : undefined);
+  // Named top to bottom as the form reads: the title, then the steps, then the when.
+  const blocker = titleProblem ?? (prepared.ok ? undefined : prepared.reason) ?? (compiled === undefined ? 'this schedule cannot be compiled — check the when' : undefined);
   const canSave = blocker === undefined && floorRefusal === undefined && !busy && consent === undefined;
 
   const update = (patch: Partial<EditorDraft>): void => setDraft((current) => ({ ...current, ...patch }));
@@ -189,8 +188,9 @@ export function ScheduleEditor({ initial, parseFailed: initialParseFailed, apps,
   const submit = (): void => {
     if (!prepared.ok || compiled === undefined || floorRefusal !== undefined || titleProblem !== undefined) return;
     const save: PreparedSave = { title, steps: prepared.steps, spec: draft.spec };
-    const asksAi = prepared.steps.some((step) => step.kind === 'app-think');
-    if ((task === undefined && asksAi) || importedDisabled) {
+    // Anything that spends — the brain or the app's own code — is shown before the first enable (U8).
+    const spends = prepared.steps.some((step) => step.kind !== 'notify');
+    if ((task === undefined && spends) || importedDisabled) {
       setError(undefined);
       setConsent(save);
       return;
@@ -280,12 +280,6 @@ export function ScheduleEditor({ initial, parseFailed: initialParseFailed, apps,
 
       <PreviewAndCost spec={draft.spec} steps={liveSteps} now={now} brainLabel={brainLabel} appNames={thinkAppNames} floorRefusal={floorRefusal} honesty={honesty} />
 
-      {laterRelease !== undefined ? (
-        <div className="error-note" role="alert" aria-live="polite" data-testid="later-release-refusal">
-          {laterRelease}
-        </div>
-      ) : null}
-
       {consent !== undefined ? (
         <EnableConsent
           steps={consent.steps}
@@ -305,7 +299,7 @@ export function ScheduleEditor({ initial, parseFailed: initialParseFailed, apps,
               {error}
             </div>
           ) : null}
-          {blocker !== undefined && laterRelease === undefined ? (
+          {blocker !== undefined ? (
             <p className="hint" role="status" data-testid="save-blocker">
               {blocker}
             </p>

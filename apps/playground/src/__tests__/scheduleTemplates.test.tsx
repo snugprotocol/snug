@@ -12,7 +12,6 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { scheduleSpecSchema, scheduleStepSchema } from '@snugprotocol/protocol';
 
 import { TEMPLATES } from '../schedule/copy.page.js';
-import { STEPS } from '../schedule/copy.editor.js';
 import { compileSpec, describeSpec } from '../schedule/cron.js';
 import { TEMPLATE_NAMES, initialDraft, prepareSteps, templateFill } from '../schedule/editorModel.js';
 import { newScheduleHref } from '../schedule/routes.js';
@@ -58,7 +57,7 @@ describe('the registry (one: editorModel.templateFill)', () => {
     expect(templateCards(NONE).map((card) => card.name)).toEqual([...TEMPLATE_NAMES]);
   });
 
-  it('every spec compiles and parses; every usable template’s steps prepare into protocol steps — and the run-an-app one is refused until PR-B', () => {
+  it('every spec compiles and parses; every usable template’s steps prepare into protocol steps — morning weather opens with a runnable run-the-app step (PR-B)', () => {
     const candidates = templateCandidates(ALL);
     for (const name of TEMPLATE_NAMES) {
       const fill = templateFill(name, candidates);
@@ -67,8 +66,7 @@ describe('the registry (one: editorModel.templateFill)', () => {
       expect(fill.missing, `${name} has every starter`).toEqual([]);
       const prepared = prepareSteps(fill.steps);
       if (name === 'morning-weather') {
-        expect(prepared).toEqual({ ok: false, reason: STEPS.laterReleaseRefusal });
-        continue;
+        expect(prepared).toEqual({ ok: true, steps: [{ kind: 'app-run', appId: 'app-weather' }, { kind: 'notify', title: 'morning weather', body: 'your morning weather is ready' }] });
       }
       expect(prepared.ok, `${name} prepares`).toBe(true);
       if (!prepared.ok) continue;

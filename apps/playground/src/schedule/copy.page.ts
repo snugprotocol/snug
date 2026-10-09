@@ -147,7 +147,7 @@ export const SETTINGS = {
   clearConfirm: 'clear',
   clearKeep: 'keep',
   cleared: 'history cleared',
-  /** PR-B: the switch these two label is not rendered until the suggestion strip reads its flag. */
+  /** The switch the suggestion strip's intake reads (`ScheduleSettingsCard.NO_SUGGESTIONS_KEY`). */
   noSuggestions: `never let apps suggest ${WORDS.items}`,
   noSuggestionsHint: `you can still ${WORDS.item} any app yourself`,
   on: 'on',
@@ -164,4 +164,10 @@ export function cancelName(title: string): string {
 export const OFFER = {
   dismiss: 'dismiss',
   dismissName: `dismiss this ${WORDS.item} offer`,
+  /**
+   * Under a platform-pinned HOST brain the chat has no classifier and no `schedule` lane
+   * (TASK-20261009 P2): this deterministic offer IS the way from the chat to a schedule, and
+   * the line says so instead of leaving the user to wonder why the agent never suggested one.
+   */
+  hostBrain: `on this brain the agent can’t suggest ${WORDS.items} itself — review is the way`,
 } as const;

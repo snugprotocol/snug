@@ -175,7 +175,9 @@ export type ToolPromptName =
   /** TASK-20260815 (ADR-0031 §3): the inline choice card any routed lane may present. */
   | 'present-card'
   /** TASK-20260811 (ADR-0019 D10): targeted edits as a cheaper route to a new version. */
-  | 'artifact-edit';
+  | 'artifact-edit'
+  /** TASK-20261009 (ADR-0074 §4): the propose-only schedule tool — the builder's and the schedule lane's. */
+  | 'schedule-propose';
 
 export function getToolPrompt(name: ToolPromptName): string {
   return renderedFile(`tools/${name}.md`);
