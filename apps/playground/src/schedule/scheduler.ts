@@ -55,8 +55,9 @@
 //
 // THE LOCK NAME. The election wants `snug-scheduler:<file db uuid>` so two files in one origin
 // elect independently. `UserDb` does not yet expose its `db_id` (`snug_meta`), so the default
-// `fileId` answers nothing and the name falls back to the constant `snug-scheduler` — one
-// election per origin until the accessor lands (then `fileId` reads it; nothing else changes).
+// `fileId` reads `db.getFileId()` (the file's `db_id`), so the lock is `snug-scheduler:<id>` — two
+// user files open on one origin never share a ticker; the constant is the fallback for a file
+// whose meta row is missing (`seedMeta` repairs it on the next open).
 
 import type { UserDb } from '@snugprotocol/db';
 import {

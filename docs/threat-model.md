@@ -89,7 +89,7 @@ personal sync origin the user connected — that is [ADR-0014](decisions/0014-cr
 custody working as designed; denial of service against the user's own browser tab or own
 self-hosted server; and third-party self-hosted infrastructure misconfiguration.
 
-**This document consolidates fifteen per-change threat-model deltas** (§8). A delta is written
+**This document consolidates sixteen per-change threat-model deltas** (§8). A delta is written
 for someone who already knows the system and is reading one change; this is written for a
 stranger deciding whether to trust the whole thing. Where a delta's residual is restated
 here it is marked as inherited, because a model that re-sells an old residual as new is as
@@ -265,6 +265,28 @@ page. The detailed record is `docs/security/threat-model-delta-brains-and-chat.m
 | A kit save publishes only the bare kit page, lifted from the measured contract-0.2.67 skeleton byte for byte or refused by name (R-47) | `scripts/lib/page-blocks.mjs` (`unwrapViewerPage`); `apps/host/src/storage/artifactHtml.ts` | `scripts/lib/page-blocks.test.mjs` — two real read-backs; `apps/host/src/__tests__/artifactHtml.test.ts` |
 | No gate or suite spawns a real agent CLI or reaches the real `~/Snug`: the runner takes no default brain registry, and the gate's launch legs run the shipped process under a temp home and abort unless its status names that home and the leg's own pid | `apps/host-mcp/src/runner.ts`; `scripts/check-host-mcp.mjs` (`runLaunchLegs`) | `apps/host-mcp/src/__tests__/runner.test.ts`; `scripts/check-host-mcp.test.mjs` |
 | The desktop-host walk — opt-in, in no gate — refuses a `SNUG_HOME` that is or is inside the user's real Snug home, and believes only its own child | `scripts/walk-desktop-host.mjs` (`walkEnv`, `whyNotMine`) | `scripts/walk-desktop-host.test.mjs` |
+
+### Scheduled tasks (ADR-0074, PR-A — the record, the engine, *Remind me* and *Ask [app]'s AI*)
+
+A scheduled task is executable intent kept in the user's file and run while nobody is in
+front of the confirm gate. These rows hold the record to what parses, the engine to one
+recorded run per occurrence and file copy, and the unattended think to the app's own tool-free
+transport with every data change it offers left pending. The detailed record is
+`docs/security/threat-model-delta-scheduling.md`; the hidden-frame *Run [app]* step and the
+proposal channels are PR-B's delta.
+
+| Invariant | Enforcement | Test |
+|---|---|---|
+| A task, a run or a proposal carrying a credential — an authorization-like key at any depth, a URL with userinfo, a high-confidence value shape — never lands in the file: the shapes are strict at every level with byte caps, writes parse before they touch a row (fail closed), and a row that does not parse reads as absent and is reported (fail open) | `packages/protocol/src/schedule.ts` (`findScheduleCredential`, the `strictObject` shapes, the whole-object byte caps); `packages/db/src/userdb/schedules.ts` (parse before write; `listUnreadableScheduleKeys`) | `packages/protocol/src/__tests__/schedule.test.ts` — the credential walk over task, run and proposal, the cap at +1; `packages/db/src/userdb/__tests__/schedules.test.ts` — the caps proven by failing writes, the pruning tiers |
+| An imported file arms nothing: on an untrusted import a task lands disabled unless canonically byte-identical to the local one, the watermark becomes now, declines and mutes are dropped; on EVERY import, pull and export pending proposals are stripped and stale claims retired, so a foreign file can never plant an approval card | `packages/db/src/userdb/schedules.ts` (`reconcileImportedSchedules`, `scrubScheduleRunRows`); `packages/db/src/userdb/userdb.ts` (the slot beside `reconcileImportedConnections`; the export copy) | `packages/db/src/userdb/__tests__/userdb.test.ts` — "importUserDb — scheduled tasks are executable intent", "exportUserDb — proposals never leave the device" |
+| Deleting an app sweeps every task that only ever named it (with its history), its declines and its mute, inside the cascade's transaction; a surviving multi-app task has its dead step marked at run time, never rewritten | `packages/db/src/userdb/schedules.ts` (`sweepSchedulesForDeletedApp`); `packages/db/src/userdb/userdb.ts` (`deleteApp` step 3c') | `packages/db/src/userdb/__tests__/delete-app.test.ts` — the AC18 rows, each sweep mutation-checked |
+| One occurrence runs at most once per file copy: one leader per origin and file (a blocking `navigator.locks` request on `snug-scheduler:<db_id>`), a `running` row written before any step, an existing row for `(taskId, dueAt)` in any status but `pending` never re-run, `ranThrough` on the task row as the dedupe record pruning cannot reach, and the watermark written last | `apps/playground/src/schedule/leader.ts`; `apps/playground/src/schedule/queue.ts` (the claim); `apps/playground/src/schedule/plan.ts` (the window, the dedupe); `apps/playground/src/schedule/scheduler.ts` (`reconcileNow`, `lockNameFor`); `packages/db/src/userdb/userdb.ts` (`getFileId`) | `apps/playground/src/__tests__/scheduleLeader.test.ts`; `apps/playground/src/__tests__/scheduleQueue.test.ts` — drop the claim write → red; `apps/playground/src/__tests__/schedulePlan.test.ts`; `apps/playground/src/__tests__/scheduler.test.ts` — write the watermark first → red |
+| "Due" is derived from the wall clock, never from a tick count: the timer re-arms to the next minute boundary from `Date.now()`, a slept-through gap is one `late` fire, and the misses it reveals collapse to one candidate per task, skipped past the freshness window, asked or run once by policy | `apps/playground/src/schedule/tick.ts`; `apps/playground/src/schedule/plan.ts`; `apps/playground/src/schedule/floors.ts` (the cost-derived defaults) | `apps/playground/src/__tests__/scheduleTick.test.ts` — a 3-hour jump is one fire, no burst; `apps/playground/src/__tests__/schedulePlan.test.ts` — 48 misses → one pending; `apps/playground/src/__tests__/scheduleFloors.test.ts` |
+| An unattended *Ask the AI* step is the app's own transport with no tools and no connected call: user-typed read-only `SELECT`s on the scratch copy, rows delimited as data with the closing tag defanged, one call per step, and every data change the reply offers dry-run and stored pending — nothing in the engine executes one; a credential-shaped summary, alert or failure message is withheld whole | `apps/playground/src/schedule/appThink.ts`; `apps/playground/src/schedule/executors.ts` (`finalizeOutcome`); `packages/protocol/src/schedule.ts` (`isReadOnlySelect`, `isSingleDmlStatement`) | `apps/playground/src/__tests__/scheduleAppThink.test.ts` — the injection row yields at most a pending change, two apps never share a wire, the demo brain is refused by name; `apps/playground/src/__tests__/scheduleExecutors.test.ts` — the withhold |
+| Spend without a reader is bounded: frequency floors by provenance (5 min user, 15 min proposed or imported), UTC-day ceilings (100 AI, 500 net) asked before every think, pause after five failures and after thirty results nobody opened (`seenAt` is a user gesture only), a global pause that holds without bursting | `apps/playground/src/schedule/floors.ts`; `apps/playground/src/schedule/protection.ts`; `apps/playground/src/schedule/queue.ts` (the ceiling before each think); `apps/playground/src/schedule/scheduler.ts` (`markSeen`, `setGlobalPause`) | `apps/playground/src/__tests__/scheduleFloors.test.ts`; `apps/playground/src/__tests__/scheduleProtection.test.ts`; `apps/playground/src/__tests__/scheduleQueue.test.ts` — capped past the ceiling; `apps/playground/src/__tests__/scheduler.test.ts` |
+| A notification is host-decided: once per run, only on the task's own `notification` choice, only through a composed `scheduler.notify` seat — the desktop and kit seats carry none, and the web seat answers `denied` until the Settings opt-in and an already-granted permission both hold at the call and never asks — the body title-prefixed, cut to 120 and past the credential withhold; the executor only suggests | `apps/playground/src/schedule/queue.ts`; `apps/playground/src/platform/platform.ts` (`SchedulerSeat`); `apps/playground/src/platform/webNotify.ts`; `apps/desktop/src/platform-desktop.ts`; `apps/host/src/platform-host.ts` (`schedulerSeatFor`) | `apps/playground/src/__tests__/scheduleQueue.test.ts` — once per run, never for `inbox`, never without a seat; `apps/playground/src/__tests__/schedulerSeat.test.ts`; `apps/playground/src/__tests__/webNotify.test.ts` — the seat never asks; `apps/host/src/__tests__/compose.test.ts`; `apps/desktop/src/__tests__/platformOffers.test.ts` |
+| Every scheduling surface says in words who must be open for a run to happen, from one sentence derived per call from the platform (the seat's label, the memory rung, whether sibling tabs can be seen); every run row records its host; no UI file spells an internal word to the user | `apps/playground/src/schedule/copy.ts` (`hostHonesty`); `apps/playground/src/schedule/honesty.ts`; the seats' labels in `apps/desktop/src/platform-desktop.ts` and `apps/host/src/platform-host.ts` | `apps/playground/src/__tests__/scheduleHonesty.test.ts`; `apps/playground/src/__tests__/scheduleCopy.test.ts` — the vocabulary scan with its planted-sentence proof; `apps/host/src/__tests__/compose.test.ts`; `apps/host/e2e/schedule.spec.ts` — the line on the built page, the lock fallback |
+| The scheduler boots idempotently from the shipping composition root and both re-init chains, resets at every file-swap seam with a run in flight recorded `interrupted`, and a host that says `schedule: false` gets no ticker, no election and no row | `apps/playground/src/schedule/scheduler.ts` (`initScheduler`, `resetScheduler`); `apps/playground/src/App.tsx`; `apps/playground/src/state/userdb.ts`; `apps/playground/src/platform/hostCapabilities.ts` | `apps/playground/src/__tests__/schedulerBoot.test.tsx`; `apps/playground/src/__tests__/scheduler.test.ts` — the swap seams, `allows("schedule") === false` |
 
 ---
 
@@ -553,6 +575,67 @@ while the URL is visible. *Follow-up:* a one-time launch code in the fragment in
 bearer — single use, a short TTL, held in memory, exchanged for the bearer on a POST that passes
 the `Host`/`Origin` gate. *Full surface:* `docs/security/threat-model-delta-brains-and-chat.md`
 (L1, L6, residual 8) and `docs/security/threat-model-delta-local-host-process.md` (residual 12).
+
+**R-50 — No Snug host is always-on, so a scheduled task runs only while some Snug holding the
+file is open (ADR-0074).** Snug for Mac quits when its window closes, the local host process
+exits a few seconds after its last agent session, a tab runs only while open and a hidden tab's
+timers are throttled. Everything missed is found on the next open — collapsed per task,
+handled by the schedule's own policy, auto-skipped past its freshness window — and the honesty
+line says so where the user decides, never only in Settings. Desktop background mode is the
+named follow-up. *Full surface:* `docs/security/threat-model-delta-scheduling.md` (R-a).
+
+**R-51 — Two copies of one file may each run one occurrence.** Two hosts on diverged copies of
+one file (two devices before a sync; two tabs at an origin where `navigator.locks` is absent or
+refuses — an opaque origin, `file://`, where each context leads and says sibling tabs cannot be
+seen) can both claim the same `(taskId, dueAt)` before either sees the other's row. *Bounded
+by:* one extra call per occurrence — a *Remind me* costs nothing, an *Ask the AI* step's data
+changes are proposals — and once the copies meet, the run row and the task's `ranThrough` dedupe
+every later reconcile. (Scheduling delta R-b.)
+
+**R-52 — Run rows written on two devices surface as a whole-file sync divergence.** Hub sync is
+compare-and-swap over the whole file (ADR-0009): a result row on one device beside a result row
+on another is a divergence the user resolves, not a merge. A result can be lost that way, never
+duplicated. (Scheduling delta R-c.)
+
+**R-53 — A think step's summary is model-written text shown to the user as the result.** A
+stored row shaped like an instruction is delimited as data and restated as "not instructions",
+but it can still shape the words of the summary and the data changes the reply OFFERS; it can
+never execute them — a proposal is dry-run on the scratch copy and waits as pending, applied
+only by a user act outside the engine. (Scheduling delta R-d; R-7's shape, unattended.)
+
+**R-54 — The VALUE scrub against the stored connected-host secrets lands with PR-B's net
+handler.** Today's reply-side wall for a scheduled think is the credential SHAPES plus the parse
+refusal: a summary, alert or failure message that looks like a credential is withheld whole, the
+rest shape-scrubbed. The request carries no credential by construction — DDL, rows from the
+app's own tables and the prompt; `snug_secrets` is never read by the engine — and the app's
+rows go to the app's own provider exactly as any think of that app does. (Scheduling delta R-e.)
+
+**R-55 — The kill switch can lag a sync pull.** Disable, pause and delete are rows in the
+file; another device keeps a task as it last pulled it until the next pull lands. *Bounded by:*
+R-51's shape — one run per occurrence, collapsed. (Scheduling delta R-f.)
+
+**R-56 — Summaries derived from user data persist in the file and roam with it.** A result
+row's summary is text about the app's rows; it rides every export and every trusted pull.
+`clearScheduleHistory` drops every result and keeps only what is not yet dealt with (`pending`,
+`needs-you`, `running`); pending proposals never roam at all. (Scheduling delta R-g.)
+
+**R-57 — The watermark and the first claim share a persist window.** A `run` action's claim is
+the queue's first write, a microtask after the watermark; a tab that dies between the two loses
+that occurrence and never runs it twice. Availability only. (Scheduling delta R-h.)
+
+**R-58 — Notifications have no limiter of their own.** At most one per run, bounded by the
+frequency floor (5 or 15 minutes) and by catch-up collapse; the body is the user's own reminder
+text, title-prefixed and cut to 120. The desktop and kit seats carry no `notify`, and the web
+seat is inert until the Settings opt-in and an already-granted permission both hold at the call,
+so this bounds a channel that is barely open; PR-B's desktop plugin inherits it. (Scheduling
+delta R-i.)
+
+**R-59 — *Run [app]* and every proposal channel are PR-B's delta.** An `app-run` step is
+refused by name today ("running an app on a schedule arrives in a later release"); the hidden
+frame, the kv handshake, the refusing confirm gate, the builder tool, the chat lane and the app
+suggestion strip each get their rows there, as does the one accepted residual ADR-0074 §6 names
+— an app's own code running unattended with the powers it already holds over its own data.
+(Scheduling delta R-j.)
 
 
 **R-38 — Shared docs may carry the sharer's personal data.** `memory` is off by default
@@ -893,6 +976,8 @@ macOS, and a Linux opener exists, untested on a real Linux desktop.
 
 **v3.3 note (2026-10-09, TASK-20261008-p0-clearance W3).** The desktop's http capability scope never matched its RFC-1918 entries (urlpattern IPv4-parses fixed hostname digits: `192.168.*.*` compiled to `192.0.0.168*.*`) and `https://**` admitted only :443 — an effective ceiling TIGHTER than documented, no exposure. Fixed with exact-octet regex hosts, https on any port (R-14), and a deny list for https to loopback spellings, link-local, 0/8 and IPv6 literals (a DNS name that resolves to loopback is a stated residual, stopped by rustls' certificate check); the desktop-shell delta now names every platform-fetch caller outside connected-fetch, for which this scope is the port and loopback limit. The plain-http leg of the prompt-injection-to-LAN chain (desktop-auth delta §4) is live on desktop from the next release, carried by the consent band, the frozen ceiling and the confirm gate. Both deltas re-hashed below.
 
+**v3.4 note (2026-10-09, TASK-20261009-scheduling-framework PR-A).** One row added (`threat-model-delta-scheduling.md`) and §5 gains a "Scheduled tasks" family: a task is executable intent kept in the user's file as namespaced settings rows and run while nobody is in front of the confirm gate. The record parses or is absent (strict shapes, byte caps, a credential anywhere a parse refusal); an untrusted import arms nothing and proposals never cross the file boundary in either direction; one leader per origin and file, a claim written before any step, dedupe by `(taskId, dueAt)` and `ranThrough`, the watermark written last; an unattended think is the app's own tool-free transport with its data changes left pending; spend is floored, ceilinged and paused. Ten residuals recorded as R-50 … R-59 (no always-on host; diverged copies; whole-file CAS; the model-written summary; the value scrub deferred to PR-B's net handler; kill-switch lag; roaming summaries; the watermark/claim window; notifications; *Run [app]* and the proposal channels as PR-B's delta).
+
 <!-- DELTA-LEDGER:BEGIN -->
 
 | Delta | Pinned hash | Consolidated into |
@@ -912,6 +997,7 @@ macOS, and a Linux opener exists, untested on a real Linux desktop.
 | `docs/security/threat-model-delta-app-sharing.md` | `806ca935aa18` | §4 boundary 5 · §5 C1 + C2 + authoring · R-34, R-35, R-36, R-37, R-38, R-39 |
 | `docs/security/threat-model-delta-local-host-process.md` | `b7ddc88afd9a` | §5 local runner (lock, socket, bearer) · §6 R-40 · R-41 · R-42 · R-43 · R-49 (R-43 amended for ADR-0070; R-40 and R-42 noted for R1; R-49 and the take-over row added at Gate 5) |
 | `docs/security/threat-model-delta-brains-and-chat.md` | `d168df71c3f0` | §4 boundary 3 · §5 local runner and its brains · R-11 note · R-40 note · R-44, R-45, R-46, R-47, R-48, R-49 (Gate 5) |
+| `docs/security/threat-model-delta-scheduling.md` | `68d849f3b08c` | §5 scheduled tasks · R-50, R-51, R-52, R-53, R-54, R-55, R-56, R-57, R-58, R-59 |
 <!-- DELTA-LEDGER:END -->
 
 ---
