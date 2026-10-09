@@ -13,9 +13,9 @@
 import type { PersistenceBackend } from '@snugprotocol/db';
 
 import { hostCapabilities } from '@playground/platform/hostCapabilities';
-import type { AgentHandInSeat, CustodySeat, SnugPlatform } from '@playground/platform/platform';
+import type { AgentHandInSeat, CustodySeat, SchedulerSeat, SnugPlatform } from '@playground/platform/platform';
 
-import type { ProbeResult } from './probe.js';
+import type { Binding, ProbeResult } from './probe.js';
 
 export interface HostPlatformSeats {
   /** The file's home as composed (the artifact record, or the probed bucket). Absent → the probed bucket. */
@@ -23,6 +23,33 @@ export interface HostPlatformSeats {
   custody?: CustodySeat;
   saveFile?: (bytes: Uint8Array, suggestedName: string) => Promise<void>;
   agentHandIns?: AgentHandInSeat;
+  /** The scheduler's seat (TASK-20261009 H3) — `schedulerSeatFor(binding)`, composed per binding. */
+  scheduler?: SchedulerSeat;
+}
+
+/**
+ * The scheduler's seat per binding (TASK-20261009 H3; ADR-0074 §7). Every kit page promises
+ * only the page (`wakeMode: 'page'` — a run happens while it is open) and carries NO `notify`:
+ * a page inside a viewer or opened from disk cannot raise a notification, and absence is the
+ * truth the engine reads (the inbox result still lands). `hostLabel` is the SUBJECT of the
+ * honesty line in the binding's own words — "this artifact" under either artifact arm (a
+ * reader cannot tell them apart and should not), "this page" for a plain file and for the
+ * runner's page, which is a tab. The storage rung the line also needs is read off the custody
+ * store by `honestyInputFor`, not carried here.
+ */
+export function schedulerSeatFor(binding: Binding): SchedulerSeat {
+  switch (binding) {
+    case 'artifact':
+    case 'artifact-static':
+      return { wakeMode: 'page', hostLabel: 'this artifact' };
+    case 'file':
+    case 'local-host':
+      return { wakeMode: 'page', hostLabel: 'this page' };
+    default: {
+      const never: never = binding;
+      return never;
+    }
+  }
 }
 
 export function createHostPlatform(probe: ProbeResult, sqlJsWasmBinary: Uint8Array, seats: HostPlatformSeats = {}): SnugPlatform {
@@ -40,6 +67,7 @@ export function createHostPlatform(probe: ProbeResult, sqlJsWasmBinary: Uint8Arr
     ...(seats.custody !== undefined ? { custody: seats.custody } : {}),
     ...(seats.saveFile !== undefined ? { saveFile: seats.saveFile } : {}),
     ...(seats.agentHandIns !== undefined ? { agentHandIns: seats.agentHandIns } : {}),
+    ...(seats.scheduler !== undefined ? { scheduler: seats.scheduler } : {}),
     capabilities: hostCapabilities(),
   };
 }

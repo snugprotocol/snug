@@ -36,7 +36,7 @@ describe('hostHonesty — the web default (the module’s own object, nothing se
   it('"runs while this tab is open" — no seat, the kind supplies the subject', async () => {
     const { hostHonesty, getPlatform } = await fresh();
     expect(getPlatform().kind).toBe('web');
-    expect(getPlatform().scheduler).toBeUndefined();
+    expect(getPlatform().scheduler).toMatchObject({ wakeMode: 'page', hostLabel: 'this tab' }); // H2: the web tab's seat
     expect(hostHonesty()).toBe('runs while this tab is open');
   });
 
@@ -102,7 +102,8 @@ describe('hostHonesty — the host kit (artifact binding)', () => {
 describe('honestyInputFor — the pure derivation the sentence is built from', () => {
   it('maps a platform and the leader state onto copy.hostHonesty’s input, field by field', async () => {
     const { honestyInputFor, getPlatform } = await fresh();
-    expect(honestyInputFor(getPlatform())).toEqual({ kind: 'web', storageRung: 'durable' });
+    // H2: the web default carries the tab seat, so its label and wake mode ride along.
+    expect(honestyInputFor(getPlatform())).toEqual({ kind: 'web', hostLabel: 'this tab', wakeMode: 'page', storageRung: 'durable' });
     expect(
       honestyInputFor(
         hostPlatform({ custody: custodySeat('memory'), scheduler: { wakeMode: 'page', hostLabel: 'this artifact' } }),

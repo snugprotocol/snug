@@ -7,6 +7,7 @@
 import type { AdapterMessage, AgentAdapter } from '@snugprotocol/adapters';
 import type { DesktopRedirectPosture } from '@snugprotocol/auth';
 import type { PersistenceBackend } from '@snugprotocol/db';
+import { webSchedulerSeat } from './webNotify.js';
 
 /**
  * THE BRAIN SEAT (TASK-20260905-host-kit P2, ADR-0065 §4 / D15). A host that supplies
@@ -526,6 +527,9 @@ export function secretsUsable(): boolean {
 
 const WEB_DEFAULT: SnugPlatform = {
   kind: 'web',
+  // TASK-20261009 H2: the web tab's scheduler seat — notifications only after the Settings
+  // opt-in AND a granted permission, read per call; `hostLabel` feeds the honesty line.
+  scheduler: webSchedulerSeat(),
   capabilities: {
     subscriptionMode: true,
     hubSyncOrigin: true,

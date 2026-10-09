@@ -57,9 +57,9 @@ describe('allows("schedule") — absence means enabled; only an explicit false h
 });
 
 describe('SchedulerSeat — optional on the platform, typed when present', () => {
-  it('a platform without the seat is the in-page story: nothing to read, nothing thrown', async () => {
+  it('the web default carries the tab seat (H2): page wake, "this tab", notify only through the opt-in', async () => {
     const { getPlatform } = await freshPlatform();
-    expect(getPlatform().scheduler).toBeUndefined();
+    expect(getPlatform().scheduler).toMatchObject({ wakeMode: 'page', hostLabel: 'this tab' });
   });
 
   it('a seat with only the two required fields type-checks — `notify` is optional within it', async () => {

@@ -515,3 +515,13 @@
     transition: none;
   }
 }
+
+/* The header is full at 375 px (lesson 2026-08-26: it overflowed by 7 px once; the calendar
+   item overflowed it by 17 px — measured in the kit e2e, 2026-10-09). Below the header's own
+   mobile breakpoint the entry is the hub's schedule section and Settings; the item hides,
+   never squeezes (design review F4: "if it does not fit, the hub section is the entry"). */
+@media (max-width: 559.98px) {
+  .schedule-nav {
+    display: none;
+  }
+}

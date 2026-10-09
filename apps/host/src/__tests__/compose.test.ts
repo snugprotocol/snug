@@ -6,6 +6,8 @@ import { createRequire } from 'node:module';
 import { describe, expect, it, vi } from 'vitest';
 
 import { custodyDisclosure, hostPassport } from '@playground/platform/copy';
+import { hostHonesty } from '@playground/schedule/copy';
+import { honestyInputFor } from '@playground/schedule/honesty';
 
 import { DB_BLOCK_FORMAT, upsertBundleBlock, writeDbBlock } from '../../../../scripts/lib/page-blocks.mjs';
 import { composeHostPlatform, handInBeforePaint, type ComposeDocument, type ComposeWindow } from '../compose.js';
@@ -150,6 +152,36 @@ describe('composeHostPlatform', () => {
     expect(c2.platform.agentHandIns?.pending.get()).toEqual([]);
     expect(opened.userDb.getAppHtml(appId)).toContain('v2');
     await opened.userDb.close();
+  });
+});
+
+describe('the scheduler seat per binding (TASK-20261009 H3; ADR-0074 §7)', () => {
+  it('a hosted artifact: "this artifact", page-bound, no notify — the page cannot raise one', () => {
+    const probe = probeOf('artifact', { artifact: { publish: async () => ({ version: 'v2' }) }, downloads: { save: async () => ({}) } });
+    const { platform } = composeHostPlatform(probe, winOf(KIT), docOf(KIT), wasm);
+    expect(platform.scheduler).toEqual({ wakeMode: 'page', hostLabel: 'this artifact' });
+    expect(platform.scheduler?.notify).toBeUndefined();
+  });
+
+  it('a static artifact: the same subject — a reader cannot tell the two artifact arms apart, and should not', () => {
+    const { platform } = composeHostPlatform(probeOf('artifact-static', {}), winOf(KIT), docOf(KIT), wasm);
+    expect(platform.scheduler).toEqual({ wakeMode: 'page', hostLabel: 'this artifact' });
+  });
+
+  it('a plain file: "this page" — the subject a tab opened from disk or a static server can honestly claim', () => {
+    const { platform } = composeHostPlatform(probeOf('file'), winOf(KIT), docOf(KIT), wasm);
+    expect(platform.scheduler).toEqual({ wakeMode: 'page', hostLabel: 'this page' });
+    expect(platform.scheduler?.notify).toBeUndefined();
+  });
+
+  it('the honesty line reads the seat AND the storage rung off the composed platform: a memory bucket says the page keeps nothing; a durable one does not', () => {
+    const memory = composeHostPlatform(probeOf('artifact', {}), winOf(KIT), docOf(KIT), wasm).platform;
+    expect(honestyInputFor(memory)).toEqual({ kind: 'host', hostLabel: 'this artifact', wakeMode: 'page', storageRung: 'memory' });
+    expect(hostHonesty(honestyInputFor(memory))).toBe('runs while this artifact is open — this page keeps nothing after it closes');
+
+    const durable = composeHostPlatform({ ...probeOf('file'), storage: { backend: createMemoryBackend(), kind: 'opfs' } }, winOf(KIT), docOf(KIT), wasm).platform;
+    expect(honestyInputFor(durable)).toEqual({ kind: 'host', hostLabel: 'this page', wakeMode: 'page', storageRung: 'durable' });
+    expect(hostHonesty(honestyInputFor(durable))).toBe('runs while this page is open');
   });
 });
 

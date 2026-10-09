@@ -78,6 +78,7 @@ import { bumpScheduleRevision, libraryRevisionStore, scheduleRevisionStore } fro
 import { createStore, useStore, type Store } from '../state/store.js';
 import { getUserDb, userDbStatusStore } from '../state/userdb.js';
 import { globalPaused, hostHonesty } from './copy.js';
+import { honestyInputFor } from './honesty.js';
 import { compileSpec } from './cron.js';
 import type { StepExecutor } from './engine-types.js';
 import { executeStep } from './executors.js';
@@ -206,13 +207,9 @@ function notifyOf(platform: SnugPlatform): ((n: { title: string; body: string })
 }
 
 function honestyOf(platform: SnugPlatform, leader: LeaderState | undefined): string {
-  const seat = platform.scheduler;
-  return hostHonesty({
-    kind: platform.kind,
-    ...(seat?.hostLabel !== undefined ? { hostLabel: seat.hostLabel } : {}),
-    ...(seat?.wakeMode !== undefined ? { wakeMode: seat.wakeMode } : {}),
-    ...(leader !== undefined ? { canSeeSiblingTabs: leader.canSeeSiblings } : {}),
-  });
+  // ONE derivation with the Settings card and the editor footer (`honesty.ts`): the seat, the
+  // storage rung (a memory bucket says so) and whether sibling tabs can be seen.
+  return hostHonesty(honestyInputFor(platform, leader !== undefined ? { canSeeSiblings: leader.canSeeSiblings } : undefined));
 }
 
 /**

@@ -5,8 +5,10 @@
 import { createMemoryBackend } from '@snugprotocol/db';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { createHostPlatform } from '../platform-host.js';
-import type { ProbeResult } from '../probe.js';
+import type { SchedulerSeat } from '@playground/platform/platform';
+
+import { createHostPlatform, schedulerSeatFor } from '../platform-host.js';
+import type { Binding, ProbeResult } from '../probe.js';
 
 const wasm = new Uint8Array([0x00, 0x61, 0x73, 0x6d, 1, 0, 0, 0]);
 const probe = (): ProbeResult => ({
@@ -84,5 +86,27 @@ describe('createHostPlatform', () => {
       expect(mod.allows(surface), surface).toBe(true);
     }
     expect(mod.secretsUsable()).toBe(true);
+  });
+});
+
+describe('the scheduler seat (TASK-20261009 H3; ADR-0074 §7)', () => {
+  it('is passed through verbatim when the composition supplies it — and absent otherwise, like every other seat', () => {
+    const seat: SchedulerSeat = { wakeMode: 'page', hostLabel: 'this artifact' };
+    expect(createHostPlatform(probe(), wasm, { scheduler: seat }).scheduler).toBe(seat);
+    expect(createHostPlatform(probe(), wasm).scheduler).toBeUndefined();
+  });
+
+  it('schedulerSeatFor names the subject of the honesty line per binding: the two artifact arms say "this artifact", a plain file and the runner’s page say "this page"; every one promises only the page and carries no notify', () => {
+    const expected: Record<Binding, string> = {
+      artifact: 'this artifact',
+      'artifact-static': 'this artifact',
+      file: 'this page',
+      'local-host': 'this page',
+    };
+    for (const [binding, hostLabel] of Object.entries(expected) as Array<[Binding, string]>) {
+      const seat = schedulerSeatFor(binding);
+      expect(seat, binding).toEqual({ wakeMode: 'page', hostLabel });
+      expect('notify' in seat, `${binding}: the page cannot raise a notification`).toBe(false);
+    }
   });
 });
