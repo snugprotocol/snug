@@ -687,6 +687,12 @@ verbatim in review. **There is no third control** — which is why review render
 uncollapsed and host lists uncapped. If the review screen ever degrades, this trade stops
 paying. Inherited.
 
+**R-60 — A promoted scheduler tab runs nothing until it reloads.** (ADR-0074, PR-A.) A follower's
+in-memory copy of the user file is stale after the leader's writes; promotion therefore marks
+`needsReload` and idles behind a visible strip rather than reconciling over the stale copy.
+The hand-over proper (a writer lock + a re-open seam) is queued in `docs/next-steps.md`.
+Availability only.
+
 **R-6 — TOFU pairing window.** An attacker already on the user's network at the moment of
 first pairing is pinned instead of the real bridge, and every later request is faithfully
 delivered to them. Signify-CA pinning is deferred for structural reasons (gated CA material;
@@ -997,7 +1003,7 @@ macOS, and a Linux opener exists, untested on a real Linux desktop.
 | `docs/security/threat-model-delta-app-sharing.md` | `806ca935aa18` | §4 boundary 5 · §5 C1 + C2 + authoring · R-34, R-35, R-36, R-37, R-38, R-39 |
 | `docs/security/threat-model-delta-local-host-process.md` | `b7ddc88afd9a` | §5 local runner (lock, socket, bearer) · §6 R-40 · R-41 · R-42 · R-43 · R-49 (R-43 amended for ADR-0070; R-40 and R-42 noted for R1; R-49 and the take-over row added at Gate 5) |
 | `docs/security/threat-model-delta-brains-and-chat.md` | `d168df71c3f0` | §4 boundary 3 · §5 local runner and its brains · R-11 note · R-40 note · R-44, R-45, R-46, R-47, R-48, R-49 (Gate 5) |
-| `docs/security/threat-model-delta-scheduling.md` | `68d849f3b08c` | §5 scheduled tasks · R-50, R-51, R-52, R-53, R-54, R-55, R-56, R-57, R-58, R-59 |
+| `docs/security/threat-model-delta-scheduling.md` | `30716624ec62` | §5 scheduled tasks · R-50, R-51, R-52, R-53, R-54, R-55, R-56, R-57, R-58, R-59, R-60 |
 <!-- DELTA-LEDGER:END -->
 
 ---

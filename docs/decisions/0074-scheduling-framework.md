@@ -55,3 +55,38 @@ Read from the code:
 - Positive: one engine and one UI for every runner; schedules roam with the file; nothing on the wire changes; every unattended act is refused, proposed or journaled — never silently done; the knowledge base finally has a sanctioned timer; three PRs, each walkable on its own.
 - Negative / residuals: a task runs only while some Snug is open until background mode lands; two hosts on diverged copies can both run one occurrence before syncing (bounded to one extra call — writes are proposals); hub sync is whole-file CAS, so run-history appends on two devices surface as a divergence the user resolves; a hidden frame's run spends the user's brain while they are not looking (capped, paused when ignored, disclosed in the inbox); third-party app code can now run unattended inside the sandbox (C2 unchanged; the threat-model delta names the residuals).
 - Docs owed: architecture (a scheduling section + the dependency graph note), code-map rows, glossary (schedule, task, run, catch-up, proposal, watermark), `docs/security/threat-model-delta-scheduling.md` + the fold, SPEC §8.1 line + spec-changelog, the whitepaper paragraph, product-vision, next-steps (Hue's sunset item unblocked; the background-mode task queued; the standing-approval follow-up).
+
+## Amendment (2026-10-09, TASK-20261009 Gate 5 — PR-A's diff review folded)
+
+Two fresh-context lenses (security 13 findings, maintainability 22) over the PR-A diff; the
+folds that change what this ADR says:
+
+- **§2 — the import guard compares executable INTENT, not bytes.** `canonicalScheduleIntent`
+  (steps, spec, cron, window, policy, alert, owner, provenance, title) is the byte-identical
+  check; the counters and `ranThrough` are engine state, so a run between a backup and its
+  restore no longer disarms every schedule. The engine never stamps `updatedAt` (only user acts
+  do). An untrusted import also drops every `pending` and `needs-you` entry of a demoted task,
+  retires any claim dated in the FUTURE, drops future-dated run entries and clamps `ranThrough`
+  to now — a planted candidate can never be offered as "missed".
+- **§2 — a `needs-you` row the user has opened is history** (prunable, clearable); unseen ones
+  are not. A refused claim write is surfaced (`lastError`, a counted failure), never silent.
+- **§4/§6 — one enable path for an imported schedule.** The row's switch routes an imported
+  schedule to the editor's consent panel; `setTaskEnabled` runs the frequency floor and refuses
+  `imported` until reviewed; `runNow` refuses a disabled schedule; catch-up acts skip disabled
+  schedules; the queue never claims a disabled task except for the user's own manual run.
+- **§5 — a promoted tab reloads.** A follower's in-memory copy is stale after the leader's
+  writes, so promotion marks `needsReload` and idles behind a strip instead of reconciling; the
+  writer-lock + re-open hand-over is queued (threat model R-60).
+- **§5 — proposals name their app.** Every pending data change carries the `appId` of the step
+  that produced it; the approval surface applies it to that app or refuses. A nested
+  `SELECT`/`FROM` inside a proposed statement is refused (literal-valued DML only).
+- **§5 — `until … for N times` counts recorded runs**, not calendar slots, so a paused-then-
+  resumed schedule still gets its remaining fires. A window the 400-day bound truncates is
+  clamped to the freshness window first.
+- **§6 — the custom-cron floor is computed from the parsed fields**, never sampled (a sparse-
+  then-dense minute set passed a nine-occurrence sample at 24 fires an hour).
+- **§6 — the app-drift pause (`noteAppVersion`) is PR-B's**: its callers are the shared-update
+  and hand-in apply paths, which PR-B wires with *Run [app]*. PR-A exports the hook and tests
+  the rule.
+- Templates have ONE registry (`editorModel.templateFill`); status words and relative time have
+  one home each; the hidden "never let apps suggest schedules" switch waits for PR-B's reader.
