@@ -1,0 +1,23 @@
+{
+  "format": "snug-starters-lock/1",
+  "name": "@snugprotocol/starters",
+  "versions": {
+    "0.1.0": {
+      "published": false,
+      "starters": {
+        "adventure-quest": "xKiYyEeHTlCm2Yma2jXR+tzq9Ha10aqp4m1dT3VZt89suvKD8QHXItk2ttHltsjn",
+        "chess": "GgtHWjt2ejFWP0WN0x/G2rVRf2Psc6SDQPh3O+DniBNz/LQM649oVKSXIWfC+PC4",
+        "flying-pig": "2JuHbnHwiB156ZHWm+oa4DGE37EASGFfr+MA60XBjAB4lMV7b0NpeuLBfG+wttJG",
+        "github": "yB0tnGTqKsqiG9FDWkqfByr9fuWx6ludhCpcL543AsvHCAjGxRWJSgOwlBMTFuyk",
+        "gmail": "GGlZ3k+NSbeZoR3UVQLA+3VoPt2c3ZsfoK8cSv/Icy1ytHHfGYbkzLis/jFOcsZE",
+        "hue": "OsaDmMo5kFjgUgpa7F2oMLZELcX6SQWXdz5EprzDe2bOFJvSi9ZRgg7dX3Hs+HeD",
+        "ledger": "HPI+2Hk2GjlOUieDqgSBqiA7z17XX+8O0DrurIzTH3sRkmx6Nge1CAuEFBJPqkNv",
+        "quiz-me": "5whpiLMAby8ysOhKdYe7+VqSUodGOF4zJB1u8LzJVS/T+wKwzHh/wKmO9cGW50ks",
+        "spotify": "Ae9x/3Y9GDe6pj6A83eW/yM63gLR1k1UOgW/vURjT1xIU84985a6GP9XkagYf7d8",
+        "trade-copilot": "fqIf6S6s8bGFEZxcWufk8havHwDAsNPVjtTyeJvuDfapFaPKCg1wRJJ/phoGW6rI",
+        "weather": "wkJQFIqf0lLGQ4sYyu+I3R2viNz/tzysgZk0pAnhZey61xkyPLFoCJ5MzLtaWKGZ",
+        "whatsapp": "BoJ9q5UUk2cZ9+XXQfneMosJUfCzYETQ+3TptRNLk8uqqWyF7zONGJNpTknqpSJj"
+      }
+    }
+  }
+}
