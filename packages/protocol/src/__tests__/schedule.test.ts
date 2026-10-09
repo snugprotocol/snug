@@ -200,6 +200,7 @@ describe('scheduleSpecSchema — every variant parses', () => {
     const variants = [
       { kind: 'once', at: AT, tz: 'device' },
       { kind: 'every', n: 30, unit: 'minutes', tz: 'device' },
+      { kind: 'every', n: 3, unit: 'days', time: '09:00', tz: 'device' },
       daily,
       { kind: 'weekly', days: ['mon', 'tue', 'wed', 'thu', 'fri'], time: '08:00', tz: 'device' },
       { kind: 'weekly', days: ['sat', 'sun'], time: '09:30', tz: 'Europe/Oslo' },
@@ -244,6 +245,21 @@ describe('scheduleSpecSchema — every variant parses', () => {
     expect(parses(scheduleSpecSchema, every(0))).toBe(false);
     expect(parses(scheduleSpecSchema, every(1.5))).toBe(false);
     expect(parses(scheduleSpecSchema, { ...every(1), unit: 'weeks' })).toBe(false);
+  });
+
+  it('every.time is optional HH:MM, honoured only when unit is "days" — minutes and hours refuse it', () => {
+    const every = (unit: string, time?: string) => ({ kind: 'every', n: 3, unit, ...(time === undefined ? {} : { time }), tz: 'device' });
+    expect(parses(scheduleSpecSchema, every('days', '09:00'))).toBe(true);
+    expect(parses(scheduleSpecSchema, every('days'))).toBe(true); // optional — without it the stride fires at its creation wall time
+    expect(parses(scheduleSpecSchema, every('hours', '09:00'))).toBe(false);
+    expect(parses(scheduleSpecSchema, every('minutes', '09:00'))).toBe(false);
+    for (const time of ['9:00', '24:00', '09:60', '9am', '']) {
+      expect(parses(scheduleSpecSchema, every('days', time)), time).toBe(false);
+    }
+    // The refusal names the seat, so an editor can point at it rather than at the whole spec.
+    const refused = scheduleSpecSchema.safeParse(every('hours', '09:00'));
+    expect(refused.success).toBe(false);
+    expect(refused.success ? [] : refused.error.issues.map((issue) => issue.path.join('.'))).toContain('time');
   });
 
   it('weekly.days is a non-empty, unique set of weekdays', () => {
@@ -746,6 +762,11 @@ describe('scheduleProposalSchema + proposalHash — the semantic fields only', (
     expect(proposalHash(scheduleProposalSchema.parse({ ...minimalProposal, steps: [notify, notify] }))).not.toBe(a);
     expect(proposalHash(scheduleProposalSchema.parse({ ...minimalProposal, spec: { ...daily, time: '09:00' } }))).not.toBe(a);
     expect(proposalHash(scheduleProposalSchema.parse({ ...minimalProposal, spec: { ...daily, tz: 'Europe/Oslo' } }))).not.toBe(a);
+    // An N-day stride's `time` is semantic too: "every 3 days" and "every 3 days at 9" are different suggestions.
+    const stride = { kind: 'every', n: 3, unit: 'days', tz: 'device' };
+    expect(proposalHash(scheduleProposalSchema.parse({ ...minimalProposal, spec: { ...stride, time: '09:00' } }))).not.toBe(
+      proposalHash(scheduleProposalSchema.parse({ ...minimalProposal, spec: stride })),
+    );
   });
 });
 

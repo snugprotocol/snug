@@ -19,7 +19,13 @@ const WEEKDAYS_MF = ['mon', 'tue', 'wed', 'thu', 'fri'] as const;
 
 const daily = (time: string): ScheduleSpec => ({ kind: 'daily', time, tz: ZONE });
 const weekly = (days: Weekday[], time: string): ScheduleSpec => ({ kind: 'weekly', days, time, tz: ZONE });
-const every = (n: number, unit: 'minutes' | 'hours' | 'days'): ScheduleSpec => ({ kind: 'every', n, unit, tz: ZONE });
+const every = (n: number, unit: 'minutes' | 'hours' | 'days', time?: string): ScheduleSpec => ({
+  kind: 'every',
+  n,
+  unit,
+  ...(time === undefined ? {} : { time }),
+  tz: ZONE,
+});
 const once = (at: string): ScheduleSpec => ({ kind: 'once', at, tz: ZONE });
 
 describe('parseScheduleText — the grammar', () => {
@@ -70,6 +76,13 @@ describe('parseScheduleText — the grammar', () => {
     ['every hour', every(1, 'hours')],
     ['every 60 minutes', every(1, 'hours')],
     ['every 48 hours', every(2, 'days')],
+    // an N-day stride may name its time; minutes and hours may not (see REFUSED)
+    ['every 3 days at 9', every(3, 'days', '09:00')],
+    ['every 2 days at 7:30 pm', every(2, 'days', '19:30')],
+    ['every other day at 8', every(2, 'days', '08:00')],
+    ['every 2 weeks at 9', every(14, 'days', '09:00')],
+    ['every 48 hours at 9', every(2, 'days', '09:00')], // 48 hours IS 2 days, so the time rides
+    ['every 3 days in the evening', every(3, 'days', '18:00')],
     // monthly
     ['first of the month', { kind: 'monthly', on: { kind: 'day', day: 1 }, time: '09:00', tz: ZONE }],
     ['on the 1st of every month at 9', { kind: 'monthly', on: { kind: 'day', day: 1 }, time: '09:00', tz: ZONE }],
@@ -145,7 +158,8 @@ describe('parseScheduleText — the grammar', () => {
     ['at 5:70 pm', 'minute out of range'],
     ['on the 32nd of every month', 'day out of range'],
     ['on feb 30', 'no such date'],
-    ['every 3 days at 9', 'an N-day stride carries no time'],
+    ['every 2 hours at 9', 'a clock-aligned interval carries no time'],
+    ['every 15 minutes at 9am', 'a clock-aligned interval carries no time'],
     ['every 30 seconds', 'no seconds unit'],
     ['yesterday at 5', 'the past'],
     ['every weekday at 8 until yesterday', 'until needs a date'],
@@ -184,6 +198,10 @@ describe('scheduleOffer — the chat gate', () => {
     expect(scheduleOffer('ping me in 20 minutes', NOW, ZONE)).toEqual({
       spec: once('2026-10-09T15:20:00.000Z'),
       phrase: 'in 20 minutes',
+    });
+    expect(scheduleOffer('water the ferns every 3 days at 9', NOW, ZONE)).toEqual({
+      spec: every(3, 'days', '09:00'),
+      phrase: 'every 3 days at 9',
     });
     expect(scheduleOffer('schedule the weather report for mondays and thursdays at 5:30 pm', NOW, ZONE)?.phrase).toBe(
       'mondays and thursdays at 5:30 pm',

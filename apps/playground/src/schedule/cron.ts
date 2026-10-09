@@ -9,8 +9,9 @@
 // 5-field cron cannot say what the spec says it emits the nearest SUPERSET and the spec
 // narrows it:
 //   once               → `once:<ISO>` (a cron cannot fire exactly once; `specFromCron` reads it back)
-//   every N days       → the daily cron at the anchor's wall time; the N-day stride from the
-//                        anchor lives here (`opts.anchor`, the task's createdAt/startsAt)
+//   every N days       → the daily cron at the spec's `time`, or at the anchor's wall time when
+//                        it names none; the N-day stride from the anchor lives here
+//                        (`opts.anchor`, the task's createdAt/startsAt)
 //   monthly nth weekday → `M H * * wd` (every such weekday); the nth filter lives here
 //   monthly last       → `M H 28,29,30,31 * *`; the last-day filter lives here
 //
@@ -276,8 +277,9 @@ const stepField = (n: number, period: number): string => {
 
 /**
  * The 5-field cron for a spec (see the header for the forms that are supersets). `anchor`
- * matters only for `every N days`, whose wall time it supplies. Undefined when the spec cannot
- * be said at all: `every` beyond 59 minutes / 23 hours, an empty day list, a bad time.
+ * matters only for `every N days` without a `time`, whose wall time it then supplies. Undefined
+ * when the spec cannot be said at all: `every` beyond 59 minutes / 23 hours, an empty day list,
+ * a bad time.
  */
 export const compileSpec = (spec: ScheduleSpec, anchor: Date = new Date()): string | undefined => {
   switch (spec.kind) {
@@ -287,8 +289,13 @@ export const compileSpec = (spec: ScheduleSpec, anchor: Date = new Date()): stri
     }
     case 'every': {
       if (!Number.isInteger(spec.n) || spec.n < 1) return undefined;
+      // Minutes and hours align to the clock; a `time` is honoured only on a day stride (the schema refuses it elsewhere).
       if (spec.unit === 'minutes') return spec.n <= 59 ? `${stepField(spec.n, 60)} * * * *` : undefined;
       if (spec.unit === 'hours') return spec.n <= 23 ? `0 ${stepField(spec.n, 24)} * * *` : undefined;
+      if (spec.time !== undefined) {
+        const t = parseTime(spec.time);
+        return t ? `${t.minute} ${t.hour} * * *` : undefined;
+      }
       if (Number.isNaN(anchor.getTime())) return undefined;
       const wall = wallClockIn(resolveZone(spec.tz), anchor);
       return `${wall.minute} ${wall.hour} * * *`;
@@ -432,10 +439,10 @@ const listWords = (words: readonly string[]): string =>
 const sameDays = (a: readonly Weekday[], b: readonly Weekday[]): boolean => a.length === b.length && a.every((d, i) => d === b[i]);
 
 /**
- * The spec in plain words: "Weekdays at 8:00 AM", "Every 2 hours", "On the 1st of every month
- * at 9:00 AM", "Once on Oct 20, 2026 at 12:00 PM", "Custom (0 8 * * 1-5)". Times and dates
- * come from `Intl.DateTimeFormat` for the locale (hour cycle included); the connecting words
- * are English, like the grammar that produces the specs.
+ * The spec in plain words: "Weekdays at 8:00 AM", "Every 2 hours", "Every 3 days at 9:00 AM",
+ * "On the 1st of every month at 9:00 AM", "Once on Oct 20, 2026 at 12:00 PM", "Custom (0 8 * * 1-5)".
+ * Times and dates come from `Intl.DateTimeFormat` for the locale (hour cycle included); the
+ * connecting words are English, like the grammar that produces the specs.
  */
 export const describeSpec = (spec: ScheduleSpec, locale = 'en-US'): string => {
   const t = (time: string): string => formatTime(locale, time);
@@ -454,6 +461,7 @@ export const describeSpec = (spec: ScheduleSpec, locale = 'en-US'): string => {
     case 'every': {
       const unit = spec.unit === 'minutes' ? 'minute' : spec.unit === 'hours' ? 'hour' : 'day';
       text = spec.n === 1 ? `Every ${unit}` : `Every ${spec.n} ${unit}s`;
+      if (spec.unit === 'days' && spec.time !== undefined) text += ` at ${t(spec.time)}`;
       break;
     }
     case 'daily':
@@ -519,12 +527,15 @@ const planFor = (spec: ScheduleSpec, zone: string, anchorMs: number): Plan | und
         return f ? planFromCron(f) : undefined;
       }
       if (!Number.isInteger(spec.n) || spec.n < 1) return undefined;
+      // The stride counts days from the anchor's day; the fire time is the spec's own when it names one.
       const wall = wallClockIn(zone, anchorMs);
+      const time = spec.time === undefined ? { hour: wall.hour, minute: wall.minute } : parseTime(spec.time);
+      if (!time) return undefined;
       const anchorDayUtc = Date.UTC(wall.year, wall.month - 1, wall.day);
       const n = spec.n;
       return {
         dayOk: (_y, _m, _d, _dow, dayUtc) => dayUtc >= anchorDayUtc && Math.round((dayUtc - anchorDayUtc) / DAY_MS) % n === 0,
-        times: [{ hour: wall.hour, minute: wall.minute }],
+        times: [time],
       };
     }
     case 'daily': {

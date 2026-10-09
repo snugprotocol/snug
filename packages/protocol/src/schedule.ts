@@ -320,13 +320,34 @@ const monthlyOnSchema = z.discriminatedUnion('kind', [
 ]);
 
 /**
+ * `every N minutes|hours` aligns to the clock (minutes 0, 15, 30, 45; hours 0, 2, 4, …) and
+ * has no time of day to name; `every N days` strides from its anchor and fires at the
+ * anchor's wall time UNLESS `time` names one ("every 3 days at 9"). So `time` is optional,
+ * and a `time` on a minutes or hours stride is a refusal rather than a silently ignored seat.
+ */
+const everySchema = z
+  .strictObject({
+    kind: z.literal('every'),
+    n: z.int().min(1).max(SCHEDULE_EVERY_MAX_N),
+    unit: z.enum(SCHEDULE_UNITS),
+    /** Honoured only when `unit` is `days`; absent, the stride keeps its creation wall time. */
+    time: timeOfDay.optional(),
+    ...specBase,
+  })
+  .superRefine((spec, ctx) => {
+    if (spec.time !== undefined && spec.unit !== 'days') {
+      ctx.addIssue({ code: 'custom', path: ['time'], message: 'time is honoured only when unit is "days"' });
+    }
+  });
+
+/**
  * The intuitive form — what the editor shows and persists so it never reverse-parses
  * cron. Every variant carries `tz` and an optional `until`; `custom` is the escape hatch
  * for the five-field grammar the hand-rolled compiler accepts (ADR-0074 §7).
  */
 export const scheduleSpecSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('once'), at: isoInstant, ...specBase }),
-  z.strictObject({ kind: z.literal('every'), n: z.int().min(1).max(SCHEDULE_EVERY_MAX_N), unit: z.enum(SCHEDULE_UNITS), ...specBase }),
+  everySchema,
   z.strictObject({ kind: z.literal('daily'), time: timeOfDay, ...specBase }),
   z.strictObject({ kind: z.literal('weekly'), days: weekdaysSchema, time: timeOfDay, ...specBase }),
   z.strictObject({ kind: z.literal('monthly'), on: monthlyOnSchema, time: timeOfDay, ...specBase }),

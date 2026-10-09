@@ -205,6 +205,17 @@ describe('compileSpec ↔ specFromCron', () => {
     expect(compileSpec(inLA, at('2026-10-01T15:00:00Z'))).toBe('0 8 * * *');
   });
 
+  it('every N days with a time compiles to the daily cron at THAT time — the anchor no longer matters', () => {
+    const spec: ScheduleSpec = { kind: 'every', n: 3, unit: 'days', time: '09:00', tz: LA };
+    expect(compileSpec(spec, at('2026-10-01T15:00:00Z'))).toBe('0 9 * * *');
+    expect(compileSpec(spec, at('2026-10-01T23:45:00Z'))).toBe('0 9 * * *');
+    expect(compileSpec({ ...spec, time: '19:30' })).toBe('30 19 * * *');
+    expect(compileSpec({ ...spec, time: '9:00' })).toBeUndefined();
+    expect(compileSpec({ ...spec, time: '24:00' })).toBeUndefined();
+    // The cron is the daily SUPERSET: it reads back as `daily`, never as the stride — specFromCron is unchanged.
+    expect(specFromCron('0 9 * * *')).toEqual({ kind: 'daily', time: '09:00', tz: 'device' });
+  });
+
   it('monthly nth weekday compiles to the weekday superset — documented, not a round trip', () => {
     const spec: ScheduleSpec = { kind: 'monthly', on: { kind: 'nth', nth: 1, weekday: 'mon' }, time: '09:00', tz: 'device' };
     expect(compileSpec(spec)).toBe('0 9 * * 1');
@@ -259,6 +270,10 @@ describe('describeSpec', () => {
     [{ kind: 'every', n: 15, unit: 'minutes', tz: 'device' }, 'Every 15 minutes'],
     [{ kind: 'every', n: 1, unit: 'minutes', tz: 'device' }, 'Every minute'],
     [{ kind: 'every', n: 3, unit: 'days', tz: 'device' }, 'Every 3 days'],
+    [{ kind: 'every', n: 3, unit: 'days', time: '09:00', tz: 'device' }, 'Every 3 days at 9:00 AM'],
+    [{ kind: 'every', n: 2, unit: 'days', time: '19:30', tz: 'device' }, 'Every 2 days at 7:30 PM'],
+    [{ kind: 'every', n: 1, unit: 'days', time: '09:00', tz: 'device' }, 'Every day at 9:00 AM'],
+    [{ kind: 'every', n: 3, unit: 'days', time: '09:00', tz: 'device', until: { kind: 'count', count: 5 } }, 'Every 3 days at 9:00 AM, 5 times'],
     [{ kind: 'monthly', on: { kind: 'day', day: 1 }, time: '09:00', tz: 'device' }, 'On the 1st of every month at 9:00 AM'],
     [{ kind: 'monthly', on: { kind: 'day', day: 2 }, time: '09:00', tz: 'device' }, 'On the 2nd of every month at 9:00 AM'],
     [{ kind: 'monthly', on: { kind: 'day', day: 3 }, time: '09:00', tz: 'device' }, 'On the 3rd of every month at 9:00 AM'],
@@ -418,6 +433,34 @@ describe('occurrencesBetween — zone-aware day stepping', () => {
       '2026-11-06T16:00:00.000Z',
       '2026-11-09T16:00:00.000Z',
     ]);
+  });
+
+  it('every 3 days with a time strides from the anchor DAY and fires at that wall time, across DST', () => {
+    const spec: ScheduleSpec = { kind: 'every', n: 3, unit: 'days', time: '09:00', tz: LA };
+    const anchor = at('2026-10-01T15:00:00Z'); // 08:00 PDT — the anchor's own 09:00 is still ahead
+    const got = occurrencesBetween(spec, anchor, at('2026-11-10T00:00:00Z'), { anchor });
+    expect(iso(got)).toEqual([
+      '2026-10-01T16:00:00.000Z', // 09:00 PDT, day 0
+      '2026-10-04T16:00:00.000Z',
+      '2026-10-07T16:00:00.000Z',
+      '2026-10-10T16:00:00.000Z',
+      '2026-10-13T16:00:00.000Z',
+      '2026-10-16T16:00:00.000Z',
+      '2026-10-19T16:00:00.000Z',
+      '2026-10-22T16:00:00.000Z',
+      '2026-10-25T16:00:00.000Z',
+      '2026-10-28T16:00:00.000Z',
+      '2026-10-31T16:00:00.000Z',
+      '2026-11-03T17:00:00.000Z', // 09:00 PST — the wall clock holds, the instant moves
+      '2026-11-06T17:00:00.000Z',
+      '2026-11-09T17:00:00.000Z',
+    ]);
+    // An anchor past 09:00 on its day: day 0 has nothing left, so the first fire is day 3 — and the
+    // anchor's own wall time (13:00) is never the fire time.
+    const late = at('2026-10-01T20:00:00Z'); // 13:00 PDT
+    expect(nextOccurrence(spec, late, { anchor: late })?.toISOString()).toBe('2026-10-04T16:00:00.000Z');
+    // A malformed time answers nothing, never throws.
+    expect(nextOccurrence({ ...spec, time: '9:00' }, anchor, { anchor })).toBeUndefined();
   });
 
   it('every N days without an anchor strides from `from`; days before the anchor never match', () => {

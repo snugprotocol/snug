@@ -12,14 +12,18 @@
 // READINGS WORTH KNOWING. A bare hour is the 24-hour clock ("at 5" is 05:00; say "5pm") unless
 // a day-part word moves it ("every evening at 6" → 18:00). A recurring schedule without a time
 // fires at 09:00, or at the day part's hour (morning 08:00, afternoon 15:00, evening 18:00,
-// night 21:00). A bare time is a one-off: today if still ahead, else tomorrow. Relative phrases
-// ("in 20 minutes", "tomorrow at 9", "on oct 20") become `once` at the absolute instant
-// computed in `zone` from `now`. The spec carries `tz: zone` exactly as given, so the editor
-// passes `'device'` for a device-following task and an IANA name for a pinned one.
+// night 21:00) — except an N-day stride ("every 3 days", "every other day", "every 2 weeks"),
+// which carries no `time` and fires at its creation wall time unless one is named ("every 3
+// days at 9" → `time: '09:00'`; "every 3 days in the evening" → 18:00). Minute and hour strides
+// align to the clock, so a time on them is a contradiction ("every 2 hours at 9"). A bare time
+// is a one-off: today if still ahead, else tomorrow. Relative phrases ("in 20 minutes",
+// "tomorrow at 9", "on oct 20") become `once` at the absolute instant computed in `zone` from
+// `now`. The spec carries `tz: zone` exactly as given, so the editor passes `'device'` for a
+// device-following task and an IANA name for a pinned one.
 //
-// NOT IN THE GRAMMAR (answered `undefined`, by design): "every N days at <time>" (an N-day
-// stride has no time field), "every 2 months", "last friday of the month", seconds, numeric
-// dates ("10/20"), "half past", "quarter to", and anything in the past ("yesterday").
+// NOT IN THE GRAMMAR (answered `undefined`, by design): "every N minutes|hours at <time>" (a
+// clock-aligned stride has no time), "every 2 months", "last friday of the month", seconds,
+// numeric dates ("10/20"), "half past", "quarter to", and anything in the past ("yesterday").
 
 import { instantInZone, resolveZone, wallClockIn } from './cron.js';
 import { WEEKDAYS, type MonthlyOn, type ScheduleSpec, type ScheduleUntil, type Weekday } from './types.js';
@@ -445,7 +449,6 @@ const toSpec = (reading: Reading, now: Date, tz: string): ScheduleSpec | undefin
 
   if (recurringKinds === 1) {
     if (reading.interval) {
-      if (rawTime) return undefined;
       let { n, unit } = reading.interval;
       if (unit === 'minutes' && n >= 60) {
         if (n % 60 !== 0) return undefined;
@@ -458,6 +461,12 @@ const toSpec = (reading: Reading, now: Date, tz: string): ScheduleSpec | undefin
         unit = 'days';
       }
       if (n < 1 || n > 366) return undefined;
+      // A day stride may name its time (or a day part); a clock-aligned minute or hour stride may not.
+      if (unit === 'days' && (rawTime !== undefined || reading.part !== undefined)) {
+        const time = resolveTime(rawTime, reading.part, DEFAULT_TIME);
+        return time ? withUntil({ kind: 'every', n, unit, time: hhmm(time), tz }) : undefined;
+      }
+      if (rawTime) return undefined;
       return withUntil({ kind: 'every', n, unit, tz });
     }
     const time = resolveTime(rawTime, reading.part, DEFAULT_TIME);
