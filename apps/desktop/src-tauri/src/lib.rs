@@ -12,6 +12,8 @@ mod exportfile;
 #[cfg(debug_assertions)]
 mod gate;
 mod helper_install;
+#[cfg(test)]
+mod http_scope;
 /// The pinned-TLS LAN transport (ADR-0023 Decision 3). Ships in RELEASE too —
 /// unlike the gate, this is a production capability, and every guard it carries
 /// (host class, pin, redirect policy, size cap) is enforced here in Rust.

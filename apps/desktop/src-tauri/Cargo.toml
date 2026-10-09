@@ -85,3 +85,9 @@ rcgen = "0.13"
 # unions the two sets, so each section states only why IT needs tokio.
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 http = "1"
+# The http-scope behaviour test (src/http_scope.rs, TASK-20261008-p0-clearance W3) runs the
+# plugin's PRIVATE parse_url_pattern verbatim, so it needs the two crates that function names.
+# Both are already locked through tauri-plugin-http (urlpattern 0.3.0, regex 1.13.1) — this adds
+# edges, not versions; the module's Cargo.lock tripwire fails if the plugin's pair moves.
+urlpattern = "0.3"
+regex = "1"

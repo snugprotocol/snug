@@ -18,6 +18,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 import { IPC_CHECK_IDS } from '../gate/ipc.js';
+import { NET_SCOPE_CHECK_IDS } from '../gate/netScope.js';
 
 const driverSource = readFileSync(fileURLToPath(new URL('../../gate/run-gate.mjs', import.meta.url)), 'utf8');
 
@@ -47,3 +48,19 @@ describe('gate driver expectations track the harness (no hand-typed twin)', () =
     expect(IPC_CHECK_IDS).toContain('ipc-lan-fetch-refused');
   });
 });
+
+describe('the net-scope ids are derived the same way (TASK-20261008-p0-clearance W3)', () => {
+  it('the driver names NET_SCOPE_CHECK_IDS and keeps no literal twin', () => {
+    expect(driverSource).toContain('NET_SCOPE_CHECK_IDS');
+    expect(/const EXPECTED_NET_SCOPE_IDS = \[\s*'/.test(driverSource)).toBe(false);
+  });
+
+  it('the driver\'s extraction recovers every current net-scope id', () => {
+    const source = readFileSync(fileURLToPath(new URL('../gate/netScope.ts', import.meta.url)), 'utf8');
+    const block = /export const NET_SCOPE_CHECK_IDS = \[([\s\S]*?)\] as const;/.exec(source);
+    expect(block).not.toBeNull();
+    expect([...block![1].matchAll(/'([^']+)'/g)].map((m) => m[1])).toEqual([...NET_SCOPE_CHECK_IDS]);
+    expect(NET_SCOPE_CHECK_IDS.length).toBeGreaterThan(0);
+  });
+});
+

@@ -27,6 +27,7 @@ import type { ShellGateConfig } from './config.js';
 import type { CheckResult, GateEnvReport, GateResults } from './types.js';
 import { runCspChecks } from './csp.js';
 import { runIpcChecks } from './ipc.js';
+import { runNetScopeChecks } from './netScope.js';
 import { runJourney } from './journey.js';
 
 async function probeSqlJs(): Promise<CheckResult> {
@@ -159,6 +160,7 @@ export async function runShellGate(config: ShellGateConfig): Promise<void> {
     checks.push(...remapChecks(config));
     checks.push(...(await runCspChecks()));
     checks.push(...(await runIpcChecks()));
+    checks.push(...(await runNetScopeChecks()));
     const journey = await runJourney(config);
     results = { env, checks, journey };
   } catch (err) {
