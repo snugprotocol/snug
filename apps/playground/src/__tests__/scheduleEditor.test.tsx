@@ -23,7 +23,8 @@ import type { ScheduledTask } from '@snugprotocol/protocol';
 
 import { imported, nextLine } from '../schedule/copy.js';
 import { CONSENT_ROWS, SENTENCE, STEPS, TEMPLATE_TITLES, TITLE, WHEN } from '../schedule/copy.editor.js';
-import { LEDGER_QUERIES, STANDUP_QUERIES, TEMPLATE_PROMPTS } from '../schedule/editorModel.js';
+import { LEDGER_QUERIES, STANDUP_QUERIES, TEMPLATE_PROMPTS, remainderOf } from '../schedule/editorModel.js';
+import { readSchedule } from '../schedule/parseScheduleText.js';
 import { ScheduleEditorView } from '../schedule/ScheduleEditorView.js';
 import { createTask } from '../schedule/scheduler.js';
 import { appModelStore, appProviderStore } from '../state/appModel.js';
@@ -152,6 +153,43 @@ const occurrences = (): string[] => [...document.body.querySelectorAll<HTMLTimeE
 const installLedger = (): string => db.installApp({ displayName: 'Ledger', html: '<!doctype html><title>Ledger</title>', usesDb: true, installSource: 'starter:ledger' }).appId;
 const installStandup = (): string => db.installApp({ displayName: 'Standup', html: '<!doctype html><title>Standup</title>', usesDb: true, installSource: 'starter:github' }).appId;
 
+describe('remainderOf — the words beside the schedule (design F1: the create bar is one click from schedule it)', () => {
+  // the text · the phrase the grammar read (`readSchedule(…).phrase`) · the task’s own words
+  const ROWS: ReadonlyArray<readonly [string, string, string]> = [
+    ['remind me to call mom at 5', 'at 5', 'call mom'],
+    ['every weekday at 8, summarise my ledger', 'every weekday at 8', 'summarise my ledger'],
+    ['at 5pm', 'at 5pm', ''],
+    ['every morning at 7 tell me the weather', 'every morning at 7', 'tell me the weather'],
+    // spelled as typed; edge punctuation and whitespace trimmed
+    ['  Remind me to   call Mom at 5pm!  ', 'at 5pm', 'call Mom'],
+    ['Every weekday at 8 — summarise my Ledger.', 'every weekday at 8', 'summarise my Ledger'],
+    // the intent words, once, at the start ("tell me" alone is not one); a trailing please
+    ['remind me every weekday at 8 to stretch, please', 'every weekday at 8', 'stretch'],
+    ['please summarise my ledger every monday at 9', 'every monday at 9', 'summarise my ledger'],
+    ['tell me to water the ferns tomorrow at 9', 'tomorrow at 9', 'water the ferns'],
+    ['remind me the weather at 7', 'at 7', 'the weather'],
+    ['remind me to remind me to breathe at 9', 'at 9', 'remind me to breathe'],
+    // the grammar’s own normalisation ("each" → "every", "p.m." → "pm") and a phrase the task splits
+    ['each day at 7pm, water the ferns', 'every day at 7pm', 'water the ferns'],
+    ['check the inbox at 5 p.m. today', 'at 5 pm today', 'check the inbox'],
+    ['at 5 remind me every weekday to stretch', 'at 5 every weekday', 'stretch'],
+    // nothing parsed: the whole sentence, minus the intent
+    ['remind me to buy milk', '', 'buy milk'],
+  ];
+
+  it.each(ROWS)('%j minus %j → %j', (text, phrase, words) => {
+    expect(remainderOf(text, phrase)).toBe(words);
+  });
+
+  it('the phrases above are the ones the grammar reads', () => {
+    for (const [text, phrase] of ROWS) if (phrase !== '') expect(readSchedule(text, NOW, 'device')?.phrase, text).toBe(phrase);
+  });
+
+  it('a phrase the text does not carry answers nothing — the caller keeps the whole sentence', () => {
+    expect(remainderOf('every weekday at 8', 'tomorrow at 9')).toBe('');
+  });
+});
+
 describe('prefill from ?text= (the sentence box)', () => {
   it('"every weekday at 8" checks the weekly chip, presses Monday–Friday, sets 08:00, and titles the schedule with the sentence', async () => {
     await mount('/schedule/new?text=every%20weekday%20at%208');
@@ -197,6 +235,61 @@ describe('prefill from ?text= (the sentence box)', () => {
     });
     expect(checked('monthly')).toBe(true);
     expect(checked('weekly')).toBe(false);
+  });
+
+  it('"remind me to call mom at 5" (the create bar’s sentence) titles the schedule "call mom", fills the reminder with the same words, and is one click from schedule it', async () => {
+    await mount('/schedule/new?text=remind%20me%20to%20call%20mom%20at%205');
+    expect(checked('once')).toBe(true);
+    expect(input('schedule-title').value).toBe('call mom');
+    expect(must('step-0').dataset.kind).toBe('notify');
+    expect(input('step-0-title').value).toBe('call mom');
+    expect(input('step-0-body').value).toBe('call mom');
+    expect(q('save-blocker')).toBeNull();
+    expect((must('schedule-save') as HTMLButtonElement).disabled).toBe(false);
+    await click(must('schedule-save'));
+    await settleUntil(() => q('schedule-page') !== null, 'navigation to /schedule');
+    expect(vi.mocked(createTask)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(createTask).mock.calls[0]?.[0]).toEqual({
+      title: 'call mom',
+      steps: [{ kind: 'notify', title: 'call mom', body: 'call mom' }],
+      spec: { kind: 'once', at: expect.stringMatching(/T\d{2}:00:00\.000Z$/), tz: 'device' },
+      missedPolicy: 'run-once',
+      alert: 'inbox',
+      provenance: 'user',
+    });
+    expect(db.listScheduledTasks()).toHaveLength(1);
+  });
+
+  it('"every weekday at 8, summarise my ledger" with ?app= (the sheet’s more options) is an ask-the-AI step whose prompt is the words beside the schedule', async () => {
+    const ledger = installLedger();
+    await mount(`/schedule/new?${new URLSearchParams({ text: 'every weekday at 8, summarise my ledger', app: ledger }).toString()}`);
+    expect(checked('weekly')).toBe(true);
+    expect(input('spec-time').value).toBe('08:00');
+    expect(input('schedule-title').value).toBe('summarise my ledger');
+    expect(must('step-0').dataset.kind).toBe('app-think');
+    expect(select('step-0-app').value).toBe(ledger);
+    expect((must('step-0-prompt') as HTMLTextAreaElement).value).toBe('summarise my ledger');
+    expect(q('save-blocker')).toBeNull();
+    expect((must('schedule-save') as HTMLButtonElement).disabled).toBe(false);
+    await click(must('schedule-save'));
+    expect(must('consent-prompt-0').textContent).toBe('summarise my ledger');
+  });
+
+  it('a sentence that is only a schedule leaves the reminder’s words to the user, and the save waits for them', async () => {
+    await mount('/schedule/new?text=every%20weekday%20at%208');
+    expect(input('schedule-title').value).toBe('every weekday at 8');
+    expect(input('step-0-title').value).toBe('');
+    expect(input('step-0-body').value).toBe('');
+    expect(must('save-blocker').textContent).toBe(STEPS.needTitle);
+    expect((must('schedule-save') as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('a sentence without a time still keeps its words — minus the intent — as the title and the reminder, and says so', async () => {
+    await mount('/schedule/new?text=remind%20me%20to%20buy%20milk');
+    expect(must('schedule-text-note').textContent).toBe(SENTENCE.cannotRead);
+    expect(input('schedule-title').value).toBe('buy milk');
+    expect(input('step-0-title').value).toBe('buy milk');
+    expect(input('step-0-body').value).toBe('buy milk');
   });
 });
 

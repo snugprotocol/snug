@@ -7,7 +7,7 @@
 // in America/Los_Angeles (PDT = UTC-7 until 2026-11-01).
 import { describe, expect, it } from 'vitest';
 
-import { parseScheduleText, scheduleOffer } from '../schedule/parseScheduleText.js';
+import { parseScheduleText, readSchedule, scheduleOffer } from '../schedule/parseScheduleText.js';
 import type { ScheduleSpec, Weekday } from '../schedule/types.js';
 
 // The spec carries the zone it was asked to compute in — `'device'` when the editor says so,
@@ -221,5 +221,32 @@ describe('scheduleOffer — the chat gate', () => {
     expect(scheduleOffer('schedule something', NOW, ZONE)).toBeUndefined();
     expect(scheduleOffer('build me a todo app', NOW, ZONE)).toBeUndefined();
     expect(scheduleOffer('', NOW, ZONE)).toBeUndefined();
+  });
+});
+
+describe('readSchedule — the spec WITH the words it was read from (the editor’s prefill)', () => {
+  it('reads a schedule and names its words, intent word or not — the gate is the chat offer’s alone', () => {
+    expect(readSchedule('mondays and thursdays 5:30 pm, water the ferns', NOW, ZONE)).toEqual({
+      spec: weekly(['mon', 'thu'], '17:30'),
+      phrase: 'mondays and thursdays 5:30 pm',
+    });
+    expect(scheduleOffer('mondays and thursdays 5:30 pm, water the ferns', NOW, ZONE)).toBeUndefined();
+    expect(readSchedule('remind me to call mom at 5', NOW, ZONE)).toEqual({
+      spec: once('2026-10-10T12:00:00.000Z'), // 05:00 PDT has passed → tomorrow
+      phrase: 'at 5',
+    });
+    expect(readSchedule('every weekday at 8, summarise my ledger', NOW, ZONE)).toEqual({
+      spec: weekly([...WEEKDAYS_MF], '08:00'),
+      phrase: 'every weekday at 8',
+    });
+  });
+
+  it('answers undefined exactly where parseScheduleText does, and the same spec elsewhere', () => {
+    expect(readSchedule('water the ferns', NOW, ZONE)).toBeUndefined();
+    expect(readSchedule('', NOW, ZONE)).toBeUndefined();
+    expect(readSchedule('every day on mondays', NOW, ZONE)).toBeUndefined();
+    for (const text of ['every weekday at 8', 'in 20 minutes', 'first monday of every month', 'ping me daily at 7:00 AM']) {
+      expect(readSchedule(text, NOW, ZONE)?.spec, text).toEqual(parseScheduleText(text, NOW, ZONE));
+    }
   });
 });

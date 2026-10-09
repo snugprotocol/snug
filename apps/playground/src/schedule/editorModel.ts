@@ -10,6 +10,12 @@
 // (a cron that maps to a preset becomes that preset, so the chips derive back) and
 // `cronTextFor` (a preset shown in the custom panel starts from its compiled cron).
 //
+// THE WORDS BESIDE THE SCHEDULE (design F1). A sentence from the create bar, the chat offer or
+// the run-header sheet is read twice over: the grammar's phrase fills the when, and `remainderOf`
+// keeps what the person typed around it — "remind me to call mom at 5" → "call mom" — as the
+// title and as the one step's own words (a reminder's title and message, an app's prompt), so
+// the editor opens one click from *schedule it*.
+//
 // `app-run` IS PR-B. A template may name one (morning weather); the step renders with the
 // later-release note and `prepareSteps` refuses the save — nothing here can persist a kind the
 // engine does not run yet.
@@ -23,6 +29,7 @@ import {
   SCHEDULE_DAILY_CEILINGS,
   SCHEDULE_MAX_STEPS,
   SCHEDULE_NOTIFY_BODY_MAX_CHARS,
+  SCHEDULE_PROMPT_MAX_CHARS,
   SCHEDULE_TITLE_MAX_CHARS,
   WEEKDAYS,
   isReadOnlySelect,
@@ -40,7 +47,7 @@ import type { Brain } from '../state/webllm.js';
 import { STEPS, TEMPLATE_TITLES } from './copy.editor.js';
 import { compileSpec, instantInZone, occurrencesBetween, parseCron, resolveZone, specFromCron, wallClockIn } from './cron.js';
 import { defaultMissedPolicy } from './floors.js';
-import { parseScheduleText } from './parseScheduleText.js';
+import { readSchedule } from './parseScheduleText.js';
 
 const DAY_MS = 86_400_000;
 const WEEK_MS = 7 * DAY_MS;
@@ -375,6 +382,93 @@ export function templateFill(name: TemplateName, apps: readonly AppRecord[], tz:
   }
 }
 
+// ------------------------------------------------------- the words beside the schedule
+
+interface Word {
+  key: string;
+  /** The typed token(s) this word came from. */
+  tokens: number[];
+}
+
+/**
+ * A typed token as the grammar's `normalise` reads it — lowercase, "a.m." → "am", edge
+ * punctuation off, "each" → "every", "everyday" → "every day" — so a phrase the grammar quotes
+ * can be found again in the text as typed.
+ */
+const keysOf = (token: string): string[] => {
+  const key = token
+    .toLowerCase()
+    .replace(/\b([ap])\.m\.?/g, '$1m')
+    .replace(/[.,;:!?()"'[\]{}]+$/, '')
+    .replace(/^[.,;!?()"'[\]{}]+/, '');
+  if (key === '') return [];
+  if (key === 'each') return ['every'];
+  if (key === 'everyday') return ['every', 'day'];
+  return [key];
+};
+
+/** The text's words, each with the token(s) it came from; "week days" / "week ends" joined as the grammar joins them. */
+const wordsOf = (tokens: readonly string[]): Word[] => {
+  const words: Word[] = [];
+  for (const [index, token] of tokens.entries()) {
+    for (const key of keysOf(token)) {
+      const last = words[words.length - 1];
+      if (last !== undefined && last.key === 'week' && (key === 'days' || key === 'ends')) {
+        last.key = `week${key}`;
+        last.tokens.push(index);
+      } else words.push({ key, tokens: [index] });
+    }
+  }
+  return words;
+};
+
+const EDGES = /^[\s,;:.!?\-–—]+|[\s,;:.!?\-–—]+$/g;
+const LEADING_PLEASE = /^please\b[\s,]*/i;
+const LEADING_INTENT = /^(?:remind me(?: to)?|tell me to)\b[\s,:]*/i;
+const TRAILING_PLEASE = /[\s,]*\bplease$/i;
+
+/**
+ * The sentence minus the schedule the grammar read (`readSchedule(…).phrase`): the task's own
+ * words, spelled as typed — "remind me to call mom at 5" → "call mom"; "every weekday at 8,
+ * summarise my ledger" → "summarise my ledger"; "at 5pm" → "". The phrase's words are found as
+ * one run, else in order (a phrase the task splits: "at 5 remind me every weekday"); then the
+ * edges are trimmed of punctuation and whitespace, and a leading intent ("please", "remind me
+ * to", "remind me", "tell me to") and a trailing "please" are each stripped once. An empty
+ * phrase (nothing parsed) leaves the whole sentence minus the intent; a phrase the text does not
+ * carry answers "" — the caller then keeps the whole sentence, as before.
+ */
+export function remainderOf(text: string, phrase: string): string {
+  const tokens = text.trim().split(/\s+/).filter((token) => token !== '');
+  const words = wordsOf(tokens);
+  const wanted = phrase.split(' ').filter((word) => word !== '');
+  const consumed = new Set<number>();
+  if (wanted.length > 0) {
+    const run = words.findIndex((_, start) => start + wanted.length <= words.length && wanted.every((word, offset) => words[start + offset]?.key === word));
+    if (run >= 0) {
+      for (let offset = 0; offset < wanted.length; offset++) for (const index of words[run + offset]?.tokens ?? []) consumed.add(index);
+    } else {
+      let next = 0;
+      for (const word of words) {
+        if (next < wanted.length && word.key === wanted[next]) {
+          for (const index of word.tokens) consumed.add(index);
+          next++;
+        }
+      }
+      if (next < wanted.length) return '';
+    }
+  }
+  const rest = tokens.filter((_, index) => !consumed.has(index)).join(' ');
+  return rest.replace(EDGES, '').replace(LEADING_PLEASE, '').replace(LEADING_INTENT, '').replace(TRAILING_PLEASE, '').replace(EDGES, '');
+}
+
+/** A fresh step carrying the sentence's own words — a reminder's title and message, or an app's prompt; untouched when there are none. */
+const stepFromWords = (step: StepDraft, words: string): StepDraft => {
+  if (words === '' || step.kind === 'app-run') return step;
+  return step.kind === 'notify'
+    ? { ...step, title: words.slice(0, SCHEDULE_TITLE_MAX_CHARS), body: words.slice(0, SCHEDULE_NOTIFY_BODY_MAX_CHARS) }
+    : { ...step, prompt: words.slice(0, SCHEDULE_PROMPT_MAX_CHARS) };
+};
+
 // ------------------------------------------------------------------- the initial draft
 
 export interface InitialDraftInput {
@@ -387,20 +481,29 @@ export interface InitialDraftInput {
 
 export interface InitialDraft {
   draft: EditorDraft;
-  /** `?text=` carried no readable time — the sentence stays as the title, the controls are the way. */
+  /** `?text=` carried no readable time — its words stay as the title, the controls are the way. */
   parseFailed: boolean;
 }
 
-/** The `/schedule/new` draft from the query string: a template, a sentence, a preselected app — or the empty form. */
+/**
+ * The `/schedule/new` draft from the query string: a template, a sentence, a preselected app — or
+ * the empty form. A sentence is read twice over: the grammar's phrase fills the when, and the
+ * words beside it (`remainderOf`) become the title and the one step's own words — a reminder's
+ * title and message, or the preselected app's prompt — so the create bar is one click from
+ * *schedule it* (design F1). A sentence that is only a schedule keeps itself as the title and
+ * leaves the step to the user; a template's steps are its own.
+ */
 export function initialDraft({ text, template, app, apps, now }: InitialDraftInput): InitialDraft {
   const appNames = new Map(apps.map((record) => [record.appId, record.displayName] as const));
   const fill = isTemplateName(template) ? templateFill(template, apps) : undefined;
   const preselected = app !== null && app !== undefined && appNames.has(app) ? app : undefined;
-  const steps = fill?.steps ?? [preselected !== undefined ? emptyThink(preselected) : emptyNotify()];
   const sentence = text ?? '';
-  const parsed = sentence.trim() === '' ? undefined : parseScheduleText(sentence, now, 'device');
-  const spec = parsed ?? fill?.spec ?? { kind: 'daily', time: '09:00', tz: 'device' };
-  const title = sentence.trim() !== '' ? titleFromText(sentence) : (fill?.title ?? titleFromSteps(steps, appNames));
+  const typed = sentence.trim() !== '';
+  const read = typed ? readSchedule(sentence, now, 'device') : undefined;
+  const words = typed ? remainderOf(sentence, read?.phrase ?? '') : '';
+  const steps = fill?.steps ?? [stepFromWords(preselected !== undefined ? emptyThink(preselected) : emptyNotify(), words)];
+  const spec = read?.spec ?? fill?.spec ?? { kind: 'daily', time: '09:00', tz: 'device' };
+  const title = typed ? titleFromText(words || sentence) : (fill?.title ?? titleFromSteps(steps, appNames));
   return {
     draft: {
       text: sentence,
@@ -414,7 +517,7 @@ export function initialDraft({ text, template, app, apps, now }: InitialDraftInp
       missedTouched: false,
       alert: fill?.alert ?? 'inbox',
     },
-    parseFailed: sentence.trim() !== '' && parsed === undefined,
+    parseFailed: typed && read === undefined,
   };
 }
 

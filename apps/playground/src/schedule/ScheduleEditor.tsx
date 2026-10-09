@@ -42,6 +42,7 @@ import {
   prepareSteps,
   specFromCronText,
   titleFromSteps,
+  remainderOf,
   titleFromText,
   type EditorDraft,
   type SpecKind,
@@ -50,7 +51,7 @@ import {
 import { EnableConsent } from './EnableConsent.js';
 import { frequencyFloorRefusal } from './floors.js';
 import { hostHonesty } from './honesty.js';
-import { parseScheduleText } from './parseScheduleText.js';
+import { parseScheduleText, readSchedule } from './parseScheduleText.js';
 import { PreviewAndCost } from './PreviewAndCost.js';
 import { createTask, setTaskEnabled, updateTask, useScheduler, type TaskResult } from './scheduler.js';
 import { SpecControls } from './SpecControls.js';
@@ -124,12 +125,16 @@ export function ScheduleEditor({ initial, parseFailed: initialParseFailed, apps,
   const update = (patch: Partial<EditorDraft>): void => setDraft((current) => ({ ...current, ...patch }));
 
   const onText = (text: string): void => {
-    const spec = text.trim() === '' ? undefined : parseScheduleText(text, new Date(), draft.spec.tz);
+    const read = text.trim() === '' ? undefined : readSchedule(text, new Date(), draft.spec.tz);
+    const spec = read?.spec;
     setParseFailed(text.trim() !== '' && spec === undefined);
     update({
       text,
       ...(spec !== undefined ? { spec, mode: spec.kind, cron: cronTextFor(spec, new Date()) } : {}),
-      ...(draft.titleTouched || text.trim() === '' ? {} : { title: titleFromText(text) }),
+      // The title is the sentence MINUS the schedule phrase ("remind me to call mom at 5" →
+      // "call mom"), the same rule the create bar's prefill uses — the whole sentence only when
+      // nothing is left after the phrase.
+      ...(draft.titleTouched || text.trim() === '' ? {} : { title: titleFromText(remainderOf(text, read?.phrase ?? '') || text) }),
     });
   };
 

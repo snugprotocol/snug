@@ -6,8 +6,9 @@
 // HOW IT READS. The text is lowercased and normalised (punctuation out, "a.m." → "am", "each"
 // → "every" …), then a fixed sequence of matchers each CONSUME their fragment — the match is
 // blanked in place so a later matcher cannot read the same words twice, and the fragment's
-// position is kept so `scheduleOffer` can quote the schedule it saw ("every weekday at 8").
-// Words that match nothing are the task, not the schedule ("remind me … to stretch").
+// position is kept so `readSchedule` and `scheduleOffer` can quote the schedule they saw ("every
+// weekday at 8"). Words that match nothing are the task, not the schedule ("remind me … to
+// stretch") — the editor keeps them (`editorModel.remainderOf`).
 //
 // READINGS WORTH KNOWING. A bare hour is the 24-hour clock ("at 5" is 05:00; say "5pm") unless
 // a day-part word moves it ("every evening at 6" → 18:00). A recurring schedule without a time
@@ -534,19 +535,35 @@ const toSpec = (reading: Reading, now: Date, tz: string): ScheduleSpec | undefin
 // ---------------------------------------------------------------------------------------------
 // Public API
 
-/**
- * Reads a schedule out of English text — the whole box, or a fragment of a longer sentence —
- * as a `ScheduleSpec`, or `undefined` when there is no time expression, when two readings
- * contradict ("every day on mondays"), or when a number is out of range. Relative phrases are
- * resolved in `zone` from `now`; the spec carries `tz: zone` as given (`'device'` included).
- */
-export const parseScheduleText = (text: string, now: Date, zone: 'device' | string): ScheduleSpec | undefined => {
-  const normalised = normalise(text);
-  if (normalised === '') return undefined;
+export interface ScheduleReading {
+  spec: ScheduleSpec;
+  /** The schedule as read, in the text's own (normalised) words — "every weekday at 8". */
+  phrase: string;
+}
+
+/** One pass of the matchers over a normalised text: the spec, and the fragments they consumed. */
+const readNormalised = (normalised: string, now: Date, zone: string): ScheduleReading | undefined => {
   const reader = new Reader(normalised);
   const reading = read(reader);
-  return reading ? toSpec(reading, now, zone) : undefined;
+  const spec = reading ? toSpec(reading, now, zone) : undefined;
+  return spec ? { spec, phrase: reader.phrase() } : undefined;
 };
+
+/**
+ * Reads a schedule out of English text — the whole box, or a fragment of a longer sentence —
+ * as a `ScheduleSpec` WITH the words it was read from, so a caller can tell the schedule from
+ * the task around it ("remind me to call mom *at 5*"). `undefined` when there is no time
+ * expression, when two readings contradict ("every day on mondays"), or when a number is out
+ * of range. Relative phrases are resolved in `zone` from `now`; the spec carries `tz: zone` as
+ * given (`'device'` included). No intent gate — that is `scheduleOffer`'s alone.
+ */
+export const readSchedule = (text: string, now: Date, zone: 'device' | string): ScheduleReading | undefined => {
+  const normalised = normalise(text);
+  return normalised === '' ? undefined : readNormalised(normalised, now, zone);
+};
+
+/** `readSchedule`'s spec alone. */
+export const parseScheduleText = (text: string, now: Date, zone: 'device' | string): ScheduleSpec | undefined => readSchedule(text, now, zone)?.spec;
 
 const INTENT = new RegExp(
   String.raw`\b(remind|every|daily|weekly|monthly|hourly|nightly|schedule|tomorrow|tonight|at \d{1,2}(?::\d{2})?(?: ?[ap]m)?|in ${NUM} (?:minutes?|mins?|hours?|hrs?|days?|weeks?)|in half an hour)\b`,
@@ -558,11 +575,8 @@ const INTENT = new RegExp(
  * tonight, "at <time>", "in <n> <unit>". `phrase` is the schedule as read, in the message's
  * own words, for the offer card ("Looks like a schedule: *every weekday at 8*").
  */
-export const scheduleOffer = (text: string, now: Date, zone: 'device' | string): { spec: ScheduleSpec; phrase: string } | undefined => {
+export const scheduleOffer = (text: string, now: Date, zone: 'device' | string): ScheduleReading | undefined => {
   const normalised = normalise(text);
   if (normalised === '' || !INTENT.test(normalised)) return undefined;
-  const reader = new Reader(normalised);
-  const reading = read(reader);
-  const spec = reading ? toSpec(reading, now, zone) : undefined;
-  return spec ? { spec, phrase: reader.phrase() } : undefined;
+  return readNormalised(normalised, now, zone);
 };
