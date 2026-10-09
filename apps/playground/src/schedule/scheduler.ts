@@ -54,10 +54,9 @@
 // AGENT update of a named app pauses every schedule that names it (its callers land in PR-B).
 //
 // THE LOCK NAME. The election wants `snug-scheduler:<file db uuid>` so two files in one origin
-// elect independently. `UserDb` does not yet expose its `db_id` (`snug_meta`), so the default
-// `fileId` reads `db.getFileId()` (the file's `db_id`), so the lock is `snug-scheduler:<id>` — two
-// user files open on one origin never share a ticker; the constant is the fallback for a file
-// whose meta row is missing (`seedMeta` repairs it on the next open).
+// elect independently: the default `fileId` reads `db.getFileId()` (the file's `db_id` in
+// `snug_meta`); the constant `snug-scheduler` is the fallback for a file whose meta row is
+// missing (`seedMeta` repairs it on the next open).
 
 import type { UserDb } from '@snugprotocol/db';
 import {
