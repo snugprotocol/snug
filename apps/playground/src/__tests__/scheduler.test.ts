@@ -359,7 +359,10 @@ describe('reconcile (E4/E5)', () => {
     expect(schedulerStore.get().leader).toEqual({ leader: false, canSeeSiblings: true, reason: 'locks' });
     expect(schedulerStore.get().ready).toBe(true);
     expect(schedulerStore.get().lastReconcileAt).toBeUndefined();
-    expect(locks.names).toEqual([SCHEDULER_LOCK_NAME_FALLBACK, SCHEDULER_LOCK_NAME_FALLBACK]);
+    // The lock is keyed on THIS file's id (`getFileId()`), so two files on one origin never share a ticker.
+    const lockName = lockNameFor(db, (d) => d.getFileId());
+    expect(lockName).toMatch(/^snug-scheduler:[0-9a-f-]{36}$/);
+    expect(locks.names).toEqual([lockName, lockName]);
     h.ticker.built[0]?.fire('minute');
     h.ticker.built[0]?.fire('visible');
     await Promise.resolve();
