@@ -120,6 +120,14 @@ pub fn run() {
         // in TS. `RunEvent::Opened` below keeps filtering to FILE paths — a `snug://`
         // URL is not a file and never enters the open-file allowlist.
         .plugin(tauri_plugin_deep_link::init())
+        // TASK-20261009 H1 (ADR-0074 §7): the OS notification channel behind the scheduler's
+        // `notify` seat (src/notify.ts). The plugin polyfills `window.Notification` in the main
+        // webview; `capabilities/main.json` admits `notification:default` to the main window
+        // ONLY, and the gate's `ipc-notification-refused` / `-dispatchable` rows pin that a
+        // sandboxed app frame cannot reach `plugin:notification|notify` — an app cannot raise
+        // a notification in Snug's name. Delivery on macOS is keyed on the bundle identifier,
+        // so an unbundled `tauri dev` binary shows nothing: walks need `tauri build`.
+        .plugin(tauri_plugin_notification::init())
         .manage(OpenedFiles::default())
         // WITHOUT THIS, both sidecar commands fail at the IPC boundary before their bodies
         // run: Tauri resolves `tauri::State<'_, SidecarState>` from managed state, and an

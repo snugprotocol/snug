@@ -96,6 +96,7 @@ import {
   isRowModifyingStatement,
   isSqlTailEmpty,
   normalizeCell,
+  type DbDriverResult,
   type DbPersistence,
   type SnugDbDriver,
 } from '../driver.js';
@@ -1211,6 +1212,34 @@ function sqlOn(target: Database): SettingsSql {
   };
 }
 
+/**
+ * An UNTRUSTED import's chat messages lose their staged schedule suggestion (TASK-20261009
+ * PR-B S9; ADR-0074 §4). The card on `meta.schedule` is a proposal the user has not answered,
+ * rendered as if this hub's own brain had suggested it — in a foreign file it is a planted
+ * suggestion with a *schedule it* button, so it goes, like the run rows' proposals do. Only the
+ * `schedule` key is dropped: the data-write card (`meta.dataWrite`) is left as it is — its
+ * approval re-runs the drift check against the live data before anything executes, which is
+ * its own guard — and the rest of the meta (the artifact card, the brain stamp) stays. A
+ * message whose meta held nothing else ends with no meta at all. Answers how many were dropped.
+ */
+function dropImportedScheduleCards(target: Database): number {
+  let dropped = 0;
+  for (const row of selectRows(target, `SELECT id, meta FROM ${USERDB_TABLES.chatMessages} WHERE meta LIKE '%"schedule"%'`)) {
+    let meta: unknown;
+    try {
+      meta = JSON.parse(String(row[1]));
+    } catch {
+      continue; // an unreadable meta renders no card; the tolerant reader already ignores it
+    }
+    if (typeof meta !== 'object' || meta === null || !('schedule' in meta)) continue;
+    const { schedule: _card, ...rest } = meta as Record<string, unknown>;
+    const next = Object.keys(rest).length === 0 ? null : JSON.stringify(rest);
+    target.run(`UPDATE ${USERDB_TABLES.chatMessages} SET meta = ? WHERE id = ?`, [next, row[0]] as never);
+    dropped += 1;
+  }
+  return dropped;
+}
+
 /** The identity a locally-approved connection is compared against during import. */
 interface LocalApprovedConnection {
   requirementJson: string;
@@ -2146,19 +2175,56 @@ function construct(
    */
   const deletedApps = new Set<string>();
 
+  /** The tombstone's answer, for a frame and for the host-side kv alike. */
+  const deletedAppRefusal = (namespace: string): DbDriverResult => ({
+    ok: false as const,
+    code: USERDB_ERROR_CODES.NOT_FOUND,
+    message: `app "${namespace}" was deleted`,
+    retryable: false,
+  });
+
+  /**
+   * The host-side kv's refusal (TASK-20261009 PR-B S7): a deleted app (the tombstone), or an
+   * app the file never held — a task can name one the C3 cascade removed or an import did
+   * not carry. Opening that namespace would create its app-data store and land a file for an
+   * app that does not exist at the next flush, so the seat refuses `NOT_FOUND` instead. The
+   * row check reads the live handle; a closed handle throws here and the inner driver then
+   * answers the closed state as data, as it does for every other call.
+   */
+  const hostKvRefusal = (namespace: string): DbDriverResult | undefined => {
+    if (deletedApps.has(namespace)) return deletedAppRefusal(namespace);
+    let held: boolean;
+    try {
+      held = select(`SELECT 1 FROM ${USERDB_TABLES.apps} WHERE app_id = ?`, [namespace]).length > 0;
+    } catch {
+      return undefined;
+    }
+    if (held) return undefined;
+    return { ok: false as const, code: USERDB_ERROR_CODES.NOT_FOUND, message: `app "${namespace}" is not in this file`, retryable: false };
+  };
+
   /** Stable facade so `userDb.driver` survives importUserDb swapping the inner driver. */
   const driver: SnugDbDriver = {
     handle: (namespace, request) => {
-      if (deletedApps.has(namespace)) {
-        return Promise.resolve({
-          ok: false as const,
-          code: USERDB_ERROR_CODES.NOT_FOUND,
-          message: `app "${namespace}" was deleted`,
-          retryable: false,
-        });
-      }
+      if (deletedApps.has(namespace)) return Promise.resolve(deletedAppRefusal(namespace));
       noteNamespace(namespace);
       return inner.handle(namespace, request);
+    },
+    // The HOST-side kv (TASK-20261009 A3) crosses the same facade as a frame: the tombstone
+    // and a missing app row refuse it (`hostKvRefusal`, S7) and `noteNamespace` keys the
+    // write-back, so a scheduled input the host writes lands in the file exactly as the
+    // app's own kv writes do — and only for an app the file holds.
+    kvSet: (namespace, key, value) => {
+      const refused = hostKvRefusal(namespace);
+      if (refused !== undefined) return Promise.resolve(refused);
+      noteNamespace(namespace);
+      return inner.kvSet(namespace, key, value);
+    },
+    kvGet: (namespace, key) => {
+      const refused = hostKvRefusal(namespace);
+      if (refused !== undefined) return Promise.resolve(refused);
+      noteNamespace(namespace);
+      return inner.kvGet(namespace, key);
     },
     get persistence() {
       return inner.persistence;
@@ -3587,6 +3653,9 @@ function construct(
           options?.trustedOrigin === true,
         ),
       };
+      // A staged schedule suggestion on a chat message is a proposal too (S9): an untrusted
+      // file's cards go; a trusted pull keeps the user's own.
+      if (options?.trustedOrigin !== true) dropImportedScheduleCards(next);
       // A stripped proposal's statement would otherwise linger in the candidate's free
       // pages and ride the next secrets-included export raw — the `stripSecrets` rule.
       if (report.schedules.strippedProposals > 0) next.run('VACUUM');

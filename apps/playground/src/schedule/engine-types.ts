@@ -20,6 +20,14 @@ export interface StepContext {
   now: () => Date;
   /** The host's notification seat, when it carries one — the executor SUGGESTS, the queue decides. */
   notify?: SchedulerSeat['notify'] | undefined;
+  /**
+   * Ask the queue to record THIS run `interrupted` with `reason` and abort it (PR-B A2: the
+   * hidden frame's run when a visible RunView mounts the same app — reason `app opened`).
+   * The executor still answers its outcome once the signal fires; the queue folds the run.
+   */
+  interrupt?: ((reason: string) => void) | undefined;
+  /** What the steps before this one already spent on this run — the ceiling counts it (PR-B A4/A5). */
+  spent?: (() => { ai: number; net: number }) | undefined;
 }
 
 /** One step's outcome — data, never a throw (a throw is a `failed` outcome with its message). */

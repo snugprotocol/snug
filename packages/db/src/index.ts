@@ -10,6 +10,8 @@ export {
   // copy is a second thing to forget to update (R-B1).
   nonDataStatementReason,
   isRowModifyingStatement,
+  // The host-side kv cap (TASK-20261009 A3): the scheduler's app input rides the handshake under it.
+  HOST_KV_VALUE_MAX_BYTES,
   type CreateDbDriverOptions,
   type DbDriverResult,
   type DbPersistence,

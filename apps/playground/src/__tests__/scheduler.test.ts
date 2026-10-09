@@ -11,6 +11,9 @@
 // `setSchedulerState` ahead of the rows → red); a follower never enqueues; the floors at
 // `createTask`; the pending acts; the global pause; the registry-epoch reset and its re-init;
 // idempotent init; the stale-claim sweep; the E8 hook; `allows('schedule') === false`.
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { UserDb } from '@snugprotocol/db';
@@ -741,5 +744,14 @@ describe('the swap seams (E1)', () => {
     expect(schedulerStore.get().ready).toBe(true);
     expect(h.ticker.built).toHaveLength(2);
     expect(started).toHaveLength(1); // the recorded occurrence is never re-run
+  });
+});
+
+describe('noteAppVersion is a thin delegate to appDrift.ts (the E8 rule has ONE home, at the db altitude)', () => {
+  it('acts.ts calls `pauseSchedulesForAppVersion` and no longer walks the tasks itself', () => {
+    const acts = readFileSync(path.resolve(__dirname, '..', 'schedule', 'acts.ts'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:'"`\\])\/\/[^\n]*/g, '$1');
+    expect(acts).toMatch(/pauseSchedulesForAppVersion\(await deps\.db\(\), appId, version, source, deps\.now\(\)\.toISOString\(\)\)/);
+    expect(acts).not.toMatch(/\bpauseForAppUpdate\b/);
+    expect(acts).toMatch(/export type \{ AppVersionSource \} from '\.\/appDrift\.js'/);
   });
 });

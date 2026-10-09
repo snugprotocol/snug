@@ -34,6 +34,9 @@ prompts/
 │       │                               ★ = the INLINE CORE (ADR-0066): these five, and only these, ride whole as
 │       │                                   system blocks to a tool-free brain (knowledge 'inline'; pinned by name in
 │       │                                   `INLINE_KNOWLEDGE_CORE_FILES`)
+│       ├── 85-scheduled-runs.md     ← the host's scheduler as the one timer: the kv + host-event run handshake, the schedule
+│       │                               listener snippet beside the copy-exactly block, suggesting a schedule once (TASK-20261009,
+│       │                               ADR-0074 §3/§4); NOT in the inline core — headings are retrieval-tested
 │       └── 90-auth-and-connected-apis.md  ← connected APIs: useConnectedFetch design + the connection_requirement directive contract, completeness bar, edit skip-rules (AL-05, rewritten by Dynamic Auth v2 P2; headings are retrieval-tested)
 ├── tools/                           ← tool + parameter descriptions
 │   ├── app-builder.md

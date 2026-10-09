@@ -89,7 +89,7 @@ personal sync origin the user connected — that is [ADR-0014](decisions/0014-cr
 custody working as designed; denial of service against the user's own browser tab or own
 self-hosted server; and third-party self-hosted infrastructure misconfiguration.
 
-**This document consolidates sixteen per-change threat-model deltas** (§8). A delta is written
+**This document consolidates seventeen per-change threat-model deltas** (§8). A delta is written
 for someone who already knows the system and is reading one change; this is written for a
 stranger deciding whether to trust the whole thing. Where a delta's residual is restated
 here it is marked as inherited, because a model that re-sells an old residual as new is as
@@ -272,8 +272,8 @@ A scheduled task is executable intent kept in the user's file and run while nobo
 front of the confirm gate. These rows hold the record to what parses, the engine to one
 recorded run per occurrence and file copy, and the unattended think to the app's own tool-free
 transport with every data change it offers left pending. The detailed record is
-`docs/security/threat-model-delta-scheduling.md`; the hidden-frame *Run [app]* step and the
-proposal channels are PR-B's delta.
+`docs/security/threat-model-delta-scheduling.md`; the hidden-frame *Run [app]* step, the
+proposal channels and desktop notifications are the sibling family below (PR-B).
 
 | Invariant | Enforcement | Test |
 |---|---|---|
@@ -287,6 +287,27 @@ proposal channels are PR-B's delta.
 | A notification is host-decided: once per run, only on the task's own `notification` choice, only through a composed `scheduler.notify` seat — the desktop and kit seats carry none, and the web seat answers `denied` until the Settings opt-in and an already-granted permission both hold at the call and never asks — the body title-prefixed, cut to 120 and past the credential withhold; the executor only suggests | `apps/playground/src/schedule/queue.ts`; `apps/playground/src/platform/platform.ts` (`SchedulerSeat`); `apps/playground/src/platform/webNotify.ts`; `apps/desktop/src/platform-desktop.ts`; `apps/host/src/platform-host.ts` (`schedulerSeatFor`) | `apps/playground/src/__tests__/scheduleQueue.test.ts` — once per run, never for `inbox`, never without a seat; `apps/playground/src/__tests__/schedulerSeat.test.ts`; `apps/playground/src/__tests__/webNotify.test.ts` — the seat never asks; `apps/host/src/__tests__/compose.test.ts`; `apps/desktop/src/__tests__/platformOffers.test.ts` |
 | Every scheduling surface says in words who must be open for a run to happen, from one sentence derived per call from the platform (the seat's label, the memory rung, whether sibling tabs can be seen); every run row records its host; no UI file spells an internal word to the user | `apps/playground/src/schedule/copy.ts` (`hostHonesty`); `apps/playground/src/schedule/honesty.ts`; the seats' labels in `apps/desktop/src/platform-desktop.ts` and `apps/host/src/platform-host.ts` | `apps/playground/src/__tests__/scheduleHonesty.test.ts`; `apps/playground/src/__tests__/scheduleCopy.test.ts` — the vocabulary scan with its planted-sentence proof; `apps/host/src/__tests__/compose.test.ts`; `apps/host/e2e/schedule.spec.ts` — the line on the built page, the lock fallback |
 | The scheduler boots idempotently from the shipping composition root and both re-init chains, resets at every file-swap seam with a run in flight recorded `interrupted`, and a host that says `schedule: false` gets no ticker, no election and no row | `apps/playground/src/schedule/scheduler.ts` (`initScheduler`, `resetScheduler`); `apps/playground/src/App.tsx`; `apps/playground/src/state/userdb.ts`; `apps/playground/src/platform/hostCapabilities.ts` | `apps/playground/src/__tests__/schedulerBoot.test.tsx`; `apps/playground/src/__tests__/scheduler.test.ts` — the swap seams, `allows("schedule") === false` |
+
+### Scheduled tasks — *Run [app]* and the proposal channels (ADR-0074, PR-B)
+
+A *Run [app]* step runs an app's own code while nobody is looking, in a hidden copy of the
+same frame RunView mounts, fed over a kv handshake on the frames that already exist, behind a
+confirm gate that consults nothing and a transport that counts every think. Three channels
+other than the user may PROPOSE a schedule — the builder's tool, the chat's `schedule` lane, a
+running app's suggestion — and all of them land on one consent surface and one writer. The
+detailed record is `docs/security/threat-model-delta-scheduling-proposals.md`.
+
+| Invariant | Enforcement | Test |
+|---|---|---|
+| The hidden frame is the SAME `SnugAppFrame` as RunView's (sandbox and CSP byte-identical), 1×1 `visibility:hidden`, at most one at a time, running only the app's committed current version; it never registers as the app's live host, a RunView mounting the same app aborts it (`interrupted`, "app opened"), a run the user did not start is refused by name when the app is already open (*needs you*: "the app is open — Snug doesn’t run it behind you" — presence is not consent), only the user's own *Run now and review* rides the live frame (under the page's ordinary gate, after opening the app), and a platform with no scheduler seat gets no hidden frame (`blocked` by name) | `apps/playground/src/schedule/ScheduledRunHost.tsx`; `apps/playground/src/schedule/appRun.ts` (`executeAppRun`, `runInHiddenFrame`, `runInLiveFrame`); `apps/playground/src/run/appRuntime.ts` (`composeAppRuntime` — the lift that leaves `registerAppHost` in RunView); `apps/playground/src/state/appHosts.ts` (`subscribeAppHosts`, `publishAppEvent`); the mount in `apps/playground/src/App.tsx` | `apps/playground/src/__tests__/scheduledRunHost.test.tsx` — the C2 reach row, never display:none, never the live host, the App.tsx seat; `apps/playground/src/__tests__/appRunHandshake.test.tsx` — the current version, the abort on open, the open-app refusal (S1), the live frame for a MANUAL run only (incl. the app closing mid-run → failed), no seat → blocked; `apps/playground/src/__tests__/appRuntime.test.tsx` — RunView consumes the lift, `registerAppHost` stays RunView's |
+| The host writes the run's input into the app's own kv under the task's 1 KiB cap through a host seat the same tombstone guards, rings ids only, and accepts a `schedule-result` only from the frame it hinted, after the hint, once, for this run, length-capped before a strict parse; the key is cleared on every exit path and swept at boot | `packages/db/src/driver.ts` (`kvSet`/`kvGet`, `HOST_KV_VALUE_MAX_BYTES`); `packages/db/src/userdb/userdb.ts` (the driver face's tombstone over the host seat); `apps/playground/src/schedule/appRun.ts` (`parseScheduleResult`, `scheduleResultSchema`, `clearScheduleKey`); `apps/playground/src/schedule/scheduler.ts` (`sweepStaleClaims` → `clearScheduleKey`) | `packages/db/src/__tests__/driver-host-kv.test.ts` — the cap at 1 KiB + 1, null clears, isolation, the tombstone; `apps/playground/src/__tests__/appRunHandshake.test.tsx` — unsolicited, duplicate, forged, oversized results dropped; the key cleared; `apps/playground/src/__tests__/schedulerKeySweep.test.ts` — the boot sweep |
+| A scheduled run's net handler carries a STANDALONE confirm gate that imports neither the session nor the standing gate and refuses every mutating call (`NET_CONFIRM_DENIED`, no new code), whose record outranks the app's own `ok` — the step is `refused`, the run `needs-you` with one act; only the user's own `manual` run composes the ordinary gate; every call, granted or refused, is counted at the handler against the UTC-day network ceiling before any executor is built | `apps/playground/src/schedule/scheduledConfirmGate.ts`; `apps/playground/src/state/net.ts` (`confirmGate?`, `onNetCall` in `CreateNetHandlerOptions` → `connectedFetchDepsFor`); `apps/playground/src/schedule/appRun.ts` (`outcomeOf`, the trigger rule, `ceilingAllows`); `apps/playground/src/schedule/queue.ts` (the `needs-you` fold) | `apps/playground/src/__tests__/scheduledGate.test.ts` — a remembered session grant and an armed standing grant are both still refused, the GET is counted, the probe keeps the default gate; `apps/playground/src/__tests__/appRunHandshake.test.tsx` — manual vs every other trigger, the record outranks `ok`, the ceiling with what the run already spent; `apps/playground/src/__tests__/scheduleQueue.test.ts` — the `refused` fold; `apps/playground/e2e/schedule-flow.spec.ts` — a POST run is `needs-you` on the built page |
+| Every think the hidden frame makes is asked of the UTC-day AI ceiling before the send, counted once on the run row when it reached the brain, shape-scrubbed on reply and withheld whole when still credential-shaped; no delta is ever forwarded, and the frame declares `streaming: false` | `apps/playground/src/schedule/scheduledTransport.ts`; `apps/playground/src/schedule/appRun.ts` (the `onCall` closure over `ceilingAllows`); `apps/playground/src/schedule/ScheduledRunHost.tsx` (`streaming={false}`) | `apps/playground/src/__tests__/scheduledTransport.test.ts` — asked before every send, refused by name at the ceiling, the scrub, the withhold, no `onDelta`; `apps/playground/src/__tests__/appRunHandshake.test.tsx` — AI calls ride the outcome and are refused at the ceiling |
+| The builder's `schedule_propose` stages ONE proposal per turn for the thread's app only, refuses another app and any SQL, and passes the strict shape and the proposed-schedule floor before staging; the chat's `schedule` lane sees ONLY that tool through an EXHAUSTIVE lane switch with a `never` default; the persisted card is re-validated and re-hashed on every read and is UI, never a gate | `apps/playground/src/agent/tools.ts` (`buildScheduleProposeTool`); `apps/playground/src/agent/useBuilderChat.ts` (`laneToolsFor`); `packages/protocol/src/chat-intent.ts` (the `schedule` lane); `apps/playground/src/agent/scheduleCard.ts` (`metaToScheduleCard`) | `apps/playground/src/__tests__/useBuilderChatLanes.test.tsx` — the schedule route never sees `artifact_write`, the switch is exhaustive, one proposal per turn; `apps/playground/src/__tests__/chatRouter.test.ts` — the lane holds exactly `schedule_propose`; `apps/playground/src/__tests__/scheduleCard.test.tsx` — a drifted row renders no card, not-now writes nothing |
+| An app's `schedule-request` is strict-parsed after a length cap, may name only the sender, is refused for an app the file does not hold, rate-limited to one a minute per instance, held to one pending per frame generation, muted by two declines or the Settings switch, never re-prompted once declined (by semantic hash) and capped at five app-proposed schedules per app; it renders as a run-header strip, never a modal, and nothing runs until the consent surface | `apps/playground/src/schedule/scheduleRequest.ts` (`consumeScheduleRequest`, the guard order); `apps/playground/src/schedule/SuggestionStrip.tsx`; `apps/playground/src/run/RunView.tsx` (`useAppEventConsumer`, the strip's slot); the decline and mute rows in `packages/db/src/userdb/schedules.ts` | `apps/playground/src/__tests__/scheduleRequest.test.tsx` — the negatives: another app, a credential, an oversize request, a second pending, the rate limit, a declined hash, a muted app, the Settings switch, the cap; `apps/playground/src/__tests__/suggestionStrip.test.tsx` — the three acts, the consent, the mute |
+| Every proposal channel lands on ONE consent surface and ONE writer, which re-parses the proposal, refuses a step naming an app other than the owner, and hands it to the engine's `createTask` (the floor of its provenance, the app check); no second non-user `createTask` call exists in the tree | `apps/playground/src/schedule/enableProposedTask.ts`; `apps/playground/src/schedule/EnableConsent.tsx`; `apps/playground/src/schedule/scheduler.ts` (`createTask`) | `apps/playground/src/__tests__/proposalWriter.test.ts` — the grep for a second writer, proven able to fail; the writer's refusals in the engine's words |
+| The SDK hook answers a `schedule-run` hint ONCE per `runId` with exactly one `schedule-result` normalised to a summary (extra keys dropped, bounds the protocol's), never throws out, and `proposeSchedule` posts once per page only a proposal the strict shape admits; the embedded block is unchanged and the KB's listener is the same shape | `packages/sdk/src/schedule.ts`; `packages/sdk/src/bridge.ts` (`onHostEvent`); `packages/knowledge/prompts/knowledge-base/app-authoring/85-scheduled-runs.md` | `packages/sdk/src/__tests__/schedule.test.ts` — one hint one result, duplicates ignored mid-flight, a throw contained, the one-per-page request; `packages/knowledge/src/__tests__/scheduled-runs-kb.test.ts` — the rendered listener matches the SDK's frame, event and key; `examples/validate.test.mjs` — a second listener admitted; `apps/host/e2e/local-schedule.spec.ts` — a handed-in app answers through the real process |
+| A desktop notification is raised only by the engine's one seat, only when the Settings opt-in AND the plugin's granted permission both hold at the call (read per call, never asked by the seat), with the engine's capped text whose TITLE is the host's (the app's name for an app's alert, the schedule's title for a reminder — app text rides the body only); the plugin's commands are admitted to the main window only, so a sandboxed app frame cannot raise one — proven by a refusal row that reads its own slot and a dispatchable twin | `apps/desktop/src/notify.ts`; `apps/desktop/src/platform-desktop.ts` (the seat on `scheduler.notify`); `apps/desktop/src-tauri/capabilities/main.json` (`notification:default`); `apps/desktop/src/gate/ipc.ts` (`ipc-notification-refused`, `ipc-notification-dispatchable`) | `apps/desktop/src/__tests__/notify.test.ts` — the three answers, the flag read per call, the web seat's flag name; `apps/desktop/src/__tests__/gateIpc.test.ts` — each row reads its own slot; `apps/desktop/src/__tests__/platformOffers.test.ts` — the seat carries `notify` as a plain property |
 
 ---
 
@@ -609,6 +630,14 @@ refusal: a summary, alert or failure message that looks like a credential is wit
 rest shape-scrubbed. The request carries no credential by construction — DDL, rows from the
 app's own tables and the prompt; `snug_secrets` is never read by the engine — and the app's
 rows go to the app's own provider exactly as any think of that app does. (Scheduling delta R-e.)
+*Closed at PR-B's Gate-5 fold (2026-10-09):* the scrub stands at the EXECUTOR for every handler —
+`packages/auth/src/connected-fetch.ts` redacts every injected value from the response body and the
+whitelisted response headers before any frame sees them, and the scheduled handler is the same
+`createNetHandlerFor` with a different gate — pinned for the scheduled handler by
+`scheduledGate.test.ts` "a connected host that echoes the injected credential answers the hidden
+frame with `***`". What remains is the executor's documented exact-substring boundary (a provider
+that re-encodes the value; AL-11) plus the credential-SHAPE wall on the way to the file. (Proposals
+delta R-d.)
 
 **R-55 — The kill switch can lag a sync pull.** Disable, pause and delete are rows in the
 file; another device keeps a task as it last pulled it until the next pull lands. *Bounded by:*
@@ -630,12 +659,13 @@ seat is inert until the Settings opt-in and an already-granted permission both h
 so this bounds a channel that is barely open; PR-B's desktop plugin inherits it. (Scheduling
 delta R-i.)
 
-**R-59 — *Run [app]* and every proposal channel are PR-B's delta.** An `app-run` step is
-refused by name today ("running an app on a schedule arrives in a later release"); the hidden
-frame, the kv handshake, the refusing confirm gate, the builder tool, the chat lane and the app
-suggestion strip each get their rows there, as does the one accepted residual ADR-0074 §6 names
-— an app's own code running unattended with the powers it already holds over its own data.
-(Scheduling delta R-j.)
+**R-59 — *Run [app]* and every proposal channel were PR-B's delta — landed 2026-10-09.** An
+`app-run` step was refused by name in PR-A; PR-B's delta
+(`docs/security/threat-model-delta-scheduling-proposals.md`) now carries the rows for the hidden
+frame, the kv handshake, the refusing confirm gate, the counting transport, the builder tool,
+the chat lane, the app suggestion strip, the SDK hook and desktop notifications (§5's sibling
+family), and its residuals are R-61 … R-69 below — R-61 being the one ADR-0074 §6 names. This
+entry stays as the record that the two deltas split there. (Scheduling delta R-j.)
 
 
 **R-38 — Shared docs may carry the sharer's personal data.** `memory` is off by default
@@ -692,6 +722,67 @@ in-memory copy of the user file is stale after the leader's writes; promotion th
 `needsReload` and idles behind a visible strip rather than reconciling over the stale copy.
 The hand-over proper (a writer lock + a re-open seam) is queued in `docs/next-steps.md`.
 Availability only.
+
+**R-61 — A scheduled *Run [app]* runs the app's own code with the powers it already holds
+over its own data.** (ADR-0074 §6, G4 — the one residual the ADR names and accepts.) In the
+hidden frame the app reads and writes ITS OWN tables through the same driver and namespace it
+has when visible; its own code can change its own rows while nobody is looking, and there is no
+pre-run snapshot or undo (deferred by name). The network side is held — every mutating call is
+refused by a gate that consults nothing, every call counted — and the brain side is counted and
+capped; the data side is the app's, as it always was. *Bounded by:* the sandbox (C2 unchanged),
+the committed version only, the user's own enable act on the consent surface, the failure and
+ignored pauses, the inbox that shows every result. (Proposals delta R-a.)
+
+**R-62 — The user's own *Run now and review* rides the live frame under the page's ordinary gate
+and transport, uncounted.** The one run delivered to an open app is the `manual` run the user just
+started (the act opens the app first, then runs): its net calls go through RunView's handler — the
+ordinary gate, with the person who clicked at the confirm — and its thinks through RunView's
+transport; the row's `calls` are zero. A run the user did NOT start never rides the open app: it is
+refused by name and reads *needs you* (presence is not consent — Gate-5 fold). *Bounded by:* one
+run per gesture; the frequency floor; the live frame's own budget. (Proposals delta R-b.)
+
+**R-63 — The demo brain answers a hidden frame's thinks like RunView's.** Under the mock
+adapter the hidden frame's own transport answers scripted turns as it does for the visible app
+(unlike *Ask the AI*, which refuses the demo brain by name); each reply COUNTS against the day's
+AI ceiling while spending nothing — no key, no provider, no cost; the count only makes the
+ceiling conservative. (Proposals delta R-c.)
+
+**R-64 — On the artifact binding a connected *Run [app]* is refused at the runner, not graded
+by the queue.** The kit's artifact bindings run with `connections: false`, so the hidden frame
+composes NO net handler (one rule for the visible and the hidden frame) and the app's connected
+call meets the runner's own refusal; the Schedule page grades such a step `blocked` in words
+through the one availability derivation, but the queue does not consult availability at run
+time — the step runs and the row records whatever the app answers. No network is reached either
+way; run-time grading is a candidate follow-up. (Proposals delta R-g.)
+
+**R-65 — Suggestion fatigue is bounded by the mute, not removed.** An app may ask once a
+minute per instance and hold one pending per frame generation; a user who keeps reopening an app
+that keeps suggesting sees the strip again until two declines, *stop suggestions* or the Settings
+switch mute it; the five-per-app cap holds at intake. *Bounded by:* a strip, never a modal;
+declines remembered by semantic hash, so a reworded title is the same decline. (Proposals delta
+R-f.)
+
+**R-66 — A scheduled result is app-written text shown to the user.** The summary on the
+Schedule page is whatever the app's own code answered (≤ 4 KiB, credential-shaped text
+withheld); an app — or a connected host whose response the app echoes — can shape those words
+and nothing else (and never a notification's TITLE: the host titles an app's alert with the app's
+name and quotes the app's text in the body only — Gate-5 S3): a result carries no data, no act and no proposal, and the one act on a
+`needs-you` row is the user's own *run now and review*. (R-53's shape for an app; proposals
+delta R-i.)
+
+**R-67 — An app that does not answer costs the queue its bound.** No announce within 10 s is
+`no-handler`; announced but silent is `failed` after 90 s; both count toward the failure pause
+and the queue's next item waits that long. Availability only. (Proposals delta R-e.)
+
+**R-68 — The notification gate rows prove unreachability from a sandboxed frame on macOS
+only.** `ipc-notification-refused` / `-dispatchable` run in the in-shell gate on the shipped
+surface (R-5's stance unchanged); a scheduled *Run [app]* has no platform-kind refusal of its
+own — it is refused where the platform composes no scheduler seat. (Proposals delta R-h.)
+
+**R-69 — A desktop notification is proven shown only by the owner's walk on the bundled app.**
+macOS keys delivery on the bundle identifier, so an unbundled `tauri dev` binary shows nothing;
+the suites prove the seat's three answers and the gate rows prove the plugin's reach, and the
+walk is printed in the task's walk list. (Proposals delta, "does NOT claim".)
 
 **R-6 — TOFU pairing window.** An attacker already on the user's network at the moment of
 first pairing is pinned instead of the real bridge, and every later request is faithfully
@@ -984,6 +1075,8 @@ macOS, and a Linux opener exists, untested on a real Linux desktop.
 
 **v3.4 note (2026-10-09, TASK-20261009-scheduling-framework PR-A).** One row added (`threat-model-delta-scheduling.md`) and §5 gains a "Scheduled tasks" family: a task is executable intent kept in the user's file as namespaced settings rows and run while nobody is in front of the confirm gate. The record parses or is absent (strict shapes, byte caps, a credential anywhere a parse refusal); an untrusted import arms nothing and proposals never cross the file boundary in either direction; one leader per origin and file, a claim written before any step, dedupe by `(taskId, dueAt)` and `ranThrough`, the watermark written last; an unattended think is the app's own tool-free transport with its data changes left pending; spend is floored, ceilinged and paused. Ten residuals recorded as R-50 … R-59 (no always-on host; diverged copies; whole-file CAS; the model-written summary; the value scrub deferred to PR-B's net handler; kill-switch lag; roaming summaries; the watermark/claim window; notifications; *Run [app]* and the proposal channels as PR-B's delta).
 
+**v3.5 note (2026-10-09, TASK-20261009-scheduling-framework PR-B).** One row added (`threat-model-delta-scheduling-proposals.md`) and §5 gains the sibling family "Scheduled tasks — *Run [app]* and the proposal channels": the hidden frame is the same `SnugAppFrame` (sandbox and CSP byte-identical), one at a time, the committed version only, never the app's live host, aborted by a visible open, and refused by name when the app is ALREADY open (presence is not consent) — only the user's own *Run now and review* rides the live frame, after opening the app; the kv handshake carries ids on the event channel and the content in the app's own kv under the task's 1 KiB cap behind the same tombstone, with the result bound to the hinted frame and the one `runId`, once, length-capped then strict-parsed, and stale keys swept at boot; the scheduled net handler carries a standalone refusing gate that imports neither the session nor the standing gate and counts every call at the handler; every hidden-frame think is counted and scrubbed by a decorator that never forwards deltas; the builder tool and the `schedule` lane (an exhaustive lane switch), the app suggestion strip (strict parse, sender only, rate, one pending, declines by hash, mutes, cap) and one consent surface with one writer; the SDK hook answers once per `runId`; desktop notifications sit behind the Settings opt-in read per call and two gate rows. R-54 CLOSED (the value scrub stands at the executor for the scheduled handler too — pinned by an echo row); R-59 closed as the record of the split; nine residuals recorded as R-61 … R-69 (the app's own code unattended; the user's own live-frame run uncounted; the demo brain counted; the artifact binding's connections-off run; suggestion fatigue; the app-written summary; the silent app's bound; the gate rows on macOS only; the bundled-app walk).
+
 <!-- DELTA-LEDGER:BEGIN -->
 
 | Delta | Pinned hash | Consolidated into |
@@ -1004,6 +1097,7 @@ macOS, and a Linux opener exists, untested on a real Linux desktop.
 | `docs/security/threat-model-delta-local-host-process.md` | `b7ddc88afd9a` | §5 local runner (lock, socket, bearer) · §6 R-40 · R-41 · R-42 · R-43 · R-49 (R-43 amended for ADR-0070; R-40 and R-42 noted for R1; R-49 and the take-over row added at Gate 5) |
 | `docs/security/threat-model-delta-brains-and-chat.md` | `d168df71c3f0` | §4 boundary 3 · §5 local runner and its brains · R-11 note · R-40 note · R-44, R-45, R-46, R-47, R-48, R-49 (Gate 5) |
 | `docs/security/threat-model-delta-scheduling.md` | `30716624ec62` | §5 scheduled tasks · R-50, R-51, R-52, R-53, R-54, R-55, R-56, R-57, R-58, R-59, R-60 |
+| `docs/security/threat-model-delta-scheduling-proposals.md` | `fcaed60e7165` | §5 scheduled tasks — *Run [app]* and the proposal channels · R-54 closed · R-59 closed · R-61, R-62, R-63, R-64, R-65, R-66, R-67, R-68, R-69 |
 <!-- DELTA-LEDGER:END -->
 
 ---

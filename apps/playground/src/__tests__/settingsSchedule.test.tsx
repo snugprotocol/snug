@@ -4,9 +4,8 @@
 // storage key the web seat reads, and `denied` says where to change it; the honesty line is
 // the host's; a follower says so; *clear history* is armed before it clears, and the accessor
 // keeps what is still waiting on the user; "never let apps suggest schedules" is a storage
-// flag PR-B reads — and until PR-B reads it the switch is NOT rendered (a control that
-// changes nothing is a lie), only its key is exported. The card is mounted in SettingsView
-// after the connections section, gated on `allows('schedule')`.
+// flag the suggestion strip's intake reads (PR-B, P3), so the switch is rendered and writes it.
+// The card is mounted in SettingsView after the connections section, gated on `allows('schedule')`.
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
@@ -267,16 +266,36 @@ describe('clear history (F19)', () => {
   });
 });
 
-describe('never let apps suggest schedules (ADR-0074 §4; PR-B reads it)', () => {
-  it('is NOT rendered until PR-B reads the flag (M11): no switch, no sentence — the key stays exported under its name', async () => {
+describe('never let apps suggest schedules (ADR-0074 §4; the strip’s intake reads it — P3)', () => {
+  it('is a switch that writes the flag the intake reads, off by default, with its sentences', async () => {
+    await initScheduler(deps());
+    const el = await render(<ScheduleSettingsCard />);
+    const toggle = el.querySelector<HTMLButtonElement>('[data-testid="schedule-no-suggestions"]');
+    expect(toggle?.getAttribute('role')).toBe('switch');
+    expect(toggle?.getAttribute('aria-checked')).toBe('false');
+    expect(el.textContent).toContain(SETTINGS.noSuggestions);
+    expect(el.textContent).toContain(SETTINGS.noSuggestionsHint);
+    expect([...el.querySelectorAll('[role="switch"]')]).toHaveLength(2);
+    expect(NO_SUGGESTIONS_KEY).toBe('snug:schedule-no-suggestions');
+    expect(localStorage.getItem(NO_SUGGESTIONS_KEY)).toBeNull();
+
+    await act(async () => {
+      toggle?.click();
+    });
+    expect(localStorage.getItem(NO_SUGGESTIONS_KEY)).toBe('1');
+    expect(toggle?.getAttribute('aria-checked')).toBe('true');
+    await act(async () => {
+      toggle?.click();
+    });
+    expect(localStorage.getItem(NO_SUGGESTIONS_KEY)).toBeNull();
+    expect(toggle?.getAttribute('aria-checked')).toBe('false');
+  });
+
+  it('reads the flag back on mount', async () => {
     localStorage.setItem(NO_SUGGESTIONS_KEY, '1');
     await initScheduler(deps());
     const el = await render(<ScheduleSettingsCard />);
-    expect(el.querySelector('[data-testid="schedule-no-suggestions"]')).toBeNull();
-    expect(el.textContent).not.toContain(SETTINGS.noSuggestions);
-    expect(el.textContent).not.toContain(SETTINGS.noSuggestionsHint);
-    expect([...el.querySelectorAll('[role="switch"]')]).toHaveLength(1);
-    expect(NO_SUGGESTIONS_KEY).toBe('snug:schedule-no-suggestions');
+    expect(el.querySelector('[data-testid="schedule-no-suggestions"]')?.getAttribute('aria-checked')).toBe('true');
   });
 });
 

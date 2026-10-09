@@ -22,7 +22,7 @@ import { z } from 'zod';
 // ------------------------------------------------------------------ constants
 
 /**
- * The eight intents. PERSISTED/ROUTED literals — the router, the tool-set selection, the
+ * The nine intents. PERSISTED/ROUTED literals — the router, the tool-set selection, the
  * context assembler and the classifier prompt all read them from here, never retyped.
  *
  * `schema_change` is classified separately from `app_change` even though v1 collapses the
@@ -34,6 +34,12 @@ import { z } from 'zod';
  * twins of the data pair: the subject is data living at the app's connected PROVIDER, not
  * in the app's own tables, and the executing seam is the connected-fetch executor rather
  * than the scratch database.
+ *
+ * `schedule` (TASK-20261009, ADR-0074 §4) is the ask for something to happen LATER or
+ * on a cadence — a reminder, a recurring summary, the app run every morning. Its lane
+ * holds exactly one tool, `schedule_propose`, which stages a suggestion the user then
+ * enables (or not) on the host's one consent surface; nothing on the turn writes code,
+ * data or a task.
  */
 export const CHAT_INTENTS = [
   'data_read',
@@ -42,6 +48,7 @@ export const CHAT_INTENTS = [
   'app_change',
   'provider_read',
   'provider_write',
+  'schedule',
   'app_question',
   'other',
 ] as const;
@@ -52,10 +59,13 @@ export type ChatIntent = (typeof CHAT_INTENTS)[number];
 export const CHAT_INTENT_CLARIFICATION_MAX_CHARS = 300;
 
 /**
- * The four execution lanes an intent can route to. `clarify` is deliberately NOT here:
- * it is the router's failure posture, never an intent's assignment.
+ * The five execution lanes an intent can route to. `clarify` is deliberately NOT here:
+ * it is the router's failure posture, never an intent's assignment. `schedule` is a lane
+ * of its own rather than a data or feature intent so the tool selection can give it ONLY
+ * the propose tool (feasibility F2: the switch over lanes is exhaustive, with no fall-through
+ * to the builder set).
  */
-export const CHAT_LANES = ['data', 'feature', 'provider', 'answer'] as const;
+export const CHAT_LANES = ['data', 'feature', 'provider', 'schedule', 'answer'] as const;
 
 export type ChatLane = (typeof CHAT_LANES)[number];
 
@@ -73,6 +83,7 @@ export const LANE_FOR_INTENT = {
   app_change: 'feature',
   provider_read: 'provider',
   provider_write: 'provider',
+  schedule: 'schedule',
   app_question: 'answer',
   other: 'answer',
 } as const satisfies Record<ChatIntent, ChatLane>;
@@ -92,6 +103,9 @@ export const CHAT_INTENT_FEATURE_LANE = intentsInLane('feature');
 
 /** The PROVIDER lane: LLM-composed requests through the governed connected-fetch executor. */
 export const CHAT_INTENT_PROVIDER_LANE = intentsInLane('provider');
+
+/** The SCHEDULE lane: one propose-only tool; the user's act on the consent surface is the only enable. */
+export const CHAT_INTENT_SCHEDULE_LANE = intentsInLane('schedule');
 
 // -------------------------------------------------------------------- schema
 
@@ -144,4 +158,9 @@ export function isFeatureIntent(intent: ChatIntent): boolean {
 /** Provider lane — gets connection facts and the provider_request tool, never credentials. */
 export function isProviderIntent(intent: ChatIntent): boolean {
   return LANE_FOR_INTENT[intent] === 'provider';
+}
+
+/** Schedule lane — gets the app's overview and DDL and the one propose tool; never a writer. */
+export function isScheduleIntent(intent: ChatIntent): boolean {
+  return LANE_FOR_INTENT[intent] === 'schedule';
 }

@@ -363,3 +363,57 @@ describe('the hand-in seat — what is offered, and when an offer is withdrawn (
     expect(db.getAppHtml(appId)).toBe(v3);
   });
 });
+
+// ---------------------------------------------------------------- the app-drift pause (E8)
+
+type TaskRow = Parameters<UserDb['putScheduledTask']>[0];
+const DAY = 86_400_000;
+const CREATED = '2026-10-01T00:00:00.000Z';
+const scheduleNaming = (appId: string, version: number, over: Partial<TaskRow> = {}): TaskRow => ({
+  id: `names-${appId}-${version}`,
+  title: 'Nightly',
+  enabled: true,
+  enabledAt: CREATED,
+  provenance: 'user',
+  steps: [{ kind: 'app-think', appId, prompt: 'sum it', context: { maxRows: 50 } }],
+  spec: { kind: 'every', n: 1, unit: 'hours', tz: 'UTC' },
+  cron: '0 * * * *',
+  missedPolicy: 'ask',
+  staleAfterMs: 7 * DAY,
+  alert: 'inbox',
+  appVersions: { [appId]: version },
+  createdAt: CREATED,
+  updatedAt: CREATED,
+  consecutiveFailures: 0,
+  unseenResults: 0,
+  ...over,
+});
+
+describe('the app-drift pause (TASK-20261009 E8, ADR-0074 §6)', () => {
+  it('a silent agent update of an UNEDITED copy pauses every schedule naming the app at its enable version; one at the new version and one naming nothing stay enabled', async () => {
+    const { installed } = await applyAgentBundles(db, blocksOf(bundle(LINEAGE_A, HTML_V1)));
+    const appId = installed[0]!.appId;
+    db.putScheduledTask(scheduleNaming(appId, 1));
+    db.putScheduledTask(scheduleNaming(appId, 2));
+    db.putScheduledTask(scheduleNaming(appId, 1, { id: 'other', steps: [{ kind: 'notify', title: 'Water', body: 'the ferns' }], appVersions: {} }));
+    const outcome = await applyAgentBundles(db, blocksOf(bundle(LINEAGE_A, HTML_V2)));
+    expect(outcome.updated).toEqual([{ appId, displayName: 'Pomodoro', version: 2 }]);
+    expect(db.getScheduledTask(`names-${appId}-1`)).toMatchObject({ enabled: false, pausedReason: 'app-updated', appVersions: { [appId]: 1 } });
+    expect(db.getScheduledTask(`names-${appId}-2`)).toMatchObject({ enabled: true });
+    expect(db.getScheduledTask('other')).toMatchObject({ enabled: true, updatedAt: CREATED });
+    expect(db.getScheduledTask(`names-${appId}-1`)?.updatedAt).not.toBe(CREATED);
+  });
+
+  it('an offered update TAKEN for an edited copy (applyPendingHandIn) pauses the schedules naming the app the same way', async () => {
+    const { installed } = await applyAgentBundles(db, blocksOf(bundle(LINEAGE_A, HTML_V1)));
+    const appId = installed[0]!.appId;
+    db.saveAppVersion(appId, USER_EDIT, 'user edit');
+    db.putScheduledTask(scheduleNaming(appId, 2));
+    const outcome = await applyAgentBundles(db, blocksOf(bundle(LINEAGE_A, HTML_V2)));
+    expect(outcome.pending).toHaveLength(1);
+    expect(db.getScheduledTask(`names-${appId}-2`)).toMatchObject({ enabled: true }); // nothing changed yet — the offer is pending
+    const applied = await applyPendingHandIn(db, outcome.pending[0]!);
+    expect(db.getScheduledTask(`names-${appId}-2`)).toMatchObject({ enabled: false, pausedReason: 'app-updated', appVersions: { [appId]: 2 } });
+    expect(applied.version).toBe(3);
+  });
+});

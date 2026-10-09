@@ -5,9 +5,12 @@
 // are one radiogroup whose change re-reads the preview; the frequency floor refuses in words and
 // disables the save; the cost line names the app's brain NOW and where the rows go; a schedule
 // that asks the AI shows the consent panel — the prompt and the queries verbatim — before
-// `createTask` is called with EXACTLY the input the form holds; an `app-run` step (PR-B) is shown
-// and refused; the custom cron and the chips derive each other; `/schedule/:id` edits through
-// `updateTask`, and an imported schedule turns on only through the consent.
+// `createTask` is called with EXACTLY the input the form holds; a *run <app>* step (PR-B, A-UI) is
+// selectable, carries an optional input ≤ 1 KiB and the note that the app must handle scheduled
+// runs, and goes through the consent like anything that spends; `?suggestion=` (the chat's suggestion
+// card) prefills the form and `?back=` is where the save and the cancel return; the custom cron
+// and the chips derive each other; `/schedule/:id` edits through `updateTask`, and an imported
+// schedule turns on only through the consent.
 //
 // A ROUTED mount with the real memory user db (`installTestUserDb`), the clock pinned to a Friday
 // so the weekly templates have a definite "next". `createTask` is wrapped (not replaced) so the
@@ -22,9 +25,10 @@ import type { UserDb } from '@snugprotocol/db';
 import type { ScheduledTask } from '@snugprotocol/protocol';
 
 import { imported, nextLine } from '../schedule/copy.js';
-import { CONSENT_ROWS, SENTENCE, STEPS, TEMPLATE_TITLES, TITLE, WHEN } from '../schedule/copy.editor.js';
-import { LEDGER_QUERIES, STANDUP_QUERIES, TEMPLATE_PROMPTS, remainderOf } from '../schedule/editorModel.js';
+import { CONSENT_ROWS, FROM_SUGGESTION, SENTENCE, STEPS, TEMPLATE_TITLES, TITLE, WHEN } from '../schedule/copy.editor.js';
+import { LEDGER_QUERIES, STANDUP_QUERIES, TEMPLATE_PROMPTS, parseRunInput, proposalFill, remainderOf } from '../schedule/editorModel.js';
 import { readSchedule } from '../schedule/parseScheduleText.js';
+import { newScheduleHref } from '../schedule/routes.js';
 import { ScheduleEditorView } from '../schedule/ScheduleEditorView.js';
 import { createTask } from '../schedule/scheduler.js';
 import { appModelStore, appProviderStore } from '../state/appModel.js';
@@ -119,6 +123,7 @@ async function mount(path: string): Promise<void> {
           <Route path="/schedule" element={<Probe />} />
           <Route path="/schedule/new" element={<ScheduleEditorView />} />
           <Route path="/schedule/:id" element={<ScheduleEditorView />} />
+          <Route path="/run/:id" element={<Probe />} />
         </Routes>
       </MemoryRouter>,
     );
@@ -151,6 +156,7 @@ const pressed = (testId: string): boolean => must(testId).getAttribute('aria-pre
 const occurrences = (): string[] => [...document.body.querySelectorAll<HTMLTimeElement>('[data-testid="preview-occurrences"] time')].map((t) => t.dateTime);
 
 const installLedger = (): string => db.installApp({ displayName: 'Ledger', html: '<!doctype html><title>Ledger</title>', usesDb: true, installSource: 'starter:ledger' }).appId;
+const installWeather = (): string => db.installApp({ displayName: 'Should I?', html: '<!doctype html><title>Should I?</title>', installSource: 'starter:weather' }).appId;
 const installStandup = (): string => db.installApp({ displayName: 'Standup', html: '<!doctype html><title>Standup</title>', usesDb: true, installSource: 'starter:github' }).appId;
 
 describe('remainderOf — the words beside the schedule (design F1: the create bar is one click from schedule it)', () => {
@@ -341,18 +347,83 @@ describe('prefill from ?template=', () => {
     expect(must('preview-cost').textContent).toBe('cost: ≈ 2 AI calls a week on demo brain · sends rows from Ledger and Standup to that provider');
   });
 
-  it('morning-weather: the run-Weather step renders with the later-release note, and the save is refused with the sentence', async () => {
-    db.installApp({ displayName: 'Should I?', html: '<!doctype html><title>Should I?</title>', installSource: 'starter:weather' });
+  it('morning-weather: the run-Weather step is selectable, carries the app, an empty input and the handles-scheduled-runs note; the save goes through the consent and lands the run step', async () => {
+    const weather = installWeather();
     await mount('/schedule/new?template=morning-weather');
     expect(must('step-0').dataset.kind).toBe('app-run');
-    expect(must('step-0-later').textContent).toContain(STEPS.laterRelease);
+    expect(must('step-0').className).not.toContain('schedule-step-off');
+    expect(select('step-0-app').value).toBe(weather);
+    expect((must('step-0-input') as HTMLTextAreaElement).value).toBe('');
+    expect(must('step-0-run-note').textContent).toBe(STEPS.runNote('Should I?'));
+    expect(must('step-0-run-note').textContent).toBe('Should I? must handle scheduled runs — apps built after today do');
+    expect(q('step-0-later')).toBeNull();
     expect(must('step-1').dataset.kind).toBe('notify');
     expect(input('alert-notification').checked).toBe(true);
-    expect(must('later-release-refusal').textContent).toBe(STEPS.laterReleaseRefusal);
-    expect((must('schedule-save') as HTMLButtonElement).disabled).toBe(true);
+    expect(input('missed-ask').checked, 'a run spends — the catch-up default asks').toBe(true);
+    expect(q('later-release-refusal')).toBeNull();
+    expect((must('schedule-save') as HTMLButtonElement).disabled).toBe(false);
+
     await click(must('schedule-save'));
-    expect(db.listScheduledTasks()).toHaveLength(0);
-    expect(vi.mocked(createTask)).not.toHaveBeenCalled();
+    expect(vi.mocked(createTask), 'what will run is shown first (U8)').not.toHaveBeenCalled();
+    expect(must('consent-step-0').textContent).toContain('run Should I?');
+    expect(must('consent-step-0').textContent).toContain(CONSENT_ROWS.noHosts);
+    await click(must('consent-enable'));
+    await settleUntil(() => q('schedule-page') !== null, 'navigation to /schedule');
+    expect(vi.mocked(createTask).mock.calls[0]?.[0]).toEqual({
+      title: TEMPLATE_TITLES['morning-weather'],
+      steps: [
+        { kind: 'app-run', appId: weather },
+        { kind: 'notify', title: 'morning weather', body: 'your morning weather is ready' },
+      ],
+      spec: { kind: 'daily', time: '07:00', tz: 'device' },
+      missedPolicy: 'ask',
+      alert: 'notification',
+      provenance: 'user',
+    });
+    expect(db.listScheduledTasks()[0]?.cron).toBe('0 7 * * *');
+  });
+
+  it('morning-weather without the app says so on the step and disables it, like any template step', async () => {
+    await mount('/schedule/new?template=morning-weather');
+    expect(must('step-0-missing').textContent).toBe(STEPS.appMissing('Should I?'));
+    expect(must('step-0').className).toContain('schedule-step-off');
+  });
+
+  it('a run step’s input reaches the task as JSON when it parses, as text otherwise, and is refused over 1 KiB', async () => {
+    const weather = installWeather();
+    await mount('/schedule/new?template=morning-weather');
+    await type(must('step-0-input') as HTMLTextAreaElement, '{"units":"metric"}');
+    await click(must('schedule-save'));
+    expect(must('consent-step-0').textContent).toContain('{"units":"metric"}');
+    await click(must('consent-enable'));
+    await settleUntil(() => q('schedule-page') !== null, 'navigation to /schedule');
+    expect((vi.mocked(createTask).mock.calls[0]?.[0] as { steps: unknown[] }).steps[0]).toEqual({ kind: 'app-run', appId: weather, input: { units: 'metric' } });
+    expect(parseRunInput('plain words')).toEqual({ ok: true, input: 'plain words' });
+    expect(parseRunInput('   ')).toEqual({ ok: true });
+    expect(parseRunInput('x'.repeat(1100))).toEqual({ ok: false, reason: STEPS.runInputTooLong });
+
+    await mount('/schedule/new?template=morning-weather');
+    await type(must('step-0-input') as HTMLTextAreaElement, 'x'.repeat(1100));
+    expect(must('save-blocker').textContent).toBe(STEPS.runInputTooLong);
+    expect((must('schedule-save') as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('the kind select offers run <app> and switching to it keeps the app', async () => {
+    const ledger = installLedger();
+    await mount(`/schedule/new?app=${ledger}`);
+    const kind = select('step-0-kind');
+    expect([...kind.options].map((option) => [option.value, option.disabled])).toEqual([
+      ['notify', false],
+      ['app-think', false],
+      ['app-run', false],
+    ]);
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!.call(kind, 'app-run');
+      kind.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    expect(must('step-0').dataset.kind).toBe('app-run');
+    expect(select('step-0-app').value).toBe(ledger);
+    expect(must('step-0-run-note').textContent).toBe(STEPS.runNote('Ledger'));
   });
 
   it('?app= preselects the app in an ask-the-AI step', async () => {
@@ -361,6 +432,70 @@ describe('prefill from ?template=', () => {
     expect(must('step-0').dataset.kind).toBe('app-think');
     expect(select('step-0-app').value).toBe(ledger);
     expect(input('schedule-title').value).toBe('ask Ledger’s AI');
+  });
+});
+
+describe('prefill from ?suggestion= — the chat’s suggestion card (P1)', () => {
+  it('opens with the suggestion’s title, when and steps, says where it came from, and the cancel goes back to the thread', async () => {
+    const ledger = installLedger();
+    const proposal = {
+      title: 'morning summary',
+      steps: [{ kind: 'app-think', appId: ledger, prompt: 'Sum up yesterday in two lines.', context: { maxRows: 50 } }],
+      spec: { kind: 'weekly', days: ['mon', 'wed'], time: '08:30', tz: 'device' },
+    };
+    await mount(newScheduleHref({ suggestion: JSON.stringify(proposal), app: ledger, back: `/run/${ledger}` }));
+    expect(must('from-suggestion-note').textContent).toBe(FROM_SUGGESTION.note);
+    expect(input('schedule-title').value).toBe('morning summary');
+    expect(checked('weekly')).toBe(true);
+    expect(pressed('spec-day-mon')).toBe(true);
+    expect(pressed('spec-day-wed')).toBe(true);
+    expect(pressed('spec-day-tue')).toBe(false);
+    expect(input('spec-time').value).toBe('08:30');
+    expect(must('step-0').dataset.kind).toBe('app-think');
+    expect(select('step-0-app').value).toBe(ledger);
+    expect((must('step-0-prompt') as HTMLTextAreaElement).value).toBe('Sum up yesterday in two lines.');
+    expect(input('step-0-data-tables').checked).toBe(true);
+    await click(must('schedule-cancel'));
+    await settleUntil(() => q('schedule-page') !== null, 'navigation back');
+    expect(must('schedule-page').textContent).toBe(`/run/${ledger}`);
+    expect(db.listScheduledTasks()).toHaveLength(0);
+  });
+
+  it('the save is the user’s own, and lands back on the thread', async () => {
+    const ledger = installLedger();
+    const proposal = { title: 'nudge', steps: [{ kind: 'notify', title: 'hi', body: 'there' }], spec: { kind: 'daily', time: '20:00', tz: 'device' } };
+    await mount(newScheduleHref({ suggestion: JSON.stringify(proposal), app: ledger, back: `/run/${ledger}` }));
+    await click(must('schedule-save'));
+    await settleUntil(() => q('schedule-page') !== null, 'navigation back');
+    expect(must('schedule-page').textContent).toBe(`/run/${ledger}`);
+    expect(vi.mocked(createTask).mock.calls[0]?.[0]).toMatchObject({ title: 'nudge', provenance: 'user' });
+  });
+
+  it('a suggestion step naming an app this file does not hold is off and named in WORDS — "that app", never the id (M14)', async () => {
+    const ghost = '0b6e5a1c-8d5e-4f13-9a2b-7c1d2e3f4a5b';
+    const proposal = { title: 'ghost run', steps: [{ kind: 'app-run', appId: ghost }], spec: { kind: 'daily', time: '08:00', tz: 'device' } };
+    const fill = proposalFill(JSON.stringify(proposal), []);
+    const step = fill?.steps[0];
+    expect(step?.kind).toBe('app-run');
+    expect(step?.kind === 'app-run' ? step.missingApp : undefined).toBe(STEPS.unknownApp);
+    expect(JSON.stringify(fill)).not.toContain(`"missingApp":"${ghost}"`);
+
+    await mount(newScheduleHref({ suggestion: JSON.stringify(proposal) }));
+    expect(must('step-0-missing').textContent).toBe(STEPS.appMissing(STEPS.unknownApp));
+    expect(must('step-0-missing').textContent).not.toContain(ghost);
+    expect(input('schedule-title').value).toBe('ghost run');
+  });
+
+  it('a proposal that does not parse, and a back that is not an in-app path, are ignored', async () => {
+    await mount('/schedule/new?suggestion=%7B%22title%22%3A%22x%22%7D&back=https%3A%2F%2Fevil.example');
+    expect(q('from-suggestion-note')).not.toBeNull();
+    expect(input('schedule-title').value).toBe('');
+    expect(checked('daily')).toBe(true);
+    expect(newScheduleHref({ back: 'https://evil.example' })).toBe('/schedule/new');
+    expect(newScheduleHref({ back: '//evil.example' })).toBe('/schedule/new');
+    await click(must('schedule-cancel'));
+    await settleUntil(() => q('schedule-page') !== null, 'navigation');
+    expect(must('schedule-page').textContent).toBe('/schedule');
   });
 });
 

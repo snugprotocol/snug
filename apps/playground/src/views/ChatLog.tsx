@@ -2,17 +2,19 @@ import { useEffect, useState } from 'react';
 import type { ReactElement } from 'react';
 import { Link } from 'react-router';
 
-
 import { sanitizeCardText, type ChatCardState } from '../agent/cards.js';
 import type { BuildStepView, ChatMessage, DataWriteCardState } from '../agent/useBuilderChat.js';
 import { CONNECTIONS_UNAVAILABLE } from '../platform/availability.js';
 import { allows } from '../platform/platform.js';
+import { OFFER } from '../schedule/copy.page.js';
+import { ScheduleCard, type ResolveScheduleCard } from '../schedule/ScheduleCard.js';
+import { ScheduleOffer } from '../schedule/ScheduleOffer.js';
 import { netConfirmStore, registerChatConfirmSurface, resolveNetConfirm } from '../state/net.js';
 import { useStore } from '../state/store.js';
+import { useBrain } from '../state/webllm.js';
 import { Button } from '../ui/Button.js';
 import { Card } from '../ui/Card.js';
 import { AuthChoiceCard } from './AuthChoiceCard.js';
-import { ScheduleOffer } from '../schedule/ScheduleOffer.js';
 import { ReportErrorLink } from '../feedback/ReportErrorLink.js';
 import { StatusLine, type StatusPhase } from './StatusLine.js';
 
@@ -67,6 +69,14 @@ export interface ChatLogProps {
    * next user message. Absent ⇒ options render disabled (a surface with no send path).
    */
   onSelectCardOption?: (card: ChatCardState, messageId: number, optionId: string) => void;
+  /**
+   * Resolve the schedule suggestion card (TASK-20261009 P1; ADR-0074 §4) —
+   * `(card: ScheduleCardState, messageId, resolution: 'scheduled' | 'declined', taskId?)`. The
+   * card never writes the chat row itself: the hook that staged it persists the answer on the
+   * row and patches its message. Absent ⇒ the card's acts render disabled (a surface with no
+   * path to persist an answer must not create anything — the choice card's rule).
+   */
+  onResolveSchedule?: ResolveScheduleCard;
 }
 
 /**
@@ -91,7 +101,12 @@ export function ChatLog({
   onApproveDataWrite,
   onDeclineDataWrite,
   onSelectCardOption,
+  onResolveSchedule,
 }: ChatLogProps): ReactElement {
+  // Under a platform-pinned HOST brain the chat has no classifier and no `schedule` lane
+  // (TASK-20261009 P2): the deterministic offer is the route, and its line says so.
+  const brain = useBrain();
+  const offerNote = brain.kind === 'host' ? OFFER.hostBrain : undefined;
   return (
     <div className="chat-log" aria-live="polite">
       {messages.map((message) => (
@@ -121,7 +136,9 @@ export function ChatLog({
             (the builder view and the run rail), so it renders once per message; the component
             memoises its parse per message and owns its own dismissal.
           */}
-          {message.role === 'user' && allows('schedule') ? <ScheduleOffer text={message.displayText} /> : null}
+          {message.role === 'user' && allows('schedule') ? (
+            <ScheduleOffer text={message.displayText} {...(offerNote !== undefined ? { note: offerNote } : {})} />
+          ) : null}
           {message.directive !== undefined ? (
             <Card className="artifact-card" data-testid="auth-directive-card">
               <span aria-hidden="true" style={{ fontSize: '1.5rem' }}>
@@ -264,6 +281,15 @@ export function ChatLog({
                 )}
               </div>
             </Card>
+          ) : null}
+          {/*
+            The SCHEDULE SUGGESTION CARD (TASK-20261009 P1, ADR-0074 §4; `schedule/ScheduleCard.tsx`):
+            what `schedule_propose` staged, with its three acts. Its answer travels back through
+            `onResolveSchedule` with this message's id — the card is UI, never a gate (ADR-0031 §3),
+            and never writes the row itself.
+          */}
+          {message.schedule !== undefined && allows('schedule') ? (
+            <ScheduleCard card={message.schedule} messageId={message.id} busy={busy} onResolve={onResolveSchedule} />
           ) : null}
           {message.artifact !== undefined ? (
             <Card className="artifact-card" data-testid="artifact-card">

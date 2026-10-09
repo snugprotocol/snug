@@ -6,7 +6,7 @@
 // boundary; every failure is an ok:false DbDriverResult (errors-as-data, docs/standards).
 import initSqlJs from 'sql.js';
 import type { BindParams, Database, SqlJsStatic } from 'sql.js';
-import { LIMITS, type DbRequestFrame } from '@snugprotocol/protocol';
+import { LIMITS, SCHEDULE_APP_INPUT_MAX_BYTES, type DbRequestFrame } from '@snugprotocol/protocol';
 import { base64ToBytes, bytesToBase64 } from './base64.js';
 import { DB_ERROR_CODES } from './errors.js';
 import { namespaceToFileName } from './namespace.js';
@@ -77,7 +77,31 @@ export interface SnugDbDriver {
   evict(namespace: string): Promise<void>;
   /** flush + close all sql.js handles. The driver is unusable afterwards. */
   close(): Promise<void>;
+  /**
+   * HOST-side kv (TASK-20261009-scheduling-framework A3, ADR-0074 §3): the same `snug_kv`
+   * table the app's own `kvGet`/`kvSet` frames reach, written by the HOST into the app's
+   * namespace — the scheduler's `snug:schedule:<runId>` handshake. `null` (or `undefined`)
+   * CLEARS the key, so the app's next `kvGet` answers no value at all (absent, never a stored
+   * null); a value is capped at `HOST_KV_VALUE_MAX_BYTES` of serialised UTF-8 — the
+   * handshake's own cap — and refused `DB_TOO_LARGE` above it. Errors are data here as at
+   * `handle`: this seat never throws.
+   */
+  kvSet(namespace: string, key: string, value: unknown): Promise<DbDriverResult>;
+  /** The host-side read of one key in an app's namespace: `{ ok: true }` with no `value` when absent. */
+  kvGet(namespace: string, key: string): Promise<DbDriverResult>;
 }
+
+/**
+ * The host-side kv value cap: the scheduler's app input rides the kv handshake inside the
+ * payload `{ taskId, runId, input }`, so the cap is the input's own (`SCHEDULE_APP_INPUT_MAX_BYTES`,
+ * the task schema's) plus 256 bytes for the two ids (≤ 64 characters each) and the keys around
+ * them — a value the task admitted always lands, and nothing meaningfully larger can be planted
+ * through this seat (Gate-5 PR-B S6).
+ */
+export const HOST_KV_VALUE_MAX_BYTES = SCHEDULE_APP_INPUT_MAX_BYTES + 256;
+
+/** The frame schema's bounds on a kv key, mirrored for the host side. */
+const KV_KEY_MAX_CHARS = 256;
 
 /** The two engine-source options, shared by both `initSqlJs` sites (`createDbDriver`, `openUserDb`). */
 export interface SqlJsEngineOptions {
@@ -402,6 +426,42 @@ export function createDbDriver(options: CreateDbDriverOptions = {}): SnugDbDrive
     return { ok: true };
   }
 
+  /** The host-side write (see `SnugDbDriver.kvSet`): a clear is a DELETE, a value is capped, the row is the app's own. */
+  function runHostKvSet(state: NamespaceState, key: string, value: unknown): DbDriverResult {
+    if (value === null || value === undefined) {
+      ensureKvTable(state.db);
+      state.db.run('DELETE FROM snug_kv WHERE key = ?', [key]);
+      markDirty(state);
+      return { ok: true };
+    }
+    const json = JSON.stringify(value);
+    if (json === undefined) return fail(DB_ERROR_CODES.INTERNAL, 'the value cannot be serialised as JSON', false);
+    const bytes = utf8Bytes(json);
+    if (bytes > HOST_KV_VALUE_MAX_BYTES) {
+      return fail(DB_ERROR_CODES.TOO_LARGE, `value is ${bytes} bytes — the host-side kv cap is ${HOST_KV_VALUE_MAX_BYTES} bytes`, false);
+    }
+    return runKvSet(state, key, value);
+  }
+
+  /** The host-side entry shared by `kvSet`/`kvGet`: the closed check, the key bounds, the open, errors as data. */
+  async function hostKv(namespace: string, key: string, op: (state: NamespaceState) => DbDriverResult): Promise<DbDriverResult> {
+    if (closed) return fail(DB_ERROR_CODES.INTERNAL, 'db driver is closed', false);
+    if (key.length === 0 || key.length > KV_KEY_MAX_CHARS) {
+      return fail(DB_ERROR_CODES.INTERNAL, `kv key must be 1–${KV_KEY_MAX_CHARS} characters`, false);
+    }
+    let state: NamespaceState;
+    try {
+      state = await openNamespace(namespace);
+    } catch (err) {
+      return fail(DB_ERROR_CODES.INIT_FAILED, `db engine failed to initialize: ${errorMessage(err)}`, true);
+    }
+    try {
+      return op(state);
+    } catch (err) {
+      return fail(DB_ERROR_CODES.INTERNAL, errorMessage(err), false);
+    }
+  }
+
   function runExport(state: NamespaceState): DbDriverResult {
     const bytes = state.db.export();
     if (bytes.byteLength > LIMITS.MAX_ARTIFACT_BYTES) {
@@ -515,6 +575,14 @@ export function createDbDriver(options: CreateDbDriverOptions = {}): SnugDbDrive
 
     flush(): Promise<void> {
       return flushAllNamespaces();
+    },
+
+    kvSet(namespace: string, key: string, value: unknown): Promise<DbDriverResult> {
+      return hostKv(namespace, key, (state) => runHostKvSet(state, key, value));
+    },
+
+    kvGet(namespace: string, key: string): Promise<DbDriverResult> {
+      return hostKv(namespace, key, (state) => runKvGet(state, key));
     },
 
     async evict(namespace: string): Promise<void> {

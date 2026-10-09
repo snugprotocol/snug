@@ -14,9 +14,9 @@ import type { ScheduleRun, ScheduledTask } from '@snugprotocol/protocol';
 import { Button } from '../ui/Button.js';
 import { RESULT_STATUS_WORD, capped, needsYou, noHandler } from './copy.js';
 import { RESULTS } from './copy.page.js';
-import { relativeTime, type AppIndex, type ResultRow } from './pageModel.js';
+import { appRunAppOf, relativeTime, type AppIndex, type ResultRow } from './pageModel.js';
 import { resultHref } from './routes.js';
-import { markAllSeen } from './scheduler.js';
+import { markAllSeen, runNow } from './scheduler.js';
 import { appIdsOf } from './taskShape.js';
 
 /** The one line a result reads as: the first step's summary, else the status's own sentence. */
@@ -69,6 +69,13 @@ export function ResultsList({ rows, apps, now }: ResultsListProps): ReactElement
             const names = appIds.map((appId) => apps.name(appId));
             const firstApp = appIds[0];
             const needs = run.status === 'needs-you' ? needsYou(firstApp === undefined ? item.title : apps.name(firstApp), run.reason ?? 'change anything') : undefined;
+            // *run now and review* (S2): open the app the schedule RUNS first, then run — the one
+            // run that rides the live frame is the user's own, under the page's ordinary gate.
+            const runApp = appRunAppOf(item.steps) ?? firstApp;
+            const runNowAndReview = (): void => {
+              if (runApp !== undefined) navigate(`/run/${encodeURIComponent(runApp)}`);
+              void runNow(run.taskId);
+            };
             const word = RESULT_STATUS_WORD[run.status];
             return (
               <li
@@ -89,7 +96,7 @@ export function ResultsList({ rows, apps, now }: ResultsListProps): ReactElement
                   </span>
                 </Link>
                 {needs !== undefined && firstApp !== undefined ? (
-                  <Button variant="ghost" className="schedule-result-act" onClick={() => navigate(`/run/${firstApp}`)} data-testid="result-needs-you-act">
+                  <Button variant="ghost" className="schedule-result-act" onClick={runNowAndReview} data-testid="result-needs-you-act">
                     {needs.action}
                   </Button>
                 ) : null}

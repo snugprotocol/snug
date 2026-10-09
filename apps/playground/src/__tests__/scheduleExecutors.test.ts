@@ -13,10 +13,10 @@ import { SCHEDULE_STEP_SUMMARY_MAX_CHARS, type ScheduleStep, type ScheduledTask 
 import type { AgentTransport } from '@snugprotocol/runner';
 import { describe, expect, it, vi } from 'vitest';
 
-import { appMissing } from '../schedule/copy.js';
+import { NO_HIDDEN_FRAME, blockedAppRunDeps, type AppRunDeps } from '../schedule/appRun.js';
+import { appMissing, blockedHere } from '../schedule/copy.js';
 import type { StepContext } from '../schedule/engine-types.js';
 import {
-  APP_RUN_LATER_SUMMARY,
   CANCELLED_SUMMARY,
   WITHHELD_SUMMARY,
   createStepExecutor,
@@ -98,17 +98,22 @@ describe('dispatch — one executor per step kind', () => {
     });
   });
 
-  it('app-run → refused by name in PR-A (the hidden frame arrives with PR-B); nothing spent', async () => {
+  it('app-run → the hidden-frame seams (PR-B, `appRun.ts`); a composition WITHOUT them is blocked by name, nothing spent', async () => {
     const step: ScheduleStep = { kind: 'app-run', appId: 'app-1' };
-    const outcome = await executeStep(step, context([step]));
-    expect(outcome).toEqual({ status: 'refused', summary: APP_RUN_LATER_SUMMARY, calls: { ai: 0, net: 0 } });
-    expect(APP_RUN_LATER_SUMMARY).toBe('running an app on a schedule arrives in a later release');
+    const without = createStepExecutor({ appRun: blockedAppRunDeps(), transportFor: () => undefined });
+    expect(await without(step, context([step]))).toEqual({ status: 'blocked', summary: blockedHere(NO_HIDDEN_FRAME).text, calls: { ai: 0, net: 0 } });
+    // With them: the seams are reached (the platform is the first thing the arm asks).
+    const platform = vi.fn(() => ({ kind: 'web' as const, capabilities: { subscriptionMode: true, hubSyncOrigin: true, lanHttpPrivate: false } }));
+    const appRun = { platform } as unknown as AppRunDeps;
+    const outcome = await createStepExecutor({ transportFor: () => undefined, appRun })(step, context([step]));
+    expect(platform).toHaveBeenCalledTimes(1);
+    expect(outcome.status).toBe('blocked'); // no scheduler seat on that fake platform — the arm refused by name (appRunHandshake.test.tsx drives the rest)
   });
 
   it('app-think → the injected transport is asked for the step’s app and its answer is the summary', async () => {
     const transport = fakeTransport(JSON.stringify({ answer: 'nothing changed overnight' }));
     const transportFor = vi.fn(() => transport);
-    const execute = createStepExecutor({ transportFor });
+    const execute = createStepExecutor({ appRun: blockedAppRunDeps(), transportFor });
     const outcome = await execute(think, context([think]));
     expect(outcome).toEqual({ status: 'ok', summary: 'nothing changed overnight', calls: { ai: 1, net: 0 } });
     expect(transportFor).toHaveBeenCalledWith('app-1');
@@ -126,7 +131,7 @@ describe('dispatch — one executor per step kind', () => {
 
 describe('the shared discipline', () => {
   it('a throw inside an executor is a failed outcome carrying the message', async () => {
-    const execute = createStepExecutor({
+    const execute = createStepExecutor({ appRun: blockedAppRunDeps(),
       transportFor: () => {
         throw new Error('no transport today');
       },
@@ -141,7 +146,7 @@ describe('the shared discipline', () => {
         throw 'plain string'; // eslint-disable-line @typescript-eslint/only-throw-error -- the point of the test
       },
     });
-    const execute = createStepExecutor({ transportFor: () => fakeTransport('{}') });
+    const execute = createStepExecutor({ appRun: blockedAppRunDeps(), transportFor: () => fakeTransport('{}') });
     const outcome = await execute(think, context([think], { db }));
     expect(outcome.status).toBe('failed');
     expect(outcome.summary).toBe('plain string');
@@ -151,7 +156,7 @@ describe('the shared discipline', () => {
     const controller = new AbortController();
     controller.abort();
     const transport = fakeTransport('{"answer":"late"}');
-    const execute = createStepExecutor({ transportFor: () => transport });
+    const execute = createStepExecutor({ appRun: blockedAppRunDeps(), transportFor: () => transport });
     const outcome = await execute(think, context([think], { signal: controller.signal }));
     expect(outcome).toEqual({ status: 'failed', summary: CANCELLED_SUMMARY, calls: { ai: 0, net: 0 } });
     expect(CANCELLED_SUMMARY).toBe('cancelled');
@@ -166,7 +171,7 @@ describe('the shared discipline', () => {
         return Promise.resolve({ ok: true as const, text: '{"answer":"too late to matter"}' });
       },
     };
-    const execute = createStepExecutor({ transportFor: () => transport });
+    const execute = createStepExecutor({ appRun: blockedAppRunDeps(), transportFor: () => transport });
     const outcome = await execute(think, context([think], { signal: controller.signal }));
     expect(outcome.status).toBe('failed');
     expect(outcome.summary).toBe(CANCELLED_SUMMARY);
@@ -174,14 +179,14 @@ describe('the shared discipline', () => {
 
   it('a summary is capped at SCHEDULE_STEP_SUMMARY_MAX_CHARS', async () => {
     const long = 'x'.repeat(SCHEDULE_STEP_SUMMARY_MAX_CHARS + 500);
-    const execute = createStepExecutor({ transportFor: () => fakeTransport(JSON.stringify({ answer: long })) });
+    const execute = createStepExecutor({ appRun: blockedAppRunDeps(), transportFor: () => fakeTransport(JSON.stringify({ answer: long })) });
     const outcome = await execute(think, context([think]));
     expect(outcome.status).toBe('ok');
     expect(outcome.summary).toHaveLength(SCHEDULE_STEP_SUMMARY_MAX_CHARS);
   });
 
   it('a credential-shaped summary is WITHHELD whole — the fixed sentence, never the value', async () => {
-    const execute = createStepExecutor({
+    const execute = createStepExecutor({ appRun: blockedAppRunDeps(),
       transportFor: () => fakeTransport(JSON.stringify({ answer: 'use Bearer eyJhbGciOiJIUzI1NiJ9.abcdef0123456789.0123456789abcdef to call it' })),
     });
     const outcome = await execute(think, context([think]));
@@ -194,7 +199,7 @@ describe('the shared discipline', () => {
     const transport: AgentTransport = {
       send: () => Promise.resolve({ ok: false as const, code: 'HOST_ERROR', message: 'provider said: invalid key sk-ant-api03-0123456789abcdefghijklmnop', retryable: false }),
     };
-    const execute = createStepExecutor({ transportFor: () => transport });
+    const execute = createStepExecutor({ appRun: blockedAppRunDeps(), transportFor: () => transport });
     const outcome = await execute(think, context([think]));
     expect(outcome.status).toBe('failed');
     expect(outcome.summary).toBe(WITHHELD_SUMMARY);
@@ -202,7 +207,7 @@ describe('the shared discipline', () => {
 
   it('a blocked app-think (the app was deleted) reads the copy module’s sentence', async () => {
     const gone: ScheduleStep = { kind: 'app-think', appId: 'app-gone', prompt: 'hi', context: { maxRows: 50 } };
-    const execute = createStepExecutor({ transportFor: () => fakeTransport('{}') });
+    const execute = createStepExecutor({ appRun: blockedAppRunDeps(), transportFor: () => fakeTransport('{}') });
     const outcome = await execute(gone, context([gone]));
     expect(outcome).toEqual({ status: 'blocked', summary: appMissing.text, calls: { ai: 0, net: 0 } });
   });

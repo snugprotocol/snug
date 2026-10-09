@@ -12,12 +12,11 @@
 // the hint says.
 //
 // "NEVER LET APPS SUGGEST SCHEDULES" is the localStorage flag `NO_SUGGESTIONS_KEY`
-// (`snug:schedule-no-suggestions`). PR-B's suggestion strip (P3) reads it before rendering any
-// app's request; nothing in PR-A consumes it, so the switch is NOT rendered yet — a control
-// that changes nothing would be a lie on a Settings page. The key stays exported here so PR-B
-// reads the name this card will write, and the sentences stay in `copy.page.SETTINGS`. Both
-// flags are per browser on purpose: they are about THIS browser's notifications and THIS
-// person's patience, not facts of the file.
+// (`snug:schedule-no-suggestions`). The suggestion strip's intake (`scheduleRequest.ts`, P3)
+// reads it before accepting any app's request, so the switch is rendered now that it has a
+// reader (PR-A withheld it — a control that changes nothing would be a lie on a Settings page).
+// The sentences stay in `copy.page.SETTINGS`. Both flags are per browser on purpose: they are
+// about THIS browser's notifications and THIS person's patience, not facts of the file.
 
 import { useId, useState } from 'react';
 import type { ReactElement } from 'react';
@@ -33,8 +32,7 @@ import { clearHistory, setGlobalPause, useScheduler } from './scheduler.js';
 
 /** The opt-in flag the web seat reads (`'1'` when on) — `platform/webNotify.ts` owns the name. */
 export const NOTIFY_OPT_IN_KEY = WEB_NOTIFY_OPT_IN_KEY;
-// PR-B: the mute-every-app flag the suggestion strip reads (`'1'` when on). The switch that
-// writes it returns to this card with PR-B, when something reads it.
+/** The mute-every-app flag the suggestion strip's intake reads (`'1'` when on) — written by the switch below. */
 export const NO_SUGGESTIONS_KEY = 'snug:schedule-no-suggestions';
 
 export function readFlag(key: string): boolean {
@@ -90,8 +88,15 @@ export function ScheduleSettingsCard(): ReactElement {
   const [clearArmed, setClearArmed] = useState(false);
   const [cleared, setCleared] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [noSuggestions, setNoSuggestions] = useState(() => readFlag(NO_SUGGESTIONS_KEY));
 
   const pauseId = useId();
+  const suggestionsId = useId();
+
+  const toggleSuggestions = (next: boolean): void => {
+    writeFlag(NO_SUGGESTIONS_KEY, next);
+    setNoSuggestions(next);
+  };
 
   const askForNotifications = async (): Promise<void> => {
     if (typeof Notification === 'undefined') return;
@@ -179,6 +184,14 @@ export function ScheduleSettingsCard(): ReactElement {
             </span>
           ) : null}
         </div>
+      </div>
+
+      <div className="settings-row schedule-settings-row">
+        <div className="schedule-settings-copy">
+          <strong id={suggestionsId}>{SETTINGS.noSuggestions}</strong>
+          <span className="hint">{SETTINGS.noSuggestionsHint}</span>
+        </div>
+        <Switch checked={noSuggestions} onChange={toggleSuggestions} labelledBy={suggestionsId} testId="schedule-no-suggestions" />
       </div>
 
       <div className="settings-row schedule-settings-row">

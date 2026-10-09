@@ -11,6 +11,8 @@ import { describe, expect, it, vi } from 'vitest';
 import type { AgentAdapter, AgentTurnEvent } from '@snugprotocol/adapters';
 
 import { MIN_ROUTING_CONFIDENCE, routeChatMessage, type ChatRoute } from '../agent/chatRouter.js';
+import { SCHEDULE_PROPOSE_TOOL_NAME } from '../agent/tools.js';
+import { laneToolsFor } from '../agent/useBuilderChat.js';
 import { installTestUserDb } from './userdbTestHelper.js';
 
 const HTML = '<!DOCTYPE html><html><body>ledger</body></html>';
@@ -76,6 +78,36 @@ describe('lane dispatch', () => {
       lane: 'provider',
       intent: 'provider_write',
     });
+  });
+
+  it('routes a schedule ask to its own lane (TASK-20261009 P2, ADR-0074 §4)', async () => {
+    expect(await route('{"intent":"schedule","confidence":0.93}', 'every Friday at 5, tell me what I spent')).toEqual({
+      lane: 'schedule',
+      intent: 'schedule',
+    });
+  });
+
+  it('a schedule route never sees artifact_write — the lane holds exactly schedule_propose', async () => {
+    const db = await installTestUserDb();
+    const app = db.installApp({ displayName: 'Pocket Ledger', html: HTML });
+    const decision = await route('{"intent":"schedule","confidence":0.93}');
+    expect(decision.lane).toBe('schedule');
+    const tools = await laneToolsFor(decision as Exclude<ChatRoute, { lane: 'clarify' }>, {
+      db,
+      contextTarget: app.appId,
+      threadId: `app:${app.appId}`,
+      signal: new AbortController().signal,
+      presentCardTool: { def: { name: 'present_card', description: 'x', inputSchema: { type: 'object' } }, run: () => 'x' },
+      onDataProposal: () => true,
+      onProviderFailureCode: () => undefined,
+      onScheduleProposal: () => true,
+    });
+    const names = tools?.map((tool) => tool.def.name);
+    expect(names).toEqual([SCHEDULE_PROPOSE_TOOL_NAME]);
+    expect(names).not.toContain('artifact_write');
+    expect(names).not.toContain('artifact_edit');
+    expect(names).not.toContain('data_propose_write');
+    expect(tools, 'never the builder set by fall-through').toBeDefined();
   });
 
   it('tolerates a fenced or chatty classification', async () => {

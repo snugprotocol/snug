@@ -12,6 +12,7 @@ import type { ReactElement } from 'react';
 import { getPlatform } from '../platform/platform.js';
 import { Button } from '../ui/Button.js';
 import { ConfirmOverlay } from '../ui/ConfirmOverlay.js';
+import { UpdatePausesNote } from './UpdatePausesNote.js';
 
 export interface AgentUpdateControlsProps {
   appId: string;
@@ -75,6 +76,7 @@ export function AgentUpdateControls({ appId, onUpdated }: AgentUpdateControlsPro
             is lost — your current version stays in the versions panel and you can revert to it any time. Your data, chats
             and docs are untouched either way.
           </p>
+          <UpdatePausesNote appId={appId} />
           <div className="field-row net-confirm-actions">
             <Button variant="ghost" data-testid="agent-update-cancel" onClick={() => setConfirmOpen(false)}>
               keep my version

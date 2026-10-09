@@ -77,6 +77,16 @@ describe('the few-shot outputs are a real contract', () => {
     expect(exampleOutputs().some((block) => parseChatIntent(block)?.clarification !== undefined)).toBe(true);
   });
 
+  it('teaches the schedule intent by rule and by example — a time plus something to happen then (TASK-20261009 P2)', () => {
+    const scheduled = exampleOutputs().filter((block) => parseChatIntent(block)?.intent === 'schedule');
+    expect(scheduled).toHaveLength(1);
+    expect(rendered.system).toContain('`schedule` — something should happen LATER or on a cadence');
+    expect(rendered.system).toMatch(/A TIME or a recurrence plus something to happen then is `schedule`/);
+    // The rule's two edges, stated: a question answered now is not a schedule; a feature that mentions time is not either.
+    expect(rendered.system).toContain('A question answered NOW is not a');
+    expect(rendered.system).toContain('is `app_change`');
+  });
+
   it('includes an example of a message TRYING to steer the classifier', () => {
     // The steering case is the one a classifier gets wrong most expensively, so it is
     // taught by example rather than by rule alone.

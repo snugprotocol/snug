@@ -28,6 +28,7 @@ import { initSync, signOut } from './state/sync.js';
 import { toggleTheme, useTheme } from './state/theme.js';
 import { bootUserDb, recoverFresh, retryUserDbBoot, useUserDbStatus } from './state/userdb.js';
 import { ConnectionWizardNote } from './connections/ConnectionWizardNote.js';
+import { ScheduledRunHost } from './schedule/ScheduledRunHost.js';
 import { ConnectionWizardSheet } from './connections/ConnectionWizardSheet.js';
 import { OAuthCallbackPage } from './connections/OAuthCallbackPage.js';
 import { NetConfirmDialog } from './run/NetConfirmDialog.js';
@@ -351,6 +352,11 @@ export function App(): ReactElement {
           reason: refusals happen from every entry point, and a per-view note would be
           silent exactly where the refused click came from (F4, TASK-20260812). */}
       <ConnectionWizardNote />
+      {/* The scheduler's hidden app frame (TASK-20261009 A2, ADR-0074 §3): ONE hidden
+          `SnugAppFrame` at a time for the queue's current *Run [app]* step — app-level
+          because a scheduled run happens on whatever route the user is on, and the queue
+          outlives every view. 1×1 and visibility:hidden, never display:none (rAF stalls). */}
+      <ScheduledRunHost />
       {/* Desktop .snug open-with confirm (W2b): app-level for the same reason as the
           wizard — an OS open event can arrive on any route. Renders nothing on web. */}
       <OpenUserFileConfirmDialog />

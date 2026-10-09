@@ -47,11 +47,14 @@
 //  counters, then the task (`applyRunOutcome`, `ranThrough` = max(ranThrough, dueAt)) —
 //  re-read fresh, because the user may have edited it while the run was in flight, and
 //  WITHOUT touching `updatedAt`: that stamp is the user's edits', and a run must not change
-//  what a backup compares by (Gate-5 M16). A notification is HOST-DECIDED (§6): the
-//  executor's `alert` is a suggestion the queue honours once per run, only when the task's
-//  `alert` is `notification` and the seat has `notify`, with the body prefixed by the
-//  schedule's title and cut to the protocol's 120 characters. The seat is deliberately NOT
-//  handed to the executor's context: one decider, one notification.
+//  what a backup compares by (Gate-5 M16). A notification is HOST-DECIDED (§6; Gate-5 PR-B
+//  S3): the executor's `alert` is a suggestion the queue honours once per run — the FIRST
+//  step that suggested one — only when the task's `alert` is `notification` and the seat has
+//  `notify`. The TITLE is never the app's or the step's to set (`hostNotification`): for an
+//  app step it is the app's display name and the body reads "App: title — body"; for a
+//  reminder it is the schedule's title and the body is the reminder's, prefixed by that
+//  title; both cut to the protocol's 120 characters. The seat is deliberately NOT handed to
+//  the executor's context: one decider, one notification.
 //
 //  SIGNALS. `scheduleRevisionStore` is bumped after every write (and `onChange`, when given),
 //  so every view that lists schedules or results re-reads the file.
@@ -214,6 +217,18 @@ export function fitRunRow(row: ScheduleRun): ScheduleRun {
 /** The reason a minimal row carries when the full result could not be written (M17). */
 export const RESULT_TOO_LARGE_REASON = 'result too large';
 
+/**
+ * The notification as the HOST shows it (§6, S3): the title is the host's — an app's display
+ * name for an app step, the schedule's title for a reminder — never a line the app or the
+ * step authored, so a result cannot impersonate Snug or another app in the system tray.
+ */
+export function hostNotification(db: UserDb, schedule: ScheduledTask, step: ScheduleStep, alert: { title: string; body: string }): { title: string; body: string } {
+  const scheduleTitle = schedule.title;
+  if (step.kind === 'notify') return { title: scheduleTitle, body: cut(`${scheduleTitle} · ${alert.body}`, SCHEDULE_NOTIFY_BODY_MAX_CHARS) };
+  const appName = db.getApp(step.appId)?.displayName ?? scheduleTitle;
+  return { title: appName, body: cut(`${appName}: ${alert.title} — ${alert.body}`, SCHEDULE_NOTIFY_BODY_MAX_CHARS) };
+}
+
 /** A promise that REJECTS when the signal aborts — the executor's opponent in the race (M7). Already handled: a late abort is never an unhandled rejection. */
 function abortedPromise(signal: AbortSignal): Promise<never> {
   const promise = new Promise<never>((_resolve, reject) => {
@@ -307,7 +322,8 @@ export function createRunQueue(deps: RunQueueDeps): RunQueue {
     const results: StepResult[] = [];
     const calls = { ...ZERO_CALLS };
     const proposals: ScheduleProposalItem[] = [];
-    let alert: StepOutcome['alert'];
+    /** The first alert any step suggested, with the step that suggested it — the host composes the notification from both. */
+    let alert: { step: ScheduleStep; alert: { title: string; body: string } } | undefined;
     let capped = false;
     const context: StepContext = {
       task,
@@ -315,6 +331,10 @@ export function createRunQueue(deps: RunQueueDeps): RunQueue {
       db,
       signal: controller.signal,
       now: deps.now,
+      // PR-B seams: a step may ask for THIS run to be interrupted with a reason (the hidden
+      // frame when the app opens visibly), and may read what the run already spent.
+      interrupt: abort,
+      spent: () => ({ ...calls }),
     };
 
     try {
@@ -360,7 +380,7 @@ export function createRunQueue(deps: RunQueueDeps): RunQueue {
         calls.ai += outcome.calls.ai;
         calls.net += outcome.calls.net;
         if (outcome.proposals !== undefined) proposals.push(...outcome.proposals);
-        alert ??= outcome.alert;
+        if (alert === undefined && outcome.alert !== undefined) alert = { step, alert: outcome.alert };
       }
     } finally {
       clearTimeout(timer);
@@ -413,10 +433,7 @@ export function createRunQueue(deps: RunQueueDeps): RunQueue {
 
     if (fresh?.alert === 'notification' && alert !== undefined) {
       const notify = deps.notify?.();
-      if (notify !== undefined) {
-        const title = fresh.title;
-        void notify({ title: alert.title, body: cut(`${title} · ${alert.body}`, SCHEDULE_NOTIFY_BODY_MAX_CHARS) }).catch(() => undefined);
-      }
+      if (notify !== undefined) void notify(hostNotification(db, fresh, alert.step, alert.alert)).catch(() => undefined);
     }
   }
 

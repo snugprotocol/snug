@@ -13,7 +13,7 @@
 // print `copy.RESULT_STATUS_WORD` for every run status — no surface has words of its own.
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { MemoryRouter, Route, Routes } from 'react-router';
+import { MemoryRouter, Route, Routes, type NavigateFunction, type NavigateOptions, type To } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { UserDb } from '@snugprotocol/db';
@@ -21,7 +21,7 @@ import { RUN_STATUSES, SCHEDULE_PROPOSAL_TTL_MS, type ScheduleProposalItem, type
 
 import type { SnugPlatform } from '../platform/platform.js';
 import { RESULT_STATUS_WORD, capped, needsYou, noHandler } from '../schedule/copy.js';
-import { CAPPED_WHAT, DECLINED, DRIFTED, EXPIRED, NO_APP_FOR_CHANGES, RESULT_MISSING, applied, callsLine, hostWord, interruptedWhy, wouldChange } from '../schedule/copy.result.js';
+import { CAPPED_WHAT, DECLINED, DRIFTED, EXPIRED, NO_APP_FOR_CHANGES, RESULT_MISSING, applied, callsLine, hostWord, interruptedWhy, openingToRun, wouldChange } from '../schedule/copy.result.js';
 import type { StepContext, StepExecutor } from '../schedule/engine-types.js';
 import { outcomeWord } from '../schedule/MissedCard.js';
 import type { AppIndex } from '../schedule/pageModel.js';
@@ -36,6 +36,33 @@ declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean | undefined;
 }
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+
+/** The ORDER of the two acts behind *run now and review* (S2): the navigation, then the manual run. */
+const trace = vi.hoisted(() => ({ calls: [] as string[] }));
+vi.mock('react-router', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('react-router')>();
+  return {
+    ...actual,
+    useNavigate: (): NavigateFunction => {
+      const navigate = actual.useNavigate();
+      const traced: NavigateFunction = (to: To | number, options?: NavigateOptions) => {
+        trace.calls.push(`navigate:${typeof to === 'number' ? to : typeof to === 'string' ? to : (to.pathname ?? '')}`);
+        return typeof to === 'number' ? navigate(to) : navigate(to, options);
+      };
+      return traced;
+    },
+  };
+});
+vi.mock('../schedule/scheduler.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../schedule/scheduler.js')>();
+  return {
+    ...actual,
+    runNow: (taskId: string) => {
+      trace.calls.push(`run-now:${taskId}`);
+      return actual.runNow(taskId);
+    },
+  };
+});
 
 const NOW = Date.parse('2026-10-09T12:05:00.000Z');
 const DUE = '2026-10-09T12:00:00.000Z';
@@ -171,6 +198,7 @@ async function coffeeCents(): Promise<unknown[]> {
 beforeEach(async () => {
   __resetSchedulerForTests();
   executed.length = 0;
+  trace.calls.length = 0;
   db = await installTestUserDb();
   db.installApp({ appId: 'ledger', displayName: 'Ledger', html: '<html>ledger</html>' });
   await db.applyAppDdl('ledger', ['CREATE TABLE expenses (id INTEGER PRIMARY KEY, label TEXT NOT NULL, cents INTEGER NOT NULL)']);
@@ -410,12 +438,50 @@ describe('the states with one act', () => {
     const card = el.querySelector('[data-testid="schedule-result-needs-you"]');
     expect(card?.textContent).toContain(needsYou('Ledger', 'make changes').text);
     expect(el.querySelector('[data-testid="schedule-status"]')?.textContent).toBe('needs you');
+    // A schedule that only ASKS runs in place: no hint about opening an app, no navigation (S2).
+    expect(el.querySelector('[data-testid="schedule-result-needs-you-hint"]')).toBeNull();
     await act(async () => {
       button(el, 'run now and review')?.click();
     });
     await vi.waitFor(() => expect(executed).toHaveLength(1));
     expect(executed[0]?.ctx.run.trigger).toBe('manual');
     expect(executed[0]?.step).toEqual(THINK);
+    expect(trace.calls).toEqual(['run-now:t1']);
+    expect(el.querySelector('[data-testid="run-route"]')).toBeNull();
+  });
+
+  it('needs-you on a schedule that RUNS an app (S2): the act says it will open the app, opens it FIRST, then enqueues the manual run', async () => {
+    const RUN: ScheduleStep = { kind: 'app-run', appId: 'ledger' };
+    seed(task({ steps: [NOTIFY, RUN] }), run({ status: 'needs-you', reason: 'refused', steps: [{ status: 'ok' }, { status: 'refused' }], calls: { ai: 0, net: 0 } }));
+    await initScheduler(deps());
+    const el = await open();
+    const card = el.querySelector('[data-testid="schedule-result-needs-you"]');
+    expect(card?.textContent).toContain(needsYou('Ledger', 'make changes').text);
+    expect(el.querySelector('[data-testid="schedule-result-needs-you-hint"]')?.textContent).toBe(openingToRun('Ledger'));
+    await act(async () => {
+      button(el, 'run now and review')?.click();
+    });
+    await settle();
+    // The navigation, THEN the act — the engine delivers a manual run only to a live frame.
+    expect(trace.calls).toEqual(['navigate:/run/ledger', 'run-now:t1']);
+    expect(el.querySelector('[data-testid="run-route"]')).not.toBeNull();
+    expect(el.querySelector('[data-testid="schedule-result-detail"]')).toBeNull();
+  });
+
+  it('needs-you where the refused step is a *run <app>* step among others: that step’s app is the one opened (S2)', async () => {
+    db.installApp({ appId: 'standup', displayName: 'Standup', html: '<html>standup</html>' });
+    seed(
+      task({ steps: [{ kind: 'app-run', appId: 'ledger' }, { kind: 'app-run', appId: 'standup' }] }),
+      run({ status: 'needs-you', reason: 'refused', steps: [{ status: 'ok' }, { status: 'refused' }], calls: { ai: 0, net: 0 } }),
+    );
+    await initScheduler(deps());
+    const el = await open();
+    expect(el.querySelector('[data-testid="schedule-result-needs-you-hint"]')?.textContent).toBe(openingToRun('Standup'));
+    await act(async () => {
+      button(el, 'run now and review')?.click();
+    });
+    await settle();
+    expect(trace.calls).toEqual(['navigate:/run/standup', 'run-now:t1']);
   });
 
   it('no-handler: the sentence and "open <app>" to the run route', async () => {

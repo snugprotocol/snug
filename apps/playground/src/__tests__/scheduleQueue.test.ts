@@ -485,7 +485,7 @@ describe('after the steps: the row, the counters, the task, the notification', (
     expect(laterInstant('garbage', DUE)).toBe(DUE);
   });
 
-  it('notifies ONCE per run, host-decided: only when the task says `notification`, with the body prefixed by the title and cut to 120', async () => {
+  it('notifies ONCE per run, host-decided: only when the task says `notification`; a reminder’s title is the SCHEDULE title, its body prefixed by that title and cut to 120', async () => {
     const t = seed({ alert: 'notification', steps: [NOTIFY, NOTIFY] });
     const notify = vi.fn<(n: { title: string; body: string }) => Promise<'shown' | 'denied' | 'unavailable'>>(async () => 'shown');
     const long = 'x'.repeat(200);
@@ -497,7 +497,32 @@ describe('after the steps: the row, the counters, the task, the notification', (
     const body = notify.mock.calls[0]![0].body;
     expect(body.startsWith('Hourly ledger · xxx')).toBe(true);
     expect(body).toHaveLength(SCHEDULE_NOTIFY_BODY_MAX_CHARS);
-    expect(notify.mock.calls[0]![0].title).toBe('Water');
+    expect(notify.mock.calls[0]![0].title).toBe('Hourly ledger'); // S3: the title is the host's, never the step's or the app's
+  });
+
+  it('an app-run alert never sets the notification title: the title is the app’s display name, the body "App: title — body" cut to 120 (S3)', async () => {
+    const t = seed({ alert: 'notification', steps: [{ kind: 'app-run', appId: 'ledger' }] });
+    const notify = vi.fn<(n: { title: string; body: string }) => Promise<'shown' | 'denied' | 'unavailable'>>(async () => 'shown');
+    const forged = 'Snug: your file is corrupt';
+    const rec = recorder(() => ok('refreshed', { ai: 0, net: 0 }, { alert: { title: forged, body: 'x'.repeat(200) } }));
+    const q = queue(rec.execute, { notify: () => notify });
+    q.enqueue(item(t));
+    await q.idle();
+    expect(notify).toHaveBeenCalledTimes(1);
+    const shown = notify.mock.calls[0]![0];
+    expect(shown.title).toBe('Ledger');
+    expect(shown.body.startsWith(`Ledger: ${forged} — xxx`)).toBe(true);
+    expect(shown.body).toHaveLength(SCHEDULE_NOTIFY_BODY_MAX_CHARS);
+  });
+
+  it('the first alert of a run decides, and it is read with its own step’s kind: a reminder after an app-run does not relabel the app’s alert', async () => {
+    const t = seed({ alert: 'notification', steps: [{ kind: 'app-run', appId: 'ledger' }, NOTIFY] });
+    const notify = vi.fn<(n: { title: string; body: string }) => Promise<'shown' | 'denied' | 'unavailable'>>(async () => 'shown');
+    const rec = recorder((step) => (step.kind === 'app-run' ? ok('refreshed', { ai: 0, net: 0 }, { alert: { title: 'Weather', body: 'sunny' } }) : ok('reminded', { ai: 0, net: 0 }, { alert: { title: 'Water', body: 'the ferns' } })));
+    const q = queue(rec.execute, { notify: () => notify });
+    q.enqueue(item(t));
+    await q.idle();
+    expect(notify.mock.calls[0]![0]).toEqual({ title: 'Ledger', body: 'Ledger: Weather — sunny' });
   });
 
   it('never notifies for an `inbox` task, nor without a seat, nor when the executor suggested nothing', async () => {
@@ -627,5 +652,75 @@ describe('the bound and the aborts', () => {
     const q = queue(recorder().execute);
     expect(() => q.cancelCurrent()).not.toThrow();
     expect(() => q.abortAll('x')).not.toThrow();
+  });
+});
+
+describe('*Run [app]* rows (PR-B A2/A4/A5): what the hidden frame spends and says rides the row', () => {
+  const APP_RUN: ScheduleStep = { kind: 'app-run', appId: 'ledger' };
+  const state = () => ({ watermark: CREATED, globalPause: false, daily: { date: DUE.slice(0, 10), ai: 0, net: 0 } });
+
+  it('an app-run step’s net count (and its AI count) lands on the run row and on the day’s counters', async () => {
+    db.setSchedulerState(state());
+    const t = seed({ steps: [APP_RUN] });
+    const q = queue(recorder(() => ok('refreshed', { ai: 1, net: 3 })).execute);
+    q.enqueue(item(t));
+    await q.idle();
+    expect(rows()[0]).toMatchObject({ status: 'ok', calls: { ai: 1, net: 3 }, steps: [{ status: 'ok', summary: 'refreshed' }] });
+    expect(db.getSchedulerState()?.daily).toEqual({ date: DUE.slice(0, 10), ai: 1, net: 3 });
+  });
+
+  it('a `refused` app-run step (the refusing gate said no) folds the run to `needs-you` with the step’s own sentence as the reason', async () => {
+    const t = seed({ steps: [APP_RUN, NOTIFY] });
+    const q = queue(recorder((step) => (step.kind === 'app-run' ? { status: 'refused', summary: 'Ledger needs your OK — Snug doesn’t post to api.github.com while you’re away', calls: { ai: 0, net: 1 } } : ok('reminded'))).execute);
+    q.enqueue(item(t));
+    await q.idle();
+    expect(rows()[0]).toMatchObject({
+      status: 'needs-you',
+      reason: 'Ledger needs your OK — Snug doesn’t post to api.github.com while you’re away',
+      calls: { ai: 0, net: 1 },
+      steps: [{ status: 'refused' }, { status: 'ok', summary: 'reminded' }], // the reminder after it still ran
+    });
+    expect(db.getScheduledTask('t1')?.consecutiveFailures).toBe(0); // the gate's refusal is not the app's failure
+  });
+
+  it('a `no-handler` app-run step (the app never announced) folds the run to `no-handler` and counts toward the failure pause', async () => {
+    const t = seed({ steps: [APP_RUN] });
+    const q = queue(recorder(() => ({ status: 'no-handler', summary: 'Ledger doesn’t know how to run on a schedule yet', calls: { ai: 0, net: 0 } })).execute);
+    q.enqueue(item(t));
+    await q.idle();
+    expect(rows()[0]?.status).toBe('no-handler');
+    expect(db.getScheduledTask('t1')?.consecutiveFailures).toBe(1);
+  });
+
+  it('the context’s `interrupt(reason)` seam records the run `interrupted` with THAT reason — "app opened" (mutation: drop `interrupt` from the context → red)', async () => {
+    const t = seed({ steps: [APP_RUN, NOTIFY] });
+    const rec = recorder(
+      (_step, ctx) =>
+        new Promise<StepOutcome>((resolve, reject) => {
+          ctx.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+          ctx.interrupt?.('app opened');
+          if (ctx.interrupt === undefined) resolve(ok());
+        }),
+    );
+    const q = queue(rec.execute);
+    q.enqueue(item(t));
+    await q.idle();
+    expect(rows()[0]).toMatchObject({ status: 'interrupted', reason: 'app opened', steps: [{ status: 'skipped' }, { status: 'skipped' }] });
+  });
+
+  it('`spent()` tells a step what the run already charged, so a step can ask the ceiling honestly', async () => {
+    const t = seed({ steps: [APP_RUN, APP_RUN] });
+    const seen: Array<{ ai: number; net: number } | undefined> = [];
+    const rec = recorder((_step, ctx) => {
+      seen.push(ctx.spent?.());
+      return ok('x', { ai: 1, net: 2 });
+    });
+    const q = queue(rec.execute);
+    q.enqueue(item(t));
+    await q.idle();
+    expect(seen).toEqual([
+      { ai: 0, net: 0 },
+      { ai: 1, net: 2 },
+    ]);
   });
 });

@@ -25,7 +25,9 @@ import RunView from '../run/RunView.js';
 import { HubView } from '../views/HubView.js';
 import { SettingsView } from '../views/SettingsView.js';
 import { modeStore } from '../state/mode.js';
+import { schedulerStore } from '../schedule/scheduler.js';
 import { __resetSharedInboxForTests, listSharedEntries, receiveSharedBundle, sharedOpenRequestStore, sharedRouteIdFor } from '../share/sharedInbox.js';
+import { makeTask } from './scheduleUiHarness.js';
 import { installTestUserDb } from './userdbTestHelper.js';
 
 declare global {
@@ -319,6 +321,55 @@ describe('the shared preview route (AC13)', () => {
     expect(db.getConnection(app.appId, 'weather')?.status).toBe('approved');
     expect(db.getAppDoc(app.appId, 'vision')?.content).toContain('A wall.'); // absent-only: the recipient's doc survives
     expect(listSharedEntries()).toEqual([]);
+  });
+
+  it('the update confirm names the schedule the update will PAUSE (TASK-20261009 E8) — the one note component the agent-update confirm renders too', async () => {
+    const first = await receiveSharedBundle(bundleText(), { source: 'file', persist: true });
+    if (!first.ok) throw new Error('receive failed');
+    let view = await renderRun(sharedRouteIdFor(first.entry.bundleId));
+    await settleUntil(() => q(view.el, 'shared-install') !== null, 'install');
+    await act(async () => {
+      q(view.el, 'shared-install')!.click();
+    });
+    await settleUntil(() => db.getAppByInstallSource(`share:${LINEAGE}`) !== undefined, 'installed');
+    const app = db.getAppByInstallSource(`share:${LINEAGE}`)!;
+    db.approveConnection(app.appId, 'weather'); // so the inherited-grants paragraph renders and the note's place among the paragraphs is observable
+    unmountCurrent();
+
+    const newer = await receiveSharedBundle(bundleText({ html: '<!doctype html><html><body>v2</body></html>' }), { source: 'link', persist: false });
+    if (!newer.ok) throw new Error('receive failed');
+    // ONE enabled schedule names the installed copy (`appVersions`) — in the file and in the engine's view.
+    const nightly = makeTask({ id: 'nightly', title: 'Nightly wall', steps: [{ kind: 'app-run', appId: app.appId }], appVersions: { [app.appId]: 1 } });
+    db.putScheduledTask(nightly);
+    const base = schedulerStore.get();
+    try {
+      await act(async () => {
+        schedulerStore.set({ ...base, tasks: [nightly] });
+      });
+      view = await renderRun(sharedRouteIdFor(newer.entry.bundleId));
+      await settleUntil(() => q(view.el, 'shared-update-apply') !== null, 'the update button');
+      await act(async () => {
+        q(view.el, 'shared-update-apply')!.click();
+      });
+      await settleUntil(() => document.body.querySelector('[data-testid="shared-update-confirm"]') !== null, 'the confirm');
+      const confirm = document.body.querySelector('[data-testid="shared-update-confirm"]')!;
+      const note = confirm.querySelector('[data-testid="update-pauses-note"]');
+      expect(note?.textContent).toBe('Updating pauses the schedule that runs this app — “Nightly wall” — until you turn it back on from the Schedule page.');
+      // Directly after the first body paragraph, before the inherited-grants one.
+      const bodies = [...confirm.querySelectorAll('p.net-confirm-body')];
+      expect(bodies.indexOf(note as HTMLParagraphElement)).toBe(1);
+      expect(bodies[2]?.getAttribute('data-testid')).toBe('shared-update-inherits');
+
+      // No enabled schedule names the app: no note at all.
+      await act(async () => {
+        schedulerStore.set({ ...base, tasks: [{ ...nightly, enabled: false }] });
+      });
+      expect(confirm.querySelector('[data-testid="update-pauses-note"]')).toBeNull();
+    } finally {
+      await act(async () => {
+        schedulerStore.set(base);
+      });
+    }
   });
 
   it('an installed lineage whose bundle is CURRENT previews with "open your copy"', async () => {

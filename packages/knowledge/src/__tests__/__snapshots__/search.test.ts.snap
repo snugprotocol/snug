@@ -111,6 +111,18 @@ exports[`KB retrieval structure stability > heading tree per file is locked (edi
     ],
   },
   {
+    "file": "knowledge-base/app-authoring/85-scheduled-runs.md",
+    "headingTree": [
+      "# Scheduled Runs",
+      "## The Host's Scheduler Is the One Timer",
+      "## The Scheduled-Run Handshake",
+      "## The Schedule Listener (copy beside the hooks block)",
+      "## Rules for a Scheduled Handler",
+      "## Suggesting a Schedule",
+      "## What the Host Shows",
+    ],
+  },
+  {
     "file": "knowledge-base/app-authoring/90-auth-and-connected-apis.md",
     "headingTree": [
       "## Connected APIs: calling an external API with auth, login, and credentials",

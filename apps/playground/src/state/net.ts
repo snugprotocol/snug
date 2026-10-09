@@ -15,12 +15,13 @@ import {
   UserDbCredentialStore,
   type ConnectedFetchDeps,
   type NetConfirmDecision,
+  type NetConfirmGate,
   type NetConfirmRequest,
   type StandingApprovalStore,
   type StandingGrant,
 } from '@snugprotocol/auth';
 import type { NetHandler, NetHandlerResult } from '@snugprotocol/runner';
-import type { NetRequestFrame } from '@snugprotocol/protocol';
+import { NET_ERROR_CODES, type NetRequestFrame } from '@snugprotocol/protocol';
 import type { UserDb } from '@snugprotocol/db';
 
 import { getUserDb, userDbStatusStore } from './userdb.js';
@@ -317,6 +318,16 @@ export function connectedFetchDepsFor(
    * negative test drives both).
    */
   onAuthShapedFailure?: (slot: string, status: number, detail?: string) => void,
+  /**
+   * The gate a mutating call must pass (TASK-20261009 A5, ADR-0074 §6). DEFAULTS to the
+   * page's standing gate over the session gate — the wizard's probe and the visible frame
+   * never pass anything here. A scheduled run's hidden frame hands its own STANDALONE
+   * refusing gate (`schedule/scheduledConfirmGate.ts`), which never consults either gate
+   * below, so a grant the user remembered or armed while present cannot answer for a run
+   * they are not watching. This is the ONE seat where that difference enters: the same
+   * executor, the same reader, the same transports — only the decision seat differs.
+   */
+  confirmGate: NetConfirmGate = standingGate,
 ): ConnectedFetchDeps {
   return {
     credentialStore: new UserDbCredentialStore(db),
@@ -348,11 +359,12 @@ export function connectedFetchDepsFor(
     // connection. Absent on web — where the executor's own refusal is the honest answer,
     // since a unix socket is not reachable from a browser tab.
     ...(getPlatform().sidecarFetch !== undefined ? { sidecarFetch: sidecarAppFetch } : {}),
-    // The STANDING gate, not the session gate directly (ADR-0033). It consults the armed
-    // grant first and delegates everything outside that frozen scope to `confirmGate`, so
-    // the ordinary confirm still runs for every request the user has not armed — including
-    // the wizard's probe, which carries no slot and therefore can never match a grant.
-    confirmGate: standingGate,
+    // The STANDING gate by default, not the session gate directly (ADR-0033). It consults
+    // the armed grant first and delegates everything outside that frozen scope to the
+    // session gate, so the ordinary confirm still runs for every request the user has not
+    // armed — including the wizard's probe, which carries no slot and therefore can never
+    // match a grant. A scheduled run replaces it with its refusing gate (the parameter).
+    confirmGate,
     // Decision 6 (TASK-20260812): the LAN rung keys on the platform capability — desktop
     // widens `http://` to explicitly-approved private-range IP literals; the browser
     // profile passes NO seat at all, so the executor's default (https-only) is untouched.
@@ -389,7 +401,25 @@ export interface CreateNetHandlerOptions {
    * the wizard mapping is code-keyed, never a message substring (N1).
    */
   onNetError?: (appId: string, code: string) => void;
+  /**
+   * The confirm gate for mutating calls (TASK-20261009 A5). Absent → the page's ordinary
+   * gate (standing over session). The scheduler's hidden frame passes its STANDALONE
+   * refusing gate so no remembered or armed grant reaches an unattended run (ADR-0074 §6).
+   */
+  confirmGate?: NetConfirmGate;
+  /**
+   * Asked BEFORE every request this handler carries, with the host-assigned app id — the
+   * scheduler's counting seam. It answers whether the request may proceed: `true` ADMITS it
+   * and the seam counts it against the day's network ceiling at that moment; `false` refuses
+   * it by name (the existing `NET_CONFIRM_DENIED`, `NET_CALL_LIMIT_MESSAGE`) before the
+   * executor is touched, and nothing is counted. A request admitted here and then refused by
+   * the confirm gate IS counted — the attempt was made on the handler (Gate-5 PR-B S11, M20).
+   */
+  onNetCall?: (appId: string, request: { method: string; url: string }) => boolean;
 }
+
+/** What the app reads when the host's counting seam refuses a call at the day's ceiling. */
+export const NET_CALL_LIMIT_MESSAGE = 'the limit on network calls for today is reached — Snug tries again tomorrow';
 
 /**
  * Build a NetHandler for the runner. `netAppId` is host-assigned by SnugAppFrame (never
@@ -402,17 +432,27 @@ export function createNetHandlerFor(options: CreateNetHandlerOptions = {}): NetH
   const fetchImpl = options.fetchImpl ?? platformDefaultFetch;
   return {
     async handle(netAppId: string, request: NetRequestFrame): Promise<NetHandlerResult> {
+      // The counting seam first (A5): a call the day's ceiling refuses never opens the
+      // file or builds an executor — nothing credentialed is touched for a refused call.
+      if (options.onNetCall?.(netAppId, { method: request.method, url: request.url }) === false) {
+        options.onNetError?.(netAppId, NET_ERROR_CODES.NET_CONFIRM_DENIED);
+        return { ok: false, code: NET_ERROR_CODES.NET_CONFIRM_DENIED, message: NET_CALL_LIMIT_MESSAGE, retryable: false };
+      }
       const db = await getUserDb();
       // THE v4 READER (P3, fold B1's named exit) is assembled by `connectedFetchDepsFor`,
       // shared with the wizard's Q7 probe so both surfaces route through ONE configured
       // executor rather than two that could drift apart on gates.
       const executor = createConnectedFetch(
-        connectedFetchDepsFor(db, fetchImpl, (slot, status, detail) =>
-          // The executor reports (slot, status, detail?); the appId is OUR argument —
-          // the host-assigned binding this handler was invoked with. Adding it here
-          // (not inside the executor) means a wiring bug can never report a foreign
-          // app's identity (the deps-level adaptation journaled in the task file).
-          authShapedFailureStore.set({ appId: netAppId, slot, status, ...(detail !== undefined ? { detail } : {}) }),
+        connectedFetchDepsFor(
+          db,
+          fetchImpl,
+          (slot, status, detail) =>
+            // The executor reports (slot, status, detail?); the appId is OUR argument —
+            // the host-assigned binding this handler was invoked with. Adding it here
+            // (not inside the executor) means a wiring bug can never report a foreign
+            // app's identity (the deps-level adaptation journaled in the task file).
+            authShapedFailureStore.set({ appId: netAppId, slot, status, ...(detail !== undefined ? { detail } : {}) }),
+          options.confirmGate,
         ),
       );
       // The runner already validated the frame shape (strict schema); pass the app-facing

@@ -49,7 +49,9 @@ on load. A host may bill the person viewing the app for every call (inside a Cla
 artifact the viewer's own Claude answers, and the first call asks their consent), and a
 page that spends usage on load or on a clock is the defect the shared-preview rule already
 guards against. Poll your own state locally as often as you like; ask the agent only when
-the user did something.
+the user did something. The ONE timer is the host's scheduler: a schedule the user created
+wakes the app through a host event, and the schedule listener in "Scheduled Runs" is the
+only way an app takes part — an app never arms a timer of its own to think, fetch or remind.
 
 ## UMD vs ESM: Why Libraries Break
 

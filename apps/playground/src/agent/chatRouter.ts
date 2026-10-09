@@ -41,8 +41,13 @@ export type ChatRoute =
   | { lane: 'data'; intent: ChatIntent }
   | { lane: 'feature'; intent: ChatIntent }
   | { lane: 'provider'; intent: ChatIntent }
+  /** TASK-20261009 (ADR-0074 §4): ONE propose-only tool; the user's act on the consent surface is the only enable. */
+  | { lane: 'schedule'; intent: ChatIntent }
   | { lane: 'answer'; intent: ChatIntent }
   | { lane: 'clarify'; question: string; intent?: ChatIntent };
+
+/** A route that runs a turn — everything but the router's own `clarify` posture, which settles before any tool is chosen. */
+export type RoutedLane = Exclude<ChatRoute, { lane: 'clarify' }>;
 
 /** The clarifying reply used whenever classification fails outright. */
 export const DEFAULT_CLARIFY_QUESTION =
@@ -138,6 +143,8 @@ export async function routeChatMessage(input: RouteChatMessageInput): Promise<Ch
       case 'feature':
         return { lane, intent: classification.intent };
       case 'provider':
+        return { lane, intent: classification.intent };
+      case 'schedule':
         return { lane, intent: classification.intent };
       case 'answer':
         return { lane, intent: classification.intent };

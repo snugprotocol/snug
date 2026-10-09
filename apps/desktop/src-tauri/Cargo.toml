@@ -54,6 +54,14 @@ tauri-plugin-process = "2"
 # CFBundleURLTypes at bundle time and delivers URLs through its own seat; a URL is data,
 # not a read capability, so there is no allowlist command for it (plan-review finding 11).
 tauri-plugin-deep-link = "2"
+# TASK-20261009-scheduling-framework H1 (ADR-0074 §7): the ONE new dependency the scheduler
+# brings — the OS notification channel behind the optional `platform.scheduler.notify` seat.
+# Its JS half polyfills `window.Notification` in the webview (the plugin injects an init script
+# routing `new Notification()` / `requestPermission()` to `plugin:notification|notify` /
+# `|request_permission`), which is what lets the playground's Settings card — the one consent
+# surface — work unchanged on the desktop. Gate rows `ipc-notification-refused` /
+# `-dispatchable` (src/gate/ipc.ts) pin that a sandboxed app frame cannot reach it.
+tauri-plugin-notification = "2"
 # ---- `helper_install` (ADR-0060) --------------------------------------------
 # All four ALREADY ride in via tauri-plugin-updater (minisign-verify, tar, flate2, webpki-roots)
 # and are named here for the same reason reqwest is above: this crate now calls them

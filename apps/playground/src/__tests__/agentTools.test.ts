@@ -11,7 +11,10 @@ import {
   SCHEMA_APPLY_TOOL_NAME,
 } from '@snugprotocol/knowledge';
 
+import type { ScheduleProposal } from '@snugprotocol/protocol';
+
 import { createAppTargetSink } from '../agent/artifactSink.js';
+import { SCHEDULE_PROPOSE_TOOL_NAME, buildScheduleProposeTool } from '../agent/scheduleProposeTool.js';
 import { buildByokTools } from '../agent/tools.js';
 import { installTestUserDb } from './userdbTestHelper.js';
 
@@ -95,7 +98,7 @@ describe('app_doc_write tool', () => {
 });
 
 describe('tool set shape', () => {
-  it('ships six tools with store-sourced names', async () => {
+  it('ships seven tools with store-sourced names', async () => {
     const db = await installTestUserDb();
     const sink = createAppTargetSink({ getDb: () => Promise.resolve(db) });
     const tools = buildByokTools(sink, noopHooks, { getDb: () => Promise.resolve(db) });
@@ -108,7 +111,102 @@ describe('tool set shape', () => {
       APP_DOC_WRITE_TOOL_NAME,
       // TASK-20260811 (ADR-0018 D5): the builder also authors the app's RUNTIME contract.
       RUNTIME_CONTRACT_WRITE_TOOL_NAME,
+      // TASK-20261009 (ADR-0074 §4): the builder may SUGGEST a schedule — propose-only.
+      SCHEDULE_PROPOSE_TOOL_NAME,
     ]);
     for (const tool of tools) expect(tool.def.description.length).toBeGreaterThan(100);
+  });
+});
+
+// TASK-20261009-scheduling-framework P1: `schedule_propose` stages ONE suggestion per turn on the
+// message (through the hook) and creates nothing. The SINK PINS THE APP: every app step is for
+// the thread's app, resolved host-side; a step naming another app, a step carrying queries, a
+// step for an app the file does not hold yet, an unreadable when and a cadence under the
+// suggested floor are each refused in the tool result — before anything is staged.
+describe('schedule_propose tool', () => {
+  const NOW = new Date('2026-10-09T12:20:00.000Z');
+  const steps = [{ kind: 'app-think', prompt: 'Sum up yesterday.' }];
+
+  async function setup(options: { withApp?: boolean; hook?: boolean } = {}) {
+    const db = await installTestUserDb();
+    const app = options.withApp === false ? undefined : db.installApp({ displayName: 'Ledger', html, usesDb: true });
+    const staged: Array<{ proposal: ScheduleProposal; appId: string | undefined }> = [];
+    const sink = createAppTargetSink({ ...(app !== undefined ? { pinnedAppId: app.appId } : {}), getDb: () => Promise.resolve(db) });
+    const tool = buildScheduleProposeTool({
+      getDb: () => Promise.resolve(db),
+      resolveAppId: () => sink.ensureTargetId(),
+      now: () => NOW,
+      ...(options.hook === false
+        ? {}
+        : {
+            onProposal: (proposal, appId) => {
+              if (staged.length > 0) return false;
+              staged.push({ proposal, appId });
+              return true;
+            },
+          }),
+    });
+    return { db, app, staged, tool };
+  }
+
+  it('stages one proposal with the pinned app on every app step and the when read from the sentence; creates nothing', async () => {
+    const { db, app, staged, tool } = await setup();
+    const answer = String(await tool.run({ title: 'morning summary', when: 'every weekday at 8', steps }));
+    expect(answer).toContain('Suggested (NOT scheduled');
+    expect(answer).toContain('Weekdays at 8:00 AM');
+    expect(staged).toHaveLength(1);
+    expect(staged[0]?.appId).toBe(app?.appId);
+    expect(staged[0]?.proposal).toEqual({
+      title: 'morning summary',
+      steps: [{ kind: 'app-think', appId: app?.appId, prompt: 'Sum up yesterday.', context: { maxRows: 50 } }],
+      spec: { kind: 'weekly', days: ['mon', 'tue', 'wed', 'thu', 'fri'], time: '08:00', tz: 'device' },
+    });
+    expect(db.listScheduledTasks()).toHaveLength(0);
+  });
+
+  it('takes the host’s spec shape when the sentence cannot say it, and a run step’s input verbatim', async () => {
+    const { app, staged, tool } = await setup();
+    const spec = { kind: 'monthly', on: { kind: 'nth', nth: 2, weekday: 'tue' }, time: '09:30', tz: 'device' };
+    await tool.run({ title: 'second tuesday', spec, steps: [{ kind: 'app-run', input: { units: 'metric' } }] });
+    expect(staged[0]?.proposal.spec).toEqual(spec);
+    expect(staged[0]?.proposal.steps).toEqual([{ kind: 'app-run', appId: app?.appId, input: { units: 'metric' } }]);
+  });
+
+  it('refuses a step naming another app, a step carrying queries, and an unreadable when — nothing staged', async () => {
+    const { staged, tool } = await setup();
+    expect(String(await tool.run({ title: 'x', when: 'every day at 8', steps: [{ kind: 'app-think', appId: 'someone-else', prompt: 'p' }] }))).toMatch(/^Error: a step may only be for THIS app/);
+    expect(String(await tool.run({ title: 'x', when: 'every day at 8', steps: [{ kind: 'app-think', prompt: 'p', context: { sql: ['SELECT 1'] } }] }))).toMatch(/^Error: leave queries out/);
+    expect(String(await tool.run({ title: 'x', when: 'every day at 8', steps: [{ kind: 'app-think', prompt: 'p', sql: ['SELECT 1'] }] }))).toMatch(/^Error: leave queries out/);
+    expect(String(await tool.run({ title: 'x', when: 'whenever you like', steps }))).toMatch(/^Error: give "when" as a plain sentence/);
+    expect(String(await tool.run({ title: 'x', steps }))).toMatch(/^Error: give "when"/);
+    expect(String(await tool.run({ title: '', when: 'every day at 8', steps }))).toMatch(/^Error: "title"/);
+    expect(String(await tool.run({ title: 'x', when: 'every day at 8', steps: [] }))).toMatch(/^Error: "steps"/);
+    expect(String(await tool.run({ title: 'x', when: 'every day at 8', steps: [{ kind: 'dance' }] }))).toMatch(/^Error: each step/);
+    expect(staged).toEqual([]);
+  });
+
+  it('refuses a cadence under the suggested floor before staging, naming the floor', async () => {
+    const { staged, tool } = await setup();
+    const answer = String(await tool.run({ title: 'x', when: 'every 5 minutes', steps }));
+    expect(answer).toMatch(/^Error: too often/);
+    expect(answer).toContain('suggest a slower cadence');
+    expect(staged).toEqual([]);
+  });
+
+  it('a thread with no app yet: a reminder is staged with no owner, an app step is refused by name', async () => {
+    const { staged, tool } = await setup({ withApp: false });
+    expect(String(await tool.run({ title: 'x', when: 'every day at 8', steps }))).toMatch(/^Error: an app-think or app-run step needs an installed app/);
+    expect(String(await tool.run({ title: 'nudge', when: 'every day at 20:00', steps: [{ kind: 'notify', title: 'hi', body: 'there' }] }))).toContain('Suggested');
+    expect(staged[0]?.appId).toBeUndefined();
+    expect(staged[0]?.proposal.steps).toEqual([{ kind: 'notify', title: 'hi', body: 'there' }]);
+  });
+
+  it('a second proposal in one turn is NOT staged and the model is told; without a surface it says so too', async () => {
+    const { staged, tool } = await setup();
+    await tool.run({ title: 'one', when: 'every day at 8', steps });
+    expect(String(await tool.run({ title: 'two', when: 'every day at 9', steps }))).toMatch(/^NOT staged: a suggestion is already waiting/);
+    expect(staged).toHaveLength(1);
+    const { tool: surfaceless } = await setup({ hook: false });
+    expect(String(await surfaceless.run({ title: 'x', when: 'every day at 8', steps }))).toMatch(/^NOT staged: suggestions cannot be shown/);
   });
 });

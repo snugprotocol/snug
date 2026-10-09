@@ -70,6 +70,8 @@ export const IPC_CHECK_IDS = [
   'ipc-updater-check-dispatchable',
   'ipc-helper-install-refused',
   'ipc-helper-status-dispatchable',
+  'ipc-notification-refused',
+  'ipc-notification-dispatchable',
 ] as const;
 
 /**
@@ -187,6 +189,31 @@ export const HELPER_INSTALL_COMMAND = 'helper_install';
 export const HELPER_STATUS_COMMAND = 'helper_status';
 
 /**
+ * `plugin:notification|notify` (TASK-20261009 H1; ADR-0074 §6–§7) gets its own row for the
+ * amendment-16 reason every row above has, and the stakes are the shell's NAME: a dispatched
+ * call raises an OS notification signed as Snug — an app iframe that reached it could put
+ * any sentence on the user's screen under the shell's icon ("your session expired — enter
+ * your key in the app"), the phishing surface §6 closes by making notifications
+ * host-decided (plain text, prefixed, rate-limited, sent by ONE seat after a Settings
+ * opt-in). The plugin's own init script polyfills `window.Notification` in the MAIN webview;
+ * a sandboxed subframe never receives that script (`ipc-tauri-internals-absent`), so what
+ * is probed here is the raw transport with a keyless invoke, exactly as for the rows above.
+ *
+ * It shares their SENSOR PROBLEM and the same honest answer: a notification's effect is a
+ * banner the harness cannot observe, so reach is the observable — a dispatched command
+ * resolves a callback (success or error alike) and a keyless one is dropped before
+ * dispatch — and the pass vouches for refusal only alongside the key-absence checks.
+ *
+ * `plugin:notification|is_permission_granted` is the positive twin: registered by the same
+ * plugin under the same `notification:default` set, it answers a boolean from the main
+ * window and shows nothing — so its reach proves the plugin the refusal row guards is the
+ * one in the builder chain (`lib.rs`) and the capability admits it, without a banner on a
+ * gate runner's screen.
+ */
+export const NOTIFICATION_NOTIFY_COMMAND = 'plugin:notification|notify';
+export const NOTIFICATION_PERMISSION_COMMAND = 'plugin:notification|is_permission_granted';
+
+/**
  * The sentinel filename the subframe's keyless write targets. Must match
  * `gate.rs::IPC_SENTINEL_NAME` — the Rust side answers for this name ONLY, so a
  * drift here turns the probe into an error rather than a silent pass.
@@ -298,6 +325,11 @@ const PROBE_HTML = `<!doctype html><html><head><meta charset="utf-8"><title>ipc 
   var REL_CB = 987654371;
   window['_' + REL_CB] = function () { relaunchCallbackFired = true; };
   window['_' + (REL_CB + 1)] = function () { relaunchCallbackFired = true; };
+  // The notification plugin (TASK-20261009 H1): its own slot pair, never shared.
+  var notificationCallbackFired = false;
+  var NTF_CB = 987654401;
+  window['_' + NTF_CB] = function () { notificationCallbackFired = true; };
+  window['_' + (NTF_CB + 1)] = function () { notificationCallbackFired = true; };
 
   function keylessInvokeBody() {
     // The main-frame invoke shape (scripts/core.js) MINUS a valid
@@ -405,6 +437,20 @@ const PROBE_HTML = `<!doctype html><html><head><meta charset="utf-8"><title>ipc 
     });
   }
 
+  function keylessNotifyBody() {
+    // A REAL, well-formed notify call — the exact payload the plugin's own polyfilled
+    // \`new Notification(title, { body })\` posts (\`{ options: { title, body } }\`), so a
+    // refusal cannot be attributed to a bad shape. If this were ever DISPATCHED a banner
+    // signed as Snug would appear on the gate runner's screen; the callback that resolves
+    // with it is the breakage this row reads.
+    return JSON.stringify({
+      cmd: '${NOTIFICATION_NOTIFY_COMMAND}',
+      callback: NTF_CB,
+      error: NTF_CB + 1,
+      payload: { options: { title: 'snug gate probe', body: 'a sandboxed app frame reached plugin:notification|notify' } }
+    });
+  }
+
   for (var k = 0; k < transports.length; k++) {
     try { transports[k].handler.postMessage(keylessInvokeBody()); } catch (e3) { /* transport rejected the shape */ }
     try { transports[k].handler.postMessage(keylessLanFetchBody()); } catch (e4) { /* transport rejected the shape */ }
@@ -414,6 +460,7 @@ const PROBE_HTML = `<!doctype html><html><head><meta charset="utf-8"><title>ipc 
     try { transports[k].handler.postMessage(keylessUpdaterInstallBody()); } catch (e7) { /* transport rejected the shape */ }
     try { transports[k].handler.postMessage(keylessRelaunchBody()); } catch (e8) { /* transport rejected the shape */ }
     try { transports[k].handler.postMessage(keylessHelperInstallBody()); } catch (e9) { /* transport rejected the shape */ }
+    try { transports[k].handler.postMessage(keylessNotifyBody()); } catch (e10) { /* transport rejected the shape */ }
   }
 
   function finishInvoke() {
@@ -431,7 +478,8 @@ const PROBE_HTML = `<!doctype html><html><head><meta charset="utf-8"><title>ipc 
         updaterCheckCallbackFired: updaterCheckCallbackFired,
         updaterInstallCallbackFired: updaterInstallCallbackFired,
         helperInstallCallbackFired: helperInstallCallbackFired,
-        relaunchCallbackFired: relaunchCallbackFired
+        relaunchCallbackFired: relaunchCallbackFired,
+        notificationCallbackFired: notificationCallbackFired
       }
     }, '*');
   }
@@ -457,16 +505,56 @@ interface ProbeReport {
   relaunchCallbackFired: boolean;
   /** Per-command (ADR-0060): did a keyless `helper_install` resolve into the subframe? */
   helperInstallCallbackFired: boolean;
+  /** Per-command (TASK-20261009 H1): did a keyless `plugin:notification|notify` resolve into the subframe? */
+  notificationCallbackFired: boolean;
 }
 
-/** The helper seat's twin verdict: any answer from the command BODY is reach. */
+/**
+ * The shapes Tauri answers when an invoke never reached a command body — unregistered
+ * (`Command X not found`), uncapable (`X not allowed. Permissions associated with…`) or
+ * unknown (`unknown command X`). ONE regex, read by every positive twin below (M13): a sixth
+ * twin cannot drift from the five by retyping it.
+ */
+const UNDISPATCHABLE_SHAPE = /not (?:found|allowed)|unknown command/i;
+
+/**
+ * THE POSITIVE TWIN, decided once for every command that has a refusal check opposite
+ * (next-steps 2026-08-17 §1; eight-seam defect #1): `ipc-sidecar-fetch-refused` PASSED while
+ * the command was UNREGISTERED — `SidecarState` was never `.manage()`d, every invoke died at the
+ * IPC boundary, and an unreachable-from-everywhere command satisfies an unreachability check
+ * perfectly. So a negative check gets a twin proving the MAIN window can dispatch the command
+ * at all: a resolved invoke is a PASS; a refusal or failure from inside the command BODY (the
+ * helper not running, a 404 from the private repo, a permission state unavailable) is a PASS
+ * too — the body ran, which is the whole question; only the unregistered/uncapable shapes
+ * FAIL, because then the dispatch never happened and `vouchesFor` is vouching for nothing.
+ */
+export function decideDispatchable(id: string, command: string, outcome: { resolved: boolean; detail: string }, vouchesFor: string): CheckResult {
+  if (outcome.resolved) {
+    return { id, pass: true, detail: `${command} dispatched from the main window and resolved (${outcome.detail})` };
+  }
+  if (UNDISPATCHABLE_SHAPE.test(outcome.detail)) {
+    return {
+      id,
+      pass: false,
+      detail: `${command} is NOT DISPATCHABLE from the main window (${outcome.detail}) — unregistered or uncapable, so ${vouchesFor} is vouching for nothing`,
+    };
+  }
+  return { id, pass: true, detail: `${command} dispatched and the command body answered: ${outcome.detail}` };
+}
+
+/**
+ * The notification plugin's twin (TASK-20261009 H1) drives `is_permission_granted` rather than
+ * `notify`: a dispatched `notify` would put a banner on the gate runner's screen and prove no
+ * more, while the permission read is registered by the same plugin under the same
+ * `notification:default` set, answers a boolean and shows nothing.
+ */
+export function decideNotificationDispatchable(dispatch: { resolved: boolean; detail: string }): CheckResult {
+  return decideDispatchable('ipc-notification-dispatchable', NOTIFICATION_PERMISSION_COMMAND, dispatch, 'ipc-notification-refused');
+}
+
+/** The helper seat's twin (ADR-0060 §7): any answer from `helper_status`'s body is reach. */
 export function decideHelperStatusDispatchable(dispatch: { resolved: boolean; detail: string }): CheckResult {
-  const id = 'ipc-helper-status-dispatchable';
-  if (dispatch.resolved) return { id, pass: true, detail: 'helper_status resolved from the main frame' };
-  const unregistered = /not (found|allowed)|unknown command|Command .* not found/i.test(dispatch.detail);
-  return unregistered
-    ? { id, pass: false, detail: `helper_status is not dispatchable from the main frame: ${dispatch.detail}` }
-    : { id, pass: true, detail: `helper_status answered from its body (${dispatch.detail})` };
+  return decideDispatchable('ipc-helper-status-dispatchable', HELPER_STATUS_COMMAND, dispatch, 'ipc-helper-install-refused');
 }
 
 /**
@@ -652,33 +740,9 @@ export function decideSidecarWizardFetchRefused(
   };
 }
 
-/**
- * THE POSITIVE TWIN for `sidecar_wizard_fetch`. Same rule as the sibling's twin: a
- * refusal check over an unregistered command vouches for nothing, so the main
- * window must be shown to dispatch this command at all. A body-level refusal (the
- * helper is not running on a gate runner) is a PASS — the body ran, which is the
- * question being asked. Only the unregistered/uncapable shapes fail.
- */
-export function decideSidecarWizardFetchDispatchable(outcome: {
-  resolved: boolean;
-  detail: string;
-}): CheckResult {
-  const id = 'ipc-sidecar-wizard-fetch-dispatchable';
-  if (outcome.resolved) {
-    return { id, pass: true, detail: `${SIDECAR_WIZARD_FETCH_COMMAND} dispatched from the main window and resolved` };
-  }
-  if (/not found|not allowed|unknown command/i.test(outcome.detail)) {
-    return {
-      id,
-      pass: false,
-      detail: `${SIDECAR_WIZARD_FETCH_COMMAND} is NOT DISPATCHABLE from the main window (${outcome.detail}) — unregistered or uncapable, so the refusal row opposite is vouching for nothing`,
-    };
-  }
-  return {
-    id,
-    pass: true,
-    detail: `${SIDECAR_WIZARD_FETCH_COMMAND} dispatched and the command body answered: ${outcome.detail}`,
-  };
+/** `sidecar_wizard_fetch`'s twin — `decideDispatchable`'s rule, for the refusal row opposite. */
+export function decideSidecarWizardFetchDispatchable(outcome: { resolved: boolean; detail: string }): CheckResult {
+  return decideDispatchable('ipc-sidecar-wizard-fetch-dispatchable', SIDECAR_WIZARD_FETCH_COMMAND, outcome, 'ipc-sidecar-wizard-fetch-refused');
 }
 
 /**
@@ -720,62 +784,14 @@ export function decideUpdateChannelCommandRefused(
   };
 }
 
-/**
- * THE POSITIVE TWIN for the updater (the `ipc-sidecar-fetch-dispatchable` rule
- * applied to the new surface): a refusal check over an UNREGISTERED command
- * vouches for nothing, so the main window must be able to dispatch
- * `plugin:updater|check` at all. A body-level failure (no network on a runner, a
- * 404 from the private repo) is a PASS — the body ran, which is the question.
- * Only the unregistered/uncapable shapes fail.
- */
+/** The updater's twin (ADR-0047 §3) — `decideDispatchable`'s rule, for the three updater/relaunch refusal rows opposite. */
 export function decideUpdaterCheckDispatchable(outcome: { resolved: boolean; detail: string }): CheckResult {
-  const id = 'ipc-updater-check-dispatchable';
-  if (outcome.resolved) {
-    return { id, pass: true, detail: `${UPDATER_CHECK_COMMAND} dispatched from the main window and resolved` };
-  }
-  if (/not found|not allowed|unknown command/i.test(outcome.detail)) {
-    return {
-      id,
-      pass: false,
-      detail: `${UPDATER_CHECK_COMMAND} is NOT DISPATCHABLE from the main window (${outcome.detail}) — unregistered or uncapable, so the three refusal rows opposite are vouching for nothing`,
-    };
-  }
-  return {
-    id,
-    pass: true,
-    detail: `${UPDATER_CHECK_COMMAND} dispatched and the command body answered: ${outcome.detail}`,
-  };
+  return decideDispatchable('ipc-updater-check-dispatchable', UPDATER_CHECK_COMMAND, outcome, 'ipc-updater-check-refused / ipc-updater-install-refused / ipc-process-relaunch-refused');
 }
 
-/**
- * THE POSITIVE TWIN (TASK-20260817-telepath, next-steps 2026-08-17 §1).
- *
- * `ipc-sidecar-fetch-refused` PASSED while the command was UNREGISTERED — eight-seam
- * defect #1: `SidecarState` was never `.manage()`d, every invoke died at the IPC boundary,
- * and an unreachable-from-everywhere command satisfies an unreachability check perfectly.
- * So the negative check gets a twin proving the MAIN window can dispatch the command at
- * all. Refusal from inside the command body ("helper not running", an admission refusal)
- * is a PASS — the body ran, which is the whole question. Only the unregistered/uncapable
- * shapes fail: those mean the dispatch never happened and the negative check opposite is
- * vouching for nothing.
- */
+/** `sidecar_fetch`'s twin (TASK-20260817-telepath) — the defect `decideDispatchable` was written for. */
 export function decideSidecarFetchDispatchable(outcome: { resolved: boolean; detail: string }): CheckResult {
-  const id = 'ipc-sidecar-fetch-dispatchable';
-  if (outcome.resolved) {
-    return { id, pass: true, detail: `${SIDECAR_FETCH_COMMAND} dispatched from the main window and resolved` };
-  }
-  if (/not found|not allowed|unknown command/i.test(outcome.detail)) {
-    return {
-      id,
-      pass: false,
-      detail: `${SIDECAR_FETCH_COMMAND} is NOT DISPATCHABLE from the main window (${outcome.detail}) — unregistered or uncapable, so the refusal check opposite is vouching for nothing`,
-    };
-  }
-  return {
-    id,
-    pass: true,
-    detail: `${SIDECAR_FETCH_COMMAND} dispatched and the command body answered: ${outcome.detail}`,
-  };
+  return decideDispatchable('ipc-sidecar-fetch-dispatchable', SIDECAR_FETCH_COMMAND, outcome, 'ipc-sidecar-fetch-refused');
 }
 
 export async function runIpcChecks(): Promise<CheckResult[]> {
@@ -820,6 +836,8 @@ export async function runIpcChecks(): Promise<CheckResult[]> {
                 relaunchCallbackFired: (p as { relaunchCallbackFired?: unknown }).relaunchCallbackFired === true,
                 helperInstallCallbackFired:
                   (p as { helperInstallCallbackFired?: unknown }).helperInstallCallbackFired === true,
+                notificationCallbackFired:
+                  (p as { notificationCallbackFired?: unknown }).notificationCallbackFired === true,
               },
             }
           : {}),
@@ -893,6 +911,19 @@ export async function runIpcChecks(): Promise<CheckResult[]> {
     ),
   );
 
+  // The notification plugin's refusal row (TASK-20261009 H1) reads its OWN slot, through the
+  // same per-command decision the helper and updater rows use.
+  byId.set(
+    'ipc-notification-refused',
+    decideUpdateChannelCommandRefused(
+      'ipc-notification-refused',
+      NOTIFICATION_NOTIFY_COMMAND,
+      'app code can raise OS notifications signed as Snug (ADR-0074 §6: notifications are host-decided)',
+      report === undefined ? undefined : { ...report, fired: report.notificationCallbackFired },
+      keyReachable,
+    ),
+  );
+
   // The POSITIVE twin, driven from the main frame — a real, well-formed app-route call.
   // Any answer from the command BODY passes; only the unregistered shapes fail.
   let dispatch: { resolved: boolean; detail: string };
@@ -937,6 +968,17 @@ export async function runIpcChecks(): Promise<CheckResult[]> {
     helperDispatch = { resolved: false, detail: String(err) };
   }
   byId.set('ipc-helper-status-dispatchable', decideHelperStatusDispatchable(helperDispatch));
+
+  // The notification plugin's positive twin: the main window must reach the plugin at all.
+  // `is_permission_granted` answers a boolean and shows nothing (see the decide function).
+  let notificationDispatch: { resolved: boolean; detail: string };
+  try {
+    const answer = await invoke<unknown>(NOTIFICATION_PERMISSION_COMMAND);
+    notificationDispatch = { resolved: true, detail: `answered ${JSON.stringify(answer)}` };
+  } catch (err) {
+    notificationDispatch = { resolved: false, detail: String(err) };
+  }
+  byId.set('ipc-notification-dispatchable', decideNotificationDispatchable(notificationDispatch));
 
   // EVERY id must be present — a missing verdict is a FAIL (AC7).
   return IPC_CHECK_IDS.map((id) => byId.get(id) ?? { id, pass: false, detail: 'no-verdict' });

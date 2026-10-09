@@ -18,16 +18,18 @@ import {
   CHAT_INTENT_DATA_LANE,
   CHAT_INTENT_FEATURE_LANE,
   CHAT_INTENT_PROVIDER_LANE,
+  CHAT_INTENT_SCHEDULE_LANE,
   CHAT_LANES,
   chatIntentSchema,
   isDataIntent,
   isFeatureIntent,
   isProviderIntent,
+  isScheduleIntent,
   laneForIntent,
   parseChatIntent,
 } from '../chat-intent.js';
 
-describe('chatIntentSchema — the eight intents', () => {
+describe('chatIntentSchema — the nine intents', () => {
   it('pins the intent set exactly (persisted/routed literals — never retyped downstream)', () => {
     expect([...CHAT_INTENTS]).toEqual([
       'data_read',
@@ -36,9 +38,14 @@ describe('chatIntentSchema — the eight intents', () => {
       'app_change',
       'provider_read',
       'provider_write',
+      'schedule',
       'app_question',
       'other',
     ]);
+  });
+
+  it('accepts the schedule intent (TASK-20261009, ADR-0074 §4)', () => {
+    expect(chatIntentSchema.parse({ intent: 'schedule', confidence: 0.9 }).intent).toBe('schedule');
   });
 
   it('accepts the provider intents (TASK-20260815, ADR-0031 §2)', () => {
@@ -129,9 +136,27 @@ describe('laneForIntent — ONE exhaustive map, no silent default lane (F7, TASK
       ['app_change', 'feature'],
       ['provider_read', 'provider'],
       ['provider_write', 'provider'],
+      ['schedule', 'schedule'],
       ['app_question', 'answer'],
       ['other', 'answer'],
     ]);
+  });
+
+  it('pins the lane set — the schedule lane is its own lane, never a data or feature lane (TASK-20261009 P2)', () => {
+    // A lane of its own is what lets the tool selection give a schedule turn ONLY the
+    // propose tool: were `schedule` a data or feature intent it would inherit that lane's
+    // tools, and the feature lane's tools write code.
+    expect([...CHAT_LANES]).toEqual(['data', 'feature', 'provider', 'schedule', 'answer']);
+    expect(laneForIntent('schedule')).toBe('schedule');
+    expect([...CHAT_INTENT_SCHEDULE_LANE]).toEqual(['schedule']);
+    expect(isScheduleIntent('schedule')).toBe(true);
+    for (const intent of CHAT_INTENTS) {
+      if (intent === 'schedule') continue;
+      expect(isScheduleIntent(intent), intent).toBe(false);
+    }
+    expect(isDataIntent('schedule')).toBe(false);
+    expect(isFeatureIntent('schedule')).toBe(false);
+    expect(isProviderIntent('schedule')).toBe(false);
   });
 
   it('keeps the lane groupings as derived views of the same map', () => {

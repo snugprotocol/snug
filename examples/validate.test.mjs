@@ -393,6 +393,65 @@ for (const app of APPS) {
 }
 
 // ── Lean runtime requests (ADR-0018) ───────────────────────────────────────────────
+/**
+ * TASK-20261009-scheduling-framework A7: an `app.html` MAY carry a SECOND `message`
+ * listener beside the bridge's own — the schedule listener the KB teaches
+ * (`85-scheduled-runs.md`, copied beside the copy-exactly block) — as long as the hooks
+ * block itself stays byte-identical. Pinned on a tiny fixture here BEFORE any starter
+ * uses it (the embedded block is unchanged this task — Q7), so the rule is the suite's
+ * own and not an accident of where `hookBlock` happens to cut. The pair below is the
+ * rule and its mutant: a listener AFTER the banner passes every per-app check this
+ * suite applies; the same listener INSIDE the block (before the banner) is a hooks edit
+ * and reds the byte-compare.
+ */
+const SECOND_LISTENER = `window.addEventListener('message', async (event) => {
+      const data = event.data;
+      if (event.source !== window.parent || !data || data.v !== 1) return;
+      if (data.type !== 'snug:host-event' || data.event !== 'schedule-run') return;
+      const stored = await snugDbRequest('kvGet', { key: 'snug:schedule:' + data.data.runId });
+      SnugBridge.post({ type: 'snug:app-event', event: 'schedule-result', data: { ok: true, summary: String(stored.value && stored.value.input) } });
+    });`;
+
+function secondListenerFixture({ inside }) {
+  const hooks = readFileSync(EMBEDDED_HOOKS, 'utf8');
+  const banner = '    // ============================================================\n    // 5. RESPONSE SCHEMA\n    // ============================================================';
+  const appAuthored = `const RESPONSE_SCHEMA = { message: 'string' };
+    function App() {
+      const { isReady } = useSnugApp({ appId: 'second-listener', displayName: 'Second Listener', description: 'fixture', iconEmoji: '⏰', iconColor: '#333' });
+      return isReady ? <main /> : null;
+    }
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);`;
+  return `<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8" /><title>fixture</title>
+<script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
+</head><body><div id="root"></div>
+<script type="text/babel">
+${hooks}${inside ? `\n    ${SECOND_LISTENER}\n` : '\n'}${banner}
+    ${appAuthored}
+    ${inside ? '' : SECOND_LISTENER}
+</script>
+</body></html>`;
+}
+
+test('an app.html may add a second `message` listener AFTER the hooks block (the KB schedule listener) and still pass every per-app rule', () => {
+  const html = secondListenerFixture({ inside: false });
+  assert.equal((html.match(/addEventListener\('message'/g) ?? []).length, 2, 'the fixture carries exactly two message listeners');
+  // The rule: the hooks block is still byte-identical to the SDK reference …
+  assert.equal(normalize(hookBlock(html, 'second-listener')), expectedHooks);
+  // … and the app-authored region (the second listener included) passes the storage and network rules.
+  const appAuthored = html.replace(hookBlock(html, 'second-listener'), '');
+  assert.ok(appAuthored.includes("data.event !== 'schedule-run'"), 'the second listener is in the app-authored region');
+  assert.doesNotMatch(appAuthored, DIRECT_NETWORK_API);
+  assert.doesNotMatch(appAuthored, QUALIFIED_NETWORK_API);
+  for (const banned of ['localStorage', 'sessionStorage', 'indexedDB', 'document.cookie']) assert.ok(!html.includes(banned));
+});
+
+test('the mutant: the same listener INSIDE the hooks block (before the banner) is a hooks edit and fails the byte-compare', () => {
+  const html = secondListenerFixture({ inside: true });
+  assert.equal((html.match(/addEventListener\('message'/g) ?? []).length, 2);
+  assert.notEqual(normalize(hookBlock(html, 'second-listener-inside')), expectedHooks);
+});
+
 test('chess sends its board state ONCE, not in both payload and state', () => {
   // The measured over-send this task fixed: `fen` appeared in the payload AND in
   // `state`, and `state.history` was unbounded while the payload copy was capped.

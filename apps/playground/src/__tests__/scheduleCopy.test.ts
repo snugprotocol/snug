@@ -29,8 +29,11 @@ import {
   MISSED_ACTIONS,
   RESULT_STATUS_WORD,
   RUNNING_CHIP,
+  SCHEDULED_NEXT,
+  SCHEDULE_CARD,
   STEP_STATUS_WORD,
   SUGGESTION_ACTIONS,
+  SUGGESTION_OUTCOME,
   WORDS,
   aiCalls,
   alertLabel,
@@ -55,8 +58,10 @@ import {
   paused,
   runningProgress,
   stepLabel,
+  stepWords,
   suggestionStrip,
 } from '../schedule/copy.js';
+import { ACTIONS } from '../schedule/copy.editor.js';
 import { PAUSE_AFTER_FAILURES, PAUSE_AFTER_UNSEEN } from '../schedule/protection.js';
 
 describe('vocabulary (Q8) — the five nouns and the three step kinds', () => {
@@ -82,6 +87,15 @@ describe('vocabulary (Q8) — the five nouns and the three step kinds', () => {
     expect(stepLabel('app-run')).toBe('run this app');
     expect(stepLabel('app-think')).toBe('ask this app’s AI');
     expect(stepLabel('notify', 'Ledger')).toBe('remind me');
+  });
+
+  it('stepWords: ONE step in words — the label, then the step’s own words; a run step’s input only where asked for (M6)', () => {
+    expect(stepWords({ kind: 'notify', title: 'Water', body: 'the ferns' })).toBe('remind me: Water — the ferns');
+    expect(stepWords({ kind: 'app-think', appId: 'x', prompt: 'Sum it', context: { maxRows: 5 } }, 'Ledger')).toBe('ask Ledger’s AI: Sum it');
+    expect(stepWords({ kind: 'app-run', appId: 'x' }, 'Weather')).toBe('run Weather');
+    expect(stepWords({ kind: 'app-run', appId: 'x', input: { fetch: true } }, 'Weather')).toBe('run Weather');
+    expect(stepWords({ kind: 'app-run', appId: 'x', input: { fetch: true } }, 'Weather', { withInput: true })).toBe('run Weather · {"fetch":true}');
+    expect(stepWords({ kind: 'app-run', appId: 'x' }, undefined, { withInput: true })).toBe('run this app');
   });
 
   it('aiCalls is the ONE pluraliser (M12): none, one, many', () => {
@@ -291,6 +305,54 @@ describe('suggestions (ADR-0074 §4) — the run-header strip, never a modal', (
     expect(SUGGESTION_ACTIONS).toEqual({ accept: 'schedule it', decline: 'not now', mute: 'stop suggestions from this app' });
     expect(SUGGESTION_ACTIONS.accept).toBe(CONSENT.enable);
     expect(SUGGESTION_ACTIONS.decline).toBe(CONSENT.notNow);
+  });
+
+  it('SUGGESTION_OUTCOME: the strip after its one act (PR-B P3)', () => {
+    expect(SUGGESTION_OUTCOME.scheduled('Sat, Oct 10, 7:00 AM UTC')).toBe('scheduled — next Sat, Oct 10, 7:00 AM UTC');
+    expect(SUGGESTION_OUTCOME.declined).toBe('not now — nothing was scheduled');
+    expect(SUGGESTION_OUTCOME.muted('Weather')).toBe('Weather won’t suggest schedules again — change that in Settings');
+    expect(SUGGESTION_OUTCOME.open).toBe('open');
+  });
+});
+
+describe('the schedule card (ADR-0074 §4) — the builder’s and the chat lane’s suggestion (PR-B P1)', () => {
+  it('SCHEDULE_CARD: the provenance line, the acts (the consent surface’s), the states', () => {
+    expect(SCHEDULE_CARD.lead).toBe('the agent suggests a schedule:');
+    expect(SCHEDULE_CARD.next('Sat, Oct 10, 8:00 AM UTC')).toBe('next Sat, Oct 10, 8:00 AM UTC');
+    expect(SCHEDULE_CARD.noNext).toBe('no next time within 400 days');
+    expect(SCHEDULE_CARD.accept).toBe(CONSENT.enable);
+    expect(SCHEDULE_CARD.decline).toBe(CONSENT.notNow);
+    expect(SCHEDULE_CARD.edit).toBe('edit…');
+    expect(SCHEDULE_CARD.open).toBe('open');
+    expect(SCHEDULE_CARD.scheduled('Sat, Oct 10, 8:00 AM UTC')).toBe('scheduled — next Sat, Oct 10, 8:00 AM UTC');
+    expect(SCHEDULE_CARD.declined).toBe('not now — nothing was scheduled');
+    expect(SCHEDULE_CARD.stale).toBe('this suggestion is out of date — the app is gone or the time has passed');
+  });
+});
+
+describe('SCHEDULED_NEXT (M7) — the one sentence every suggestion surface ends on', () => {
+  it('pins the three arms', () => {
+    expect(SCHEDULED_NEXT.scheduled('Sat, Oct 10, 8:00 AM UTC')).toBe('scheduled — next Sat, Oct 10, 8:00 AM UTC');
+    expect(SCHEDULED_NEXT.declined).toBe('not now — nothing was scheduled');
+    expect(SCHEDULED_NEXT.open).toBe('open');
+  });
+
+  it('the card, the strip and the sheet REFERENCE it — the same function and strings, never a restatement', () => {
+    expect(SCHEDULE_CARD.scheduled).toBe(SCHEDULED_NEXT.scheduled);
+    expect(SCHEDULE_CARD.declined).toBe(SCHEDULED_NEXT.declined);
+    expect(SCHEDULE_CARD.open).toBe(SCHEDULED_NEXT.open);
+    expect(SUGGESTION_OUTCOME.scheduled).toBe(SCHEDULED_NEXT.scheduled);
+    expect(SUGGESTION_OUTCOME.declined).toBe(SCHEDULED_NEXT.declined);
+    expect(SUGGESTION_OUTCOME.open).toBe(SCHEDULED_NEXT.open);
+    expect(ACTIONS.scheduled).toBe(SCHEDULED_NEXT.scheduled);
+  });
+
+  it('no surface copy module spells the sentence itself', () => {
+    for (const name of ['copy.page.ts', 'copy.editor.ts', 'copy.result.ts']) {
+      const code = stripComments(readFileSync(path.join(PLAYGROUND_SRC, 'schedule', name), 'utf8'));
+      expect(code, `${name} restates "scheduled — next"`).not.toContain('scheduled — next');
+      expect(code, `${name} restates the declined line`).not.toContain('nothing was scheduled');
+    }
   });
 });
 

@@ -26,12 +26,11 @@ import { Button } from '../ui/Button.js';
 import { ConfirmOverlay } from '../ui/ConfirmOverlay.js';
 import { EMPTY, stepLabel } from './copy.js';
 import { ACTIONS, SENTENCE, SHEET, STEPS } from './copy.editor.js';
-import { describeSpec, nextOccurrence, resolveZone } from './cron.js';
+import { describeSpec } from './cron.js';
 import { approvedHostsByApp, remainderOf } from './editorModel.js';
 import { EnableConsent } from './EnableConsent.js';
-import { pageClock, useNow } from './pageModel.js';
+import { nextWords, pageClock, useNow } from './pageModel.js';
 import { readSchedule } from './parseScheduleText.js';
-import { formatOccurrence } from './PreviewAndCost.js';
 import { newScheduleHref } from './routes.js';
 import { createTask } from './scheduler.js';
 
@@ -95,9 +94,8 @@ export function ScheduleSheet({ appId, onClose }: ScheduleSheetProps): ReactElem
       setError(result.reason);
       return;
     }
-    const next = nextOccurrence(result.task.spec, pageClock.now(), { anchor: new Date(result.task.createdAt) });
     setConsent(undefined);
-    setDone(ACTIONS.scheduled(next === undefined ? describeSpec(result.task.spec) : formatOccurrence(next, resolveZone(result.task.spec.tz))));
+    setDone(ACTIONS.scheduled(nextWords(result.task.spec, pageClock.now(), new Date(result.task.createdAt))));
   };
 
   const scheduleIt = (): void => {

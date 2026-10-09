@@ -180,6 +180,37 @@ describe('the Snug skill leaves the hand-in’s answers to the launch protocol',
   });
 });
 
+describe('the Snug skill says who schedules (TASK-20261009 P5; ADR-0074 §4, §6)', () => {
+  const schedules = (): string => said(skillSource()).split('## Schedules')[1]?.split('## Never')[0] ?? '';
+
+  it('has one "## Schedules" section, before "## Never" and after the hand-in, so the routing rows and the Never list are untouched', () => {
+    const text = skillSource();
+    expect(text.split('## Schedules').length - 1).toBe(1);
+    expect(text.indexOf('## Schedules')).toBeGreaterThan(text.indexOf('## Where the user\'s data lives'));
+    expect(text.indexOf('## Schedules')).toBeLessThan(text.indexOf('## Never'));
+  });
+
+  it('the runner schedules, never the app and never the agent; the Schedule page is the user’s', () => {
+    expect(schedules()).toMatch(/^ ?The runner schedules; the app never does, and neither do you\./);
+    expect(schedules()).toMatch(/the runner's scheduler is the one timer there is/);
+    expect(schedules()).toMatch(/the Schedule page is the user's\.\s*$/);
+  });
+
+  it('an app the agent builds may SUGGEST a schedule at runtime, once, after a user act — through the reference it names', () => {
+    expect(schedules()).toMatch(/may SUGGEST a schedule for itself at runtime, once, after the user has done something/);
+    expect(schedules()).toContain('`references/85-scheduled-runs.md`');
+    // The reference is listed where the agent reads references, and the KB file it names exists.
+    expect(said(skillSource()).split('## Build the app')[1]?.split('## Hand the app in')[0] ?? '').toContain('`references/85-scheduled-runs.md`');
+    expect(promptFilesOnDisk().some((f) => f.rel === 'knowledge-base/app-authoring/85-scheduled-runs.md')).toBe(true);
+  });
+
+  it('the agent never hand-rolls setInterval reminders, never thinks on a timer, and never writes a schedule into the bundle', () => {
+    expect(schedules()).toMatch(/Never hand-roll a reminder with `setInterval` or `setTimeout`/);
+    expect(schedules()).toMatch(/never think or fetch on a timer/);
+    expect(schedules()).toMatch(/never write a schedule into the bundle/);
+  });
+});
+
 describe('the Snug skill keeps its shape', () => {
   it('carries the store header, then the frontmatter the skill ships with', () => {
     const source = skillSource();

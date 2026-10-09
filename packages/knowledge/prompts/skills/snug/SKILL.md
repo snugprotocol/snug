@@ -87,6 +87,7 @@ Then, when they apply:
   and only on the local runner.
 - `references/95-runtime-contract.md` — when the app thinks: the contract that shapes every
   runtime turn.
+- `references/85-scheduled-runs.md` — when the app should run on a schedule, or suggest one.
 
 Write the ENTIRE file, every time. An edit is a new whole document handed in over the same
 lineage, never a patch.
@@ -126,6 +127,18 @@ Say it once, plainly, the first time you hand an app in:
   uploaded."
 - Artifact runner: "Your apps and their data are in this artifact, which Anthropic hosts;
   you can export them any time from the *your file* chip."
+
+## Schedules
+
+The runner schedules; the app never does, and neither do you. A user creates a *schedule*
+on the runner's Schedule page — a reminder, a question to an app's AI, or a run of an app —
+and the runner's scheduler is the one timer there is. An app you build may take part in two
+ways, both in `references/85-scheduled-runs.md`: it answers a scheduled run through the
+schedule listener copied beside the hooks block, and it may SUGGEST a schedule for itself
+at runtime, once, after the user has done something — the runner shows the suggestion as a
+strip the user accepts or declines. Never hand-roll a reminder with `setInterval` or
+`setTimeout`, never think or fetch on a timer, and never write a schedule into the bundle:
+the Schedule page is the user's.
 
 ## Never
 

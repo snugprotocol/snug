@@ -17,10 +17,16 @@ import {
 } from '@snugprotocol/knowledge';
 import { runtimeContractSchema } from '@snugprotocol/protocol';
 
+import { allows } from '../platform/platform.js';
 import { getUserDb } from '../state/userdb.js';
 import type { ArtifactSink, ArtifactWriteResult } from './artifactSink.js';
+import { buildScheduleProposeTool, type OnScheduleProposal } from './scheduleProposeTool.js';
 
 export const ARTIFACT_WRITE_TOOL_NAME = 'artifact_write';
+
+// The propose-only schedule tool lives in `scheduleProposeTool.ts` (Gate-5 PR-B M17); its name
+// is re-exported here beside the other tool names so every importer keeps its one import.
+export { SCHEDULE_PROPOSE_TOOL_NAME } from './scheduleProposeTool.js';
 
 /** Doc slugs are ids, not prose: lowercase, hyphen-separated (matches the standard slugs). */
 const DOC_SLUG_RULE = /^[a-z][a-z0-9-]{0,40}$/;
@@ -32,6 +38,13 @@ export interface ByokToolHooks {
   onDocWritten?: (appId: string, slug: string) => void;
   /** The app's runtime contract was authored/replaced (ADR-0018). */
   onRuntimeContractWritten?: (appId: string) => void;
+  /**
+   * A `schedule_propose` call staged a suggestion (TASK-20261009 P1). The host renders it as
+   * a card on the agent's message; `false` means it was NOT staged (one card per turn), and
+   * the tool tells the model so. Absent ⇒ no surface can show a suggestion here, and the
+   * tool says that instead of pretending.
+   */
+  onScheduleProposal?: OnScheduleProposal;
 }
 
 export interface BuildByokToolsOptions {
@@ -265,5 +278,18 @@ export function buildByokTools(
         }
       },
     },
+    // TASK-20261009 P1 (ADR-0074 §4): the builder may SUGGEST a schedule for the app it is
+    // building — staged on the message, enabled only by the user. Only where this host
+    // schedules at all; the sink's pre-minted target counts as "no app yet" until the first
+    // artifact write lands, exactly as the runtime-contract tool reads it.
+    ...(allows('schedule')
+      ? [
+          buildScheduleProposeTool({
+            getDb,
+            resolveAppId: () => sink.ensureTargetId(),
+            ...(hooks.onScheduleProposal !== undefined ? { onProposal: hooks.onScheduleProposal } : {}),
+          }),
+        ]
+      : []),
   ];
 }
