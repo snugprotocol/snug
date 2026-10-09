@@ -40,6 +40,7 @@ import { useCallback } from 'react';
 import { SCHEDULED_TASK_MAX_BYTES, proposalHash, scheduleProposalSchema, type ScheduleProposal } from '@snugprotocol/protocol';
 import type { UserDb } from '@snugprotocol/db';
 
+import { getAppMeta } from '../state/appMeta.js';
 import { createStore, type Store } from '../state/store.js';
 import { getUserDb } from '../state/userdb.js';
 import { enableProposedTask, namesOnly } from './enableProposedTask.js';
@@ -126,6 +127,12 @@ export function appProposedCount(db: UserDb, appId: string): number {
  * Consume one app event. Answers the decision so a test can see WHY a request was dropped;
  * the app never does. Never throws — a bad event from the frame must not reach the run view.
  */
+/** Every step that names `announcedId` renamed to `libraryId`; untouched when they are the same or unknown. */
+export function withOwnStepsAs(proposal: ScheduleProposal, announcedId: string | undefined, libraryId: string): ScheduleProposal {
+  if (announcedId === undefined || announcedId === libraryId) return proposal;
+  return { ...proposal, steps: proposal.steps.map((step) => ('appId' in step && step.appId === announcedId ? { ...step, appId: libraryId } : step)) };
+}
+
 export async function consumeScheduleRequest(input: ScheduleRequestInput): Promise<RequestDecision> {
   if (input.event !== SCHEDULE_REQUEST_EVENT) return 'ignored';
   const at = deps.now();
@@ -137,7 +144,10 @@ export async function consumeScheduleRequest(input: ScheduleRequestInput): Promi
   if (bytes === undefined || bytes > SCHEDULE_REQUEST_MAX_BYTES) return 'unreadable';
   const parsed = scheduleProposalSchema.safeParse(input.data);
   if (!parsed.success) return 'unreadable';
-  const proposal = parsed.data;
+  // An app knows only the id it ANNOUNCED (`useSnugApp({ appId })`), never the library id the
+  // host assigned, so a step naming its announced id names the sender: map it to the library
+  // id here, once, before the sender-only rule (PR-C). Anything else still reads `other-app`.
+  const proposal = withOwnStepsAs(parsed.data, getAppMeta(input.appId)?.announcedAppId, input.appId);
 
   try {
     const db = await deps.getDb();

@@ -157,6 +157,8 @@ export function useSnugSchedule(handler: SnugScheduleHandler): void {
  * (steps may name only this app — the host enforces the sender), or once a request has
  * already gone out on this page. The user decides on the host's strip; nothing runs until
  * they say so, and a declined suggestion is remembered by the host.
+ * The steps name THIS app by the `appId` the app announced (`useSnugApp({ appId })`): the host
+ * maps it to the id it holds the app under, so an app never needs to know that one.
  */
 export function proposeSchedule(proposal: ScheduleProposal): boolean {
   ensureListener();

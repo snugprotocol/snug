@@ -1,7 +1,21 @@
 {
-  "version": 2,
-  "appHash": "6ee7590ba73fd0d29cd0753521a3dd2040301c0ea9bd8c2a5ee0b24b2ec87fb2",
+  "version": 3,
+  "appHash": "38f4c962b0ee826b558509165b5c2dabde56c0061767ce7ab68736bf4622e94e",
   "changelog": [
+    {
+      "version": 3,
+      "date": "2026-10-09",
+      "title": "Morning forecast — a schedule of its own",
+      "sections": [
+        {
+          "title": "What's new",
+          "items": [
+            "The host can run the forecast for you each morning: schedule \"Morning forecast\" on the Schedule page and the app answers one line — the active place, the sky, and a verdict per decision card — without spending an AI call.",
+            "The app suggests that schedule once, after the first real forecast; nothing runs until you say so."
+          ]
+        }
+      ]
+    },
     {
       "version": 2,
       "date": "2026-08-21",

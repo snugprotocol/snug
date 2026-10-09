@@ -17,6 +17,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { UserDb } from '@snugprotocol/db';
 import { proposalHash, type ScheduleProposal } from '@snugprotocol/protocol';
 
+import { appMetaStore } from '../state/appMeta.js';
+
 import { __resetSchedulerForTests } from '../schedule/scheduler.js';
 import {
   APP_PROPOSED_TASK_CAP,
@@ -289,3 +291,15 @@ describe('useAppEventConsumer — the run view’s one line', () => {
     container.remove();
   });
 });
+
+describe('the declared announce id (PR-C): a starter cannot know its library id', () => {
+  it('a step naming the app’s ANNOUNCED id is accepted and normalised to the library id; a foreign announced id is still other-app', async () => {
+    appMetaStore.set({ ...appMetaStore.get(), [weather]: { displayName: 'Should I?', announcedAppId: 'weather-should-i' }, [other]: { displayName: 'Ledger', announcedAppId: 'ledger' } });
+    expect(await request(weather, proposal(weather, { steps: [{ kind: 'app-run', appId: 'weather-should-i', input: { fetch: true } }] }))).toBe('accepted');
+    const pending = pendingSuggestionFor(weather);
+    expect(pending?.proposal.steps).toEqual([{ kind: 'app-run', appId: weather, input: { fetch: true } }]);
+    expect(pending?.hash).toBe(proposalHash({ ...proposal(weather), steps: [{ kind: 'app-run', appId: weather, input: { fetch: true } }] }));
+    expect(await request(weather, proposal(weather, { steps: [{ kind: 'app-run', appId: 'ledger' }] }), 1)).toBe('other-app');
+  });
+});
+

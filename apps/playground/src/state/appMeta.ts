@@ -16,6 +16,13 @@ export interface AppMeta {
   iconColor?: string;
   /** Set once the app has been observed making db requests — gates the export button. */
   usesDb?: boolean;
+  /**
+   * The id the app ANNOUNCED for itself (`useSnugApp({ appId })`) — not the library id the
+   * host assigned. An app knows only this one, so a schedule it suggests for itself names it
+   * (TASK-20261009 PR-C); the intake maps it to the library id. In-memory only: the db's app
+   * row has no column for it, and the announce re-records it on every open.
+   */
+  announcedAppId?: string;
 }
 
 export type AppMetaMap = Readonly<Record<string, AppMeta>>;
@@ -74,7 +81,7 @@ export function recordAppMeta(libraryId: string, meta: Partial<AppMeta>): void {
       // THE AUTHORITATIVE GUARD: an announce can race hydration, in which case the
       // in-memory marker set above is empty and the merge used the announce name. The
       // DB knows better — a marked app's stored name wins, always.
-      const patch = { ...merged };
+      const { announcedAppId: _announced, ...patch } = merged; // the row has no column for the announced id
       if (db.listRenamedApps().includes(libraryId)) {
         const stored = db.getApp(libraryId)?.displayName;
         if (stored !== undefined) patch.displayName = stored;

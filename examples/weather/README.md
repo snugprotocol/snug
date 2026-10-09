@@ -5,6 +5,9 @@ OpenWeather data (current, 5-day/3-hour forecast, geocoding) through the governe
 connected-fetch seam, decision verdicts computed by local, explainable rules, an
 "ask the agent" upgrade validated hard against `RESPONSE_SCHEMA`, and app-owned
 SQLite for places, decision cards, and a decision-outcome journal.
+Since v3 it also takes part in the host's scheduler: a "Morning forecast" the user
+schedules runs the same local rules unattended and answers one line (and suggests
+itself once, after the first real forecast) — see the KB's "Scheduled Runs".
 
 **Complement thesis:** every weather app shows you numbers; none answers the
 question you actually had. *Should I?* turns the forecast into verdicts — decision

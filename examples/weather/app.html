@@ -934,6 +934,70 @@ function useConnectedFetch() {
     }
 
     // ---- the app --------------------------------------------------------
+    // ============================================================
+    // SCHEDULED RUNS — the host's scheduler wakes this app; see "Scheduled Runs"
+    // ============================================================
+    // A "Morning forecast" the user schedules on the host's Schedule page: the host wakes
+    // this app in a hidden frame, this handler fetches the forecast for the active place
+    // through the same governed seam, scores every decision card with the SAME local rules
+    // the page uses (no agent call — nothing to spend while nobody is looking), and answers
+    // one line. Reads only; the app never owns a timer (KB "Scheduled Runs").
+    const SCHEDULE_HANDLED = new Set(); // runIds already answered on this page
+
+    const rowsOf = (res, cols) => (res && res.ok && Array.isArray(res.rows) ? res.rows.map((r) => Object.fromEntries(cols.map((c, i) => [c, r[i]]))) : []);
+
+    async function onScheduledRun({ runId, taskId, input }) {
+      const prefs = await snugDbRequest('kvGet', { key: 'should-i-prefs' });
+      const activeId = prefs.ok && prefs.value && prefs.value.activePlaceId != null ? prefs.value.activePlaceId : null;
+      const places = rowsOf(await snugDbRequest('exec', { sql: 'SELECT id, name, lat, lon FROM places ORDER BY id', params: [] }), ['id', 'name', 'lat', 'lon']);
+      const place = places.find((p) => p.id === activeId) || places[0];
+      if (!place) return { ok: false, summary: 'add a place in the app first' };
+      const qs = 'lat=' + place.lat + '&lon=' + place.lon + '&units=metric';
+      const [cRes, fRes] = await Promise.all([
+        snugNetRequest({ url: OW + '/data/2.5/weather?' + qs, method: 'GET' }),
+        snugNetRequest({ url: OW + '/data/2.5/forecast?' + qs, method: 'GET' }),
+      ]);
+      const bad = classifyNet(cRes) || classifyNet(fRes);
+      if (bad) return { ok: false, summary: bad.kind === 'unconnected' ? 'connect OpenWeather in the app first' : (netCopy(bad) || bad.msg || 'the forecast did not load') };
+      const cur = parseBody(cRes.body);
+      const fc = parseBody(fRes.body);
+      if (!cur || !cur.main || !fc || !Array.isArray(fc.list) || fc.list.length === 0) return { ok: false, summary: 'unexpected response from OpenWeather' };
+      const wx = { slots: fc.list.map(slotFromApi), tz: safeNum(cur.timezone, safeNum(fc.city && fc.city.timezone)) };
+      const nowSec = Math.floor(Date.now() / 1000);
+      const decisions = rowsOf(
+        await snugDbRequest('exec', { sql: 'SELECT id, title, kind, emoji, day_offset, start_hour, end_hour FROM decisions ORDER BY id', params: [] }),
+        ['id', 'title', 'kind', 'emoji', 'day_offset', 'start_hour', 'end_hour'],
+      );
+      const head = place.name + ': ' + Math.round(safeNum(cur.main.temp)) + '°, ' + ((cur.weather && cur.weather[0] && cur.weather[0].description) || 'settled');
+      const calls = decisions.slice(0, 4).map((d) => d.title + ' — ' + decideLocal(d, wx, nowSec).verdict);
+      const summary = calls.length > 0 ? head + '. ' + calls.join(' · ') + '.' : head + '. Add a decision card in the app to get verdicts here.';
+      return { ok: true, summary, notify: { title: 'Morning forecast', body: summary.slice(0, 120) } };
+    }
+
+    window.addEventListener('message', async (event) => {
+      const data = event.data;
+      if (event.source !== window.parent || !data || data.v !== 1) return;
+      if (data.type !== 'snug:host-event' || data.event !== 'schedule-run') return;
+      const hint = data.data;
+      if (!hint || typeof hint.runId !== 'string' || typeof hint.taskId !== 'string') return;
+      if (SCHEDULE_HANDLED.has(hint.runId)) return; // a repeated hint: the first answer stands
+      SCHEDULE_HANDLED.add(hint.runId);
+      const stored = await snugDbRequest('kvGet', { key: 'snug:schedule:' + hint.runId });
+      const input = stored.ok && stored.value && typeof stored.value === 'object' ? stored.value.input : undefined;
+      let result;
+      try {
+        result = await onScheduledRun({ runId: hint.runId, taskId: hint.taskId, input });
+      } catch (err) {
+        result = { ok: false, summary: (err && err.message) || 'the scheduled run failed' };
+      }
+      const answer = { ok: !!(result && result.ok) };
+      if (result && typeof result.summary === 'string' && result.summary) answer.summary = result.summary;
+      if (result && result.notify && result.notify.title && result.notify.body) {
+        answer.notify = { title: String(result.notify.title), body: String(result.notify.body) };
+      }
+      SnugBridge.post({ type: 'snug:app-event', event: 'schedule-result', data: answer });
+    });
+
     function App() {
       const { isReady, theme, sendMessage } = useSnugApp({
         appId: 'weather-should-i',
@@ -1053,6 +1117,24 @@ function useConnectedFetch() {
         if (!isReady || !activePlace) return;
         loadWeather(activePlace);
       }, [isReady, activePlace && activePlace.id, loadWeather]);
+
+      // Suggest a "Morning forecast" schedule ONCE, only after the first forecast loaded for
+      // real (a working connection, a place) — never on load, never again after that; the host
+      // shows it as a strip the user can take, decline or silence (KB "Suggesting a Schedule").
+      const [scheduleSuggested, setScheduleSuggested] = usePersistedState('schedule-suggested', false);
+      useEffect(() => {
+        if (!wx || scheduleSuggested) return;
+        SnugBridge.post({
+          type: 'snug:app-event',
+          event: 'schedule-request',
+          data: {
+            title: 'Morning forecast',
+            steps: [{ kind: 'app-run', appId: 'weather-should-i', input: { fetch: true } }],
+            spec: { kind: 'daily', time: '07:00', tz: 'device' },
+          },
+        });
+        setScheduleSuggested(true);
+      }, [wx, scheduleSuggested, setScheduleSuggested]);
 
       // ---- geocoding (Places) ----
       const searchPlaces = async () => {
