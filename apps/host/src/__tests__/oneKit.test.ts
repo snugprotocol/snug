@@ -93,6 +93,10 @@ describe('K1 — one Vite config, one html entry, one output', () => {
   it('nothing outside docs/ names the second build — in any tracked file', () => {
     // The four spellings the second build had. Assembled, so this file does not name them.
     const second = new RegExp(['dist' + '-local', 'snug-host' + '-local', 'vite' + '\\.local', 'build' + ':local'].join('|'));
+    // Positive control: the pattern can match each spelling it hunts (a mistyped pattern would pass vacuously).
+    for (const spelling of ['dist' + '-local/x', 'snug-host' + '-local.html', 'vite' + '.local.config.ts', 'build' + ':local']) {
+      expect(second.test(spelling), spelling).toBe(true);
+    }
     // `docs/` is the append-only record (decisions, journals, the plan that withdrew the
     // build) and the ONLY directory K1 exempts. (A filed prompt outside `docs/` was exempt
     // by name until TASK-20261008-p0-clearance removed it from the repo; nothing else is.)
