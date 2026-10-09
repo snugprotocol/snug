@@ -4,9 +4,26 @@
 // corruption recovery, and the size guard.
 import initSqlJs from 'sql.js';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { USERDB_FILE, USERDB_LIMITS, USERDB_SCHEMA_VERSION } from '@snugprotocol/protocol';
+import {
+  USERDB_FILE,
+  USERDB_LIMITS,
+  USERDB_SCHEMA_VERSION,
+  USERDB_TABLES,
+  scheduleRunSchema,
+  scheduledTaskSchema,
+  type ScheduleRun,
+  type ScheduledTask,
+} from '@snugprotocol/protocol';
 import { locateWasm } from '../../__tests__/helpers.js';
 import { createMemoryBackend, type MemoryBackend } from '../../persistence.js';
+import {
+  SCHEDULER_STATE_SETTING_KEY,
+  scheduleDeclinedSettingKey,
+  scheduleMutedSettingKey,
+  scheduleRunsSettingKey,
+  scheduleSettingKey,
+} from '../app-settings-keys.js';
+import { SCHEDULE_IMPORTED_CLAIM_MAX_AGE_MS } from '../schedules.js';
 import { openUserDb, UserDbError, type UserDb } from '../userdb.js';
 
 const open = async (backend: MemoryBackend, overrides: Record<string, unknown> = {}): Promise<UserDb> => {
@@ -330,5 +347,294 @@ describe('importUserDb({ stripSecrets }) — the candidate loses snug_secrets be
     expect(target.listSecretKeys()).toEqual(['byok:anthropic']);
     expect(target.getSecret('byok:anthropic')).toBe(SECRET);
     await target.close();
+  });
+});
+
+// ------------------------------------------- scheduled tasks across the file boundary
+//
+// TASK-20261009-scheduling-framework C4 (ADR-0074 §2, §6). A task is EXECUTABLE INTENT
+// — like endpoint settings, connections and runtime contracts, it is the kind of row a
+// foreign file must not be able to plant armed. So the import seam that every path
+// (UI import, sync pull-merge, applyRemote, recovery restore) already funnels through
+// gains one more pass, at the slot the connection reconciliation occupies:
+//
+//   - on EVERY import: `proposals` leave every run row (a foreign file can never plant an
+//     approval card — security F1), and a `running`/`pending` claim older than its bound
+//     is `interrupted` (reason `imported`): no host is still executing it;
+//   - UNTRUSTED (a file off disk): a task not byte-identical to a local one lands
+//     `enabled:false, provenance:'imported'`; the watermark becomes NOW (a foreign past
+//     must not become a catch-up storm); declines and mutes are dropped (they are the
+//     user's own answers to THEIR apps' suggestions, not something a file carries in);
+//   - TRUSTED (the user's own origin): tasks stay as they are; the watermark is
+//     max(local, imported) so a pull never rewinds a device behind runs it recorded.
+//
+// Export strips `proposals` the same way, on the throwaway copy: a proposed statement
+// never leaves the device, on either export path.
+
+const SCHEDULE_AT = '2026-10-09T08:00:00.000Z';
+const minutesAgo = (minutes: number): string => new Date(Date.now() - minutes * 60_000).toISOString();
+
+function scheduledTask(id: string, overrides: Record<string, unknown> = {}): ScheduledTask {
+  return scheduledTaskSchema.parse({
+    id,
+    title: `Task ${id}`,
+    enabled: true,
+    provenance: 'user',
+    steps: [{ kind: 'notify', title: 'Water the plants', body: 'The ferns are thirsty.' }],
+    spec: { kind: 'daily', time: '08:00', tz: 'device' },
+    cron: '0 8 * * *',
+    missedPolicy: 'run-once',
+    staleAfterMs: 86_400_000,
+    alert: 'inbox',
+    appVersions: {},
+    createdAt: SCHEDULE_AT,
+    updatedAt: SCHEDULE_AT,
+    ...overrides,
+  });
+}
+
+function scheduleRun(taskId: string, dueAt: string, overrides: Record<string, unknown> = {}): ScheduleRun {
+  return scheduleRunSchema.parse({
+    id: `run-${taskId}-${dueAt}`,
+    taskId,
+    dueAt,
+    trigger: 'due',
+    status: 'ok',
+    host: { kind: 'web' },
+    steps: [],
+    ...overrides,
+  });
+}
+
+const PROPOSAL_SQL = "UPDATE expenses SET note = 'PLANTED-BY-A-FOREIGN-FILE' WHERE id = 7";
+const proposals = { items: [{ sql: PROPOSAL_SQL, summary: 'Fix the note', counts: { changes: 1 } }], expiresAt: minutesAgo(-60) };
+
+/** A donor file carrying whatever `plant` writes through the accessors — exported WITH secrets, like a sync push. */
+async function donorBytes(plant: (donor: UserDb) => void): Promise<Uint8Array> {
+  const donor = await open(createMemoryBackend());
+  plant(donor);
+  const bytes = await donor.exportUserDb({ includeSecrets: true });
+  await donor.close();
+  return bytes;
+}
+
+/**
+ * Plant one settings row INTO exported bytes with raw sql.js — what a hostile or foreign
+ * donor would do, and the only way to build a file that carries proposals, since the
+ * donor's own export strips them (the `foreignDbWithRawContract` technique).
+ */
+async function plantRaw(bytes: Uint8Array, rows: Array<[key: string, value: unknown]>): Promise<Uint8Array> {
+  const SQL = await initSqlJs({ locateFile: locateWasm });
+  const raw = new SQL.Database(bytes);
+  try {
+    for (const [key, value] of rows) {
+      raw.run(`INSERT OR REPLACE INTO ${USERDB_TABLES.settings} (key, value) VALUES (?, ?)`, [key, JSON.stringify(value)]);
+    }
+    return raw.export();
+  } finally {
+    raw.close();
+  }
+}
+
+/** Read one settings row straight out of exported bytes — the claim is about what LEAVES, so no accessor sits in between. */
+async function settingFromBytes(bytes: Uint8Array, key: string): Promise<unknown> {
+  const SQL = await initSqlJs({ locateFile: locateWasm });
+  const raw = new SQL.Database(bytes);
+  try {
+    const stmt = raw.prepare(`SELECT value FROM ${USERDB_TABLES.settings} WHERE key = ?`, [key]);
+    try {
+      return stmt.step() ? (JSON.parse(String(stmt.get()[0])) as unknown) : undefined;
+    } finally {
+      stmt.free();
+    }
+  } finally {
+    raw.close();
+  }
+}
+
+describe('importUserDb — scheduled tasks are executable intent (TASK-20261009 C4)', () => {
+  it('an UNTRUSTED file: a task the hub has never seen arrives DISABLED with provenance "imported", and is reported', async () => {
+    const bytes = await donorBytes((donor) => donor.putScheduledTask(scheduledTask('foreign', { provenance: 'app', ownerAppId: 'weather' })));
+    const db = await open(backend);
+
+    const report = await db.importUserDb(bytes);
+
+    const landed = db.getScheduledTask('foreign');
+    expect(landed?.enabled).toBe(false);
+    expect(landed?.provenance).toBe('imported');
+    expect(landed?.ownerAppId).toBe('weather'); // the rest of the task is kept, readable, for the user to review
+    expect(report.schedules).toEqual({ demotedTasks: 1, strippedProposals: 0 });
+    await db.close();
+  });
+
+  it('an UNTRUSTED file: a task byte-identical (canonically) to a local one stays enabled — a backup round trip must not disarm the user', async () => {
+    const mine = scheduledTask('mine');
+    const bytes = await donorBytes((donor) => {
+      // The same task with its keys in another order: the comparison is canonical, not raw.
+      const reordered = Object.fromEntries(Object.entries(mine).reverse());
+      donor.setSetting(scheduleSettingKey('mine'), reordered);
+      donor.putScheduledTask(scheduledTask('edited-elsewhere', { title: 'Same id, other bytes' }));
+    });
+    const db = await open(backend);
+    db.putScheduledTask(mine);
+    db.putScheduledTask(scheduledTask('edited-elsewhere'));
+
+    const report = await db.importUserDb(bytes);
+
+    expect(db.getScheduledTask('mine')).toEqual(mine);
+    expect(db.getScheduledTask('edited-elsewhere')?.enabled).toBe(false);
+    expect(db.getScheduledTask('edited-elsewhere')?.provenance).toBe('imported');
+    expect(report.schedules.demotedTasks).toBe(1);
+    await db.close();
+  });
+
+  it('a TRUSTED origin keeps every task exactly as it is (a new device or a restore must not disarm the user)', async () => {
+    const theirs = scheduledTask('theirs', { provenance: 'chat' });
+    const bytes = await donorBytes((donor) => donor.putScheduledTask(theirs));
+    const db = await open(backend);
+
+    const report = await db.importUserDb(bytes, { trustedOrigin: true });
+
+    expect(db.getScheduledTask('theirs')).toEqual(theirs);
+    expect(report.schedules.demotedTasks).toBe(0);
+    await db.close();
+  });
+
+  it('proposals are STRIPPED from every run row on both paths, and the planted SQL is nowhere in the adopted bytes', async () => {
+    const exported = await donorBytes((donor) => {
+      donor.putScheduledTask(scheduledTask('t1'));
+      donor.putScheduledTask(scheduledTask('t2'));
+    });
+    // Planted raw: the donor's own export would already have stripped these.
+    const bytes = await plantRaw(exported, [
+      [scheduleRunsSettingKey('t1'), [scheduleRun('t1', minutesAgo(3), { status: 'ok' }), scheduleRun('t1', minutesAgo(5), { status: 'needs-you', proposals })]],
+      [scheduleRunsSettingKey('t2'), [scheduleRun('t2', minutesAgo(4), { status: 'ok', proposals })]],
+    ]);
+
+    for (const options of [undefined, { trustedOrigin: true }]) {
+      const db = await open(createMemoryBackend());
+      const report = await db.importUserDb(bytes, options);
+      expect(report.schedules.strippedProposals, `trusted=${String(options?.trustedOrigin)}`).toBe(2);
+      for (const run of [...db.listScheduleRuns('t1'), ...db.listScheduleRuns('t2')]) {
+        expect(run.proposals).toBeUndefined();
+      }
+      expect(db.listScheduleRuns('t1').map((r) => r.status)).toEqual(['ok', 'needs-you']); // the rows themselves survive
+      const adopted = await db.exportUserDb({ includeSecrets: true });
+      expect(new TextDecoder('latin1').decode(adopted)).not.toContain('PLANTED-BY-A-FOREIGN-FILE');
+      await db.close();
+    }
+  });
+
+  it('a running or pending claim older than its bound becomes "interrupted" (reason imported); a fresh one is left alone', async () => {
+    const staleMinutes = SCHEDULE_IMPORTED_CLAIM_MAX_AGE_MS / 60_000 + 5;
+    const bytes = await donorBytes((donor) => {
+      donor.putScheduledTask(scheduledTask('t1'));
+      donor.putScheduleRun(scheduleRun('t1', minutesAgo(staleMinutes + 10), { status: 'running', startedAt: minutesAgo(staleMinutes) }));
+      donor.putScheduleRun(scheduleRun('t1', minutesAgo(staleMinutes), { status: 'pending', trigger: 'catch-up' }));
+      donor.putScheduleRun(scheduleRun('t1', minutesAgo(2), { status: 'running', startedAt: minutesAgo(1) }));
+      donor.putScheduleRun(scheduleRun('t1', minutesAgo(3), { status: 'pending', trigger: 'catch-up' }));
+    });
+    const db = await open(backend);
+
+    await db.importUserDb(bytes, { trustedOrigin: true });
+
+    const byStatus = db.listScheduleRuns('t1').map((r) => [r.status, r.reason]);
+    expect(byStatus).toEqual([
+      ['pending', undefined],
+      ['running', undefined],
+      ['interrupted', 'imported'],
+      ['interrupted', 'imported'],
+    ]);
+    await db.close();
+  });
+
+  it('UNTRUSTED: the watermark becomes NOW, globalPause is kept, the daily counters are zeroed', async () => {
+    const bytes = await donorBytes((donor) => {
+      donor.putScheduledTask(scheduledTask('t1'));
+      donor.setSchedulerState({ watermark: '2020-01-01T00:00:00.000Z', globalPause: true, daily: { date: '2020-01-01', ai: 40, net: 200 } });
+    });
+    const db = await open(backend);
+    db.setSchedulerState({ watermark: '2025-06-01T00:00:00.000Z', globalPause: false, daily: { date: '2025-06-01', ai: 1, net: 1 } });
+    const before = new Date().toISOString();
+
+    await db.importUserDb(bytes);
+
+    const state = db.getSchedulerState();
+    expect(state?.watermark && state.watermark >= before, 'the watermark is now, not the foreign past').toBe(true);
+    expect(state?.globalPause).toBe(true);
+    expect(state?.daily).toEqual({ date: before.slice(0, 10), ai: 0, net: 0 });
+    await db.close();
+  });
+
+  it('TRUSTED: the watermark is max(local, imported) — in both directions', async () => {
+    const older = '2026-01-01T00:00:00.000Z';
+    const newer = '2026-06-01T00:00:00.000Z';
+    const imported = (watermark: string): Promise<Uint8Array> =>
+      donorBytes((donor) => donor.setSchedulerState({ watermark, globalPause: false, daily: { date: watermark.slice(0, 10), ai: 2, net: 3 } }));
+
+    const localNewer = await open(createMemoryBackend());
+    localNewer.setSchedulerState({ watermark: newer, globalPause: false, daily: { date: '2026-06-01', ai: 0, net: 0 } });
+    await localNewer.importUserDb(await imported(older), { trustedOrigin: true });
+    expect(localNewer.getSchedulerState()?.watermark).toBe(newer);
+    expect(localNewer.getSchedulerState()?.daily.ai, 'the rest of the imported state is kept').toBe(2);
+    await localNewer.close();
+
+    const localOlder = await open(createMemoryBackend());
+    localOlder.setSchedulerState({ watermark: older, globalPause: false, daily: { date: '2026-01-01', ai: 0, net: 0 } });
+    await localOlder.importUserDb(await imported(newer), { trustedOrigin: true });
+    expect(localOlder.getSchedulerState()?.watermark).toBe(newer);
+    await localOlder.close();
+  });
+
+  it('UNTRUSTED drops every decline and mute; TRUSTED keeps them', async () => {
+    const bytes = await donorBytes((donor) => {
+      donor.addScheduleDecline('weather', 'hash-1');
+      donor.setScheduleMuted('ledger', true);
+    });
+
+    const untrusted = await open(createMemoryBackend());
+    await untrusted.importUserDb(bytes);
+    expect(untrusted.listScheduleDeclines('weather')).toEqual([]);
+    expect(untrusted.isScheduleMuted('ledger')).toBe(false);
+    expect(untrusted.listSettingKeys()).not.toContain(scheduleDeclinedSettingKey('weather', 'hash-1'));
+    expect(untrusted.listSettingKeys()).not.toContain(scheduleMutedSettingKey('ledger'));
+    await untrusted.close();
+
+    const trusted = await open(createMemoryBackend());
+    await trusted.importUserDb(bytes, { trustedOrigin: true });
+    expect(trusted.listScheduleDeclines('weather')).toEqual(['hash-1']);
+    expect(trusted.isScheduleMuted('ledger')).toBe(true);
+    await trusted.close();
+  });
+
+  it('an untrusted file with no scheduling rows at all adds no scheduler state — old backups import as before', async () => {
+    const bytes = await donorBytes((donor) => donor.setSetting('mode', 'local'));
+    const db = await open(backend);
+    await db.importUserDb(bytes);
+    expect(db.getSchedulerState()).toBeUndefined();
+    expect(db.listSettingKeys()).not.toContain(SCHEDULER_STATE_SETTING_KEY);
+    await db.close();
+  });
+});
+
+describe('exportUserDb — proposals never leave the device (TASK-20261009 C4)', () => {
+  it('strips proposals from every run row on BOTH export paths; the live file keeps them', async () => {
+    const db = await open(backend);
+    db.putScheduledTask(scheduledTask('t1'));
+    db.putScheduleRun(scheduleRun('t1', minutesAgo(5), { status: 'needs-you', proposals }));
+    db.putScheduleRun(scheduleRun('t1', minutesAgo(3), { status: 'ok' }));
+
+    for (const opts of [undefined, { includeSecrets: true }]) {
+      const bytes = await db.exportUserDb(opts);
+      expect(new TextDecoder('latin1').decode(bytes), `includeSecrets=${String(opts?.includeSecrets)}`).not.toContain(
+        'PLANTED-BY-A-FOREIGN-FILE',
+      );
+      const row = (await settingFromBytes(bytes, scheduleRunsSettingKey('t1'))) as Array<Record<string, unknown>>;
+      expect(row.map((r) => r.status)).toEqual(['ok', 'needs-you']); // the history itself is carried
+      expect(row.every((r) => !('proposals' in r))).toBe(true);
+    }
+    // The device's own pending card is untouched by exporting.
+    expect(db.listScheduleRuns('t1').find((r) => r.status === 'needs-you')?.proposals?.items[0]?.sql).toBe(PROPOSAL_SQL);
+    await db.close();
   });
 });

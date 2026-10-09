@@ -114,7 +114,25 @@ export {
   AGENT_DISMISSED_SETTING_PREFIX,
   agentDismissedSettingKey,
   lineageFromAgentDismissedSettingKey,
+  // Scheduled tasks (TASK-20261009-scheduling-framework, ADR-0074 §2): the five
+  // namespaces the scheduler keeps in `snug_settings`, single-homed like the rest.
+  SCHEDULE_SETTING_PREFIX,
+  SCHEDULE_RUNS_SETTING_PREFIX,
+  SCHEDULER_STATE_SETTING_KEY,
+  SCHEDULE_DECLINED_SETTING_PREFIX,
+  SCHEDULE_MUTED_SETTING_PREFIX,
+  appIdFromScheduleMutedSettingKey,
+  scheduleDeclinedSettingKey,
+  scheduleDeclinedSettingPrefixFor,
+  scheduleMutedSettingKey,
+  scheduleRunsSettingKey,
+  scheduleSettingKey,
+  taskIdFromScheduleRunsSettingKey,
+  taskIdFromScheduleSettingKey,
 } from './userdb/app-settings-keys.js';
+
+// The import/export bound a `running`/`pending` claim is retired under (TASK-20261009 C4).
+export { SCHEDULE_IMPORTED_CLAIM_MAX_AGE_MS } from './userdb/schedules.js';
 
 // App sharing (TASK-20260904, ADR-0063): build / install / update one app as a bundle, and
 // the first-bytes sniff that tells a bundle from a user file.

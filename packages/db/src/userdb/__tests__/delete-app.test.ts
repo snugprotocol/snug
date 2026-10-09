@@ -9,16 +9,42 @@
 // The delete deliberately IGNORES `pinned` (owner-confirmed): the factory version and
 // the bootstrap chat message go too. The existing retention helpers (pruneChatMessages,
 // version retention) must NOT be reused — both refuse pinned rows by design.
+//
+// SCHEDULES (TASK-20261009-scheduling-framework C3, ADR-0074 §2). The scheduler's rows
+// live in `snug_settings` too, so the cascade owes them three sweeps, each of which the
+// last describe below is the mutation check for — remove one and its row reds:
+//   - the task + runs delete for a task whose EVERY step names the app
+//       → "a task that only ever named the deleted app vanishes with its runs row";
+//   - the `scheduleDeclined:<appId>:` prefix delete → "the app's declines … are gone";
+//   - the `scheduleMuted:<appId>` equality delete  → "… and its mute … are gone".
+// A multi-app task is deliberately NOT rewritten: the engine derives `appMissing` on a
+// step result from the missing app at run time, so the task row stays byte-identical.
 
 import initSqlJs from 'sql.js';
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { APP_KV_TABLE, USERDB_FILE, USERDB_TABLES, appDataToken } from '@snugprotocol/protocol';
+import {
+  APP_KV_TABLE,
+  USERDB_FILE,
+  USERDB_TABLES,
+  appDataToken,
+  scheduleRunSchema,
+  scheduledTaskSchema,
+  type ScheduleRun,
+  type ScheduleStep,
+  type ScheduledTask,
+} from '@snugprotocol/protocol';
 
 import { locateWasm } from '../../__tests__/helpers.js';
 import { createMemoryBackend, type MemoryBackend } from '../../persistence.js';
 import { openUserDb, type UserDb } from '../userdb.js';
 import { execFrame, kvSetFrame } from '../../__tests__/helpers.js';
+import {
+  scheduleDeclinedSettingKey,
+  scheduleMutedSettingKey,
+  scheduleRunsSettingKey,
+  scheduleSettingKey,
+} from '../app-settings-keys.js';
 
 let backend: MemoryBackend;
 let db: UserDb;
@@ -386,5 +412,117 @@ describe('deleteApp — rollback preserves unflushed app data (review F2)', () =
     if (read.ok && read.rows !== undefined) {
       expect(read.rows.flat().map(String)).toContain('UNFLUSHED-PRECIOUS');
     }
+  });
+});
+
+// ------------------------------------------------- scheduled tasks (TASK-20261009 C3)
+
+const SCHEDULE_AT = '2026-10-09T08:00:00.000Z';
+
+function scheduledTask(id: string, steps: ScheduleStep[]): ScheduledTask {
+  return scheduledTaskSchema.parse({
+    id,
+    title: `Task ${id}`,
+    enabled: true,
+    provenance: 'user',
+    steps,
+    spec: { kind: 'daily', time: '08:00', tz: 'device' },
+    cron: '0 8 * * *',
+    missedPolicy: 'run-once',
+    staleAfterMs: 86_400_000,
+    alert: 'inbox',
+    appVersions: {},
+    createdAt: SCHEDULE_AT,
+    updatedAt: SCHEDULE_AT,
+  });
+}
+
+function scheduleRun(taskId: string): ScheduleRun {
+  return scheduleRunSchema.parse({
+    id: `run-${taskId}`,
+    taskId,
+    dueAt: SCHEDULE_AT,
+    trigger: 'due',
+    status: 'ok',
+    host: { kind: 'web' },
+    steps: [],
+  });
+}
+
+const runStep = (appId: string): ScheduleStep => ({ kind: 'app-run', appId });
+const thinkStep = (appId: string): ScheduleStep => ({ kind: 'app-think', appId, prompt: 'Summarise.', context: { maxRows: 50 } });
+const notifyStep: ScheduleStep = { kind: 'notify', title: 'Water the plants', body: 'The ferns are thirsty.' };
+
+describe('deleteApp — scheduled tasks, declines and the mute (TASK-20261009 C3, AC18 rows)', () => {
+  it('a task that only ever named the deleted app vanishes with its runs row', async () => {
+    const appId = await seedFullApp('goner');
+    db.putScheduledTask(scheduledTask('only-goner', [runStep(appId), thinkStep(appId)]));
+    db.putScheduleRun(scheduleRun('only-goner'));
+    expect(db.listScheduleRuns('only-goner')).toHaveLength(1);
+
+    await db.deleteApp(appId);
+
+    expect(db.getScheduledTask('only-goner')).toBeUndefined();
+    expect(db.listScheduleRuns('only-goner')).toEqual([]);
+    const after = await readUserDbTables();
+    for (const key of [scheduleSettingKey('only-goner'), scheduleRunsSettingKey('only-goner')]) {
+      expect(after.query(`SELECT 1 FROM ${USERDB_TABLES.settings} WHERE key = ?`, [key]), `row ${key} survived`).toHaveLength(0);
+    }
+  });
+
+  it('a task that names another app too SURVIVES with every step intact — the engine marks the dead step at run time', async () => {
+    const goner = await seedFullApp('goner', 'src-goner');
+    const keeper = await seedFullApp('keeper', 'src-keeper');
+    const twoApps = scheduledTask('two-apps', [runStep(goner), runStep(keeper)]);
+    const withReminder = scheduledTask('with-reminder', [notifyStep, thinkStep(goner)]);
+    db.putScheduledTask(twoApps);
+    db.putScheduledTask(withReminder);
+    db.putScheduleRun(scheduleRun('two-apps'));
+
+    await db.deleteApp(goner);
+
+    expect(db.getScheduledTask('two-apps')).toEqual(twoApps);
+    expect(db.getScheduledTask('with-reminder')).toEqual(withReminder);
+    expect(db.listScheduleRuns('two-apps')).toHaveLength(1);
+  });
+
+  it("the app's declines (prefix) and its mute (equality) are gone; a sibling app's rows and tasks are untouched", async () => {
+    const goner = await seedFullApp('goner', 'src-goner');
+    const keeper = await seedFullApp('keeper', 'src-keeper');
+    db.addScheduleDecline(goner, 'hash-1');
+    db.addScheduleDecline(goner, 'hash-2');
+    db.setScheduleMuted(goner, true);
+    db.addScheduleDecline(keeper, 'hash-1');
+    db.setScheduleMuted(keeper, true);
+    const keeperTask = scheduledTask('keeper-only', [runStep(keeper)]);
+    db.putScheduledTask(keeperTask);
+    db.putScheduleRun(scheduleRun('keeper-only'));
+
+    await db.deleteApp(goner);
+
+    expect(db.listScheduleDeclines(goner)).toEqual([]);
+    expect(db.isScheduleMuted(goner)).toBe(false);
+    const after = await readUserDbTables();
+    for (const key of [
+      scheduleDeclinedSettingKey(goner, 'hash-1'),
+      scheduleDeclinedSettingKey(goner, 'hash-2'),
+      scheduleMutedSettingKey(goner),
+    ]) {
+      expect(after.query(`SELECT 1 FROM ${USERDB_TABLES.settings} WHERE key = ?`, [key]), `row ${key} survived`).toHaveLength(0);
+    }
+    // The sibling keeps everything.
+    expect(db.listScheduleDeclines(keeper)).toEqual(['hash-1']);
+    expect(db.isScheduleMuted(keeper)).toBe(true);
+    expect(db.getScheduledTask('keeper-only')).toEqual(keeperTask);
+    expect(db.listScheduleRuns('keeper-only')).toHaveLength(1);
+  });
+
+  it('a schedule row that does not parse is left alone — the cascade cannot know whose it is', async () => {
+    const appId = await seedFullApp('goner');
+    db.setSetting(scheduleSettingKey('unreadable'), { steps: [{ kind: 'app-run', appId }] });
+
+    await db.deleteApp(appId);
+
+    expect(db.listUnreadableScheduleKeys()).toEqual([scheduleSettingKey('unreadable')]);
   });
 });
