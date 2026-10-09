@@ -1,0 +1,431 @@
+// resultDetail.test.tsx — TASK-20261009-scheduling-framework U4, the detail half (ADR-0074
+// §5–§6): one result opened at `/schedule/:id/result/:dueAt`.
+//
+// Over the REAL engine (the scheduler's composition root with its three outside seams faked —
+// a quiet ticker, no lock manager, a recording executor) and a REAL memory-backed user db, so
+// `markSeen` stamps the production row, `runNow` enqueues through the production queue and
+// *apply to my data* reaches `executeApprovedWrite` — the one path from a proposed statement to
+// data — against a real table: the applied case changes rows, the drift case halts on a count
+// that moved, the failed case reports the dry-run error. Nothing here fakes the accessor.
+import { act } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
+import { MemoryRouter, Route, Routes } from 'react-router';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import type { UserDb } from '@snugprotocol/db';
+import { SCHEDULE_PROPOSAL_TTL_MS, type ScheduleProposalItem, type ScheduleRun, type ScheduleStep, type ScheduledTask } from '@snugprotocol/protocol';
+
+import type { SnugPlatform } from '../platform/platform.js';
+import {
+  CAPPED_WHAT,
+  DECLINED,
+  DRIFTED,
+  EXPIRED,
+  RESULT_MISSING,
+  absoluteTime,
+  applied,
+  callsLine,
+  hostWord,
+  interruptedWhy,
+  relativeTime,
+  wouldChange,
+} from '../schedule/copy.bits.js';
+import { capped, needsYou, noHandler } from '../schedule/copy.js';
+import type { StepContext, StepExecutor } from '../schedule/engine-types.js';
+import { ResultDetail, changesAppId, proposalFor } from '../schedule/ResultDetail.js';
+import { __resetSchedulerForTests, initScheduler, type SchedulerDeps } from '../schedule/scheduler.js';
+import { execFrame } from './dbFrames.js';
+import { installTestUserDb } from './userdbTestHelper.js';
+
+declare global {
+  // eslint-disable-next-line no-var
+  var IS_REACT_ACT_ENVIRONMENT: boolean | undefined;
+}
+globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+
+const NOW = Date.parse('2026-10-09T12:05:00.000Z');
+const DUE = '2026-10-09T12:00:00.000Z';
+const CREATED = '2026-10-01T00:00:00.000Z';
+const WEB: SnugPlatform = { kind: 'web', capabilities: { subscriptionMode: true, hubSyncOrigin: true, lanHttpPrivate: false } };
+const SQL = "UPDATE expenses SET cents = 999 WHERE label = 'coffee'";
+
+let db: UserDb;
+let container: HTMLDivElement | undefined;
+let root: Root | undefined;
+const executed: Array<{ step: ScheduleStep; ctx: StepContext }> = [];
+
+const execute: StepExecutor = async (step, ctx) => {
+  executed.push({ step, ctx });
+  return { status: 'ok', summary: 'ran again', calls: { ai: 0, net: 0 } };
+};
+
+const deps = (): Partial<SchedulerDeps> => ({
+  db: () => Promise.resolve(db),
+  execute,
+  locks: undefined,
+  ticker: () => ({ start: () => {}, stop: () => {}, nextFireAt: () => undefined }),
+  now: () => new Date(NOW),
+  platform: () => WEB,
+  allows: () => true,
+});
+
+const THINK: ScheduleStep = { kind: 'app-think', appId: 'ledger', prompt: 'sum it', context: { maxRows: 50 } };
+const NOTIFY: ScheduleStep = { kind: 'notify', title: 'Water', body: 'the ferns' };
+
+const task = (over: Partial<ScheduledTask> = {}): ScheduledTask => ({
+  id: 't1',
+  title: 'Weekly spend review',
+  enabled: true,
+  enabledAt: CREATED,
+  provenance: 'user',
+  steps: [THINK],
+  spec: { kind: 'every', n: 1, unit: 'hours', tz: 'UTC' },
+  cron: '0 * * * *',
+  missedPolicy: 'ask',
+  staleAfterMs: 3_600_000,
+  alert: 'inbox',
+  appVersions: {},
+  createdAt: CREATED,
+  updatedAt: CREATED,
+  consecutiveFailures: 0,
+  unseenResults: 1,
+  ...over,
+});
+
+const run = (over: Partial<ScheduleRun> = {}): ScheduleRun => ({
+  id: 'r1',
+  taskId: 't1',
+  dueAt: DUE,
+  trigger: 'due',
+  collapsedCount: 1,
+  status: 'ok',
+  startedAt: DUE,
+  finishedAt: '2026-10-09T12:00:20.000Z',
+  host: { kind: 'web' },
+  steps: [{ status: 'ok', summary: 'Coffee came to 9.50 this week.' }],
+  calls: { ai: 1, net: 0 },
+  ...over,
+});
+
+/** A live batch expires seven days from the REAL clock — the detail reads `Date.now()` for expiry. */
+const batch = (
+  items: ScheduleProposalItem[] = [{ sql: SQL, summary: 'Set both coffees to 9.99', counts: { changes: 2 } }],
+  expiresAt = new Date(Date.now() + SCHEDULE_PROPOSAL_TTL_MS).toISOString(),
+): NonNullable<ScheduleRun['proposals']> => ({ items, expiresAt });
+
+const seed = (t: ScheduledTask, r?: ScheduleRun): void => {
+  db.putScheduledTask(t);
+  if (r !== undefined) db.putScheduleRun(r);
+};
+
+async function settle(): Promise<void> {
+  for (let i = 0; i < 12; i++) {
+    await act(async () => {
+      await Promise.resolve();
+    });
+  }
+}
+
+async function open(dueAt = DUE, taskId = 't1'): Promise<HTMLDivElement> {
+  container = document.createElement('div');
+  document.body.appendChild(container);
+  root = createRoot(container);
+  await act(async () => {
+    root!.render(
+      <MemoryRouter initialEntries={[`/schedule/${taskId}/result/${encodeURIComponent(dueAt)}`]}>
+        <Routes>
+          <Route path="/schedule/:id/result/:dueAt" element={<ResultDetail />} />
+          <Route path="/schedule/:id" element={<p data-testid="editor-route">editor</p>} />
+          <Route path="/schedule" element={<p data-testid="page-route">page</p>} />
+          <Route path="/run/:id" element={<p data-testid="run-route">run</p>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+  });
+  await settle();
+  return container;
+}
+
+const button = (el: HTMLElement, text: string): HTMLButtonElement | undefined =>
+  [...el.querySelectorAll('button')].find((b) => b.textContent?.trim() === text);
+
+async function coffeeCents(): Promise<unknown[]> {
+  const result = await db.scratchRun('ledger', [{ sql: "SELECT cents FROM expenses WHERE label = 'coffee' ORDER BY id" }]);
+  return (result.statements[0]?.rows ?? []).map((row) => row[0]);
+}
+
+beforeEach(async () => {
+  __resetSchedulerForTests();
+  executed.length = 0;
+  db = await installTestUserDb();
+  db.installApp({ appId: 'ledger', displayName: 'Ledger', html: '<html>ledger</html>' });
+  await db.applyAppDdl('ledger', ['CREATE TABLE expenses (id INTEGER PRIMARY KEY, label TEXT NOT NULL, cents INTEGER NOT NULL)']);
+  for (const [id, label, cents] of [
+    [1, 'coffee', 450],
+    [2, 'rent', 120000],
+    [3, 'coffee', 500],
+  ] as const) {
+    const result = await db.driver.handle('ledger', execFrame('INSERT INTO expenses (id, label, cents) VALUES (?, ?, ?)', [id, label, cents]));
+    if (!result.ok) throw new Error('seed failed');
+  }
+});
+
+afterEach(() => {
+  act(() => root?.unmount());
+  root = undefined;
+  container?.remove();
+  container = undefined;
+  __resetSchedulerForTests();
+});
+
+describe('the result, opened', () => {
+  it('shows the status word, the title as a link to the editor, when and where it ran, what it spent, and each step', async () => {
+    seed(task(), run());
+    await initScheduler(deps());
+    const el = await open();
+    const detail = el.querySelector('[data-testid="schedule-result-detail"]');
+    expect(detail).not.toBeNull();
+    expect(detail?.querySelector('[data-testid="schedule-status"]')?.textContent).toBe('done');
+    const title = el.querySelector<HTMLAnchorElement>('[data-testid="schedule-result-title"]');
+    expect(title?.textContent).toBe('Weekly spend review');
+    expect(title?.getAttribute('href')).toBe('/schedule/t1');
+    const when = el.querySelector('[data-testid="schedule-result-when"]')?.textContent ?? '';
+    expect(when).toMatch(/^ran .+ · .+ · on a browser tab · 1 AI call$/);
+    const steps = [...el.querySelectorAll('[data-testid="schedule-result-step"]')];
+    expect(steps).toHaveLength(1);
+    const step = steps[0]?.textContent ?? '';
+    expect(step).toContain('ask Ledger’s AI');
+    expect(step).toContain('Coffee came to 9.50 this week.');
+    expect(steps[0]?.querySelector('[data-testid="schedule-status"]')?.textContent).toBe('done');
+    expect(steps[0]?.querySelector('a')?.getAttribute('href')).toBe('/run/ledger');
+  });
+
+  it('renders a step summary as TEXT, never as HTML', async () => {
+    seed(task(), run({ steps: [{ status: 'ok', summary: '<b>bold</b> & <img src=x onerror="alert(1)">' }] }));
+    await initScheduler(deps());
+    const el = await open();
+    const step = el.querySelector('[data-testid="schedule-result-step"]');
+    expect(step?.querySelector('b, img')).toBeNull();
+    expect(step?.textContent).toContain('<b>bold</b> & <img src=x onerror="alert(1)">');
+  });
+
+  it('opening is the gesture that stamps seenAt — once — and takes one off the unseen count', async () => {
+    seed(task({ unseenResults: 2 }), run());
+    await initScheduler(deps());
+    expect(db.listScheduleRuns('t1')[0]?.seenAt).toBeUndefined();
+    await open();
+    await vi.waitFor(() => expect(db.listScheduleRuns('t1')[0]?.seenAt).toBe(new Date(NOW).toISOString()));
+    expect(db.getScheduledTask('t1')?.unseenResults).toBe(1);
+    // A second render of the same result (StrictMode, a re-render) changes nothing more.
+    await settle();
+    expect(db.getScheduledTask('t1')?.unseenResults).toBe(1);
+  });
+
+  it('a result the file no longer holds: the empty state with the way back', async () => {
+    seed(task());
+    await initScheduler(deps());
+    const el = await open('2026-10-09T09:00:00.000Z');
+    expect(el.textContent).toContain(RESULT_MISSING.title);
+    expect(el.querySelector('a')?.getAttribute('href')).toBe('/schedule');
+  });
+});
+
+describe('changes waiting for your OK (ADR-0074 §6)', () => {
+  it('renders each statement VERBATIM in a <pre>, its summary, the dry-run count, and who wrote it', async () => {
+    seed(task(), run({ proposals: batch() }));
+    await initScheduler(deps());
+    const el = await open();
+    const changes = el.querySelector('[data-testid="schedule-result-changes"]');
+    expect(changes?.textContent).toContain('changes waiting for your OK');
+    const item = el.querySelector('[data-testid="schedule-change"]');
+    expect(item?.querySelector('pre')?.textContent).toBe(SQL);
+    expect(item?.textContent).toContain('Set both coffees to 9.99');
+    expect(item?.textContent).toContain('would change 2 rows in Ledger');
+    expect(item?.textContent).toContain('written by the AI from your data');
+    expect(button(el, 'apply to my data')).toBeDefined();
+    expect(button(el, 'decline')).toBeDefined();
+  });
+
+  it('apply: the statement runs through executeApprovedWrite — rows change, the item leaves the row, the RE-VALIDATED count is shown', async () => {
+    seed(task(), run({ proposals: batch() }));
+    await initScheduler(deps());
+    const el = await open();
+    await act(async () => {
+      button(el, 'apply to my data')?.click();
+    });
+    await vi.waitFor(async () => expect(await coffeeCents()).toEqual([999, 999]));
+    await vi.waitFor(() => expect(db.listScheduleRuns('t1')[0]?.proposals).toBeUndefined());
+    await settle();
+    expect(el.querySelector('[data-testid="schedule-change"]')).toBeNull();
+    const settled = el.querySelector('[data-testid="schedule-change-settled"]');
+    expect(settled?.textContent).toContain(applied([2]));
+    expect(settled?.querySelector('pre')?.textContent).toBe(SQL);
+  });
+
+  it('drift: the data moved between the preview and the approval — nothing is applied, the row carries the current count, the item stays', async () => {
+    seed(task(), run({ proposals: batch() }));
+    await initScheduler(deps());
+    const el = await open();
+    const third = await db.driver.handle('ledger', execFrame("INSERT INTO expenses (id, label, cents) VALUES (4, 'coffee', 300)"));
+    expect(third.ok).toBe(true);
+    await act(async () => {
+      button(el, 'apply to my data')?.click();
+    });
+    await vi.waitFor(() => expect(db.listScheduleRuns('t1')[0]?.proposals?.items[0]?.counts).toEqual({ changes: 3 }));
+    expect(await coffeeCents()).toEqual([450, 500, 300]);
+    await settle();
+    expect(el.querySelector('[data-testid="schedule-change-note"]')?.textContent).toBe(DRIFTED);
+    expect(el.querySelector('[data-testid="schedule-change"]')?.textContent).toContain(wouldChange(3));
+    expect(button(el, 'apply to my data')).toBeDefined();
+  });
+
+  it('failed: a statement the dry run refuses reports the message and changes nothing', async () => {
+    seed(task(), run({ proposals: batch([{ sql: 'UPDATE nowhere SET x = 1', counts: { changes: 0 } }]) }));
+    await initScheduler(deps());
+    const el = await open();
+    await act(async () => {
+      button(el, 'apply to my data')?.click();
+    });
+    await vi.waitFor(() => expect(el.querySelector('[data-testid="schedule-change-note"]')?.textContent).toMatch(/^couldn’t apply — /));
+    expect(await coffeeCents()).toEqual([450, 500]);
+    expect(db.listScheduleRuns('t1')[0]?.proposals?.items).toHaveLength(1);
+  });
+
+  it('decline removes the item from the row — written through db.putScheduleRun, there is no scheduler act for it', async () => {
+    seed(task(), run({ proposals: batch() }));
+    await initScheduler(deps());
+    const el = await open();
+    await act(async () => {
+      button(el, 'decline')?.click();
+    });
+    await vi.waitFor(() => expect(db.listScheduleRuns('t1')[0]?.proposals).toBeUndefined());
+    expect(await coffeeCents()).toEqual([450, 500]);
+    await settle();
+    expect(el.querySelector('[data-testid="schedule-change"]')).toBeNull();
+    expect(el.querySelector('[data-testid="schedule-change-settled"]')?.textContent).toContain(DECLINED);
+  });
+
+  it('declining one of two keeps the other, with the batch’s expiry', async () => {
+    const other = { sql: "DELETE FROM expenses WHERE label = 'rent'", counts: { changes: 1 } };
+    const live = batch([{ sql: SQL, counts: { changes: 2 } }, other]);
+    seed(task(), run({ proposals: live }));
+    await initScheduler(deps());
+    const el = await open();
+    const declines = [...el.querySelectorAll('button')].filter((b) => b.textContent?.trim() === 'decline');
+    expect(declines).toHaveLength(2);
+    await act(async () => {
+      declines[0]?.click();
+    });
+    await vi.waitFor(() => expect(db.listScheduleRuns('t1')[0]?.proposals).toEqual({ items: [other], expiresAt: live.expiresAt }));
+  });
+
+  it('an expired batch offers nothing and says so', async () => {
+    seed(task(), run({ proposals: batch(undefined, new Date(Date.now() - 1_000).toISOString()) }));
+    await initScheduler(deps());
+    const el = await open();
+    expect(el.querySelector('[data-testid="schedule-changes-expired"]')?.textContent).toBe(EXPIRED);
+    expect(el.querySelector('[data-testid="schedule-change"]')).toBeNull();
+    expect(button(el, 'apply to my data')).toBeUndefined();
+  });
+
+  it('proposalFor builds the one write path’s shape: the step’s app, the single statement, no params, the stored count as the drift baseline', () => {
+    expect(proposalFor('ledger', { sql: SQL, summary: 'x', counts: { changes: 2 } })).toEqual({
+      appId: 'ledger',
+      statements: [SQL],
+      params: [[]],
+      summary: 'x',
+      previewed: [2],
+    });
+    expect(proposalFor('ledger', { sql: SQL })).toEqual({ appId: 'ledger', statements: [SQL], params: [[]], summary: '', previewed: [0] });
+    expect(changesAppId({ steps: [NOTIFY, THINK] })).toBe('ledger');
+    expect(changesAppId({ steps: [NOTIFY] })).toBeUndefined();
+  });
+});
+
+describe('the states with one act', () => {
+  it('needs-you: the sentence names the app; "run now and review" enqueues one manual run through the production queue', async () => {
+    seed(task(), run({ status: 'needs-you', reason: 'refused', steps: [{ status: 'refused' }], calls: { ai: 0, net: 0 } }));
+    await initScheduler(deps());
+    const el = await open();
+    const card = el.querySelector('[data-testid="schedule-result-needs-you"]');
+    expect(card?.textContent).toContain(needsYou('Ledger', 'make changes').text);
+    expect(el.querySelector('[data-testid="schedule-status"]')?.textContent).toBe('needs you');
+    await act(async () => {
+      button(el, 'run now and review')?.click();
+    });
+    await vi.waitFor(() => expect(executed).toHaveLength(1));
+    expect(executed[0]?.ctx.run.trigger).toBe('manual');
+    expect(executed[0]?.step).toEqual(THINK);
+  });
+
+  it('no-handler: the sentence and "open <app>" to the run route', async () => {
+    seed(task(), run({ status: 'no-handler', steps: [{ status: 'no-handler' }] }));
+    await initScheduler(deps());
+    const el = await open();
+    const card = el.querySelector('[data-testid="schedule-result-no-handler"]');
+    expect(card?.textContent).toContain(noHandler('Ledger').text);
+    const link = card?.querySelector('a');
+    expect(link?.textContent).toBe('open Ledger');
+    expect(link?.getAttribute('href')).toBe('/run/ledger');
+  });
+
+  it('capped: the ceiling sentence, with no act — tomorrow is the act', async () => {
+    seed(task(), run({ status: 'capped', reason: 'capped', steps: [{ status: 'refused' }] }));
+    await initScheduler(deps());
+    const el = await open();
+    const card = el.querySelector('[data-testid="schedule-result-capped"]');
+    expect(card?.textContent).toContain(capped(CAPPED_WHAT));
+    expect(card?.querySelector('button, a')).toBeNull();
+  });
+
+  it('interrupted: the engine’s reason word in the user’s terms', async () => {
+    seed(task(), run({ status: 'interrupted', reason: 'stale claim', steps: [] }));
+    await initScheduler(deps());
+    const el = await open();
+    expect(el.querySelector('[data-testid="schedule-result-interrupted"]')?.textContent).toBe(interruptedWhy('stale claim'));
+  });
+});
+
+describe('copy.bits — the pure sentences', () => {
+  it('relativeTime: minutes, hours, yesterday, days — and the future', () => {
+    const now = NOW;
+    expect(relativeTime(now - 10_000, now)).toBe('just now');
+    expect(relativeTime(now - 3 * 60_000, now)).toBe('3 min ago');
+    expect(relativeTime(now - 2 * 3_600_000, now)).toBe('2 hours ago');
+    expect(relativeTime(now - 3_600_000, now)).toBe('1 hour ago');
+    expect(relativeTime(now - 30 * 3_600_000, now)).toBe('yesterday');
+    expect(relativeTime(now - 4 * 86_400_000, now)).toBe('4 days ago');
+    expect(relativeTime(now + 20 * 60_000, now)).toBe('in 20 min');
+    expect(relativeTime(now + 30 * 3_600_000, now)).toBe('tomorrow');
+  });
+
+  it('absoluteTime formats in the given locale', () => {
+    expect(absoluteTime(NOW, 'en-US')).toMatch(/2026/);
+  });
+
+  it('callsLine and hostWord', () => {
+    expect(callsLine({ ai: 0, net: 0 })).toBe('no AI or network calls');
+    expect(callsLine({ ai: 1, net: 0 })).toBe('1 AI call');
+    expect(callsLine({ ai: 2, net: 3 })).toBe('2 AI calls · 3 network calls');
+    expect(hostWord({ kind: 'web' })).toBe('a browser tab');
+    expect(hostWord({ kind: 'desktop' })).toBe('Snug for Mac');
+    expect(hostWord({ kind: 'host', binding: 'artifact' })).toBe('an artifact page');
+    expect(hostWord({ kind: 'host', binding: 'local' })).toBe('your agent’s plugin');
+  });
+
+  it('interruptedWhy maps every engine reason, and passes an unknown one through', () => {
+    expect(interruptedWhy('cancelled')).toBe('you cancelled it');
+    expect(interruptedWhy('timeout')).toBe('it took too long and was stopped');
+    expect(interruptedWhy('paused')).toBe('all schedules were paused');
+    expect(interruptedWhy('file swap')).toBe('your file changed underneath it');
+    expect(interruptedWhy(undefined)).toBe('it was interrupted');
+    expect(interruptedWhy('something else')).toBe('something else');
+  });
+
+  it('wouldChange and applied count rows, singular handled', () => {
+    expect(wouldChange(1)).toBe('would change 1 row');
+    expect(wouldChange(undefined)).toBe('row count unknown');
+    expect(applied([1])).toBe('applied — 1 row changed');
+    expect(applied([2, 3])).toBe('applied — 5 rows changed');
+  });
+});
