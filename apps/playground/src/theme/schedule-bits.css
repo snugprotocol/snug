@@ -1,0 +1,344 @@
+/* schedule-bits.css — the result detail, the Settings card, the running chip, the chat offer
+   and the row-state helpers (TASK-20261009-scheduling-framework U4, U6, U7, U9, U10, E10).
+   Imported once from app.css; every colour is a tokens.css token. The siblings' schedule.css
+   styles the page, the rows, the editor and the missed card.
+
+   SPECIFICITY NOTE (availability.css's): this sheet is @imported at the TOP of app.css, so a
+   rule here loses a tie with app.css — anything that adjusts an app.css surface (the header
+   chip) is written one class heavier on purpose. */
+
+/* ---------------------------------------------------------------- status with a word (U9)
+
+   The dot is colour; the word is meaning. Both always render; the dot is aria-hidden. */
+
+.schedule-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+
+.schedule-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--fg-faint);
+  flex: none;
+}
+
+.schedule-status.is-ok .schedule-status-dot {
+  background: var(--ok);
+}
+
+.schedule-status.is-warn .schedule-status-dot {
+  background: var(--warn);
+}
+
+.schedule-status.is-danger .schedule-status-dot {
+  background: var(--danger);
+}
+
+/* ---------------------------------------------------------------- a state line with its one act */
+
+.schedule-state-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-s);
+  color: var(--fg-muted);
+}
+
+.schedule-state-text {
+  flex: 1 1 20ch;
+  min-width: 0;
+}
+
+/* ---------------------------------------------------------------- the switch (44 px, role=switch) */
+
+.schedule-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: var(--tap);
+  min-height: var(--tap);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  background: var(--surface-2);
+  color: var(--fg-muted);
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+  transition: background var(--dur-1), color var(--dur-1), border-color var(--dur-1);
+}
+
+.schedule-switch-knob {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--fg-faint);
+  transition: background var(--dur-1), transform var(--dur-1);
+}
+
+.schedule-switch[aria-checked='true'] {
+  border-color: var(--ember);
+  background: var(--ember);
+  color: var(--ember-ink);
+}
+
+.schedule-switch[aria-checked='true'] .schedule-switch-knob {
+  background: var(--ember-ink);
+  transform: translateX(2px);
+}
+
+.schedule-switch:focus-visible {
+  outline: 2px solid var(--ember);
+  outline-offset: 2px;
+}
+
+.schedule-switch:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* ---------------------------------------------------------------- the running chip (U10)
+
+   The header's quiet-ember chip family (.auth-repair-chip), opened up: the chip is a status,
+   not a button, so it holds a pulse, the label, the clamped title and the one act. */
+
+.auth-repair-chip.schedule-running-chip {
+  max-width: none;
+  cursor: default;
+  gap: var(--space-2);
+}
+
+.schedule-running-pulse {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ember);
+  flex: none;
+  animation: schedule-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes schedule-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.schedule-running-title {
+  max-width: 14ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--fg);
+}
+
+.schedule-running-cancel {
+  padding: 0 var(--space-1);
+  min-height: 24px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--ember);
+  font: inherit;
+  font-size: var(--text-xs);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.schedule-running-cancel:hover {
+  background: var(--ember-glow);
+}
+
+.schedule-running-cancel:focus-visible {
+  outline: 2px solid var(--ember);
+  outline-offset: 1px;
+}
+
+@media (max-width: 830px) {
+  .schedule-running-label {
+    display: none;
+  }
+}
+
+/* ---------------------------------------------------------------- the chat offer (E10)
+
+   Sits under the user's bubble, right-aligned like it, as a quiet ember-edged line: one
+   sentence, the review link, a dismiss. */
+
+.schedule-offer {
+  align-self: flex-end;
+  max-width: 92%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding-left: var(--space-3);
+  border-left: 3px solid var(--ember);
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+  animation: reveal-in var(--dur-2) var(--ease-out);
+}
+
+.schedule-offer-text {
+  flex: 1 1 16ch;
+  min-width: 0;
+}
+
+/* ---------------------------------------------------------------- the Settings card (U6) */
+
+.schedule-settings-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.schedule-settings-copy {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  flex: 1 1 24ch;
+  min-width: 0;
+  font-size: var(--text-s);
+}
+
+.schedule-settings-copy .hint {
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+}
+
+.schedule-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+}
+
+.schedule-confirm .hint {
+  flex: 1 1 20ch;
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+}
+
+/* ---------------------------------------------------------------- the result detail (U4) */
+
+.schedule-result {
+  display: grid;
+  gap: var(--space-5);
+  max-width: 72ch;
+}
+
+.schedule-result-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.schedule-result-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--text-xl);
+  line-height: 1.2;
+}
+
+.schedule-result-title a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.schedule-result-title a:hover {
+  text-decoration: underline;
+}
+
+.schedule-result-step-list {
+  margin: 0;
+  padding-inline-start: 1.25rem;
+  display: grid;
+  gap: var(--space-3);
+}
+
+.schedule-result-step-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+}
+
+.schedule-result-step-label {
+  font-weight: 700;
+}
+
+.schedule-result-step-app {
+  font-size: var(--text-xs);
+  color: var(--ember);
+}
+
+.schedule-result-step-summary {
+  margin: var(--space-1) 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--fg);
+  font-size: var(--text-s);
+  line-height: 1.5;
+}
+
+.schedule-result-changes {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.schedule-change {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4);
+}
+
+.schedule-change.is-settled {
+  opacity: 0.75;
+}
+
+.schedule-change-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.schedule-result-sql {
+  margin: 0;
+  padding: var(--space-3);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  color: var(--fg);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+}
+
+/* ---------------------------------------------------------------- motion (U9) */
+
+@media (prefers-reduced-motion: reduce) {
+  .schedule-running-pulse,
+  .schedule-offer {
+    animation: none;
+  }
+
+  .schedule-switch,
+  .schedule-switch-knob {
+    transition: none;
+  }
+}

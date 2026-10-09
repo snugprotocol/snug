@@ -65,3 +65,17 @@ describe('setPlatform', () => {
     expect(getPlatform()).toBe(first);
   });
 });
+
+describe('allows("schedule") — TASK-20261009 C7: the scheduling surface is a host surface flag like the rest', () => {
+  it('web default: absent means enabled', async () => {
+    const { allows, getPlatform } = await freshModule();
+    expect(getPlatform().capabilities.schedule).toBeUndefined();
+    expect(allows('schedule')).toBe(true);
+  });
+
+  it('only an explicit `schedule: false` hides it; `true` and absent keep it', async () => {
+    const { allows, setPlatform } = await freshModule();
+    setPlatform({ ...desktopPlatform(), capabilities: { ...desktopPlatform().capabilities, schedule: false } });
+    expect(allows('schedule')).toBe(false);
+  });
+});

@@ -6,6 +6,8 @@
    contending for this file (TASK-20261003). @import must precede every rule. */
 @import './availability.css';
 @import './brain-dock.css';
+@import './schedule-page.css';
+@import './schedule-bits.css';
 
 /* ---------------------------------------------------------------- shell */
 

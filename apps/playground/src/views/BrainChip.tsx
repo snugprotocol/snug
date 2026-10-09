@@ -127,6 +127,15 @@ function copyFor(brain: ActiveBrainKind): { label: string; aria: string; headlin
   return BRAINS[brain];
 }
 
+/**
+ * The chip's LABEL for a brain, for the one other surface that names the brain in words — the
+ * schedule editor's cost line ("≈ 7 AI calls a week on claude"; TASK-20261009 U3). Reading it
+ * from here keeps that line and this chip saying the same word for the same brain.
+ */
+export function brainChipLabel(brain: ActiveBrainKind): string {
+  return copyFor(brain).label;
+}
+
 /** One stable no-op for the seatless render (a fresh closure per render would resubscribe on every render). */
 const noSubscription = (): (() => void) => () => undefined;
 

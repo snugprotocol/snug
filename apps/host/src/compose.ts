@@ -26,7 +26,7 @@ import type { CustodySeat, PendingAgentUpdate, SnugPlatform } from '@playground/
 import { parseDbBlockBody } from '../../../scripts/lib/page-blocks.mjs';
 import { createExportSeat } from './exportSeat.js';
 import { applyAgentBundles, createHandInSeat, readBundleBlocksFromDocument, type HandInOutcome } from './handin.js';
-import { createHostPlatform } from './platform-host.js';
+import { createHostPlatform, schedulerSeatFor } from './platform-host.js';
 import type { ProbeResult } from './probe.js';
 import { CUSTODY_NOTE_STASH_KEY, createArtifactRecord, type ArtifactRecord } from './storage/artifactHtml.js';
 import { createCustodyStore, type CustodyStore } from './storage/custodyStore.js';
@@ -133,6 +133,9 @@ export function composeHostPlatform(probe: ProbeResult, win: ComposeWindow, doc:
   const handIns = createHandInSeat();
 
   const platform = createHostPlatform(probe, wasm, {
+    // The scheduler's seat (TASK-20261009 H3): the subject of the honesty line per binding,
+    // page-bound, no notify. The storage rung the line also says is read off `custody`.
+    scheduler: schedulerSeatFor(probe.binding),
     userdbBackend: backend,
     custody: custodySeat,
     saveFile: createExportSeat({ downloads: probe.host?.downloads, store: custody }),

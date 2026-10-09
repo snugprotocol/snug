@@ -9,7 +9,7 @@ import { hostCapabilities } from '../platform/hostCapabilities.js';
 import { HOST_OFF_CAPABILITIES, hostPlatform } from './fixtures/hostPlatform.js';
 
 describe('hostCapabilities — the kit’s posture, stated once', () => {
-  it('every launch boolean explicit, every host surface off, the app export ON', () => {
+  it('every launch boolean explicit, every host surface off, the app export ON, the scheduler ON', () => {
     expect(hostCapabilities()).toEqual({
       subscriptionMode: false,
       hubSyncOrigin: false,
@@ -21,6 +21,8 @@ describe('hostCapabilities — the kit’s posture, stated once', () => {
       connections: false,
       share: false,
       appExport: true,
+      // TASK-20261009 C7 (ADR-0074 §7): the kit binding runs the scheduler while its page is open.
+      schedule: true,
     });
   });
 

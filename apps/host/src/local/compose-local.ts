@@ -42,6 +42,7 @@ import { createStore } from '@playground/state/store';
 
 import { LEGACY_BRAIN, createBrainChoiceStore, type BrainChoiceState, type BrainChoiceStore, type BrainPrefs } from '../brains/brainChoiceStore.js';
 import { createHandInSeat, type HandInSeat } from '../handin.js';
+import { schedulerSeatFor } from '../platform-host.js';
 import { safeLocalStorage } from '../safeStorage.js';
 import { createCustodyStore, type CustodyStore } from '../storage/custodyStore.js';
 import { parseStatusEvent, type BrainWire, type LocalClient, type LocalStatus } from './client.js';
@@ -257,6 +258,9 @@ export function composeLocalPlatform(
     // This seat was missing here, so on the runner such a hand-in was announced on a chip
     // note and then could not be taken anywhere.
     agentHandIns: handIns.seat,
+    // The scheduler's seat (TASK-20261009 H3): the runner's page is a tab, so the honesty
+    // line's subject is "this page"; page-bound; no notify — the page cannot raise one.
+    scheduler: schedulerSeatFor('local-host'),
     capabilities: hostCapabilities({
       // THE difference from Binding A. `RunView` keys its net handler on this, so
       // `host-ready.net` becomes true structurally rather than by a flag an app must trust.

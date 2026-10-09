@@ -30,9 +30,12 @@
 // the button's colour and hover state like every other control in this header.
 
 import type { ReactElement } from 'react';
+import { useState } from 'react';
 
 import { Button } from '../ui/Button.js';
 import { allows } from '../platform/platform.js';
+import { RUN_HEADER_SCHEDULE } from '../schedule/copy.editor.js';
+import { ScheduleSheet } from '../schedule/ScheduleSheet.js';
 import { ModelSelect } from './ModelSelect.js';
 import { AuthRepairChip } from './AuthRepairChip.js';
 
@@ -71,6 +74,9 @@ export function RunHeaderActions({
   onManageConnections,
   onShare,
 }: RunHeaderActionsProps): ReactElement {
+  // The schedule sheet's open state lives HERE, not in RunView: the sheet portals to <body>
+  // (ConfirmOverlay), so nothing about the header's layout changes while it is open.
+  const [scheduleOpen, setScheduleOpen] = useState(false);
   return (
     <>
       {/*
@@ -158,6 +164,29 @@ export function RunHeaderActions({
         </Button>
       ) : null}
       {/*
+        THE SCHEDULE ACTION (TASK-20261009-scheduling-framework U5, ADR-0074 §4) — between the
+        connections door and the share control, so share keeps the cluster's last slot (RunView
+        places the theme toggle right after it). OWNED apps only: a starter or a shared preview
+        has no row to key a schedule to, exactly as it has nothing to share; and only where the
+        host allows scheduling at all. Glyph `◷` — a clock face, monochrome like its neighbours;
+        the accessible name is "schedule". It opens the SMALL sheet (what + when + more options),
+        never the route directly (design F3).
+      */}
+      {!isStarter && allows('schedule') ? (
+        <Button
+          variant="ghost"
+          onClick={() => setScheduleOpen(true)}
+          className="btn-icon"
+          data-testid="schedule-app"
+          aria-label={RUN_HEADER_SCHEDULE.label}
+          aria-haspopup="dialog"
+          aria-expanded={scheduleOpen}
+          title={RUN_HEADER_SCHEDULE.title}
+        >
+          ◷
+        </Button>
+      ) : null}
+      {/*
         THE SHARE CONTROL (TASK-20260904, AC10) — last in the cluster, which places it
         between the connections door and RunView's theme toggle (owner ask). Owned apps
         only: `onShare` is absent for a starter or a shared preview. Glyph `⇪` — the
@@ -178,6 +207,8 @@ export function RunHeaderActions({
           ⇪
         </Button>
       ) : null}
+      {/* Portaled to <body>: renders no node here, so the share control stays the cluster's last. */}
+      {scheduleOpen ? <ScheduleSheet appId={appId} onClose={() => setScheduleOpen(false)} /> : null}
     </>
   );
 }

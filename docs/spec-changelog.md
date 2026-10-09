@@ -4,6 +4,27 @@ Every change pushed to `snugprotocol/spec`, newest first. Format: `## YYYY-MM-DD
 
 ---
 
+## 2026-10-09 — INTERNAL / TRANSPARENCY, not staged for any push — TASK-20261009-scheduling-framework (ADR-0074)
+**Excluded from every spec push; no schema bytes changed; no version bump.** Scheduling is a
+host feature, not protocol (ADR-0074 §1): nothing enters `packages/protocol/schemas/`, the
+envelope, the runtime contract or the local host's tool list, and `packages/protocol/src/schedule.ts`
+is an internal draft OUT of `json-schemas.ts` SOURCES (pinned by `schedule.test.ts`'s
+"buildJsonSchemas() exports no schedule entry"). A host that never schedules is still
+conforming.
+
+**The one spec touch** is §8.1's non-normative transparency list of namespaced `snug_settings`
+keys (the `sharedApp:` / `sharedBundle:` / `shareLink:` precedent above): it now names
+`schedule:<taskId>`, `scheduleRuns:<taskId>` and `schedulerState`, plus the two per-app rows
+`scheduleDeclined:<appId>:<hash>` and `scheduleMuted:<appId>` that the existing "cascaded on
+app delete" sentence covers. The file format is spec, so what travels in it is documented;
+nothing about the keys is required of a conforming host. No `USERDB_SCHEMA_VERSION` bump (a
+v7 stamp would strand every fielded v6 hub — the ADR-0063 reasoning); no new frame, capability
+flag or error code (Q2/Q10 of the task).
+
+**Owner act, not performed:** the push of this §8.1 paragraph to `snugprotocol/spec` needs an
+explicit ask (PROCESS.md release rules). On push, this entry gets the date/UTC time and the
+spec commit SHA.
+
 ## 2026-09-04 — INTERNAL DRAFT, not staged for any push — TASK-20260904-app-sharing (ADR-0063/0064)
 **Excluded from every spec push.** `connection-requirement` and the new `app-bundle` module
 are both outside `json-schemas.ts` SOURCES, so zero schema bytes changed and wire protocol v1

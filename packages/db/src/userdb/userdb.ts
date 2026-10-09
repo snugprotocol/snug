@@ -59,6 +59,9 @@ import {
   type ConnectionStatus,
   type DbRequestFrame,
   type RuntimeContract,
+  type ScheduleRun,
+  type ScheduledTask,
+  type SchedulerState,
 } from '@snugprotocol/protocol';
 import { authAppSecretPrefix, authConnectionSlotPrefix, isLegacyAppSecretKey } from './auth-secrets.js';
 import {
@@ -75,6 +78,15 @@ import {
   sharedBundleSettingKey,
 } from './app-settings-keys.js';
 import { SIDECAR_IDENTITY_DIRECTORY_SETTING_KEY } from './sidecar-identity-keys.js';
+import {
+  createScheduleAccessors,
+  hasScheduleRunProposals,
+  reconcileImportedSchedules,
+  scrubScheduleRunRows,
+  snapshotLocalSchedules,
+  sweepSchedulesForDeletedApp,
+  type SettingsSql,
+} from './schedules.js';
 import { base64ToBytes } from '../base64.js';
 import {
   KV_TABLE_DDL,
@@ -146,6 +158,18 @@ export const USERDB_ERROR_CODES = {
    * the caller must not read "no rows" as an answer.
    */
   SCRATCH_UNAVAILABLE: 'USERDB_SCRATCH_UNAVAILABLE',
+  /**
+   * A scheduled task, a run or the scheduler state failed the protocol's strict parse at
+   * the write boundary (TASK-20261009 C2, ADR-0074 §2) — the 16 KiB task cap and the C1
+   * credential refusal both surface here. Nothing was written.
+   */
+  SCHEDULE_INVALID: 'USERDB_SCHEDULE_INVALID',
+  /**
+   * A schedule write would cross a cap that nothing prunable can make room under: the
+   * 200-task seat count, or a run history holding nothing but rows waiting on the user
+   * (`pending`, `needs-you`, `running` are never pruned). Nothing was written.
+   */
+  SCHEDULE_LIMIT: 'USERDB_SCHEDULE_LIMIT',
 } as const;
 
 export type UserDbErrorCode = (typeof USERDB_ERROR_CODES)[keyof typeof USERDB_ERROR_CODES];
@@ -494,6 +518,13 @@ export interface UserDbImportReport {
    * an untrusted file — same doctrine as the connection reconciliation above.
    */
   droppedRuntimeContracts: Array<{ appId: string; version: number }>;
+  /**
+   * The scheduler pass (TASK-20261009 C4, ADR-0074 §2): tasks that landed disabled with
+   * provenance `imported` because they were not byte-identical to a local one (always 0
+   * on a trusted pull), and the pending data-change proposals stripped from run rows on
+   * EVERY import — a foreign file can never plant an approval card.
+   */
+  schedules: { demotedTasks: number; strippedProposals: number };
 }
 
 /** One statement submitted to `scratchRun` — SQL plus its bound parameters. */
@@ -746,6 +777,13 @@ export interface UserDb {
   /** Every settings key, sorted — for namespaced-prefix readers (`sharedApp:`, `shareLink:`) that parse the key rather than trusting a prefix test. */
   listSettingKeys(): string[];
   /**
+   * The file's own identity — the `db_id` row `seedMeta` writes once (TASK-20261009 R1).
+   * The scheduler keys its per-origin leader lock on it (`snug-scheduler:<id>`), so two
+   * user files open on one origin never share a ticker. `undefined` only for a file whose
+   * meta row is missing, which `seedMeta` repairs on the next open.
+   */
+  getFileId(): string | undefined;
+  /**
    * Every app that has PINNED a model, as `{ [appId]: modelId }` (TASK-20260817).
    * Apps that inherit the global `model` setting are simply absent — inheritance is an
    * absence, not a stored copy, so a later change to the default reaches them.
@@ -769,6 +807,69 @@ export interface UserDb {
   listRenamedApps(): string[];
   /** Mark (or clear) the user-renamed flag for one app. */
   setAppRenamed(appId: string, renamed: boolean): void;
+
+  // ------------------------------------- scheduled tasks (TASK-20261009, ADR-0074 §2)
+  //
+  // The scheduler's record is a family of namespaced `snug_settings` rows (keys in
+  // `app-settings-keys.ts`, storage in `schedules.ts`): `schedule:<taskId>` the task,
+  // `scheduleRuns:<taskId>` its bounded history, `schedulerState` the one scheduler row,
+  // `scheduleDeclined:<appId>:<hash>` and `scheduleMuted:<appId>` the user's answers to
+  // app suggestions. Every writer parses through the protocol's strict schemas FIRST
+  // (SCHEDULE_INVALID leaves the file byte-identical); every reader is tolerant.
+
+  /**
+   * Every `schedule:` row that parses, in key order. A row that does not — a hand edit,
+   * a foreign file, a future shape — is SKIPPED, never thrown: one bad row must not stop
+   * the scheduler for every other task. See `listUnreadableScheduleKeys` for those.
+   */
+  listScheduledTasks(): ScheduledTask[];
+  /** The keys of `schedule:` rows `listScheduledTasks` skipped, so the UI can show and offer to remove them. */
+  listUnreadableScheduleKeys(): string[];
+  getScheduledTask(taskId: string): ScheduledTask | undefined;
+  /**
+   * Insert or replace one task, stored as the PARSED object (defaults in the bytes).
+   * Refuses with SCHEDULE_INVALID (the strict schema: shape, the 16 KiB cap, the C1
+   * credential refusal) and with SCHEDULE_LIMIT when 200 OTHER tasks already hold seats.
+   * Stores what it is given — `updatedAt` and `enabled` are the caller's to set, because
+   * nothing but the user's act sets `enabled` (ADR-0074 §4). The frequency floor is NOT
+   * checked here; it needs the cron core, which lives with the engine.
+   */
+  putScheduledTask(task: ScheduledTask): void;
+  /** Delete the task row AND its runs row. An unknown id is a no-op. */
+  deleteScheduledTask(taskId: string): void;
+  /** The task's history as stored: newest first. Unreadable entries are skipped. */
+  listScheduleRuns(taskId: string): ScheduleRun[];
+  /** Every task's history, keyed by task id (a history can outlive its task only through a foreign row — the cascade and the delete remove both). */
+  listAllScheduleRuns(): Record<string, ScheduleRun[]>;
+  /**
+   * UPSERT by `(taskId, dueAt)` — the claim: the same occurrence replaces in place (a
+   * `running` row becoming its result), a new one lands at the front. Then PRUNES to the
+   * caps — ≤ 50 entries and ≤ 64 KiB per task, ≤ 2 MiB across every task — removing the
+   * oldest (by `dueAt`) `ok`/`skipped` entries first, then `failed`/`capped`/
+   * `no-handler`/`interrupted`, and NEVER `pending`, `needs-you` or `running`; when only
+   * those remain and a cap is still crossed the write is refused (SCHEDULE_LIMIT) and
+   * nothing changes. Refuses a run for a task the file does not hold (NOT_FOUND).
+   */
+  putScheduleRun(run: ScheduleRun): void;
+  /** Stamp `seenAt` on one entry — a USER gesture only, never an app-derived signal (E7). Absent entry: no-op. */
+  markScheduleRunSeen(taskId: string, dueAt: string, seenAt: string): void;
+  /**
+   * Clear one task's history, or every task's when `taskId` is omitted — but KEEP the
+   * entries that are not yet dealt-with results: `pending` (a catch-up candidate the
+   * missed card reads), `needs-you` (waiting on the user) and `running` (a live claim).
+   * A row with nothing to keep is deleted.
+   */
+  clearScheduleHistory(taskId?: string): void;
+  /** The one scheduler row, or undefined when absent or unreadable (the engine then starts fresh). */
+  getSchedulerState(): SchedulerState | undefined;
+  /** Replace the scheduler row; validated (SCHEDULE_INVALID). */
+  setSchedulerState(state: SchedulerState): void;
+  /** The proposal hashes this app's suggestions were declined under, sorted. */
+  listScheduleDeclines(appId: string): string[];
+  addScheduleDecline(appId: string, hash: string): void;
+  isScheduleMuted(appId: string): boolean;
+  /** Mute (or unmute — clearing DELETES the row) suggestions from one app. */
+  setScheduleMuted(appId: string, muted: boolean): void;
   getProfileField(key: string): unknown;
   setProfileField(key: string, value: unknown): void;
   getSecret(key: string): string | undefined;
@@ -1100,6 +1201,14 @@ function selectRows(target: Database, sql: string, params?: unknown[]): unknown[
   } finally {
     statement.free();
   }
+}
+
+/** The `schedules.ts` seam over a bare handle — the cascade's transaction, an import candidate, an export copy. */
+function sqlOn(target: Database): SettingsSql {
+  return {
+    select: (sql, params) => selectRows(target, sql, params),
+    run: (sql, params) => target.run(sql, (params ?? []) as never),
+  };
 }
 
 /** The identity a locally-approved connection is compared against during import. */
@@ -2146,7 +2255,20 @@ function construct(
     return { version, ...(note !== undefined ? { note } : {}), createdAt, htmlBytes: html.length, pinned };
   }
 
+  // The scheduler's accessors (TASK-20261009 C2): built over the factory's own seams and
+  // spread in below, so the storage logic lives in schedules.ts and this file only wires.
+  const scheduleAccessors = createScheduleAccessors({
+    assertOpen,
+    select,
+    run,
+    setSetting: (key, value) => kvSet(USERDB_TABLES.settings, key, value),
+    refuse: (code, message) => {
+      throw new UserDbError(USERDB_ERROR_CODES[code], message);
+    },
+  });
+
   const userDb: UserDb = {
+    ...scheduleAccessors,
     get persistence(): DbPersistence {
       return backend.kind === 'memory' ? 'none' : backend.kind;
     },
@@ -2389,6 +2511,12 @@ function construct(
           db.run(`DELETE FROM ${USERDB_TABLES.secrets} WHERE key = ?`, [`share:${linkId}`]);
         }
         db.run(`DELETE FROM ${USERDB_TABLES.settings} WHERE key LIKE ? ESCAPE '!'`, [`${linkPrefix}%`]);
+        // 3c'. The scheduler's rows (TASK-20261009 C3, ADR-0074 §2): a task whose EVERY
+        //     step names this app goes with its runs row (a multi-app task is left as is
+        //     — the engine marks the dead step's result at run time), plus the app's
+        //     `scheduleDeclined:<appId>:*` by escaped prefix and `scheduleMuted:<appId>`
+        //     by equality. Three sweeps, each mutation-checked by delete-app.test.ts.
+        sweepSchedulesForDeletedApp(sqlOn(db), appId);
         // 3d. The sidecar identity directory, when this app held the LAST approved
         //     sidecar-ceiling connection (TASK-20260820, R-9 lifecycle). Inside the
         //     transaction: the check reads the connection rows step 3 just deleted, so
@@ -3188,6 +3316,11 @@ function construct(
       assertOpen();
       return select(`SELECT key FROM ${USERDB_TABLES.settings} ORDER BY key`).map((row) => String(row[0]));
     },
+    getFileId() {
+      assertOpen();
+      const row = select(`SELECT value FROM ${USERDB_TABLES.meta} WHERE key = 'db_id'`)[0]?.[0];
+      return row === undefined || row === null || String(row) === '' ? undefined : String(row);
+    },
     listAppModels() {
       assertOpen();
       const out: Record<string, string> = {};
@@ -3301,7 +3434,11 @@ function construct(
       await inner.flush();
       await persistNow();
       const bytes = db.export();
-      if (opts.includeSecrets === true) {
+      // PROPOSALS NEVER LEAVE THE DEVICE (TASK-20261009 C4, ADR-0074 §6): a run's pending
+      // data changes are this device's own dry-run, stripped from every history row on
+      // BOTH export paths — the file export and the sync push alike. The secrets-included
+      // path keeps its no-copy fast path when no history row carries one.
+      if (opts.includeSecrets === true && !hasScheduleRunProposals(sqlOn(db))) {
         if (bytes.byteLength > maxBytes) {
           throw new UserDbError(USERDB_ERROR_CODES.TOO_LARGE, `export is ${bytes.byteLength} bytes — cap is ${maxBytes}`);
         }
@@ -3310,7 +3447,8 @@ function construct(
       // Strip on a throwaway copy; VACUUM so deleted secret rows leave no bytes in free pages.
       const temp = new SQL.Database(bytes);
       try {
-        temp.run(`DELETE FROM ${USERDB_TABLES.secrets}`);
+        if (opts.includeSecrets !== true) temp.run(`DELETE FROM ${USERDB_TABLES.secrets}`);
+        scrubScheduleRunRows(sqlOn(temp));
         temp.run('VACUUM');
         const stripped = temp.export();
         if (stripped.byteLength > maxBytes) {
@@ -3413,6 +3551,11 @@ function construct(
         const parsed = parseRuntimeContract(row[0] === null || row[0] === undefined ? null : String(row[0]));
         if (parsed !== undefined) localContractBytes.add(canonicalRuntimeContract(parsed));
       }
+      // Scheduled tasks (TASK-20261009 C4, ADR-0074 §2): the local tasks' canonical bytes
+      // and the local watermark, read from the still-open handle for the same reason as
+      // the two snapshots above — the pass compares the candidate against what THIS hub
+      // already holds, and runs before the candidate goes live.
+      const localSchedules = snapshotLocalSchedules(sqlOn(db));
       /**
        * TRUSTED RESTORE (R-M2, 2026-08-11). Keying "known" off the open DB's contracts made
        * an EMPTY hub mean "nothing is known", so every contract was nulled — and an empty
@@ -3435,7 +3578,18 @@ function construct(
           options?.trustedOrigin === true
             ? []
             : reconcileImportedRuntimeContracts(next, localContractBytes),
+        // A task is executable intent, so the same doctrine: untrusted → disabled unless
+        // byte-identical to a local one; trusted → kept. Proposals leave on both paths.
+        schedules: reconcileImportedSchedules(
+          sqlOn(next),
+          localSchedules.tasks,
+          localSchedules.watermark,
+          options?.trustedOrigin === true,
+        ),
       };
+      // A stripped proposal's statement would otherwise linger in the candidate's free
+      // pages and ride the next secrets-included export raw — the `stripSecrets` rule.
+      if (report.schedules.strippedProposals > 0) next.run('VACUUM');
       // Close the inner driver FIRST: its cached app databases came from the old handle.
       // Its close-flush writes into the old handle, which is discarded right after.
       await inner.close();

@@ -4,6 +4,9 @@ import { Link, useNavigate } from 'react-router';
 
 import { parseBuildPrompt } from '../agent/chips.js';
 import { ProtectionOffer } from '../vault/ProtectionOffer.js';
+import { useProtectOffer } from '../vault/protectOffer.js';
+import { MissedCard } from '../schedule/MissedCard.js';
+import { ScheduleHubSection } from '../schedule/ScheduleHubSection.js';
 import { DesktopWelcome } from '../desktop/DesktopWelcome.js';
 import { useDesktopFirstRun } from '../desktop/firstRun.js';
 import { availabilityOf, needsOfConnections, needsOfRequirement, offersOf, signedIn, type AppNeed } from '../platform/availability.js';
@@ -61,6 +64,8 @@ function HubHome(): ReactElement {
   const metaMap = useAppMetaMap();
   const prompt = useMemo(() => parseBuildPrompt(), []);
   const starters = useMemo(listStarterApps, []);
+  /** ONE banner at a time below the create bar: while the protection offer is up, the missed card waits (U1). */
+  const protectOffered = useProtectOffer();
   const [idea, setIdea] = useState('');
   const [load, setLoad] = useState<LoadState>({ phase: 'loading' });
   /** Which tile is showing its inline confirm — no window.confirm (design contract, AC22). */
@@ -259,6 +264,10 @@ function HubHome(): ReactElement {
           instead of them. Renders nothing once protection is on or the offer is
           declined. */}
       <ProtectionOffer />
+      {/* TASK-20261009 U1/U4: the missed card — the persisted catch-up candidates — sits in the
+          same slot, ordered after the protection offer and hidden while that offer shows, so
+          a first open never stacks two banners between the create bar and the shelf. */}
+      {protectOffered ? null : <MissedCard />}
       <div className="chip-row" aria-label="suggestions">
         {prompt.chips.map((chip) => (
           <Chip key={chip} onClick={() => startBuild(chip)}>
@@ -454,6 +463,11 @@ function HubHome(): ReactElement {
         noise), reports only (the install act lives in the preview's header — the
         hub-never-writes doctrine, see `openStarter`).
       */}
+      {/* TASK-20261009 U1: the next three schedules and the way to all of them — between the
+          user's own apps and what others handed them. Renders nothing when there is nothing
+          scheduled and no template fits the installed starters. */}
+      <ScheduleHubSection installedBySource={installedBySource} />
+
       <SharedShelf installedBySource={installedBySource} />
 
       <h2 className="section-title">starter apps</h2>

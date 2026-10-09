@@ -13,6 +13,8 @@ import { BRAIN_AUTO, demoStandIn } from '@playground/platform/copy';
 import { hostCapabilities } from '@playground/platform/hostCapabilities';
 import type { BrainSwitchSeat, SnugPlatform } from '@playground/platform/platform';
 import { brainRevisionStore } from '@playground/platform/signals';
+import { hostHonesty } from '@playground/schedule/copy';
+import { honestyInputFor } from '@playground/schedule/honesty';
 
 import { BRAIN_CHOICE_STORAGE_KEY } from '../brains/brainChoiceStore.js';
 import type { BrainWire, LocalClient, LocalStatus } from '../local/client.js';
@@ -225,6 +227,13 @@ describe('the platform this binding carries', () => {
     expect(platform.capabilities.appExport).toBe(true);
     expect(platform.capabilities.share).toBe(false);
   });
+
+  it('carries the scheduler seat (TASK-20261009 H3): the runner’s page is a tab, so the subject is "this page"; page-bound; no notify — the page cannot raise one', () => {
+    const { platform } = composeLocalPlatform(client, status());
+    expect(platform.scheduler).toEqual({ wakeMode: 'page', hostLabel: 'this page' });
+    expect(platform.scheduler?.notify).toBeUndefined();
+    expect(hostHonesty(honestyInputFor(platform))).toBe('runs while this page is open');
+  });
 });
 
 describe('when another product holds the file (D-B24)', () => {
@@ -245,6 +254,11 @@ describe('when another product holds the file (D-B24)', () => {
     const { platform } = composeLocalPlatform(client, status({ heldBy: 'Snug for Mac', ...READY }), undefined, undefined, 't');
     expect(platform.brain).toBeUndefined();
     expect(platform.brainSwitch).toBeUndefined();
+  });
+
+  it('and no scheduler seat — a page that will not open the file schedules nothing', () => {
+    const { platform } = composeLocalPlatform(client, status({ heldBy: 'Snug for Mac' }));
+    expect(platform.scheduler).toBeUndefined();
   });
 });
 

@@ -59,3 +59,12 @@ describe('the desktop platform offers every need an app can have', () => {
     }
   });
 });
+
+describe('the scheduler seat (TASK-20261009 H3; ADR-0074 §7)', () => {
+  it('createDesktopPlatform() names itself as the subject of the honesty line — "Snug for Mac" — and promises only the page; no notify until PR-B’s plugin brings one', async () => {
+    const { createDesktopPlatform } = await import('../platform-desktop.js');
+    const { scheduler } = createDesktopPlatform();
+    expect(scheduler).toEqual({ wakeMode: 'page', hostLabel: 'Snug for Mac' });
+    expect(scheduler?.notify).toBeUndefined();
+  });
+});

@@ -204,3 +204,97 @@ export function bundleIdFromSharedAppSettingKey(key: string): string | undefined
   const bundleId = key.slice(SHARED_APP_SETTING_PREFIX.length);
   return bundleId.length === 0 ? undefined : bundleId;
 }
+
+// ------------------------------- scheduled tasks (TASK-20261009-scheduling-framework, ADR-0074 §2)
+//
+// The scheduler's record lives in `snug_settings` too (SPEC §8.1: host state that is
+// neither app data nor a grant is a namespaced settings row — no new table, no v7). Five
+// namespaces; the first three are keyed by TASK, the last two by APP. The accessors in
+// `schedules.ts`, `deleteApp`'s cascade and the import reconciliation are the three
+// writers, and all three spell every key through here. Note that `schedule:`,
+// `scheduleRuns:` and `schedulerState` share their first eight letters: the parsers
+// below test the FULL prefix, so a runs row can never be read as a task.
+
+/** The `schedule:` namespace prefix — one row per task. */
+export const SCHEDULE_SETTING_PREFIX = 'schedule:';
+
+/** `schedule:<taskId>` — the task itself (`scheduledTaskSchema` JSON). */
+export function scheduleSettingKey(taskId: string): string {
+  if (taskId.length === 0) throw new Error('taskId must be non-empty');
+  return `${SCHEDULE_SETTING_PREFIX}${taskId}`;
+}
+
+/** The taskId a settings key names, or `undefined` if the key is not a task row. */
+export function taskIdFromScheduleSettingKey(key: string): string | undefined {
+  if (!key.startsWith(SCHEDULE_SETTING_PREFIX)) return undefined;
+  const taskId = key.slice(SCHEDULE_SETTING_PREFIX.length);
+  return taskId.length === 0 ? undefined : taskId;
+}
+
+/** The `scheduleRuns:` namespace prefix — one bounded row per task. */
+export const SCHEDULE_RUNS_SETTING_PREFIX = 'scheduleRuns:';
+
+/**
+ * `scheduleRuns:<taskId>` — the task's run history as ONE JSON array, newest first,
+ * bounded by entries, by bytes per task and by bytes across every task (ADR-0074 §2).
+ * One row per task, so it is equality-deleted beside its task.
+ */
+export function scheduleRunsSettingKey(taskId: string): string {
+  if (taskId.length === 0) throw new Error('taskId must be non-empty');
+  return `${SCHEDULE_RUNS_SETTING_PREFIX}${taskId}`;
+}
+
+/** The taskId a settings key names, or `undefined` if the key is not a runs row. */
+export function taskIdFromScheduleRunsSettingKey(key: string): string | undefined {
+  if (!key.startsWith(SCHEDULE_RUNS_SETTING_PREFIX)) return undefined;
+  const taskId = key.slice(SCHEDULE_RUNS_SETTING_PREFIX.length);
+  return taskId.length === 0 ? undefined : taskId;
+}
+
+/**
+ * `schedulerState` — the ONE row for the scheduler itself: the reconcile watermark, the
+ * global pause and the daily counters (`schedulerStateSchema`). A fixed key, not a
+ * namespace: there is one scheduler per file.
+ */
+export const SCHEDULER_STATE_SETTING_KEY = 'schedulerState';
+
+/** The `scheduleDeclined:` namespace prefix. */
+export const SCHEDULE_DECLINED_SETTING_PREFIX = 'scheduleDeclined:';
+
+/**
+ * `scheduleDeclined:<appId>:<hash>` — the user said *Not now* to this app's suggestion,
+ * identified by `proposalHash()` over its semantic fields (ADR-0074 §4). MANY rows per
+ * app, so the cascade is a prefix delete on `scheduleDeclinedSettingPrefixFor(appId)`
+ * with the same `!`-escaping the `auth:` and `shareLink:` prefixes use. Dropped whole on
+ * an untrusted import: these are the user's own answers, not something a file carries in.
+ */
+export function scheduleDeclinedSettingKey(appId: string, hash: string): string {
+  if (hash.length === 0) throw new Error('hash must be non-empty');
+  return `${scheduleDeclinedSettingPrefixFor(appId)}${hash}`;
+}
+
+/** The per-app prefix every `scheduleDeclined:` row of one app shares — the cascade's LIKE pattern base. */
+export function scheduleDeclinedSettingPrefixFor(appId: string): string {
+  if (appId.length === 0) throw new Error('appId must be non-empty');
+  return `${SCHEDULE_DECLINED_SETTING_PREFIX}${appId}:`;
+}
+
+/** The `scheduleMuted:` namespace prefix. */
+export const SCHEDULE_MUTED_SETTING_PREFIX = 'scheduleMuted:';
+
+/**
+ * `scheduleMuted:<appId>` — *Stop suggestions from this app* (two declines, or the
+ * explicit choice). Absent means not muted, which is why clearing DELETES the row. One
+ * row per app ⇒ equality-deleted in `deleteApp`'s cascade.
+ */
+export function scheduleMutedSettingKey(appId: string): string {
+  if (appId.length === 0) throw new Error('appId must be non-empty');
+  return `${SCHEDULE_MUTED_SETTING_PREFIX}${appId}`;
+}
+
+/** The appId a settings key names, or `undefined` if the key is not a mute marker. */
+export function appIdFromScheduleMutedSettingKey(key: string): string | undefined {
+  if (!key.startsWith(SCHEDULE_MUTED_SETTING_PREFIX)) return undefined;
+  const appId = key.slice(SCHEDULE_MUTED_SETTING_PREFIX.length);
+  return appId.length === 0 ? undefined : appId;
+}

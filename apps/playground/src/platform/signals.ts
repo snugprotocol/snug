@@ -18,6 +18,12 @@ import { useStore } from '../state/store.js';
 export const brainRevisionStore = createStore(0);
 /** Bumped when the user's library changed underneath the UI (an agent hand-in landed). */
 export const libraryRevisionStore = createStore(0);
+/**
+ * Bumped when the schedules or their runs changed underneath the UI (TASK-20261009 C7,
+ * ADR-0074 §5): a sync pull landed rows, a reconcile wrote candidates, a run finished. The
+ * engine re-reads the file on it; so does every view that lists schedules or results.
+ */
+export const scheduleRevisionStore = createStore(0);
 
 export function bumpBrainRevision(): void {
   brainRevisionStore.set(brainRevisionStore.get() + 1);
@@ -27,10 +33,18 @@ export function bumpLibraryRevision(): void {
   libraryRevisionStore.set(libraryRevisionStore.get() + 1);
 }
 
+export function bumpScheduleRevision(): void {
+  scheduleRevisionStore.set(scheduleRevisionStore.get() + 1);
+}
+
 export function useBrainRevision(): number {
   return useStore(brainRevisionStore);
 }
 
 export function useLibraryRevision(): number {
   return useStore(libraryRevisionStore);
+}
+
+export function useScheduleRevision(): number {
+  return useStore(scheduleRevisionStore);
 }

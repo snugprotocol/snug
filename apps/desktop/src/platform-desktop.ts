@@ -297,6 +297,12 @@ export function createDesktopPlatform(): SnugPlatform {
     // plugin (artifact-signature verified in Rust); relaunch reaps the sidecar first
     // — the ordering is pinned by appUpdates.test.ts's call-order spy, never by prose.
     appUpdates: createAppUpdates(),
+    // THE SCHEDULER SEAT (TASK-20261009 H3; ADR-0074 §7). The shell names itself as the
+    // subject of the honesty line ("runs while Snug for Mac is open") and promises only the
+    // page: background mode is the deferred task (§8), and stating `page` here is what keeps
+    // the line from inheriting a background sentence by accident. No `notify` yet — PR-B's
+    // `tauri-plugin-notification` brings it; until then the inbox result is the alert.
+    scheduler: { wakeMode: 'page', hostLabel: 'Snug for Mac' },
     // hubAuth stays absent-and-off by design (ADR-0052 §5): the shell has no hub
     // login surface — BYOK/local only — and stating it here would imply a knob.
     capabilities: { subscriptionMode: false, hubSyncOrigin: false, lanHttpPrivate: true },

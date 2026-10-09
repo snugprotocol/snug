@@ -15,6 +15,7 @@ import { USERDB_FILE } from '@snugprotocol/protocol';
 import { getPlatform } from '../platform/platform.js';
 import { sqlJsEngineOptions } from '../run/sqlJsEngine.js';
 import { resetThreadSessions } from '../agent/threadSessions.js';
+import { initScheduler } from '../schedule/scheduler.js';
 import { resetSidecarIdentitySession } from './sidecarIdentity.js';
 import { createStore, useStore } from './store.js';
 
@@ -222,6 +223,9 @@ export async function restoreUserDbFromBytes(bytes: Uint8Array): Promise<void> {
     });
     attemptOpen();
   });
+  // The restored file gets its own scheduler (TASK-20261009 E1, ADR-0074 §5): the reset above
+  // dropped the engine of the file being replaced; this is the re-init, after the open succeeded.
+  void initScheduler();
 }
 
 /** Resolves when the user DB is usable. Never resolves while status is corrupt/unsupported. */
