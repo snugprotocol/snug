@@ -267,10 +267,9 @@ test.describe('A8 — a scheduled Run [app] against the net stub', () => {
     await expect(rows.first()).toContainText(missedRow('every hour', 1).split(' · ')[1] as string); // "missed once"
     await expect(card.getByTestId('missed-run-all')).toHaveText(MISSED_ACTIONS.runAll);
     await expect(card.getByTestId('missed-skip-all')).toHaveText(MISSED_ACTIONS.skipAll);
-    // The feed shows the same one row, as *missed*, and nothing ran.
+    // Nothing ran: a pending candidate lives on the missed card, never in the results feed
+    // (the feed lists finished results only), so the feed stays empty until the user acts.
     const results = page.getByTestId('schedule-result');
-    await expect(results).toHaveCount(1);
-    await expect(results.first()).toHaveAttribute('data-status', 'pending');
-    await expect(results.first()).toContainText(RESULT_STATUS_WORD.pending);
+    await expect(results).toHaveCount(0);
   });
 });
