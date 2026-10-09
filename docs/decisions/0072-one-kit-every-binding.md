@@ -146,3 +146,6 @@ path.
   refreshes it over the network), so if its refresh fails for want of a refresh token the app is
   shown runnable on such a runner while every connected call fails, and the remedy — signing in
   again — needs the redirect that runner cannot take.
+
+**Amendment 2026-10-09 (TASK-20261008-p0-clearance W2, react-router 7).** §2's router probe gains a second requirement: react-router 7.18 resolves every navigation target against the document URL, so a document whose History API accepts the hash but whose URL cannot serve as a base (`about:srcdoc`, origin `null`) would throw on every navigate. `pickRouter` mounts the hash router only when `replaceState` succeeds AND `new URL('/', location.href)` resolves; otherwise the memory router.
+
