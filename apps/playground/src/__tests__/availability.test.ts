@@ -479,6 +479,7 @@ const ALLOWED_KIND_READS: Record<string, { reads: number; why: string }> = {
   'views/AvailabilityNote.tsx': { reads: 1, why: 'presentation of a verdict ALREADY taken: the web shelf keeps its "desktop" badge' },
   'views/HostPassport.tsx': { reads: 1, why: 'the passport renders on host platforms only (web and desktop show nothing new)' },
   'schedule/honesty.ts': { reads: 1, why: 'presentation: the honesty line names the host ("this tab" / "Snug for Mac") — disclosure of what the seats already decided, never a capability (TASK-20261009 E9)' },
+  'schedule/scheduler.ts': { reads: 2, why: 'the run row RECORDS which host ran it (`host: {kind, binding}`) and the lock name — a record of where, never a decision about what may run (TASK-20261009 E9)' },
 };
 
 describe('S4 — no capability decision in playground source reads the platform’s kind', () => {
