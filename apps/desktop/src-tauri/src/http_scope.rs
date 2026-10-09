@@ -4,7 +4,7 @@
 //! sixteen `http://172.N.*.*:*` entries, and a test pinned those STRINGS. None of them ever
 //! matched a single address: urlpattern 0.3 canonicalises every fixed-text hostname part
 //! through `url::Url::set_host`, which IPv4-parses digit text, so `192.168.*.*` compiled to the
-//! host `192.0.0.168*.*` (next-steps 2026-09-05; measured again 2026-10-09). The plain-http LAN
+//! host `192.0.0.168*.*` (lessons.md 2026-09-05; measured again 2026-10-09). The plain-http LAN
 //! rung (ADR-0021 D4) was dead in every release. This module runs the scope the way the plugin
 //! does and asserts what it ADMITS and REFUSES — the only kind of test that can see that class.
 //!

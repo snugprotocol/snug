@@ -3,7 +3,8 @@
   "name": "@snugprotocol/starters",
   "versions": {
     "0.1.0": {
-      "published": false,
+      "published": true,
+      "integrity": "sha512-Ji9PkDuBYiTAenTf2A9onNGzHjibJfiWxPxNsI9IFL6GRnMNtURKia9MlccoBaZrdIhhWzhx6NcSSEjBNCXQqw==",
       "starters": {
         "adventure-quest": "xKiYyEeHTlCm2Yma2jXR+tzq9Ha10aqp4m1dT3VZt89suvKD8QHXItk2ttHltsjn",
         "chess": "GgtHWjt2ejFWP0WN0x/G2rVRf2Psc6SDQPh3O+DniBNz/LQM649oVKSXIWfC+PC4",
