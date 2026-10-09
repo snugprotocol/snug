@@ -94,21 +94,13 @@ describe('K1 — one Vite config, one html entry, one output', () => {
     // The four spellings the second build had. Assembled, so this file does not name them.
     const second = new RegExp(['dist' + '-local', 'snug-host' + '-local', 'vite' + '\\.local', 'build' + ':local'].join('|'));
     // `docs/` is the append-only record (decisions, journals, the plan that withdrew the
-    // build) and the ONLY directory K1 exempts. ONE file outside it is exempt BY NAME: a
-    // filed prompt quoting the decision this range reverses (D-B1, "a second entry of
-    // apps/host") — a record of the same kind, kept outside `docs/` and outside this
-    // range's files. A named file, not its directory: anything else filed beside it is
-    // walked like source. (Whether K1's wording takes the exemption or the prompt moves
-    // under `docs/` is the task owner's call; if it moves, the last assertion below reds.)
-    const FILED_RECORD = 'Claude outputs/PROMPT-binding-b-plugin-host.md';
-    const record = (file: string): boolean => file.startsWith('docs/') || file === FILED_RECORD;
+    // build) and the ONLY directory K1 exempts. (A filed prompt outside `docs/` was exempt
+    // by name until TASK-20261008-p0-clearance removed it from the repo; nothing else is.)
+    const record = (file: string): boolean => file.startsWith('docs/');
     const tracked = workingTreeFiles();
     const files = tracked.filter((file) => !record(file) && !file.split('/').some((part) => part === 'node_modules' || part === 'dist'));
     expect(files.length, 'the walk must see the repo, not an empty list').toBeGreaterThan(500);
     expect(files).toContain('apps/host/vite.config.ts');
-    // The exemption earns its place: the file is there and still names the second build.
-    // Once it is moved or reworded this line is the reminder to delete the exemption.
-    expect(tracked.includes(FILED_RECORD) && second.test(read(FILED_RECORD)), `${FILED_RECORD} no longer needs its exemption — remove it`).toBe(true);
     const hits: string[] = [];
     for (const file of files) {
       if (second.test(file)) hits.push(`${file} (the path itself)`);

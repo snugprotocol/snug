@@ -2,7 +2,7 @@
 
 **What this covers:** the four walks no suite can take for TASK-20261003-host-bindings-complete (criterion D7; ADR-0071, ADR-0072). Each is a list of numbered steps with the observation to expect at each, and what to record.
 
-**Status, 2026-10-04: every track is READY FOR WALK. None is done.** A track is done only when its walk is journaled in the task file (`docs/tasks/active/TASK-20261003-host-bindings-complete.md`, or `docs/tasks/done/` after the move) with the date, the commit walked and what it recorded. **No kit shelf (artifact, chat or local runner) can install a starter yet** (the playground's and the desktop app's shelves bundle theirs) — the starters package is not published (step 0.3) — so every track takes Chess by hand-in until it is.
+**Status, 2026-10-08: every track is READY FOR WALK. None is done.** TASK-20261003-host-bindings-complete merged as PR #185 (`0b68061`) and its task file is retired (ADR-0027; its full text is in git history). A track is done only when its walk is journaled in the skill-only Snug program record ([`docs/tasks/active/TASK-20260904-skill-only-snug.md`](../tasks/active/TASK-20260904-skill-only-snug.md)) with the date, the commit walked and what it recorded. **No kit shelf (artifact, chat or local runner) can install a starter yet** (the playground's and the desktop app's shelves bundle theirs) — the starters package is not published (step 0.3) — so every track takes Chess by hand-in until it is.
 
 | Track | What it proves | What it spends | Needs |
 |---|---|---|---|
@@ -215,4 +215,4 @@ Run under Node 22 from the repo root. It uses the Chromium that `apps/host`'s br
 
 ## Journaling a walk
 
-In the task file's session journal, one entry per walk: `### <date> <time> UTC — Jeetu — walk <A|B|C|D>: PASS | FAIL`, then the commit and `build`, what the track's **Record** line asks for, and anything that refused, in its own words. A FAIL is a finding, not a failure of the walk: it goes in the journal as it was seen, and its fix is a task of its own.
+In the program record's session journal ([TASK-20260904-skill-only-snug](../tasks/active/TASK-20260904-skill-only-snug.md)), one entry per walk: `### <date> <time> UTC — Jeetu — walk <A|B|C|D>: PASS | FAIL`, then the commit and `build`, what the track's **Record** line asks for, and anything that refused, in its own words. A FAIL is a finding, not a failure of the walk: it goes in the journal as it was seen, and its fix is a task of its own.
