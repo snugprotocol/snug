@@ -260,7 +260,11 @@ differs from the playground is the OUTPUT and what the platform carries:
   integrity="sha384-…" crossorigin="anonymous">`, a page hook the wrapper registers into,
   and NAMED refusals (offline, timeout, bad payload, wrong version) the run view renders —
   never a dead control. Publishing the package is an owner act; the version pin lives in
-  `examples/starters-package.json`.
+  `examples/starters-package.json` and every version's wrapper hashes in
+  `examples/starters-lock.json` (ADR-0073): `check-starters-pin` (root `check-host-kit`)
+  reds when `examples/` drifts from the lock — re-stage before publication, bump the pin
+  after — and `scripts/publish-starters.mjs` stages, dry-runs and publishes
+  ([runbook](runbooks/publish-starters.md)).
 - **A host offers only what it can run** (`apps/playground/src/platform/availability.ts`,
   ADR-0072 §4 — every shell, not only the kit): one pure derivation. An app's NEEDS
   (`network`, `native-fetch` — the registry says its provider refuses browsers — `oauth`,
