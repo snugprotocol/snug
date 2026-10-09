@@ -29,7 +29,7 @@ export const PROBES = {
   'net-scope-rfc1918-http-admitted': ['http://10.255.255.254/', 'http://172.31.255.254/', 'http://192.168.255.254:8787/v1/bundles'],
   'net-scope-non-private-http-refused': ['http://172.32.0.1/', 'http://11.0.0.1/', 'http://192.169.0.1/', 'http://127.0.0.1:8080/', 'http://localhost:11434/'],
   'net-scope-https-any-port-admitted': ['https://example.com:8443/', 'https://192.168.255.254:5001/'],
-  'net-scope-https-loopback-denied': ['https://localhost:6443/', 'https://127.0.0.1:8443/', 'https://[::1]:6443/'],
+  'net-scope-https-loopback-denied': ['https://localhost:6443/', 'https://foo_bar.localhost:6443/', 'https://127.0.0.1:8443/', 'https://0.0.0.0:8443/', 'https://169.254.169.254:80/', 'https://[::1]:6443/'],
 } as const satisfies Record<(typeof NET_SCOPE_CHECK_IDS)[number], readonly string[]>;
 
 export interface FetchOutcome {

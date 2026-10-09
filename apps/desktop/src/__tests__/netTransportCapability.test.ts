@@ -59,7 +59,8 @@ const EXPECTED_HTTP_ALLOW = [
   'http://127.0.0.1:43120/*',
 ];
 const EXPECTED_HTTP_DENY = [
-  'https://((?:[a-z0-9-]+\\.)*localhost\\.?):*',
+  'https://((?:[^.]+\\.)*localhost\\.?):*',
+  `https://(169\\.254(?:\\.${OCTET}){2}):*`,
   `https://(127(?:\\.${OCTET}){3}):*`,
   `https://(0(?:\\.${OCTET}){3}):*`,
   'https://(\\[[0-9a-f:.]+\\]):*',
@@ -74,7 +75,7 @@ describe('tauri http capability scope', () => {
     expect([...httpAllow].sort()).toEqual([...EXPECTED_HTTP_ALLOW].sort());
   });
 
-  it('denies EXACTLY the closed set: https to loopback, 0/8 and IPv6 literals on every port', () => {
+  it('denies EXACTLY the closed set: https to loopback spellings, link-local, 0/8 and IPv6 literals on every port', () => {
     expect([...httpDeny].sort()).toEqual([...EXPECTED_HTTP_DENY].sort());
   });
 

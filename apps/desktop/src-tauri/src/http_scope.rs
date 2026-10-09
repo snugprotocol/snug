@@ -180,9 +180,23 @@ fn https_is_admitted_on_any_port_for_names_and_ipv4_literals() {
             "https://api.github.com/user",
             "https://192.168.1.10:5001/",
             "https://10.0.0.5:8443/",
+            // The loopback deny is anchored: names that merely CONTAIN "localhost" pass.
+            "https://notlocalhost.com/",
+            "https://localhost.example.com/",
+            "https://mylocalhost:6443/",
+            // CGNAT stays open (Tailscale); it is not loopback.
+            "https://100.64.0.7:8443/",
         ],
         true,
     );
+}
+
+#[test]
+fn a_dns_name_that_resolves_to_loopback_is_not_a_spelling_the_scope_can_see() {
+    // Documented residual (threat-model delta, desktop shell): `localtest.me` resolves to
+    // 127.0.0.1, and a host pattern cannot know that. The stop there is rustls' webpki check —
+    // no loopback service holds a publicly trusted certificate for that name.
+    assert!(admitted("https://localtest.me:6443/"));
 }
 
 #[test]
@@ -198,6 +212,15 @@ fn https_to_loopback_and_ipv6_literals_is_denied_on_every_port() {
             "https://localhost.:8443/",
             "https://LOCALHOST:443/",
             "https://foo.localhost:443/",
+            "https://foo_bar.localhost:6443/", // `_` survives URL parsing and resolves to loopback (Gate 5)
+            "https://a%5Fb.localhost/",
+            "https://a.b_c.localhost:8443/",
+            "https://169.254.169.254:80/",     // link-local / cloud metadata
+            "https://169.254.1.1:8443/",
+            "https://0x7f.1:8443/",            // → 127.0.0.1
+            "https://2130706433:8443/",        // → 127.0.0.1
+            "https://0:8443/",                 // → 0.0.0.0
+            "https://[::]:8443/",
             "https://127.0.0.1/",
             "https://127.5.5.5:8443/",
             "https://0.0.0.0:8443/",
