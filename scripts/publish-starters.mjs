@@ -6,7 +6,8 @@
 //
 //   node scripts/publish-starters.mjs                         # dry run: every preflight, PRINT the publish line
 //   node scripts/publish-starters.mjs --stage [--ref=<sha>]   # write examples/starters-lock.json's entry (on a branch)
-//   node scripts/publish-starters.mjs --publish [--version=<v>] [--otp=<code>]   # publish + verify + mark the lock
+//   node scripts/publish-starters.mjs --publish [--version=<v>] [--otp=<code>]   # publish, mark the lock, verify
+//   node scripts/publish-starters.mjs --reconcile [--version=<v>]  # mark a version the registry + CDN already serve (recovery)
 //
 // Dry run and --publish, in order — each refusal names its fix and fires BEFORE npm publish:
 //   1. Node 22 (the gates' Node; the tarball's gzip bytes depend on npm's version);
@@ -30,14 +31,14 @@
 // scripts/publish-starters.test.mjs drives every path with a faked world.
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { NPM_REGISTRY, writePackageFiles } from './build-starters-pkg.mjs';
 import { cdnUrl, LOCK_FILE, packumentUrl } from './check-starters-pin.mjs';
-import { compareToLock, isNetworkError, lockEntryFromIndex, serializeLock } from './lib/starters-lock.mjs';
+import { compareToLock, compareVersions, isNetworkError, lockEntryFromIndex, serializeLock } from './lib/starters-lock.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const PUBLISH_REGISTRY_ARGS = Object.freeze(['--registry', NPM_REGISTRY]);
@@ -51,13 +52,13 @@ const POLL_MS = 15_000;
 export class UsageError extends Error {}
 class Refusal extends Error {}
 
-const USAGE = 'usage: node scripts/publish-starters.mjs [--stage [--ref=<sha>]] [--publish [--version=<v>] [--otp=<code>]] [--version=<v>]';
+const USAGE = 'usage: node scripts/publish-starters.mjs [--stage [--ref=<sha>]] [--publish [--version=<v>] [--otp=<code>]] [--reconcile [--version=<v>]] [--version=<v>]';
 
 export function parseArgs(argv) {
   const out = { mode: 'dry' };
   for (const arg of argv) {
-    if (arg === '--stage' || arg === '--publish') {
-      if (out.mode !== 'dry') throw new UsageError(`choose one of --stage / --publish\n${USAGE}`);
+    if (arg === '--stage' || arg === '--publish' || arg === '--reconcile') {
+      if (out.mode !== 'dry') throw new UsageError(`choose one of --stage / --publish / --reconcile\n${USAGE}`);
       out.mode = arg.slice(2);
     } else if (arg.startsWith('--ref=')) out.ref = arg.slice('--ref='.length);
     else if (arg.startsWith('--version=')) out.version = arg.slice('--version='.length);
@@ -228,6 +229,8 @@ async function dryOrPublish(opts, deps) {
   const version = opts.version ?? pin.version;
   const versions = await registryVersions(deps, pin.name);
   if (version in versions) throw new Refusal(`${pin.name}@${version} is already on the registry — nothing to publish (an npm version can never be republished)`);
+  const higher = Object.keys(versions).filter((v) => compareVersions(v, version) > 0);
+  if (higher.length > 0) throw new Refusal(`${higher.join(', ')} is already published — publishing ${version} now would move npm's \`latest\` tag backwards; publish versions oldest first`);
   const lock = deps.readLock();
   const entry = lock?.versions?.[version];
   if (entry === undefined) throw new Refusal(`examples/starters-lock.json has no entry for ${version} — stage it first: node scripts/publish-starters.mjs --stage`);
@@ -238,6 +241,7 @@ async function dryOrPublish(opts, deps) {
   const first = await deps.build({ ref, version });
   const second = await deps.build({ ref, version });
   if (first.index.version !== version) throw new Refusal(`the build at ${ref.slice(0, 7)} produced ${first.index.version}, not ${version}`);
+  deps.discard?.(second.outDir);
   if (JSON.stringify(first.index) !== JSON.stringify(second.index)) throw new Refusal(`the build is not reproducible — two builds at ${ref.slice(0, 7)} differ`);
   const cmp = compareToLock({ index: first.index, lock: { ...lock, versions: { [version]: entry } } });
   if (cmp.status !== 'ok') throw new Refusal(`the build at ${ref.slice(0, 7)} does not match the lock for ${version} (${[...cmp.changed, ...cmp.added, ...cmp.removed].join(', ')}) — re-stage or fix the lock`);
@@ -270,17 +274,61 @@ async function dryOrPublish(opts, deps) {
   if (opts.mode !== 'publish') return { status: 'ready', version, tarball: packed.tarball };
 
   const result = deps.exec('npm', [...argv.slice(1), ...(opts.otp ? [`--otp=${opts.otp}`] : [])], { stdio: 'inherit' });
-  if (result.status !== 0) throw new Error(`npm publish exited ${result.status} — nothing is marked published; check the registry before retrying`);
-  const verified = await verifyAfterPublish(deps, { name: pin.name, version, integrity: packed.integrity, entry });
+  if (result.status !== 0) {
+    throw new Error(`npm publish exited ${result.status} — the lock is NOT marked. If the registry accepted it anyway (npm view ${pin.name}@${version}), run: node scripts/publish-starters.mjs --reconcile --version=${version}`);
+  }
+  // npm accepted the upload: from this moment the bytes are permanent, so the lock says so
+  // BEFORE the (minutes-long) verification — a run that dies or fails there leaves a truthful lock.
   lock.versions[version] = { ...entry, published: true, integrity: packed.integrity };
   deps.writeLock(lock);
+  const verified = await verifyAfterPublish(deps, { name: pin.name, version, integrity: packed.integrity, entry });
   deps.log(`publish-starters: PUBLISHED ${pin.name}@${version} — registry ${verified.registry}, jsDelivr ${verified.cdn}${verified.cdn === 'VERIFIED' ? '' : ' (re-check: node scripts/check-starters-pin.mjs --online)'}`);
   deps.log('  journal: what, the UTC time, the integrity above, both verification results; commit examples/starters-lock.json');
   return { status: 'published', version, ...verified };
 }
 
+/**
+ * Recovery: a version the registry already serves but the lock does not mark (npm exited
+ * non-zero after accepting the upload, or the run died before writing). Marks it only when
+ * the registry has it AND every wrapper on jsDelivr hashes to the lock.
+ */
+async function reconcile(opts, deps) {
+  cleanTreePreflight(deps, { allowLock: true });
+  const pin = deps.readPin();
+  const version = opts.version ?? pin.version;
+  const lock = deps.readLock();
+  const entry = lock?.versions?.[version];
+  if (entry === undefined) throw new Refusal(`examples/starters-lock.json has no entry for ${version} — nothing to reconcile`);
+  if (entry.published) {
+    deps.log(`publish-starters --reconcile: ${version} is already marked published`);
+    return { status: 'already-marked', version };
+  }
+  const onRegistry = (await registryVersions(deps, pin.name))[version];
+  if (onRegistry === undefined) throw new Refusal(`${pin.name}@${version} is not on the registry — nothing to reconcile (publish it instead)`);
+  const integrity = onRegistry.dist?.integrity;
+  if (integrity === undefined) throw new Refusal(`NOT VERIFIED: the registry gave no integrity for ${version}`);
+  for (const [folder, expected] of Object.entries(entry.starters)) {
+    let res;
+    try {
+      res = await deps.fetchImpl(cdnUrl(pin.name, version, `${folder}.js`));
+    } catch (err) {
+      if (!isNetworkError(err)) throw err;
+      throw new Refusal(`NOT VERIFIED: jsDelivr unreachable for ${folder}.js (${netReason(err)}) — retry later`);
+    }
+    if (res.status !== 200) throw new Refusal(`NOT VERIFIED: jsDelivr answered HTTP ${res.status} for ${folder}.js — retry later`);
+    const body = typeof res.arrayBuffer === 'function' ? Buffer.from(await res.arrayBuffer()) : Buffer.from(await res.text(), 'utf8');
+    if (sha384(body) !== expected) throw new Error(`FAILED: jsDelivr serves ${folder}.js@${version} hashing to ${sha384(body)}; the lock says ${expected} — do not mark it`);
+  }
+  lock.versions[version] = { ...entry, published: true, integrity };
+  deps.writeLock(lock);
+  deps.log(`publish-starters --reconcile: ${pin.name}@${version} marked published (integrity ${integrity}) — commit examples/starters-lock.json`);
+  return { status: 'reconciled', version };
+}
+
 export async function runPublishStarters(opts, deps) {
-  return opts.mode === 'stage' ? stage(opts, deps) : dryOrPublish(opts, deps);
+  if (opts.mode === 'stage') return stage(opts, deps);
+  if (opts.mode === 'reconcile') return reconcile(opts, deps);
+  return dryOrPublish(opts, deps);
 }
 
 // ---------------------------------------------------------------------------
@@ -301,18 +349,22 @@ export async function realBuild({ root = ROOT, ref, version, outDir, name }) {
   // realpath: macOS's tmpdir is a symlink (/var → /private/var), and a builder whose argv[1]
   // spelling differs from its own import.meta.url skips its main block — silently, exit 0.
   const work = realpathSync(mkdtempSync(path.join(tmpdir(), 'snug-starters-src-')));
-  const src = path.join(work, 'src');
-  mkdirSync(src);
-  must(run('git', ['-C', root, 'archive', '--format=tar', '-o', path.join(work, 'src.tar'), ref, 'examples', 'scripts/build-starters-pkg.mjs', 'scripts/lib', 'LICENSE']), `git archive ${ref}`);
-  must(run('tar', ['-xf', path.join(work, 'src.tar'), '-C', src]), 'tar -x');
-  const out = outDir ?? mkdtempSync(path.join(tmpdir(), 'snug-starters-out-'));
-  must(run(process.execPath, [path.join(src, 'scripts/build-starters-pkg.mjs'), `--out=${out}`], { cwd: src }), `the builder at ${ref}`);
-  if (!existsSync(path.join(out, 'index.json'))) throw new Error(`the builder at ${ref} wrote no index.json into ${out}`);
-  const index = JSON.parse(readFileSync(path.join(out, 'index.json'), 'utf8'));
-  if (version !== undefined && index.version !== version) throw new Refusal(`the pin at ${ref.slice(0, 7)} names ${index.version}, not ${version}`);
-  if (name !== undefined && index.name !== name) throw new Refusal(`the pin at ${ref.slice(0, 7)} names ${index.name}, not ${name}`);
-  writePackageFiles(out, { name: index.name, version: index.version, wrapperFiles: Object.values(index.starters).map((s) => s.file), licenseFile: path.join(root, 'LICENSE') });
-  return { index, outDir: out };
+  try {
+    const src = path.join(work, 'src');
+    mkdirSync(src);
+    must(run('git', ['-C', root, 'archive', '--format=tar', '-o', path.join(work, 'src.tar'), ref, 'examples', 'scripts/build-starters-pkg.mjs', 'scripts/lib', 'LICENSE']), `git archive ${ref}`);
+    must(run('tar', ['-xf', path.join(work, 'src.tar'), '-C', src]), 'tar -x');
+    const out = outDir ?? mkdtempSync(path.join(tmpdir(), 'snug-starters-out-'));
+    must(run(process.execPath, [path.join(src, 'scripts/build-starters-pkg.mjs'), `--out=${out}`], { cwd: src }), `the builder at ${ref}`);
+    if (!existsSync(path.join(out, 'index.json'))) throw new Error(`the builder at ${ref} wrote no index.json into ${out}`);
+    const index = JSON.parse(readFileSync(path.join(out, 'index.json'), 'utf8'));
+    if (version !== undefined && index.version !== version) throw new Refusal(`the pin at ${ref.slice(0, 7)} names ${index.version}, not ${version}`);
+    if (name !== undefined && index.name !== name) throw new Refusal(`the pin at ${ref.slice(0, 7)} names ${index.name}, not ${name}`);
+    writePackageFiles(out, { name: index.name, version: index.version, wrapperFiles: Object.values(index.starters).map((s) => s.file), licenseFile: path.join(root, 'LICENSE') });
+    return { index, outDir: out };
+  } finally {
+    rmSync(work, { recursive: true, force: true });
+  }
 }
 
 export async function realPack({ outDir, dest = mkdtempSync(path.join(tmpdir(), 'snug-starters-pack-')) }) {
@@ -334,6 +386,7 @@ export async function realReadTarball(tarball) {
     }
   };
   walk(base);
+  rmSync(dir, { recursive: true, force: true });
   return files;
 }
 
@@ -369,6 +422,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       readTarball: realReadTarball,
       scrub: await loadScrub(),
       sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      discard: (dir) => rmSync(dir, { recursive: true, force: true }),
       log: (line) => console.log(line),
     });
     if (result.status === 'published' && result.cdn !== 'VERIFIED') process.exitCode = 0;

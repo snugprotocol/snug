@@ -60,7 +60,7 @@ function world(over = {}) {
       calls.push([cmd, ...args]);
       const key = [cmd, ...args].join(' ');
       if (key === 'git status --porcelain') return { status: 0, stdout: state.porcelain };
-      if (key.startsWith('git fetch')) return { status: 0, stdout: '' };
+      if (key.startsWith('git fetch')) return { status: state.fetchStatus ?? 0, stdout: '', stderr: 'fatal: unable to access' };
       if (key === 'git rev-parse HEAD') return { status: 0, stdout: `${state.head}\n` };
       if (key === 'git rev-parse origin/main') return { status: 0, stdout: `${state.originMain}\n` };
       if (key.startsWith('git rev-parse --verify')) return { status: 0, stdout: `${OLD}\n` };
@@ -111,6 +111,7 @@ test('parseArgs: dry by default; --stage, --publish, --version, --ref and --otp;
   assert.deepEqual(parseArgs([]), { mode: 'dry' });
   assert.deepEqual(parseArgs(['--stage', `--ref=${OLD}`]), { mode: 'stage', ref: OLD });
   assert.deepEqual(parseArgs(['--publish', '--version=0.1.0', '--otp=123456']), { mode: 'publish', version: '0.1.0', otp: '123456' });
+  assert.deepEqual(parseArgs(['--reconcile', '--version=0.1.0']), { mode: 'reconcile', version: '0.1.0' });
   assert.throws(() => parseArgs(['--publish', '--stage']), /one of/);
   assert.throws(() => parseArgs(['--force']), /unknown/);
   assert.throws(() => parseArgs(['--ref=abc']), /--ref only with --stage/);
@@ -137,7 +138,11 @@ const REFUSALS = [
   ['a non-npmjs registry', { registryConfig: 'https://npm.pkg.github.com/' }, /registry/],
   ['a scoped registry override', { scopedRegistry: 'https://npm.pkg.github.com/' }, /@snugprotocol:registry/],
   ['npm whoami failing', { whoami: { status: 1, stdout: '', stderr: 'ENEEDAUTH' } }, /npm login/],
-  ['the scope missing', { scope: 404 }, /org/],
+  ['the scope missing', { scope: 404 }, /does not exist/],
+  ['the org lookup answering 500', { scope: 500 }, /org lookup answered HTTP 500/],
+  ['git fetch failing', { fetchStatus: 1 }, /git fetch origin main failed/],
+  ['a build producing another version', { build: () => ({ format: 'snug-starters-index/1', name: NAME, version: '0.9.9', starters: {} }) }, /produced 0\.9\.9/],
+  ['a HIGHER version already published (latest would move backwards)', { packument: { status: 200, body: { versions: { '0.2.0': {} } } } }, /oldest first/],
   ['the version already published', { packument: { status: 200, body: { versions: { '0.1.1': {} } } } }, /already on the registry/],
   ['the registry unreachable', { packument: Object.assign(new TypeError('fetch failed'), { cause: { code: 'ENOTFOUND' } }) }, /NOT VERIFIED/],
   ['two builds differing', { buildTwiceDiffers: true }, /reproducib/],
@@ -182,16 +187,29 @@ test('--publish: publishes THE VERIFIED TARBALL to the pinned registry, verifies
   assert.match(w.logs.join('\n'), /VERIFIED/);
 });
 
-test('--publish: a non-zero npm publish is a failure and the lock is untouched', async () => {
+test('--publish: a non-zero npm publish leaves the lock untouched and names the recovery', async () => {
   const w = world({ publishStatus: 1 });
-  await assert.rejects(run(['--publish'], w), /npm publish exited 1/);
+  await assert.rejects(run(['--publish'], w), /npm publish exited 1[\s\S]*--reconcile/);
   assert.equal(w.lockWrites.length, 0);
 });
 
-test('--publish: a registry integrity that differs from the packed tarball is FAILED and the lock is untouched', async () => {
+test('--publish: the lock is marked the moment npm accepts the upload — BEFORE verification (a run that dies or fails there leaves a truthful lock)', async () => {
+  const w = world();
+  let lockWrittenBeforeFirstVerifyFetch;
+  const fetchImpl = w.deps.fetchImpl;
+  w.deps.fetchImpl = async (url) => {
+    if (lockWrittenBeforeFirstVerifyFetch === undefined && w.calls.some((c) => c[0] === 'npm' && c[1] === 'publish')) lockWrittenBeforeFirstVerifyFetch = w.lockWrites.length === 1;
+    return fetchImpl(url);
+  };
+  await run(['--publish'], w);
+  assert.equal(lockWrittenBeforeFirstVerifyFetch, true);
+});
+
+test('--publish: a registry integrity that differs from the packed tarball is FAILED — and the lock still says published (it is)', async () => {
   const w = world({ afterPublish: { integrity: 'sha512-someone-else', cdn: { 'alpha.js': 'ALPHA', 'beta.js': 'BETA' } } });
   await assert.rejects(run(['--publish'], w), /FAILED/);
-  assert.equal(w.lockWrites.length, 0);
+  assert.equal(w.lockWrites.length, 1);
+  assert.equal(w.lockWrites[0].versions['0.1.1'].published, true);
 });
 
 test('--publish: jsDelivr lag is NOT VERIFIED (published, lock marked, CDN to re-check) — never FAILED', async () => {
@@ -205,6 +223,31 @@ test('--publish: jsDelivr lag is NOT VERIFIED (published, lock marked, CDN to re
 test('--publish: CDN bytes that differ from the lock are FAILED', async () => {
   const w = world({ afterPublish: { integrity: 'sha512-local', cdn: { 'alpha.js': 'TAMPERED', 'beta.js': 'BETA' } } });
   await assert.rejects(run(['--publish'], w), /FAILED/);
+});
+
+// --- reconcile (recovery) ------------------------------------------------------------------
+
+const servedWorld = (over = {}) => {
+  const w = world({ packument: { status: 200, body: { versions: { '0.1.1': { dist: { integrity: 'sha512-registry' } } } } }, ...over });
+  return w;
+};
+
+test('--reconcile: a version the registry and jsDelivr already serve is marked published with the REGISTRY integrity', async () => {
+  const w = servedWorld();
+  const r = await run(['--reconcile'], w);
+  assert.equal(r.status, 'reconciled');
+  assert.deepEqual(w.lockWrites[0].versions['0.1.1'], { published: true, integrity: 'sha512-registry', starters: { alpha: sha('ALPHA'), beta: sha('BETA') } });
+  assert.equal(published(w), false);
+});
+
+test('--reconcile REFUSES a version the registry does not have, and never marks CDN bytes that differ from the lock', async () => {
+  const absent = world();
+  await assert.rejects(run(['--reconcile'], absent), /not on the registry/);
+  const tampered = servedWorld({ afterPublish: { integrity: 'x', cdn: { 'alpha.js': 'TAMPERED', 'beta.js': 'BETA' } } });
+  await assert.rejects(run(['--reconcile'], tampered), /FAILED/);
+  const lagging = servedWorld({ afterPublish: { integrity: 'x', cdn: {} } });
+  await assert.rejects(run(['--reconcile'], lagging), /NOT VERIFIED/);
+  assert.equal(absent.lockWrites.length + tampered.lockWrites.length + lagging.lockWrites.length, 0);
 });
 
 test('--publish --version of an OLDER locked version builds from that entry\'s ref', async () => {
@@ -283,7 +326,7 @@ test('INTEGRATION: realBuild builds from `git archive <ref>` with that commit\'s
   writeFileSync(path.join(dir, 'LICENSE'), 'MIT License\n');
   writeFileSync(path.join(dir, '.gitignore'), 'examples/alpha/authoring/\n');
   git('add', '-A');
-  git('commit', '-q', '-m', 'fixture');
+  git('-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'fixture');
   // An IGNORED file the builder would read from a working tree: it must not reach the package.
   mkdirSync(path.join(dir, 'examples', 'alpha', 'authoring', 'docs'), { recursive: true });
   writeFileSync(path.join(dir, 'examples', 'alpha', 'authoring', 'docs', 'secret.md'), 'IGNORED-SECRET\n');
