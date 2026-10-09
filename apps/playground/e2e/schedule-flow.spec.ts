@@ -150,17 +150,20 @@ async function createHourlyRun(page: Page, input: Record<string, unknown>, title
   await expect(page).toHaveURL(/\/schedule\/new\?/);
   await expectShipped(page.getByTestId('schedule-editor-view'), 'the editor route');
 
-  // The step kind — W3's *run <app>*: an ENABLED option labelled exactly `stepLabel('app-run', name)`.
+  // The step kind — the editor lists the KIND first (`stepLabel('app-run')`, "run this app") and
+  // takes the app in the next select; both are asserted, never skipped.
   const kind = page.getByTestId('step-0-kind');
   await expectShipped(kind, 'the step-kind select');
-  const runOption = kind.locator('option', { hasText: stepLabel('app-run', APP_NAME) });
-  await expect(runOption, `the "${stepLabel('app-run', APP_NAME)}" step kind ships with PR-B's Run [app] (W3)`).toHaveCount(1);
+  const runOption = kind.locator('option[value="app-run"]');
+  await expect(runOption, 'the run step kind ships with PR-B\'s Run [app]').toHaveCount(1);
   await expect(runOption, 'the run step is pickable, not the PR-A placeholder').toBeEnabled();
-  await kind.selectOption({ label: stepLabel('app-run', APP_NAME) });
+  await expect(runOption).toHaveText(stepLabel('app-run'));
+  await kind.selectOption('app-run');
   const step = page.getByTestId('step-0');
   await expect(step).toHaveAttribute('data-kind', 'app-run');
   const appSelect = step.getByTestId('step-0-app');
-  if ((await appSelect.count()) > 0) await appSelect.selectOption({ label: APP_NAME });
+  await expect(appSelect, 'the app select for a run step').toHaveCount(1);
+  await appSelect.selectOption({ label: APP_NAME });
   await step.getByLabel(STEPS.runInput).fill(JSON.stringify(input));
 
   // Every hour, on the hour; the catch-up choice an app run defaults to (`ask`), made explicit.
@@ -237,9 +240,10 @@ test.describe('A8 — a scheduled Run [app] against the net stub', () => {
     await expect(page).toHaveURL(/\/run\/[0-9a-f-]{36}$/);
   });
 
-  test('48 hourly misses while Snug was closed: one pending row, one missed line that reads "missed 48 times → runs once"', async ({ page }) => {
+  test('48 hourly misses while Snug was closed: the stale ones are skipped by the freshness window, the fresh one is offered — one pending row, "missed once"', async ({ page }) => {
     test.setTimeout(150_000);
     await installFixture(page);
+    await connectStub(page); // the consent names the approved host; a declared-only row says "none"
     await createHourlyRun(page, { fetch: true }, 'hourly stub check');
 
     // The jump: no timer fires (`setSystemTime` keeps them armed where they were), so the 48
@@ -257,7 +261,10 @@ test.describe('A8 — a scheduled Run [app] against the net stub', () => {
     await card.getByTestId('missed-details').click();
     const rows = card.getByTestId('missed-row');
     await expect(rows, 'collapsed per schedule to ONE candidate').toHaveCount(1);
-    await expect(rows.first()).toContainText(missedRow('every hour', 48).split(' · ')[1] as string); // "missed 48 times → runs once"
+    // Q12's freshness window: an hourly schedule's window is one period, so the 47 older misses
+    // are auto-skipped (history lines, never a card) and the ONE fresh miss is offered — "missed
+    // once", not 48 — which is the rule that keeps a weekend away from producing stale cards.
+    await expect(rows.first()).toContainText(missedRow('every hour', 1).split(' · ')[1] as string); // "missed once"
     await expect(card.getByTestId('missed-run-all')).toHaveText(MISSED_ACTIONS.runAll);
     await expect(card.getByTestId('missed-skip-all')).toHaveText(MISSED_ACTIONS.skipAll);
     // The feed shows the same one row, as *missed*, and nothing ran.

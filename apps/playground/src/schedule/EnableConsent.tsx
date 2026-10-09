@@ -60,7 +60,7 @@ export function EnableConsent({ steps, spec, now, appNames, hostsByApp, busy = f
                     <code>{step.input === undefined ? CONSENT_ROWS.noHosts : JSON.stringify(step.input)}</code>
                   </dd>
                   <dt>{CONSENT.hosts}</dt>
-                  <dd>{hosts.length === 0 ? CONSENT_ROWS.noHosts : hosts.join(', ')}</dd>
+                  <dd data-testid={`consent-hosts-${index}`}>{hosts.length === 0 ? CONSENT_ROWS.noHosts : hosts.join(', ')}</dd>
                 </dl>
               </li>
             );
