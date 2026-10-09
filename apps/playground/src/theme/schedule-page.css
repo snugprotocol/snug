@@ -521,7 +521,9 @@
    mobile breakpoint the entry is the hub's schedule section and Settings; the item hides,
    never squeezes (design review F4: "if it does not fit, the hub section is the entry"). */
 @media (max-width: 559.98px) {
-  .schedule-nav {
+  /* Two classes: the header's own `.shell-nav .nav-link` rule sets `display: flex` at (0,2,0),
+     and a single-class hide loses to it (measured on the built kit page, 2026-10-09). */
+  .shell-nav .nav-link.schedule-nav {
     display: none;
   }
 }
