@@ -98,7 +98,7 @@
     <li><span class="num">11</span><span class="ttl">Related work<span class="sub">MCP, vendor application platforms, local-first software</span></span><span class="pg">29</span></li>
     <li><span class="num">12</span><span class="ttl">Limitations and future work<span class="sub">What is unsolved, stated plainly</span></span><span class="pg">30</span></li>
     <li><span class="num">13</span><span class="ttl">Conclusion</span><span class="pg">31</span></li>
-    <li><span class="num">—</span><span class="ttl">Normative references</span><span class="pg">31</span></li>
+    <li><span class="num">—</span><span class="ttl">Normative references</span><span class="pg">32</span></li>
     <li><span class="num">A</span><span class="ttl">Appendix: message schema summary</span><span class="pg">32</span></li>
   </ol>
 </section>
@@ -1486,6 +1486,26 @@ specified; the arming channel is not, and the reference implementation's grant s
 not yet survive a reload. Until both are settled and audited, unattended action remains a
 narrow, disclosed exception rather than a finished capability — and the specification says
 so rather than implying otherwise.</p>
+
+<!-- Scheduling (ADR-0074, TASK-20261009): non-normative by design. No frame, no envelope or
+     runtime-contract field, no conformance clause — the AC4 frame inventory is unchanged. -->
+<p><strong>Scheduled work is a host feature, not protocol.</strong> The reference
+implementation lets the user set a reminder, or a question for an application's own agent,
+to a time; the task and its run history are rows in the user's file, under the namespaced
+<code>snug_settings</code> keys that the specification's §8.1 reserves for host-side state
+that is neither application data nor a grant. Nothing is added to the wire, the envelope,
+the runtime contract, or the conformance clauses of §10, and a conforming host need not
+schedule anything. Because the schedule is in the file it travels with the file: the same
+morning question is put on whichever host opens the file next, no scheduler service holds
+it apart from the file, and — like the endpoint settings of §6.4 — it arrives disabled on
+import, because a task is executable intent. The limit is plain: a host runs a schedule
+only while it is open (none of the reference hosts is always-on), and on the next open it
+reconciles what fell due while every host was closed and reports what it could not run
+rather than implying that it ran. A scheduled run gains no new powers — a network call that
+would change something is refused and left for the user to run with the application in
+view — and a scheduled answer stays inside the data surface of §9.2: the agent's reply can
+propose changes to the application's data, with the verbatim statements and an affected-row
+preview, but never applies them.</p>
 
 <p><strong>The pseudonymisation backstop has a stated class.</strong> It is anti-default
 and anti-naive, not anti-adversarial (§8), and the write-approval drift check compares row
