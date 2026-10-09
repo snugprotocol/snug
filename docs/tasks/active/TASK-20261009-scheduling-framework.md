@@ -196,6 +196,12 @@ Tests first per TDD.md, one failing test per AC. **C1 negatives**: a run result,
 
 ## Session journal (append-only, newest last)
 
+### 2026-10-09 — Claude — session (R0 done; R1 in flight)
+- Done: **R0 complete and verified** — C1 `packages/protocol/src/schedule.ts` (+54 tests; internal draft, SOURCES unchanged; the credential walk also covers runs and proposals), C2–C4 `packages/db` accessors + cascade + import/export posture (+40 tests; new codes `USERDB_SCHEDULE_INVALID`/`USERDB_SCHEDULE_LIMIT`; `UserDbImportReport.schedules`), C5–C6 `schedule/cron.ts` + `parseScheduleText.ts` (+218 tests; DST/leap/month-end in two hemispheres; weekday-8am over 366 days ≈ 2.3 ms), C7 the seat/capability/revision (+12), C8 `copy.ts` (+38). R1 pure pieces: `leader.ts` + `tick.ts` (+34), `plan.ts` + `protection.ts` + `floors.ts` (+127), `engine-types.ts`. Verifier round: protocol 426 · db 518 · sdk 41 · playground 2586 · host 660, EXIT 0. Commits `818f40e` … `30e7505`.
+- Decisions: the frequency floor lives in `schedule/floors.ts` (the accessor cannot parse cron) — C2/A6 amended; `every{n, unit:'days'}` has no time field (the grammar refuses "every 3 days at 9") — a small R2 rider adds `time?` to that variant; the planner's `globalPause` keeps the watermark (held occurrences return as missed); `appMissing` is derived at run time, never written into the task row (C3 amended).
+- State: executors/appThink/honesty and queue/scheduler/boot wiring are being written in parallel against `engine-types.ts`.
+- Next step: fold their reports, run the R1 verifier round, then R2 (the UI) in parallel workers against `scheduler.ts`'s exports.
+
 ### 2026-10-09 — Claude — session (Gate 2 close + self-sign-off)
 - Done: branch created off `80cbd07`; ADR-0074 drafted and indexed; four fresh-context plan reviews run in parallel and folded (above); the ACs, plan, PR split and queue reconciliation rewritten; baseline recorded (root `pnpm test` EXIT=0 after reinstall).
 - **Self-sign-off (High tier):** the plan was reviewed fresh-context before any implementation; every blocker has a concrete AC; no range touches `packages/runner`, `packages/auth`, `packages/adapters` or `apps/server`; the C1/C2 negatives are named per PR; the owner's delegation covers Q1–Q13.
