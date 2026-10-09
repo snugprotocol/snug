@@ -6,6 +6,10 @@
 // takes the call's argument text, and refuses any call outside `schedule/enableProposedTask.ts`
 // whose provenance is not the literal `'user'`. It proves it can fail on a planted call first.
 //
+// The scan reads EVERY source — the definer (`acts.ts`) and the re-exporter (`scheduler.ts`)
+// included, since a call can sit beside a definition (Gate-5 PR-B M16) — and follows an aliased
+// import (`createTask as mint`) to the name the file actually calls.
+//
 // Then the writer itself: re-parses, pins the owner, records provenance and owner, and hands the
 // engine's own refusal back in words.
 
@@ -16,14 +20,13 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { UserDb } from '@snugprotocol/db';
 
-import { NO_OWNER_REFUSAL, OTHER_APP_REFUSAL, enableProposedTask, namesOnly, parseProposalOrReason } from '../schedule/enableProposedTask.js';
+import { NO_OWNER_REFUSAL, OTHER_APP_REFUSAL, enableProposedTask, namesOnly } from '../schedule/enableProposedTask.js';
 import { __resetSchedulerForTests } from '../schedule/scheduler.js';
 import { installTestUserDb } from './userdbTestHelper.js';
 
 const SRC = path.resolve(__dirname, '..');
 const WRITER = path.join('schedule', 'enableProposedTask.ts');
-/** Where `createTask` is defined and where it is re-exported — not callers. */
-const DEFINERS = new Set([path.join('schedule', 'acts.ts'), path.join('schedule', 'scheduler.ts')]);
+const DEFINER = path.join('schedule', 'acts.ts');
 
 function walk(dir: string): string[] {
   const out: string[] = [];
@@ -41,24 +44,33 @@ function stripComments(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:'"`\\])\/\/[^\n]*/g, '$1');
 }
 
-/** The argument text of every `createTask(` CALL in a source (balanced parentheses; a definition `function createTask(` is skipped). */
+/** The names a source may call the engine's `createTask` by: the name itself, plus every `createTask as x` alias it imports or re-exports. */
+export function createTaskNames(code: string): string[] {
+  const names = new Set(['createTask']);
+  for (const match of code.matchAll(/\bcreateTask\s+as\s+([A-Za-z_$][\w$]*)/g)) names.add(match[1] as string);
+  return [...names];
+}
+
+/** The argument text of every `createTask(` CALL in a source — by any of its names — with balanced parentheses; a definition `function createTask(` and a member `.createTask(` are skipped. */
 export function createTaskCalls(source: string): string[] {
   const code = stripComments(source);
   const calls: string[] = [];
-  const pattern = /\bcreateTask\s*\(/g;
-  for (const match of code.matchAll(pattern)) {
-    const before = code.slice(Math.max(0, match.index - 20), match.index);
-    if (/function\s*$/.test(before) || /\.\s*$/.test(before)) continue; // a definition, or a member named createTask
-    let depth = 1;
-    let i = match.index + match[0].length;
-    const start = i;
-    while (i < code.length && depth > 0) {
-      const ch = code[i];
-      if (ch === '(') depth += 1;
-      else if (ch === ')') depth -= 1;
-      i += 1;
+  for (const name of createTaskNames(code)) {
+    const pattern = new RegExp(`\\b${name.replace(/\$/g, '\\$')}\\s*\\(`, 'g');
+    for (const match of code.matchAll(pattern)) {
+      const before = code.slice(Math.max(0, match.index - 20), match.index);
+      if (/function\s*$/.test(before) || /\.\s*$/.test(before)) continue; // a definition, or a member of that name
+      let depth = 1;
+      let i = match.index + match[0].length;
+      const start = i;
+      while (i < code.length && depth > 0) {
+        const ch = code[i];
+        if (ch === '(') depth += 1;
+        else if (ch === ')') depth -= 1;
+        i += 1;
+      }
+      calls.push(code.slice(start, i - 1));
     }
-    calls.push(code.slice(start, i - 1));
   }
   return calls;
 }
@@ -81,15 +93,36 @@ describe('the scan can fail', () => {
     expect(createTaskCalls(`// createTask('app')\nconst a = 1;`)).toEqual([]);
     expect(createTaskCalls(`createTask({ a: f(1, (2)) }); createTask({ provenance: 'user' })`)).toHaveLength(2);
   });
+
+  it('follows an ALIASED import to the name the file calls (`createTask as mint` → `mint(...)`)', () => {
+    const aliased = `import { createTask as mint } from './acts.js';\nexport async function go() { return mint({ title: 't', steps, spec, provenance: 'chat' }); }`;
+    expect(createTaskNames(aliased)).toEqual(['createTask', 'mint']);
+    const calls = createTaskCalls(aliased);
+    expect(calls).toHaveLength(1);
+    expect(provenanceOf(calls[0] as string)).toBe('chat');
+    // A re-export alias is a name too, and a bare re-export is not a call.
+    expect(createTaskCalls(`export { createTask as create } from './acts.js';`)).toEqual([]);
+    expect(createTaskCalls(`export { createTask } from './acts.js';`)).toEqual([]);
+  });
+
+  it('a call planted INSIDE the definer (`acts.ts`) is found — the definition itself is skipped, the file is not', () => {
+    const acts = readFileSync(path.join(SRC, DEFINER), 'utf8');
+    expect(createTaskCalls(acts), 'acts.ts calls createTask nowhere today').toEqual([]);
+    const planted = `${acts}\nvoid createTask({ title: 'planted', steps: [], spec: s, provenance: 'app', ownerAppId: 'x' });\n`;
+    const calls = createTaskCalls(planted);
+    expect(calls).toHaveLength(1);
+    expect(provenanceOf(calls[0] as string)).toBe('app');
+  });
 });
 
 describe('ONE writer for every proposal channel (P6)', () => {
-  it('every createTask call outside enableProposedTask.ts is the user’s own; the writer passes the channel through', () => {
+  it('every createTask call outside enableProposedTask.ts — the definer and the re-exporter scanned too — is the user’s own; the writer passes the channel through', () => {
     const offenders: string[] = [];
     let writerCalls = 0;
+    let scanned = 0;
     for (const file of walk(SRC)) {
       const rel = path.relative(SRC, file);
-      if (DEFINERS.has(rel)) continue;
+      scanned += 1;
       const calls = createTaskCalls(readFileSync(file, 'utf8'));
       if (rel === WRITER) {
         writerCalls += calls.length;
@@ -102,10 +135,12 @@ describe('ONE writer for every proposal channel (P6)', () => {
     }
     expect(writerCalls, 'the writer calls createTask exactly once').toBe(1);
     expect(offenders).toEqual([]);
+    expect(walk(SRC).map((file) => path.relative(SRC, file))).toContain(DEFINER); // the definer is in the walk, not skipped
+    expect(scanned).toBeGreaterThan(10);
   });
 
   it('the surfaces that stage proposals import the writer, not the engine’s createTask', () => {
-    for (const rel of [path.join('views', 'ChatLog.tsx'), path.join('schedule', 'SuggestionStrip.tsx'), path.join('schedule', 'scheduleRequest.ts')]) {
+    for (const rel of [path.join('schedule', 'ScheduleCard.tsx'), path.join('schedule', 'SuggestionStrip.tsx'), path.join('schedule', 'scheduleRequest.ts')]) {
       const code = stripComments(readFileSync(path.join(SRC, rel), 'utf8'));
       expect(code, `${rel} reaches the engine directly`).not.toMatch(/\bcreateTask\b/);
       expect(code, `${rel} enables through the writer`).toMatch(/enableProposedTask|acceptSuggestion/);
@@ -143,12 +178,14 @@ describe('enableProposedTask — the writer (P7)', () => {
     expect(db.listScheduledTasks()).toHaveLength(3);
   });
 
-  it('re-parses: an unparseable proposal is refused in words and nothing is written', async () => {
+  it('re-parses: an unparseable proposal is refused in words and nothing is written (the parse is the writer’s own — not exported, M21)', async () => {
     const result = await enableProposedTask({ proposal: { title: 'x', steps: [], spec: daily }, provenance: 'builder' });
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.reason).toMatch(/can’t be read/);
-    expect(parseProposalOrReason('junk').ok).toBe(false);
+    const junk = await enableProposedTask({ proposal: 'junk', provenance: 'chat', ownerAppId: ledger });
+    expect(junk.ok).toBe(false);
+    if (!junk.ok) expect(junk.reason).toMatch(/can’t be read/);
     expect(db.listScheduledTasks()).toHaveLength(0);
   });
 

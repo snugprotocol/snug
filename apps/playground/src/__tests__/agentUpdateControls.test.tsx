@@ -54,6 +54,28 @@ async function mount(platform: SnugPlatform | undefined, appId: string, onUpdate
 }
 
 describe('AgentUpdateControls', () => {
+  it('the confirm names the schedules the update will pause (E8), and says nothing when none runs the app', async () => {
+    const seat: AgentHandInSeat = {
+      pending: createStore<readonly PendingAgentUpdate[]>([{ appId: 'app-1', displayName: 'Pomodoro', bundleId: 'b2' }]),
+      apply: vi.fn(async () => ({ version: 3 })),
+    };
+    await mount(hostPlatform(seat), 'app-1');
+    const { schedulerStore } = await import('../schedule/scheduler.js');
+    const base = schedulerStore.get();
+    const task = (id: string, title: string, appVersions: Record<string, number>, enabled = true) =>
+      ({ id, title, enabled, provenance: 'user', steps: [], spec: { kind: 'every', n: 1, unit: 'hours', tz: 'UTC' }, cron: '0 * * * *', missedPolicy: 'ask', staleAfterMs: 3_600_000, alert: 'inbox', appVersions, createdAt: 'x', updatedAt: 'x', consecutiveFailures: 0, unseenResults: 0 }) as (typeof base.tasks)[number];
+    act(() => {
+      schedulerStore.set({ ...base, tasks: [task('n', 'Nightly', { 'app-1': 1 }), task('w', 'Weekly review', { 'app-1': 2 }), task('o', 'Other', { 'app-9': 1 }), task('p', 'Paused', { 'app-1': 1 }, false)] });
+    });
+    click(q('agent-update'));
+    expect(q('update-pauses-note')?.textContent).toBe('Updating pauses 2 schedules that run this app — “Nightly” and “Weekly review” — until you turn them back on from the Schedule page.');
+    act(() => {
+      schedulerStore.set({ ...base, tasks: [task('o', 'Other', { 'app-9': 1 })] });
+    });
+    expect(q('update-pauses-note')).toBeNull();
+    expect(q('agent-update-confirm')).not.toBeNull();
+  });
+
   it('web (positive twin) and a host without the seat: nothing', async () => {
     await mount(undefined, 'app-1');
     expect(q('agent-update')).toBeNull();

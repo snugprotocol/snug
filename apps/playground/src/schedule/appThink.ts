@@ -56,6 +56,7 @@ import { modeStore, providerStore } from '../state/mode.js';
 import { currentBrain } from '../state/webllm.js';
 import { appMissing } from './copy.js';
 import type { StepContext, StepOutcome } from './engine-types.js';
+import { countsAsAiCall } from './scrub.js';
 import { messageOf } from './taskShape.js';
 
 export type AppThinkStep = Extract<ScheduleStep, { kind: 'app-think' }>;
@@ -326,9 +327,10 @@ export async function executeAppThink(step: AppThinkStep, ctx: StepContext, deps
   });
   const reply = await transport.send(wire, { signal: ctx.signal });
   if (!reply.ok) {
-    if (reply.code === ERROR_CODES.CONSENT_REQUIRED) return { status: 'refused', summary: reply.message, calls: none() };
-    if (reply.code === ERROR_CODES.CANCELLED) return { status: 'failed', summary: CANCELLED_SUMMARY, calls: oneAi() };
-    return { status: 'failed', summary: reply.message, calls: oneAi() };
+    const calls = countsAsAiCall(reply) ? oneAi() : none(); // one rule with the hidden frame's transport (`scrub.ts`, M15)
+    if (reply.code === ERROR_CODES.CONSENT_REQUIRED) return { status: 'refused', summary: reply.message, calls };
+    if (reply.code === ERROR_CODES.CANCELLED) return { status: 'failed', summary: CANCELLED_SUMMARY, calls };
+    return { status: 'failed', summary: reply.message, calls };
   }
 
   const { answer, candidates } = readReply(reply.text);

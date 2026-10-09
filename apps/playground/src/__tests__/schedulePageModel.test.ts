@@ -5,7 +5,9 @@ import { describe, expect, it } from 'vitest';
 
 import type { ScheduleRun, ScheduledTask } from '@snugprotocol/protocol';
 
-import { pendingRows } from '../schedule/pageModel.js';
+import { describeSpec, nextOccurrence } from '../schedule/cron.js';
+import { appRunAppOf, formatOccurrence, nextWords, pendingRows } from '../schedule/pageModel.js';
+import { formatOccurrence as formatOccurrenceFromPreview } from '../schedule/PreviewAndCost.js';
 
 const CREATED = '2026-10-01T00:00:00.000Z';
 
@@ -61,5 +63,49 @@ describe('pendingRows', () => {
       ['on', '2026-10-09T09:00:00.000Z'],
       ['on', '2026-10-09T11:00:00.000Z'],
     ]);
+  });
+});
+
+describe('nextWords (M7) — the next occurrence in words, ONE function for the card, the strip and the sheet', () => {
+  /** Friday 2026-10-09 12:20Z — a daily 08:00 is tomorrow morning. */
+  const NOW = new Date('2026-10-09T12:20:00.000Z');
+
+  it('the next occurrence, formatted in the spec’s zone', () => {
+    expect(nextWords({ kind: 'daily', time: '08:00', tz: 'UTC' }, NOW)).toBe('Sat, Oct 10, 8:00 AM UTC');
+  });
+
+  it('a one-off whose time has passed has no next, so the spec is described instead', () => {
+    const past = { kind: 'once', at: '2026-10-01T09:00:00.000Z', tz: 'UTC' } as const;
+    expect(nextWords(past, NOW)).toBe(describeSpec(past));
+  });
+
+  it('an anchor (the saved schedule’s createdAt) is passed through: an every-N-days stride without a time keeps the ANCHOR’s wall time', () => {
+    const spec = { kind: 'every', n: 1, unit: 'days', tz: 'UTC' } as const;
+    const anchor = new Date('2026-10-01T06:30:00.000Z');
+    const expected = nextOccurrence(spec, NOW, { anchor });
+    expect(expected).toBeDefined();
+    expect(nextWords(spec, NOW, anchor)).toBe(formatOccurrence(expected!, 'UTC'));
+    expect(nextWords(spec, NOW, anchor)).toBe('Sat, Oct 10, 6:30 AM UTC');
+    // Without one, the search anchors at `now` — the stride keeps 12:20.
+    expect(nextWords(spec, NOW)).toBe('Sat, Oct 10, 12:20 PM UTC');
+  });
+
+  it('formatOccurrence lives with the page’s other clocks; the preview re-exports the same function', () => {
+    expect(formatOccurrenceFromPreview).toBe(formatOccurrence);
+    expect(formatOccurrence(new Date('2026-10-16T17:00:00.000Z'), 'UTC')).toBe('Fri, Oct 16, 5:00 PM UTC');
+  });
+});
+
+describe('appRunAppOf (S2) — the app a *run <app>* step runs', () => {
+  it('the first run step’s app; undefined for a schedule that runs no app', () => {
+    expect(appRunAppOf([{ kind: 'notify', title: 'a', body: 'b' }])).toBeUndefined();
+    expect(appRunAppOf([{ kind: 'app-think', appId: 'ledger', prompt: 'p', context: { maxRows: 1 } }])).toBeUndefined();
+    expect(
+      appRunAppOf([
+        { kind: 'app-think', appId: 'ledger', prompt: 'p', context: { maxRows: 1 } },
+        { kind: 'app-run', appId: 'weather' },
+        { kind: 'app-run', appId: 'other' },
+      ]),
+    ).toBe('weather');
   });
 });

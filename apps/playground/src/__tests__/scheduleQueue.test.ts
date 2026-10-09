@@ -485,7 +485,7 @@ describe('after the steps: the row, the counters, the task, the notification', (
     expect(laterInstant('garbage', DUE)).toBe(DUE);
   });
 
-  it('notifies ONCE per run, host-decided: only when the task says `notification`, with the body prefixed by the title and cut to 120', async () => {
+  it('notifies ONCE per run, host-decided: only when the task says `notification`; a reminder’s title is the SCHEDULE title, its body prefixed by that title and cut to 120', async () => {
     const t = seed({ alert: 'notification', steps: [NOTIFY, NOTIFY] });
     const notify = vi.fn<(n: { title: string; body: string }) => Promise<'shown' | 'denied' | 'unavailable'>>(async () => 'shown');
     const long = 'x'.repeat(200);
@@ -497,7 +497,32 @@ describe('after the steps: the row, the counters, the task, the notification', (
     const body = notify.mock.calls[0]![0].body;
     expect(body.startsWith('Hourly ledger · xxx')).toBe(true);
     expect(body).toHaveLength(SCHEDULE_NOTIFY_BODY_MAX_CHARS);
-    expect(notify.mock.calls[0]![0].title).toBe('Water');
+    expect(notify.mock.calls[0]![0].title).toBe('Hourly ledger'); // S3: the title is the host's, never the step's or the app's
+  });
+
+  it('an app-run alert never sets the notification title: the title is the app’s display name, the body "App: title — body" cut to 120 (S3)', async () => {
+    const t = seed({ alert: 'notification', steps: [{ kind: 'app-run', appId: 'ledger' }] });
+    const notify = vi.fn<(n: { title: string; body: string }) => Promise<'shown' | 'denied' | 'unavailable'>>(async () => 'shown');
+    const forged = 'Snug: your file is corrupt';
+    const rec = recorder(() => ok('refreshed', { ai: 0, net: 0 }, { alert: { title: forged, body: 'x'.repeat(200) } }));
+    const q = queue(rec.execute, { notify: () => notify });
+    q.enqueue(item(t));
+    await q.idle();
+    expect(notify).toHaveBeenCalledTimes(1);
+    const shown = notify.mock.calls[0]![0];
+    expect(shown.title).toBe('Ledger');
+    expect(shown.body.startsWith(`Ledger: ${forged} — xxx`)).toBe(true);
+    expect(shown.body).toHaveLength(SCHEDULE_NOTIFY_BODY_MAX_CHARS);
+  });
+
+  it('the first alert of a run decides, and it is read with its own step’s kind: a reminder after an app-run does not relabel the app’s alert', async () => {
+    const t = seed({ alert: 'notification', steps: [{ kind: 'app-run', appId: 'ledger' }, NOTIFY] });
+    const notify = vi.fn<(n: { title: string; body: string }) => Promise<'shown' | 'denied' | 'unavailable'>>(async () => 'shown');
+    const rec = recorder((step) => (step.kind === 'app-run' ? ok('refreshed', { ai: 0, net: 0 }, { alert: { title: 'Weather', body: 'sunny' } }) : ok('reminded', { ai: 0, net: 0 }, { alert: { title: 'Water', body: 'the ferns' } })));
+    const q = queue(rec.execute, { notify: () => notify });
+    q.enqueue(item(t));
+    await q.idle();
+    expect(notify.mock.calls[0]![0]).toEqual({ title: 'Ledger', body: 'Ledger: Weather — sunny' });
   });
 
   it('never notifies for an `inbox` task, nor without a seat, nor when the executor suggested nothing', async () => {

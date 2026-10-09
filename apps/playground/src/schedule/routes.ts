@@ -35,6 +35,36 @@ export function newScheduleHref(params: NewScheduleParams = {}): string {
   return search === '' ? '/schedule/new' : `/schedule/new?${search}`;
 }
 
-/** A `?back=` the editor will follow: an in-app path (`/run/…`, `/build/…`), never a URL, never protocol-relative. */
-export const isBackPath = (value: string | null | undefined): value is string =>
-  typeof value === 'string' && value.startsWith('/') && !value.startsWith('//') && !/[\r\n]/.test(value);
+/**
+ * The shape of an in-app path: one leading slash, then neither a slash nor a backslash (a
+ * browser reads `\` as `/` in an http URL, so `/\host` is `//host` in disguise), and no
+ * whitespace or backslash anywhere after.
+ */
+const BACK_PATH = /^\/(?![/\\])[^\s\\]*$/;
+
+/** The page's own origin where there is a page; `undefined` in a worker or at build time. */
+const pageOrigin = (): string | undefined => (typeof location === 'undefined' ? undefined : location.origin);
+
+/**
+ * A `?back=` the editor will follow: an in-app path (`/run/…`, `/build/…`), never a URL, never
+ * protocol-relative (Gate-5 PR-B S4). The raw value AND its percent-decoded form must both
+ * read as a path (`/%5Chost` decodes to the backslash form), and where an origin is known —
+ * the page's `location` by default — both must resolve ON that origin through the URL parser
+ * itself, so no spelling the parser reads differently from this regex can leave the app.
+ */
+export function isBackPath(value: string | null | undefined, origin: string | undefined = pageOrigin()): value is string {
+  if (typeof value !== 'string' || !BACK_PATH.test(value)) return false;
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(value);
+  } catch {
+    return false;
+  }
+  if (!BACK_PATH.test(decoded)) return false;
+  if (origin === undefined) return true;
+  try {
+    return new URL(value, origin).origin === origin && new URL(decoded, origin).origin === origin;
+  } catch {
+    return false;
+  }
+}

@@ -1,7 +1,7 @@
 <!--
 layer: knowledge-base
 destination: served (whole or as ##-sections via searchKnowledge) by the {{appBuilderToolName}} tool when the host LLM is asked for an app that runs on a schedule — a morning brief, a daily fetch, a recurring reminder, a check "every hour" — or for an app that should suggest a schedule for itself; NOT in the inline core (ADR-0066: a tool-free brain gets only the amended timer rule in 10 and 80); reachable only when the app-builder capability is enabled
-blast-radius: whether a generated app can take part in the host's scheduler at all — a wrong frame shape or a wrong kv key here produces apps whose scheduled runs never answer (the host records them as "not supported"), and a wrong suggestion rule produces apps that nag on every load
+blast-radius: whether a generated app can take part in the host's scheduler at all — a wrong frame shape or a wrong kv key here produces apps whose scheduled runs never answer (the host records them as failed after 90 s), and a wrong suggestion rule produces apps that nag on every load
 source: written for TASK-20261009-scheduling-framework (ADR-0074 §3 the kv handshake, §4 the suggest-only ladder, §6 the unattended posture); the listener mirrors packages/sdk/src/schedule.ts, the module-form hook
 -->
 
@@ -13,8 +13,9 @@ An app never owns a clock. The ONE timer in Snug is the host's scheduler, and a 
 exists only because the USER created or enabled it on the host's Schedule page — a
 recurring reminder, a question to an app's AI, or a run of an app: a fetch every hour, a
 brief every morning, a check every Friday. When a run of your app is due the host wakes
-the app itself (in a hidden frame when the app is not open, in the live frame when it
-is), hands it the run's input, and records what the app answers as a *result* the user
+the app itself in a hidden frame (if your app is open on screen at that moment, the host
+does not run it behind the user — the result reads *needs you* until the user runs it from
+there), hands it the run's input, and records what the app answers as a *result* the user
 reads later. Nobody has to be looking.
 
 So the rule in "Never Think on a Timer" has exactly one sanctioned exception, and it is
@@ -49,7 +50,8 @@ store, exactly the way `usePersistedState` reads it.
 
 Then the host clears the key. The host accepts a result only from the frame it hinted,
 only for that one outstanding `runId`, and only once — a second result for the same run
-is dropped, and a run that never answers is recorded as *not supported*.
+is dropped. A run the app does not answer within 90 s is recorded as *failed*; *not
+supported* is for an app that never announces at all.
 
 ## The Schedule Listener (copy beside the hooks block)
 
@@ -174,6 +176,8 @@ The user sees your app's part of a schedule on the host's Schedule page: a *resu
 you*, *not supported*), each opening to the step results; a *missed* card when runs fell
 due while Snug was closed ("3 schedules were missed while Snug was closed" — *run them* /
 *skip*); and the schedule's own row with its switch. A notification, when the user asked
-for one and the host raised it, reads "<your app>: <your title> — <your body>". An app
-without the listener is still a complete Snug app; a schedule that names it simply records
-*not supported* until the listener ships.
+for one and the host raised it, carries your app's name as its title — the host decides
+the title, never your handler — and reads "<your app>: <your title> — <your body>" under
+it. An app without the listener is still a complete Snug app; a schedule that names it
+records *failed* after 90 s until the listener ships (it announces, so it is never *not
+supported*).

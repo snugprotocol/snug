@@ -19,12 +19,11 @@ import type { ScheduleStep } from '@snugprotocol/protocol';
 import { getUserDb } from '../state/userdb.js';
 import { useStore } from '../state/store.js';
 import { Button } from '../ui/Button.js';
-import { SUGGESTION_ACTIONS, SUGGESTION_OUTCOME, stepLabel, suggestionStrip } from './copy.js';
-import { describeSpec, nextOccurrence, resolveZone } from './cron.js';
+import { SUGGESTION_ACTIONS, SUGGESTION_OUTCOME, stepWords, suggestionStrip } from './copy.js';
+import { describeSpec } from './cron.js';
 import { approvedHostsByApp } from './editorModel.js';
 import { EnableConsent } from './EnableConsent.js';
-import { pageClock, useNow } from './pageModel.js';
-import { formatOccurrence } from './PreviewAndCost.js';
+import { nextWords, pageClock, useNow } from './pageModel.js';
 import { editHref } from './routes.js';
 import { acceptSuggestion, declineSuggestion, muteSuggestions, suggestionStore } from './scheduleRequest.js';
 
@@ -32,24 +31,9 @@ export interface SuggestionStripProps {
   appId: string;
 }
 
-/** The steps in words, one line: "remind me: Water — the ferns · run Weather". */
+/** The steps in words, one line: "remind me: Water — the ferns · run Weather" — each step through `copy.stepWords` (M6). */
 export function suggestionStepsLine(steps: readonly ScheduleStep[], appName: string): string {
-  return steps
-    .map((step) => {
-      switch (step.kind) {
-        case 'notify':
-          return `${stepLabel('notify')}: ${step.title} — ${step.body}`;
-        case 'app-think':
-          return `${stepLabel('app-think', appName)}: ${step.prompt}`;
-        case 'app-run':
-          return stepLabel('app-run', appName);
-        default: {
-          const never: never = step;
-          return never;
-        }
-      }
-    })
-    .join(' · ');
+  return steps.map((step) => stepWords(step, appName)).join(' · ');
 }
 
 type Outcome = { kind: 'scheduled'; whenWords: string; taskId: string } | { kind: 'declined' } | { kind: 'muted'; appName: string };
@@ -110,10 +94,8 @@ export function SuggestionStrip({ appId }: SuggestionStripProps): ReactElement |
       setError(result.reason);
       return;
     }
-    const next = nextOccurrence(result.task.spec, pageClock.now(), { anchor: new Date(result.task.createdAt) });
-    const whenWords = next === undefined ? describeSpec(result.task.spec) : formatOccurrence(next, resolveZone(result.task.spec.tz));
     setConsent(undefined);
-    setOutcome({ kind: 'scheduled', whenWords, taskId: result.task.id });
+    setOutcome({ kind: 'scheduled', whenWords: nextWords(result.task.spec, pageClock.now(), new Date(result.task.createdAt)), taskId: result.task.id });
   };
   const decline = async (): Promise<void> => {
     const answer = await declineSuggestion(appId);

@@ -179,6 +179,15 @@ export function openApp(appName: string): string {
   return `open ${appName}`;
 }
 
+/**
+ * Under *run now and review* on a result whose schedule runs an app (S2): the act opens the app
+ * FIRST and delivers the manual run to that live frame — the engine never runs a manual run
+ * hidden, because the point of the act is that the user is there to answer the gate.
+ */
+export function openingToRun(appName: string): string {
+  return `opening ${appName} to run it with you`;
+}
+
 /** The empty state when the route names a result the file no longer holds. */
 export const RESULT_MISSING = {
   title: 'no such result',

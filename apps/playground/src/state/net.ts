@@ -409,12 +409,13 @@ export interface CreateNetHandlerOptions {
   confirmGate?: NetConfirmGate;
   /**
    * Asked BEFORE every request this handler carries, with the host-assigned app id — the
-   * scheduler's counting seam: it charges the call against the day's network ceiling and
-   * answers `false` at the ceiling, which refuses the request by name (the existing
-   * `NET_CONFIRM_DENIED`, `NET_CALL_LIMIT_MESSAGE`) before the executor is touched. Every
-   * attempt counts, granted or refused: the call was made on the handler either way.
+   * scheduler's counting seam. It answers whether the request may proceed: `true` ADMITS it
+   * and the seam counts it against the day's network ceiling at that moment; `false` refuses
+   * it by name (the existing `NET_CONFIRM_DENIED`, `NET_CALL_LIMIT_MESSAGE`) before the
+   * executor is touched, and nothing is counted. A request admitted here and then refused by
+   * the confirm gate IS counted — the attempt was made on the handler (Gate-5 PR-B S11, M20).
    */
-  onNetCall?: (appId: string, request: { method: string; url: string }) => boolean | void;
+  onNetCall?: (appId: string, request: { method: string; url: string }) => boolean;
 }
 
 /** What the app reads when the host's counting seam refuses a call at the day's ceiling. */

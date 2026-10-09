@@ -98,7 +98,8 @@ export function ScheduleEditorView(): ReactElement {
   );
   // The chat's suggestion card says where it came from; the save and the cancel return there.
   const params = new URLSearchParams(query);
-  const backTo = isBackPath(params.get('back')) ? params.get('back')! : '/schedule';
+  const backParam = params.get('back');
+  const backTo = isBackPath(backParam) ? backParam : '/schedule';
   const fromSuggestion = params.get('suggestion') !== null;
 
   return (

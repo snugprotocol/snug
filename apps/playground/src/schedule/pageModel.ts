@@ -10,12 +10,12 @@
 
 import { useEffect, useState } from 'react';
 
-import type { RunStatus, ScheduleRun, ScheduleStep, ScheduledTask } from '@snugprotocol/protocol';
+import type { RunStatus, ScheduleRun, ScheduleSpec, ScheduleStep, ScheduledTask } from '@snugprotocol/protocol';
 
 import { useLibraryRevision } from '../platform/signals.js';
 import { refreshAppMeta, useAppMetaMap } from '../state/appMeta.js';
 import { userLibrary } from '../state/library.js';
-import { nextOccurrence } from './cron.js';
+import { describeSpec, nextOccurrence, resolveZone } from './cron.js';
 
 const MINUTE_MS = 60_000;
 const HOUR_MS = 3_600_000;
@@ -92,9 +92,39 @@ export function absoluteTime(target: Date, locale = 'en-US', zone?: string): str
   return parts.map((part) => part.value).join('').replace(/\u202f/g, ' ');
 }
 
+const occurrenceFormatters = new Map<string, Intl.DateTimeFormat>();
+
+/** "Fri, Oct 16, 5:00 PM PDT" — an occurrence in the schedule's zone; the zone's own abbreviation names where the clock was read. */
+export function formatOccurrence(at: Date, zone: string, locale = 'en-US'): string {
+  const key = `${locale}|${zone}`;
+  let fmt = occurrenceFormatters.get(key);
+  if (fmt === undefined) {
+    fmt = new Intl.DateTimeFormat(locale, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: zone, timeZoneName: 'short' });
+    occurrenceFormatters.set(key, fmt);
+  }
+  return fmt
+    .formatToParts(at)
+    .map((p) => (p.type === 'literal' && /^\s+$/.test(p.value) ? ' ' : p.value))
+    .join('');
+}
+
+/**
+ * The next occurrence of `spec` after `now`, in words — "Sat, Oct 10, 8:00 AM UTC" — or the
+ * schedule described ("Every day at 8:00 AM") when none falls within the search bound (M6/M7).
+ * The ONE sentence the chat card, the run-header strip and the run-header sheet end on after
+ * *schedule it*; `anchor` is the saved schedule's `createdAt`/`startsAt` where there is one.
+ */
+export function nextWords(spec: ScheduleSpec, now: Date, anchor?: Date): string {
+  const next = nextOccurrence(spec, now, anchor !== undefined ? { anchor } : {});
+  return next === undefined ? describeSpec(spec) : formatOccurrence(next, resolveZone(spec.tz));
+}
+
 // ------------------------------------------------------------------------ the steps
 
 export const appIdsOf = (steps: readonly ScheduleStep[]): string[] => [...new Set(steps.flatMap((step) => (step.kind === 'notify' ? [] : [step.appId])))];
+
+/** The app a *run <app>* step runs — the first such step's; `undefined` for a schedule that runs no app. */
+export const appRunAppOf = (steps: readonly ScheduleStep[]): string | undefined => steps.find((step) => step.kind === 'app-run')?.appId;
 
 /** How many *ask the AI* steps a schedule has — one brain call each per occurrence. */
 export const aiStepsOf = (steps: readonly ScheduleStep[]): number => steps.filter((step) => step.kind === 'app-think').length;

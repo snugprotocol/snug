@@ -88,5 +88,12 @@ folds that change what this ADR says:
 - **§6 — the app-drift pause (`noteAppVersion`) is PR-B's**: its callers are the shared-update
   and hand-in apply paths, which PR-B wires with *Run [app]*. PR-A exports the hook and tests
   the rule.
+  *(Landed in PR-B's Gate-5 fold: the pause moved to the db altitude — `schedule/appDrift.ts`
+  `pauseSchedulesForAppVersion`, which the host kit's hand-in (`apps/host/src/handin.ts`, the silent
+  update and the taken offer) and the shared-shelf update (`share/installShared.ts`) call with the db
+  they hold; `noteAppVersion` delegates to it. Both update confirms name the schedules the update will
+  pause — `run/UpdatePausesNote.tsx`.)*
 - Templates have ONE registry (`editorModel.templateFill`); status words and relative time have
   one home each; the hidden "never let apps suggest schedules" switch waits for PR-B's reader.
+
+*§3, §4 and §7 are implemented in PR-B (2026-10-09) — threat delta `docs/security/threat-model-delta-scheduling-proposals.md` (model v3.5, R-61 … R-69). The §6 value scrub against the stored secrets stands at the EXECUTOR for the scheduled handler as for RunView's (`packages/auth` `connected-fetch.ts`; pinned at the Gate-5 fold by `scheduledGate.test.ts`'s echo row — R-54 closed). The fold also settled §4's live-frame posture — a run the user did not start never rides an open app (refused by name, *needs you*: presence is not consent); the user's own *Run now and review* opens the app first and is the one run on the page's ordinary gate — and §6's notification rule as code: the title is the host's (the app's name for an app's alert, the schedule's title for a reminder), app text in the body only.*

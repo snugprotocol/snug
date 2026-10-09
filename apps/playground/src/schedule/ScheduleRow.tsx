@@ -22,7 +22,7 @@ import { useDismissableMenu } from '../ui/useDismissableMenu.js';
 import { RESULT_STATUS_WORD, imported, needsYou, paused, type StateCopy } from './copy.js';
 import { ROW } from './copy.page.js';
 import { describeSpec } from './cron.js';
-import { attentionOf, nextFor, relativeTime, runsNewestFirst, type AppIndex, type Attention } from './pageModel.js';
+import { appRunAppOf, attentionOf, nextFor, relativeTime, runsNewestFirst, type AppIndex, type Attention } from './pageModel.js';
 import { editHref } from './routes.js';
 import { deleteTask, runNow, setTaskEnabled } from './scheduler.js';
 import { appIdsOf } from './taskShape.js';
@@ -79,8 +79,15 @@ export function ScheduleRow({ item, runs, apps, now, attention }: ScheduleRowPro
     if (!result.ok) setError(result.reason);
   };
 
+  /** The app a *run <app>* step runs, when the schedule has one. */
+  const runApp = appRunAppOf(item.steps);
+
+  // *Run now* on a schedule that RUNS an app opens the app FIRST (S2): the engine delivers a
+  // manual run only to a live frame — the user is there to see it and to answer the gate. A
+  // schedule that only asks or reminds runs in place.
   const run = async (): Promise<void> => {
     setError(undefined);
+    if (runApp !== undefined) navigate(`/run/${encodeURIComponent(runApp)}`);
     const result = await runNow(item.id);
     if (!result.ok) setError(result.reason);
   };
@@ -104,9 +111,10 @@ export function ScheduleRow({ item, runs, apps, now, attention }: ScheduleRowPro
     if (attentionLine === undefined) return;
     if (attentionLine.act === 'resume') void setTaskEnabled(item.id, true).then((result) => (result.ok ? undefined : setError(result.reason)));
     else if (attentionLine.act === 'review') navigate(editHref(item.id));
+    else if (runApp !== undefined) void run(); // *run now and review*: the app, then the manual run into it (S2)
     else {
       const firstApp = appIds[0];
-      if (firstApp !== undefined) navigate(`/run/${firstApp}`);
+      if (firstApp !== undefined) navigate(`/run/${encodeURIComponent(firstApp)}`);
     }
   };
 

@@ -125,6 +125,15 @@ describe('ScheduledRunHost — one hidden frame, the same component', () => {
     expect(iframe.title).toBe('scheduled run');
   });
 
+  it('is out of the TAB ORDER as well as out of sight (S5): `inert` on the wrapper, tabindex=-1 on the frame', async () => {
+    await render();
+    const iframe = await show(mount());
+    const wrapper = container!.querySelector<HTMLElement>(`[data-testid="${SCHEDULED_RUN_HOST_TEST_ID}"]`)!;
+    expect(wrapper.hasAttribute('inert')).toBe(true);
+    expect(iframe.getAttribute('tabindex')).toBe('-1');
+    expect(iframe.tabIndex).toBe(-1);
+  });
+
   it('never registers as the app’s live host (F5): the registry does not know the app while the hidden frame is up', async () => {
     await render();
     await show(mount({ appId: 'weather' }));

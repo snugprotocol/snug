@@ -1,42 +1,53 @@
 // schedule/appRun.ts — the *Run [app]* executor and the kv handshake
-// (TASK-20261009-scheduling-framework A2, A3, A5; ADR-0074 §3, §5, §6; security F5, F8, F16).
+// (TASK-20261009-scheduling-framework A2, A3, A5; ADR-0074 §3, §5, §6; security F5, F8, F16;
+// Gate-5 PR-B S1/M1, M9, M12, M18, M22).
 //
 // THE SHAPE OF A RUN. The host writes the step's input into the app's OWN kv under
-// `snug:schedule:<runId>` (≤ 1 KiB — the task schema's cap, enforced again by the driver's
-// host-side seat), rings the EXISTING `host-event` channel with a hint that carries ids and
-// nothing else (`schedule-run { taskId, runId }` — R7: hints, never content), and reads the
-// app's `app-event 'schedule-result'`. No new frame, no `host-ready` flag, no new error code.
-// The key is cleared on EVERY exit path, and the boot sweep clears the key of any claim a dead
-// tab left behind (`clearScheduleKey`, called from `scheduler.ts`'s stale-claim sweep).
+// `snug:schedule:<runId>` (`scheduleKey.ts` — the input is ≤ 1 KiB by the task schema; the
+// driver's host-side seat caps the whole payload), rings the EXISTING `host-event` channel with
+// a hint that carries ids and nothing else (`schedule-run { taskId, runId }` — R7: hints, never
+// content), and reads the app's `app-event 'schedule-result'`. No new frame, no `host-ready`
+// flag, no new error code. The key is cleared on EVERY exit path, and the stale-claim sweep
+// clears the key of any claim a dead tab left behind (`clearScheduleKey`, from `scheduler.ts`).
 //
-// WHERE THE APP RUNS. If the app is on screen (`hasLiveAppHost`), the run is delivered to the
-// LIVE frame — the hint rides the registry's notify, the result comes back through the
-// app-events the view forwards (`publishAppEvent`) — and the run spends on the live frame's own
-// transport and gate (the user is at the app; its calls are not this executor's to count). Else
-// ONE hidden `SnugAppFrame` is mounted through `hiddenMountStore` (`ScheduledRunHost.tsx`
-// renders it) with the runtime `run/appRuntime.ts` composes for RunView, and two differences:
-// the confirm gate and the counting transport (below). The hidden frame runs the app's
-// COMMITTED CURRENT version (`getAppHtml` — the read RunView makes for an owned app).
+// WHERE THE APP RUNS — THE TRIGGER DECIDES, AND IT NEVER RUNS BEHIND THE USER (S1).
+//   `due` / `late` / `catch-up` (nobody asked right now): ONE hidden `SnugAppFrame` is mounted
+//   through `hiddenMountStore` (`ScheduledRunHost.tsx` renders it) with the runtime
+//   `run/appRuntime.ts` composes for RunView, and two differences — the STANDALONE refusing
+//   gate and the counting transport (below). The hidden frame runs the app's COMMITTED CURRENT
+//   version (`getAppHtml`). If the app is ON SCREEN at that moment, the step is `refused`
+//   (`APP_OPEN_REFUSAL`): Snug does not run an app behind the person using it — not in a
+//   hidden frame beside the live one (two instances over one store), and not in the live frame
+//   (whose gate is the ordinary one, armed by whatever the user remembered). The run folds to
+//   `needs-you`; its one act is *run now*.
+//   `manual` (the user pressed *run now* / *run now and review*): the run is delivered ONLY to
+//   the LIVE frame — the hint rides the registry's notify, the result comes back through the
+//   app-events the view forwards (`publishAppEvent`) — under the page's ordinary gate, because
+//   the user is at the app, and its calls ride the live frame's own transport (not this
+//   executor's to count). When the app is not open the step is `refused` by name
+//   (`openAndRunAgain`): the view navigates to the app BEFORE it calls `runNow`, so this is the
+//   answer only to a manual run nobody is looking at — never a hidden frame under the ordinary
+//   gate. The app closing mid-run ends the step `failed` at once (M18).
 //
 // THE RESULT IS BOUND, ONCE, CAPPED (F8). A result is accepted only from the frame that
-// received the hint (the mount's own closure — a visible app's events never reach it), only
-// after the hint was posted, only once, only for this `runId` when the result names one; its
-// serialised length is capped BEFORE the strict parse (`scheduleResultSchema`). Anything else is
-// dropped without a word: an unsolicited, duplicate, forged or oversized result is the one
-// thing an app can send that the host must not act on.
+// received the hint (the mount's own closure, or the live registry's events for that app),
+// only after the hint was posted, only once, only for this `runId` when the result names one;
+// its serialised length is capped BEFORE the strict parse (`scheduleResultSchema`). Anything
+// else is dropped without a word: an unsolicited, duplicate, forged or oversized result is the
+// one thing an app can send that the host must not act on.
 //
-// THE GATE FOLLOWS THE TRIGGER (A5, §6). A `manual` run has the user present: the ordinary gate
-// (RunView's — the confirm dialog is app-level). Every other trigger gets the STANDALONE
-// refusing gate (`scheduledConfirmGate.ts`): a mutating call is refused with the existing
+// THE GATE (A5, §6). Every hidden-frame run carries the STANDALONE refusing gate
+// (`scheduledConfirmGate.ts`): a mutating call is refused with the existing
 // `NET_CONFIRM_DENIED`, the gate RECORDS it, and the step is `refused` with the sentence
 // `copy.needsYou` composes from the record — whatever the app then reports. The run folds to
 // `needs-you` with *run now and review* as its one act.
 //
 // WHAT IS COUNTED (A4, A5). The hidden frame's transport is wrapped by `scheduledTransport.ts`
-// (every send asked of the day's AI ceiling, one call each, the reply scrubbed); its net
-// handler's `onNetCall` seam asks the day's network ceiling before every request. Both read
-// the counters in the file PLUS what this run already spent (`ctx.spent`), so a run cannot
-// slip past the ceiling by spending inside one step. The counts ride the outcome's `calls`.
+// (every send asked of the day's AI ceiling; `onCounted` reports each call that reached the
+// brain into this executor's own count); its net handler's `onNetCall` seam asks the day's
+// network ceiling before every request. Both read the counters in the file PLUS what this run
+// already spent (`ctx.spent`), so a run cannot slip past the ceiling by spending inside one
+// step. The counts ride the outcome's `calls`.
 //
 // A VISIBLE OPEN ABORTS THE HIDDEN RUN (F5). While the hidden frame runs, a RunView mounting
 // the same app (`subscribeAppHosts`) asks the queue to interrupt this run (`ctx.interrupt`,
@@ -44,13 +55,14 @@
 //
 // REFUSED WITHOUT A SEAT. A platform that composes no `scheduler` seat (every shipped host
 // composes one — web, desktop, both kit bindings) gets no hidden frame: the step is `blocked`
-// by name. No read of the platform's `kind` (the S4 lint).
+// by name. No read of the platform's `kind` (the S4 lint). A unit fake that wants exactly that
+// answer composes `blockedAppRunDeps()` (M12) rather than leaving the seams out.
 
 import { z } from 'zod';
 
 import type { NetConfirmGate } from '@snugprotocol/auth';
-import type { AppRecord, SnugDbDriver, UserDb } from '@snugprotocol/db';
-import { SCHEDULE_NOTIFY_BODY_MAX_CHARS, SCHEDULE_STEP_SUMMARY_MAX_CHARS, SCHEDULE_TITLE_MAX_CHARS, type ScheduleRun, type ScheduleStep, type ScheduledTask } from '@snugprotocol/protocol';
+import type { AppRecord, SnugDbDriver } from '@snugprotocol/db';
+import { SCHEDULE_NOTIFY_BODY_MAX_CHARS, SCHEDULE_STEP_SUMMARY_MAX_CHARS, SCHEDULE_TITLE_MAX_CHARS, type ScheduleStep } from '@snugprotocol/protocol';
 import type { AgentTransport, RunnerHost } from '@snugprotocol/runner';
 
 import { getPlatform, type SnugPlatform } from '../platform/platform.js';
@@ -62,19 +74,11 @@ import { CANCELLED_SUMMARY } from './appThink.js';
 import { appMissing, blockedHere, needsYou, noHandler } from './copy.js';
 import type { StepContext, StepOutcome } from './engine-types.js';
 import { dailyCounters, wouldExceedCeiling } from './protection.js';
+import { SCHEDULE_RESULT_EVENT, SCHEDULE_RUN_EVENT, scheduleKvKey } from './scheduleKey.js';
 import { createScheduledConfirmGate, scheduledRefusalVerb, type ScheduledConfirmGate } from './scheduledConfirmGate.js';
-import { createScheduledTransport, type ScheduledTransport } from './scheduledTransport.js';
-import { appIdsOf } from './taskShape.js';
+import { createScheduledTransport } from './scheduledTransport.js';
 
 export type AppRunStep = Extract<ScheduleStep, { kind: 'app-run' }>;
-
-/** The host-event that tells the app a scheduled run is waiting in its kv. Ids only. */
-export const SCHEDULE_RUN_EVENT = 'schedule-run';
-/** The app-event the app answers with. */
-export const SCHEDULE_RESULT_EVENT = 'schedule-result';
-/** The kv key family the handshake rides; one key per run. */
-export const SCHEDULE_KV_KEY_PREFIX = 'snug:schedule:';
-export const scheduleKvKey = (runId: string): string => `${SCHEDULE_KV_KEY_PREFIX}${runId}`;
 
 /** No announce within this → `no-handler` (the app never even booted its bridge). */
 export const SCHEDULE_ANNOUNCE_TIMEOUT_MS = 10_000;
@@ -86,10 +90,20 @@ export const SCHEDULE_RESULT_MAX_CHARS = 8 * 1024;
 /** The reason when a composition carries no hidden-frame seams, or the platform no scheduler seat. */
 export const NO_HIDDEN_FRAME = 'this host cannot run an app on a schedule';
 
+/** An unattended run found the app on screen (S1): refused, never run behind the user; the fold is `needs-you`. */
+export const APP_OPEN_REFUSAL = 'the app is open — Snug doesn’t run it behind you; close it or run now';
+
+/** A manual run with the app NOT on screen: refused by name — the view opens the app first, then runs. */
+export const openAndRunAgain = (appName: string): string => `open ${appName} and run it again`;
+
+/** A manual run whose live frame went away mid-run (M18). */
+export const APP_CLOSED_SUMMARY = 'the app was closed';
+
 /**
  * What the app may answer. `runId`/`taskId` are optional echoes (a result that names another
  * run is dropped); `summary` is what the person reads; `notify` is a SUGGESTION the queue
- * honours only when the task's `alert` allows (§6). Strict: an unknown field is a drop.
+ * honours only when the task's `alert` allows (§6) — and the queue decides the title. Strict:
+ * an unknown field is a drop.
  */
 export const scheduleResultSchema = z.strictObject({
   runId: z.string().min(1).max(64).optional(),
@@ -156,8 +170,8 @@ export interface LiveAppHosts {
 export interface AppRunRuntimeInput {
   appId: string;
   driver: SnugDbDriver;
-  /** `undefined` → the page's ordinary gate (a manual run); else the refusing gate. */
-  confirmGate: NetConfirmGate | undefined;
+  /** The STANDALONE refusing gate — a hidden frame never runs under the page's gate. */
+  confirmGate: NetConfirmGate;
   /** The net handler's counting seam. */
   onNetCall: () => boolean;
 }
@@ -187,19 +201,23 @@ export function defaultAppRunDeps(): AppRunDeps {
   };
 }
 
-// --------------------------------------------------------------------- the sweep
-
-/** Clear the handshake key of a run that can no longer answer — the boot's stale-claim sweep. Never throws. */
-export async function clearScheduleKey(db: UserDb, run: Pick<ScheduleRun, 'id'>, task: Pick<ScheduledTask, 'steps'> | undefined): Promise<void> {
-  if (task === undefined) return;
-  const key = scheduleKvKey(run.id);
-  for (const appId of appIdsOf(task.steps.filter((step) => step.kind === 'app-run'))) {
-    try {
-      await db.driver.kvSet(appId, key, null);
-    } catch {
-      // The driver answers errors as data; a throw here would be a closed driver — nothing to clear.
-    }
-  }
+/**
+ * The composition a unit fake passes when it wants every app-run step `blocked` by name (M12):
+ * a platform with no scheduler seat, so the arm refuses before any mount, runtime or registry
+ * is touched. Nothing here can run anything.
+ */
+export function blockedAppRunDeps(): AppRunDeps {
+  const noSeat: SnugPlatform = { kind: 'web', capabilities: { subscriptionMode: false, hubSyncOrigin: false, lanHttpPrivate: false } };
+  return {
+    platform: () => noSeat,
+    runtimeFor: () => {
+      throw new Error('a blocked composition composes no runtime');
+    },
+    mounts: createStore<HiddenMount | undefined>(undefined),
+    live: { has: () => false, notify: () => false, subscribe: () => () => undefined, subscribeEvents: () => () => undefined },
+    announceTimeoutMs: 0,
+    resultTimeoutMs: 0,
+  };
 }
 
 // ------------------------------------------------------------------ the executor
@@ -232,11 +250,15 @@ function timer(ms: number): { promise: Promise<void>; stop: () => void } {
   };
 }
 
-/** What ends a phase of the handshake. */
-type Settled = { kind: 'announced' } | { kind: 'result'; result: ScheduleResult } | { kind: 'timeout' } | { kind: 'aborted' } | { kind: 'failed'; message: string };
+/** What can end EITHER phase from outside the app's own answer: the queue's abort, or a failure the frame or the registry signalled. */
+type Interrupted = { kind: 'aborted' } | { kind: 'failed'; message: string };
+/** How the announce phase ends (the hidden frame only). */
+type AnnouncePhase = { kind: 'announced' } | { kind: 'timeout' } | Interrupted;
+/** How the result phase ends (both frames). */
+type ResultPhase = { kind: 'result'; result: ScheduleResult } | { kind: 'timeout' } | Interrupted;
 
 /** The step outcome once the app answered (or did not): the gate's record outranks what the app reports. */
-function outcomeOf(app: AppRecord, gate: ScheduledConfirmGate | undefined, answer: Settled, calls: StepOutcome['calls'], resultTimeoutMs: number): StepOutcome {
+function outcomeOf(app: AppRecord, gate: ScheduledConfirmGate | undefined, answer: ResultPhase, calls: StepOutcome['calls'], resultTimeoutMs: number): StepOutcome {
   if (gate !== undefined && gate.refused.length > 0) {
     return { status: 'refused', summary: needsYou(app.displayName, scheduledRefusalVerb(gate.refused[0])).text, calls };
   }
@@ -257,8 +279,6 @@ function outcomeOf(app: AppRecord, gate: ScheduledConfirmGate | undefined, answe
       return { status: 'failed', summary: CANCELLED_SUMMARY, calls };
     case 'failed':
       return { status: 'failed', summary: answer.message, calls };
-    case 'announced':
-      return { status: 'failed', summary: 'the app announced twice', calls };
     default: {
       const never: never = answer;
       return never;
@@ -282,40 +302,41 @@ export async function executeAppRun(step: AppRunStep, ctx: StepContext, deps: Ap
   if (deps.platform().scheduler === undefined) return { status: 'blocked', summary: blockedHere(NO_HIDDEN_FRAME).text, calls: none() };
 
   const { appId } = step;
-  const runId = ctx.run.id;
-  const key = scheduleKvKey(runId);
-  const payload = { taskId: ctx.run.taskId, runId, ...(step.input !== undefined ? { input: step.input } : {}) };
-  const gate = ctx.run.trigger === 'manual' ? undefined : createScheduledConfirmGate();
+  const key = scheduleKvKey(ctx.run.id);
+  const payload = { taskId: ctx.run.taskId, runId: ctx.run.id, ...(step.input !== undefined ? { input: step.input } : {}) };
+  const live = deps.live.has(appId);
 
-  if (deps.live.has(appId)) return runInLiveFrame(app, step, ctx, deps, key, payload, gate);
-  return runInHiddenFrame(app, step, ctx, deps, key, payload, gate);
+  if (ctx.run.trigger === 'manual') {
+    // The user asked, so the user is at the app — or the view brings them there first.
+    if (!live) return { status: 'refused', summary: openAndRunAgain(app.displayName), calls: none() };
+    return runInLiveFrame(app, step, ctx, deps, key, payload);
+  }
+  // Unattended: never behind the person using the app (S1); else the hidden frame, refusing gate.
+  if (live) return { status: 'refused', summary: APP_OPEN_REFUSAL, calls: none() };
+  return runInHiddenFrame(app, step, ctx, deps, key, payload, createScheduledConfirmGate());
 }
 
-/** The result phase shared by both frames: the first of the app's answer, the bound, the abort, or a failure signal. */
-async function awaitResult(
-  ctx: StepContext,
-  resultTimeoutMs: number,
-  result: Promise<ScheduleResult>,
-  failure: Promise<Settled>,
-): Promise<Settled> {
+/** The result phase shared by both frames: the first of the app's answer, the bound, the abort, or an interruption. */
+async function awaitResult(ctx: StepContext, resultTimeoutMs: number, result: Promise<ScheduleResult>, interrupted: Promise<Interrupted>): Promise<ResultPhase> {
   const bound = timer(resultTimeoutMs);
-  const aborted = new Promise<Settled>((resolve) => {
+  const aborted = new Promise<ResultPhase>((resolve) => {
     const settle = (): void => resolve({ kind: 'aborted' });
     if (ctx.signal.aborted) settle();
     else ctx.signal.addEventListener('abort', settle, { once: true });
   });
   try {
-    return await Promise.race<Settled>([
+    return await Promise.race<ResultPhase>([
       result.then((value) => ({ kind: 'result', result: value })),
       bound.promise.then(() => ({ kind: 'timeout' })),
       aborted,
-      failure,
+      interrupted,
     ]);
   } finally {
     bound.stop();
   }
 }
 
+/** A manual run delivered to the app ON SCREEN, under the page's own gate; the app closing ends it (M18). */
 async function runInLiveFrame(
   app: AppRecord,
   step: AppRunStep,
@@ -323,19 +344,21 @@ async function runInLiveFrame(
   deps: AppRunDeps,
   key: string,
   payload: { taskId: string; runId: string; input?: unknown },
-  gate: ScheduledConfirmGate | undefined,
 ): Promise<StepOutcome> {
   const { appId } = step;
   const result = deferred<ScheduleResult>();
-  const failure = deferred<Settled>();
+  const interrupted = deferred<Interrupted>();
   let hinted = false;
   let seen = false;
-  const unsubscribe = deps.live.subscribeEvents(appId, (event, data) => {
+  const unsubscribeEvents = deps.live.subscribeEvents(appId, (event, data) => {
     if (!hinted || seen || event !== SCHEDULE_RESULT_EVENT) return;
     const parsed = parseScheduleResult(data, ctx.run.id);
     if (parsed === undefined) return;
     seen = true;
     result.resolve(parsed);
+  });
+  const unwatch = deps.live.subscribe((id, isLive) => {
+    if (!isLive && id === appId) interrupted.resolve({ kind: 'failed', message: APP_CLOSED_SUMMARY });
   });
   try {
     const wrote = await ctx.db.driver.kvSet(appId, key, payload);
@@ -344,15 +367,17 @@ async function runInLiveFrame(
     if (!deps.live.notify(appId, SCHEDULE_RUN_EVENT, { taskId: ctx.run.taskId, runId: ctx.run.id })) {
       return { status: 'failed', summary: 'the open app could not be reached', calls: none() };
     }
-    const answer = await awaitResult(ctx, deps.resultTimeoutMs, result.promise, failure.promise);
+    const answer = await awaitResult(ctx, deps.resultTimeoutMs, result.promise, interrupted.promise);
     // The live frame's calls ride its own transport and gate — nothing here to count.
-    return outcomeOf(app, gate, answer, none(), deps.resultTimeoutMs);
+    return outcomeOf(app, undefined, answer, none(), deps.resultTimeoutMs);
   } finally {
-    unsubscribe();
+    unwatch();
+    unsubscribeEvents();
     await ctx.db.driver.kvSet(appId, key, null);
   }
 }
 
+/** An unattended run in the ONE hidden frame, under the refusing gate and the counting transport. */
 async function runInHiddenFrame(
   app: AppRecord,
   step: AppRunStep,
@@ -360,30 +385,36 @@ async function runInHiddenFrame(
   deps: AppRunDeps,
   key: string,
   payload: { taskId: string; runId: string; input?: unknown },
-  gate: ScheduledConfirmGate | undefined,
+  gate: ScheduledConfirmGate,
 ): Promise<StepOutcome> {
   const { appId } = step;
   const html = ctx.db.getAppHtml(appId);
   if (html === undefined) return { status: 'blocked', summary: appMissing.text, calls: none() };
   if (deps.mounts.get() !== undefined) return { status: 'failed', summary: 'another scheduled run is still mounted', calls: none() };
 
-  // The counting seams: the transport's `onCall` and the handler's `onNetCall` both ask the
-  // ceiling with what THIS step spent so far (the transport's own count, this counter).
+  // The counting seams (M22): this executor keeps the step's own count — the transport reports
+  // each call that reached the brain (`onCounted`), the net handler asks before each request —
+  // and both ceiling questions read it with what the run already spent.
+  let ai = 0;
   let net = 0;
-  let transport: ScheduledTransport | undefined;
-  const soFar = (): { ai: number; net: number } => ({ ai: transport?.calls ?? 0, net });
+  const soFar = (): { ai: number; net: number } => ({ ai, net });
   const onNetCall = (): boolean => {
     if (!ceilingAllows(ctx, soFar(), { net: 1 })) return false;
     net += 1;
     return true;
   };
   const runtime = deps.runtimeFor({ appId, driver: ctx.db.driver, confirmGate: gate, onNetCall });
-  transport = createScheduledTransport(runtime.transport, { onCall: () => ceilingAllows(ctx, soFar(), { ai: 1 }) });
-  const calls = (): StepOutcome['calls'] => ({ ai: transport?.calls ?? 0, net });
+  const transport = createScheduledTransport(runtime.transport, {
+    onCall: () => ceilingAllows(ctx, soFar(), { ai: 1 }),
+    onCounted: () => {
+      ai += 1;
+    },
+  });
+  const calls = (): StepOutcome['calls'] => ({ ai, net });
 
   const announce = deferred<void>();
   const result = deferred<ScheduleResult>();
-  const failure = deferred<Settled>();
+  const interrupted = deferred<Interrupted>();
   let announced = false;
   let hinted = false;
   let seen = false;
@@ -408,31 +439,31 @@ async function runInHiddenFrame(
       seen = true;
       result.resolve(parsed);
     },
-    onNavigatedAway: () => failure.resolve({ kind: 'failed', message: 'the app left its sandbox' }),
-    onBudgetExhausted: () => failure.resolve({ kind: 'failed', message: 'the app kept answering off-script' }),
+    onNavigatedAway: () => interrupted.resolve({ kind: 'failed', message: 'the app left its sandbox' }),
+    onBudgetExhausted: () => interrupted.resolve({ kind: 'failed', message: 'the app kept answering off-script' }),
   };
   // A visible open of the same app aborts the hidden run (F5): the queue records it `interrupted`.
-  const unwatch = deps.live.subscribe((id, live) => {
-    if (live && id === appId) {
+  const unwatch = deps.live.subscribe((id, isLive) => {
+    if (isLive && id === appId) {
       ctx.interrupt?.('app opened');
-      failure.resolve({ kind: 'failed', message: 'app opened' });
+      interrupted.resolve({ kind: 'failed', message: 'app opened' });
     }
   });
   deps.mounts.set(mount);
   try {
     const announceBound = timer(deps.announceTimeoutMs);
-    const aborted = new Promise<Settled>((resolve) => {
+    const aborted = new Promise<AnnouncePhase>((resolve) => {
       const settle = (): void => resolve({ kind: 'aborted' });
       if (ctx.signal.aborted) settle();
       else ctx.signal.addEventListener('abort', settle, { once: true });
     });
-    let first: Settled;
+    let first: AnnouncePhase;
     try {
-      first = await Promise.race<Settled>([
+      first = await Promise.race<AnnouncePhase>([
         announce.promise.then(() => ({ kind: 'announced' })),
         announceBound.promise.then(() => ({ kind: 'timeout' })),
         aborted,
-        failure.promise,
+        interrupted.promise,
       ]);
     } finally {
       announceBound.stop();
@@ -447,7 +478,7 @@ async function runInHiddenFrame(
     hinted = true; // before the ring: the app may answer in the same tick
     host.notifyEvent(SCHEDULE_RUN_EVENT, { taskId: ctx.run.taskId, runId: ctx.run.id });
 
-    const answer = await awaitResult(ctx, deps.resultTimeoutMs, result.promise, failure.promise);
+    const answer = await awaitResult(ctx, deps.resultTimeoutMs, result.promise, interrupted.promise);
     return outcomeOf(app, gate, answer, calls(), deps.resultTimeoutMs);
   } finally {
     unwatch();

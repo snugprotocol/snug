@@ -30,7 +30,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import type { ReactElement } from 'react';
-import { Link, useParams } from 'react-router';
+import { Link, useNavigate, useParams } from 'react-router';
 
 import type { ScheduleProposalItem, ScheduleRun, ScheduledTask, StepResult } from '@snugprotocol/protocol';
 
@@ -62,10 +62,11 @@ import {
   interruptedWhy,
   onHost,
   openApp,
+  openingToRun,
   ranLine,
   wouldChange,
 } from './copy.result.js';
-import { absoluteTime, relativeTime, useNow } from './pageModel.js';
+import { absoluteTime, appRunAppOf, relativeTime, useNow } from './pageModel.js';
 import { editHref } from './routes.js';
 import { ResultStatus, StepStatus, appNameOf, type AppName } from './ScheduleStates.js';
 import { markSeen, runNow, useScheduler } from './scheduler.js';
@@ -110,6 +111,7 @@ export function ResultDetail(): ReactElement {
   const view = useScheduler();
   const libraryRevision = useLibraryRevision();
   const now = useNow();
+  const navigate = useNavigate();
 
   const task = view.tasks.find((entry) => entry.id === taskId);
   const run = (view.runsByTask[taskId] ?? []).find((row) => sameOccurrence(row, dueAt));
@@ -234,14 +236,22 @@ export function ResultDetail(): ReactElement {
     }
   };
 
+  const needsYouAt = needsYouStep(task, run);
+  const needsYouApp = appOfStep(task, needsYouAt);
+  const needsYouCopy = needsYou(needsYouApp === undefined ? task.title : (appNameOf(needsYouApp, apps) ?? 'this app'), NEEDS_YOU_FALLBACK_VERB);
+  // The app a *run <app>* step runs — the refused step's when it is one, else the first such step.
+  const refusedStep = task.steps[needsYouAt];
+  const runApp = refusedStep?.kind === 'app-run' ? refusedStep.appId : appRunAppOf(task.steps);
+
+  // *Run now and review* on a schedule that RUNS an app opens the app FIRST (S2): the engine
+  // delivers a manual run only to a live frame, because the point of the act is that the user
+  // is there to answer the gate. A schedule that only asks or reminds runs in place.
   const runNowAndReview = async (): Promise<void> => {
     setRunNowNote(undefined);
+    if (runApp !== undefined) navigate(`/run/${encodeURIComponent(runApp)}`);
     const result = await runNow(taskId);
     if (!result.ok) setRunNowNote(result.reason);
   };
-
-  const needsYouApp = appOfStep(task, needsYouStep(task, run));
-  const needsYouCopy = needsYou(needsYouApp === undefined ? task.title : (appNameOf(needsYouApp, apps) ?? 'this app'), NEEDS_YOU_FALLBACK_VERB);
   const noHandlerAt = run.steps.findIndex((step) => step.status === 'no-handler');
   const noHandlerApp = appOfStep(task, noHandlerAt === -1 ? task.steps.findIndex((step) => step.kind !== 'notify') : noHandlerAt);
   const noHandlerCopy = noHandler(noHandlerApp === undefined ? task.title : (appNameOf(noHandlerApp, apps) ?? 'this app'));
@@ -270,6 +280,7 @@ export function ResultDetail(): ReactElement {
               {needsYouCopy.action}
             </Button>
           }
+          hint={runApp !== undefined ? openingToRun(appNameOf(runApp, apps) ?? 'this app') : undefined}
           note={runNowNote}
         />
       ) : run.status === 'no-handler' ? (
@@ -394,12 +405,32 @@ function StepRow({ task, index, result, apps }: { task: ScheduledTask; index: nu
   );
 }
 
-function StateCard({ text, detail, action, note, testId }: { text: string; detail?: string | undefined; action?: ReactElement | undefined; note?: string | undefined; testId: string }): ReactElement {
+function StateCard({
+  text,
+  detail,
+  action,
+  hint,
+  note,
+  testId,
+}: {
+  text: string;
+  detail?: string | undefined;
+  action?: ReactElement | undefined;
+  /** What the act will do before it does it ("opening Ledger to run it with you"). */
+  hint?: string | undefined;
+  note?: string | undefined;
+  testId: string;
+}): ReactElement {
   return (
     <div className="connection-note" role="status" data-testid={testId}>
       <p className="connection-note-title">{text}</p>
       {detail !== undefined ? <p className="connection-note-body">{sanitizeCardText(detail)}</p> : null}
       {action !== undefined ? <div className="connection-note-actions">{action}</div> : null}
+      {hint !== undefined ? (
+        <p className="hint" data-testid={`${testId}-hint`}>
+          {hint}
+        </p>
+      ) : null}
       {note !== undefined ? (
         <p className="connection-note-body" role="alert">
           {note}

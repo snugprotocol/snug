@@ -1,27 +1,16 @@
 import { useEffect, useState } from 'react';
 import type { ReactElement } from 'react';
-import { Link, useLocation } from 'react-router';
-
-import type { ScheduleStep } from '@snugprotocol/protocol';
+import { Link } from 'react-router';
 
 import { sanitizeCardText, type ChatCardState } from '../agent/cards.js';
-import { persistScheduleResolution, readScheduleCardRow, type ScheduleCardState } from '../agent/scheduleCard.js';
 import type { BuildStepView, ChatMessage, DataWriteCardState } from '../agent/useBuilderChat.js';
 import { CONNECTIONS_UNAVAILABLE } from '../platform/availability.js';
 import { allows } from '../platform/platform.js';
-import { SCHEDULE_CARD, stepLabel } from '../schedule/copy.js';
 import { OFFER } from '../schedule/copy.page.js';
-import { describeSpec, nextOccurrence, resolveZone } from '../schedule/cron.js';
-import { approvedHostsByApp } from '../schedule/editorModel.js';
-import { EnableConsent } from '../schedule/EnableConsent.js';
-import { enableProposedTask } from '../schedule/enableProposedTask.js';
-import { pageClock } from '../schedule/pageModel.js';
-import { formatOccurrence } from '../schedule/PreviewAndCost.js';
-import { editHref, newScheduleHref } from '../schedule/routes.js';
+import { ScheduleCard, type ResolveScheduleCard } from '../schedule/ScheduleCard.js';
 import { ScheduleOffer } from '../schedule/ScheduleOffer.js';
 import { netConfirmStore, registerChatConfirmSurface, resolveNetConfirm } from '../state/net.js';
 import { useStore } from '../state/store.js';
-import { getUserDb } from '../state/userdb.js';
 import { useBrain } from '../state/webllm.js';
 import { Button } from '../ui/Button.js';
 import { Card } from '../ui/Card.js';
@@ -80,6 +69,14 @@ export interface ChatLogProps {
    * next user message. Absent ⇒ options render disabled (a surface with no send path).
    */
   onSelectCardOption?: (card: ChatCardState, messageId: number, optionId: string) => void;
+  /**
+   * Resolve the schedule suggestion card (TASK-20261009 P1; ADR-0074 §4) —
+   * `(card: ScheduleCardState, messageId, resolution: 'scheduled' | 'declined', taskId?)`. The
+   * card never writes the chat row itself: the hook that staged it persists the answer on the
+   * row and patches its message. Absent ⇒ the card's acts render disabled (a surface with no
+   * path to persist an answer must not create anything — the choice card's rule).
+   */
+  onResolveSchedule?: ResolveScheduleCard;
 }
 
 /**
@@ -104,6 +101,7 @@ export function ChatLog({
   onApproveDataWrite,
   onDeclineDataWrite,
   onSelectCardOption,
+  onResolveSchedule,
 }: ChatLogProps): ReactElement {
   // Under a platform-pinned HOST brain the chat has no classifier and no `schedule` lane
   // (TASK-20261009 P2): the deterministic offer is the route, and its line says so.
@@ -285,13 +283,14 @@ export function ChatLog({
             </Card>
           ) : null}
           {/*
-            The SCHEDULE SUGGESTION CARD (TASK-20261009 P1, ADR-0074 §4): what `schedule_propose`
-            staged — the title, the steps in words, the when and the next time — with three acts.
-            *Schedule it* opens the ONE consent surface inside the card and the user's act there
-            calls the ONE writer; *edit…* opens the editor route prefilled; *not now* answers it.
-            The card is UI, never a gate (ADR-0031 §3): nothing on it can enable a task by itself.
+            The SCHEDULE SUGGESTION CARD (TASK-20261009 P1, ADR-0074 §4; `schedule/ScheduleCard.tsx`):
+            what `schedule_propose` staged, with its three acts. Its answer travels back through
+            `onResolveSchedule` with this message's id — the card is UI, never a gate (ADR-0031 §3),
+            and never writes the row itself.
           */}
-          {message.schedule !== undefined && allows('schedule') ? <ScheduleCard card={message.schedule} busy={busy} /> : null}
+          {message.schedule !== undefined && allows('schedule') ? (
+            <ScheduleCard card={message.schedule} messageId={message.id} busy={busy} onResolve={onResolveSchedule} />
+          ) : null}
           {message.artifact !== undefined ? (
             <Card className="artifact-card" data-testid="artifact-card">
               <span aria-hidden="true" style={{ fontSize: '1.5rem' }}>
@@ -323,174 +322,6 @@ export function ChatLog({
       <ProviderConfirmCard />
       <StatusLine phase={phase} active={busy} />
     </div>
-  );
-}
-
-/** One step of a suggestion, in words — the label the editor uses, then the step's own words. */
-function suggestionStepWords(step: ScheduleStep, appName: string | undefined): string {
-  switch (step.kind) {
-    case 'notify':
-      return `${stepLabel('notify')}: ${step.title} — ${step.body}`;
-    case 'app-think':
-      return `${stepLabel('app-think', appName)}: ${step.prompt}`;
-    case 'app-run':
-      return step.input === undefined ? stepLabel('app-run', appName) : `${stepLabel('app-run', appName)} · ${JSON.stringify(step.input)}`;
-    default: {
-      const never: never = step;
-      return never;
-    }
-  }
-}
-
-interface ScheduleCardProps {
-  card: ScheduleCardState;
-  /** The turn is in flight: the row does not exist yet, so an answer could not persist — the acts wait (the choice card's rule). */
-  busy: boolean;
-}
-
-function ScheduleCard({ card, busy }: ScheduleCardProps): ReactElement {
-  const location = useLocation();
-  const [state, setState] = useState<ScheduleCardState>(card);
-  const [appNames, setAppNames] = useState<Record<string, string>>({});
-  const [appMissing, setAppMissing] = useState(false);
-  /** The consent panel is open: the hosts each app's approved connections may call. */
-  const [consent, setConsent] = useState<Record<string, string[]> | undefined>(undefined);
-  const [working, setWorking] = useState(false);
-  const [error, setError] = useState<string | undefined>(undefined);
-
-  // The row id lands after the turn finalizes; a resolution the hook rehydrated is adopted once.
-  useEffect(() => {
-    setState((current) => ({
-      ...current,
-      ...(card.messageRowId !== undefined ? { messageRowId: card.messageRowId } : {}),
-      ...(card.resolution !== undefined && current.resolution === undefined
-        ? { resolution: card.resolution, ...(card.taskId !== undefined ? { taskId: card.taskId } : {}) }
-        : {}),
-    }));
-  }, [card.messageRowId, card.resolution, card.taskId]);
-
-  // THE ROW IS THE TRUTH: a card remounted after an answer given elsewhere (the other view,
-  // an earlier mount) reads it back; the same read names the app and notices it is gone.
-  useEffect(() => {
-    let cancelled = false;
-    void getUserDb().then((db) => {
-      if (cancelled) return;
-      if (card.appId !== undefined) {
-        const app = db.getApp(card.appId);
-        setAppMissing(app === undefined);
-        if (app !== undefined) setAppNames({ [card.appId]: app.displayName });
-      }
-      if (card.messageRowId !== undefined) {
-        const row = readScheduleCardRow(db, card.threadId, card.messageRowId);
-        if (row?.resolution !== undefined) {
-          const answered = row;
-          setState((current) =>
-            current.resolution === undefined ? { ...current, resolution: answered.resolution!, ...(answered.taskId !== undefined ? { taskId: answered.taskId } : {}) } : current,
-          );
-        }
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [card.appId, card.messageRowId, card.threadId]);
-
-  const { proposal } = state;
-  const now = pageClock.now();
-  const zone = resolveZone(proposal.spec.tz);
-  const next = nextOccurrence(proposal.spec, now);
-  const appName = state.appId !== undefined ? appNames[state.appId] : undefined;
-  // Stale: the app the suggestion was for is gone, or its one time has passed (no next within the bound).
-  const resolution = state.resolution === 'stale' || appMissing || next === undefined ? 'stale' : state.resolution;
-  const whenWords = next === undefined ? describeSpec(proposal.spec) : formatOccurrence(next, zone);
-
-  const resolve = async (resolved: ScheduleCardState): Promise<void> => {
-    setState(resolved);
-    persistScheduleResolution(await getUserDb(), resolved);
-  };
-  const openConsent = async (): Promise<void> => {
-    const db = await getUserDb();
-    setError(undefined);
-    setConsent(approvedHostsByApp(db, state.appId !== undefined ? [state.appId] : []));
-  };
-  const enable = async (): Promise<void> => {
-    setWorking(true);
-    setError(undefined);
-    const result = await enableProposedTask({ proposal, provenance: state.channel, ...(state.appId !== undefined ? { ownerAppId: state.appId } : {}) });
-    setWorking(false);
-    if (!result.ok) {
-      setError(result.reason);
-      return;
-    }
-    setConsent(undefined);
-    await resolve({ ...state, resolution: 'scheduled', taskId: result.task.id });
-  };
-  const editTo = newScheduleHref({
-    suggestion: JSON.stringify(proposal),
-    ...(state.appId !== undefined ? { app: state.appId } : {}),
-    back: `${location.pathname}${location.search}`,
-  });
-
-  return (
-    <Card className={`artifact-card schedule-card${resolution === 'declined' ? ' is-declined' : ''}`} data-testid="schedule-card" data-resolution={resolution ?? 'staged'}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)', width: '100%', ...(resolution === 'declined' ? { opacity: 0.6 } : {}) }}>
-        {/* The provenance line every agent-authored card opens with (the choice card's rule). */}
-        <span className="hint">{SCHEDULE_CARD.lead}</span>
-        <span className="artifact-name">{proposal.title}</span>
-        <ol style={{ margin: 0, paddingInlineStart: '1.25rem' }}>
-          {proposal.steps.map((step, index) => (
-            <li key={`${state.hash}-${index}`} data-testid={`schedule-card-step-${index}`}>
-              {suggestionStepWords(step, appName)}
-            </li>
-          ))}
-        </ol>
-        <span className="hint" data-testid="schedule-card-when">
-          {describeSpec(proposal.spec)} · {next === undefined ? SCHEDULE_CARD.noNext : SCHEDULE_CARD.next(formatOccurrence(next, zone))}
-        </span>
-        {consent !== undefined ? (
-          <EnableConsent
-            steps={proposal.steps}
-            spec={proposal.spec}
-            now={now}
-            appNames={appNames}
-            hostsByApp={consent}
-            busy={working}
-            {...(error !== undefined ? { error } : {})}
-            onEnable={() => void enable()}
-            onNotNow={() => setConsent(undefined)}
-          />
-        ) : resolution === undefined ? (
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)' }}>
-            <Button variant="primary" onClick={() => void openConsent()} disabled={busy} data-testid="schedule-card-accept">
-              {SCHEDULE_CARD.accept}
-            </Button>
-            <Link to={editTo} className="btn" data-testid="schedule-card-edit">
-              {SCHEDULE_CARD.edit}
-            </Link>
-            <Button onClick={() => void resolve({ ...state, resolution: 'declined' })} disabled={busy} data-testid="schedule-card-decline">
-              {SCHEDULE_CARD.decline}
-            </Button>
-          </div>
-        ) : (
-          <span className="hint" data-testid="schedule-card-outcome">
-            {resolution === 'scheduled' ? (
-              <>
-                {SCHEDULE_CARD.scheduled(whenWords)}{' '}
-                {state.taskId !== undefined ? (
-                  <Link to={editHref(state.taskId)} data-testid="schedule-card-open">
-                    {SCHEDULE_CARD.open}
-                  </Link>
-                ) : null}
-              </>
-            ) : resolution === 'declined' ? (
-              SCHEDULE_CARD.declined
-            ) : (
-              SCHEDULE_CARD.stale
-            )}
-          </span>
-        )}
-      </div>
-    </Card>
   );
 }
 

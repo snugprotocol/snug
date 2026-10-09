@@ -13,9 +13,9 @@ import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { UserDb } from '@snugprotocol/db';
-import type { ScheduleProposal } from '@snugprotocol/protocol';
+import type { ScheduleProposal, ScheduleStep } from '@snugprotocol/protocol';
 
-import { CONSENT, SUGGESTION_ACTIONS, SUGGESTION_OUTCOME, suggestionStrip } from '../schedule/copy.js';
+import { CONSENT, SUGGESTION_ACTIONS, SUGGESTION_OUTCOME, stepWords, suggestionStrip } from '../schedule/copy.js';
 import { __setPageClockForTests } from '../schedule/pageModel.js';
 import { __resetSchedulerForTests } from '../schedule/scheduler.js';
 import {
@@ -111,8 +111,13 @@ describe('the strip renders the pending suggestion', () => {
     expect(db.listScheduledTasks()).toHaveLength(0);
   });
 
-  it('suggestionStepsLine names each kind with the app', () => {
-    expect(suggestionStepsLine([{ kind: 'app-think', appId: 'x', prompt: 'Sum it', context: { maxRows: 5 } }], 'Ledger')).toBe('ask Ledger’s AI: Sum it');
+  it('suggestionStepsLine is copy.stepWords per step, joined — the strip’s one line leaves a run step’s input out (M6)', () => {
+    const steps: ScheduleStep[] = [
+      { kind: 'app-think', appId: 'x', prompt: 'Sum it', context: { maxRows: 5 } },
+      { kind: 'app-run', appId: 'x', input: { fetch: true } },
+    ];
+    expect(suggestionStepsLine(steps, 'Ledger')).toBe('ask Ledger’s AI: Sum it · run Ledger');
+    expect(suggestionStepsLine(steps, 'Ledger')).toBe(steps.map((step) => stepWords(step, 'Ledger')).join(' · '));
   });
 });
 

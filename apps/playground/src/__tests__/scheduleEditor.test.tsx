@@ -26,7 +26,7 @@ import type { ScheduledTask } from '@snugprotocol/protocol';
 
 import { imported, nextLine } from '../schedule/copy.js';
 import { CONSENT_ROWS, FROM_SUGGESTION, SENTENCE, STEPS, TEMPLATE_TITLES, TITLE, WHEN } from '../schedule/copy.editor.js';
-import { LEDGER_QUERIES, STANDUP_QUERIES, TEMPLATE_PROMPTS, parseRunInput, remainderOf } from '../schedule/editorModel.js';
+import { LEDGER_QUERIES, STANDUP_QUERIES, TEMPLATE_PROMPTS, parseRunInput, proposalFill, remainderOf } from '../schedule/editorModel.js';
 import { readSchedule } from '../schedule/parseScheduleText.js';
 import { newScheduleHref } from '../schedule/routes.js';
 import { ScheduleEditorView } from '../schedule/ScheduleEditorView.js';
@@ -469,6 +469,21 @@ describe('prefill from ?suggestion= — the chat’s suggestion card (P1)', () =
     await settleUntil(() => q('schedule-page') !== null, 'navigation back');
     expect(must('schedule-page').textContent).toBe(`/run/${ledger}`);
     expect(vi.mocked(createTask).mock.calls[0]?.[0]).toMatchObject({ title: 'nudge', provenance: 'user' });
+  });
+
+  it('a suggestion step naming an app this file does not hold is off and named in WORDS — "that app", never the id (M14)', async () => {
+    const ghost = '0b6e5a1c-8d5e-4f13-9a2b-7c1d2e3f4a5b';
+    const proposal = { title: 'ghost run', steps: [{ kind: 'app-run', appId: ghost }], spec: { kind: 'daily', time: '08:00', tz: 'device' } };
+    const fill = proposalFill(JSON.stringify(proposal), []);
+    const step = fill?.steps[0];
+    expect(step?.kind).toBe('app-run');
+    expect(step?.kind === 'app-run' ? step.missingApp : undefined).toBe(STEPS.unknownApp);
+    expect(JSON.stringify(fill)).not.toContain(`"missingApp":"${ghost}"`);
+
+    await mount(newScheduleHref({ suggestion: JSON.stringify(proposal) }));
+    expect(must('step-0-missing').textContent).toBe(STEPS.appMissing(STEPS.unknownApp));
+    expect(must('step-0-missing').textContent).not.toContain(ghost);
+    expect(input('schedule-title').value).toBe('ghost run');
   });
 
   it('a proposal that does not parse, and a back that is not an in-app path, are ignored', async () => {

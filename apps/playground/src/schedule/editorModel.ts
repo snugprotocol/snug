@@ -563,9 +563,10 @@ export function proposalFill(raw: string | null | undefined, apps: readonly Temp
   const known = new Set(apps.map((record) => record.appId));
   return {
     title: proposal.title,
-    // A step naming an app this file no longer holds is disabled by its id — the same off
-    // state a template step gets, so the save drops it rather than refusing by surprise.
-    steps: draftsFromSteps(proposal.steps).map((step) => (step.kind !== 'notify' && !known.has(step.appId) ? { ...step, missingApp: step.appId } : step)),
+    // A step naming an app this file no longer holds gets the same off state a template step
+    // gets, so the save drops it rather than refusing by surprise — and it is named in WORDS: a
+    // suggestion carries no app names, so the note says "that app", never an id (M14).
+    steps: draftsFromSteps(proposal.steps).map((step) => (step.kind !== 'notify' && !known.has(step.appId) ? { ...step, missingApp: STEPS.unknownApp } : step)),
     spec: proposal.spec,
   };
 }

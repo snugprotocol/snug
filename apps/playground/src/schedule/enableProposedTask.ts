@@ -52,8 +52,8 @@ function issuesInWords(issues: ReadonlyArray<{ path: PropertyKey[]; message: str
     .join('; ');
 }
 
-/** The strict parse, in words — exported so the strip can refuse an unparseable request with the same sentence. */
-export function parseProposalOrReason(proposal: unknown): { ok: true; proposal: ScheduleProposal } | { ok: false; reason: string } {
+/** The strict parse, in words. The writer's own: the strip's intake parses with the schema directly and tells the app nothing (M21). */
+function parseProposalOrReason(proposal: unknown): { ok: true; proposal: ScheduleProposal } | { ok: false; reason: string } {
   const parsed = scheduleProposalSchema.safeParse(proposal);
   return parsed.success ? { ok: true, proposal: parsed.data } : { ok: false, reason: `this suggestion can’t be read — ${issuesInWords(parsed.error.issues)}` };
 }

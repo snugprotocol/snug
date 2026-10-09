@@ -17,8 +17,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentTool } from '@snugprotocol/adapters';
 
 import type { BuildHandlers, BuilderTurn } from '../agent/builder.js';
+import { laneToolsFor as laneToolsFromHome } from '../agent/laneTools.js';
 import { metaToScheduleCard } from '../agent/scheduleCard.js';
-import { SCHEDULE_PROPOSE_TOOL_NAME } from '../agent/tools.js';
+import { SCHEDULE_PROPOSE_TOOL_NAME } from '../agent/scheduleProposeTool.js';
+import { SCHEDULE_PROPOSE_TOOL_NAME as NAME_VIA_TOOLS } from '../agent/tools.js';
 import { laneToolsFor, useBuilderChat, type BuilderChat, type LaneToolDeps } from '../agent/useBuilderChat.js';
 import { modeStore } from '../state/mode.js';
 import { installTestUserDb } from './userdbTestHelper.js';
@@ -192,6 +194,86 @@ describe('the exhaustive lane switch — what each lane may reach', () => {
     const bogus = await laneToolsFor({ lane: 'bogus', intent: 'other' } as unknown as Parameters<typeof laneToolsFor>[0], deps);
     expect(bogus).not.toBeUndefined();
     expect(Array.isArray(bogus)).toBe(false);
+  });
+
+  it('S10: a ROUTED non-feature lane with no contextTarget runs tool-free ([]) — never the builder set; the feature lane and an unrouted turn keep it', async () => {
+    const deps: LaneToolDeps = {
+      db,
+      contextTarget: undefined,
+      threadId: THREAD,
+      signal: new AbortController().signal,
+      presentCardTool: { def: { name: 'present_card', description: 'x', inputSchema: { type: 'object' } }, run: () => 'x' },
+      onDataProposal: () => true,
+      onProviderFailureCode: () => undefined,
+      onScheduleProposal: () => true,
+    };
+    expect(await laneToolsFor({ lane: 'schedule', intent: 'schedule' }, deps)).toEqual([]);
+    expect(await laneToolsFor({ lane: 'data', intent: 'data_read' }, deps)).toEqual([]);
+    expect(await laneToolsFor({ lane: 'provider', intent: 'provider_read' }, deps)).toEqual([]);
+    expect(await laneToolsFor({ lane: 'answer', intent: 'other' }, deps)).toEqual([]);
+    expect(await laneToolsFor({ lane: 'feature', intent: 'app_change' }, deps)).toBeUndefined();
+    expect(await laneToolsFor(undefined, deps)).toBeUndefined();
+  });
+
+  it('M4/M17: the lane switch lives in agent/laneTools.ts (the hook re-exports it) and the propose tool in agent/scheduleProposeTool.ts (tools.ts re-exports its name)', () => {
+    expect(laneToolsFor).toBe(laneToolsFromHome);
+    expect(NAME_VIA_TOOLS).toBe(SCHEDULE_PROPOSE_TOOL_NAME);
+  });
+});
+
+describe('resolving the card through the hook (the ChatLog contract: `onResolveSchedule`)', () => {
+  it('`resolveSchedule` patches the message and persists the answer by MERGING the row’s meta — the task id rides along, the other meta keys survive', async () => {
+    intent = 'schedule';
+    drive = async (tools) => {
+      const tool = tools?.find((t) => t.def.name === SCHEDULE_PROPOSE_TOOL_NAME);
+      await tool?.run({ title: 'nudge', when: 'every day at 8', steps: [{ kind: 'notify', title: 'hi', body: 'there' }] });
+    };
+    const { chat } = renderChat();
+    await act(async () => {
+      chat().send('remind me every day at 8');
+    });
+    await settleUntilIdle(chat);
+    const agent = chat().messages.find((m) => m.role === 'agent');
+    const card = agent?.schedule;
+    expect(card?.messageRowId).toBeDefined();
+    const rowId = card!.messageRowId!;
+    const before = db.listChatMessages(THREAD).find((m) => m.id === rowId)!;
+    db.updateChatMessageMeta(rowId, { ...(before.meta as object), wireText: 'kept across the resolution' });
+
+    act(() => {
+      chat().resolveSchedule(card!, agent!.id, 'scheduled', 'task-9');
+    });
+    await settle();
+
+    const after = chat().messages.find((m) => m.id === agent!.id)?.schedule;
+    expect(after).toMatchObject({ resolution: 'scheduled', taskId: 'task-9', messageRowId: rowId });
+    const stored = db.listChatMessages(THREAD).find((m) => m.id === rowId)!;
+    expect(metaToScheduleCard(stored.meta)).toMatchObject({ resolution: 'scheduled', taskId: 'task-9', channel: 'chat' });
+    expect((stored.meta as { wireText?: string }).wireText).toBe('kept across the resolution');
+    expect(db.listScheduledTasks(), 'resolving a card never creates a task — the writer does').toHaveLength(0);
+  });
+
+  it('a declined card persists `declined` with no task id', async () => {
+    intent = 'schedule';
+    drive = async (tools) => {
+      const tool = tools?.find((t) => t.def.name === SCHEDULE_PROPOSE_TOOL_NAME);
+      await tool?.run({ title: 'nudge', when: 'every day at 8', steps: [{ kind: 'notify', title: 'hi', body: 'there' }] });
+    };
+    const { chat } = renderChat();
+    await act(async () => {
+      chat().send('remind me every day at 8');
+    });
+    await settleUntilIdle(chat);
+    const agent = chat().messages.find((m) => m.role === 'agent')!;
+    act(() => {
+      chat().resolveSchedule(agent.schedule!, agent.id, 'declined');
+    });
+    await settle();
+    expect(chat().messages.find((m) => m.id === agent.id)?.schedule?.resolution).toBe('declined');
+    const stored = db.listChatMessages(THREAD).find((m) => m.id === agent.schedule!.messageRowId)!;
+    const persisted = metaToScheduleCard(stored.meta);
+    expect(persisted?.resolution).toBe('declined');
+    expect(persisted?.taskId).toBeUndefined();
   });
 });
 

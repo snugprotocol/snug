@@ -7,7 +7,7 @@
 // with run now · edit · history · delete (the tiles' armed inline confirm); the banners
 // (global pause, follower tab); loading, error and the host refusal.
 import { act } from 'react';
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
+import { MemoryRouter, Route, Routes, useLocation, type NavigateFunction, type NavigateOptions, type To } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { EMPTY, RESULT_STATUS_WORD, followerTab, globalPaused, imported, needsYou, paused } from '../schedule/copy.js';
@@ -43,6 +43,33 @@ declare global {
 }
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
+/** The ORDER of the two acts behind *run now* on a schedule that runs an app (S2): the navigation, then the manual run. */
+const trace = vi.hoisted(() => ({ calls: [] as string[] }));
+vi.mock('react-router', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('react-router')>();
+  return {
+    ...actual,
+    useNavigate: (): NavigateFunction => {
+      const navigate = actual.useNavigate();
+      const traced: NavigateFunction = (to: To | number, options?: NavigateOptions) => {
+        trace.calls.push(`navigate:${typeof to === 'number' ? to : typeof to === 'string' ? to : (to.pathname ?? '')}`);
+        return typeof to === 'number' ? navigate(to) : navigate(to, options);
+      };
+      return traced;
+    },
+  };
+});
+vi.mock('../schedule/scheduler.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../schedule/scheduler.js')>();
+  return {
+    ...actual,
+    runNow: (taskId: string) => {
+      trace.calls.push(`run-now:${taskId}`);
+      return actual.runNow(taskId);
+    },
+  };
+});
+
 // A real sql.js db per test (the 2026-08-26 db-load class): the budget is the fix, not a retry.
 vi.setConfig({ testTimeout: 20_000 });
 
@@ -53,6 +80,7 @@ beforeEach(async () => {
   env = await setupEnv();
   env.db.installApp({ appId: 'ledger', displayName: 'Ledger', iconEmoji: '📒', html: '<html>ledger</html>', installSource: 'starter:ledger' });
   path = '';
+  trace.calls.length = 0;
 });
 
 afterEach(() => {
@@ -191,15 +219,19 @@ describe('results (design F9)', () => {
     expect(byTestId(c, 'schedule-results')?.querySelector('.section-title')?.textContent).toBe(`${RESULTS.heading} · 2 ${RESULTS.unread}`);
   });
 
-  it('a needs-you row carries its one act, which opens the app', async () => {
+  it('a needs-you row carries its one act, which opens the app the schedule runs and THEN runs it (S2: the user’s own run rides the live frame)', async () => {
     seedResults();
     await env.boot();
     const c = render();
     await settle();
     const act1 = byTestId(c, 'result-needs-you-act');
     expect(act1?.textContent).toBe(needsYou('Ledger', 'post to Notion').action);
+    const needsRow = qa(c, '[data-testid="schedule-result"]').find((row) => row.dataset.status === 'needs-you');
+    const taskId = (q(needsRow!, 'a')?.getAttribute('href') ?? '').split('/')[2];
+    expect(taskId).toMatch(/^t\d$/);
     await click(act1);
     expect(path).toBe('/run/ledger');
+    expect(trace.calls).toEqual(['navigate:/run/ledger', `run-now:${taskId}`]);
   });
 
   it('mark all read is one gesture: every unread result is seen, the button goes, the engine’s unseen count is 0', async () => {
@@ -353,6 +385,42 @@ describe('a row (design F12)', () => {
     await click(byTestId(c, 'schedule-kebab'));
     await click(qa(c, '.schedule-menu-item')[1]);
     expect(path).toBe('/schedule/t1');
+  });
+
+  it('run now on a schedule that RUNS an app opens the app FIRST, then enqueues the manual run (S2); a reminder runs in place', async () => {
+    env.db.putScheduledTask(makeTask({ id: 't1', title: 'Hourly', steps: [{ kind: 'app-run', appId: 'ledger' }], appVersions: { ledger: 1 } }));
+    env.db.putScheduledTask(makeTask({ id: 't2', title: 'Water' }));
+    await env.boot();
+    const c = render();
+    await settle();
+    const rowOf = (title: string): HTMLElement => qa(c, '[data-testid="schedule-row"]').find((row) => row.querySelector('.schedule-row-title')?.textContent === title)!;
+    // The reminder-only schedule: run now in place, no navigation.
+    await click(rowOf('Water').querySelector('[data-testid="schedule-kebab"]'));
+    await click(qa(rowOf('Water'), '.schedule-menu-item')[0]);
+    await settleUntil(() => env.rec.calls.length === 1, 'the reminder ran');
+    expect(trace.calls).toEqual(['run-now:t2']);
+    expect(path).toBe('');
+    trace.calls.length = 0;
+    // The schedule that runs Ledger: the app opens, THEN the manual run is enqueued into it.
+    await click(rowOf('Hourly').querySelector('[data-testid="schedule-kebab"]'));
+    await click(qa(rowOf('Hourly'), '.schedule-menu-item')[0]);
+    await settle();
+    expect(trace.calls).toEqual(['navigate:/run/ledger', 'run-now:t1']);
+    expect(path).toBe('/run/ledger');
+  });
+
+  it('the needs-you line’s *run now and review* on a schedule that RUNS an app is the same act: the app, then the manual run (S2)', async () => {
+    env.db.putScheduledTask(makeTask({ id: 't1', title: 'Hourly', steps: [{ kind: 'app-run', appId: 'ledger' }], appVersions: { ledger: 1 } }));
+    env.db.putScheduleRun(makeRun({ taskId: 't1', dueAt: iso(NOW - HOUR), status: 'needs-you', reason: 'post to Notion', steps: [{ status: 'refused' }] }));
+    await env.boot();
+    const c = render();
+    await settle();
+    const act1 = byTestId(c, 'schedule-attention-act');
+    expect(act1?.textContent).toBe(needsYou('Ledger', 'post to Notion').action);
+    await click(act1);
+    await settle();
+    expect(trace.calls).toEqual(['navigate:/run/ledger', 'run-now:t1']);
+    expect(path).toBe('/run/ledger');
   });
 
   it('delete arms the tiles’ inline confirm — keep backs out, delete removes the schedule and its runs', async () => {

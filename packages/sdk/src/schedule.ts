@@ -140,12 +140,14 @@ export function useSnugSchedule(handler: SnugScheduleHandler): void {
   useEffect(() => {
     handlerRef.current = handler;
   });
-  useEffect(() => {
-    ensureListener(); // useSnugSchedule may be the first hook to mount
-    return onHostEvent(SCHEDULE_RUN_EVENT, (data) => {
-      void answerHint(data, (run) => handlerRef.current(run));
-    });
-  }, []);
+  // `onHostEvent` installs the bridge's listener itself, so this may be the first hook to mount.
+  useEffect(
+    () =>
+      onHostEvent(SCHEDULE_RUN_EVENT, (data) => {
+        void answerHint(data, (run) => handlerRef.current(run));
+      }),
+    [],
+  );
 }
 
 /**

@@ -20,6 +20,7 @@
 // callbacks (announce, app-event, the two failure signals). Mounted ONCE in `App.tsx`, beside
 // `ConnectionWizardNote`, so a run can happen on any route.
 
+import { useEffect, useRef } from 'react';
 import type { CSSProperties, ReactElement } from 'react';
 
 import { SnugAppFrame } from '@snugprotocol/runner';
@@ -35,9 +36,18 @@ export const SCHEDULED_RUN_HOST_TEST_ID = 'scheduled-run-host';
 
 export function ScheduledRunHost(): ReactElement | null {
   const mount = useStore(hiddenMountStore);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  // OUT OF THE TAB ORDER as well as out of sight (S5). `inert` on the wrapper takes the whole
+  // subtree out of focus, hit-testing and the accessibility tree — React 18's typings do not
+  // know the attribute, hence the spread. `tabindex="-1"` on the frame itself is the belt for a
+  // browser without `inert`; `SnugAppFrame` forwards no attributes, so it is set on the element
+  // after the mount (the frame is keyed by run, so once per run).
+  useEffect(() => {
+    wrapRef.current?.querySelector('iframe')?.setAttribute('tabindex', '-1');
+  }, [mount?.runId]);
   if (mount === undefined) return null;
   return (
-    <div data-testid={SCHEDULED_RUN_HOST_TEST_ID} aria-hidden="true" style={WRAP_STYLE}>
+    <div ref={wrapRef} data-testid={SCHEDULED_RUN_HOST_TEST_ID} aria-hidden="true" style={WRAP_STYLE} {...{ inert: '' }}>
       <SnugAppFrame
         key={mount.runId}
         html={mount.html}

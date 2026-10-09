@@ -17,23 +17,12 @@ import { ceilingWarning, costLine, nextLine } from './copy.js';
 import { PREVIEW } from './copy.editor.js';
 import { SEARCH_BOUND_DAYS, describeSpec, occurrencesBetween, resolveZone } from './cron.js';
 import { estimatedCallsPerWeek } from './floors.js';
+import { formatOccurrence } from './pageModel.js';
+
+/** The occurrence formatter lives with the page's other clocks (`pageModel.ts`); re-exported so the preview's callers keep their import. */
+export { formatOccurrence };
 
 const DAY_MS = 86_400_000;
-const formatters = new Map<string, Intl.DateTimeFormat>();
-
-/** "Fri, Oct 16, 5:00 PM PDT" — the zone's own abbreviation names where the clock was read. */
-export function formatOccurrence(at: Date, zone: string, locale = 'en-US'): string {
-  const key = `${locale}|${zone}`;
-  let fmt = formatters.get(key);
-  if (fmt === undefined) {
-    fmt = new Intl.DateTimeFormat(locale, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: zone, timeZoneName: 'short' });
-    formatters.set(key, fmt);
-  }
-  return fmt
-    .formatToParts(at)
-    .map((p) => (p.type === 'literal' && /^\s+$/.test(p.value) ? ' ' : p.value))
-    .join('');
-}
 
 export interface PreviewAndCostProps {
   spec: ScheduleSpec;

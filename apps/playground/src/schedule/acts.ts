@@ -42,10 +42,11 @@ import {
 } from '@snugprotocol/protocol';
 
 import { bumpScheduleRevision } from '../platform/signals.js';
+import { pauseSchedulesForAppVersion, type AppVersionSource } from './appDrift.js';
 import { globalPaused } from './copy.js';
 import { compileSpec } from './cron.js';
 import { defaultMissedPolicy, frequencyFloorRefusal, freshnessWindowMs } from './floors.js';
-import { markSeen as markTaskSeen, pauseForAppUpdate, resumeTask } from './protection.js';
+import { markSeen as markTaskSeen, resumeTask } from './protection.js';
 import { currentDeps, engine, freshSchedulerState, reconcile } from './scheduler.js';
 import { RESULT_STATUSES, appIdsOf, messageOf, sameOccurrence } from './taskShape.js';
 
@@ -74,8 +75,8 @@ export type TaskRefusal = { ok: false; reason: string; route?: 'review' };
 export type TaskResult = { ok: true; task: ScheduledTask } | TaskRefusal;
 export type ActResult = { ok: true } | { ok: false; reason: string };
 
-/** Who changed an app's version — only `shared` and `agent` updates pause the schedules that name it (E8). */
-export type AppVersionSource = 'own' | 'shared' | 'agent';
+/** Who changed an app's version — `appDrift.ts` owns the rule; re-exported so every importer keeps its one import. */
+export type { AppVersionSource } from './appDrift.js';
 
 export interface EnableOptions {
   /** The editor's save after the consent panel — the one caller that may enable an imported schedule (S2). */
@@ -385,23 +386,13 @@ export function cancelRunning(): void {
 }
 
 /**
- * The E8 hook. An app's version changed: for a SHARED or AGENT update, every schedule naming
- * the app at another version is paused `app-updated` (its recorded versions kept, so the
- * resume card can name the change); the user's OWN edits change nothing. Answers how many
- * schedules were paused. Its callers land in PR-B.
+ * The E8 hook at the engine's altitude: an app's version changed. The rule — a SHARED or
+ * AGENT update pauses every schedule naming the app at another version, the user's OWN edit
+ * pauses nothing — lives in `appDrift.ts` at the db altitude, where the hand-in and the
+ * shared-install paths call it with the db they hold; this act is the same call over the
+ * engine's installed db and clock. Answers how many schedules were paused.
  */
 export async function noteAppVersion(appId: string, version: number, source: AppVersionSource): Promise<number> {
-  if (source === 'own') return 0;
   const deps = currentDeps();
-  const db = await deps.db();
-  const nowIso = deps.now().toISOString();
-  let paused = 0;
-  for (const task of db.listScheduledTasks()) {
-    const next = pauseForAppUpdate(task, appId, version);
-    if (next === task) continue;
-    db.putScheduledTask({ ...next, updatedAt: nowIso });
-    paused += 1;
-  }
-  if (paused > 0) bumpScheduleRevision();
-  return paused;
+  return pauseSchedulesForAppVersion(await deps.db(), appId, version, source, deps.now().toISOString());
 }

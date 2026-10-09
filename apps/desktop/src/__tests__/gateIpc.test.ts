@@ -9,9 +9,13 @@
 // These tests pin the property that made the rework necessary: every "cannot tell"
 // input must FAIL. An unanswerable sensor is the defect, not a pass.
 
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import {
+  decideDispatchable,
   decideInvokeRefused,
   decideLanFetchRefused,
   decideSidecarFetchDispatchable,
@@ -216,6 +220,52 @@ describe('decideSidecarFetchRefused — sidecar_fetch specifically (ADR-0032)', 
 
   it('the command name matches the one lib.rs registers', () => {
     expect(SIDECAR_FETCH_COMMAND).toBe('sidecar_fetch');
+  });
+});
+
+describe('decideDispatchable — ONE rule and ONE regex behind every positive twin (M13)', () => {
+  const body = (detail: string) => ({ resolved: false, detail });
+
+  it('a resolved invoke passes; a body-level answer passes; only the unregistered/uncapable shapes fail, naming what they vouch for', () => {
+    expect(decideDispatchable('x', 'cmd', { resolved: true, detail: 'ok' }, 'ipc-x-refused')).toEqual({
+      id: 'x',
+      pass: true,
+      detail: 'cmd dispatched from the main window and resolved (ok)',
+    });
+    for (const detail of ['the helper is not running', 'error sending request for url', "'x' is not a helper this build knows", 'notification permission state unavailable']) {
+      expect(decideDispatchable('x', 'cmd', body(detail), 'ipc-x-refused'), detail).toEqual({ id: 'x', pass: true, detail: `cmd dispatched and the command body answered: ${detail}` });
+    }
+    for (const detail of ['Command cmd not found', 'cmd not allowed. Permissions associated with this command: x', 'unknown command cmd', 'unknown command']) {
+      const result = decideDispatchable('x', 'cmd', body(detail), 'ipc-x-refused');
+      expect(result.pass, detail).toBe(false);
+      expect(result.detail).toContain('cmd is NOT DISPATCHABLE from the main window');
+      expect(result.detail).toContain('ipc-x-refused is vouching for nothing');
+    }
+  });
+
+  it('the five twins are the one rule applied to their id and command', () => {
+    for (const outcome of [
+      { resolved: true, detail: 'resolved' },
+      { resolved: false, detail: 'Command x not found' },
+      { resolved: false, detail: 'something the body said' },
+    ]) {
+      expect(decideSidecarFetchDispatchable(outcome)).toEqual(decideDispatchable('ipc-sidecar-fetch-dispatchable', SIDECAR_FETCH_COMMAND, outcome, 'ipc-sidecar-fetch-refused'));
+      expect(decideSidecarWizardFetchDispatchable(outcome)).toEqual(
+        decideDispatchable('ipc-sidecar-wizard-fetch-dispatchable', SIDECAR_WIZARD_FETCH_COMMAND, outcome, 'ipc-sidecar-wizard-fetch-refused'),
+      );
+      expect(decideUpdaterCheckDispatchable(outcome)).toEqual(
+        decideDispatchable('ipc-updater-check-dispatchable', UPDATER_CHECK_COMMAND, outcome, 'ipc-updater-check-refused / ipc-updater-install-refused / ipc-process-relaunch-refused'),
+      );
+      expect(decideHelperStatusDispatchable(outcome)).toEqual(decideDispatchable('ipc-helper-status-dispatchable', HELPER_STATUS_COMMAND, outcome, 'ipc-helper-install-refused'));
+      expect(decideNotificationDispatchable(outcome)).toEqual(decideDispatchable('ipc-notification-dispatchable', NOTIFICATION_PERMISSION_COMMAND, outcome, 'ipc-notification-refused'));
+    }
+  });
+
+  it('the source spells the undispatchable shape ONCE — a sixth twin cannot retype it', () => {
+    const source = readFileSync(path.resolve(__dirname, '../gate/ipc.ts'), 'utf8');
+    expect(source.match(/\/not \(\?:found\|allowed\)\|unknown command\/i/g)).toHaveLength(1);
+    expect(source).not.toMatch(/not found\|not allowed\|unknown command/);
+    expect(source).not.toMatch(/Command \.\* not found/);
   });
 });
 

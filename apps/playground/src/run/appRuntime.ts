@@ -65,10 +65,7 @@ export type FrameCapabilityProps = { db: SnugDbDriver; dbNamespace: string } & (
 export interface AppRuntime {
   /** The app's OWN transport (ADR-0018 contract, the per-app pin, the R-9 scrub — all per send). */
   transport: AgentTransport;
-  /** The value-blind net handler, or `undefined` where this app may not reach the network. */
-  netHandler: NetHandler | undefined;
-  /** The host-assigned net binding — the app id; `undefined` with no handler. */
-  netAppId: string | undefined;
+  /** The frame's bindings: db + namespace always; the value-blind net handler and its host-assigned id only where this app may reach the network (M5: nothing is duplicated beside them). */
   frameProps: FrameCapabilityProps;
 }
 
@@ -88,8 +85,7 @@ export function composeAppRuntime(options: ComposeAppRuntimeOptions): AppRuntime
         ...(options.confirmGate !== undefined ? { confirmGate: options.confirmGate } : {}),
       })
     : undefined;
-  const netAppId = netHandler !== undefined ? appId : undefined;
   const frameProps: FrameCapabilityProps =
     netHandler !== undefined ? { db: options.driver, dbNamespace: appId, net: netHandler, netAppId: appId } : { db: options.driver, dbNamespace: appId };
-  return { transport, netHandler, netAppId, frameProps };
+  return { transport, frameProps };
 }

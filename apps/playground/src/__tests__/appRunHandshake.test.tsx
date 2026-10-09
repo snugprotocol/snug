@@ -20,15 +20,16 @@ import type { UserDb } from '@snugprotocol/db';
 
 import type { SnugPlatform } from '../platform/platform.js';
 import {
+  APP_CLOSED_SUMMARY,
+  APP_OPEN_REFUSAL,
   NO_HIDDEN_FRAME,
-  SCHEDULE_RESULT_EVENT,
   SCHEDULE_RESULT_MAX_CHARS,
-  SCHEDULE_RUN_EVENT,
   appDidNotAnswer,
+  blockedAppRunDeps,
   executeAppRun,
   hiddenMountStore,
+  openAndRunAgain,
   parseScheduleResult,
-  scheduleKvKey,
   type AppRunDeps,
   type AppRunRuntimeInput,
   type AppRunStep,
@@ -38,6 +39,7 @@ import {
 import { appMissing, blockedHere, needsYou, noHandler } from '../schedule/copy.js';
 import type { StepContext } from '../schedule/engine-types.js';
 import { CANCELLED_SUMMARY, WITHHELD_SUMMARY, createStepExecutor, executeStep } from '../schedule/executors.js';
+import { SCHEDULE_RESULT_EVENT, SCHEDULE_RUN_EVENT, scheduleKvKey } from '../schedule/scheduleKey.js';
 import type { ScheduledConfirmGate } from '../schedule/scheduledConfirmGate.js';
 import { SCHEDULED_AI_LIMIT_MESSAGE } from '../schedule/scheduledTransport.js';
 import { __resetAppHostsForTest } from '../state/appHosts.js';
@@ -430,23 +432,32 @@ describe('a visible open aborts the hidden run (F5)', () => {
 });
 
 describe('the gate follows the trigger, and its record outranks the app’s answer (A5)', () => {
-  it('a manual run composes the runtime with NO gate (the page’s ordinary gate); every other trigger with the refusing gate', async () => {
-    for (const trigger of ['manual', 'due', 'late', 'catch-up'] as const) {
+  it('every unattended trigger (due, late, catch-up) composes the hidden frame with the refusing gate', async () => {
+    for (const trigger of ['due', 'late', 'catch-up'] as const) {
       const deps = fakeDeps();
       const step: AppRunStep = { kind: 'app-run', appId };
       const { context, controller } = ctx(step, { trigger });
       const pending = executeAppRun(step, context, deps);
       await mounted(deps);
       const gate = deps.runtimeCalls[0]!.confirmGate;
-      if (trigger === 'manual') expect(gate, trigger).toBeUndefined();
-      else {
-        expect(gate, trigger).toBeDefined();
-        expect((gate as ScheduledConfirmGate).refused, trigger).toEqual([]);
-        expect(gate!.confirm({ appId, host: 'api.github.com', method: 'POST', url: 'https://api.github.com/x' }), trigger).toBe(false);
-      }
+      expect(gate, trigger).toBeDefined();
+      expect((gate as ScheduledConfirmGate).refused, trigger).toEqual([]);
+      expect(gate!.confirm({ appId, host: 'api.github.com', method: 'POST', url: 'https://api.github.com/x' }), trigger).toBe(false);
       controller.abort();
       await pending;
     }
+  });
+
+  it('a manual run NEVER gets a hidden frame: with the app closed it is refused by name — "open Weather and run it again" — nothing mounted, nothing composed, nothing written', async () => {
+    const deps = fakeDeps();
+    const step: AppRunStep = { kind: 'app-run', appId, input: { city: 'Oslo' } };
+    const outcome = await executeAppRun(step, ctx(step, { trigger: 'manual' }).context, deps);
+    expect(outcome).toEqual({ status: 'refused', summary: openAndRunAgain('Weather'), calls: { ai: 0, net: 0 } });
+    expect(outcome.summary).toBe('open Weather and run it again');
+    expect(deps.mounts.get()).toBeUndefined();
+    expect(deps.runtimeCalls).toEqual([]);
+    expect(deps.live.notified).toEqual([]);
+    expect('value' in (await kv())).toBe(false);
   });
 
   it('a refused mutating call makes the step `refused` with the needs-you sentence — even when the app then reports ok', async () => {
@@ -512,15 +523,40 @@ describe('what the run spends is counted and capped (A4, A5)', () => {
   });
 });
 
-describe('the live frame (the app is on screen)', () => {
-  it('delivers to the LIVE frame: no hidden mount, the key written, the hint rung through the registry, the result read from the forwarded events', async () => {
+describe('S1 — an unattended trigger never runs behind an open app', () => {
+  it('due / late / catch-up with the app LIVE → `refused` with the "app is open" sentence: no hidden frame, no runtime, no hint, nothing written', async () => {
+    for (const trigger of ['due', 'late', 'catch-up'] as const) {
+      const deps = fakeDeps();
+      deps.live.open(appId);
+      const step: AppRunStep = { kind: 'app-run', appId, input: { city: 'Oslo' } };
+      const outcome = await executeAppRun(step, ctx(step, { trigger }).context, deps);
+      expect(outcome, trigger).toEqual({ status: 'refused', summary: APP_OPEN_REFUSAL, calls: { ai: 0, net: 0 } });
+      expect(deps.mounts.get(), trigger).toBeUndefined();
+      expect(deps.runtimeCalls, trigger).toEqual([]);
+      expect(deps.live.notified, trigger).toEqual([]);
+      expect('value' in (await kv()), trigger).toBe(false);
+    }
+    expect(APP_OPEN_REFUSAL).toBe('the app is open — Snug doesn’t run it behind you; close it or run now');
+  });
+
+  it('the refusal folds to `needs-you` through the production executor (the queue reads `refused` as needs-you)', async () => {
+    const deps = fakeDeps();
+    deps.live.open(appId);
+    const execute = createStepExecutor({ transportFor: () => undefined, appRun: deps });
+    const step: AppRunStep = { kind: 'app-run', appId };
+    expect(await execute(step, ctx(step, { trigger: 'due' }).context)).toEqual({ status: 'refused', summary: APP_OPEN_REFUSAL, calls: { ai: 0, net: 0 } });
+  });
+});
+
+describe('the live frame — a MANUAL run with the app on screen', () => {
+  it('delivers to the LIVE frame under the page’s own gate: no hidden mount, no runtime of ours, the key written, the hint rung through the registry, the result read from the forwarded events', async () => {
     const deps = fakeDeps();
     deps.live.open(appId);
     const step: AppRunStep = { kind: 'app-run', appId, input: 1 };
-    const pending = executeAppRun(step, ctx(step).context, deps);
+    const pending = executeAppRun(step, ctx(step, { trigger: 'manual' }).context, deps);
     await vi.waitFor(() => expect(deps.live.notified).toHaveLength(1));
     expect(deps.mounts.get()).toBeUndefined();
-    expect(deps.runtimeCalls).toEqual([]); // the live frame's own runtime, not ours
+    expect(deps.runtimeCalls).toEqual([]); // the live frame's own runtime and gate (the user is at the app), not ours
     expect(deps.live.notified[0]).toEqual({ appId, event: SCHEDULE_RUN_EVENT, data: { taskId: 'task-1', runId: RUN_ID } });
     expect(await kvValue()).toEqual({ taskId: 'task-1', runId: RUN_ID, input: 1 });
     deps.live.emit(appId, SCHEDULE_RESULT_EVENT, { ok: true, summary: 'refreshed on screen' });
@@ -532,9 +568,34 @@ describe('the live frame (the app is on screen)', () => {
     const deps = fakeDeps();
     deps.live.open(appId);
     const step: AppRunStep = { kind: 'app-run', appId };
-    const outcome = await executeAppRun(step, ctx(step).context, deps);
-    expect(outcome.status).toBe('failed');
+    const outcome = await executeAppRun(step, ctx(step, { trigger: 'manual' }).context, deps);
+    expect(outcome).toEqual({ status: 'failed', summary: appDidNotAnswer(60), calls: { ai: 0, net: 0 } });
     expect('value' in (await kv())).toBe(false);
+  });
+
+  it('M18: the app CLOSING mid-run settles the step `failed: "the app was closed"` at once — no wait for the bound; the key cleared', async () => {
+    const deps = fakeDeps({ resultTimeoutMs: 10_000 });
+    deps.live.open(appId);
+    const step: AppRunStep = { kind: 'app-run', appId };
+    const pending = executeAppRun(step, ctx(step, { trigger: 'manual' }).context, deps);
+    await vi.waitFor(() => expect(deps.live.notified).toHaveLength(1));
+    deps.live.close(appId);
+    expect(await pending).toEqual({ status: 'failed', summary: APP_CLOSED_SUMMARY, calls: { ai: 0, net: 0 } });
+    expect(APP_CLOSED_SUMMARY).toBe('the app was closed');
+    expect('value' in (await kv())).toBe(false);
+  });
+
+  it('ANOTHER app closing does not touch the run; a result after that still lands', async () => {
+    const other = db.installApp({ displayName: 'Ledger', html: '<html>l</html>' }).appId;
+    const deps = fakeDeps();
+    deps.live.open(appId);
+    deps.live.open(other);
+    const step: AppRunStep = { kind: 'app-run', appId };
+    const pending = executeAppRun(step, ctx(step, { trigger: 'manual' }).context, deps);
+    await vi.waitFor(() => expect(deps.live.notified).toHaveLength(1));
+    deps.live.close(other);
+    deps.live.emit(appId, SCHEDULE_RESULT_EVENT, { ok: true, summary: 'still here' });
+    expect((await pending).summary).toBe('still here');
   });
 });
 
@@ -561,10 +622,13 @@ describe('refusals before anything mounts', () => {
     expect(deps.mounts.get()).toBeUndefined();
   });
 
-  it('a composition without the hidden-frame seams (a unit fake) answers an app-run step blocked by name', async () => {
-    const execute = createStepExecutor({ transportFor: () => undefined });
+  it('M12: `blockedAppRunDeps()` — the composition a unit fake passes — answers an app-run step blocked by name: no mount, no runtime, no registry', async () => {
+    const blocked = blockedAppRunDeps();
+    const execute = createStepExecutor({ transportFor: () => undefined, appRun: blocked });
     const step: AppRunStep = { kind: 'app-run', appId };
     expect(await execute(step, ctx(step).context)).toEqual({ status: 'blocked', summary: blockedHere(NO_HIDDEN_FRAME).text, calls: { ai: 0, net: 0 } });
+    expect(blocked.mounts.get()).toBeUndefined();
+    expect(blocked.live.has(appId)).toBe(false);
   });
 });
 

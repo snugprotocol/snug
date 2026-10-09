@@ -14,7 +14,8 @@ import {
 import type { ScheduleProposal } from '@snugprotocol/protocol';
 
 import { createAppTargetSink } from '../agent/artifactSink.js';
-import { SCHEDULE_PROPOSE_TOOL_NAME, buildByokTools, buildScheduleProposeTool } from '../agent/tools.js';
+import { SCHEDULE_PROPOSE_TOOL_NAME, buildScheduleProposeTool } from '../agent/scheduleProposeTool.js';
+import { buildByokTools } from '../agent/tools.js';
 import { installTestUserDb } from './userdbTestHelper.js';
 
 const html = `<!DOCTYPE html><html><head><title>Portfolio</title></head></html>`;

@@ -510,38 +510,51 @@ interface ProbeReport {
 }
 
 /**
- * THE POSITIVE TWIN for the notification plugin (TASK-20261009 H1) — the helper-status rule
- * applied to a plugin command: a refusal check over an unregistered or uncapable command
- * vouches for nothing, so the main window must be shown to dispatch the plugin at all. The
- * twin drives `is_permission_granted` rather than `notify` because a dispatched `notify`
- * would put a banner on the gate runner's screen and prove nothing more; the permission read
- * is registered by the same plugin under the same `notification:default` set, answers a
- * boolean, and shows nothing. A body-level answer of any kind is a PASS (the body ran); only
- * the unregistered/uncapable shapes fail.
+ * The shapes Tauri answers when an invoke never reached a command body — unregistered
+ * (`Command X not found`), uncapable (`X not allowed. Permissions associated with…`) or
+ * unknown (`unknown command X`). ONE regex, read by every positive twin below (M13): a sixth
+ * twin cannot drift from the five by retyping it.
  */
-export function decideNotificationDispatchable(dispatch: { resolved: boolean; detail: string }): CheckResult {
-  const id = 'ipc-notification-dispatchable';
-  if (dispatch.resolved) {
-    return { id, pass: true, detail: `${NOTIFICATION_PERMISSION_COMMAND} resolved from the main frame (${dispatch.detail})` };
+const UNDISPATCHABLE_SHAPE = /not (?:found|allowed)|unknown command/i;
+
+/**
+ * THE POSITIVE TWIN, decided once for every command that has a refusal check opposite
+ * (next-steps 2026-08-17 §1; eight-seam defect #1): `ipc-sidecar-fetch-refused` PASSED while
+ * the command was UNREGISTERED — `SidecarState` was never `.manage()`d, every invoke died at the
+ * IPC boundary, and an unreachable-from-everywhere command satisfies an unreachability check
+ * perfectly. So a negative check gets a twin proving the MAIN window can dispatch the command
+ * at all: a resolved invoke is a PASS; a refusal or failure from inside the command BODY (the
+ * helper not running, a 404 from the private repo, a permission state unavailable) is a PASS
+ * too — the body ran, which is the whole question; only the unregistered/uncapable shapes
+ * FAIL, because then the dispatch never happened and `vouchesFor` is vouching for nothing.
+ */
+export function decideDispatchable(id: string, command: string, outcome: { resolved: boolean; detail: string }, vouchesFor: string): CheckResult {
+  if (outcome.resolved) {
+    return { id, pass: true, detail: `${command} dispatched from the main window and resolved (${outcome.detail})` };
   }
-  const unregistered = /not (found|allowed)|unknown command|Command .* not found/i.test(dispatch.detail);
-  return unregistered
-    ? {
-        id,
-        pass: false,
-        detail: `${NOTIFICATION_PERMISSION_COMMAND} is NOT DISPATCHABLE from the main window (${dispatch.detail}) — the plugin is unregistered or uncapable, so ipc-notification-refused is vouching for nothing`,
-      }
-    : { id, pass: true, detail: `${NOTIFICATION_PERMISSION_COMMAND} answered from its body (${dispatch.detail})` };
+  if (UNDISPATCHABLE_SHAPE.test(outcome.detail)) {
+    return {
+      id,
+      pass: false,
+      detail: `${command} is NOT DISPATCHABLE from the main window (${outcome.detail}) — unregistered or uncapable, so ${vouchesFor} is vouching for nothing`,
+    };
+  }
+  return { id, pass: true, detail: `${command} dispatched and the command body answered: ${outcome.detail}` };
 }
 
-/** The helper seat's twin verdict: any answer from the command BODY is reach. */
+/**
+ * The notification plugin's twin (TASK-20261009 H1) drives `is_permission_granted` rather than
+ * `notify`: a dispatched `notify` would put a banner on the gate runner's screen and prove no
+ * more, while the permission read is registered by the same plugin under the same
+ * `notification:default` set, answers a boolean and shows nothing.
+ */
+export function decideNotificationDispatchable(dispatch: { resolved: boolean; detail: string }): CheckResult {
+  return decideDispatchable('ipc-notification-dispatchable', NOTIFICATION_PERMISSION_COMMAND, dispatch, 'ipc-notification-refused');
+}
+
+/** The helper seat's twin (ADR-0060 §7): any answer from `helper_status`'s body is reach. */
 export function decideHelperStatusDispatchable(dispatch: { resolved: boolean; detail: string }): CheckResult {
-  const id = 'ipc-helper-status-dispatchable';
-  if (dispatch.resolved) return { id, pass: true, detail: 'helper_status resolved from the main frame' };
-  const unregistered = /not (found|allowed)|unknown command|Command .* not found/i.test(dispatch.detail);
-  return unregistered
-    ? { id, pass: false, detail: `helper_status is not dispatchable from the main frame: ${dispatch.detail}` }
-    : { id, pass: true, detail: `helper_status answered from its body (${dispatch.detail})` };
+  return decideDispatchable('ipc-helper-status-dispatchable', HELPER_STATUS_COMMAND, dispatch, 'ipc-helper-install-refused');
 }
 
 /**
@@ -727,33 +740,9 @@ export function decideSidecarWizardFetchRefused(
   };
 }
 
-/**
- * THE POSITIVE TWIN for `sidecar_wizard_fetch`. Same rule as the sibling's twin: a
- * refusal check over an unregistered command vouches for nothing, so the main
- * window must be shown to dispatch this command at all. A body-level refusal (the
- * helper is not running on a gate runner) is a PASS — the body ran, which is the
- * question being asked. Only the unregistered/uncapable shapes fail.
- */
-export function decideSidecarWizardFetchDispatchable(outcome: {
-  resolved: boolean;
-  detail: string;
-}): CheckResult {
-  const id = 'ipc-sidecar-wizard-fetch-dispatchable';
-  if (outcome.resolved) {
-    return { id, pass: true, detail: `${SIDECAR_WIZARD_FETCH_COMMAND} dispatched from the main window and resolved` };
-  }
-  if (/not found|not allowed|unknown command/i.test(outcome.detail)) {
-    return {
-      id,
-      pass: false,
-      detail: `${SIDECAR_WIZARD_FETCH_COMMAND} is NOT DISPATCHABLE from the main window (${outcome.detail}) — unregistered or uncapable, so the refusal row opposite is vouching for nothing`,
-    };
-  }
-  return {
-    id,
-    pass: true,
-    detail: `${SIDECAR_WIZARD_FETCH_COMMAND} dispatched and the command body answered: ${outcome.detail}`,
-  };
+/** `sidecar_wizard_fetch`'s twin — `decideDispatchable`'s rule, for the refusal row opposite. */
+export function decideSidecarWizardFetchDispatchable(outcome: { resolved: boolean; detail: string }): CheckResult {
+  return decideDispatchable('ipc-sidecar-wizard-fetch-dispatchable', SIDECAR_WIZARD_FETCH_COMMAND, outcome, 'ipc-sidecar-wizard-fetch-refused');
 }
 
 /**
@@ -795,62 +784,14 @@ export function decideUpdateChannelCommandRefused(
   };
 }
 
-/**
- * THE POSITIVE TWIN for the updater (the `ipc-sidecar-fetch-dispatchable` rule
- * applied to the new surface): a refusal check over an UNREGISTERED command
- * vouches for nothing, so the main window must be able to dispatch
- * `plugin:updater|check` at all. A body-level failure (no network on a runner, a
- * 404 from the private repo) is a PASS — the body ran, which is the question.
- * Only the unregistered/uncapable shapes fail.
- */
+/** The updater's twin (ADR-0047 §3) — `decideDispatchable`'s rule, for the three updater/relaunch refusal rows opposite. */
 export function decideUpdaterCheckDispatchable(outcome: { resolved: boolean; detail: string }): CheckResult {
-  const id = 'ipc-updater-check-dispatchable';
-  if (outcome.resolved) {
-    return { id, pass: true, detail: `${UPDATER_CHECK_COMMAND} dispatched from the main window and resolved` };
-  }
-  if (/not found|not allowed|unknown command/i.test(outcome.detail)) {
-    return {
-      id,
-      pass: false,
-      detail: `${UPDATER_CHECK_COMMAND} is NOT DISPATCHABLE from the main window (${outcome.detail}) — unregistered or uncapable, so the three refusal rows opposite are vouching for nothing`,
-    };
-  }
-  return {
-    id,
-    pass: true,
-    detail: `${UPDATER_CHECK_COMMAND} dispatched and the command body answered: ${outcome.detail}`,
-  };
+  return decideDispatchable('ipc-updater-check-dispatchable', UPDATER_CHECK_COMMAND, outcome, 'ipc-updater-check-refused / ipc-updater-install-refused / ipc-process-relaunch-refused');
 }
 
-/**
- * THE POSITIVE TWIN (TASK-20260817-telepath, next-steps 2026-08-17 §1).
- *
- * `ipc-sidecar-fetch-refused` PASSED while the command was UNREGISTERED — eight-seam
- * defect #1: `SidecarState` was never `.manage()`d, every invoke died at the IPC boundary,
- * and an unreachable-from-everywhere command satisfies an unreachability check perfectly.
- * So the negative check gets a twin proving the MAIN window can dispatch the command at
- * all. Refusal from inside the command body ("helper not running", an admission refusal)
- * is a PASS — the body ran, which is the whole question. Only the unregistered/uncapable
- * shapes fail: those mean the dispatch never happened and the negative check opposite is
- * vouching for nothing.
- */
+/** `sidecar_fetch`'s twin (TASK-20260817-telepath) — the defect `decideDispatchable` was written for. */
 export function decideSidecarFetchDispatchable(outcome: { resolved: boolean; detail: string }): CheckResult {
-  const id = 'ipc-sidecar-fetch-dispatchable';
-  if (outcome.resolved) {
-    return { id, pass: true, detail: `${SIDECAR_FETCH_COMMAND} dispatched from the main window and resolved` };
-  }
-  if (/not found|not allowed|unknown command/i.test(outcome.detail)) {
-    return {
-      id,
-      pass: false,
-      detail: `${SIDECAR_FETCH_COMMAND} is NOT DISPATCHABLE from the main window (${outcome.detail}) — unregistered or uncapable, so the refusal check opposite is vouching for nothing`,
-    };
-  }
-  return {
-    id,
-    pass: true,
-    detail: `${SIDECAR_FETCH_COMMAND} dispatched and the command body answered: ${outcome.detail}`,
-  };
+  return decideDispatchable('ipc-sidecar-fetch-dispatchable', SIDECAR_FETCH_COMMAND, outcome, 'ipc-sidecar-fetch-refused');
 }
 
 export async function runIpcChecks(): Promise<CheckResult[]> {

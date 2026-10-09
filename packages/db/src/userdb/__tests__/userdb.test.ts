@@ -684,6 +684,28 @@ describe('importUserDb — scheduled tasks are executable intent (TASK-20261009 
     await trusted.close();
   });
 
+  it('S9: an UNTRUSTED file’s chat messages lose `meta.schedule` — a staged suggestion is a foreign card; the data-write card and the other meta keys stay; TRUSTED keeps it', async () => {
+    const schedule = { proposal: { title: 'morning', steps: [{ kind: 'notify', title: 'hi', body: 'there' }], spec: { kind: 'daily', time: '08:00', tz: 'device' } }, hash: 'h', channel: 'chat', threadId: 'app:x' };
+    const bytes = await donorBytes((donor) => {
+      donor.upsertThread('app:x', { appId: 'x', title: 'x' });
+      donor.appendChatMessage('app:x', 'assistant', 'suggested', { meta: { schedule, dataWrite: { summary: 'add lunch' }, brainKind: 'byok' } });
+      donor.appendChatMessage('app:x', 'assistant', 'only a card', { meta: { schedule } });
+      donor.appendChatMessage('app:x', 'assistant', 'no meta');
+    });
+
+    const untrusted = await open(createMemoryBackend());
+    await untrusted.importUserDb(bytes);
+    const rows = untrusted.listChatMessages('app:x');
+    expect(rows.map((m) => m.meta)).toEqual([{ dataWrite: { summary: 'add lunch' }, brainKind: 'byok' }, undefined, undefined]);
+    await untrusted.close();
+
+    const trusted = await open(createMemoryBackend());
+    await trusted.importUserDb(bytes, { trustedOrigin: true });
+    expect(trusted.listChatMessages('app:x')[0]?.meta).toEqual({ schedule, dataWrite: { summary: 'add lunch' }, brainKind: 'byok' });
+    expect(trusted.listChatMessages('app:x')[1]?.meta).toEqual({ schedule });
+    await trusted.close();
+  });
+
   it('an untrusted file with no scheduling rows at all adds no scheduler state — old backups import as before', async () => {
     const bytes = await donorBytes((donor) => donor.setSetting('mode', 'local'));
     const db = await open(backend);

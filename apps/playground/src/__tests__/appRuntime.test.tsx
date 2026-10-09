@@ -11,11 +11,12 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
 import { NET_ERROR_CODES } from '@snugprotocol/protocol';
-import type { AgentTransport } from '@snugprotocol/runner';
+import type { AgentTransport, NetHandler } from '@snugprotocol/runner';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { UserDb } from '@snugprotocol/db';
 
+import type { AppRuntime } from '../run/appRuntime.js';
 import { createScheduledConfirmGate } from '../schedule/scheduledConfirmGate.js';
 import { __resetNetStateForTests, netConfirmStore } from '../state/net.js';
 import { installTestUserDb } from './userdbTestHelper.js';
@@ -82,6 +83,13 @@ afterEach(() => {
   __resetNetStateForTests();
 });
 
+/** The net handler an OWNED app's runtime binds — the frame props are its one home (M5). */
+const netOf = (runtime: AppRuntime): NetHandler => {
+  const net = runtime.frameProps.net;
+  if (net === undefined) throw new Error('this runtime binds no net handler');
+  return net;
+};
+
 describe('composeAppRuntime — the seams RunView used to compose inline', () => {
   it('the transport is the app’s OWN transport: built for the app id with the mode, provider and the inspector seams', () => {
     const onLlmEvent = (): void => {};
@@ -94,16 +102,18 @@ describe('composeAppRuntime — the seams RunView used to compose inline', () =>
 
   it('an owned app binds a value-blind net handler to ITS OWN id (host-assigned), and the frame props carry db + net together', () => {
     const runtime = composeAppRuntime({ appId: 'app-1', mode: 'byok', provider: 'mock', driver: db.driver });
-    expect(runtime.netHandler).toBeDefined();
-    expect(runtime.netAppId).toBe('app-1');
-    expect(runtime.frameProps).toEqual({ db: db.driver, dbNamespace: 'app-1', net: runtime.netHandler, netAppId: 'app-1' });
+    expect(runtime.frameProps.net).toBeDefined();
+    expect(runtime.frameProps.netAppId).toBe('app-1');
+    expect(runtime.frameProps).toEqual({ db: db.driver, dbNamespace: 'app-1', net: runtime.frameProps.net, netAppId: 'app-1' });
+    // M5: the handler and its id live in the frame props ONLY — nothing is duplicated beside them.
+    expect(Object.keys(runtime).sort()).toEqual(['frameProps', 'transport']);
   });
 
   it('an UNOWNED id (a starter browse, a shared preview) gets no net handler — the frame props carry the db binding only', () => {
     for (const appId of ['starter--chess', 'shared--0b6e5a1c-8d5e-4f13-9a2b-7c1d2e3f4a5b']) {
       const runtime = composeAppRuntime({ appId, mode: 'byok', provider: 'mock', driver: db.driver });
-      expect(runtime.netHandler, appId).toBeUndefined();
-      expect(runtime.netAppId, appId).toBeUndefined();
+      expect(runtime.frameProps.net, appId).toBeUndefined();
+      expect(runtime.frameProps.netAppId, appId).toBeUndefined();
       expect(runtime.frameProps, appId).toEqual({ db: db.driver, dbNamespace: appId });
     }
   });
@@ -111,7 +121,7 @@ describe('composeAppRuntime — the seams RunView used to compose inline', () =>
   it('a host that allows no connections gets no handler STRUCTURALLY (host-ready.net is then false, not a flag the app must trust)', () => {
     allowsSpy.mockImplementation((surface) => surface !== 'connections');
     const runtime = composeAppRuntime({ appId: 'app-1', mode: 'byok', provider: 'mock', driver: db.driver });
-    expect(runtime.netHandler).toBeUndefined();
+    expect(runtime.frameProps.net).toBeUndefined();
     expect(allowsSpy).toHaveBeenCalledWith('connections');
   });
 
@@ -119,7 +129,7 @@ describe('composeAppRuntime — the seams RunView used to compose inline', () =>
     const appId = seedConnectedApp();
     const errors: Array<[string, string]> = [];
     const runtime = composeAppRuntime({ appId, mode: 'byok', provider: 'mock', driver: db.driver, onNetError: (id, code) => errors.push([id, code]) });
-    const result = await runtime.netHandler!.handle(appId, { ...post('https://not-declared.example.net/x'), method: 'GET' as const, body: undefined } as never);
+    const result = await netOf(runtime).handle(appId, { ...post('https://not-declared.example.net/x'), method: 'GET' as const, body: undefined } as never);
     expect(result.ok).toBe(false);
     expect(errors).toHaveLength(1);
     expect(errors[0]![0]).toBe(appId);
@@ -141,7 +151,7 @@ describe('composeAppRuntime — the seams RunView used to compose inline', () =>
         return new Response('{}', { status: 200 });
       },
     });
-    const result = await runtime.netHandler!.handle(appId, post());
+    const result = await netOf(runtime).handle(appId, post());
     expect(result).toMatchObject({ ok: false, code: NET_ERROR_CODES.NET_CONFIRM_DENIED });
     expect(fetched).toEqual([]);
     expect(netConfirmStore.get()).toBeNull();
@@ -151,7 +161,7 @@ describe('composeAppRuntime — the seams RunView used to compose inline', () =>
   it('without `confirmGate` the page’s ORDINARY gate answers: the same POST parks a confirm for the user (the visible frame is unchanged)', async () => {
     const appId = seedConnectedApp();
     const runtime = composeAppRuntime({ appId, mode: 'byok', provider: 'mock', driver: db.driver, fetchImpl: async () => new Response('{}', { status: 200 }) });
-    const pending = runtime.netHandler!.handle(appId, post());
+    const pending = netOf(runtime).handle(appId, post());
     await vi.waitFor(() => expect(netConfirmStore.get()).not.toBeNull());
     netConfirmStore.get()!.resolve({ granted: false });
     expect(await pending).toMatchObject({ ok: false, code: NET_ERROR_CODES.NET_CONFIRM_DENIED });

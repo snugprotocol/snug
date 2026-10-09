@@ -15,9 +15,9 @@
 //     That is the leg: stop mid-run → the page says the runner stopped → the file, opened under a
 //     fresh runner, shows the run as interrupted;
 //   * a scheduled *Run [app]* runs the app's own code in the hidden frame (A1–A8) against an app
-//     the agent handed in over the process's stdio. That leg is written against the AC's labels
-//     and GUARDED BY ASSERTIONS, never a skip: until the hidden frame ships, the *run [app]* step
-//     kind is a disabled option and the leg is red by name.
+//     the agent handed in over the process's stdio. That leg picks the *run [app]* step kind the
+//     editor ships (PR-B A1–A3) and asserts every surface it needs BY NAME, never a skip: a build
+//     that ships the option disabled, or no hidden frame, is red here rather than quietly green.
 //
 // THE CLOCK is installed before `goto` and ticks in real time once installed (debounced saves
 // still happen); `fastForward` fires the due timer. THE HOLD: a long *Ask the AI* step is made
@@ -165,15 +165,23 @@ async function openEditorFromSentence(page: Page, sentence: string): Promise<voi
 /**
  * The end of the create ladder (U2/U3): *schedule it* → the consent surface where something
  * is spent (an *Ask the AI* or *Run [app]* step) → *schedule it* → the listed row, enabled.
+ * The caller says whether the consent is OWED (M24): a reminder-only schedule spends nothing
+ * and goes straight to the page; a schedule that asks the AI or runs an app must stop at the
+ * consent — a build that skips it is red here by name, never quietly green.
  */
-async function saveAndEnable(page: Page): Promise<void> {
+async function saveAndEnable(page: Page, { expectConsent }: { expectConsent: boolean }): Promise<void> {
   const save = page.getByTestId('schedule-save');
   await expect(save, `the editor's act reads "${CONSENT.enable}"`).toHaveText(CONSENT.enable);
   await expect(save).toBeEnabled();
   await save.click();
   const consent = page.getByTestId('consent-enable');
-  await expect(consent.or(page.getByTestId('schedule-page')).first(), 'the consent surface, or the page with the new row').toBeVisible({ timeout: 10_000 });
-  if ((await consent.count()) > 0) await consent.click();
+  if (expectConsent) {
+    await expect(consent, 'a schedule that asks the AI or runs an app stops at the consent surface').toBeVisible({ timeout: 10_000 });
+    await consent.click();
+  } else {
+    await expect(page, 'a reminder-only schedule spends nothing — no consent, straight to the page').toHaveURL(/#\/schedule$/, { timeout: 10_000 });
+    await expect(consent, 'no consent surface was raised for a reminder').toHaveCount(0);
+  }
   await expect(page).toHaveURL(/#\/schedule$/, { timeout: 10_000 });
   await expect(page.getByTestId('schedule-switch').first(), 'the new schedule is listed, enabled').toBeChecked({ timeout: 10_000 });
 }
@@ -187,7 +195,7 @@ test.describe('H4 — the scheduler on the runner’s page, through the real pro
       await openEditorFromSentence(page, 'remind me in 2 minutes');
       await page.getByTestId('step-0-title').fill('stretch');
       await page.getByTestId('step-0-body').fill('stand up and stretch');
-      await saveAndEnable(page);
+      await saveAndEnable(page, { expectConsent: false });
       await expect(page.getByTestId('schedule-result')).toHaveCount(0);
 
       // Three minutes on: the timer fires once (late, inside the grace), the queue runs the
@@ -238,7 +246,7 @@ test.describe('H4 — the scheduler on the runner’s page, through the real pro
       await kind.selectOption('app-think');
       await page.getByTestId('step-0-app').selectOption({ label: 'Digest' });
       await page.getByTestId('step-0-prompt').fill('what changed since yesterday?');
-      await saveAndEnable(page);
+      await saveAndEnable(page, { expectConsent: true });
 
       // Due, claimed, sent — and held.
       await page.clock.fastForward(3 * MINUTE_MS);
@@ -313,10 +321,10 @@ test.describe('H4 — the scheduler on the runner’s page, through the real pro
       const kind = page.getByTestId('step-0-kind');
       await expectUi(kind, 'the step kind control');
       const runOption = kind.locator('option[value="app-run"]');
-      await expect(runOption, 'the *run [app]* step kind (PR-B A1–A3) must be PICKABLE in the build under test — today it is the disabled "later release" option').toBeEnabled({ timeout: 2_000 });
+      await expect(runOption, 'the *run [app]* step kind (PR-B A1–A3) is pickable — a build that ships the option disabled is red here by name').toBeEnabled({ timeout: 2_000 });
       await kind.selectOption('app-run');
       await page.getByTestId('step-0-app').selectOption({ label: 'Digest' });
-      await saveAndEnable(page);
+      await saveAndEnable(page, { expectConsent: true });
 
       // Due → the hidden frame mounts the app, writes the kv handshake, raises `schedule-run`;
       // the fixture answers `schedule-result`; the run reads done with the app's summary.

@@ -12,7 +12,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { ReactElement } from 'react';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { UserDb } from '@snugprotocol/db';
 import { proposalHash, type ScheduleProposal } from '@snugprotocol/protocol';
@@ -21,7 +21,9 @@ import { __resetSchedulerForTests } from '../schedule/scheduler.js';
 import {
   APP_PROPOSED_TASK_CAP,
   SCHEDULE_REQUEST_EVENT,
+  SCHEDULE_REQUEST_MAX_BYTES,
   SCHEDULE_REQUEST_MIN_GAP_MS,
+  __rateLimitSizeForTests,
   __resetScheduleRequestsForTests,
   __setScheduleRequestDepsForTests,
   acceptSuggestion,
@@ -30,6 +32,7 @@ import {
   declineSuggestion,
   muteSuggestions,
   pendingSuggestionFor,
+  requestBytes,
   suggestionStore,
   useAppEventConsumer,
 } from '../schedule/scheduleRequest.js';
@@ -138,6 +141,43 @@ describe('the intake — a request becomes a pending suggestion', () => {
     // Another instance (a remounted frame) has its own minute — and, as a new generation, replaces the pending.
     expect(await request(weather, proposal(weather, { title: 'from the remount' }), 7)).toBe('accepted');
     expect(pendingSuggestionFor(weather)?.generation).toBe(7);
+  });
+});
+
+describe('the guards after the parse (S11, M10, M11)', () => {
+  it('S11: the request’s size is measured in UTF-8 BYTES, not characters — a request under the cap in characters but over it in bytes is unreadable', async () => {
+    const wide = 'é'.repeat(SCHEDULE_REQUEST_MAX_BYTES / 2); // 8 192 characters, 16 384 bytes — plus the quotes
+    expect(JSON.stringify(wide).length).toBeLessThan(SCHEDULE_REQUEST_MAX_BYTES);
+    expect(requestBytes(wide)).toBe(SCHEDULE_REQUEST_MAX_BYTES + 2);
+    expect(requestBytes(wide)! > SCHEDULE_REQUEST_MAX_BYTES).toBe(true);
+    expect(requestBytes({ title: 'x' })).toBe(13);
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    expect(requestBytes(circular)).toBeUndefined();
+    expect(await request(weather, wide)).toBe('unreadable');
+  });
+
+  it('M10: the rate limit is keyed by APP — one entry per app however many frame generations come and go (bounded), and a new generation starts its own minute', async () => {
+    for (let generation = 0; generation < 50; generation += 1) {
+      expect(await request(weather, proposal(weather), generation)).toBe('accepted'); // each remount is a new instance; it replaces the pending
+    }
+    expect(__rateLimitSizeForTests()).toBe(1);
+    expect(await request(weather, proposal(weather), 49)).toBe('rate-limited'); // the same instance, inside its minute
+    expect(await request(weather, proposal(weather), 50)).toBe('accepted'); // a new instance is not rate-limited by the old one
+    await request(other, proposal(other), 0);
+    expect(__rateLimitSizeForTests()).toBe(2);
+  });
+
+  it('M11: a throw after the parse — the file refusing a read, the db failing to open — is a named `failed` decision, never a throw out of the frame seam', async () => {
+    const muted = vi.spyOn(db, 'isScheduleMuted').mockImplementation(() => {
+      throw new Error('boom');
+    });
+    expect(await request(weather, proposal(weather))).toBe('failed');
+    muted.mockRestore();
+    expect(pendingSuggestionFor(weather)).toBeUndefined();
+    __setScheduleRequestDepsForTests({ getDb: () => Promise.reject(new Error('no file')), now: () => clock.now, noSuggestions: () => false });
+    clock.now += SCHEDULE_REQUEST_MIN_GAP_MS;
+    expect(await request(weather, proposal(weather))).toBe('failed');
   });
 });
 

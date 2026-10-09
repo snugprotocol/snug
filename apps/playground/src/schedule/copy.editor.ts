@@ -9,7 +9,7 @@
 
 import { SCHEDULE_APP_INPUT_MAX_BYTES, SCHEDULE_DAILY_CEILINGS, SCHEDULE_MAX_STEPS, SCHEDULE_TITLE_MAX_CHARS } from '@snugprotocol/protocol';
 
-import { CONSENT, aiCalls, stepLabel } from './copy.js';
+import { CONSENT, SCHEDULED_NEXT, aiCalls, stepLabel } from './copy.js';
 
 /** The route's heading, by mode. */
 export const EDITOR_HEADING = { new: 'new schedule', edit: 'edit schedule' } as const;
@@ -105,6 +105,8 @@ export const STEPS = {
   runNote: (appName: string): string => `${appName} must handle scheduled runs — apps built after today do`,
   /** A template step whose app is not in this file. */
   appMissing: (appName: string): string => `add ${appName} first — this step is off until it’s installed`,
+  /** A suggestion step naming an app this file does not hold: the name is unknown, and an id is never shown (M14). */
+  unknownApp: 'that app',
   needStep: 'add at least one step',
   tooMany: `at most ${SCHEDULE_MAX_STEPS} steps`,
   needApp: 'choose an app to ask',
@@ -139,7 +141,8 @@ export const ACTIONS = {
   cancel: 'cancel',
   moreOptions: 'more options',
   close: 'close',
-  scheduled: (whenWords: string): string => `scheduled — next ${whenWords}`,
+  /** The sheet after its act — the one sentence every suggestion surface ends on (`copy.SCHEDULED_NEXT`). */
+  scheduled: SCHEDULED_NEXT.scheduled,
 } as const;
 
 /** The editor opened from a suggestion card (`?proposal=`): where the save and cancel go back to. */

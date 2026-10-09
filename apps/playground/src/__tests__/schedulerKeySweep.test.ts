@@ -11,9 +11,9 @@ import type { UserDb } from '@snugprotocol/db';
 import type { ScheduledTask } from '@snugprotocol/protocol';
 
 import type { SnugPlatform } from '../platform/platform.js';
-import { clearScheduleKey, scheduleKvKey } from '../schedule/appRun.js';
 import type { StepExecutor } from '../schedule/engine-types.js';
-import { __resetSchedulerForTests, initScheduler, type SchedulerDeps } from '../schedule/scheduler.js';
+import { scheduleKvKey } from '../schedule/scheduleKey.js';
+import { __resetSchedulerForTests, initScheduler, reconcile, type SchedulerDeps } from '../schedule/scheduler.js';
 import { installTestUserDb } from './userdbTestHelper.js';
 
 const NOW = Date.parse('2026-10-09T12:05:00.000Z');
@@ -36,14 +36,14 @@ const deps = (): Partial<SchedulerDeps> => ({
   allows: () => true,
 });
 
-function appRunTask(id: string): ScheduledTask {
+function appRunTask(id: string, app = appId): ScheduledTask {
   return {
     id,
     title: `run weather ${id}`,
     enabled: true,
     enabledAt: CREATED,
     provenance: 'user',
-    steps: [{ kind: 'app-run', appId }],
+    steps: [{ kind: 'app-run', appId: app }],
     spec: { kind: 'every', n: 1, unit: 'hours', tz: 'UTC' },
     cron: '0 * * * *',
     missedPolicy: 'ask',
@@ -57,8 +57,8 @@ function appRunTask(id: string): ScheduledTask {
   };
 }
 
-/** A `running` claim started `ageMs` ago, with its handshake key written as the executor would have. */
-async function claim(taskId: string, runId: string, ageMs: number): Promise<void> {
+/** A `running` claim started `ageMs` ago, with its handshake key written as the executor would have (`withKey: false` for an app that cannot hold one). */
+async function claim(taskId: string, runId: string, ageMs: number, withKey = true): Promise<void> {
   db.putScheduleRun({
     id: runId,
     taskId,
@@ -71,6 +71,7 @@ async function claim(taskId: string, runId: string, ageMs: number): Promise<void
     steps: [],
     calls: { ai: 0, net: 0 },
   });
+  if (!withKey) return;
   const wrote = await db.driver.kvSet(appId, scheduleKvKey(runId), { taskId, runId });
   if (!wrote.ok) throw new Error('seed kv failed');
 }
@@ -106,13 +107,27 @@ describe('stale handshake keys are swept at boot', () => {
     expect(await keyPresent('r-fresh')).toBe(true);
   });
 
-  it('clearScheduleKey clears the key in EVERY app an app-run step names and nothing for a task the file no longer holds', async () => {
-    const other = db.installApp({ displayName: 'Ledger', html: '<html>l</html>' }).appId;
-    await db.driver.kvSet(appId, scheduleKvKey('r-1'), { runId: 'r-1' });
-    await db.driver.kvSet(other, scheduleKvKey('r-1'), { runId: 'r-1' });
-    await clearScheduleKey(db, { id: 'r-1' }, { steps: [{ kind: 'app-run', appId }, { kind: 'app-run', appId: other }, { kind: 'notify', title: 't', body: 'b' }] });
-    expect(await keyPresent('r-1')).toBe(false);
-    expect((await db.driver.kvGet(other, scheduleKvKey('r-1'))).ok && 'value' in (await db.driver.kvGet(other, scheduleKvKey('r-1')))).toBe(false);
-    await expect(clearScheduleKey(db, { id: 'r-1' }, undefined)).resolves.toBeUndefined();
+  it('S7: a stale claim of a task naming an app the file does NOT hold is retired without opening that app’s namespace — no kvSet for the ghost', async () => {
+    db.putScheduledTask({ ...appRunTask('ghostly', 'ghost-app'), appVersions: {} });
+    await claim('ghostly', 'r-ghost', 10 * 60_000, false);
+    const kvSet = vi.spyOn(db.driver, 'kvSet');
+
+    await initScheduler(deps());
+
+    expect(db.listScheduleRuns('ghostly')[0]).toMatchObject({ status: 'interrupted', reason: 'stale claim' });
+    expect(kvSet.mock.calls.some(([namespace]) => namespace === 'ghost-app')).toBe(false);
+    kvSet.mockRestore();
+  });
+
+  it('S7: a `visible` reconcile sweeps a claim that went stale AFTER boot and clears its key too (`reconcileNow` passes `onSwept`)', async () => {
+    db.putScheduledTask(appRunTask('later'));
+    await initScheduler(deps());
+    await claim('later', 'r-later', 10 * 60_000); // a sibling tab's claim, dead by the time this tab wakes
+    expect(await keyPresent('r-later')).toBe(true);
+
+    await reconcile('visible');
+
+    expect(db.listScheduleRuns('later')[0]).toMatchObject({ status: 'interrupted', reason: 'stale claim' });
+    await vi.waitFor(async () => expect(await keyPresent('r-later')).toBe(false));
   });
 });

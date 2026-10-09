@@ -19,7 +19,7 @@ import type { UserDb } from '@snugprotocol/db';
 import { AUTH_WIZARD_DIRECTIVE_KIND, type AuthWizardDirective, type RenderDirective, type ScheduleProposal } from '@snugprotocol/protocol';
 
 import { directiveToMeta, metaToDirective, scanForRenderDirective } from './renderDirective.js';
-import { HOST_BRAIN_REFUSED_CODE, allows } from '../platform/platform.js';
+import { HOST_BRAIN_REFUSED_CODE } from '../platform/platform.js';
 import { createServerArtifactFetch } from '../state/library.js';
 import { resolveModelForApp } from '../state/appModel.js';
 import { applyBuilderPickToApp, useBuilderPick } from '../state/builderModel.js';
@@ -39,8 +39,8 @@ import { finalizeConnectionDeclaration } from './connectionPipeline.js';
 import { knowledgeDeliveryFor } from './knowledgeDelivery.js';
 import { authChoiceForPersistedRow, metaToAuthChoice, type AuthChoiceSeed } from './authChoiceCard.js';
 import { buildPresentCardTool, metaToCard, sanitizeCardText, type ChatCardState } from './cards.js';
-import { metaToScheduleCard, scheduleCardToMeta, stageScheduleCard, type ScheduleCardState } from './scheduleCard.js';
-import { buildScheduleProposeTool } from './tools.js';
+import { laneToolsFor } from './laneTools.js';
+import { metaToScheduleCard, persistScheduleResolution, scheduleCardToMeta, stageScheduleCard, type ScheduleCardResolution, type ScheduleCardState } from './scheduleCard.js';
 import { ADAPTER_KINDS, type AdapterKind } from './adapter.js';
 import {
   createDirectBuilder,
@@ -177,6 +177,13 @@ export interface BuilderChat {
    * sends it as the next USER message. UI-only authority by construction.
    */
   selectCardOption: (card: ChatCardState, messageId: number, optionId: string) => void;
+  /**
+   * Record how the user answered a schedule SUGGESTION card (TASK-20261009 P1; the ChatLog
+   * contract `onResolveSchedule`): `scheduled` with the task the one writer created, or
+   * `declined`. The card is UI, not a gate — this records an answer, it never enables a task —
+   * and the answer is persisted through the hook's own meta path (the data-write card's rule).
+   */
+  resolveSchedule: (card: ScheduleCardState, messageId: number, resolution: Exclude<ScheduleCardResolution, 'stale'>, taskId?: string) => void;
 }
 
 export interface UseBuilderChatOptions {
@@ -349,88 +356,9 @@ function applyStep(current: BuildStepView[], step: BuildStep): BuildStepView[] {
   return next;
 }
 
-/** What the lane tool selection needs from the turn — the seams, never React state. */
-export interface LaneToolDeps {
-  db: UserDb;
-  /** The app the message sits beside (the thread's pin); every routed lane has one. */
-  contextTarget: string | undefined;
-  threadId: string;
-  /** The turn's abort signal — the provider lane threads it so a cancelled turn denies its own parked confirm (AC6). */
-  signal: AbortSignal;
-  /** The inline choice card, offered to every routed non-feature lane but the schedule lane. */
-  presentCardTool: AgentTool;
-  /** One data-write proposal per turn; `false` ⇒ not staged. */
-  onDataProposal: (proposal: PendingWriteProposal) => boolean;
-  /** Provider-lane request failures, code-keyed (TASK-20260815 AC5). */
-  onProviderFailureCode: (appId: string, code: string) => void;
-  /** One schedule suggestion per turn; `false` ⇒ not staged (TASK-20261009 P1). */
-  onScheduleProposal: (proposal: ScheduleProposal, appId: string | undefined) => boolean;
-}
-
-/**
- * LANE-SCOPED TOOLS (ADR-0019 D9) — the second lock, as ONE EXHAUSTIVE SWITCH over the lane
- * (TASK-20261009 P2, feasibility F2). `undefined` means "the builder's own set" and is answered
- * ONLY by the feature lane and by an unrouted turn: the else-chain this replaces let any lane
- * it did not name fall through to the full builder set — `artifact_write` in hand — which is
- * the exact failure the lane design exists to prevent. A new lane now fails to compile until
- * this switch names its tools.
- *
- *  - data: the two data tools (`data_read` drops the write tool — a question is not permission
- *    to propose a change) + the choice card.
- *  - feature: the builder set (its trust story is versioning, not cards).
- *  - provider: the governed request tool (read-only unless `provider_write`) + the choice card.
- *  - schedule: ONLY `schedule_propose` — no card, no data tool, nothing that writes; where the
- *    host does not schedule at all the turn runs tool-free and the model answers in words.
- *  - answer: the choice card alone.
- */
-export async function laneToolsFor(route: RoutedLane | undefined, deps: LaneToolDeps): Promise<AgentTool[] | undefined> {
-  if (route === undefined || deps.contextTarget === undefined) return undefined;
-  const target = deps.contextTarget;
-  switch (route.lane) {
-    case 'data': {
-      const { buildDataTools } = await import('./dataTools.js');
-      return [
-        ...buildDataTools({
-          appId: target,
-          getDb: () => Promise.resolve(deps.db),
-          allowWrites: route.intent === 'data_write',
-          onProposal: deps.onDataProposal,
-        }),
-        deps.presentCardTool,
-      ];
-    }
-    case 'feature':
-      return undefined;
-    case 'provider': {
-      const { buildProviderTools } = await import('./providerTools.js');
-      return [
-        ...buildProviderTools({
-          appId: target,
-          getDb: () => Promise.resolve(deps.db),
-          allowWrites: route.intent === 'provider_write',
-          signal: deps.signal,
-          onFailureCode: (code) => deps.onProviderFailureCode(target, code),
-        }),
-        deps.presentCardTool,
-      ];
-    }
-    case 'schedule':
-      if (!allows('schedule')) return [];
-      return [
-        buildScheduleProposeTool({
-          getDb: () => Promise.resolve(deps.db),
-          resolveAppId: () => Promise.resolve(target),
-          onProposal: deps.onScheduleProposal,
-        }),
-      ];
-    case 'answer':
-      return [deps.presentCardTool];
-    default: {
-      const never: never = route;
-      return never;
-    }
-  }
-}
+// The lane-scoped tool selection lives in `laneTools.ts` (Gate-5 PR-B M4) and is re-exported
+// here so every importer — the lanes test, the router test — keeps its one import.
+export { laneToolsFor, type LaneToolDeps } from './laneTools.js';
 
 function metaToArtifact(meta: unknown): ArtifactEvent | undefined {
   if (typeof meta !== 'object' || meta === null) return undefined;
@@ -1234,6 +1162,34 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
     [patchMessage, send, threadId],
   );
 
+  /**
+   * Answer a schedule suggestion card (TASK-20261009 P1). The row id is read from CURRENT
+   * message state at click time (the `selectCardOption` rule): the card renders mid-turn
+   * before its row exists, and finalize patches `messageRowId` in later. The answer is
+   * persisted by MERGING the row's meta — the same message may carry an artifact card or the
+   * brain stamp — best-effort, like every other audit field here.
+   */
+  const resolveSchedule = useCallback(
+    (card: ScheduleCardState, messageId: number, resolution: Exclude<ScheduleCardResolution, 'stale'>, taskId?: string): void => {
+      let resolved: ScheduleCardState | undefined;
+      patchMessage(messageId, (m) => {
+        const current = m.schedule ?? card;
+        const rowId = current.messageRowId ?? card.messageRowId;
+        resolved = {
+          ...current,
+          resolution,
+          ...(taskId !== undefined ? { taskId } : {}),
+          ...(rowId !== undefined ? { messageRowId: rowId } : {}),
+        };
+        return { schedule: resolved };
+      });
+      const answered = resolved;
+      if (answered === undefined) return;
+      void (async () => persistScheduleResolution(await getUserDb(), answered))();
+    },
+    [patchMessage],
+  );
+
   // The user's explicit stop — the ONE abort a view may trigger (ADR-0062). There is
   // deliberately no unmount cleanup any more: leaving the view leaves the turn running
   // in its session, visible from the build page's thread sidebar.
@@ -1255,5 +1211,6 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
     approveDataWrite,
     declineDataWrite,
     selectCardOption,
+    resolveSchedule,
   };
 }

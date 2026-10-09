@@ -20,6 +20,7 @@ import { useBuilderChat, type DataWriteCardState } from '../agent/useBuilderChat
 import type { ChatCardState } from '../agent/cards.js';
 import { createOpenUrlHandlerFor } from '../state/openUrl.js';
 import { composeAppRuntime } from './appRuntime.js';
+import { UpdatePausesNote } from './UpdatePausesNote.js';
 import { startSidecarLiveForApp, type SidecarSyncState } from '../state/sidecarLive.js';
 import { publishAppEvent, registerAppHost } from '../state/appHosts.js';
 import {
@@ -77,6 +78,7 @@ import { isNamedLoadRefusal, missingAppCopy, starterInstallDisclosureTail } from
 import { sqlJsEngineOptions } from './sqlJsEngine.js';
 import { RunBlocked } from '../views/AvailabilityNote.js';
 import { ChatLog } from '../views/ChatLog.js';
+import type { ResolveScheduleCard } from '../schedule/ScheduleCard.js';
 
 type HtmlState = { phase: 'loading' } | { phase: 'ready'; html: string } | { phase: 'missing'; reason?: string };
 
@@ -315,18 +317,6 @@ export default function RunView(): ReactElement {
     };
   }, [id]);
 
-  // Identity seams — captured per app id (SnugAppFrame mount-captures them via key).
-  // onLlmEvent is stable (useCallback with [] deps), so threading it here does not
-  // rebuild the transport on every render. This is what makes an APP's LLM turn —
-  // e.g. a Chess move — visible in the LLM surface alongside the builder's turns.
-  // `id` is threaded so the transport can read this app's runtime contract (ADR-0018).
-  // It is a memo dep for correctness on app-to-app navigation; the contract itself is
-  // read PER SEND inside the transport, so an edit or revert needs no rebuild here
-  // (fold F-M1 — there is no contentEpoch dependency and there does not need to be).
-  // The composition itself — transport, net handler, the frame's bindings — LIVES IN
-  // `run/appRuntime.ts` (TASK-20261009 A1): the scheduler's hidden frame composes the
-  // same seams, so they have one home; the memo over it is below the db driver.
-  //
   // A SHARED PREVIEW runs WITHOUT the LLM transport until the user arms it (ADR-0063
   // §4, plan-review finding 2): a stranger's code must not spend the user's tokens on
   // a click. A starter keeps the real transport — the pillar demo is the point. The
@@ -393,6 +383,14 @@ export default function RunView(): ReactElement {
   // is known; the page's ORDINARY confirm gate answers here (the hidden frame injects its
   // refusing gate — the one difference the seam allows). The shared preview's consent
   // gate replaces the transport until the user arms it (above).
+  //
+  // The deps are the identity seams the frame mount-captures through its key. `id`, so the
+  // transport reads THIS app's runtime contract (ADR-0018) — the contract itself is read PER
+  // SEND, so an edit or revert needs no rebuild and there is no contentEpoch dep (fold F-M1).
+  // `onLlmEvent`/`onTurnStart` are stable callbacks, which is what makes an app's own LLM turn
+  // visible in the inspector beside the builder's. `mode`/`provider` rebuild the net handler
+  // along with the transport — harmless: the frame key carries both, so the frame remounts
+  // onto the new runtime anyway (M5).
   const runtime = useMemo(
     () =>
       db === null
@@ -896,6 +894,7 @@ export default function RunView(): ReactElement {
             onApproveDataWrite={chat.approveDataWrite}
             onDeclineDataWrite={chat.declineDataWrite}
             onSelectCardOption={chat.selectCardOption}
+            onResolveSchedule={chat.resolveSchedule}
           />
         </>
       )}
@@ -1217,6 +1216,8 @@ export default function RunView(): ReactElement {
               version stays in the versions panel, revertable.
               {installedCopy.edited ? ' You have customized your copy — the edited version is what gets replaced.' : ''}
             </p>
+            {/* E8 (ADR-0074 §6): an update pauses every enabled schedule that runs this app — said here, where the user decides. */}
+            <UpdatePausesNote appId={installedCopy.appId} />
             {installedCopy.approvedProviders.length > 0 ? (
               <p className="net-confirm-body" data-testid="shared-update-inherits">
                 The new code will run with the connections you already approved:{' '}
@@ -1417,6 +1418,8 @@ interface RailChatProps {
   onApproveDataWrite?: (proposal: DataWriteCardState, messageId: number) => void;
   onDeclineDataWrite?: (proposal: DataWriteCardState, messageId: number) => void;
   onSelectCardOption?: (card: ChatCardState, messageId: number, optionId: string) => void;
+  /** The schedule suggestion card's resolve path (TASK-20261009 P1) — threaded through to `ChatLog`. */
+  onResolveSchedule?: ResolveScheduleCard;
 }
 
 /** Compact chat inside the rail — keep talking to the agent about the app. */
@@ -1432,6 +1435,7 @@ function RailChat({
   onApproveDataWrite,
   onDeclineDataWrite,
   onSelectCardOption,
+  onResolveSchedule,
 }: RailChatProps): ReactElement {
   const [draft, setDraft] = useState('');
   const submit = (): void => {
@@ -1464,6 +1468,7 @@ function RailChat({
           {...(onApproveDataWrite !== undefined ? { onApproveDataWrite } : {})}
           {...(onDeclineDataWrite !== undefined ? { onDeclineDataWrite } : {})}
           {...(onSelectCardOption !== undefined ? { onSelectCardOption } : {})}
+          {...(onResolveSchedule !== undefined ? { onResolveSchedule } : {})}
           phase="edit"
           onDirectiveConnect={onDirectiveConnect}
           onConnectionConnect={onConnectionConnect}

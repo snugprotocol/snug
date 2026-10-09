@@ -67,6 +67,27 @@ describe('createScheduledTransport — counting and capping', () => {
     expect(await transport.send('w', { signal: signal() })).toEqual({ ok: false, code: ERROR_CODES.NETWORK_ERROR, message: 'offline', retryable: true });
     expect(transport.calls).toBe(1);
   });
+
+  it('`onCounted` fires once per send that reached the brain — never for a send the ceiling refused or a CONSENT_REQUIRED reply (M22: the executor keeps its own count)', async () => {
+    let admit = true;
+    let answer: Awaited<ReturnType<AgentTransport['send']>> = okReply('hello');
+    const brain = inner(() => answer);
+    const onCounted = vi.fn();
+    const transport = createScheduledTransport(brain, { onCall: () => admit, onCounted });
+    await transport.send('w', { signal: signal() });
+    expect(onCounted).toHaveBeenCalledTimes(1);
+    admit = false;
+    await transport.send('w', { signal: signal() });
+    expect(onCounted).toHaveBeenCalledTimes(1);
+    admit = true;
+    answer = { ok: false as const, code: ERROR_CODES.CONSENT_REQUIRED, message: 'confirm first', retryable: false };
+    await transport.send('w', { signal: signal() });
+    expect(onCounted).toHaveBeenCalledTimes(1);
+    answer = { ok: false as const, code: ERROR_CODES.NETWORK_ERROR, message: 'offline', retryable: true };
+    await transport.send('w', { signal: signal() });
+    expect(onCounted).toHaveBeenCalledTimes(2);
+    expect(transport.calls).toBe(2);
+  });
 });
 
 describe('createScheduledTransport — the C1 wall on the reply side', () => {

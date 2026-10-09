@@ -64,6 +64,28 @@ export function stepLabel(kind: StepKind, appName?: string): string {
   }
 }
 
+/**
+ * ONE step in words — the label, then the step's own words (M6/M7): "remind me: Water — the
+ * ferns" · "ask Ledger’s AI: Sum it up" · "run Weather". The chat card, the run-header strip and
+ * the builder's tool all print a suggestion's steps through this, so a step reads the same on
+ * every surface. `withInput` appends a *run <app>* step's input ("run Weather · {"fetch":true}")
+ * where there is room for it (the card); the strip's one line leaves it out.
+ */
+export function stepWords(step: ScheduleStep, appName?: string, options: { withInput?: boolean } = {}): string {
+  switch (step.kind) {
+    case 'notify':
+      return `${stepLabel('notify')}: ${step.title} — ${step.body}`;
+    case 'app-think':
+      return `${stepLabel('app-think', appName)}: ${step.prompt}`;
+    case 'app-run':
+      return options.withInput === true && step.input !== undefined ? `${stepLabel('app-run', appName)} · ${JSON.stringify(step.input)}` : stepLabel('app-run', appName);
+    default: {
+      const never: never = step;
+      return never;
+    }
+  }
+}
+
 /** "no AI calls" · "1 AI call" · "2 AI calls" — the ONE pluraliser every cost sentence uses. */
 export function aiCalls(n: number): string {
   if (n === 0) return 'no AI calls';
@@ -330,12 +352,24 @@ export const SUGGESTION_ACTIONS = {
   mute: 'stop suggestions from this app',
 } as const;
 
-/** The strip after its one act: scheduled (with the next time), declined, or muted. */
-export const SUGGESTION_OUTCOME = {
+/**
+ * What EVERY suggestion surface says after its one act (M7) — the chat card, the run-header
+ * strip, the run-header sheet: scheduled with the next time (and *open* beside it), or declined.
+ * `copy.editor.ACTIONS.scheduled`, `SUGGESTION_OUTCOME` and `SCHEDULE_CARD` reference these
+ * rather than restating them, so the sentence cannot drift between the three.
+ */
+export const SCHEDULED_NEXT = {
   scheduled: (whenWords: string): string => `scheduled — next ${whenWords}`,
   declined: 'not now — nothing was scheduled',
-  muted: (appName: string): string => `${appName} won’t suggest ${WORDS.items} again — change that in Settings`,
   open: 'open',
+} as const;
+
+/** The strip after its one act: scheduled (with the next time), declined, or muted. */
+export const SUGGESTION_OUTCOME = {
+  scheduled: SCHEDULED_NEXT.scheduled,
+  declined: SCHEDULED_NEXT.declined,
+  muted: (appName: string): string => `${appName} won’t suggest ${WORDS.items} again — change that in Settings`,
+  open: SCHEDULED_NEXT.open,
 } as const;
 
 // ---------------------------------------------------------------------------------------------
@@ -355,9 +389,9 @@ export const SCHEDULE_CARD = {
   accept: CONSENT.enable,
   edit: 'edit…',
   decline: CONSENT.notNow,
-  open: 'open',
-  scheduled: (whenWords: string): string => `scheduled — next ${whenWords}`,
-  declined: 'not now — nothing was scheduled',
+  open: SCHEDULED_NEXT.open,
+  scheduled: SCHEDULED_NEXT.scheduled,
+  declined: SCHEDULED_NEXT.declined,
   /** The app the suggestion was for is gone, or its one time has passed. */
   stale: `this ${WORDS.suggestion} is out of date — the app is gone or the time has passed`,
 } as const;

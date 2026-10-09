@@ -11,8 +11,11 @@
 //   - not our event → `ignored` (apps post other events over the same seam);
 //   - ≤ 1 request a minute per INSTANCE (the frame generation) — counted on every request that
 //     reaches this point, readable or not, so a chatty app cannot spam its way to the one that
-//     fits → `rate-limited`;
-//   - length-capped, then STRICT-parsed against `scheduleProposalSchema` → `unreadable`;
+//     fits → `rate-limited`. The memory is ONE entry per app (`{ generation, at }` — Gate-5
+//     PR-B M10), so a frame remounting a thousand times never grows it; a new generation is a
+//     new instance with its own minute;
+//   - capped in serialised UTF-8 BYTES (the task's own bound, measured as the schema measures
+//     it — S11), then STRICT-parsed against `scheduleProposalSchema` → `unreadable`;
 //   - the app must be in this file (a read-only starter or a shared preview has no row a
 //     schedule could attach to) → `unknown-app`;
 //   - every app step names the SENDER — an app may suggest only for itself → `other-app`;
@@ -24,6 +27,8 @@
 //   - ONE pending per frame generation — a second from the same instance is dropped; a new
 //     generation (the frame was remounted) replaces an older pending → `pending`;
 //   - otherwise `accepted`: the strip renders it.
+// Everything after the parse — the file's reads, the Settings flag — runs under one catch: a
+// throw there is a named `failed` decision (M11), never an exception out of the frame seam.
 //
 // A module store (the `appHosts` registry's shape): `RunView` wires the consumer in one line
 // (`useAppEventConsumer`) and mounts the strip in one; the strip subscribes by app id. The
@@ -61,7 +66,7 @@ export interface PendingSuggestion {
   receivedAt: number;
 }
 
-export type RequestDecision = 'accepted' | 'ignored' | 'rate-limited' | 'unreadable' | 'unknown-app' | 'other-app' | 'muted' | 'declined' | 'capped' | 'pending';
+export type RequestDecision = 'accepted' | 'ignored' | 'rate-limited' | 'unreadable' | 'unknown-app' | 'other-app' | 'muted' | 'declined' | 'capped' | 'pending' | 'failed';
 
 export interface ScheduleRequestInput {
   appId: string;
@@ -87,10 +92,19 @@ interface Deps {
 const defaultDeps = (): Deps => ({ getDb: getUserDb, now: Date.now, noSuggestions: () => readFlag(NO_SUGGESTIONS_KEY) });
 let deps: Deps = defaultDeps();
 
-/** Last request time per instance (`appId:generation`) — the rate limit's memory. */
-const lastRequestAt = new Map<string, number>();
+/** The rate limit's memory: the last request per APP, with the instance it came from — bounded by the apps a page shows (M10). */
+const lastRequest = new Map<string, { generation: number; at: number }>();
 
-const instanceKey = (appId: string, generation: number): string => `${appId}:${generation}`;
+/** The serialised size of a request in UTF-8 bytes — what the cap counts (S11); `undefined` when it cannot be serialised. */
+export function requestBytes(data: unknown): number | undefined {
+  let serialised: unknown;
+  try {
+    serialised = JSON.stringify(data);
+  } catch {
+    return undefined;
+  }
+  return typeof serialised === 'string' ? new TextEncoder().encode(serialised).length : undefined;
+}
 
 function setPending(appId: string, next: PendingSuggestion | undefined): void {
   const current = suggestionStore.get();
@@ -115,40 +129,33 @@ export function appProposedCount(db: UserDb, appId: string): number {
 export async function consumeScheduleRequest(input: ScheduleRequestInput): Promise<RequestDecision> {
   if (input.event !== SCHEDULE_REQUEST_EVENT) return 'ignored';
   const at = deps.now();
-  const key = instanceKey(input.appId, input.generation);
-  const last = lastRequestAt.get(key);
-  if (last !== undefined && at - last < SCHEDULE_REQUEST_MIN_GAP_MS) return 'rate-limited';
-  lastRequestAt.set(key, at);
+  const last = lastRequest.get(input.appId);
+  if (last !== undefined && last.generation === input.generation && at - last.at < SCHEDULE_REQUEST_MIN_GAP_MS) return 'rate-limited';
+  lastRequest.set(input.appId, { generation: input.generation, at });
 
-  let serialised: string;
-  try {
-    serialised = JSON.stringify(input.data);
-  } catch {
-    return 'unreadable';
-  }
-  if (typeof serialised !== 'string' || serialised.length > SCHEDULE_REQUEST_MAX_BYTES) return 'unreadable';
+  const bytes = requestBytes(input.data);
+  if (bytes === undefined || bytes > SCHEDULE_REQUEST_MAX_BYTES) return 'unreadable';
   const parsed = scheduleProposalSchema.safeParse(input.data);
   if (!parsed.success) return 'unreadable';
   const proposal = parsed.data;
 
-  let db: UserDb;
   try {
-    db = await deps.getDb();
-  } catch {
-    return 'unknown-app';
-  }
-  const app = db.getApp(input.appId);
-  if (app === undefined) return 'unknown-app';
-  if (!namesOnly(proposal, input.appId)) return 'other-app';
-  if (deps.noSuggestions() || db.isScheduleMuted(input.appId)) return 'muted';
-  const hash = proposalHash(proposal);
-  if (db.listScheduleDeclines(input.appId).includes(hash)) return 'declined';
-  if (appProposedCount(db, input.appId) >= APP_PROPOSED_TASK_CAP) return 'capped';
-  const current = pendingSuggestionFor(input.appId);
-  if (current !== undefined && current.generation === input.generation) return 'pending';
+    const db = await deps.getDb();
+    const app = db.getApp(input.appId);
+    if (app === undefined) return 'unknown-app';
+    if (!namesOnly(proposal, input.appId)) return 'other-app';
+    if (deps.noSuggestions() || db.isScheduleMuted(input.appId)) return 'muted';
+    const hash = proposalHash(proposal);
+    if (db.listScheduleDeclines(input.appId).includes(hash)) return 'declined';
+    if (appProposedCount(db, input.appId) >= APP_PROPOSED_TASK_CAP) return 'capped';
+    const current = pendingSuggestionFor(input.appId);
+    if (current !== undefined && current.generation === input.generation) return 'pending';
 
-  setPending(input.appId, { appId: input.appId, appName: app.displayName, generation: input.generation, proposal, hash, receivedAt: at });
-  return 'accepted';
+    setPending(input.appId, { appId: input.appId, appName: app.displayName, generation: input.generation, proposal, hash, receivedAt: at });
+    return 'accepted';
+  } catch {
+    return 'failed'; // the file refused a read, or would not open: the app is told nothing, the test is told why
+  }
 }
 
 /**
@@ -204,6 +211,11 @@ export function __setScheduleRequestDepsForTests(over?: Partial<Deps>): void {
 
 export function __resetScheduleRequestsForTests(): void {
   deps = defaultDeps();
-  lastRequestAt.clear();
+  lastRequest.clear();
   suggestionStore.set({});
+}
+
+/** How many apps the rate limit remembers — the bound M10 pins. */
+export function __rateLimitSizeForTests(): number {
+  return lastRequest.size;
 }

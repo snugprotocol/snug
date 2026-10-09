@@ -3,7 +3,9 @@
 // app's OWN namespace, where the app reads it with its ordinary `kvGet` frame — so the two
 // sides must agree on the table (`snug_kv`), `null` must clear (the hooks read a cleared key
 // as ABSENT, never as a stored null), the value is capped at the handshake's 1 KiB, and the
-// user db's facade must refuse a tombstoned (deleted) app exactly as it refuses its frames.
+// user db's facade must refuse a tombstoned (deleted) app exactly as it refuses its frames, and
+// an app the file never held at all (Gate-5 PR-B S7: a ghost namespace must never be opened —
+// it would land an app-data file in the user's file for an app that does not exist).
 // Errors are DATA at this seat as everywhere on the driver: it never throws.
 import { SCHEDULE_APP_INPUT_MAX_BYTES } from '@snugprotocol/protocol';
 import { describe, expect, it } from 'vitest';
@@ -43,9 +45,19 @@ function expectError(result: DbDriverResult, code: string): void {
 const stringOfJsonBytes = (bytes: number): string => 'x'.repeat(bytes - 2);
 
 describe('SnugDbDriver.kvSet / kvGet — the host side of the kv handshake', () => {
-  it('the cap is the handshake’s: HOST_KV_VALUE_MAX_BYTES is SCHEDULE_APP_INPUT_MAX_BYTES (1 KiB)', () => {
-    expect(HOST_KV_VALUE_MAX_BYTES).toBe(SCHEDULE_APP_INPUT_MAX_BYTES);
-    expect(HOST_KV_VALUE_MAX_BYTES).toBe(1024);
+  it('the cap is the handshake’s PAYLOAD: SCHEDULE_APP_INPUT_MAX_BYTES (1 KiB of input) plus 256 bytes for the ids around it (S6)', () => {
+    expect(HOST_KV_VALUE_MAX_BYTES).toBe(SCHEDULE_APP_INPUT_MAX_BYTES + 256);
+    expect(HOST_KV_VALUE_MAX_BYTES).toBe(1280);
+  });
+
+  it('S6: the real `{ taskId, runId, input }` with an input at the task schema’s full 1 KiB lands — the ids no longer push it over', async () => {
+    const d = driver();
+    const input = stringOfJsonBytes(SCHEDULE_APP_INPUT_MAX_BYTES); // serialises to exactly 1024 bytes, the most a task may carry
+    const payload = { taskId: 'task-0123456789abcdef0123456789abcdef', runId: 'run-0123456789abcdef0123456789abcdef', input };
+    expectOk(await d.kvSet(NS, KEY, payload));
+    const read = await d.kvGet(NS, KEY);
+    expectOk(read);
+    expect(read.value).toEqual(payload);
   });
 
   it('what the host writes, the app reads through its ordinary kvGet frame — and the host reads it back too', async () => {
@@ -85,7 +97,7 @@ describe('SnugDbDriver.kvSet / kvGet — the host side of the kv handshake', () 
     expectOk(await d.kvSet(NS, 'never-written', null));
   });
 
-  it('a value over 1 KiB (serialised UTF-8) is refused DB_TOO_LARGE and the key keeps what it held; exactly 1 KiB lands', async () => {
+  it('a value over the cap (serialised UTF-8) is refused DB_TOO_LARGE and the key keeps what it held; exactly the cap lands', async () => {
     const d = driver();
     expectOk(await d.kvSet(NS, KEY, 'before'));
     expectError(await d.kvSet(NS, KEY, stringOfJsonBytes(HOST_KV_VALUE_MAX_BYTES + 1)), DB_ERROR_CODES.TOO_LARGE);
@@ -93,8 +105,9 @@ describe('SnugDbDriver.kvSet / kvGet — the host side of the kv handshake', () 
     expectOk(kept);
     expect(kept.value).toBe('before');
     expectOk(await d.kvSet(NS, KEY, stringOfJsonBytes(HOST_KV_VALUE_MAX_BYTES)));
-    // Multi-byte characters count as BYTES, not characters: 512 two-byte chars + quotes = 1026.
-    expectError(await d.kvSet(NS, KEY, 'é'.repeat(512)), DB_ERROR_CODES.TOO_LARGE);
+    // Multi-byte characters count as BYTES, not characters: 640 two-byte chars + quotes = 1282 > 1280.
+    expectError(await d.kvSet(NS, KEY, 'é'.repeat(640)), DB_ERROR_CODES.TOO_LARGE);
+    expect('é'.repeat(640).length).toBeLessThan(HOST_KV_VALUE_MAX_BYTES);
   });
 
   it('a key outside the frame schema’s bounds (empty, over 256 characters) is refused, never written', async () => {
@@ -151,6 +164,26 @@ describe('the user db’s driver face — the same seat, the tombstone honoured'
     expectError(set, USERDB_ERROR_CODES.NOT_FOUND);
     const get = await db.driver.kvGet(app.appId, KEY);
     expectError(get, USERDB_ERROR_CODES.NOT_FOUND);
+    await db.close();
+  });
+
+  it('S7: a namespace with NO app row (never installed) is refused NOT_FOUND on kvSet and kvGet, and no app-data file is ever opened for it', async () => {
+    const backend = createMemoryBackend();
+    const opened = await openUserDb({ backend, locateWasm, persistDebounceMs: 1 });
+    if (opened.status !== 'ok') throw new Error('open failed');
+    const db = opened.userDb;
+    await db.flush();
+    const filesBefore = [...backend.files.keys()].sort();
+
+    expectError(await db.driver.kvSet('ghost-app', KEY, null), USERDB_ERROR_CODES.NOT_FOUND); // the sweep's clear is a write too
+    expectError(await db.driver.kvSet('ghost-app', KEY, { runId: 'run-1' }), USERDB_ERROR_CODES.NOT_FOUND);
+    expectError(await db.driver.kvGet('ghost-app', KEY), USERDB_ERROR_CODES.NOT_FOUND);
+
+    await db.flush();
+    expect([...backend.files.keys()].sort()).toEqual(filesBefore); // nothing materialised for the ghost
+    // The same call for an installed app is the ordinary seat.
+    const app = db.installApp({ displayName: 'Real', html: '<html>r</html>' });
+    expectOk(await db.driver.kvSet(app.appId, KEY, null));
     await db.close();
   });
 });

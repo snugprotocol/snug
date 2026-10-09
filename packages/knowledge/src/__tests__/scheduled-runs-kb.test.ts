@@ -54,6 +54,24 @@ const KV_PREFIX = (() => {
   return match[1] as string;
 })();
 
+/** The status words the host prints, read from the playground's ONE copy table — the KB may not spell a word of its own. */
+const RESULT_STATUS_WORD: Readonly<Record<string, string>> = (() => {
+  const copySource = readFileSync(path.join(repoRoot, 'apps', 'playground', 'src', 'schedule', 'copy.ts'), 'utf8');
+  const block = /export const RESULT_STATUS_WORD[^{]*\{([\s\S]*?)\};/.exec(copySource);
+  if (block === null) throw new Error('apps/playground/src/schedule/copy.ts no longer exports RESULT_STATUS_WORD');
+  const words: Record<string, string> = {};
+  for (const entry of (block[1] as string).matchAll(/^\s*'?([\w-]+)'?:\s*'([^']+)'/gm)) words[entry[1] as string] = entry[2] as string;
+  return words;
+})();
+
+/** The engine's result bound, read from its source (`appRun.ts`), so "90 s" here is the engine's 90 s. */
+const RESULT_TIMEOUT_S = (() => {
+  const engineSource = readFileSync(path.join(repoRoot, 'apps', 'playground', 'src', 'schedule', 'appRun.ts'), 'utf8');
+  const match = /export const SCHEDULE_RESULT_TIMEOUT_MS = ([\d_]+);/.exec(engineSource);
+  if (match === null) throw new Error('apps/playground/src/schedule/appRun.ts no longer exports SCHEDULE_RESULT_TIMEOUT_MS');
+  return Number((match[1] as string).replace(/_/g, '')) / 1000;
+})();
+
 function rendered(file: string): string {
   const section = getKnowledgeBase().find((doc) => doc.file === file);
   expect(section, `${file} missing from the knowledge base`).toBeDefined();
@@ -163,6 +181,22 @@ describe('P4 content sync — the handshake the KB teaches is the one the SDK im
     // The module form is named beside the embedded snippet.
     expect(text).toContain('`useSnugSchedule(handler)`');
     expect(text).toContain('`proposeSchedule(proposal)`');
+  });
+
+  it('the status words are copy.RESULT_STATUS_WORD’s; an unanswered run is *failed* after the engine’s bound, *not supported* is for an app that never announces; the host titles the notification (S8)', () => {
+    const text = prose(rendered(KB_FILE));
+    for (const status of ['ok', 'failed', 'needs-you', 'no-handler']) {
+      const word = RESULT_STATUS_WORD[status];
+      expect(word, `copy.ts names ${status}`).toBeDefined();
+      expect(text, status).toContain(`*${word}*`);
+    }
+    expect(text).toContain(
+      `A run the app does not answer within ${RESULT_TIMEOUT_S} s is recorded as *${RESULT_STATUS_WORD.failed}*; *${RESULT_STATUS_WORD['no-handler']}* is for an app that never announces at all.`,
+    );
+    expect(text).not.toMatch(/never answers is recorded as \*not supported\*/);
+    expect(text).toContain(`records *${RESULT_STATUS_WORD.failed}* after ${RESULT_TIMEOUT_S} s until the listener ships`);
+    // The notification: the host decides the title (the app's name); the app's words read under it.
+    expect(text).toContain('carries your app\'s name as its title — the host decides the title, never your handler — and reads "<your app>: <your title> — <your body>" under it');
   });
 
   it('the kv key is exempt from the frame scanners ONLY as the key — the exemption helper leaves a frame-shaped neighbour to be caught', async () => {

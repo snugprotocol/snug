@@ -145,7 +145,14 @@ describe('the handler with the scheduled gate (A5)', () => {
   it('a refused POST is counted too — the attempt spent a call on the handler, whatever the gate said', async () => {
     const appId = seedConnectedApp();
     const counted: string[] = [];
-    const scheduled = createNetHandlerFor({ fetchImpl: recordingFetch().fetchImpl, confirmGate: createScheduledConfirmGate(), onNetCall: (_id, request) => void counted.push(request.method) });
+    const scheduled = createNetHandlerFor({
+      fetchImpl: recordingFetch().fetchImpl,
+      confirmGate: createScheduledConfirmGate(),
+      onNetCall: (_id, request) => {
+        counted.push(request.method);
+        return true;
+      },
+    });
     await scheduled.handle(appId, frame('POST'));
     expect(counted).toEqual(['POST']);
   });
@@ -159,6 +166,35 @@ describe('the handler with the scheduled gate (A5)', () => {
     expect(result).toEqual({ ok: false, code: NET_ERROR_CODES.NET_CONFIRM_DENIED, message: NET_CALL_LIMIT_MESSAGE, retryable: false });
     expect(fetched).toEqual([]);
     expect(errors).toEqual([NET_ERROR_CODES.NET_CONFIRM_DENIED]);
+  });
+
+  it('a connected host that echoes the injected credential answers the hidden frame with `***`', async () => {
+    // The handler EXACTLY as `appRuntime.composeAppRuntime` builds it for `appRun.ts`'s hidden
+    // frame: the standalone refusing gate, the counting seam, the injected fetch. The host
+    // echoes every credential header it received into the body AND a whitelisted response
+    // header; what the frame reads back must carry `***` and never the stored value — the
+    // VALUE scrub (`packages/auth/src/connected-fetch.ts` gate 10, `scrubAuthValues` over the
+    // read body and each whitelisted header) is the hidden frame's too (threat model R-54).
+    const appId = seedConnectedApp();
+    const echoing = async (_url: string, init?: RequestInit): Promise<Response> => {
+      const sent = new Headers(init?.headers);
+      const echoed = ['Authorization', 'X-Api-Key']
+        .map((name) => [name, sent.get(name)] as const)
+        .filter((entry): entry is readonly [string, string] => entry[1] !== null);
+      return new Response(JSON.stringify({ youSent: Object.fromEntries(echoed) }), {
+        status: 200,
+        headers: { 'content-type': 'application/json', etag: `"${echoed.map(([, value]) => value).join('+')}"` },
+      });
+    };
+    const scheduled = createNetHandlerFor({ fetchImpl: echoing, confirmGate: createScheduledConfirmGate(), onNetCall: () => true });
+    const result = await scheduled.handle(appId, frame('GET'));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.body).toContain('***');
+    expect(result.body).not.toContain('stored-key-abc123');
+    expect(JSON.parse(result.body)).toEqual({ youSent: { 'X-Api-Key': '***' } }); // the fixture injects X-Api-Key; no Authorization is ever sent for an api_key connection
+    expect(result.headers.etag).toBe('"***"');
+    expect(JSON.stringify(result)).not.toContain('stored-key-abc123');
   });
 
   it('the wizard’s probe and the visible frame keep the DEFAULT gate: a handler built without `confirmGate` still parks a confirm', async () => {

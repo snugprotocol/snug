@@ -7,28 +7,31 @@
 //   COUNT.  Every send that reaches the brain is one AI call on the run row (`calls.ai`), and
 //           the queue charges that to the day's ceiling. A reply that refused before anything
 //           left the page (F15's `CONSENT_REQUIRED` — the imported-endpoint confirm) is not a
-//           call, the same rule `appThink.ts` applies.
+//           call — `scrub.ts`'s `countsAsAiCall`, the rule `appThink.ts` applies too. The
+//           count is readable here (`calls`) and reported to the executor's own count as it
+//           happens (`onCounted`, Gate-5 PR-B M22).
 //   CAP.    `onCall()` is asked BEFORE every send — the executor's closure reads the day's
 //           counters plus what this run already spent — and a `false` refuses by name with the
 //           EXISTING `HOST_ERROR` code (no new error code: feasibility F3), non-retryable, the
 //           brain untouched, nothing counted.
-//   SCRUB.  The reply side of the C1 wall: the text is shape-scrubbed (`scrubCredentialProse`)
-//           and, when it STILL looks like a credential (`findScheduleCredential` — the same walk
-//           the run row's parse refuses on), WITHHELD whole behind a named refusal. The app
-//           never sees a key the brain echoed, and nothing credential-shaped can ride a
-//           `schedule-result` into the file.
+//   SCRUB.  The reply side of the C1 wall, `deliver` policy (`scrub.ts`, M15): the text is
+//           shape-scrubbed and, when it STILL looks like a credential, WITHHELD whole behind a
+//           named refusal. The app never sees a key the brain echoed, and nothing
+//           credential-shaped can ride a `schedule-result` into the file.
 //   WHOLE.  `onDelta` is never forwarded: a streamed fragment is unscrubbed by construction, so
 //           a scheduled reply arrives once, whole, after the scrub. The hidden frame declares
 //           `streaming: false` to match (the runner's rule: the flag follows the transport).
 
-import { ERROR_CODES, findScheduleCredential } from '@snugprotocol/protocol';
+import { ERROR_CODES } from '@snugprotocol/protocol';
 import type { AgentTransport, AgentTransportOptions, TransportResult } from '@snugprotocol/runner';
 
-import { scrubCredentialProse } from '../security/credentialShapes.js';
+import { countsAsAiCall, scrubOrWithhold } from './scrub.js';
 
 export interface ScheduledTransportOptions {
   /** Asked before every send: `false` refuses at the day's ceiling without touching the brain. */
   onCall(): boolean;
+  /** Told of every send that counted as a call, as it is counted — the executor's own tally (M22). */
+  onCounted?: () => void;
 }
 
 export interface ScheduledTransport extends AgentTransport {
@@ -44,6 +47,10 @@ export const SCHEDULED_REPLY_WITHHELD = 'the reply was withheld because it looke
 
 export function createScheduledTransport(inner: AgentTransport, options: ScheduledTransportOptions): ScheduledTransport {
   let calls = 0;
+  const counted = (): void => {
+    calls += 1;
+    options.onCounted?.();
+  };
   return {
     get calls() {
       return calls;
@@ -53,13 +60,10 @@ export function createScheduledTransport(inner: AgentTransport, options: Schedul
         return { ok: false, code: ERROR_CODES.HOST_ERROR, message: SCHEDULED_AI_LIMIT_MESSAGE, retryable: false };
       }
       const reply = await inner.send(wire, { signal: sendOptions.signal });
-      if (!reply.ok) {
-        if (reply.code !== ERROR_CODES.CONSENT_REQUIRED) calls += 1;
-        return reply;
-      }
-      calls += 1;
-      const text = scrubCredentialProse(reply.text);
-      if (findScheduleCredential({ text }) !== undefined) {
+      if (countsAsAiCall(reply)) counted();
+      if (!reply.ok) return reply;
+      const text = scrubOrWithhold(reply.text, 'deliver');
+      if (text === undefined) {
         return { ok: false, code: ERROR_CODES.HOST_ERROR, message: SCHEDULED_REPLY_WITHHELD, retryable: false };
       }
       return { ...reply, text };

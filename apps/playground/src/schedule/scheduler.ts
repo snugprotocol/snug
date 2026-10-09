@@ -87,12 +87,12 @@ import { createStore, useStore, type Store } from '../state/store.js';
 import { getUserDb, userDbStatusStore } from '../state/userdb.js';
 import { hostHonesty } from './copy.js';
 import { honestyInputFor } from './honesty.js';
-import { clearScheduleKey } from './appRun.js';
 import type { StepExecutor } from './engine-types.js';
 import { executeStep } from './executors.js';
 import { createLeaderElection, pageLocks, type LeaderElection, type LeaderLocks, type LeaderState } from './leader.js';
 import { plan } from './plan.js';
 import { DEFAULT_RUN_BOUNDS, createRunQueue, laterInstant, runBoundMs, type RunBounds, type RunHost, type RunQueue, type RunQueueState } from './queue.js';
+import { clearScheduleKey } from './scheduleKey.js';
 import { RESULT_STATUSES, messageOf, sameOccurrence } from './taskShape.js';
 import { createTicker, type Tick, type Ticker } from './tick.js';
 
@@ -397,8 +397,9 @@ function reconcileNow(trigger: ReconcileTrigger): void {
   let lastError: string | undefined;
   let freshlyRead: Rows | undefined;
   try {
-    // A wake after a gap: a sibling tab may have died mid-run since boot (S5).
-    if ((trigger === 'late' || trigger === 'visible') && sweepStaleClaims(db, now, d.bounds) > 0) wrote = true;
+    // A wake after a gap: a sibling tab may have died mid-run since boot (S5) — its claim is
+    // retired and its handshake key cleared, exactly as at boot (PR-B S7).
+    if ((trigger === 'late' || trigger === 'visible') && sweepStaleClaims(db, now, d.bounds, (run, task) => void clearScheduleKey(db, run, task)) > 0) wrote = true;
     const rows = !wrote && snapshotUsable(eng) ? (snapshot as RowsSnapshot) : (freshlyRead = readRows(db));
     const state = rows.state ?? freshSchedulerState(nowIso);
     const { actions, watermark } = plan({ tasks: rows.tasks, runsByTask: rows.runsByTask, state, now });

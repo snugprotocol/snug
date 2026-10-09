@@ -92,11 +92,13 @@ export interface SnugDbDriver {
 }
 
 /**
- * The host-side kv value cap: the scheduler's app input rides the kv handshake under the same
- * cap the task schema enforces on it (`SCHEDULE_APP_INPUT_MAX_BYTES`), so a value the task
- * admitted always lands and nothing larger can be planted through this seat.
+ * The host-side kv value cap: the scheduler's app input rides the kv handshake inside the
+ * payload `{ taskId, runId, input }`, so the cap is the input's own (`SCHEDULE_APP_INPUT_MAX_BYTES`,
+ * the task schema's) plus 256 bytes for the two ids (≤ 64 characters each) and the keys around
+ * them — a value the task admitted always lands, and nothing meaningfully larger can be planted
+ * through this seat (Gate-5 PR-B S6).
  */
-export const HOST_KV_VALUE_MAX_BYTES = SCHEDULE_APP_INPUT_MAX_BYTES;
+export const HOST_KV_VALUE_MAX_BYTES = SCHEDULE_APP_INPUT_MAX_BYTES + 256;
 
 /** The frame schema's bounds on a kv key, mirrored for the host side. */
 const KV_KEY_MAX_CHARS = 256;

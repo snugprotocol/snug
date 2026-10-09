@@ -108,6 +108,25 @@ describe('useSnugSchedule — the app side of a scheduled run (module form)', ()
     });
   });
 
+  it('useSnugSchedule may be the FIRST (and only) hook to mount: onHostEvent installs the bridge’s listener itself, so host-ready and the hint still arrive (M25)', async () => {
+    const seen: string[] = [];
+    await mount(() => {
+      useSnugSchedule((run) => {
+        seen.push(run.runId);
+        return { ok: true, summary: 'solo' };
+      });
+    });
+    await flush();
+    host.ready();
+    await flush();
+    expect(bridge.ready).toBe(true);
+    hint(host, 'run-solo');
+    await flush();
+    await answerKv('run-solo', undefined);
+    expect(seen).toEqual(['run-solo']);
+    expect(results(host)).toHaveLength(1);
+  });
+
   it('a second hint for the same runId is ignored — one kv read, one handler run, one result (even mid-flight)', async () => {
     const handler = vi.fn<SnugScheduleHandler>(async () => ({ ok: true, summary: 'once' }));
     await connected(handler);
