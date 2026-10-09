@@ -21,7 +21,8 @@
       }
     },
     "0.1.1": {
-      "published": false,
+      "published": true,
+      "integrity": "sha512-FEjQLH823SEW6idlhrxXXum2EZH2uR5ZcMiqnqjZsXyyNKTupd9VyRV7f8jcX1W3ztdra7ysuNQtkbLEmnAHwA==",
       "starters": {
         "adventure-quest": "buvQBr8eKBXn75ZTnJfFaxygjQJGq+pU3rrz2HRxIzMZCrX5AU3LrxCyzilsX6LQ",
         "chess": "Ob9bA8uxsZGFED2KT/lQIU5SMXalaUQ8WjfFXm9la6hU970KKsck8UW9dNrPk6OK",
