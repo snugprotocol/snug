@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import vm from 'node:vm';
 
-import { buildStartersPackage, escapeForInlineScript, starterFolders, wrapperSource, STARTER_PAYLOAD_FORMAT, STARTER_REGISTER_GLOBAL, STARTERS_INDEX_FORMAT } from './build-starters-pkg.mjs';
+import { buildStartersPackage, escapeForInlineScript, packageManifest, starterFolders, wrapperSource, NPM_REGISTRY, STARTER_PAYLOAD_FORMAT, STARTER_REGISTER_GLOBAL, STARTERS_INDEX_FORMAT } from './build-starters-pkg.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const EXAMPLES = path.join(REPO, 'examples');
@@ -158,4 +158,52 @@ test('cross-pin: the package catalogue equals the examples validator’s curated
   const noComments = block[1].replace(/^\s*\/\/.*$/gm, ''); // apostrophes in the comments are not quotes
   const apps = [...noComments.matchAll(/'([^']+)'/g)].map((m) => m[1]).sort((a, b) => a.localeCompare(b));
   assert.deepEqual(starterFolders(EXAMPLES), apps, 'a folder with an app.html the validator never gates would be packaged and published');
+});
+
+// TASK-20261008-p0-clearance W1: the package is publish-ready — repository, the public
+// access + registry pin, a `files` allowlist, and a LICENSE byte-equal to the given file —
+// while the wrappers (the bytes every kit bakes a sha384 of) are untouched by any of it.
+function fixtureLicense() {
+  const file = path.join(tmp('license'), 'LICENSE');
+  writeFileSync(file, 'MIT License\n\nCopyright (c) fixture\n');
+  return file;
+}
+
+test('publish metadata: repository (examples/), public access on the npm registry, a files allowlist, MIT + LICENSE bytes', () => {
+  const { dir } = hostileExamples();
+  const out = tmp('meta');
+  const licenseFile = fixtureLicense();
+  const result = buildStartersPackage({ examplesDir: dir, outDir: out, name: '@snugprotocol/starters', version: '0.0.1', licenseFile });
+  const pkg = JSON.parse(readFileSync(path.join(out, 'package.json'), 'utf8'));
+  assert.deepEqual(pkg.repository, { type: 'git', url: 'git+https://github.com/snugprotocol/snug.git', directory: 'examples' });
+  assert.deepEqual(pkg.publishConfig, { access: 'public', registry: NPM_REGISTRY });
+  assert.equal(NPM_REGISTRY, 'https://registry.npmjs.org/');
+  assert.equal(pkg.license, 'MIT');
+  assert.deepEqual(pkg.files, ['LICENSE', 'README.md', 'bare.js', 'evil.js', 'index.json']);
+  assert.equal(readFileSync(path.join(out, 'LICENSE'), 'utf8'), readFileSync(licenseFile, 'utf8'));
+  // `files` + package.json (always packed by npm) is exactly what the build emitted.
+  assert.deepEqual([...pkg.files, 'package.json'].sort(), readdirSync(out).sort());
+  assert.deepEqual([...result.files].sort(), readdirSync(out).sort());
+  assert.deepEqual(packageManifest({ name: pkg.name, version: pkg.version, wrapperFiles: ['evil.js', 'bare.js'] }), pkg);
+});
+
+test('NEGATIVE: the publish metadata never changes a wrapper byte — index.json is identical whatever the license file says', () => {
+  const { dir } = hostileExamples();
+  const a = tmp('lic-a');
+  const b = tmp('lic-b');
+  const other = path.join(tmp('license-b'), 'LICENSE');
+  writeFileSync(other, 'a different license text\n');
+  buildStartersPackage({ examplesDir: dir, outDir: a, name: '@snugprotocol/starters', version: '0.0.1', licenseFile: fixtureLicense() });
+  buildStartersPackage({ examplesDir: dir, outDir: b, name: '@snugprotocol/starters', version: '0.0.1', licenseFile: other });
+  assert.equal(readFileSync(path.join(a, 'index.json'), 'utf8'), readFileSync(path.join(b, 'index.json'), 'utf8'));
+  for (const f of ['bare.js', 'evil.js']) assert.equal(readFileSync(path.join(a, f), 'utf8'), readFileSync(path.join(b, f), 'utf8'), f);
+});
+
+test('the default license is the repository root LICENSE (MIT)', () => {
+  const { dir } = hostileExamples();
+  const out = tmp('lic-default');
+  buildStartersPackage({ examplesDir: dir, outDir: out, name: '@snugprotocol/starters', version: '0.0.1' });
+  const root = readFileSync(path.join(REPO, 'LICENSE'), 'utf8');
+  assert.ok(/MIT License/.test(root), 'the root LICENSE is MIT');
+  assert.equal(readFileSync(path.join(out, 'LICENSE'), 'utf8'), root);
 });

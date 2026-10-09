@@ -15,7 +15,7 @@
 // starter whose html carries `</script>` or `<!--` cannot end or escape whatever script
 // element happens to load it. The publishing itself is an OWNER ACT (CLAUDE.md rule 4).
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -25,6 +25,9 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const DEFAULT_EXAMPLES_DIR = path.join(ROOT, 'examples');
 export const DEFAULT_OUT_DIR = path.join(ROOT, 'apps/host/starters-pkg');
 export const STARTERS_PIN_FILE = path.join(ROOT, 'examples/starters-package.json');
+export const DEFAULT_LICENSE_FILE = path.join(ROOT, 'LICENSE');
+/** The ONE registry the package is published to and verified against (TASK-20261008-p0-clearance W1). */
+export const NPM_REGISTRY = 'https://registry.npmjs.org/';
 
 export const STARTERS_INDEX_FORMAT = 'snug-starters-index/1';
 export const STARTER_PAYLOAD_FORMAT = 'snug-starter/1';
@@ -85,7 +88,7 @@ export function starterFolders(examplesDir) {
     .sort((a, b) => a.localeCompare(b));
 }
 
-export function buildStartersPackage({ examplesDir, outDir, name, version }) {
+export function buildStartersPackage({ examplesDir, outDir, name, version, licenseFile = DEFAULT_LICENSE_FILE }) {
   rmSync(outDir, { recursive: true, force: true });
   mkdirSync(outDir, { recursive: true });
   const starters = {};
@@ -108,19 +111,39 @@ export function buildStartersPackage({ examplesDir, outDir, name, version }) {
   }
   const index = { format: STARTERS_INDEX_FORMAT, name, version, starters };
   writeFileSync(path.join(outDir, 'index.json'), `${JSON.stringify(index, null, 2)}\n`);
-  const pkg = {
+  const files = writePackageFiles(outDir, { name, version, wrapperFiles: Object.values(starters).map((s) => s.file), licenseFile });
+  return { index, files };
+}
+
+/**
+ * The publishable `package.json` (TASK-20261008-p0-clearance W1). Pure, so `publish-starters`
+ * can write it beside wrappers an OLDER commit's builder emitted — the wrappers (and so every
+ * kit's baked sha384) never depend on any field here.
+ */
+export function packageManifest({ name, version, wrapperFiles }) {
+  return {
     name,
     version,
     description: 'The Snug starter apps, one content-pinned script per starter — loaded on demand by the Snug host kit (https://snugprotocol.org).',
     license: 'MIT',
     homepage: 'https://snugprotocol.org',
+    repository: { type: 'git', url: 'git+https://github.com/snugprotocol/snug.git', directory: 'examples' },
+    bugs: { url: 'https://github.com/snugprotocol/snug/issues' },
+    publishConfig: { access: 'public', registry: NPM_REGISTRY },
+    files: [...wrapperFiles, 'index.json', 'README.md', 'LICENSE'].sort(), // code-point order: deterministic across locales
   };
+}
+
+/** Write package.json + README.md + LICENSE beside the wrappers; returns every emitted file name. */
+export function writePackageFiles(outDir, { name, version, wrapperFiles, licenseFile = DEFAULT_LICENSE_FILE }) {
+  const pkg = packageManifest({ name, version, wrapperFiles });
   writeFileSync(path.join(outDir, 'package.json'), `${JSON.stringify(pkg, null, 2)}\n`);
   writeFileSync(
     path.join(outDir, 'README.md'),
     `# ${name}\n\nThe Snug starter apps as content-pinned scripts. Each \`<starter>.js\` registers its html, docs, runtime contract and release metadata with the Snug host kit through \`window.${STARTER_REGISTER_GLOBAL}\`; \`index.json\` carries the sha384 of every file. Generated from the \`examples/\` folder of the Snug monorepo — do not edit.\n`,
   );
-  return { index, files: [...Object.values(starters).map((s) => s.file), 'index.json', 'package.json', 'README.md'] };
+  copyFileSync(licenseFile, path.join(outDir, 'LICENSE'));
+  return [...pkg.files, 'package.json'];
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
