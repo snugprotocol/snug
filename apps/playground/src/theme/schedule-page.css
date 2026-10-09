@@ -1,0 +1,517 @@
+/* schedule-page.css — the schedule page, its rows, the results feed, the hub section, the
+   missed card and the header's calendar item (TASK-20261009-scheduling-framework U1/U2/U4).
+   Its own sheet, like availability.css and brain-dock.css, @import'ed from app.css.
+   TOKENS ONLY: every colour, radius, space and duration is a tokens.css custom property, so
+   both themes come for free and nothing here invents a colour. Reuses app.css where a class
+   already says the thing: .create-bar, .section-title, .connection-note (+ -title/-actions),
+   .tile-grid, .card, .btn/.btn-*, .nav-link/.nav-link-icon, .error-note, .tile-confirm-copy. */
+
+/* ---------------------------------------------------------------- page chrome */
+
+.schedule-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.schedule-heading {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--text-xl);
+  line-height: 1.2;
+}
+
+/* Programmatic focus (the missed card leaving) must not paint a ring on a heading. */
+.schedule-heading:focus {
+  outline: none;
+}
+
+.schedule-section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-3);
+}
+
+.schedule-section-head .section-title {
+  margin-bottom: 0;
+}
+
+.schedule-count {
+  font-family: var(--font-ui);
+  font-size: var(--text-s);
+  font-weight: 400;
+  color: var(--fg-muted);
+}
+
+.schedule-hint {
+  margin: 0;
+  color: var(--fg-muted);
+  font-size: var(--text-s);
+}
+
+.schedule-loading {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.schedule-paused-banner {
+  margin: 0;
+}
+
+/* ---------------------------------------------------------------- create bar */
+
+.schedule-create-bar {
+  flex-wrap: wrap;
+  margin-top: 0;
+}
+
+.schedule-create-bar input {
+  flex: 1 1 18ch;
+  min-width: 0;
+}
+
+.schedule-create-bar .btn {
+  min-height: var(--tap);
+}
+
+/* ---------------------------------------------------------------- lists */
+
+.schedule-result-list,
+.schedule-list,
+.schedule-hub-list,
+.schedule-history,
+.missed-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+/* ---------------------------------------------------------------- results */
+
+.schedule-result {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--surface);
+  box-shadow: var(--inner-glow);
+}
+
+/* The unread edge is decoration; the word "unread" beside the status is the signal. */
+.schedule-result.is-unread {
+  border-left: 3px solid var(--ember);
+}
+
+.schedule-result-link {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: var(--space-1);
+  min-height: var(--tap);
+  padding: var(--space-3) var(--space-4);
+  color: inherit;
+}
+
+.schedule-result-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+
+.schedule-result.is-unread .schedule-result-word {
+  color: var(--ember-bright);
+}
+
+.schedule-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-pill);
+  background: var(--ember);
+}
+
+.schedule-result-summary {
+  overflow-wrap: anywhere;
+}
+
+.schedule-result-meta {
+  font-size: var(--text-s);
+  color: var(--fg-muted);
+}
+
+.schedule-result-act {
+  margin-right: var(--space-2);
+}
+
+/* ---------------------------------------------------------------- a row */
+
+.schedule-row {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--surface);
+  box-shadow: var(--inner-glow);
+}
+
+.schedule-row.is-off {
+  color: var(--fg-muted);
+}
+
+.schedule-row-line1 {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.schedule-row-title {
+  flex: 1;
+  min-width: 0;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.schedule-row-line2 {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-s);
+  color: var(--fg-muted);
+}
+
+.schedule-row.is-off .schedule-row-line2 {
+  color: var(--fg-faint);
+}
+
+.schedule-row-attention {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-s);
+  color: var(--warn);
+}
+
+.schedule-row-error {
+  margin: 0;
+}
+
+/* The switch: a 44 px target around a small track; the state word is for the eye, aria-checked for the ear. */
+.schedule-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: var(--tap);
+  min-height: var(--tap);
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-s);
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.schedule-switch-track {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  background: var(--surface-3);
+  transition: background var(--dur-1) var(--ease-out), border-color var(--dur-1) var(--ease-out);
+}
+
+.schedule-switch-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: var(--radius-pill);
+  background: var(--fg-muted);
+  transition: transform var(--dur-1) var(--ease-out), background var(--dur-1) var(--ease-out);
+}
+
+.schedule-switch[aria-checked='true'] {
+  color: var(--fg);
+}
+
+.schedule-switch[aria-checked='true'] .schedule-switch-track {
+  background: var(--ember);
+  border-color: var(--ember-deep);
+}
+
+.schedule-switch[aria-checked='true'] .schedule-switch-knob {
+  transform: translateX(16px);
+  background: var(--ember-ink);
+}
+
+/* App chips: the emoji always, the name only where there is room (the aria-label carries it). */
+.schedule-apps {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.schedule-app-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: 28px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--surface-2);
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+}
+
+/* The kebab and its menu — the identity menu's shape, scoped to the row. */
+.schedule-menu-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.schedule-kebab {
+  min-width: var(--tap);
+  min-height: var(--tap);
+  padding: 0;
+  font-size: var(--text-l);
+  line-height: 1;
+}
+
+.schedule-menu {
+  position: absolute;
+  top: calc(100% + var(--space-1));
+  right: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  min-width: 160px;
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--surface);
+  box-shadow: var(--shadow-lift);
+}
+
+.schedule-menu-item {
+  display: flex;
+  align-items: center;
+  min-height: var(--tap);
+  padding: 0 var(--space-3);
+  border: 0;
+  border-radius: var(--radius-s);
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: var(--text-s);
+  text-align: left;
+  cursor: pointer;
+}
+
+.schedule-menu-item:hover,
+.schedule-menu-item:focus-visible {
+  background: var(--surface-2);
+}
+
+.schedule-menu-item.is-danger {
+  color: var(--danger);
+}
+
+/* The armed delete: the tiles' confirm, outside the tile scope app.css gives it. */
+.schedule-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.schedule-confirm .tile-confirm-copy {
+  flex: 1;
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+}
+
+.schedule-history {
+  padding-left: var(--space-3);
+  border-left: 2px solid var(--border);
+  font-size: var(--text-s);
+  color: var(--fg-muted);
+}
+
+.schedule-history-entry {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.schedule-history-status {
+  font-weight: 700;
+  color: var(--fg);
+}
+
+/* ---------------------------------------------------------------- hub section */
+
+.schedule-hub-all {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--tap);
+  font-size: var(--text-s);
+}
+
+.schedule-hub-link {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-3);
+  min-height: var(--tap);
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--surface);
+  color: inherit;
+  transition: border-color var(--dur-1) var(--ease-out), background var(--dur-1) var(--ease-out);
+}
+
+.schedule-hub-link:hover,
+.schedule-hub-link:focus-visible {
+  border-color: var(--ember);
+  background: var(--ember-glow);
+}
+
+.schedule-hub-title {
+  flex: 1 1 14ch;
+  min-width: 0;
+  font-weight: 700;
+}
+
+.schedule-hub-when,
+.schedule-hub-next {
+  font-size: var(--text-s);
+  color: var(--fg-muted);
+}
+
+/* ---------------------------------------------------------------- templates */
+
+.schedule-template {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4);
+}
+
+.schedule-template-glyphs {
+  font-size: 1.5rem;
+  line-height: 1;
+}
+
+.schedule-template-title {
+  font-weight: 700;
+}
+
+.schedule-template-when {
+  font-size: var(--text-xs);
+  color: var(--ember-bright);
+}
+
+.schedule-template-blurb {
+  flex: 1;
+  font-size: var(--text-s);
+  color: var(--fg-muted);
+}
+
+.schedule-template-act {
+  align-self: flex-start;
+}
+
+/* ---------------------------------------------------------------- missed card */
+
+.missed-card {
+  margin: 0 0 var(--space-3);
+}
+
+.missed-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-3);
+  padding: var(--space-2) 0;
+  border-top: 1px solid var(--border);
+}
+
+.missed-row-title {
+  flex: 1 1 14ch;
+  min-width: 0;
+  font-weight: 700;
+}
+
+.missed-row-when,
+.missed-row-cost,
+.missed-row-outcome {
+  font-size: var(--text-s);
+  color: var(--fg-muted);
+}
+
+.missed-row-acts {
+  display: inline-flex;
+  gap: var(--space-1);
+}
+
+.missed-progress,
+.missed-undo,
+.missed-outcomes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/* ---------------------------------------------------------------- header item */
+
+.schedule-nav {
+  position: relative;
+  gap: var(--space-1);
+}
+
+.schedule-nav svg {
+  display: block;
+}
+
+.schedule-nav-badge {
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  background: var(--ember);
+  color: var(--ember-ink);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+/* ---------------------------------------------------------------- 375 px */
+
+@media (max-width: 760px) {
+  .schedule-app-name,
+  .schedule-switch-word {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .schedule-switch-track,
+  .schedule-switch-knob,
+  .schedule-hub-link {
+    transition: none;
+  }
+}
