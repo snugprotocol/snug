@@ -407,7 +407,7 @@ function scheduleRun(taskId: string, dueAt: string, overrides: Record<string, un
 }
 
 const PROPOSAL_SQL = "UPDATE expenses SET note = 'PLANTED-BY-A-FOREIGN-FILE' WHERE id = 7";
-const proposals = { items: [{ sql: PROPOSAL_SQL, summary: 'Fix the note', counts: { changes: 1 } }], expiresAt: minutesAgo(-60) };
+const proposals = { items: [{ appId: 'ledger', sql: PROPOSAL_SQL, summary: 'Fix the note', counts: { changes: 1 } }], expiresAt: minutesAgo(-60) };
 
 /** A donor file carrying whatever `plant` writes through the accessors — exported WITH secrets, like a sync push. */
 async function donorBytes(plant: (donor: UserDb) => void): Promise<Uint8Array> {
@@ -518,7 +518,8 @@ describe('importUserDb — scheduled tasks are executable intent (TASK-20261009 
       for (const run of [...db.listScheduleRuns('t1'), ...db.listScheduleRuns('t2')]) {
         expect(run.proposals).toBeUndefined();
       }
-      expect(db.listScheduleRuns('t1').map((r) => r.status)).toEqual(['ok', 'needs-you']); // the rows themselves survive
+      // The rows themselves survive a trusted pull; the untrusted path demotes t1 and so disarms its needs-you row (S1).
+      expect(db.listScheduleRuns('t1').map((r) => r.status)).toEqual(options?.trustedOrigin === true ? ['ok', 'needs-you'] : ['ok']);
       const adopted = await db.exportUserDb({ includeSecrets: true });
       expect(new TextDecoder('latin1').decode(adopted)).not.toContain('PLANTED-BY-A-FOREIGN-FILE');
       await db.close();
@@ -545,6 +546,82 @@ describe('importUserDb — scheduled tasks are executable intent (TASK-20261009 
       ['interrupted', 'imported'],
       ['interrupted', 'imported'],
     ]);
+    await db.close();
+  });
+
+  it('a FUTURE-dated pending row for a demoted task is gone after an untrusted import — and so are its needs-you rows (S1/S7)', async () => {
+    const bytes = await donorBytes((donor) => {
+      donor.putScheduledTask(scheduledTask('planted', { provenance: 'app', ownerAppId: 'weather' }));
+      donor.putScheduleRun(scheduleRun('planted', minutesAgo(-120), { status: 'pending', trigger: 'catch-up' })); // two hours from now
+      donor.putScheduleRun(scheduleRun('planted', minutesAgo(30), { status: 'pending', trigger: 'catch-up' })); // fresh, past
+      donor.putScheduleRun(scheduleRun('planted', minutesAgo(60), { status: 'needs-you' }));
+      donor.putScheduleRun(scheduleRun('planted', minutesAgo(90), { status: 'running', startedAt: minutesAgo(-60) })); // started in the future
+      donor.putScheduleRun(scheduleRun('planted', minutesAgo(120), { status: 'ok' }));
+      donor.putScheduleRun(scheduleRun('planted', minutesAgo(-5), { status: 'ok' })); // a result dated in the future
+    });
+    const db = await open(backend);
+
+    const report = await db.importUserDb(bytes);
+
+    expect(db.getScheduledTask('planted')).toMatchObject({ enabled: false, provenance: 'imported' });
+    expect(report.schedules.demotedTasks).toBe(1);
+    expect(db.listScheduleRuns('planted').map((r) => [r.status, r.reason])).toEqual([
+      ['ok', undefined],
+      ['interrupted', 'imported'], // the future-started claim: no host is executing it
+    ]);
+    await db.close();
+  });
+
+  it('on BOTH paths a run dated in the future is dropped and a claim started in the future is interrupted (S1/S7); a fresh past claim is kept', async () => {
+    const bytes = await donorBytes((donor) => {
+      donor.putScheduledTask(scheduledTask('t1'));
+      donor.putScheduleRun(scheduleRun('t1', minutesAgo(-3), { status: 'pending', trigger: 'catch-up' })); // three minutes from now
+      donor.putScheduleRun(scheduleRun('t1', minutesAgo(-30), { status: 'ok' }));
+      donor.putScheduleRun(scheduleRun('t1', minutesAgo(5), { status: 'running', startedAt: minutesAgo(-60) }));
+      donor.putScheduleRun(scheduleRun('t1', minutesAgo(2), { status: 'running', startedAt: minutesAgo(1) }));
+      donor.putScheduleRun(scheduleRun('t1', minutesAgo(4), { status: 'pending', trigger: 'catch-up' }));
+    });
+    for (const options of [undefined, { trustedOrigin: true }]) {
+      const db = await open(createMemoryBackend());
+      db.putScheduledTask(scheduledTask('t1')); // intent-identical: the untrusted path keeps it, like a backup round trip
+      await db.importUserDb(bytes, options);
+      expect(db.listScheduleRuns('t1').map((r) => [r.status, r.reason]), `trusted=${String(options?.trustedOrigin)}`).toEqual([
+        ['pending', undefined],
+        ['running', undefined],
+        ['interrupted', 'imported'],
+      ]);
+      await db.close();
+    }
+  });
+
+  it('UNTRUSTED: a ranThrough in the future is clamped to the import instant — a planted record cannot hold a schedule silent (S1)', async () => {
+    const future = minutesAgo(-24 * 60);
+    const bytes = await donorBytes((donor) => donor.putScheduledTask(scheduledTask('t1', { ranThrough: future })));
+    const db = await open(backend);
+    const before = Date.now();
+    await db.importUserDb(bytes);
+    const landed = db.getScheduledTask('t1');
+    expect(landed?.enabled).toBe(false);
+    expect(landed?.ranThrough).toBeDefined();
+    expect(Date.parse(landed?.ranThrough ?? '')).toBeLessThanOrEqual(Date.now());
+    expect(Date.parse(landed?.ranThrough ?? '')).toBeGreaterThanOrEqual(before);
+    await db.close();
+  });
+
+  it('a backup taken before a run and restored (UNTRUSTED) after it keeps the task ENABLED — the engine’s bookkeeping is not intent (M4/M16)', async () => {
+    const db = await open(backend);
+    const mine = scheduledTask('mine', { steps: [{ kind: 'app-think', appId: 'ledger', prompt: 'sum it', context: { maxRows: 50 } }], appVersions: { ledger: 1 } });
+    db.putScheduledTask(mine);
+    const backup = await db.exportUserDb({ includeSecrets: true });
+
+    // One run happened since: a result row, `ranThrough`, the unseen counter, a fresh `appVersions` after a resume — and no `updatedAt` stamp (M16).
+    db.putScheduleRun(scheduleRun('mine', minutesAgo(10), { status: 'ok', finishedAt: minutesAgo(9) }));
+    db.putScheduledTask({ ...mine, ranThrough: minutesAgo(10), unseenResults: 1, consecutiveFailures: 0, enabledAt: minutesAgo(30), appVersions: { ledger: 2 } });
+
+    const report = await db.importUserDb(backup);
+
+    expect(db.getScheduledTask('mine')).toMatchObject({ enabled: true, provenance: 'user' });
+    expect(report.schedules.demotedTasks).toBe(0);
     await db.close();
   });
 

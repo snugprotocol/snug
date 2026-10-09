@@ -19,8 +19,8 @@ import { useId, useRef } from 'react';
 import { SCHEDULE_EVERY_MAX_N, SCHEDULE_UNITS, SCHEDULE_UNTIL_MAX_COUNT, WEEKDAYS, type ScheduleSpec, type ScheduleUnit, type Weekday } from '@snugprotocol/protocol';
 
 import { KIND_LABELS, WHEN, ZONE } from './copy.editor.js';
-import { describeSpec, resolveZone } from './cron.js';
-import { SPEC_KINDS, WEEKDAY_KEYS, WEEKEND_KEYS, instantOf, knownZones, sortDays, specFromCronText, wallParts, type SpecKind } from './editorModel.js';
+import { WEEKDAY_KEYS, WEEKEND_KEYS, describeSpec, resolveZone, sortDays } from './cron.js';
+import { SPEC_KINDS, instantOf, knownZones, specFromCronText, wallParts, type SpecKind } from './editorModel.js';
 
 /** Full names for the day chips (U9: never an abbreviation alone) and the monthly weekday select. */
 export const DAY_NAMES: Record<Weekday, string> = {

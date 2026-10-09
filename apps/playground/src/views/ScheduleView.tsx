@@ -4,11 +4,12 @@
 // sentence is `copy.ts` / `copy.page.ts`.
 //
 // The page, top to bottom: the honesty line under the heading (where the user decides, F6) ·
-// the follower line when another tab is ticking · the global-pause banner · the CREATE BAR
-// FIRST · the missed card · results (newest first) · the schedules grouped needs your
-// attention / today / upcoming / paused · the templates, ALWAYS. Loading is a skeleton, a boot
-// that failed is an `EmptyState` with the engine's one line, a host that says
-// `allows('schedule') === false` gets a named refusal — never an empty main region.
+// the follower line when another tab is ticking · the reload strip when this tab took over
+// from a stale copy (E2) · the global-pause banner · the CREATE BAR FIRST · the missed card ·
+// results (newest first) · the schedules grouped needs your attention / today / upcoming /
+// paused · the templates, ALWAYS. Loading is a skeleton, a boot that failed is an `EmptyState`
+// with the engine's one line, a host that says `allows('schedule') === false` gets a named
+// refusal — never an empty main region.
 
 import type { ReactElement, ReactNode } from 'react';
 import { NavLink } from 'react-router';
@@ -24,6 +25,7 @@ import { attentionOf, groupTasks, resultRows, useAppIndex, useNow, type AppIndex
 import { ResultsList } from '../schedule/ResultsList.js';
 import { ScheduleCreateBar } from '../schedule/ScheduleCreateBar.js';
 import { ScheduleRow } from '../schedule/ScheduleRow.js';
+import { ReloadNote } from '../schedule/ScheduleStates.js';
 import { setGlobalPause, useScheduler, type SchedulerView } from '../schedule/scheduler.js';
 import { Templates } from '../schedule/Templates.js';
 import { Button } from '../ui/Button.js';
@@ -136,6 +138,7 @@ function SchedulePage(): ReactElement {
           {followerTab}
         </p>
       ) : null}
+      {view.needsReload === true ? <ReloadNote /> : null}
       {view.state?.globalPause === true ? (
         <div className="connection-note schedule-paused-banner" role="status" data-testid="schedule-global-paused">
           <p className="connection-note-title">{globalPaused}</p>

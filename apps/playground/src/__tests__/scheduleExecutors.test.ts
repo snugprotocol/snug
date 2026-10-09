@@ -233,11 +233,11 @@ describe('finalizeOutcome — the one place the result text is made safe to stor
       summary: 'ok',
       calls: { ai: 1, net: 0 },
       proposals: [
-        { sql: 'DELETE FROM t WHERE id = 1', summary: 'stale row', counts: { changes: 1 } },
-        { sql: "UPDATE t SET note = 'Bearer eyJhbGciOiJIUzI1NiJ9.abcdefghij.klmnopqrst' WHERE id = 2", summary: 'x', counts: { changes: 1 } },
+        { appId: 'ledger', sql: 'DELETE FROM t WHERE id = 1', summary: 'stale row', counts: { changes: 1 } },
+        { appId: 'ledger', sql: "UPDATE t SET note = 'Bearer eyJhbGciOiJIUzI1NiJ9.abcdefghij.klmnopqrst' WHERE id = 2", summary: 'x', counts: { changes: 1 } },
       ],
     });
-    expect(out.proposals).toEqual([{ sql: 'DELETE FROM t WHERE id = 1', summary: 'stale row', counts: { changes: 1 } }]);
+    expect(out.proposals).toEqual([{ appId: 'ledger', sql: 'DELETE FROM t WHERE id = 1', summary: 'stale row', counts: { changes: 1 } }]);
   });
 
   it('an absent summary stays absent and an empty one stays empty — no sentence is invented', () => {

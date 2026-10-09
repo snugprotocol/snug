@@ -1,13 +1,18 @@
 // schedule/ScheduleSheet.tsx — the run header's SMALL sheet (TASK-20261009-scheduling-framework
 // U5; design F3; the share-sheet precedent). For THIS app only: the sentence box, the one step
 // kind — *ask <app>'s AI* with a prompt, or *remind me* — and two acts: `more options` opens the
-// full editor prefilled (`/schedule/new?text=…&app=<id>`), `schedule it` writes the schedule
-// here through the engine's own `createTask`, behind the consent panel whenever the step asks
-// the AI (U8). Through `ConfirmOverlay`, which PORTALS to <body> — the header's backdrop-filter
-// would otherwise confine a fixed overlay to the header's box (lesson 2026-08-26).
+// full editor prefilled (`routes.newScheduleHref({ text, app })`), `schedule it` writes the
+// schedule here through the engine's own `createTask`, behind the consent panel whenever the
+// step asks the AI (U8). Through `ConfirmOverlay`, which PORTALS to <body> — the header's
+// backdrop-filter would otherwise confine a fixed overlay to the header's box (lesson
+// 2026-08-26).
 //
-// The reminder's words are the sentence minus the schedule it read ("remind me to stretch every
-// weekday at 8" → "remind me to stretch"); when nothing is left, the app's name stands in.
+// THE WORDS BESIDE THE SCHEDULE are read the editor's way and no other (design F1): ONE
+// `readSchedule` gives the when and the phrase it was read from, and `editorModel.remainderOf`
+// keeps what the person typed around it — "remind me to stretch every weekday at 8" →
+// "stretch" — as the reminder's title and message or the ask's title. When nothing is left,
+// the app's name stands in. The clock is the page's (`useNow` for what is shown,
+// `pageClock.now()` in the act), the same one the editor and the rows read.
 
 import type { ReactElement } from 'react';
 import { useEffect, useMemo, useState } from 'react';
@@ -22,10 +27,12 @@ import { ConfirmOverlay } from '../ui/ConfirmOverlay.js';
 import { EMPTY, stepLabel } from './copy.js';
 import { ACTIONS, SENTENCE, SHEET, STEPS } from './copy.editor.js';
 import { describeSpec, nextOccurrence, resolveZone } from './cron.js';
-import { approvedHostsByApp } from './editorModel.js';
+import { approvedHostsByApp, remainderOf } from './editorModel.js';
 import { EnableConsent } from './EnableConsent.js';
-import { parseScheduleText, scheduleOffer } from './parseScheduleText.js';
+import { pageClock, useNow } from './pageModel.js';
+import { readSchedule } from './parseScheduleText.js';
 import { formatOccurrence } from './PreviewAndCost.js';
+import { newScheduleHref } from './routes.js';
 import { createTask } from './scheduler.js';
 
 export interface ScheduleSheetProps {
@@ -34,14 +41,6 @@ export interface ScheduleSheetProps {
 }
 
 type SheetKind = 'app-think' | 'notify';
-
-/** The sentence with the schedule it read taken out — the reminder's own words. */
-export function wordsBesideSchedule(text: string, now: Date): string {
-  const offer = scheduleOffer(text, now, 'device');
-  const lowered = text.toLowerCase();
-  const stripped = offer === undefined ? lowered : lowered.replace(offer.phrase, ' ');
-  return stripped.replace(/\s+/g, ' ').trim();
-}
 
 export function ScheduleSheet({ appId, onClose }: ScheduleSheetProps): ReactElement {
   const navigate = useNavigate();
@@ -68,9 +67,11 @@ export function ScheduleSheet({ appId, onClose }: ScheduleSheetProps): ReactElem
     };
   }, [appId]);
 
-  const now = useMemo(() => new Date(), [text, kind, prompt]);
-  const spec = useMemo(() => (text.trim() === '' ? undefined : parseScheduleText(text, now, 'device')), [text, now]);
-  const words = wordsBesideSchedule(text, now);
+  const now = useNow();
+  // One reading: the when, and the phrase it was read from — the remainder is the task's own words.
+  const reading = useMemo(() => (text.trim() === '' ? undefined : readSchedule(text, now, 'device')), [text, now]);
+  const spec = reading?.spec;
+  const words = remainderOf(text, reading?.phrase ?? '');
   const ready = spec !== undefined && (kind === 'notify' || prompt.trim() !== '');
 
   const build = (): { steps: ScheduleStep[]; spec: ScheduleSpec; title: string } | undefined => {
@@ -94,7 +95,7 @@ export function ScheduleSheet({ appId, onClose }: ScheduleSheetProps): ReactElem
       setError(result.reason);
       return;
     }
-    const next = nextOccurrence(result.task.spec, new Date(), { anchor: new Date(result.task.createdAt) });
+    const next = nextOccurrence(result.task.spec, pageClock.now(), { anchor: new Date(result.task.createdAt) });
     setConsent(undefined);
     setDone(ACTIONS.scheduled(next === undefined ? describeSpec(result.task.spec) : formatOccurrence(next, resolveZone(result.task.spec.tz))));
   };
@@ -110,11 +111,8 @@ export function ScheduleSheet({ appId, onClose }: ScheduleSheetProps): ReactElem
   };
 
   const moreOptions = (): void => {
-    const params = new URLSearchParams();
-    if (text.trim() !== '') params.set('text', text.trim());
-    params.set('app', appId);
     onClose();
-    navigate(`/schedule/new?${params.toString()}`);
+    navigate(newScheduleHref({ text: text.trim(), app: appId }));
   };
 
   const heading = SHEET.heading(name);

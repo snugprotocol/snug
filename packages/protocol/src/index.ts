@@ -323,6 +323,7 @@ export {
   STEP_RESULT_STATUSES,
   TASK_PROVENANCES,
   WEEKDAYS,
+  canonicalScheduleIntent,
   canonicalScheduledTask,
   findScheduleCredential,
   isIanaTimeZone,

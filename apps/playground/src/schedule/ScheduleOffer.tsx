@@ -14,30 +14,27 @@ import type { ReactElement } from 'react';
 import { Link } from 'react-router';
 
 import { chatOffer } from './copy.js';
-import { OFFER } from './copy.bits.js';
+import { OFFER } from './copy.page.js';
+import { pageClock } from './pageModel.js';
 import { scheduleOffer } from './parseScheduleText.js';
+import { newScheduleHref } from './routes.js';
 
 export interface ScheduleOfferProps {
   /** The user's message, exactly as sent — what the editor route receives. */
   text: string;
 }
 
-/** The editor route, prefilled with the message. */
-export function scheduleOfferHref(text: string): string {
-  return `/schedule/new?text=${encodeURIComponent(text)}`;
-}
-
 export const ScheduleOffer = memo(function ScheduleOffer({ text }: ScheduleOfferProps): ReactElement | null {
   // `now` matters only to relative phrases ("in 20 minutes"), and only for the phrase quoted
   // back; the editor re-parses the text at its own `now`.
-  const offer = useMemo(() => scheduleOffer(text, new Date(), 'device'), [text]);
+  const offer = useMemo(() => scheduleOffer(text, pageClock.now(), 'device'), [text]);
   const [dismissed, setDismissed] = useState(false);
   if (offer === undefined || dismissed) return null;
   const copy = chatOffer(offer.phrase);
   return (
     <div className="schedule-offer" data-testid="schedule-offer">
       <span className="schedule-offer-text">{copy.text}</span>
-      <Link to={scheduleOfferHref(text)} className="btn btn-ghost schedule-offer-review">
+      <Link to={newScheduleHref({ text })} className="btn btn-ghost schedule-offer-review">
         {copy.action}
       </Link>
       <button type="button" className="btn btn-ghost" aria-label={OFFER.dismissName} onClick={() => setDismissed(true)}>

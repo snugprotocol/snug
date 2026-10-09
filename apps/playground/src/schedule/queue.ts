@@ -9,13 +9,23 @@
 //  `pending` means it is already recorded — claimed by another tab, finished here, skipped,
 //  carried in by a sync pull — and the item is DROPPED without a call. A `pending` row (a
 //  catch-up candidate the user answered with *run*) is replaced by the claim, under the row's
-//  own `dueAt` string so the accessor's upsert replaces in place rather than beside it.
+//  own `dueAt` string so the accessor's upsert replaces in place rather than beside it. The
+//  task is read FRESH from the file: one that is off (`enabled: false` — the user's switch, an
+//  engine pause, an untrusted import) is never claimed by a due or catch-up item, only by the
+//  user's own `manual` run (Gate-5 S1). A claim the accessor REFUSES — a history full of
+//  results waiting on the user, the schedule gone — is said (`lastError` on the queue's state,
+//  `onChange`) and counted as one consecutive failure on the task, so the fifth refusal pauses
+//  it like a fifth failure would (Gate-5 S5): nothing runs unrecorded, and nothing stays
+//  silently stuck.
 //
 //  ONE AT A TIME, FIFO, UNDER A BOUND. Each run gets one `AbortController` and a timeout —
 //  `thinkMs` when any step is *Ask the AI*, else `runMs` — so a stuck executor can never hold
-//  the queue; the signal reaches the executor through its context. `cancelCurrent()` (the
-//  user's cancel) and `abortAll(reason)` (a file swap, the global pause) abort the same way;
-//  the run is recorded `interrupted` with the reason (`timeout` | `cancelled` | the given one).
+//  the queue: every step is RACED against the signal (Gate-5 M7), so an executor that ignores
+//  it is left behind (its late answer or rejection is dropped) rather than waited for. The
+//  signal still reaches the executor through its context so a well-behaved one stops early.
+//  `cancelCurrent()` (the user's cancel) and `abortAll(reason)` (a file swap, the global
+//  pause) abort the same way; the run is recorded `interrupted` with the reason (`timeout` |
+//  `cancelled` | the given one).
 //
 //  THE STEP RULES. A step whose app is gone from the file is `blocked` (`appMissing`) without
 //  calling the executor. An *Ask the AI* step the day's ceiling would not admit — counting
@@ -30,9 +40,14 @@
 //  AFTER THE STEPS. One final write replaces the claim: `finishedAt`, the step results (the
 //  executor scrubbed and capped them; the row is shrunk to the run's byte cap if five of them
 //  still overflow it), the summed `calls`, the *Ask the AI* proposals with one `expiresAt`
-//  (`SCHEDULE_PROPOSAL_TTL_MS`). Then the day's counters, then the task (`applyRunOutcome`,
-//  `ranThrough` = max(ranThrough, dueAt), `updatedAt`) — re-read fresh, because the user may
-//  have edited it while the run was in flight. A notification is HOST-DECIDED (§6): the
+//  (`SCHEDULE_PROPOSAL_TTL_MS`) — each item naming the app its step asked (Gate-5 S4), pooled
+//  as the steps answered them. Should that write be refused, a MINIMAL row — the claim, the
+//  status, `finishedAt`, the bare step statuses, reason `result too large` — replaces the
+//  claim instead (Gate-5 M17): the occurrence is on record either way. Then the day's
+//  counters, then the task (`applyRunOutcome`, `ranThrough` = max(ranThrough, dueAt)) —
+//  re-read fresh, because the user may have edited it while the run was in flight, and
+//  WITHOUT touching `updatedAt`: that stamp is the user's edits', and a run must not change
+//  what a backup compares by (Gate-5 M16). A notification is HOST-DECIDED (§6): the
 //  executor's `alert` is a suggestion the queue honours once per run, only when the task's
 //  `alert` is `notification` and the seat has `notify`, with the body prefixed by the
 //  schedule's title and cut to the protocol's 120 characters. The seat is deliberately NOT
@@ -67,6 +82,7 @@ import { bumpScheduleRevision } from '../platform/signals.js';
 import { createStore, type Store } from '../state/store.js';
 import type { StepContext, StepExecutor, StepOutcome } from './engine-types.js';
 import { applyRunOutcome, dailyCounters, wouldExceedCeiling } from './protection.js';
+import { messageOf } from './taskShape.js';
 
 /** The per-run bounds (E5): 120 s, or 300 s when a step asks the AI. */
 export const DEFAULT_RUN_BOUNDS: RunBounds = { runMs: 120_000, thinkMs: 300_000 };
@@ -96,6 +112,8 @@ export interface RunQueueState {
   running?: RunningView;
   /** Items waiting behind the running one. */
   queued: number;
+  /** The last claim the file refused, in one line — cleared by the next claim that lands (S5). */
+  lastError?: string;
 }
 
 export interface RunQueueDeps {
@@ -139,8 +157,6 @@ export function laterInstant(a: string | undefined, b: string): string {
   if (Number.isNaN(bms)) return a;
   return ams >= bms ? a : b;
 }
-
-const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
 const cut = (text: string, max: number): string => (text.length <= max ? text : text.slice(0, max));
 
@@ -195,12 +211,27 @@ export function fitRunRow(row: ScheduleRun): ScheduleRun {
   return withoutProposals;
 }
 
+/** The reason a minimal row carries when the full result could not be written (M17). */
+export const RESULT_TOO_LARGE_REASON = 'result too large';
+
+/** A promise that REJECTS when the signal aborts — the executor's opponent in the race (M7). Already handled: a late abort is never an unhandled rejection. */
+function abortedPromise(signal: AbortSignal): Promise<never> {
+  const promise = new Promise<never>((_resolve, reject) => {
+    const fail = (): void => reject(new Error('aborted'));
+    if (signal.aborted) fail();
+    else signal.addEventListener('abort', fail, { once: true });
+  });
+  promise.catch(() => undefined);
+  return promise;
+}
+
 export function createRunQueue(deps: RunQueueDeps): RunQueue {
   const bounds = deps.bounds ?? DEFAULT_RUN_BOUNDS;
   const state = createStore<RunQueueState>({ queued: 0 });
   const waiting: QueueItem[] = [];
   let current: { abort: (reason: string) => void } | undefined;
   let draining: Promise<void> | undefined;
+  let lastError: string | undefined;
 
   const changed = (): void => {
     bumpScheduleRevision();
@@ -208,13 +239,34 @@ export function createRunQueue(deps: RunQueueDeps): RunQueue {
   };
 
   const publish = (running: RunningView | undefined): void => {
-    state.set(running === undefined ? { queued: waiting.length } : { running, queued: waiting.length });
+    state.set({
+      ...(running !== undefined ? { running } : {}),
+      queued: waiting.length,
+      ...(lastError !== undefined ? { lastError } : {}),
+    });
   };
+
+  /** A claim the file refused (S5): say it, count it against the task, and move on — nothing runs unrecorded. */
+  function refuseClaim(db: UserDb, task: ScheduledTask, claim: ScheduleRun, err: unknown): void {
+    lastError = messageOf(err);
+    const fresh = db.getScheduledTask(task.id);
+    if (fresh !== undefined) {
+      const counted = applyRunOutcome(fresh, { ...claim, status: 'failed' });
+      try {
+        db.putScheduledTask({ ...counted, unseenResults: fresh.unseenResults }); // a failure to record is not a result to open
+      } catch {
+        // The task row itself is refused: the error on the state is all that can be said.
+      }
+    }
+    publish(state.get().running);
+    changed();
+  }
 
   async function runItem(item: QueueItem): Promise<void> {
     const db = await deps.db();
     const task = db.getScheduledTask(item.task.id);
     if (task === undefined) return; // deleted while it waited
+    if (!task.enabled && item.trigger !== 'manual') return; // off is off (S1): only the user's own *run now* goes
     const dueMs = instant(item.dueAt);
     const existing = db.listScheduleRuns(task.id).find((row) => instant(row.dueAt) === dueMs);
     if (existing !== undefined && existing.status !== 'pending') return; // already recorded — never re-run
@@ -234,9 +286,11 @@ export function createRunQueue(deps: RunQueueDeps): RunQueue {
     };
     try {
       db.putScheduleRun(claim);
-    } catch {
-      return; // the history is full of rows waiting on the user, or the schedule went away: nothing runs unrecorded
+    } catch (err) {
+      refuseClaim(db, task, claim, err); // the history is full of rows waiting on the user, or the schedule went away
+      return;
     }
+    lastError = undefined;
     changed();
 
     const controller = new AbortController();
@@ -248,6 +302,7 @@ export function createRunQueue(deps: RunQueueDeps): RunQueue {
     };
     current = { abort };
     const timer = setTimeout(() => abort('timeout'), runBoundMs(task.steps, bounds));
+    const aborted = abortedPromise(controller.signal);
 
     const results: StepResult[] = [];
     const calls = { ...ZERO_CALLS };
@@ -285,7 +340,15 @@ export function createRunQueue(deps: RunQueueDeps): RunQueue {
         }
         let outcome: StepOutcome;
         try {
-          outcome = await deps.execute(step, context);
+          // The race (M7): the signal's rejection wins over an executor that never answers; the loser's late answer is dropped.
+          let attempt: Promise<StepOutcome>;
+          try {
+            attempt = Promise.resolve(deps.execute(step, context));
+          } catch (err) {
+            attempt = Promise.reject(err);
+          }
+          attempt.catch(() => undefined);
+          outcome = await Promise.race([attempt, aborted]);
         } catch (err) {
           if (controller.signal.aborted) {
             results.push({ status: 'skipped' });
@@ -325,7 +388,12 @@ export function createRunQueue(deps: RunQueueDeps): RunQueue {
     try {
       db.putScheduleRun(row);
     } catch {
-      // The claim stands as written; the boot sweep retires it to `interrupted` past its bound.
+      // The full result is refused (the byte cap, most likely): a minimal row that always parses replaces the claim (M17).
+      try {
+        db.putScheduleRun({ ...claim, status: fold.status, finishedAt, steps: results.map(({ status }) => ({ status })), calls, reason: RESULT_TOO_LARGE_REASON });
+      } catch {
+        // The schedule went away mid-run: there is nothing left to record it on.
+      }
     }
 
     if (calls.ai > 0 || calls.net > 0) {
@@ -339,7 +407,7 @@ export function createRunQueue(deps: RunQueueDeps): RunQueue {
     const fresh = db.getScheduledTask(task.id);
     if (fresh !== undefined) {
       const next = applyRunOutcome(fresh, row);
-      db.putScheduledTask({ ...next, ranThrough: laterInstant(fresh.ranThrough, row.dueAt), updatedAt: finishedAt });
+      db.putScheduledTask({ ...next, ranThrough: laterInstant(fresh.ranThrough, row.dueAt) }); // bookkeeping, never `updatedAt` (M16)
     }
     changed();
 

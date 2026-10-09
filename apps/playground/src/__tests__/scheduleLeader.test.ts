@@ -106,20 +106,52 @@ const throwingLocks = (): LeaderLocks =>
 const hangingLocks = (): LeaderLocks =>
   ({ request: (): Promise<never> => new Promise<never>(() => undefined) }) as unknown as LeaderLocks;
 
-/** A manager the test answers by hand, so a reply can arrive AFTER the probe bound. */
-function deferredLocks(): LeaderLocks & { answer(lock: Lock | null): void } {
+/** A manager the test answers by hand, so a reply — a grant, a null or a rejection — can arrive AFTER the probe bound. */
+function deferredLocks(): LeaderLocks & { answer(lock: Lock | null): void; reject(): void } {
   let pending: Callback<unknown> | undefined;
+  let rejectRequest: ((reason: unknown) => void) | undefined;
   const manager = {
     request: (_name: string, _options: unknown, callback?: Callback<unknown>): Promise<unknown> => {
       pending = typeof _options === 'function' ? (_options as Callback<unknown>) : callback;
-      return new Promise<unknown>(() => undefined);
+      return new Promise<unknown>((_resolve, reject) => {
+        rejectRequest = reject;
+      });
     },
     answer: (lock: Lock | null): void => {
       if (pending === undefined) throw new Error('nothing to answer');
       pending(lock);
     },
+    reject: (): void => {
+      if (rejectRequest === undefined) throw new Error('nothing to reject');
+      rejectRequest(new DOMException('The request is not allowed', 'SecurityError'));
+    },
   };
-  return manager as unknown as LeaderLocks & { answer(lock: Lock | null): void };
+  return manager as unknown as LeaderLocks & { answer(lock: Lock | null): void; reject(): void };
+}
+
+/**
+ * A manager whose name is HELD elsewhere (the probe answers null) and whose parked blocking
+ * requests REJECT asynchronously `rejections` times before one parks for real — granted by
+ * `release()`. A `throwOnPark` manager throws synchronously on the blocking request instead.
+ */
+function flakyHeldLocks(rejections: number, throwOnPark = false): LeaderLocks & { release(): void; blocking: number } {
+  let grant: (() => void) | undefined;
+  const manager = {
+    blocking: 0,
+    release: (): void => grant?.(),
+    request: (name: string, first: unknown, second?: unknown): Promise<unknown> => {
+      const options = (typeof first === 'function' ? {} : first) as LockOptions;
+      const callback = (typeof first === 'function' ? first : second) as Callback<unknown>;
+      if (options.ifAvailable) return Promise.resolve().then(() => callback(null));
+      manager.blocking += 1;
+      if (throwOnPark) throw new DOMException('The request is not allowed', 'SecurityError');
+      if (manager.blocking <= rejections) return Promise.reject(new DOMException('The request is not allowed', 'SecurityError'));
+      return new Promise((resolve) => {
+        grant = () => resolve(callback({ name, mode: 'exclusive' }));
+      });
+    },
+  };
+  return manager as unknown as LeaderLocks & { release(): void; blocking: number };
 }
 
 /** Wait on a condition across microtasks — never on a fixed delay (vitest.config.ts). */
@@ -134,6 +166,8 @@ async function until(predicate: () => boolean, what: string): Promise<void> {
 const NAME = 'snug-scheduler:1f0b8a12-7c3d-4e2a-9f11-0a2b3c4d5e6f';
 const LEADER_UNDER_LOCKS: LeaderState = { leader: true, canSeeSiblings: true, reason: 'locks' };
 const FOLLOWER: LeaderState = { leader: false, canSeeSiblings: true, reason: 'locks' };
+/** The probe is still out past its bound: not leading, siblings unknown (S9). */
+const UNANSWERED: LeaderState = { leader: false, canSeeSiblings: false, reason: 'locks-pending' };
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -188,7 +222,7 @@ describe('createLeaderElection — a manager that refuses', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it('leads with reason locks-refused at exactly probeMs when request() never settles', async () => {
+  it('a probe unanswered at probeMs settles start() as a FOLLOWER (locks-pending) — a mere timeout never makes a second leader (S9)', async () => {
     const election = createLeaderElection({ name: NAME, locks: hangingLocks(), probeMs: 2_000 });
     let settled = false;
     void election.start().then(() => {
@@ -199,16 +233,19 @@ describe('createLeaderElection — a manager that refuses', () => {
     expect(election.state.get().leader).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
     expect(settled).toBe(true);
-    expect(election.state.get()).toEqual({ leader: true, canSeeSiblings: false, reason: 'locks-refused' });
+    expect(election.state.get()).toEqual(UNANSWERED);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(election.state.get()).toEqual(UNANSWERED); // and stays so until the manager speaks
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('defaults the probe bound to 2 s', async () => {
     const election = createLeaderElection({ name: NAME, locks: hangingLocks() });
     void election.start();
     await vi.advanceTimersByTimeAsync(DEFAULT_PROBE_MS - 1);
-    expect(election.state.get().leader).toBe(false);
+    expect(election.state.get()).toEqual({ leader: false, canSeeSiblings: false, reason: 'locks' });
     await vi.advanceTimersByTimeAsync(1);
-    expect(election.state.get().leader).toBe(true);
+    expect(election.state.get()).toEqual(UNANSWERED);
     expect(DEFAULT_PROBE_MS).toBe(2_000);
   });
 
@@ -227,21 +264,74 @@ describe('createLeaderElection — a manager that refuses', () => {
     const election = createLeaderElection({ name: NAME, locks, probeMs: 100 });
     void election.start();
     await vi.advanceTimersByTimeAsync(100);
-    expect(election.state.get()).toEqual({ leader: true, canSeeSiblings: false, reason: 'locks-refused' });
+    expect(election.state.get()).toEqual(UNANSWERED);
     locks.answer({ name: NAME, mode: 'exclusive' });
-    await until(() => election.state.get().reason === 'locks', 'late grant adopted');
+    await until(() => election.state.get().leader, 'late grant adopted');
     expect(election.state.get()).toEqual(LEADER_UNDER_LOCKS);
   });
 
-  it('adopts a probe answer that arrives after the bound: a late null steps down to follower', async () => {
+  it('adopts a probe answer that arrives after the bound: a late null follows (and parks the promotion request)', async () => {
     const locks = deferredLocks();
     const election = createLeaderElection({ name: NAME, locks, probeMs: 100 });
     void election.start();
     await vi.advanceTimersByTimeAsync(100);
-    expect(election.state.get().leader).toBe(true);
+    expect(election.state.get()).toEqual(UNANSWERED);
     locks.answer(null);
-    await until(() => !election.state.get().leader, 'late null adopted');
+    await until(() => election.state.get().reason === 'locks', 'late null adopted');
     expect(election.state.get()).toEqual(FOLLOWER);
+  });
+
+  it('adopts a probe answer that arrives after the bound: a late REJECTION leads with locks-refused — the manager, not the clock, said no', async () => {
+    const locks = deferredLocks();
+    const election = createLeaderElection({ name: NAME, locks, probeMs: 100 });
+    void election.start();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(election.state.get()).toEqual(UNANSWERED);
+    locks.reject();
+    await until(() => election.state.get().leader, 'late rejection adopted');
+    expect(election.state.get()).toEqual({ leader: true, canSeeSiblings: false, reason: 'locks-refused' });
+  });
+});
+
+describe('createLeaderElection — a parked promotion request that fails (S9)', () => {
+  it('a parked request rejected asynchronously keeps this context a FOLLOWER and parks again after probeMs — never a second leader', async () => {
+    const locks = flakyHeldLocks(2);
+    const election = createLeaderElection({ name: NAME, locks, probeMs: 500 });
+    await election.start();
+    expect(election.state.get()).toEqual(FOLLOWER);
+    expect(locks.blocking).toBe(1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(election.state.get()).toEqual(FOLLOWER); // the first rejection landed: still a follower
+    await vi.advanceTimersByTimeAsync(500);
+    expect(locks.blocking).toBe(2); // parked again, after the bound
+    await vi.advanceTimersByTimeAsync(500);
+    expect(locks.blocking).toBe(3); // the third one holds
+    expect(election.state.get()).toEqual(FOLLOWER);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(locks.blocking).toBe(3); // a request that parks is not retried
+    locks.release();
+    await until(() => election.state.get().leader, 'promoted when the holder released');
+    expect(election.state.get()).toEqual(LEADER_UNDER_LOCKS);
+  });
+
+  it('stop() while a retry is pending clears the timer and never parks again', async () => {
+    const locks = flakyHeldLocks(5);
+    const election = createLeaderElection({ name: NAME, locks, probeMs: 500 });
+    await election.start();
+    await vi.advanceTimersByTimeAsync(0);
+    election.stop();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(locks.blocking).toBe(1);
+    expect(election.state.get().leader).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('a parked request that THROWS synchronously still leads with locks-refused — a manager that worked a moment ago and refuses now', async () => {
+    const locks = flakyHeldLocks(0, true);
+    const election = createLeaderElection({ name: NAME, locks });
+    await election.start();
+    expect(election.state.get()).toEqual({ leader: true, canSeeSiblings: false, reason: 'locks-refused' });
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
 

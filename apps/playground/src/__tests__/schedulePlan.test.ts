@@ -281,9 +281,36 @@ describe('plan — missed occurrences by policy', () => {
   });
 
   it('a stale one-off is skipped, not asked', () => {
-    const at = ago(2 * DAY);
+    const at = ago(30 * HOUR);
     const once = task({ spec: { kind: 'once', at: iso(at), tz: 'UTC' }, cron: '', staleAfterMs: DAY });
-    expect(plan(input({ tasks: [once], state: state({ watermark: CREATED }) })).actions[0]).toMatchObject({ kind: 'skip', reason: 'stale' });
+    expect(plan(input({ tasks: [once], state: state({ watermark: iso(ago(47 * HOUR)) }) })).actions[0]).toMatchObject({ kind: 'skip', reason: 'stale' });
+  });
+});
+
+describe('plan — the window is clamped to the freshness edge (M18)', () => {
+  const askedFrom = (t: ScheduledTask, watermark: string): string => {
+    const occurrences = vi.fn<typeof occurrencesBetween>(() => []);
+    plan(input({ tasks: [t], state: state({ watermark }), occurrences }));
+    expect(occurrences).toHaveBeenCalledTimes(1);
+    return (occurrences.mock.calls[0] as Parameters<typeof occurrencesBetween>)[1].toISOString();
+  };
+
+  it('a window reaching more than a day past now − staleAfterMs starts at the edge: months of a 5-minute schedule are never enumerated to learn they are stale', () => {
+    const t = task({ spec: { kind: 'every', n: 5, unit: 'minutes', tz: 'UTC' }, cron: '*/5 * * * *', staleAfterMs: 5 * MINUTE });
+    expect(askedFrom(t, iso(ago(90 * DAY)))).toBe(iso(ago(5 * MINUTE)));
+    expect(askedFrom(task({ staleAfterMs: HOUR }), iso(ago(3 * DAY)))).toBe(iso(ago(HOUR)));
+  });
+
+  it('a window the 400-day search bound would truncate is clamped too — the planner must always see the LATEST occurrence', () => {
+    expect(askedFrom(task({ staleAfterMs: 7 * DAY }), iso(ago(500 * DAY)))).toBe(iso(ago(7 * DAY)));
+  });
+
+  it('a window within a day of the edge is NOT clamped — the stale line for what it holds is still written', () => {
+    const watermark = iso(ago(7 * DAY + 12 * HOUR));
+    expect(askedFrom(task({ staleAfterMs: 7 * DAY }), watermark)).toBe(watermark);
+    const elevenDaily = task({ spec: { kind: 'daily', time: '11:00', tz: 'UTC' }, cron: '0 11 * * *', staleAfterMs: HOUR });
+    const result = plan(input({ tasks: [elevenDaily], state: state({ watermark: iso(ago(24 * HOUR)) }) }));
+    expect(result.actions[0]).toMatchObject({ kind: 'skip', reason: 'stale', dueAt: '2026-10-09T11:00:00.000Z' });
   });
 });
 
@@ -359,6 +386,39 @@ describe('plan — the end of a schedule', () => {
   it('once ranThrough has passed endsAt the end is on record — nothing more is planned', () => {
     const result = plan(input({ tasks: [task({ endsAt: '2026-10-09T10:30:00.000Z', ranThrough: '2026-10-09T11:00:00.000Z' })] }));
     expect(result.actions).toEqual([]);
+  });
+
+  it('until.count counts RECORDED runs, not the calendar (M9): a task paused through its occurrences still gets its remaining fires', () => {
+    // Hourly, 3 times, created Oct 1: the calendar says the three fired on Oct 1 and nothing is left.
+    const counted = task({ spec: { kind: 'every', n: 1, unit: 'hours', tz: 'UTC', until: { kind: 'count', count: 3 } } });
+    const byCalendar = plan(input({ tasks: [counted], runsByTask: {} }));
+    expect(byCalendar.actions).toEqual([
+      { kind: 'pending', taskId: 't1', dueAt: '2026-10-09T12:00:00.000Z', collapsedCount: 1 },
+      { kind: 'advance', taskId: 't1', ranThrough: '2026-10-09T12:00:00.000Z' },
+    ]);
+    // One run on record: two fires remain, so 12:00 is planned; three on record: nothing is.
+    const recorded = (statuses: ScheduleRun['status'][]): Record<string, ScheduleRun[]> => ({
+      t1: statuses.map((status, i) => run({ dueAt: iso(ago((i + 2) * HOUR)), status })),
+    });
+    expect(plan(input({ tasks: [counted], runsByTask: recorded(['ok']) })).actions[0]).toMatchObject({ kind: 'pending', dueAt: '2026-10-09T12:00:00.000Z' });
+    expect(plan(input({ tasks: [counted], runsByTask: recorded(['ok', 'failed', 'needs-you']) })).actions.filter((a) => a.kind !== 'advance')).toEqual([]);
+    // A candidate the user never answered and a skip are not fires.
+    const withCandidate = plan(input({ tasks: [counted], runsByTask: recorded(['ok', 'pending', 'skipped']) })).actions;
+    expect(withCandidate.find((a) => a.kind === 'pending')).toMatchObject({ dueAt: '2026-10-09T12:00:00.000Z' });
+  });
+
+  it('until.count: the recorded count is handed to the engine as `spent`; a history at the entry cap falls back to the calendar (it may have been pruned)', () => {
+    const counted = task({ spec: { kind: 'daily', time: '09:00', tz: 'UTC', until: { kind: 'count', count: 100 } }, cron: '0 9 * * *' });
+    const occurrences = vi.fn<typeof occurrencesBetween>(() => []);
+    const rows = (n: number): ScheduleRun[] => Array.from({ length: n }, (_, i) => run({ dueAt: iso(ago((i + 2) * HOUR)), status: 'ok' }));
+    plan(input({ tasks: [counted], runsByTask: { t1: [...rows(4), run({ dueAt: iso(ago(HOUR)), status: 'pending' })] }, occurrences }));
+    expect((occurrences.mock.calls[0] as Parameters<typeof occurrencesBetween>)[3]?.spent).toBe(4);
+    occurrences.mockClear();
+    plan(input({ tasks: [counted], runsByTask: { t1: rows(50) }, occurrences }));
+    expect((occurrences.mock.calls[0] as Parameters<typeof occurrencesBetween>)[3]?.spent).toBeUndefined();
+    occurrences.mockClear();
+    plan(input({ tasks: [task()], runsByTask: { t1: rows(2) }, occurrences })); // no until: nothing to count
+    expect((occurrences.mock.calls[0] as Parameters<typeof occurrencesBetween>)[3]?.spent).toBeUndefined();
   });
 
   it('a spec until-date is respected by the engine: nothing after the end of that day is planned', () => {

@@ -56,6 +56,7 @@ import { modeStore, providerStore } from '../state/mode.js';
 import { currentBrain } from '../state/webllm.js';
 import { appMissing } from './copy.js';
 import type { StepContext, StepOutcome } from './engine-types.js';
+import { messageOf } from './taskShape.js';
 
 export type AppThinkStep = Extract<ScheduleStep, { kind: 'app-think' }>;
 
@@ -151,11 +152,6 @@ export interface RenderThinkContextInput {
   maxRows: number;
 }
 
-function errorMessage(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  return typeof err === 'string' ? err : String(err);
-}
-
 /** Cut the DDL at a UTF-8 byte bound without splitting a character. */
 function boundDdl(ddl: string): string {
   const bytes = new TextEncoder().encode(ddl);
@@ -215,7 +211,7 @@ async function runContextQuery(db: UserDb, appId: string, sql: string): Promise<
     const result = await db.scratchRun(appId, [{ sql }]);
     return result.statements[0] ?? { error: 'no result' };
   } catch (err) {
-    return { error: errorMessage(err) };
+    return { error: messageOf(err) };
   }
 }
 
@@ -238,12 +234,17 @@ function readReply(text: string): ReadReply {
   return { answer, candidates };
 }
 
-/** Only the two fields the item schema knows, the reason trimmed to its cap rather than dropping the change for verbosity. */
-function toItem(candidate: unknown): { sql: string; summary?: string } | undefined {
+/**
+ * The item schema's fields, the reason trimmed to its cap rather than dropping the change for
+ * verbosity, and the app it is FOR set HERE from the step — never from the reply (Gate-5 S4:
+ * a run pools the items of every step it ran, and the approval card applies each one against
+ * its own app's data).
+ */
+function toItem(candidate: unknown, appId: string): { appId: string; sql: string; summary?: string } | undefined {
   if (typeof candidate !== 'object' || candidate === null) return undefined;
   const { sql, summary } = candidate as Record<string, unknown>;
   if (typeof sql !== 'string') return undefined;
-  return { sql, ...(typeof summary === 'string' ? { summary: summary.slice(0, SCHEDULE_PROPOSAL_SUMMARY_MAX_CHARS) } : {}) };
+  return { appId, sql, ...(typeof summary === 'string' ? { summary: summary.slice(0, SCHEDULE_PROPOSAL_SUMMARY_MAX_CHARS) } : {}) };
 }
 
 /** The dry run on the throwaway copy: the count, or `undefined` when the statement was refused or failed. */
@@ -266,15 +267,16 @@ interface DryRunOutcome {
 
 /**
  * At most `SCHEDULE_PROPOSALS_PER_RUN` candidates are CONSIDERED (bounded work: never more
- * dry runs than one result may hold); each must parse as one DML statement
- * (`scheduleProposalItemSchema` → `isSingleDmlStatement`), carry no credential, and dry-run
- * to a count. Anything else is dropped and said.
+ * dry runs than one result may hold); each must parse as one DML statement over literal
+ * values (`scheduleProposalItemSchema` → `isSingleDmlStatement`, which also refuses a nested
+ * `SELECT`/`FROM` — Gate-5 S8: a subquery reaches every table the app holds), carry no
+ * credential, and dry-run to a count. Anything else is dropped and said.
  */
 async function dryRunCandidates(db: UserDb, appId: string, candidates: readonly unknown[]): Promise<DryRunOutcome> {
   const kept: ScheduleProposalItem[] = [];
   let dropped = 0;
   for (const candidate of candidates.slice(0, SCHEDULE_PROPOSALS_PER_RUN)) {
-    const item = toItem(candidate);
+    const item = toItem(candidate, appId);
     const parsed = item === undefined ? undefined : scheduleProposalItemSchema.safeParse(item);
     if (parsed === undefined || !parsed.success || findScheduleCredential(parsed.data) !== undefined) {
       dropped += 1;

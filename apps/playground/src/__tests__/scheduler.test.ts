@@ -18,6 +18,7 @@ import { SCHEDULE_PROPOSAL_TTL_MS, type ScheduleRun, type ScheduleStep, type Sch
 
 import { resetThreadSessions } from '../agent/threadSessions.js';
 import type { SnugPlatform } from '../platform/platform.js';
+import { bumpScheduleRevision } from '../platform/signals.js';
 import type { StepContext, StepExecutor, StepOutcome } from '../schedule/engine-types.js';
 import type { LeaderLocks } from '../schedule/leader.js';
 import {
@@ -297,7 +298,42 @@ describe('reconcile (E4/E5)', () => {
     expect(h.rec.calls).toHaveLength(0);
     expect(schedulerStore.get().pending).toBe(1);
     expect(db.getScheduledTask('t1')?.ranThrough).toBe(TWELVE);
+    expect(db.getScheduledTask('t1')?.updatedAt, 'the advance is bookkeeping, not an edit (M16)').toBe(CREATED);
     expect(db.getSchedulerState()?.watermark).toBe(iso(clock));
+  });
+
+  it('a reconcile with nothing written since the last refresh re-reads NO rows: it plans over the view’s own (M3)', async () => {
+    seed();
+    const h = harness();
+    await initScheduler(h.deps);
+    const reads = vi.spyOn(db, 'listAllScheduleRuns');
+    clock += 30_000;
+    await reconcile('tick');
+    expect(reads).toHaveBeenCalledTimes(0);
+    db.putScheduleRun(run({ dueAt: iso(NOW - HOUR), status: 'ok' }));
+    bumpScheduleRevision(); // a write announces itself: the refresh re-reads once, the reconcile after it reads nothing more
+    await reconcile('tick');
+    expect(reads).toHaveBeenCalledTimes(1);
+    expect(schedulerStore.get().runsByTask.t1).toHaveLength(1);
+    reads.mockRestore();
+  });
+
+  it('a `late` or `visible` reconcile sweeps a stale running claim that appeared after boot; a minute tick does not (S5)', async () => {
+    seed();
+    const h = harness();
+    await initScheduler(h.deps);
+    db.putScheduleRun(run({ id: 'ghost', dueAt: iso(NOW - 10 * MINUTE), status: 'running', startedAt: iso(NOW - 10 * MINUTE) }));
+    bumpScheduleRevision();
+    h.ticker.built[0]?.fire('minute');
+    await vi.waitFor(() => expect(schedulerStore.get().lastReconcileAt).toBe(iso(clock)));
+    expect(rows().find((row) => row.id === 'ghost')?.status).toBe('running');
+    h.ticker.built[0]?.fire('late');
+    await vi.waitFor(() => expect(rows().find((row) => row.id === 'ghost')?.status).toBe('interrupted'));
+    expect(rows().find((row) => row.id === 'ghost')).toMatchObject({ reason: 'stale claim' });
+    db.putScheduleRun(run({ id: 'ghost2', dueAt: iso(NOW - 9 * MINUTE), status: 'running', startedAt: iso(NOW - 9 * MINUTE) }));
+    bumpScheduleRevision();
+    h.ticker.built[0]?.fire('visible');
+    await vi.waitFor(() => expect(rows().find((row) => row.id === 'ghost2')?.status).toBe('interrupted'));
   });
 
   it('a refused write between candidate rows leaves the watermark where it was (mutation: write the watermark first → red)', async () => {
@@ -349,7 +385,7 @@ describe('reconcile (E4/E5)', () => {
     expect(schedulerStore.get().lastReconcileAt).toBe(iso(clock));
   });
 
-  it('a follower NEVER enqueues: a late occurrence stays unrun and the watermark stays; a promotion reconciles at once', async () => {
+  it('a follower NEVER enqueues: a late occurrence stays unrun and the watermark stays; a promotion over its boot-time copy asks for a reload and plans NOTHING (S3)', async () => {
     seed({ enabledAt: iso(NOW - 35 * MINUTE) });
     const before = iso(NOW - 10 * MINUTE);
     db.setSchedulerState(freshSchedulerState(before)); // a leader would run 12:00 as late from here
@@ -358,6 +394,7 @@ describe('reconcile (E4/E5)', () => {
     await initScheduler(h.deps);
     expect(schedulerStore.get().leader).toEqual({ leader: false, canSeeSiblings: true, reason: 'locks' });
     expect(schedulerStore.get().ready).toBe(true);
+    expect(schedulerStore.get().needsReload).toBe(false);
     expect(schedulerStore.get().lastReconcileAt).toBeUndefined();
     // The lock is keyed on THIS file's id (`getFileId()`), so two files on one origin never share a ticker.
     const lockName = lockNameFor(db, (d) => d.getFileId());
@@ -371,12 +408,17 @@ describe('reconcile (E4/E5)', () => {
     expect(db.getSchedulerState()?.watermark).toBe(before);
     expect(schedulerStore.get().tasks.map((t) => t.id)).toEqual(['t1']); // the view is read all the same
     clock += MINUTE;
-    locks.release(); // the leader tab closed
+    locks.release(); // the leader tab closed: this tab is promoted over the handle it opened at boot — stale after the leader's writes
     await vi.waitFor(() => expect(schedulerStore.get().leader?.leader).toBe(true));
-    await vi.waitFor(() => expect(rows()[0]?.status).toBe('ok'));
-    expect(rows()[0]).toMatchObject({ trigger: 'late', dueAt: TWELVE });
-    expect(schedulerStore.get().lastReconcileAt).toBe(iso(clock));
-    expect(db.getSchedulerState()?.watermark).toBe(iso(clock));
+    expect(schedulerStore.get().needsReload).toBe(true);
+    h.ticker.built[0]?.fire('minute');
+    h.ticker.built[0]?.fire('late');
+    await reconcile('manual');
+    expect(h.rec.calls).toHaveLength(0);
+    expect(rows()).toEqual([]);
+    expect(db.getSchedulerState()?.watermark).toBe(before);
+    expect(schedulerStore.get().lastReconcileAt).toBeUndefined();
+    expect(schedulerStore.get().tasks.map((t) => t.id)).toEqual(['t1']); // the view still reads
   });
 
   it('runs an *Ask the AI* step through the injected executor and records its proposals and calls', async () => {
@@ -386,11 +428,11 @@ describe('reconcile (E4/E5)', () => {
       status: 'ok',
       summary: 'two unpaid',
       calls: { ai: 1, net: 0 },
-      proposals: [{ sql: 'UPDATE ledger SET paid = 1 WHERE id = 7', summary: 'mark 7 paid' }],
+      proposals: [{ appId: 'ledger', sql: 'UPDATE ledger SET paid = 1 WHERE id = 7', summary: 'mark 7 paid' }],
     }));
     await initScheduler(h.deps);
     await vi.waitFor(() => expect(rows()[0]?.status).toBe('ok'));
-    expect(rows()[0]?.proposals).toEqual({ items: [{ sql: 'UPDATE ledger SET paid = 1 WHERE id = 7', summary: 'mark 7 paid' }], expiresAt: iso(NOW + SCHEDULE_PROPOSAL_TTL_MS) });
+    expect(rows()[0]?.proposals).toEqual({ items: [{ appId: 'ledger', sql: 'UPDATE ledger SET paid = 1 WHERE id = 7', summary: 'mark 7 paid' }], expiresAt: iso(NOW + SCHEDULE_PROPOSAL_TTL_MS) });
     expect(db.getSchedulerState()?.daily).toEqual({ date: '2026-10-09', ai: 1, net: 0 });
     expect(schedulerStore.get().unseen).toBe(1);
   });
@@ -456,6 +498,25 @@ describe('createTask / updateTask / setTaskEnabled (floors, defaults, app versio
     const on = await setTaskEnabled(t.id, true);
     expect(on.ok && on.task).toMatchObject({ enabled: true, enabledAt: iso(clock), consecutiveFailures: 0, unseenResults: 0, appVersions: { ledger: 2 } });
   });
+
+  it('setTaskEnabled(true) applies the floor of the task’s provenance and refuses an imported schedule until the editor’s reviewed save — both routed to review (S2/M2)', async () => {
+    await initScheduler(harness().deps);
+    const imported = seed({ id: 'imp', provenance: 'imported', enabled: false });
+    const refused = await setTaskEnabled(imported.id, true);
+    expect(refused).toEqual({ ok: false, reason: 'this schedule arrived with an imported file — review it before turning it on', route: 'review' });
+    expect(db.getScheduledTask('imp')?.enabled).toBe(false);
+    const reviewed = await setTaskEnabled(imported.id, true, { reviewed: true });
+    expect(reviewed.ok && reviewed.task).toMatchObject({ enabled: true, provenance: 'imported', enabledAt: iso(NOW) });
+
+    const tooOften = seed({ id: 'often', provenance: 'chat', enabled: false, spec: { kind: 'every', n: 10, unit: 'minutes', tz: 'UTC' }, cron: '*/10 * * * *' });
+    const floor = await setTaskEnabled(tooOften.id, true);
+    expect(floor.ok).toBe(false);
+    expect(!floor.ok && floor.reason).toContain('15 minutes');
+    expect(!floor.ok && floor.route).toBe('review');
+    expect(db.getScheduledTask('often')?.enabled).toBe(false);
+    const fine = await setTaskEnabled(seed({ id: 'ok', provenance: 'user', enabled: false, spec: { kind: 'every', n: 10, unit: 'minutes', tz: 'UTC' }, cron: '*/10 * * * *' }).id, true);
+    expect(fine.ok).toBe(true);
+  });
 });
 
 describe('the pending acts, seen, history, delete', () => {
@@ -494,14 +555,42 @@ describe('the pending acts, seen, history, delete', () => {
     expect(await runPending('nope', iso(NOW))).toEqual({ ok: false, reason: 'no such schedule' });
   });
 
-  it('runNow enqueues a manual run due this instant', async () => {
-    seed({ enabled: false });
+  it('runNow enqueues a manual run due this instant for an ENABLED schedule and refuses a disabled or paused one by name (M2)', async () => {
+    seed();
+    seed({ id: 'off', title: 'Night check', enabled: false });
+    seed({ id: 'paused', title: 'Weekly sum', enabled: false, pausedReason: 'failures' });
     const h = harness();
     await initScheduler(h.deps);
     expect(await runNow('t1')).toEqual({ ok: true });
     await vi.waitFor(() => expect(rows()[0]?.status).toBe('ok'));
     expect(rows()[0]).toMatchObject({ trigger: 'manual', dueAt: iso(NOW) });
+    expect(await runNow('off')).toEqual({ ok: false, reason: '“Night check” is off — turn it on to run it' });
+    expect(await runNow('paused')).toEqual({ ok: false, reason: '“Weekly sum” is off — turn it on to run it' });
+    expect(rows('off')).toEqual([]);
     expect(await runNow('nope')).toEqual({ ok: false, reason: 'no such schedule' });
+  });
+
+  it('runPending and runAllPending skip a disabled schedule’s candidates (S1); a refused claim surfaces as the view’s lastError (S5)', async () => {
+    seed({ id: 't1' });
+    seed({ id: 'off', title: 'Night check', enabled: false });
+    db.putScheduleRun(run({ taskId: 't1', dueAt: iso(NOW - 2 * HOUR), status: 'pending', trigger: 'catch-up' }));
+    db.putScheduleRun(run({ taskId: 'off', dueAt: iso(NOW - 3 * HOUR), status: 'pending', trigger: 'catch-up' }));
+    db.setSchedulerState(freshSchedulerState(iso(NOW)));
+    const h = harness();
+    await initScheduler(h.deps);
+    expect(await runPending('off', iso(NOW - 3 * HOUR))).toEqual({ ok: false, reason: '“Night check” is off — turn it on to run it' });
+    expect(await runAllPending()).toBe(1);
+    await vi.waitFor(() => expect(h.rec.calls).toHaveLength(1));
+    expect(h.rec.calls[0]?.ctx.task.id).toBe('t1');
+    expect(rows('off')[0]?.status).toBe('pending');
+
+    seed({ id: 'full' });
+    for (let i = 0; i < 50; i += 1) {
+      db.putScheduleRun(run({ taskId: 'full', id: `ny-${i}`, dueAt: iso(NOW - (i + 1) * HOUR), status: 'needs-you' }));
+    }
+    expect(await runNow('full')).toEqual({ ok: true });
+    await vi.waitFor(() => expect(schedulerStore.get().lastError).toMatch(/waiting on the user/));
+    expect(h.rec.calls).toHaveLength(1);
   });
 
   it('markSeen is a user gesture: seenAt stamped once, the task’s unseen count down by one; markAllSeen clears the rest', async () => {
@@ -521,6 +610,25 @@ describe('the pending acts, seen, history, delete', () => {
     expect(db.getScheduledTask('t1')?.unseenResults).toBe(0);
     expect(schedulerStore.get().unseen).toBe(0);
     expect(rows().filter((row) => row.status === 'skipped')[0]?.seenAt).toBeUndefined();
+  });
+
+  it('opening a FAILED result keeps the counter consistent: the fold counted it, the gesture takes it off; a skip is never a result (M8)', async () => {
+    seed({ enabledAt: iso(NOW - 35 * MINUTE) });
+    db.setSchedulerState(freshSchedulerState(iso(NOW - 10 * MINUTE)));
+    const h = harness({}, () => {
+      throw new Error('no channel');
+    });
+    await initScheduler(h.deps);
+    await vi.waitFor(() => expect(rows()[0]?.status).toBe('failed'));
+    expect(db.getScheduledTask('t1')?.unseenResults).toBe(1);
+    expect(schedulerStore.get().unseen).toBe(1);
+    await markSeen('t1', TWELVE);
+    expect(db.getScheduledTask('t1')?.unseenResults).toBe(0);
+    expect(schedulerStore.get().unseen).toBe(0);
+    db.putScheduleRun(run({ dueAt: iso(NOW - 5 * HOUR), status: 'skipped', reason: 'stale' }));
+    await markSeen('t1', iso(NOW - 5 * HOUR));
+    expect(db.getScheduledTask('t1')?.unseenResults).toBe(0);
+    expect(rows().find((row) => row.status === 'skipped')?.seenAt).toBeUndefined();
   });
 
   it('clearHistory keeps what is not dealt with; deleteTask removes the schedule and its rows and the view follows', async () => {

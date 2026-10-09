@@ -266,6 +266,81 @@ describe('one at a time, claimed before anything runs (E5)', () => {
   });
 });
 
+describe('a disabled schedule and the claim that cannot land (S1, S5)', () => {
+  it('a disabled schedule is never claimed by a due or catch-up item — only the user’s own manual run goes', async () => {
+    const t = seed({ enabled: false });
+    const rec = recorder();
+    const q = queue(rec.execute);
+    q.enqueue({ task: t, dueAt: DUE, trigger: 'catch-up', collapsedCount: 3 });
+    q.enqueue({ task: { ...t, enabled: true }, dueAt: '2026-10-09T13:00:00.000Z', trigger: 'due', collapsedCount: 1 }); // the ITEM says enabled; the file says off
+    await q.idle();
+    expect(rec.calls).toHaveLength(0);
+    expect(rows()).toEqual([]);
+    q.enqueue({ task: t, dueAt: DUE, trigger: 'manual', collapsedCount: 1 });
+    await q.idle();
+    expect(rec.calls).toHaveLength(1);
+    expect(rows()[0]).toMatchObject({ status: 'ok', trigger: 'manual' });
+  });
+
+  it('after 50 needs-you results the next due run is still recorded (a seen one was pruned); with none seen the refused claim surfaces as lastError and counts as a failure', async () => {
+    const needsYou = (taskId: string, i: number, seenAt?: string): ScheduleRun => ({
+      id: `ny-${taskId}-${i}`,
+      taskId,
+      dueAt: new Date(Date.UTC(2026, 0, 1) + i * 60_000).toISOString(),
+      trigger: 'due',
+      collapsedCount: 1,
+      status: 'needs-you',
+      host: { kind: 'web' },
+      steps: [],
+      calls: { ai: 0, net: 0 },
+      ...(seenAt !== undefined ? { seenAt } : {}),
+    });
+    const t1 = seed({ id: 't1' });
+    for (let i = 0; i < 50; i += 1) db.putScheduleRun(needsYou('t1', i, i === 7 ? CREATED : undefined));
+    const rec = recorder();
+    const onChange = vi.fn();
+    const q = queue(rec.execute, { onChange });
+    q.enqueue(item(t1));
+    await q.idle();
+    expect(rec.calls).toHaveLength(1);
+    expect(rows('t1')[0]).toMatchObject({ status: 'ok', dueAt: DUE });
+    expect(rows('t1').map((r) => r.id)).not.toContain('ny-t1-7');
+    expect(q.state.get().lastError).toBeUndefined();
+
+    const t2 = seed({ id: 't2' });
+    for (let i = 0; i < 50; i += 1) db.putScheduleRun(needsYou('t2', i));
+    onChange.mockClear();
+    for (let n = 1; n <= 5; n += 1) {
+      q.enqueue({ task: t2, dueAt: new Date(Date.parse(DUE) + n * 3_600_000).toISOString(), trigger: 'due', collapsedCount: 1 });
+      await q.idle();
+      expect(rec.calls, `claim ${n}`).toHaveLength(1); // nothing runs unrecorded
+      expect(q.state.get().lastError, `claim ${n}`).toMatch(/waiting on the user/);
+      expect(db.getScheduledTask('t2')?.consecutiveFailures, `claim ${n}`).toBe(n);
+    }
+    expect(onChange).toHaveBeenCalled(); // the view learns of the refusal
+    expect(db.getScheduledTask('t2')).toMatchObject({ enabled: false, pausedReason: 'failures' }); // the fifth refusal pauses it, like a fifth failure
+    expect(rows('t2')).toHaveLength(50);
+  });
+
+  it('when the final row write fails, a minimal row — the status, finishedAt, bare step statuses, reason "result too large" — still replaces the claim (M17)', async () => {
+    const t = seed({ steps: [NOTIFY, NOTIFY] });
+    const original = db.putScheduleRun.bind(db);
+    let writes = 0;
+    vi.spyOn(db, 'putScheduleRun').mockImplementation((row) => {
+      writes += 1;
+      if (writes === 2) throw new Error('refused: too big');
+      original(row);
+    });
+    const q = queue(recorder(() => ok('a long summary')).execute);
+    q.enqueue(item(t));
+    await q.idle();
+    expect(writes).toBe(3);
+    expect(rows()[0]).toMatchObject({ status: 'ok', finishedAt: now().toISOString(), reason: 'result too large', steps: [{ status: 'ok' }, { status: 'ok' }] });
+    expect(rows()[0]?.steps[0]?.summary).toBeUndefined();
+    expect(db.getScheduledTask('t1')?.ranThrough).toBe(DUE);
+  });
+});
+
 describe('the step rules', () => {
   it('a step whose app is gone is `blocked` (appMissing) without a call; the other steps still run; the run is needs-you', async () => {
     const t = seed({ steps: [{ kind: 'app-think', appId: 'gone', prompt: 'x', context: { maxRows: 50 } }, NOTIFY] });
@@ -349,7 +424,7 @@ describe('after the steps: the row, the counters, the task, the notification', (
     const rec = recorder(() => {
       n += 1;
       return ok(`thought ${n}`, { ai: 1, net: 0 }, {
-        proposals: [{ sql: `UPDATE ledger SET paid = 1 WHERE id = ${n}`, summary: `mark ${n}`, counts: { changes: 1 } }],
+        proposals: [{ appId: 'ledger', sql: `UPDATE ledger SET paid = 1 WHERE id = ${n}`, summary: `mark ${n}`, counts: { changes: 1 } }],
       });
     });
     const q = queue(rec.execute);
@@ -361,15 +436,29 @@ describe('after the steps: the row, the counters, the task, the notification', (
     expect(row.finishedAt).toBe(now().toISOString());
     expect(row.proposals).toEqual({
       items: [
-        { sql: 'UPDATE ledger SET paid = 1 WHERE id = 1', summary: 'mark 1', counts: { changes: 1 } },
-        { sql: 'UPDATE ledger SET paid = 1 WHERE id = 2', summary: 'mark 2', counts: { changes: 1 } },
+        { appId: 'ledger', sql: 'UPDATE ledger SET paid = 1 WHERE id = 1', summary: 'mark 1', counts: { changes: 1 } },
+        { appId: 'ledger', sql: 'UPDATE ledger SET paid = 1 WHERE id = 2', summary: 'mark 2', counts: { changes: 1 } },
       ],
       expiresAt: new Date(NOW_MS + SCHEDULE_PROPOSAL_TTL_MS).toISOString(),
     });
     expect(db.getSchedulerState()?.daily).toEqual({ date: '2026-10-09', ai: 5, net: 1 });
   });
 
-  it('applies the outcome to the task: unseenResults +1 on ok, ranThrough = dueAt, updatedAt stamped — read fresh, not from the item', async () => {
+  it('a two-step run over two apps pools the items with each one’s own appId — the card applies each against its own app (S4)', async () => {
+    db.installApp({ appId: 'notes', displayName: 'Notes', html: '<html>notes</html>' });
+    const t = seed({ steps: [THINK, { kind: 'app-think', appId: 'notes', prompt: 'tidy', context: { maxRows: 50 } }] });
+    const rec = recorder((step) =>
+      ok('thought', { ai: 1, net: 0 }, {
+        proposals: [{ appId: step.kind === 'notify' ? 'none' : step.appId, sql: `DELETE FROM t WHERE app = '${step.kind === 'notify' ? '' : step.appId}'`, counts: { changes: 1 } }],
+      }),
+    );
+    const q = queue(rec.execute);
+    q.enqueue(item(t));
+    await q.idle();
+    expect(rows()[0]?.proposals?.items.map((p) => p.appId)).toEqual(['ledger', 'notes']);
+  });
+
+  it('applies the outcome to the task: unseenResults +1 on ok, ranThrough = dueAt — read fresh, not from the item — and NEVER stamps updatedAt (M16)', async () => {
     const t = seed({ unseenResults: 2 });
     const gate = deferred<undefined>();
     const rec = recorder(async () => {
@@ -383,7 +472,7 @@ describe('after the steps: the row, the counters, the task, the notification', (
     clock += 5_000;
     gate.resolve(undefined);
     await q.idle();
-    expect(db.getScheduledTask('t1')).toMatchObject({ title: 'Renamed mid-run', unseenResults: 3, ranThrough: DUE, updatedAt: now().toISOString() });
+    expect(db.getScheduledTask('t1')).toMatchObject({ title: 'Renamed mid-run', unseenResults: 3, ranThrough: DUE, updatedAt: CREATED });
   });
 
   it('ranThrough never moves backwards: a manual run for an older instant keeps the newer record', async () => {
@@ -496,7 +585,7 @@ describe('the bound and the aborts', () => {
     q.cancelCurrent();
     await q.idle();
     expect(rows()[0]).toMatchObject({ status: 'interrupted', reason: 'cancelled', finishedAt: now().toISOString() });
-    expect(db.getScheduledTask('t1')).toMatchObject({ consecutiveFailures: 0, unseenResults: 0, ranThrough: DUE });
+    expect(db.getScheduledTask('t1')).toMatchObject({ consecutiveFailures: 0, unseenResults: 1, ranThrough: DUE }); // an interrupted run is a result to open (M8)
     expect(q.state.get()).toEqual({ queued: 0 });
   });
 
@@ -515,6 +604,22 @@ describe('the bound and the aborts', () => {
     expect(rows('t1')[0]).toMatchObject({ status: 'interrupted', reason: 'file swap' });
     expect(rows('t2')).toEqual([]); // never claimed: the next reconcile finds it again
     expect(rec.calls).toHaveLength(1);
+    expect(q.state.get()).toEqual({ queued: 0 });
+  });
+
+  it('an executor that ignores the signal — never settling after the abort — is still cut short: the bound bounds (M7)', async () => {
+    const t = seed();
+    const started = deferred<undefined>();
+    const stuck: StepExecutor = () =>
+      new Promise<StepOutcome>(() => {
+        started.resolve(undefined);
+      });
+    const q = queue(stuck);
+    q.enqueue(item(t));
+    await started.promise;
+    q.cancelCurrent();
+    await q.idle();
+    expect(rows()[0]).toMatchObject({ status: 'interrupted', reason: 'cancelled', steps: [{ status: 'skipped' }] });
     expect(q.state.get()).toEqual({ queued: 0 });
   });
 

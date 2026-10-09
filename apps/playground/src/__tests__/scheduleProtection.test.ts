@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 
 import { RUN_STATUSES, SCHEDULE_DAILY_CEILINGS, type RunStatus, type ScheduleRun, type ScheduledTask, type SchedulerState } from '@snugprotocol/protocol';
 
+import { RESULT_STATUSES } from '../schedule/taskShape.js';
 import {
   appDrift,
   applyRunOutcome,
@@ -103,8 +104,8 @@ describe('applyRunOutcome', () => {
     expect(next.pausedReason).toBeUndefined();
   });
 
-  it.each(['failed', 'no-handler'] as const)('%s adds one consecutive failure and nothing unseen', (status) => {
-    expect(applyRunOutcome(task({ consecutiveFailures: 1, unseenResults: 2 }), run(status))).toMatchObject({ consecutiveFailures: 2, unseenResults: 2, enabled: true });
+  it.each(['failed', 'no-handler'] as const)('%s adds one consecutive failure AND one unseen result — a failure is a result the user may open (M8)', (status) => {
+    expect(applyRunOutcome(task({ consecutiveFailures: 1, unseenResults: 2 }), run(status))).toMatchObject({ consecutiveFailures: 2, unseenResults: 3, enabled: true });
   });
 
   it('the fifth consecutive failure pauses the task for failures', () => {
@@ -117,9 +118,20 @@ describe('applyRunOutcome', () => {
     expect(applyRunOutcome(task({ consecutiveFailures: 2, unseenResults: 0 }), run('needs-you'))).toMatchObject({ consecutiveFailures: 2, unseenResults: 1 });
   });
 
-  it.each(['skipped', 'interrupted', 'capped', 'pending', 'running'] as const)('%s changes no counter', (status) => {
+  it.each(['skipped', 'pending', 'running'] as const)('%s changes no counter', (status) => {
     const before = task({ consecutiveFailures: 2, unseenResults: 7 });
     expect(applyRunOutcome(before, run(status))).toMatchObject({ consecutiveFailures: 2, unseenResults: 7, enabled: true });
+  });
+
+  it.each(['interrupted', 'capped'] as const)('%s adds one unseen result and leaves the failure streak alone (M8)', (status) => {
+    expect(applyRunOutcome(task({ consecutiveFailures: 2, unseenResults: 7 }), run(status))).toMatchObject({ consecutiveFailures: 2, unseenResults: 8, enabled: true });
+  });
+
+  it('the unseen counter moves for EXACTLY the statuses the view counts as results — one set, `RESULT_STATUSES` (M8)', () => {
+    for (const status of RUN_STATUSES) {
+      expect(applyRunOutcome(task({ unseenResults: 0 }), run(status)).unseenResults, status).toBe(RESULT_STATUSES.has(status) ? 1 : 0);
+    }
+    expect([...RESULT_STATUSES].sort()).toEqual(['capped', 'failed', 'interrupted', 'needs-you', 'no-handler', 'ok']);
   });
 
   it('the thirtieth unseen result pauses the task as ignored', () => {

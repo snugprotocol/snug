@@ -10,7 +10,7 @@
 import type { ReactElement } from 'react';
 
 import { RUNNING_CHIP, WORDS } from './copy.js';
-import { cancelName } from './copy.bits.js';
+import { cancelName } from './copy.page.js';
 import { cancelRunning, useScheduler } from './scheduler.js';
 
 export function RunningChip(): ReactElement | null {

@@ -4,8 +4,9 @@
 // storage key the web seat reads, and `denied` says where to change it; the honesty line is
 // the host's; a follower says so; *clear history* is armed before it clears, and the accessor
 // keeps what is still waiting on the user; "never let apps suggest schedules" is a storage
-// flag PR-B reads. The card is mounted in SettingsView after the connections section, gated
-// on `allows('schedule')`.
+// flag PR-B reads — and until PR-B reads it the switch is NOT rendered (a control that
+// changes nothing is a lie), only its key is exported. The card is mounted in SettingsView
+// after the connections section, gated on `allows('schedule')`.
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
@@ -16,8 +17,8 @@ import type { ScheduleRun, ScheduledTask } from '@snugprotocol/protocol';
 
 import type { SnugPlatform } from '../platform/platform.js';
 import { WEB_NOTIFY_OPT_IN_KEY } from '../platform/webNotify.js';
-import { SETTINGS } from '../schedule/copy.bits.js';
 import { followerTab, globalPaused } from '../schedule/copy.js';
+import { SETTINGS } from '../schedule/copy.page.js';
 import { NO_SUGGESTIONS_KEY, NOTIFY_OPT_IN_KEY, ScheduleSettingsCard } from '../schedule/ScheduleSettingsCard.js';
 import { __resetSchedulerForTests, initScheduler, schedulerStore, type SchedulerDeps } from '../schedule/scheduler.js';
 import { SettingsView } from '../views/SettingsView.js';
@@ -267,28 +268,15 @@ describe('clear history (F19)', () => {
 });
 
 describe('never let apps suggest schedules (ADR-0074 §4; PR-B reads it)', () => {
-  it('is a storage flag: on writes "1", off removes it', async () => {
-    await initScheduler(deps());
-    const el = await render(<ScheduleSettingsCard />);
-    const toggle = el.querySelector<HTMLButtonElement>('[data-testid="schedule-no-suggestions"]');
-    expect(toggle?.getAttribute('aria-checked')).toBe('false');
-    expect(NO_SUGGESTIONS_KEY).toBe('snug:schedule-no-suggestions');
-    await act(async () => {
-      toggle?.click();
-    });
-    expect(localStorage.getItem(NO_SUGGESTIONS_KEY)).toBe('1');
-    expect(toggle?.getAttribute('aria-checked')).toBe('true');
-    await act(async () => {
-      toggle?.click();
-    });
-    expect(localStorage.getItem(NO_SUGGESTIONS_KEY)).toBeNull();
-  });
-
-  it('reads the flag back at mount', async () => {
+  it('is NOT rendered until PR-B reads the flag (M11): no switch, no sentence — the key stays exported under its name', async () => {
     localStorage.setItem(NO_SUGGESTIONS_KEY, '1');
     await initScheduler(deps());
     const el = await render(<ScheduleSettingsCard />);
-    expect(el.querySelector('[data-testid="schedule-no-suggestions"]')?.getAttribute('aria-checked')).toBe('true');
+    expect(el.querySelector('[data-testid="schedule-no-suggestions"]')).toBeNull();
+    expect(el.textContent).not.toContain(SETTINGS.noSuggestions);
+    expect(el.textContent).not.toContain(SETTINGS.noSuggestionsHint);
+    expect([...el.querySelectorAll('[role="switch"]')]).toHaveLength(1);
+    expect(NO_SUGGESTIONS_KEY).toBe('snug:schedule-no-suggestions');
   });
 });
 

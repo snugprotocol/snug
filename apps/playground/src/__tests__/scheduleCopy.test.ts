@@ -27,9 +27,12 @@ import {
   CONSENT,
   EMPTY,
   MISSED_ACTIONS,
+  RESULT_STATUS_WORD,
   RUNNING_CHIP,
+  STEP_STATUS_WORD,
   SUGGESTION_ACTIONS,
   WORDS,
+  aiCalls,
   alertLabel,
   alertSentence,
   appMissing,
@@ -54,6 +57,7 @@ import {
   stepLabel,
   suggestionStrip,
 } from '../schedule/copy.js';
+import { PAUSE_AFTER_FAILURES, PAUSE_AFTER_UNSEEN } from '../schedule/protection.js';
 
 describe('vocabulary (Q8) — the five nouns and the three step kinds', () => {
   it('WORDS is the user-facing vocabulary, nothing internal', () => {
@@ -78,6 +82,35 @@ describe('vocabulary (Q8) — the five nouns and the three step kinds', () => {
     expect(stepLabel('app-run')).toBe('run this app');
     expect(stepLabel('app-think')).toBe('ask this app’s AI');
     expect(stepLabel('notify', 'Ledger')).toBe('remind me');
+  });
+
+  it('aiCalls is the ONE pluraliser (M12): none, one, many', () => {
+    expect(aiCalls(0)).toBe('no AI calls');
+    expect(aiCalls(1)).toBe('1 AI call');
+    expect(aiCalls(2)).toBe('2 AI calls');
+    expect(aiCalls(100)).toBe('100 AI calls');
+  });
+});
+
+describe('status words (M5) — the one table every surface prints', () => {
+  it('RESULT_STATUS_WORD: a word per run status, never colour alone', () => {
+    expect(RESULT_STATUS_WORD).toEqual({
+      pending: 'missed',
+      running: 'running',
+      ok: 'done',
+      failed: 'failed',
+      skipped: 'skipped',
+      'needs-you': 'needs you',
+      interrupted: 'interrupted',
+      capped: 'capped',
+      'no-handler': 'not supported',
+    });
+  });
+
+  it('STEP_STATUS_WORD: a word per step status, the same words where the statuses meet', () => {
+    expect(STEP_STATUS_WORD).toEqual({ ok: 'done', failed: 'failed', blocked: 'blocked', refused: 'refused', 'no-handler': 'not supported', skipped: 'skipped' });
+    expect(STEP_STATUS_WORD.ok).toBe(RESULT_STATUS_WORD.ok);
+    expect(STEP_STATUS_WORD['no-handler']).toBe(RESULT_STATUS_WORD['no-handler']);
   });
 });
 
@@ -163,6 +196,11 @@ describe('states — each with its ONE action (design F14)', () => {
     expect(paused('failures')).toEqual({ text: 'paused: 5 failures in a row', action: 'resume' });
     expect(paused('ignored')).toEqual({ text: 'paused: nobody opened 30 results', action: 'resume' });
     expect(paused('app-updated')).toEqual({ text: 'paused: this app was updated', action: 'resume' });
+  });
+
+  it('paused: the default counts are the engine’s own thresholds (M13: protection.ts, never restated)', () => {
+    expect(paused('failures').text).toBe(`paused: ${PAUSE_AFTER_FAILURES} failures in a row`);
+    expect(paused('ignored').text).toBe(`paused: nobody opened ${PAUSE_AFTER_UNSEEN} results`);
   });
 
   it('paused: the engine may pass the count it actually used', () => {
@@ -322,9 +360,20 @@ describe('vocabulary scan — no UI file spells "task" or "proposal" as a user-f
     expect(internalWordsIn(`/* proposal: the data-write card */ const y = "result";`)).toEqual([]);
   });
 
-  it('the walk sees copy.ts, and tolerates the rest of the tree being empty today', () => {
-    const files = uiFiles();
-    expect(files.map((file) => path.relative(PLAYGROUND_SRC, file))).toContain(path.join('schedule', 'copy.ts'));
+  it('the walk sees copy.ts and the three surface copy modules, and tolerates the rest of the tree being empty', () => {
+    const files = uiFiles().map((file) => path.relative(PLAYGROUND_SRC, file));
+    for (const name of ['copy.ts', 'copy.page.ts', 'copy.editor.ts', 'copy.result.ts', 'routes.ts']) expect(files).toContain(path.join('schedule', name));
+    expect(files, 'copy.bits.ts was renamed to copy.result.ts (M22)').not.toContain(path.join('schedule', 'copy.bits.ts'));
+  });
+
+  it('the surface copy modules compose from copy.ts and never carry a pluraliser or a status word of their own (M5, M12)', () => {
+    for (const name of ['copy.page.ts', 'copy.editor.ts', 'copy.result.ts']) {
+      const code = stripComments(readFileSync(path.join(PLAYGROUND_SRC, 'schedule', name), 'utf8'));
+      expect(code, `${name} spells its own AI-call plural`).not.toMatch(/AI \$\{[^}]*\? 'call' : 'calls'\}/);
+      expect(code, `${name} spells "no AI calls" itself`).not.toContain("'no AI calls'");
+      expect(code, `${name} has a status table of its own`).not.toMatch(/STATUS_WORD\s*[:=]/);
+      expect(code, `${name} has a relative clock of its own`).not.toMatch(/function (relativeTime|absoluteTime)\b/);
+    }
   });
 
   it('every scanned file outside copy.ts is clean — copy.ts is where the words are decided, and its sentences are pinned above', () => {

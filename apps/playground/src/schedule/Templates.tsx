@@ -1,148 +1,89 @@
-// schedule/Templates.tsx — the four templates and the cards that offer them
-// (TASK-20261009-scheduling-framework U2; design F11: templates ALWAYS rendered).
+// schedule/Templates.tsx — the template cards (TASK-20261009-scheduling-framework U2; design
+// F11: templates ALWAYS rendered). THE REGISTRY IS `editorModel.templateFill` — the same fill
+// the editor opens with — and a card is rendered FROM it: the title, `describeSpec(fill.spec)`
+// as the when, the starters the steps name, and which of them are missing. Nothing here
+// decides a template's when or steps, so a card cannot promise what the editor then lacks.
 //
-// A template is a title, a when and the steps it would run, keyed to the STARTER FOLDERS its
-// steps need. Whether the user has those starters is read the hub's way — `installSource`
-// `starter:<folder>` on the library entry — so a template whose app is installed opens the
-// editor prefilled (`/schedule/new?template=<id>`; the editor reads `templateById` and
-// `templateDraft` from here), and one whose app is missing says "add Weather, then schedule
-// it" and links to that starter's run route, where install is an explicit act. The card
-// order leads with what fits: a person who installed Ledger sees the spend review first.
+// Whether the user has a starter is read the hub's way — `installSource` `starter:<folder>`
+// on the library entry, the hub's dedup map — so a template whose apps are installed opens
+// the editor prefilled (`routes.newScheduleHref({ template })`), and one whose app is missing
+// says "add Weather, then schedule it" and links to that starter's run route, where install
+// is an explicit act. The card order leads with what fits: a person who installed Ledger
+// sees the spend review first.
 //
 // "nudge me" needs no app at all; it is always usable — but it never makes the HUB section
-// appear on its own (`templateFits`), or every first-time user would see a schedule section
-// before they have a single app.
+// appear on its own (`fits`), or every first-time user would see a schedule section before
+// they have a single app.
 
 import type { ReactElement } from 'react';
 import { Link } from 'react-router';
-
-import { SCHEDULE_CONTEXT_DEFAULT_ROWS, type ScheduleSpec, type ScheduleStep } from '@snugprotocol/protocol';
 
 import { starterLook } from '../starter/starterLooks.js';
 import { Card } from '../ui/Card.js';
 import { TEMPLATES } from './copy.page.js';
 import { describeSpec } from './cron.js';
+import { TEMPLATE_NAMES, templateAppName, templateFill, type StepDraft, type TemplateApp, type TemplateAppCandidate, type TemplateName } from './editorModel.js';
+import { newScheduleHref } from './routes.js';
 
-export interface ScheduleTemplate {
-  id: string;
-  title: string;
-  blurb: string;
-  /** The starter folders the steps name, in step order; empty for a reminder-only template. */
-  apps: readonly string[];
-  /** The glyph for a template with no app. */
-  glyph?: string;
-  spec: ScheduleSpec;
-  /** The steps, given each folder's installed app id. */
-  steps: (appIdOf: (folder: string) => string) => ScheduleStep[];
-}
-
-const DEVICE = 'device' as const;
-
-export const SCHEDULE_TEMPLATES: readonly ScheduleTemplate[] = [
-  {
-    id: 'nudge',
-    title: 'nudge me',
-    blurb: 'a reminder in Snug every morning — change the words and the time to taste',
-    apps: [],
-    glyph: '🔔',
-    spec: { kind: 'daily', time: '09:00', tz: DEVICE },
-    steps: () => [{ kind: 'notify', title: 'nudge', body: 'time to check in — open the app you keep meaning to open' }],
-  },
-  {
-    id: 'weekly-spend',
-    title: 'weekly spend review',
-    blurb: 'every Sunday evening, Ledger’s AI sums the week by category and flags what looks off',
-    apps: ['ledger'],
-    spec: { kind: 'weekly', days: ['sun'], time: '18:00', tz: DEVICE },
-    steps: (appIdOf) => [
-      {
-        kind: 'app-think',
-        appId: appIdOf('ledger'),
-        prompt: 'Summarise what I spent this week by category, call out anything unusual, and compare it with the week before.',
-        context: { maxRows: SCHEDULE_CONTEXT_DEFAULT_ROWS },
-      },
-    ],
-  },
-  {
-    id: 'friday-review',
-    title: 'friday review',
-    blurb: 'Friday afternoon: Ledger on the money and Standup on the work — two short briefings, one result',
-    apps: ['ledger', 'github'],
-    spec: { kind: 'weekly', days: ['fri'], time: '16:00', tz: DEVICE },
-    steps: (appIdOf) => [
-      {
-        kind: 'app-think',
-        appId: appIdOf('ledger'),
-        prompt: 'Review this week’s money: what came in, what went out, and what needs attention next week.',
-        context: { maxRows: SCHEDULE_CONTEXT_DEFAULT_ROWS },
-      },
-      {
-        kind: 'app-think',
-        appId: appIdOf('github'),
-        prompt: 'What did I ship this week, and what is still waiting on me?',
-        context: { maxRows: SCHEDULE_CONTEXT_DEFAULT_ROWS },
-      },
-    ],
-  },
-  {
-    id: 'morning-weather',
-    title: 'morning weather',
-    blurb: 'weekdays at 7, Should I? fetches the forecast and a notification tells you the call',
-    apps: ['weather'],
-    spec: { kind: 'weekly', days: ['mon', 'tue', 'wed', 'thu', 'fri'], time: '07:00', tz: DEVICE },
-    steps: (appIdOf) => [
-      { kind: 'app-run', appId: appIdOf('weather') },
-      { kind: 'notify', title: 'morning weather', body: 'your forecast is in — open Should I? for the call' },
-    ],
-  },
-];
-
-export function templateById(id: string | null | undefined): ScheduleTemplate | undefined {
-  return id === null || id === undefined ? undefined : SCHEDULE_TEMPLATES.find((template) => template.id === id);
-}
+export { templateAppName };
 
 /** The starter folder's install identity, the hub's dedup rule (`starter:<folder>`). */
 export const starterSourceOf = (folder: string): string => `starter:${folder}`;
-
-/** What the user reads for a starter folder ("Ledger", "Should I?"), from the shelf's looks. */
-export function templateAppName(folder: string): string {
-  return starterLook(folder).name ?? folder.replace(/-/g, ' ');
-}
-
-/** The folders of a template's apps the user has NOT installed, in step order. */
-export function missingApps(template: ScheduleTemplate, installedBySource: ReadonlyMap<string, string>): string[] {
-  return template.apps.filter((folder) => !installedBySource.has(starterSourceOf(folder)));
-}
-
-/** Every app the template needs is installed (vacuously true for a reminder-only template). */
-export function templateUsable(template: ScheduleTemplate, installedBySource: ReadonlyMap<string, string>): boolean {
-  return missingApps(template, installedBySource).length === 0;
-}
-
-/** Usable AND about an installed app — what makes the hub section appear with nothing scheduled. */
-export function templateFits(template: ScheduleTemplate, installedBySource: ReadonlyMap<string, string>): boolean {
-  return template.apps.length > 0 && templateUsable(template, installedBySource);
-}
-
-/** Templates that fit first, then the rest in registry order. */
-export function orderedTemplates(installedBySource: ReadonlyMap<string, string>): ScheduleTemplate[] {
-  const fits = SCHEDULE_TEMPLATES.filter((template) => templateFits(template, installedBySource));
-  const rest = SCHEDULE_TEMPLATES.filter((template) => !templateFits(template, installedBySource));
-  return [...fits, ...rest];
-}
-
-/** The editor's prefill for a usable template: title, steps over the installed ids, the when. */
-export function templateDraft(
-  template: ScheduleTemplate,
-  installedBySource: ReadonlyMap<string, string>,
-): { title: string; steps: ScheduleStep[]; spec: ScheduleSpec } | undefined {
-  if (!templateUsable(template, installedBySource)) return undefined;
-  const appIdOf = (folder: string): string => installedBySource.get(starterSourceOf(folder)) ?? folder;
-  return { title: template.title, steps: template.steps(appIdOf), spec: template.spec };
-}
-
-export const templateHref = (id: string): string => `/schedule/new?template=${encodeURIComponent(id)}`;
 export const starterRunHref = (folder: string): string => `/run/starter--${folder}`;
+
+/**
+ * The hub's dedup map (`installSource` → appId) as the registry's candidates: one row per
+ * installed starter, named by its id — a card decides by install identity, never by name.
+ */
+export function templateCandidates(installedBySource: ReadonlyMap<string, string>): TemplateAppCandidate[] {
+  return [...installedBySource].map(([installSource, appId]) => ({ appId, displayName: appId, installSource }));
+}
+
+/** One card, as rendered — every field derived from the fill the editor will open with. */
+export interface TemplateCard {
+  name: TemplateName;
+  title: string;
+  /** `describeSpec` of the template's own spec. */
+  when: string;
+  blurb: string;
+  /** The starters the steps name, in step order; empty for a reminder-only template. */
+  apps: readonly TemplateApp[];
+  /** Those not installed, in step order; the first one is the card's "add <App>" link. */
+  missing: readonly TemplateApp[];
+  glyph: string | undefined;
+  /** The step kinds the editor opens with, in order. */
+  stepKinds: readonly StepDraft['kind'][];
+  /** Every app the template needs is installed (vacuously true for a reminder-only template). */
+  usable: boolean;
+  /** Usable AND about an installed app — what makes the hub section appear with nothing scheduled. */
+  fits: boolean;
+  /** The editor route, prefilled with this template. */
+  href: string;
+}
+
+export function templateCard(name: TemplateName, installedBySource: ReadonlyMap<string, string>): TemplateCard {
+  const fill = templateFill(name, templateCandidates(installedBySource));
+  const usable = fill.missing.length === 0;
+  return {
+    name,
+    title: fill.title,
+    when: describeSpec(fill.spec),
+    blurb: TEMPLATES.blurb[name],
+    apps: fill.apps,
+    missing: fill.missing,
+    glyph: fill.glyph,
+    stepKinds: fill.steps.map((step) => step.kind),
+    usable,
+    fits: usable && fill.apps.length > 0,
+    href: newScheduleHref({ template: name }),
+  };
+}
+
+/** Every template as a card: those that fit first, then the rest in registry order. */
+export function templateCards(installedBySource: ReadonlyMap<string, string>): TemplateCard[] {
+  const cards = TEMPLATE_NAMES.map((name) => templateCard(name, installedBySource));
+  return [...cards.filter((card) => card.fits), ...cards.filter((card) => !card.fits)];
+}
 
 export interface TemplatesProps {
   installedBySource: ReadonlyMap<string, string>;
@@ -155,31 +96,24 @@ export function Templates({ installedBySource }: TemplatesProps): ReactElement {
         {TEMPLATES.heading}
       </h2>
       <div className="tile-grid">
-        {orderedTemplates(installedBySource).map((template) => {
-          const missing = missingApps(template, installedBySource);
-          const glyphs = template.apps.length === 0 ? [template.glyph ?? '✦'] : template.apps.map((folder) => starterLook(folder).emoji);
-          const firstMissing = missing[0];
+        {templateCards(installedBySource).map((card) => {
+          const glyphs = card.apps.length === 0 ? [card.glyph ?? '✦'] : card.apps.map((app) => starterLook(app.folder).emoji);
+          const firstMissing = card.missing[0];
           return (
-            <Card
-              key={template.id}
-              className="schedule-template"
-              data-testid="schedule-template"
-              data-template={template.id}
-              data-usable={firstMissing === undefined ? 'true' : 'false'}
-            >
+            <Card key={card.name} className="schedule-template" data-testid="schedule-template" data-template={card.name} data-usable={card.usable ? 'true' : 'false'}>
               <span className="schedule-template-glyphs" aria-hidden="true">
                 {glyphs.join(' ')}
               </span>
-              <span className="schedule-template-title">{template.title}</span>
-              <span className="schedule-template-when">{describeSpec(template.spec)}</span>
-              <span className="schedule-template-blurb">{template.blurb}</span>
+              <span className="schedule-template-title">{card.title}</span>
+              <span className="schedule-template-when">{card.when}</span>
+              <span className="schedule-template-blurb">{card.blurb}</span>
               {firstMissing === undefined ? (
-                <Link to={templateHref(template.id)} className="btn btn-primary schedule-template-act" data-testid="template-use">
+                <Link to={card.href} className="btn btn-primary schedule-template-act" data-testid="template-use">
                   {TEMPLATES.use}
                 </Link>
               ) : (
-                <Link to={starterRunHref(firstMissing)} className="btn schedule-template-act" data-testid="template-add">
-                  {TEMPLATES.addThen(templateAppName(firstMissing))}
+                <Link to={starterRunHref(firstMissing.folder)} className="btn schedule-template-act" data-testid="template-add">
+                  {TEMPLATES.addThen(firstMissing.name)}
                 </Link>
               )}
             </Card>

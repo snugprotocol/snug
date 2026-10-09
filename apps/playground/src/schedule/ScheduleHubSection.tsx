@@ -1,10 +1,12 @@
 // schedule/ScheduleHubSection.tsx — the hub's "schedule" section (TASK-20261009-scheduling-
 // framework U1). Between "your apps" and "shared with you": the next three schedules (title ·
 // when · next), an "all schedules" link with the unread count, and — when nothing is scheduled
-// yet but a template's app is installed — that template as a one-line offer. It renders
-// NOTHING when there are no schedules and no template fits: a first-time user with no starters
-// sees no schedule section at all (the templates live on the page). Reports only; every act
-// lives on `/schedule`.
+// yet but a template's app is installed — that template as a one-line offer, rendered from the
+// same registry as the page's cards (`Templates.templateCards`). It renders NOTHING when there
+// are no schedules and no template fits: a first-time user with no starters sees no schedule
+// section at all (the templates live on the page). Reports only; every act lives on
+// `/schedule` — except the reload strip (E2), which is the one act this tab must offer
+// wherever it shows a schedule after taking over from a stale copy.
 
 import type { ReactElement } from 'react';
 import { Link } from 'react-router';
@@ -13,9 +15,10 @@ import { allows } from '../platform/platform.js';
 import { HUB } from './copy.page.js';
 import { describeSpec } from './cron.js';
 import { nextFor, relativeTime, upcomingTasks, useNow } from './pageModel.js';
+import { editHref } from './routes.js';
 import { useScheduler } from './scheduler.js';
-import { SCHEDULE_TEMPLATES, templateFits, templateHref } from './Templates.js';
-import { editHref } from './ScheduleRow.js';
+import { ReloadNote } from './ScheduleStates.js';
+import { templateCards } from './Templates.js';
 
 export interface ScheduleHubSectionProps {
   /** install_source → appId, the hub's dedup map (the templates' "fits" rule reads it). */
@@ -26,8 +29,9 @@ export function ScheduleHubSection({ installedBySource }: ScheduleHubSectionProp
   const view = useScheduler();
   const now = useNow();
   if (!allows('schedule') || !view.ready) return null;
-  const fitting = SCHEDULE_TEMPLATES.filter((template) => templateFits(template, installedBySource));
-  if (view.tasks.length === 0 && fitting.length === 0) return null;
+  const needsReload = view.needsReload === true;
+  const fitting = templateCards(installedBySource).filter((card) => card.fits);
+  if (view.tasks.length === 0 && fitting.length === 0 && !needsReload) return null;
   const rows = upcomingTasks(view.tasks, now, 3);
   return (
     <section className="schedule-hub" aria-labelledby="schedule-hub-heading" data-testid="schedule-hub-section">
@@ -40,6 +44,7 @@ export function ScheduleHubSection({ installedBySource }: ScheduleHubSectionProp
           {view.unseen > 0 ? <span className="schedule-count"> · {HUB.unread(view.unseen)}</span> : null}
         </Link>
       </div>
+      {needsReload ? <ReloadNote /> : null}
       {rows.length > 0 ? (
         <ul className="schedule-hub-list">
           {rows.map((item) => {
@@ -58,11 +63,11 @@ export function ScheduleHubSection({ installedBySource }: ScheduleHubSectionProp
       ) : null}
       {view.tasks.length === 0 ? (
         <ul className="schedule-hub-list">
-          {fitting.map((template) => (
-            <li key={template.id} className="schedule-hub-row" data-testid="schedule-hub-template">
-              <Link to={templateHref(template.id)} className="schedule-hub-link">
-                <span className="schedule-hub-title">{template.title}</span>
-                <span className="schedule-hub-when">{describeSpec(template.spec)}</span>
+          {fitting.map((card) => (
+            <li key={card.name} className="schedule-hub-row" data-testid="schedule-hub-template">
+              <Link to={card.href} className="schedule-hub-link">
+                <span className="schedule-hub-title">{card.title}</span>
+                <span className="schedule-hub-when">{card.when}</span>
                 <span className="schedule-hub-next">{HUB.setUp}</span>
               </Link>
             </li>

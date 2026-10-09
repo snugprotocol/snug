@@ -13,6 +13,20 @@
 // `(taskId, dueAt)` exists in ANY status — a claimed, finished, pending or skipped row all mean
 // "recorded" — compared as instants, not strings.
 //
+// THE CLAMP (Gate-5 M18). Everything older than the task's freshness window is stale, and stale
+// misses can only ever yield one `skip{stale}` line — so a window that reaches more than a day
+// past `now − staleAfterMs`, or one the engine's 400-day search bound would truncate (the
+// planner must always see the LATEST occurrence), starts AT the edge instead: a file closed for
+// three months never enumerates 26 000 five-minute occurrences to learn they are stale. The one
+// residual: misses beyond the clamp get no `stale` history line (nothing there could have been
+// offered); the watermark moves to `now` as always, so they are never seen again.
+//
+// THE COUNT (Gate-5 M9). `until.count` is spent by RECORDED runs — every row that is neither a
+// candidate (`pending`) nor a skip — handed to the engine as `spent`, so a task paused through
+// its occurrences still gets its remaining fires. A history at the entry cap may have been
+// pruned, so there the calendar count governs again (never worse than before); *Clear history*
+// restarts the count, by the same token.
+//
 // DUE, LATE, MISSED. An occurrence inside the minute it fires in (age < 60 s) is `due`; the
 // ticker re-arms to the minute boundary from the wall clock, so a due occurrence is normally a
 // few ms old — zero age is the ideal, not the norm. Older but within the grace (≤ 15 min,
@@ -48,9 +62,9 @@
 // THE STORE'S HALF. Actions are applied in order; `advance` and the watermark are written only
 // after every row before them — "the watermark never passes an unwritten miss".
 
-import { SCHEDULE_GRACE_MS, type ScheduleRun, type ScheduledTask, type SchedulerState } from '@snugprotocol/protocol';
+import { SCHEDULE_GRACE_MS, SCHEDULE_RUNS_MAX_ENTRIES, type ScheduleRun, type ScheduledTask, type SchedulerState } from '@snugprotocol/protocol';
 
-import { occurrencesBetween } from './cron.js';
+import { SEARCH_BOUND_DAYS, occurrencesBetween } from './cron.js';
 
 export type PlanInput = {
   tasks: readonly ScheduledTask[];
@@ -79,6 +93,7 @@ export type PlanResult = { actions: PlanAction[]; watermark: string };
 export type MissedCandidate = { dueAt: Date; collapsedCount: number };
 
 const MINUTE_MS = 60_000;
+const DAY_MS = 86_400_000;
 
 /**
  * The most occurrences one task may contribute per reconcile. The planner must see the LATEST
@@ -97,6 +112,22 @@ const msOf = (iso: string | undefined): number => {
 /** The exclusive start of a task's reconcile window — the max of the four bounds (see the header). */
 export function windowStart(task: ScheduledTask, state: SchedulerState): Date {
   return new Date(Math.max(msOf(state.watermark), msOf(task.enabledAt ?? task.createdAt), msOf(task.startsAt), msOf(task.ranThrough)));
+}
+
+/** The window start after the clamp (see the header): the freshness edge when the raw start lies more than a day before it or beyond the search bound. */
+export function clampedWindowStart(task: ScheduledTask, state: SchedulerState, now: Date): Date {
+  const from = windowStart(task, state);
+  const staleEdge = now.getTime() - task.staleAfterMs;
+  const beyondEdge = from.getTime() < staleEdge - DAY_MS;
+  const truncated = now.getTime() - from.getTime() > SEARCH_BOUND_DAYS * DAY_MS;
+  return beyondEdge || truncated ? new Date(Math.max(from.getTime(), staleEdge)) : from;
+}
+
+/** A recorded fire against `until.count`: a candidate and a skip are not fires; a history at the cap may be pruned, so it answers `undefined` (the calendar governs). */
+export function spentCount(task: ScheduledTask, runs: readonly ScheduleRun[]): number | undefined {
+  if (task.spec.until?.kind !== 'count') return undefined;
+  if (runs.length >= SCHEDULE_RUNS_MAX_ENTRIES) return undefined;
+  return runs.filter((run) => run.status !== 'pending' && run.status !== 'skipped').length;
 }
 
 /** The LATEST of the instants and how many there were; `undefined` for none. Order of input does not matter. */
@@ -121,11 +152,16 @@ function planTask(
   const endsAtMs = task.endsAt === undefined ? undefined : msOf(task.endsAt);
   if (endsAtMs !== undefined && msOf(task.ranThrough) >= endsAtMs) return;
 
-  const from = windowStart(task, state);
+  const from = clampedWindowStart(task, state, now);
   const nowMs = now.getTime();
   if (!(from.getTime() < nowMs)) return;
 
-  const found = occurrences(task.spec, from, now, { limit: PLAN_OCCURRENCE_LIMIT, anchor: new Date(task.startsAt ?? task.createdAt) });
+  const spent = spentCount(task, runs);
+  const found = occurrences(task.spec, from, now, {
+    limit: PLAN_OCCURRENCE_LIMIT,
+    anchor: new Date(task.startsAt ?? task.createdAt),
+    ...(spent !== undefined ? { spent } : {}),
+  });
   if (found.length === 0) return;
   const inOrder = [...found].sort((a, b) => a.getTime() - b.getTime());
   const latestConsidered = inOrder[inOrder.length - 1] as Date;

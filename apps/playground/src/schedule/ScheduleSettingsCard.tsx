@@ -1,7 +1,7 @@
 // schedule/ScheduleSettingsCard.tsx — Settings → schedule (TASK-20261009-scheduling-framework
 // U6; ADR-0074 §6–§7). One grouped card: the global pause, the browser-notification opt-in, the
-// host's honesty line (and the follower state), *clear history* behind an armed inline confirm,
-// and the "never let apps suggest schedules" switch.
+// host's honesty line (and the follower state), and *clear history* behind an armed inline
+// confirm.
 //
 // NOTIFICATIONS ARE ASKED FOR ON THE CLICK, NEVER AT BOOT (H2, ADR-0074 §7): this card reads
 // `Notification.permission` to SAY where things stand and calls `requestPermission()` only
@@ -11,10 +11,13 @@
 // nothing recomposed. A result that asks for a notification lands in Snug either way, which
 // the hint says.
 //
-// "NEVER LET APPS SUGGEST SCHEDULES" is the localStorage flag `snug:schedule-no-suggestions`.
-// PR-B's suggestion strip (P3) reads it before rendering any app's request; nothing in PR-A
-// consumes it. Both flags are per browser on purpose: they are about THIS browser's
-// notifications and THIS person's patience, not facts of the file.
+// "NEVER LET APPS SUGGEST SCHEDULES" is the localStorage flag `NO_SUGGESTIONS_KEY`
+// (`snug:schedule-no-suggestions`). PR-B's suggestion strip (P3) reads it before rendering any
+// app's request; nothing in PR-A consumes it, so the switch is NOT rendered yet — a control
+// that changes nothing would be a lie on a Settings page. The key stays exported here so PR-B
+// reads the name this card will write, and the sentences stay in `copy.page.SETTINGS`. Both
+// flags are per browser on purpose: they are about THIS browser's notifications and THIS
+// person's patience, not facts of the file.
 
 import { useId, useState } from 'react';
 import type { ReactElement } from 'react';
@@ -23,14 +26,15 @@ import { WEB_NOTIFY_OPT_IN_KEY, readWebNotifyOptIn } from '../platform/webNotify
 import { Card } from '../ui/Card.js';
 import { Button } from '../ui/Button.js';
 import { followerTab, globalPaused } from './copy.js';
-import { SETTINGS } from './copy.bits.js';
+import { SETTINGS } from './copy.page.js';
 import { hostHonesty } from './honesty.js';
 import { Switch } from './ScheduleStates.js';
 import { clearHistory, setGlobalPause, useScheduler } from './scheduler.js';
 
 /** The opt-in flag the web seat reads (`'1'` when on) — `platform/webNotify.ts` owns the name. */
 export const NOTIFY_OPT_IN_KEY = WEB_NOTIFY_OPT_IN_KEY;
-/** The mute-every-app flag PR-B's suggestion strip reads (`'1'` when on). */
+// PR-B: the mute-every-app flag the suggestion strip reads (`'1'` when on). The switch that
+// writes it returns to this card with PR-B, when something reads it.
 export const NO_SUGGESTIONS_KEY = 'snug:schedule-no-suggestions';
 
 export function readFlag(key: string): boolean {
@@ -83,13 +87,11 @@ export function ScheduleSettingsCard(): ReactElement {
   const [permission, setPermission] = useState<NotifyPermission>(notifyPermission);
   const [notifyOptIn, setNotifyOptIn] = useState(() => readWebNotifyOptIn());
   const [asking, setAsking] = useState(false);
-  const [noSuggestions, setNoSuggestions] = useState(() => readFlag(NO_SUGGESTIONS_KEY));
   const [clearArmed, setClearArmed] = useState(false);
   const [cleared, setCleared] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const pauseId = useId();
-  const suggestId = useId();
 
   const askForNotifications = async (): Promise<void> => {
     if (typeof Notification === 'undefined') return;
@@ -212,22 +214,6 @@ export function ScheduleSettingsCard(): ReactElement {
             </Button>
           </>
         )}
-      </div>
-
-      <div className="settings-row schedule-settings-row">
-        <div className="schedule-settings-copy">
-          <strong id={suggestId}>{SETTINGS.noSuggestions}</strong>
-          <span className="hint">{SETTINGS.noSuggestionsHint}</span>
-        </div>
-        <Switch
-          checked={noSuggestions}
-          onChange={(next) => {
-            writeFlag(NO_SUGGESTIONS_KEY, next);
-            setNoSuggestions(next);
-          }}
-          labelledBy={suggestId}
-          testId="schedule-no-suggestions"
-        />
       </div>
     </Card>
   );

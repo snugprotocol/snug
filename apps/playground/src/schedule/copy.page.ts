@@ -1,15 +1,16 @@
-// schedule/copy.page.ts — the sentences of the schedule PAGE, its rows, the results feed, the
-// hub section, the missed card's own chrome and the templates (TASK-20261009-scheduling-
-// framework U1, U2, U4; design F9, F11, F12). `copy.ts` holds the engine-facing sentences
-// (states, policies, the missed headline, the honesty line) and is never edited from here;
+// schedule/copy.page.ts — the sentences of the schedule PAGE and the surfaces that hang off it:
+// the page itself, its rows, the results feed, the hub section, the missed card's own chrome,
+// the templates, the Settings card, the running chip's act and the chat offer's chrome
+// (TASK-20261009-scheduling-framework U1, U2, U4, U6, U10, E10; design F9, F11, F12).
+// `copy.ts` holds the vocabulary and the engine-facing sentences (the states, the status
+// words, the policies, the missed headline, the honesty line) and is never edited from here;
 // this module only COMPOSES the page's labels from its nouns, so the vocabulary scan in
 // `scheduleCopy.test.ts` covers both and a person reads one set of words.
 //
 // Same voice: lowercase-leading labels, plain words, the typographic apostrophe.
 
-import type { RunStatus } from '@snugprotocol/protocol';
-
 import { WORDS } from './copy.js';
+import type { TemplateName } from './editorModel.js';
 
 // --------------------------------------------------------------------------- the page
 
@@ -30,6 +31,16 @@ export const PAGE = {
   resumeAll: 'resume',
 } as const;
 
+/**
+ * This tab was promoted to leader over a copy that had gone stale (another tab ran the
+ * schedules in between): the rows on screen may be behind the file, and the one act is a
+ * reload (E2). Shown on the page and in the hub section.
+ */
+export const RELOAD = {
+  note: `another tab was running your ${WORDS.items} — reload to continue here`,
+  act: 'reload',
+} as const;
+
 // --------------------------------------------------------------------- the results feed
 
 export const RESULTS = {
@@ -39,40 +50,6 @@ export const RESULTS = {
   /** Printed WITH the status word on an unread row — never colour alone (U9). */
   unread: 'unread',
 } as const;
-
-/** The one-word status beside a result (the dot is decoration; this is the signal). */
-export function statusWord(status: RunStatus): string {
-  switch (status) {
-    case 'ok':
-      return 'done';
-    case 'failed':
-      return 'failed';
-    case 'needs-you':
-      return 'needs you';
-    case 'capped':
-      return 'capped';
-    case 'no-handler':
-      return 'not supported';
-    case 'interrupted':
-      return 'interrupted';
-    case 'pending':
-      return 'waiting';
-    case 'running':
-      return 'running';
-    case 'skipped':
-      return 'skipped';
-    default: {
-      const never: never = status;
-      return never;
-    }
-  }
-}
-
-/** "2 AI calls" / "1 AI call" / "no AI calls" — the cost of a candidate or a template. */
-export function aiCallsWord(n: number): string {
-  if (n === 0) return 'no AI calls';
-  return `${n} AI ${n === 1 ? 'call' : 'calls'}`;
-}
 
 // ---------------------------------------------------------------------- the groups
 
@@ -123,14 +100,68 @@ export const TEMPLATES = {
   use: 'use this',
   /** "add Weather, then schedule it" — the app is not installed; the link opens its starter. */
   addThen: (appName: string): string => `add ${appName}, then schedule it`,
+  /**
+   * One line under each card's title. The WHEN is never restated here — the card prints it
+   * from the template's own spec (`editorModel.templateFill`), so a blurb cannot promise a
+   * different time than the editor opens with.
+   */
+  blurb: {
+    nudge: 'a reminder in Snug — change the words and the time to taste',
+    'spend-review': 'Ledger’s AI sums the week by category against your budgets and flags what looks off',
+    'friday-review': 'Ledger on the money and Standup on the work — two short briefings, one result',
+    'morning-weather': 'Should I? fetches the forecast and a notification tells you the call',
+  } satisfies Readonly<Record<TemplateName, string>>,
 } as const;
 
 // ---------------------------------------------------------------------- the missed card
 
 export const MISSED = {
-  /** The undo strip while a *skip* waits out its delay. */
+  /**
+   * The undo strip while a *skip* waits out its delay. The decision is kept, not lost: if the
+   * card leaves the page before the delay runs out, the skip lands at once (`MissedCard`).
+   */
   skippingSoon: (n: number): string => `skipping ${n === 1 ? `1 ${WORDS.item}` : `${n} ${WORDS.items}`}…`,
-  done: 'done',
   /** Dismisses the per-row outcomes once a batch has finished (the card then leaves). */
   ok: 'ok',
+} as const;
+
+// --------------------------------------------------------------------- the Settings card (U6)
+
+export const SETTINGS = {
+  pauseAll: `pause all ${WORDS.items}`,
+  pauseHint: `nothing runs until you turn this off — what was due comes back as ${WORDS.missed}`,
+  notifyHeading: 'browser notifications',
+  notifyAsk: 'turn on notifications',
+  notifyOff: 'turn off',
+  /** Permission `default`: the browser has not been asked — and will be only on the click. */
+  notifyDefault: 'off — this browser will ask you once when you turn them on',
+  /** Permission `granted`, opted in. */
+  notifyOn: 'on for this browser',
+  /** Permission `granted` but not opted in here. */
+  notifyAllowed: 'this browser allows them — turn them on to use them',
+  notifyDenied: 'blocked — change it in your browser’s site settings',
+  notifyUnavailable: 'this browser has no notifications',
+  notifyHint: `a ${WORDS.item} set to tell you “with a notification” will use them; everything still lands in Snug`,
+  clearHistory: 'clear history',
+  clearArm: `clear every ${WORDS.result}? what is still waiting for you stays`,
+  clearConfirm: 'clear',
+  clearKeep: 'keep',
+  cleared: 'history cleared',
+  /** PR-B: the switch these two label is not rendered until the suggestion strip reads its flag. */
+  noSuggestions: `never let apps suggest ${WORDS.items}`,
+  noSuggestionsHint: `you can still ${WORDS.item} any app yourself`,
+  on: 'on',
+  off: 'off',
+} as const;
+
+// ------------------------------------------------ the running chip (U10) and the chat offer (E10)
+
+/** The cancel control's accessible name names what it cancels. */
+export function cancelName(title: string): string {
+  return `cancel ${title}`;
+}
+
+export const OFFER = {
+  dismiss: 'dismiss',
+  dismissName: `dismiss this ${WORDS.item} offer`,
 } as const;

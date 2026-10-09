@@ -7,23 +7,23 @@
 // spent; each step with its kind label, its app, its summary — PLAIN TEXT, never HTML: the
 // summary is the AI's or the app's words, scrubbed before it was stored, and rendered as a
 // text node here, nothing more — and its status; then the pending *changes waiting for your
-// OK*, each statement VERBATIM in a `<pre>` with the dry-run count and the line "written by the
-// AI from your data"; and for the states with one act, that act (`needs-you` → *run now and
-// review*; `no-handler` → *open <app>*; `capped` has none).
+// OK*, each statement VERBATIM in a `<pre>` with the dry-run count, the app it would change
+// and the line "written by the AI from your data"; and for the states with one act, that act
+// (`needs-you` → *run now and review*; `no-handler` → *open <app>*; `capped` has none).
 //
-// THE CHANGES (ADR-0074 §6). *apply to my data* builds a `PendingWriteProposal` — the step's
-// app, `[sql]`, no params, the stored count as the drift baseline — and hands it to
-// `executeApprovedWrite`, the ONE path from a proposed statement to real data; the re-dry-run
-// and the drift check happen inside it. Applied: the item leaves the row (an applied change
-// that still offers *apply* invites a second execution); drifted: the row's count becomes the
-// current one and the item stays, with "the data moved — review again"; failed: the message,
-// the item stays. *decline* removes the item from the row: there is no scheduler act for that —
-// it is written straight through `db.putScheduleRun` (the upsert by `(taskId, dueAt)`) and the
-// revision is bumped so every view re-reads. The batch has one expiry; past it nothing is
-// offered. The app the statement applies to is the schedule's *ask the AI* step's app — PR-A's
-// steps are independent and one *ask* step per schedule is the shape the editor builds; with
-// several, the first one's app (a statement against the wrong app fails its dry run, which is
-// reported, never applied).
+// THE CHANGES (ADR-0074 §6). Every item NAMES ITS APP (`appId` on the protocol's proposal
+// item): the executor recorded which *ask the AI* step composed it, so a schedule that asks
+// two apps applies each statement to its own data, never the first step's. *apply to my data*
+// builds a `PendingWriteProposal` — the item's app, `[sql]`, no params, the stored count as the
+// drift baseline — and hands it to `executeApprovedWrite`, the ONE path from a proposed
+// statement to real data; the re-dry-run and the drift check happen inside it. Applied: the
+// item leaves the row (an applied change that still offers *apply* invites a second
+// execution); drifted: the row's count becomes the current one and the item stays, with "the
+// data moved — review again"; failed: the message, the item stays. An item with no app is
+// refused outright ("these changes have no app to apply to") and offers only *decline*.
+// *decline* removes the item from the row: there is no scheduler act for that — it is written
+// straight through `db.putScheduleRun` (the upsert by `(taskId, dueAt)`) and the revision is
+// bumped so every view re-reads. The batch has one expiry; past it nothing is offered.
 //
 // OPENING IS A GESTURE (E7): `markSeen(taskId, dueAt)` once per open — the only thing that
 // ever stamps `seenAt`.
@@ -55,7 +55,6 @@ import {
   RESULT_LOADING,
   RESULT_MISSING,
   STEPS_HEADING,
-  absoluteTime,
   applied,
   callsLine,
   couldNotApply,
@@ -64,18 +63,20 @@ import {
   onHost,
   openApp,
   ranLine,
-  relativeTime,
   wouldChange,
-} from './copy.bits.js';
+} from './copy.result.js';
+import { absoluteTime, relativeTime, useNow } from './pageModel.js';
+import { editHref } from './routes.js';
 import { ResultStatus, StepStatus, appNameOf, type AppName } from './ScheduleStates.js';
 import { markSeen, runNow, useScheduler } from './scheduler.js';
+import { sameOccurrence } from './taskShape.js';
 
-const sameOccurrence = (row: ScheduleRun, dueAt: string): boolean => row.dueAt === dueAt || Date.parse(row.dueAt) === Date.parse(dueAt);
+/** One item's identity in the batch: its app and its statement (two apps may propose the same SQL). */
+const itemKey = (item: ScheduleProposalItem): string => `${item.appId}:${item.sql}`;
 
-/** The app a pending change applies to — see the header. */
-export function changesAppId(task: Pick<ScheduledTask, 'steps'>): string | undefined {
-  const think = task.steps.find((step) => step.kind === 'app-think');
-  return think !== undefined && think.kind === 'app-think' ? think.appId : undefined;
+/** The app an item applies to — its own; an empty id (nothing to apply to) is refused by the view. */
+export function itemAppId(item: Pick<ScheduleProposalItem, 'appId'>): string | undefined {
+  return item.appId === '' ? undefined : item.appId;
 }
 
 /** The step whose refusal or block made the result `needs-you`, for the sentence's app name. */
@@ -89,7 +90,7 @@ function appOfStep(task: ScheduledTask, index: number): string | undefined {
   return step === undefined || step.kind === 'notify' ? undefined : step.appId;
 }
 
-/** The pending change's shape for the one write path (`agent/dataTools.ts`). */
+/** The pending change's shape for the one write path (`agent/dataTools.ts`): the ITEM's app, its one statement. */
 export function proposalFor(appId: string, item: ScheduleProposalItem): PendingWriteProposal {
   return {
     appId,
@@ -100,7 +101,7 @@ export function proposalFor(appId: string, item: ScheduleProposalItem): PendingW
   };
 }
 
-type Settled = { sql: string; summary: string | undefined; line: string };
+type Settled = { key: string; sql: string; summary: string | undefined; line: string };
 
 export function ResultDetail(): ReactElement {
   const params = useParams<{ id: string; dueAt: string }>();
@@ -108,6 +109,7 @@ export function ResultDetail(): ReactElement {
   const dueAt = params.dueAt ?? '';
   const view = useScheduler();
   const libraryRevision = useLibraryRevision();
+  const now = useNow();
 
   const task = view.tasks.find((entry) => entry.id === taskId);
   const run = (view.runsByTask[taskId] ?? []).find((row) => sameOccurrence(row, dueAt));
@@ -115,7 +117,7 @@ export function ResultDetail(): ReactElement {
   const [apps, setApps] = useState<readonly AppName[]>([]);
   const [notes, setNotes] = useState<Readonly<Record<string, string>>>({});
   const [settled, setSettled] = useState<readonly Settled[]>([]);
-  const [busySql, setBusySql] = useState<string | undefined>(undefined);
+  const [busyKey, setBusyKey] = useState<string | undefined>(undefined);
   const [error, setError] = useState<string | undefined>(undefined);
   const [runNowNote, setRunNowNote] = useState<string | undefined>(undefined);
 
@@ -168,17 +170,14 @@ export function ResultDetail(): ReactElement {
     );
   }
 
-  const nowMs = Date.now();
   const ranAt = run.finishedAt ?? run.startedAt;
   const whenLine =
     ranAt !== undefined
-      ? ranLine(absoluteTime(Date.parse(ranAt)), relativeTime(Date.parse(ranAt), nowMs))
-      : dueLine(absoluteTime(Date.parse(run.dueAt)), relativeTime(Date.parse(run.dueAt), nowMs));
+      ? ranLine(absoluteTime(new Date(ranAt)), relativeTime(new Date(ranAt), now))
+      : dueLine(absoluteTime(new Date(run.dueAt)), relativeTime(new Date(run.dueAt), now));
 
-  const changeApp = changesAppId(task);
-  const changeAppName = changeApp === undefined ? undefined : appNameOf(changeApp, apps);
   const proposals = run.proposals;
-  const expired = proposals !== undefined && Date.parse(proposals.expiresAt) <= nowMs;
+  const expired = proposals !== undefined && Date.parse(proposals.expiresAt) <= now.getTime();
 
   /** Rewrite the row with the given items (none → no batch at all) and tell every view. */
   const writeItems = async (items: readonly ScheduleProposalItem[]): Promise<void> => {
@@ -192,43 +191,46 @@ export function ResultDetail(): ReactElement {
     bumpScheduleRevision();
   };
 
-  const without = (sql: string): ScheduleProposalItem[] => (proposals?.items ?? []).filter((item) => item.sql !== sql);
+  const without = (key: string): ScheduleProposalItem[] => (proposals?.items ?? []).filter((item) => itemKey(item) !== key);
 
   const approve = async (item: ScheduleProposalItem): Promise<void> => {
-    if (changeApp === undefined || busySql !== undefined) return;
-    setBusySql(item.sql);
+    const appId = itemAppId(item);
+    if (appId === undefined || busyKey !== undefined) return;
+    const key = itemKey(item);
+    setBusyKey(key);
     setError(undefined);
     try {
       const db = await getUserDb();
-      const outcome = await executeApprovedWrite(db, proposalFor(changeApp, item));
+      const outcome = await executeApprovedWrite(db, proposalFor(appId, item));
       if (outcome.ok) {
-        await writeItems(without(item.sql));
-        setSettled((list) => [...list, { sql: item.sql, summary: item.summary, line: applied(outcome.executed) }]);
+        await writeItems(without(key));
+        setSettled((list) => [...list, { key, sql: item.sql, summary: item.summary, line: applied(outcome.executed) }]);
       } else if (outcome.reason === 'drifted') {
         const current = outcome.current[0] ?? 0;
-        await writeItems((proposals?.items ?? []).map((entry) => (entry.sql === item.sql ? { ...entry, counts: { changes: current } } : entry)));
-        setNotes((map) => ({ ...map, [item.sql]: DRIFTED }));
+        await writeItems((proposals?.items ?? []).map((entry) => (itemKey(entry) === key ? { ...entry, counts: { changes: current } } : entry)));
+        setNotes((map) => ({ ...map, [key]: DRIFTED }));
       } else {
-        setNotes((map) => ({ ...map, [item.sql]: couldNotApply(outcome.message) }));
+        setNotes((map) => ({ ...map, [key]: couldNotApply(outcome.message) }));
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setBusySql(undefined);
+      setBusyKey(undefined);
     }
   };
 
   const decline = async (item: ScheduleProposalItem): Promise<void> => {
-    if (busySql !== undefined) return;
-    setBusySql(item.sql);
+    if (busyKey !== undefined) return;
+    const key = itemKey(item);
+    setBusyKey(key);
     setError(undefined);
     try {
-      await writeItems(without(item.sql));
-      setSettled((list) => [...list, { sql: item.sql, summary: item.summary, line: DECLINED }]);
+      await writeItems(without(key));
+      setSettled((list) => [...list, { key, sql: item.sql, summary: item.summary, line: DECLINED }]);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setBusySql(undefined);
+      setBusyKey(undefined);
     }
   };
 
@@ -249,7 +251,7 @@ export function ResultDetail(): ReactElement {
       <header className="schedule-result-head">
         <ResultStatus status={run.status} />
         <h1 className="schedule-result-title">
-          <Link to={`/schedule/${encodeURIComponent(taskId)}`} data-testid="schedule-result-title">
+          <Link to={editHref(taskId)} data-testid="schedule-result-title">
             {task.title}
           </Link>
         </h1>
@@ -312,40 +314,46 @@ export function ResultDetail(): ReactElement {
             <p className="hint" role="status" data-testid="schedule-changes-expired">
               {EXPIRED}
             </p>
-          ) : changeApp === undefined && (proposals?.items.length ?? 0) > 0 ? (
-            <p className="hint" role="status">
-              {NO_APP_FOR_CHANGES}
-            </p>
           ) : null}
           {!expired
-            ? (proposals?.items ?? []).map((item) => (
-                <Card key={item.sql} className="schedule-change" data-testid="schedule-change">
-                  {item.summary !== undefined && item.summary !== '' ? <span className="artifact-name">{sanitizeCardText(item.summary)}</span> : null}
-                  <pre className="schedule-result-sql">{item.sql}</pre>
-                  <span className="hint">
-                    {wouldChange(item.counts?.changes)}
-                    {changeAppName !== undefined ? ` in ${changeAppName}` : ''} · {AI_WROTE}
-                  </span>
-                  {notes[item.sql] !== undefined ? (
-                    <span className="hint" role="status" data-testid="schedule-change-note">
-                      {notes[item.sql]}
+            ? (proposals?.items ?? []).map((item) => {
+                const key = itemKey(item);
+                const appId = itemAppId(item);
+                const appName = appId === undefined ? undefined : appNameOf(appId, apps);
+                return (
+                  <Card key={key} className="schedule-change" data-testid="schedule-change" data-app={appId}>
+                    {item.summary !== undefined && item.summary !== '' ? <span className="artifact-name">{sanitizeCardText(item.summary)}</span> : null}
+                    <pre className="schedule-result-sql">{item.sql}</pre>
+                    <span className="hint" data-testid="schedule-change-count">
+                      {wouldChange(item.counts?.changes)}
+                      {appName !== undefined ? ` in ${appName}` : ''} · {AI_WROTE}
                     </span>
-                  ) : null}
-                  <div className="schedule-change-actions">
-                    {changeApp !== undefined ? (
-                      <Button variant="primary" onClick={() => void approve(item)} disabled={busySql !== undefined}>
-                        {CHANGE_ACTIONS.apply}
-                      </Button>
+                    {appId === undefined ? (
+                      <span className="hint" role="status" data-testid="schedule-change-no-app">
+                        {NO_APP_FOR_CHANGES}
+                      </span>
                     ) : null}
-                    <Button onClick={() => void decline(item)} disabled={busySql !== undefined}>
-                      {CHANGE_ACTIONS.decline}
-                    </Button>
-                  </div>
-                </Card>
-              ))
+                    {notes[key] !== undefined ? (
+                      <span className="hint" role="status" data-testid="schedule-change-note">
+                        {notes[key]}
+                      </span>
+                    ) : null}
+                    <div className="schedule-change-actions">
+                      {appId !== undefined ? (
+                        <Button variant="primary" onClick={() => void approve(item)} disabled={busyKey !== undefined}>
+                          {CHANGE_ACTIONS.apply}
+                        </Button>
+                      ) : null}
+                      <Button onClick={() => void decline(item)} disabled={busyKey !== undefined}>
+                        {CHANGE_ACTIONS.decline}
+                      </Button>
+                    </div>
+                  </Card>
+                );
+              })
             : null}
           {settled.map((entry) => (
-            <Card key={`settled-${entry.sql}`} className="schedule-change is-settled" data-testid="schedule-change-settled">
+            <Card key={`settled-${entry.key}`} className="schedule-change is-settled" data-testid="schedule-change-settled">
               {entry.summary !== undefined && entry.summary !== '' ? <span className="artifact-name">{sanitizeCardText(entry.summary)}</span> : null}
               <pre className="schedule-result-sql">{entry.sql}</pre>
               <span className="hint" role="status">

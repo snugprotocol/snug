@@ -9,7 +9,7 @@
 
 import { SCHEDULE_DAILY_CEILINGS, SCHEDULE_MAX_STEPS, SCHEDULE_TITLE_MAX_CHARS } from '@snugprotocol/protocol';
 
-import { CONSENT, stepLabel } from './copy.js';
+import { CONSENT, aiCalls, stepLabel } from './copy.js';
 
 /** The route's heading, by mode. */
 export const EDITOR_HEADING = { new: 'new schedule', edit: 'edit schedule' } as const;
@@ -125,8 +125,7 @@ export const CONSENT_ROWS = {
   tables: (appName: string): string => `the AI reads ${appName}’s tables — no queries`,
   noHosts: 'none',
   /** The bound the engine's daily ceiling enforces (E7); a reminder-only schedule spends nothing, and says so. */
-  dailyBound: (calls: number): string =>
-    calls === 0 ? 'no AI calls' : `up to ${calls} AI ${calls === 1 ? 'call' : 'calls'} a day — the daily limit is ${SCHEDULE_DAILY_CEILINGS.ai}`,
+  dailyBound: (calls: number): string => (calls === 0 ? aiCalls(0) : `up to ${aiCalls(calls)} a day — the daily limit is ${SCHEDULE_DAILY_CEILINGS.ai}`),
   enable: CONSENT.enable,
   notNow: CONSENT.notNow,
 } as const;

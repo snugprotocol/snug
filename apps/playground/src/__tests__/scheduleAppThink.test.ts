@@ -280,7 +280,7 @@ describe('the reply — text or JSON, pending changes dry-run and never executed
     const outcome = await executeAppThink(step, context([step]), { transportFor: () => transport });
     expect(outcome.status).toBe('ok');
     expect(outcome.summary).toBe('drop the stale row');
-    expect(outcome.proposals).toEqual([{ sql: 'DELETE FROM t WHERE id = 1', summary: 'stale', counts: { changes: 1 } }]);
+    expect(outcome.proposals).toEqual([{ appId, sql: 'DELETE FROM t WHERE id = 1', summary: 'stale', counts: { changes: 1 } }]); // named for THIS app (S4)
     expect(await realBytes(appId)).toBe(before);
     expect(await realRowCount(appId)).toBe(3);
   });
@@ -293,7 +293,7 @@ describe('the reply — text or JSON, pending changes dry-run and never executed
     const outcome = await executeAppThink(step, context([step]), { transportFor: () => transport });
     expect(transport.wires).toHaveLength(1);
     expect(outcome.calls).toEqual({ ai: 1, net: 0 });
-    expect(outcome.proposals).toEqual([{ sql: 'DELETE FROM t', counts: { changes: 3 } }]);
+    expect(outcome.proposals).toEqual([{ appId, sql: 'DELETE FROM t', counts: { changes: 3 } }]);
     expect(await realBytes(appId)).toBe(before);
     expect(await realRowCount(appId)).toBe(3);
   });
@@ -311,10 +311,28 @@ describe('the reply — text or JSON, pending changes dry-run and never executed
     );
     const step = thinkStep();
     const outcome = await executeAppThink(step, context([step]), { transportFor: () => transport });
-    expect(outcome.proposals).toEqual([{ sql: 'UPDATE t SET cents = 0 WHERE id = 2', summary: 'zero it', counts: { changes: 1 } }]);
+    expect(outcome.proposals).toEqual([{ appId, sql: 'UPDATE t SET cents = 0 WHERE id = 2', summary: 'zero it', counts: { changes: 1 } }]);
     expect(outcome.summary).toBe(`tidy up\n\n${droppedNote(2)}`);
     expect(droppedNote(1)).toBe('1 suggested change was not safe to keep');
     expect(droppedNote(2)).toBe('2 suggested changes were not safe to keep');
+    expect(await realRowCount(appId)).toBe(3);
+  });
+
+  it('a change with a nested SELECT or FROM is dropped with the note — a scheduled proposal carries literal values only (S8)', async () => {
+    const transport = fakeTransport(
+      json({
+        answer: 'copy it over',
+        proposals: [
+          { sql: 'INSERT INTO t (label, cents) SELECT label, cents FROM t WHERE id = 1' },
+          { sql: 'UPDATE t SET cents = (SELECT MAX(cents) FROM t) WHERE id = 2' },
+          { sql: "INSERT INTO t (label, cents) VALUES ('select from the menu', 1)" },
+        ],
+      }),
+    );
+    const step = thinkStep();
+    const outcome = await executeAppThink(step, context([step]), { transportFor: () => transport });
+    expect(outcome.proposals).toEqual([{ appId, sql: "INSERT INTO t (label, cents) VALUES ('select from the menu', 1)", counts: { changes: 1 } }]);
+    expect(outcome.summary).toBe(`copy it over\n\n${droppedNote(2)}`);
     expect(await realRowCount(appId)).toBe(3);
   });
 

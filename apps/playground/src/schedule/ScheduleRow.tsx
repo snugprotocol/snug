@@ -6,6 +6,11 @@
 // ("delete for good?" · delete · keep) — no window.confirm. An attention line, when the
 // schedule has one, carries its ONE act: resume (paused), review (imported), run now and
 // review (needs you).
+//
+// AN IMPORTED SCHEDULE HAS ONE WAY ON (C4; security F10): the consent panel in its editor.
+// The row's switch never enables it directly — the engine refuses that too — so on an
+// imported row the switch's click is the same act as *review*: it opens the editor. Any
+// refusal the engine answers (a deleted app, a read-only file) is rendered inline, in words.
 
 import { useRef, useState, type ReactElement } from 'react';
 import { useNavigate } from 'react-router';
@@ -14,13 +19,13 @@ import type { ScheduleRun, ScheduledTask } from '@snugprotocol/protocol';
 
 import { Button } from '../ui/Button.js';
 import { useDismissableMenu } from '../ui/useDismissableMenu.js';
-import { imported, needsYou, paused, type StateCopy } from './copy.js';
-import { ROW, statusWord } from './copy.page.js';
+import { RESULT_STATUS_WORD, imported, needsYou, paused, type StateCopy } from './copy.js';
+import { ROW } from './copy.page.js';
 import { describeSpec } from './cron.js';
-import { appIdsOf, nextFor, relativeTime, runsNewestFirst, type AppIndex, type Attention } from './pageModel.js';
+import { attentionOf, nextFor, relativeTime, runsNewestFirst, type AppIndex, type Attention } from './pageModel.js';
+import { editHref } from './routes.js';
 import { deleteTask, runNow, setTaskEnabled } from './scheduler.js';
-
-export const editHref = (taskId: string): string => `/schedule/${encodeURIComponent(taskId)}`;
+import { appIdsOf } from './taskShape.js';
 
 /** The attention line's copy, with its one act's handler. */
 function attentionCopy(attention: Attention, item: ScheduledTask, apps: AppIndex): { copy: StateCopy; act: 'resume' | 'review' | 'open-app' } {
@@ -61,9 +66,15 @@ export function ScheduleRow({ item, runs, apps, now, attention }: ScheduleRowPro
   const next = nextFor(item, now);
   const appIds = appIdsOf(item.steps);
   const historyId = `schedule-history-${item.id}`;
+  /** The one enable path for an imported schedule is its editor's consent panel. */
+  const reviewFirst = (attention ?? attentionOf(item, runs))?.kind === 'imported';
 
   const toggle = async (): Promise<void> => {
     setError(undefined);
+    if (reviewFirst) {
+      navigate(editHref(item.id));
+      return;
+    }
     const result = await setTaskEnabled(item.id, !item.enabled);
     if (!result.ok) setError(result.reason);
   };
@@ -111,6 +122,7 @@ export function ScheduleRow({ item, runs, apps, now, attention }: ScheduleRowPro
           className="schedule-switch"
           onClick={() => void toggle()}
           data-testid="schedule-switch"
+          data-review-first={reviewFirst ? 'true' : undefined}
         >
           <span className="schedule-switch-track" aria-hidden="true">
             <span className="schedule-switch-knob" />
@@ -232,7 +244,7 @@ export function ScheduleRow({ item, runs, apps, now, attention }: ScheduleRowPro
           ) : (
             runsNewestFirst(runs).map((entry) => (
               <li key={`${entry.id}:${entry.dueAt}`} className="schedule-history-entry" data-status={entry.status}>
-                <span className="schedule-history-status">{statusWord(entry.status)}</span>
+                <span className="schedule-history-status">{RESULT_STATUS_WORD[entry.status]}</span>
                 <span className="schedule-history-when">{relativeTime(new Date(entry.finishedAt ?? entry.dueAt), now)}</span>
                 {entry.steps[0]?.summary !== undefined ? <span className="schedule-history-summary">{entry.steps[0].summary}</span> : entry.reason !== undefined ? <span className="schedule-history-summary">{entry.reason}</span> : null}
               </li>
@@ -241,7 +253,7 @@ export function ScheduleRow({ item, runs, apps, now, attention }: ScheduleRowPro
         </ul>
       ) : null}
       {error !== undefined ? (
-        <div className="error-note schedule-row-error" role="alert">
+        <div className="error-note schedule-row-error" role="alert" data-testid="schedule-row-error">
           {error}
         </div>
       ) : null}

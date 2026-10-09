@@ -13,13 +13,15 @@
 // ceiling exactly is allowed; one past it is `capped`); `ceilingWarning` is the editor's 80 %
 // line. `ai` is answered before `net` when both apply.
 //
-// THE OUTCOME FOLD. `ok` resets the failure streak and adds an unseen result; `failed` and
-// `no-handler` lengthen the streak — the fifth pauses the task (`failures`); `needs-you` adds an
-// unseen result and leaves the streak alone (it is the gate's refusal, not the app's failure);
-// `skipped`, `interrupted`, `capped`, `pending` and `running` change nothing. Thirty unseen
-// results pause the task (`ignored`); `seenAt` — and so `markSeen` — is a USER gesture only,
-// never an app-derived signal. A task that is already paused keeps its first reason: a late
-// outcome never rewrites why the user was told it stopped.
+// THE OUTCOME FOLD. Every RESULT — a status in `RESULT_STATUSES` (`taskShape.ts`: ok, failed,
+// needs-you, interrupted, capped, no-handler — the one set the view's unseen count and the
+// user's `markSeen` read too; Gate-5 M8) — adds an unseen result. `ok` resets the failure
+// streak; `failed` and `no-handler` lengthen it — the fifth pauses the task (`failures`);
+// `needs-you`, `interrupted` and `capped` leave the streak alone (the gate's refusal, a cancel
+// or a ceiling, not the app's failure); `skipped`, `pending` and `running` change nothing.
+// Thirty unseen results pause the task (`ignored`); `seenAt` — and so `markSeen` — is a USER
+// gesture only, never an app-derived signal. A task that is already paused keeps its first
+// reason: a late outcome never rewrites why the user was told it stopped.
 //
 // APP DRIFT (E8). `pauseForAppUpdate` pauses a task that names the app at another version and
 // leaves `appVersions` AS RECORDED, so the resume card can name the change (recorded → current);
@@ -30,6 +32,8 @@
 // `updatedAt` is never touched here: the one writer that persists a task stamps it.
 
 import { SCHEDULE_DAILY_CEILINGS, type ScheduleRun, type ScheduledTask, type SchedulerState } from '@snugprotocol/protocol';
+
+import { RESULT_STATUSES } from './taskShape.js';
 
 /** The fifth consecutive failure pauses the task (`failures`). */
 export const PAUSE_AFTER_FAILURES = 5;
@@ -66,22 +70,19 @@ export function ceilingWarning(daily: DailyCounters): CeilingKind | undefined {
 /** The task after one run's outcome (see the header for the fold); a new object. */
 export function applyRunOutcome(task: ScheduledTask, run: ScheduleRun): ScheduledTask {
   let consecutiveFailures = task.consecutiveFailures;
-  let unseenResults = task.unseenResults;
+  const unseenResults = task.unseenResults + (RESULT_STATUSES.has(run.status) ? 1 : 0);
   switch (run.status) {
     case 'ok':
       consecutiveFailures = 0;
-      unseenResults += 1;
       break;
     case 'failed':
     case 'no-handler':
       consecutiveFailures += 1;
       break;
     case 'needs-you':
-      unseenResults += 1;
-      break;
-    case 'skipped':
     case 'interrupted':
     case 'capped':
+    case 'skipped':
     case 'pending':
     case 'running':
       break;

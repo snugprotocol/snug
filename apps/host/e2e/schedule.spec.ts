@@ -24,12 +24,11 @@
 // After the first `goto`, every route change is a same-document hash write (`go`), never a
 // reload: a reload would re-run the init script and put the clock back at the boot instant.
 //
-// THE GUARDS. The Schedule page, its create bar, the nav item and the missed card are the UI
-// siblings' (apps/playground/src/schedule/*.tsx, views/ScheduleView.tsx). Every step that
-// needs one of them is guarded by a NAMED `test.skip` — the build this spec met may predate
-// them — never by a silent pass. The boot legs (no console errors, nothing leaves the page)
-// run unconditionally. The strings come from `schedule/copy.ts` itself (pinned byte-for-byte
-// in `scheduleCopy.test.ts`), so a copy change cannot turn an assertion into a skip unnoticed.
+// THE SURFACES. The Schedule page, its create bar, the nav item and the missed card
+// (apps/playground/src/schedule/*.tsx, views/ScheduleView.tsx) SHIP IN THIS PR, so every step
+// that needs one of them ASSERTS it is visible — a build without them is a red, never a skip.
+// The strings come from `schedule/copy.ts` itself (pinned byte-for-byte in
+// `scheduleCopy.test.ts`), so a copy change cannot turn an assertion green by accident.
 //
 // Run via `pnpm --filter host test:e2e -- schedule` (cwd = apps/host), after `pnpm --filter host build`.
 import { expect, test, type Locator, type Page } from '@playwright/test';
@@ -42,9 +41,6 @@ const BOOT_INSTANT = new Date('2026-10-09T15:00:00.000Z');
 const MINUTE_MS = 60_000;
 const HOUR_MS = 60 * MINUTE_MS;
 const DAY_MS = 24 * HOUR_MS;
-
-/** Who owns the surfaces a skip names. */
-const UI_OWNER = 'the UI siblings (apps/playground/src/schedule/*.tsx, views/ScheduleView.tsx)';
 
 /** The honesty line this binding must show: `file` → "this page"; OPFS over http → durable; a working lock manager → no sibling tail. */
 const HONESTY_HTTP = hostHonesty({ kind: 'host', hostLabel: 'this page', wakeMode: 'page', storageRung: 'durable', canSeeSiblingTabs: true });
@@ -72,18 +68,9 @@ async function go(page: Page, hash: `#/${string}`): Promise<void> {
   }, hash);
 }
 
-/** Whether a sibling-owned surface is in this build: one short settle (Playwright's clock, not the page's faked one), then a count. */
-async function present(locator: Locator): Promise<boolean> {
-  await locator
-    .first()
-    .waitFor({ state: 'visible', timeout: 3_000 })
-    .catch(() => undefined);
-  return (await locator.count()) > 0;
-}
-
-/** Skip — by name — when the surface a step needs is not in the build under test. */
-async function requireUi(locator: Locator, what: string): Promise<void> {
-  test.skip(!(await present(locator)), `${what} is not in this build — owned by ${UI_OWNER}`);
+/** A surface this PR ships must be visible here — named, so a red says which one is missing. */
+async function expectUi(locator: Locator, what: string): Promise<void> {
+  await expect(locator.first(), `${what} ships in this PR and must be in the build under test`).toBeVisible({ timeout: 10_000 });
 }
 
 const createBar = (page: Page): Locator => page.getByPlaceholder(EMPTY.createPlaceholder);
@@ -169,7 +156,7 @@ test.describe('H3 — the scheduler on the built page served over loopback http 
     await page.goto(KIT_URL);
     await expect(page.getByTestId('brain-chip')).toContainText('demo brain');
     await go(page, '#/schedule');
-    await requireUi(emptyState(page), 'the Schedule page (#/schedule) with its empty state');
+    await expectUi(emptyState(page), 'the Schedule page (#/schedule) with its empty state');
     await expect(emptyState(page)).toBeVisible();
     await expect(page.getByText(HONESTY_HTTP), 'the honesty line').toBeVisible();
     await expect(page.getByText('this artifact'), 'never the artifact wording on a plain page').toHaveCount(0);
@@ -185,8 +172,8 @@ test.describe('H3 — the scheduler on the built page served over loopback http 
     await page.goto(KIT_URL);
     await expect(page.getByTestId('brain-chip')).toContainText('demo brain');
     await go(page, '#/schedule');
-    await requireUi(createBar(page), 'the Schedule page’s create bar');
-    await requireUi(scheduleNav(page), 'the header’s schedule item ("schedule, N unread")');
+    await expectUi(createBar(page), 'the Schedule page’s create bar');
+    await expectUi(scheduleNav(page), 'the header’s schedule item ("schedule, N unread")');
     await expect(scheduleNav(page, 0).or(page.getByRole('link', { name: /^schedule$/ })), 'nothing unread before the run').toHaveCount(1);
 
     await createThroughTheUi(page, 'remind me in 2 minutes', { title: 'stretch', body: 'stand up and stretch' });
@@ -213,7 +200,7 @@ test.describe('H3 — the scheduler on the built page served over loopback http 
     await page.goto(KIT_URL);
     await expect(page.getByTestId('brain-chip')).toContainText('demo brain');
     await go(page, '#/schedule');
-    await requireUi(createBar(page), 'the Schedule page’s create bar');
+    await expectUi(createBar(page), 'the Schedule page’s create bar');
 
     // Due one hour before the jump lands: past the grace (missed, not late) and inside any
     // freshness window (never `stale`), and a one-off is ALWAYS asked (plan.ts) — so the card.
@@ -247,7 +234,7 @@ test.describe('H3 — the scheduler on the built page served over loopback http 
           await expect(page.getByTestId('brain-chip')).toContainText('demo brain');
           await setTheme(page, theme);
           await go(page, '#/schedule');
-          await requireUi(emptyState(page), 'the Schedule page (#/schedule)');
+          await expectUi(emptyState(page), 'the Schedule page (#/schedule)');
           await expect(page.getByText(HONESTY_HTTP)).toBeVisible();
           // The pictures first, the gate second: a red gate still leaves the pictures to look at.
           await page.screenshot({ path: `test-results/schedule-empty-${theme}-${width}.png`, fullPage: true });
@@ -296,7 +283,7 @@ test.describe('H3 — opened from file:// with every request aborted (the plain-
     await page.goto(KIT_FILE_URL);
     await expect(page.getByTestId('brain-chip')).toContainText('demo brain');
     await go(page, '#/schedule');
-    await requireUi(emptyState(page), 'the Schedule page (#/schedule)');
+    await expectUi(emptyState(page), 'the Schedule page (#/schedule)');
     // The election resolves within its probe bound (2 s of page time); the line is derived from the leader state.
     await page.clock.fastForward(5_000);
     await expect(page.getByText(HONESTY_FILE), 'the whole line is one of the four this binding can truthfully say').toBeVisible({ timeout: 10_000 });

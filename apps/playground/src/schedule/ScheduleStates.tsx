@@ -25,8 +25,9 @@ import {
 } from '../platform/availability.js';
 import type { UserDb } from '@snugprotocol/db';
 import { Button } from '../ui/Button.js';
-import { appMissing, blockedHere, imported, paused, type StateCopy } from './copy.js';
-import { RESULT_STATUS_WORD, STEP_STATUS_WORD, resultTone, stepTone, type StatusTone } from './copy.bits.js';
+import { RESULT_STATUS_WORD, STEP_STATUS_WORD, appMissing, blockedHere, imported, paused, type StateCopy } from './copy.js';
+import { RELOAD } from './copy.page.js';
+import { resultTone, stepTone, type StatusTone } from './copy.result.js';
 
 /** The two fields of an app row a state helper reads. */
 export type AppName = Pick<AppRecord, 'appId' | 'displayName'>;
@@ -165,6 +166,24 @@ export function AppMissingNote({ onRemove }: { onRemove: () => void }): ReactEle
 /** "not available in this host — …" — no act; the reason is the whole line. */
 export function BlockedStepNote({ reason }: { reason: string }): ReactElement {
   return <StateLine copy={{ text: reason }} testId="schedule-step-blocked" />;
+}
+
+/**
+ * This tab was promoted to leader over a stale copy (`SchedulerView.needsReload`, E2): one
+ * line, one act — a reload. The page and the hub section both mount it; `reload` is a seam
+ * for the test (`location.reload()` in the product).
+ */
+export function ReloadNote({ reload = (): void => location.reload() }: { reload?: () => void }): ReactElement {
+  return (
+    <div className="connection-note schedule-reload-note" role="status" data-testid="schedule-reload">
+      <p className="connection-note-title">{RELOAD.note}</p>
+      <div className="connection-note-actions">
+        <Button variant="primary" onClick={reload} data-testid="schedule-reload-act">
+          {RELOAD.act}
+        </Button>
+      </div>
+    </div>
+  );
 }
 
 /** "paused: 5 failures in a row · resume" — renders nothing for a schedule the engine did not pause. */

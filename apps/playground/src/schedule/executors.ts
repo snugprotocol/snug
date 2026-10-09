@@ -36,6 +36,7 @@ import type { AgentTransport } from '@snugprotocol/runner';
 import { scrubCredentialProse } from '../security/credentialShapes.js';
 import { CANCELLED_SUMMARY, defaultTransportFor, executeAppThink } from './appThink.js';
 import type { StepContext, StepExecutor, StepOutcome } from './engine-types.js';
+import { messageOf } from './taskShape.js';
 
 export { CANCELLED_SUMMARY } from './appThink.js';
 
@@ -51,11 +52,6 @@ export const WITHHELD_SUMMARY = 'a result was withheld because it looked like a 
 export const APP_RUN_LATER_SUMMARY = 'running an app on a schedule arrives in a later release';
 
 const none = (): StepOutcome['calls'] => ({ ai: 0, net: 0 });
-
-function errorMessage(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  return typeof err === 'string' ? err : String(err);
-}
 
 /** Refuse whole, else scrub shapes and cap. An empty string stays empty — no sentence is invented. */
 function safeText(text: string): string {
@@ -103,7 +99,7 @@ export function createStepExecutor(deps: StepExecutorDeps): StepExecutor {
     try {
       outcome = ctx.signal.aborted ? { status: 'failed', summary: CANCELLED_SUMMARY, calls: none() } : await dispatch(step, ctx, deps);
     } catch (err) {
-      outcome = { status: 'failed', summary: errorMessage(err), calls: none() };
+      outcome = { status: 'failed', summary: messageOf(err), calls: none() };
     }
     // Cut short while it ran: say so (what was spent stays charged); the queue records the run.
     if (ctx.signal.aborted) outcome = { status: 'failed', summary: CANCELLED_SUMMARY, calls: outcome.calls };

@@ -31,6 +31,7 @@ import {
   SCHEDULE_EVERY_MAX_N,
   SCHEDULE_GRACE_MS,
   SCHEDULE_HOST_KINDS,
+  SCHEDULE_ID_MAX_CHARS,
   SCHEDULE_MAX_APP_VERSIONS,
   SCHEDULE_MAX_STEPS,
   SCHEDULE_MAX_TASKS,
@@ -54,6 +55,7 @@ import {
   STEP_RESULT_STATUSES,
   TASK_PROVENANCES,
   WEEKDAYS,
+  canonicalScheduleIntent,
   canonicalScheduledTask,
   findScheduleCredential,
   isIanaTimeZone,
@@ -594,7 +596,7 @@ describe('scheduleRunSchema — one execution', () => {
       host: { kind: 'host', binding: 'claude-code' },
       steps: [{ status: 'ok', summary: 'Spent 120 on food.' }, { status: 'no-handler', appMissing: true }],
       proposals: {
-        items: [{ sql: "INSERT INTO notes (body) VALUES ('hi')", summary: 'Adds a note', counts: { changes: 1 } }],
+        items: [{ appId: 'notes', sql: "INSERT INTO notes (body) VALUES ('hi')", summary: 'Adds a note', counts: { changes: 1 } }],
         expiresAt: '2026-10-16T08:00:00.000Z',
       },
       calls: { ai: 1, net: 0 },
@@ -618,7 +620,7 @@ describe('scheduleRunSchema — one execution', () => {
     expect(parses(scheduleRunSchema, { ...minimalRun, steps: results(SCHEDULE_MAX_STEPS) })).toBe(true);
     expect(parses(scheduleRunSchema, { ...minimalRun, steps: results(SCHEDULE_MAX_STEPS + 1) })).toBe(false);
 
-    const item = { sql: 'DELETE FROM notes WHERE id = 1' };
+    const item = { appId: 'notes', sql: 'DELETE FROM notes WHERE id = 1' };
     const proposals = (count: number) => ({ items: Array.from({ length: count }, () => item), expiresAt: AT });
     expect(parses(scheduleRunSchema, { ...minimalRun, proposals: proposals(SCHEDULE_PROPOSALS_PER_RUN) })).toBe(true);
     expect(parses(scheduleRunSchema, { ...minimalRun, proposals: proposals(SCHEDULE_PROPOSALS_PER_RUN + 1) })).toBe(false);
@@ -653,7 +655,7 @@ describe('scheduleRunSchema — one execution', () => {
     expect(parses(scheduleRunSchema, { ...minimalRun, host: { kind: 'web', origin: 'x' } })).toBe(false);
     expect(parses(scheduleRunSchema, { ...minimalRun, calls: { ai: 0, net: 0, disk: 0 } })).toBe(false);
     expect(parses(scheduleRunSchema, { ...minimalRun, steps: [{ status: 'ok', extra: 1 }] })).toBe(false);
-    const item = { sql: 'DELETE FROM notes WHERE id = 1' };
+    const item = { appId: 'notes', sql: 'DELETE FROM notes WHERE id = 1' };
     expect(parses(scheduleRunSchema, { ...minimalRun, proposals: { items: [item], expiresAt: AT, approved: true } })).toBe(false);
     expect(parses(scheduleRunSchema, { ...minimalRun, proposals: { items: [{ ...item, approved: true }], expiresAt: AT } })).toBe(false);
     expect(parses(scheduleRunSchema, { ...minimalRun, proposals: { items: [{ ...item, counts: { changes: 1, rows: [] } }], expiresAt: AT } })).toBe(false);
@@ -665,15 +667,22 @@ describe('scheduleRunSchema — one execution', () => {
   });
 });
 
-describe('scheduleProposalItemSchema — a pending data change is DML, one statement', () => {
+describe('scheduleProposalItemSchema — a pending data change is DML, one statement, for ONE named app', () => {
   it('accepts INSERT / UPDATE / DELETE with an optional summary and dry-run counts', () => {
-    expect(parses(scheduleProposalItemSchema, { sql: "INSERT INTO notes (body) VALUES ('hi')" })).toBe(true);
-    expect(parses(scheduleProposalItemSchema, { sql: 'UPDATE notes SET body = 1 WHERE id = 2;' })).toBe(true);
-    expect(parses(scheduleProposalItemSchema, { sql: 'DELETE FROM notes WHERE id = 1', summary: 'Removes one', counts: { changes: 1 } })).toBe(true);
-    expect(parses(scheduleProposalItemSchema, { sql: 'INSERT INTO t SELECT * FROM u' })).toBe(true);
+    expect(parses(scheduleProposalItemSchema, { appId: 'notes', sql: "INSERT INTO notes (body) VALUES ('hi')" })).toBe(true);
+    expect(parses(scheduleProposalItemSchema, { appId: 'notes', sql: 'UPDATE notes SET body = 1 WHERE id = 2;' })).toBe(true);
+    expect(parses(scheduleProposalItemSchema, { appId: 'notes', sql: 'DELETE FROM notes WHERE id = 1', summary: 'Removes one', counts: { changes: 1 } })).toBe(true);
   });
 
-  it('refuses a SELECT, DDL, two statements and ATTACH/PRAGMA', () => {
+  it('carries the app it was proposed FOR (S4): a run pools items from several steps, so each names its own app; absent or oversize is a refusal', () => {
+    expect(parses(scheduleProposalItemSchema, { sql: 'DELETE FROM notes WHERE id = 1' })).toBe(false);
+    expect(parses(scheduleProposalItemSchema, { appId: '', sql: 'DELETE FROM notes WHERE id = 1' })).toBe(false);
+    expect(parses(scheduleProposalItemSchema, { appId: 'x'.repeat(SCHEDULE_ID_MAX_CHARS), sql: 'DELETE FROM notes WHERE id = 1' })).toBe(true);
+    expect(parses(scheduleProposalItemSchema, { appId: 'x'.repeat(SCHEDULE_ID_MAX_CHARS + 1), sql: 'DELETE FROM notes WHERE id = 1' })).toBe(false);
+    expect(scheduleProposalItemSchema.parse({ appId: 'ledger', sql: 'DELETE FROM notes WHERE id = 1' }).appId).toBe('ledger');
+  });
+
+  it('refuses a SELECT, DDL, two statements, ATTACH/PRAGMA and a nested SELECT/FROM — a scheduled proposal is literal-valued DML (S8)', () => {
     expect(isSingleDmlStatement('SELECT * FROM notes')).toBe(false);
     expect(isSingleDmlStatement('DROP TABLE notes')).toBe(false);
     expect(isSingleDmlStatement('CREATE TABLE x (id)')).toBe(false);
@@ -682,21 +691,29 @@ describe('scheduleProposalItemSchema — a pending data change is DML, one state
     expect(isSingleDmlStatement("INSERT INTO t VALUES (1); ATTACH 'x' AS y")).toBe(false);
     expect(isSingleDmlStatement('PRAGMA writable_schema = 1')).toBe(false);
     expect(isSingleDmlStatement('WITH x AS (SELECT 1) INSERT INTO t SELECT * FROM x')).toBe(false);
-    expect(parses(scheduleProposalItemSchema, { sql: 'SELECT * FROM notes' })).toBe(false);
-    expect(parses(scheduleProposalItemSchema, { sql: 'DROP TABLE notes' })).toBe(false);
-    expect(parses(scheduleProposalItemSchema, { sql: 'ALTER TABLE notes ADD COLUMN x' })).toBe(false);
-    expect(parses(scheduleProposalItemSchema, { sql: 'DELETE FROM notes; DROP TABLE notes' })).toBe(false);
+    // A nested read reaches every table the app holds — a proposal may only carry literal values.
+    expect(isSingleDmlStatement('INSERT INTO t SELECT * FROM u')).toBe(false);
+    expect(isSingleDmlStatement('UPDATE t SET note = (SELECT secret FROM private_notes LIMIT 1) WHERE id = 1')).toBe(false);
+    expect(isSingleDmlStatement('DELETE FROM t WHERE id IN (SELECT id FROM u)')).toBe(false);
+    expect(isSingleDmlStatement("INSERT INTO t (body) VALUES ('select from the menu')")).toBe(true); // inside a string literal: data, not a read
+    expect(isSingleDmlStatement('DELETE FROM notes WHERE id = 1')).toBe(true); // the DML's own FROM is not a nested read
+    expect(isSingleDmlStatement("UPDATE t SET fromage = 'brie' WHERE selected = 1")).toBe(true); // whole words only
+    expect(parses(scheduleProposalItemSchema, { appId: 'notes', sql: 'SELECT * FROM notes' })).toBe(false);
+    expect(parses(scheduleProposalItemSchema, { appId: 'notes', sql: 'DROP TABLE notes' })).toBe(false);
+    expect(parses(scheduleProposalItemSchema, { appId: 'notes', sql: 'ALTER TABLE notes ADD COLUMN x' })).toBe(false);
+    expect(parses(scheduleProposalItemSchema, { appId: 'notes', sql: 'DELETE FROM notes; DROP TABLE notes' })).toBe(false);
+    expect(parses(scheduleProposalItemSchema, { appId: 'notes', sql: 'INSERT INTO t SELECT * FROM u' })).toBe(false);
   });
 
   it('bounds sql, summary and counts at their caps', () => {
     const dml = (chars: number) => `DELETE FROM notes WHERE body = '${'x'.repeat(chars - "DELETE FROM notes WHERE body = ''".length)}'`;
-    expect(parses(scheduleProposalItemSchema, { sql: dml(SCHEDULE_PROPOSAL_SQL_MAX_CHARS) })).toBe(true);
-    expect(parses(scheduleProposalItemSchema, { sql: dml(SCHEDULE_PROPOSAL_SQL_MAX_CHARS + 1) })).toBe(false);
-    expect(parses(scheduleProposalItemSchema, { sql: '' })).toBe(false);
-    expect(parses(scheduleProposalItemSchema, { sql: 'DELETE FROM t', summary: 'x'.repeat(SCHEDULE_PROPOSAL_SUMMARY_MAX_CHARS) })).toBe(true);
-    expect(parses(scheduleProposalItemSchema, { sql: 'DELETE FROM t', summary: 'x'.repeat(SCHEDULE_PROPOSAL_SUMMARY_MAX_CHARS + 1) })).toBe(false);
-    expect(parses(scheduleProposalItemSchema, { sql: 'DELETE FROM t', counts: { changes: -1 } })).toBe(false);
-    expect(parses(scheduleProposalItemSchema, { sql: 'DELETE FROM t', counts: {} })).toBe(false);
+    expect(parses(scheduleProposalItemSchema, { appId: 'notes', sql: dml(SCHEDULE_PROPOSAL_SQL_MAX_CHARS) })).toBe(true);
+    expect(parses(scheduleProposalItemSchema, { appId: 'notes', sql: dml(SCHEDULE_PROPOSAL_SQL_MAX_CHARS + 1) })).toBe(false);
+    expect(parses(scheduleProposalItemSchema, { appId: 'notes', sql: '' })).toBe(false);
+    expect(parses(scheduleProposalItemSchema, { appId: 'notes', sql: 'DELETE FROM t', summary: 'x'.repeat(SCHEDULE_PROPOSAL_SUMMARY_MAX_CHARS) })).toBe(true);
+    expect(parses(scheduleProposalItemSchema, { appId: 'notes', sql: 'DELETE FROM t', summary: 'x'.repeat(SCHEDULE_PROPOSAL_SUMMARY_MAX_CHARS + 1) })).toBe(false);
+    expect(parses(scheduleProposalItemSchema, { appId: 'notes', sql: 'DELETE FROM t', counts: { changes: -1 } })).toBe(false);
+    expect(parses(scheduleProposalItemSchema, { appId: 'notes', sql: 'DELETE FROM t', counts: {} })).toBe(false);
   });
 });
 
@@ -821,6 +838,36 @@ describe('canonicalScheduledTask — byte identity for the import guard (ADR-007
     const base = canonicalScheduledTask(scheduledTaskSchema.parse(minimalTask));
     expect(canonicalScheduledTask(scheduledTaskSchema.parse({ ...minimalTask, enabled: false }))).not.toBe(base);
     expect(canonicalScheduledTask(scheduledTaskSchema.parse({ ...minimalTask, cron: '0 9 * * *' }))).not.toBe(base);
+  });
+});
+
+describe('canonicalScheduleIntent — what a run or a counter must NOT change (M4)', () => {
+  const parsed = (over: Record<string, unknown> = {}) => scheduledTaskSchema.parse({ ...minimalTask, ...over });
+
+  it('is key-order independent and stable across the engine’s own bookkeeping — a backup round trip after one run still matches', () => {
+    const base = canonicalScheduleIntent(parsed());
+    const reordered = Object.fromEntries(Object.entries(minimalTask).reverse());
+    expect(canonicalScheduleIntent(scheduledTaskSchema.parse({ ...reordered, spec: { tz: 'device', time: '08:00', kind: 'daily' } }))).toBe(base);
+    expect(canonicalScheduleIntent(parsed({ ranThrough: AT }))).toBe(base);
+    expect(canonicalScheduleIntent(parsed({ updatedAt: '2026-10-10T08:00:00.000Z' }))).toBe(base);
+    expect(canonicalScheduleIntent(parsed({ consecutiveFailures: 3, unseenResults: 12 }))).toBe(base);
+    expect(canonicalScheduleIntent(parsed({ enabled: false, pausedReason: 'failures' }))).toBe(base);
+    expect(canonicalScheduleIntent(parsed({ enabledAt: AT, appVersions: { w: 2 }, staleAfterMs: 120_000 }))).toBe(base);
+    expect(base).toBe(JSON.stringify(JSON.parse(base)));
+  });
+
+  it('differs on every field that IS the intent: steps, spec, cron, startsAt, endsAt, missedPolicy, alert, ownerAppId, provenance, title', () => {
+    const base = canonicalScheduleIntent(parsed());
+    expect(canonicalScheduleIntent(parsed({ title: 'Other' }))).not.toBe(base);
+    expect(canonicalScheduleIntent(parsed({ steps: [{ ...notify, body: 'Different.' }] }))).not.toBe(base);
+    expect(canonicalScheduleIntent(parsed({ spec: { ...daily, time: '09:00' } }))).not.toBe(base);
+    expect(canonicalScheduleIntent(parsed({ cron: '0 9 * * *' }))).not.toBe(base);
+    expect(canonicalScheduleIntent(parsed({ startsAt: AT }))).not.toBe(base);
+    expect(canonicalScheduleIntent(parsed({ endsAt: AT }))).not.toBe(base);
+    expect(canonicalScheduleIntent(parsed({ missedPolicy: 'skip' }))).not.toBe(base);
+    expect(canonicalScheduleIntent(parsed({ alert: 'notification' }))).not.toBe(base);
+    expect(canonicalScheduleIntent(parsed({ ownerAppId: 'w' }))).not.toBe(base);
+    expect(canonicalScheduleIntent(parsed({ provenance: 'chat' }))).not.toBe(base);
   });
 });
 

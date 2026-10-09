@@ -5,7 +5,9 @@
 // pure pieces — `plan`, `protection`, `floors`, `leader`, `tick`, `queue` — are composed HERE
 // and nowhere else, over the page-wide user db, and the result is a store any view reads with
 // `useScheduler()`. Nothing in this file decides what a run does (`engine-types.ts` is that
-// seam) or what the file says (`packages/db`'s accessors are that); it decides when.
+// seam) or what the file says (`packages/db`'s accessors are that); it decides when. The user's
+// ACTS live in `acts.ts` (Gate-5 M14) and are re-exported from here, so every importer keeps
+// its one import; they reach the engine through two accessors, `currentDeps()` and `engine()`.
 //
 // BOOT (E1). `initScheduler()` is IDEMPOTENT — the same promise for every call, so
 // StrictMode's doubled effect, the boot chain and the re-init chains may all call it — and
@@ -16,22 +18,38 @@
 // `interrupted` (reason `stale claim` — a tab that died mid-run); elects a leader under
 // `snug-scheduler:<file id>`; starts the minute ticker; reconciles once; and resolves when
 // that first reconcile is done. Where the host says `allows('schedule') === false` it resolves
-// at once and the store stays `ready: false` — no ticker, no election, no row written.
+// at once and the store stays `ready: false` — no ticker, no election, no row written. The
+// same sweep runs again on every `late` and `visible` reconcile (Gate-5 S5): a sibling tab
+// that died mid-run leaves its claim behind while this one keeps ticking.
 //
 // LEADER AND FOLLOWER (E2). Only the LEADER reconciles and runs. A follower keeps its view
 // fresh by re-reading the file on the revision signals and on the wake ticks (`visible`,
-// `focus`, `online`); the minute tick does nothing for it. A follower promoted when the leader
-// tab closes reconciles at once.
+// `focus`, `online`); the minute tick does nothing for it.
+//
+// PROMOTION ASKS FOR A RELOAD (Gate-5 S3, PR-A). A follower promoted when the leader tab
+// closes holds the sql.js handle it opened at BOOT — stale after every row the leader wrote
+// since — so planning over it would re-run recorded occurrences and persist the stale copy
+// over the leader's. So a promotion does NOT reconcile: it sets `needsReload` on the view and
+// the engine stays idle (the ticker runs, `reconcile` is refused, the view still reads) until
+// the page reloads — the strip the view renders says so. The residual, queued for its own
+// task: the proper fix is a writer lock on the file plus a re-open seam so a promoted tab can
+// swap in the leader's bytes without a reload.
 //
 // RECONCILE (E4). Leader only, SERIALISED — one in flight, one coalesced behind it. It runs
 // `plan()` over the file as it is now and applies the actions in order: `pending` and `skip`
 // become rows at once, `supersede` marks the older pending row `skipped` (`superseded`; the
 // accessor has no delete), `run` goes to the queue (which claims it before anything executes),
-// `advance` moves the task's `ranThrough`. The watermark is written LAST, after every candidate
-// row — a throw before it leaves the watermark where it was, so the next reconcile finds the
-// same misses and the rows already written dedupe them ("a crash between candidate rows loses
-// nothing"). One residual, by design: a `run` action's claim is the queue's first write, a
-// microtask after the watermark; both land in the same persist window.
+// `advance` moves the task's `ranThrough` — bookkeeping, never an `updatedAt` stamp (Gate-5
+// M16: a backup compares by intent, and a run must not change it). The watermark is written
+// LAST, after every candidate row — a throw before it leaves the watermark where it was, so the
+// next reconcile finds the same misses and the rows already written dedupe them ("a crash
+// between candidate rows loses nothing"). One residual, by design: a `run` action's claim is
+// the queue's first write, a microtask after the watermark; both land in the same persist
+// window. THE ROWS IT PLANS OVER (Gate-5 M3): the ones the last `refreshScheduler()` read,
+// when nothing has been written since — every writer bumps `scheduleRevision` (or
+// `libraryRevision`) and the refresh runs on the bump, so an unchanged revision means an
+// unchanged file; otherwise it reads afresh. With the accessor's own memo under it, a minute
+// tick over an idle file parses nothing.
 //
 // THE SWAP SEAMS (E1, lesson 2026-08-20). The engine mirrors rows of the CURRENT user file, so
 // it resets wherever the thread sessions reset: this module subscribes to `threadSessions`'
@@ -46,57 +64,58 @@
 // `restoreUserDbFromBytes`) ALSO call `initScheduler()` explicitly — the pinned wire — and
 // find the same promise. A generation counter lets a boot that outlived its engine stand down.
 //
-// USER ACTS. Every act validates through the protocol's strict schema, stamps `updatedAt`,
-// writes through the accessor and bumps `scheduleRevision`. `createTask` compiles the spec,
-// applies the frequency floor, derives the catch-up default and the freshness window, and
-// records every named app's version — a missing app refuses by name; nothing here sets
-// `enabled` but the user's own act (ADR-0074 §4). `noteAppVersion` is the E8 hook: a SHARED or
-// AGENT update of a named app pauses every schedule that names it (its callers land in PR-B).
-//
 // THE LOCK NAME. The election wants `snug-scheduler:<file db uuid>` so two files in one origin
 // elect independently: the default `fileId` reads `db.getFileId()` (the file's `db_id` in
 // `snug_meta`); the constant `snug-scheduler` is the fallback for a file whose meta row is
 // missing (`seedMeta` repairs it on the next open).
+//
+// THE MODULE CYCLE (Gate-5 M20, verified benign). `state/userdb.ts → scheduler → executors →
+// appThink → state/mode → state/userdb` is a cycle, and `scheduler ↔ acts` another. Every
+// cross edge is reached through a hoisted function (`initScheduler`, `getUserDb`,
+// `defaultTransportFor`, `executeStep` is read inside `defaultDeps()`, the acts read
+// `currentDeps()`/`engine()`), and NOTHING here dereferences an imported const at module
+// evaluation: the deps are built lazily on first use (`currentDeps()`), never at load. Whichever
+// module the bundle enters the cycle by, the bindings are live by the time they are read.
 
 import type { UserDb } from '@snugprotocol/db';
-import {
-  scheduledTaskSchema,
-  type AlertKind,
-  type MissedPolicy,
-  type RunStatus,
-  type ScheduleRun,
-  type ScheduleSpec,
-  type ScheduleStep,
-  type ScheduledTask,
-  type SchedulerState,
-  type TaskProvenance,
-} from '@snugprotocol/protocol';
+import type { ScheduleRun, ScheduledTask, SchedulerState } from '@snugprotocol/protocol';
 
 import { registryEpochStore } from '../agent/threadSessions.js';
 import { allows, getPlatform, type SnugPlatform } from '../platform/platform.js';
 import { bumpScheduleRevision, libraryRevisionStore, scheduleRevisionStore } from '../platform/signals.js';
 import { createStore, useStore, type Store } from '../state/store.js';
 import { getUserDb, userDbStatusStore } from '../state/userdb.js';
-import { globalPaused, hostHonesty } from './copy.js';
+import { hostHonesty } from './copy.js';
 import { honestyInputFor } from './honesty.js';
-import { compileSpec } from './cron.js';
 import type { StepExecutor } from './engine-types.js';
 import { executeStep } from './executors.js';
-import { defaultMissedPolicy, frequencyFloorRefusal, freshnessWindowMs } from './floors.js';
 import { createLeaderElection, pageLocks, type LeaderElection, type LeaderLocks, type LeaderState } from './leader.js';
 import { plan } from './plan.js';
-import { markSeen as markTaskSeen, pauseForAppUpdate, resumeTask } from './protection.js';
-import {
-  DEFAULT_RUN_BOUNDS,
-  createRunQueue,
-  laterInstant,
-  runBoundMs,
-  type RunBounds,
-  type RunHost,
-  type RunQueue,
-  type RunQueueState,
-} from './queue.js';
+import { DEFAULT_RUN_BOUNDS, createRunQueue, laterInstant, runBoundMs, type RunBounds, type RunHost, type RunQueue, type RunQueueState } from './queue.js';
+import { RESULT_STATUSES, messageOf, sameOccurrence } from './taskShape.js';
 import { createTicker, type Tick, type Ticker } from './tick.js';
+
+// The user's acts (acts.ts) — re-exported so every importer keeps its one import.
+export {
+  IMPORTED_NEEDS_REVIEW,
+  cancelRunning,
+  clearHistory,
+  createTask,
+  deleteTask,
+  markAllSeen,
+  markSeen,
+  noteAppVersion,
+  runAllPending,
+  runNow,
+  runPending,
+  scheduleOff,
+  setGlobalPause,
+  setTaskEnabled,
+  skipAllPending,
+  skipPending,
+  updateTask,
+} from './acts.js';
+export type { ActResult, AppVersionSource, CreateTaskInput, EnableOptions, TaskPatch, TaskRefusal, TaskResult } from './acts.js';
 
 // ------------------------------------------------------------------------- types
 
@@ -123,6 +142,8 @@ export interface SchedulerView {
   /** The engine is up: elected, ticking, reconciled once. */
   ready: boolean;
   leader: LeaderState | undefined;
+  /** Promoted over a boot-time copy of the file (S3): the engine stays idle until the page reloads. */
+  needsReload: boolean;
   tasks: ScheduledTask[];
   runsByTask: Record<string, ScheduleRun[]>;
   state: SchedulerState | undefined;
@@ -135,29 +156,9 @@ export interface SchedulerView {
   lastReconcileAt?: string;
   /** The one sentence about what THIS host can do, for the surfaces where the user decides. */
   honesty?: string;
-  /** The last refused read or write, in one line; cleared by the next clean reconcile. */
+  /** The last refused read, write or claim, in one line; cleared by the next clean reconcile. */
   lastError?: string;
 }
-
-export interface CreateTaskInput {
-  title: string;
-  steps: ScheduleStep[];
-  spec: ScheduleSpec;
-  missedPolicy?: MissedPolicy;
-  alert?: AlertKind;
-  provenance: TaskProvenance;
-  ownerAppId?: string;
-  startsAt?: string;
-  endsAt?: string;
-}
-
-export type TaskPatch = Partial<Pick<CreateTaskInput, 'title' | 'steps' | 'spec' | 'missedPolicy' | 'alert' | 'startsAt' | 'endsAt'>>;
-
-export type TaskResult = { ok: true; task: ScheduledTask } | { ok: false; reason: string };
-export type ActResult = { ok: true } | { ok: false; reason: string };
-
-/** Who changed an app's version — only `shared` and `agent` updates pause the schedules that name it (E8). */
-export type AppVersionSource = 'own' | 'shared' | 'agent';
 
 // ---------------------------------------------------------------------- the store
 
@@ -165,13 +166,10 @@ export const SCHEDULER_LOCK_PREFIX = 'snug-scheduler:';
 /** The lock name when the file's own id is not available (see the header). */
 export const SCHEDULER_LOCK_NAME_FALLBACK = 'snug-scheduler';
 
-/** The statuses that are a RESULT the user may open — never a candidate, a claim or a skip. */
-const RESULT_STATUSES: ReadonlySet<RunStatus> = new Set<RunStatus>(['ok', 'failed', 'needs-you', 'interrupted', 'capped', 'no-handler']);
-
 const ZERO_CALLS = { ai: 0, net: 0 } as const;
 
 export function initialSchedulerView(): SchedulerView {
-  return { ready: false, leader: undefined, tasks: [], runsByTask: {}, state: undefined, pending: 0, unseen: 0, running: undefined, queued: 0 };
+  return { ready: false, leader: undefined, needsReload: false, tasks: [], runsByTask: {}, state: undefined, pending: 0, unseen: 0, running: undefined, queued: 0 };
 }
 
 export const schedulerStore: Store<SchedulerView> = createStore<SchedulerView>(initialSchedulerView());
@@ -181,9 +179,6 @@ export function useScheduler(): SchedulerView {
 }
 
 // ------------------------------------------------------------------- the helpers
-
-const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err));
-const refuse = (reason: string): { ok: false; reason: string } => ({ ok: false, reason });
 
 /** The first scheduler row of a file: nothing before `nowIso` was ever due here. */
 export function freshSchedulerState(nowIso: string): SchedulerState {
@@ -251,43 +246,9 @@ function countRows(runsByTask: Record<string, ScheduleRun[]>): { pending: number
   return { pending, unseen };
 }
 
-const appIdsOf = (steps: readonly ScheduleStep[]): string[] => [...new Set(steps.flatMap((step) => (step.kind === 'notify' ? [] : [step.appId])))];
-
-/** Each named app's current version — or the refusal naming the first app the file does not hold. */
-function appVersionsFor(db: UserDb, steps: readonly ScheduleStep[]): { ok: true; versions: ScheduledTask['appVersions'] } | { ok: false; reason: string } {
-  const versions: ScheduledTask['appVersions'] = {};
-  for (const appId of appIdsOf(steps)) {
-    const app = db.getApp(appId);
-    if (app === undefined) return refuse(`app "${appId}" is not installed in this file`);
-    versions[appId] = app.currentVersion;
-  }
-  return { ok: true, versions };
-}
-
-function commitTask(db: UserDb, draft: ScheduledTask): TaskResult {
-  const parsed = scheduledTaskSchema.safeParse(draft);
-  if (!parsed.success) {
-    return refuse(
-      parsed.error.issues
-        .slice(0, 3)
-        .map((issue) => `${issue.path.map(String).join('.')}: ${issue.message}`)
-        .join('; '),
-    );
-  }
-  try {
-    db.putScheduledTask(parsed.data);
-  } catch (err) {
-    return refuse(messageOf(err));
-  }
-  bumpScheduleRevision();
-  return { ok: true, task: parsed.data };
-}
-
-const sameOccurrence = (row: ScheduleRun, dueAt: string): boolean => row.dueAt === dueAt || Date.parse(row.dueAt) === Date.parse(dueAt);
-
 // ------------------------------------------------------------------ the engine
 
-interface Engine {
+export interface Engine {
   gen: number;
   db: UserDb;
   queue: RunQueue;
@@ -296,11 +257,16 @@ interface Engine {
   stop(): void;
 }
 
-let engine: Engine | undefined;
+let current: Engine | undefined;
 let initPromise: Promise<void> | undefined;
 let generation = 0;
 let epochUnsubscribe: (() => void) | undefined;
 let reinitStop: (() => void) | undefined;
+
+/** The live engine, or `undefined` before boot and after a reset — the acts' seam to the queue. */
+export function engine(): Engine | undefined {
+  return current;
+}
 
 const hasDom = (): boolean => typeof document !== 'undefined' && typeof window !== 'undefined';
 
@@ -334,64 +300,102 @@ function defaultDeps(): SchedulerDeps {
   };
 }
 
-let currentDeps: SchedulerDeps = defaultDeps();
+let deps: SchedulerDeps | undefined;
+
+/** The engine's dependencies — the page's by default, built on FIRST USE (never at load: M20), with any test overrides remembered. */
+export function currentDeps(): SchedulerDeps {
+  deps ??= defaultDeps();
+  return deps;
+}
 
 function patchView(patch: Partial<SchedulerView>): void {
   schedulerStore.set({ ...schedulerStore.get(), ...patch });
 }
 
-/** Re-read the file into the view. Synchronous: the engine holds the open handle. */
-export function refreshScheduler(): void {
-  const eng = engine;
-  if (eng === undefined) return;
-  const db = eng.db;
-  let runsByTask: Record<string, ScheduleRun[]>;
-  let tasks: ScheduledTask[];
-  let state: SchedulerState | undefined;
-  try {
-    tasks = db.listScheduledTasks();
-    runsByTask = db.listAllScheduleRuns();
-    state = db.getSchedulerState();
-  } catch (err) {
-    patchView({ lastError: messageOf(err) });
-    return;
-  }
+/** The rows the last refresh read, with the revisions they were read at — reused by a reconcile when nothing was written since (M3). */
+interface RowsSnapshot {
+  gen: number;
+  scheduleRevision: number;
+  libraryRevision: number;
+  tasks: ScheduledTask[];
+  runsByTask: Record<string, ScheduleRun[]>;
+  state: SchedulerState | undefined;
+}
+
+/** What one read of the file answers — the snapshot without its revision stamps. */
+type Rows = Omit<RowsSnapshot, 'gen' | 'scheduleRevision' | 'libraryRevision'>;
+
+let snapshot: RowsSnapshot | undefined;
+
+function readRows(db: UserDb): Rows {
+  return { tasks: db.listScheduledTasks(), runsByTask: db.listAllScheduleRuns(), state: db.getSchedulerState() };
+}
+
+function snapshotUsable(eng: Engine): boolean {
+  return (
+    snapshot !== undefined &&
+    snapshot.gen === eng.gen &&
+    snapshot.scheduleRevision === scheduleRevisionStore.get() &&
+    snapshot.libraryRevision === libraryRevisionStore.get()
+  );
+}
+
+/** Rows just read from the file become the view and the snapshot a later reconcile may reuse. */
+function publishRows(eng: Engine, rows: Rows): void {
+  snapshot = { gen: eng.gen, scheduleRevision: scheduleRevisionStore.get(), libraryRevision: libraryRevisionStore.get(), ...rows };
   const leader = eng.election.state.get();
-  const { pending, unseen } = countRows(runsByTask);
+  const { pending, unseen } = countRows(rows.runsByTask);
   const queue = eng.queue.state.get();
   patchView({
-    tasks,
-    runsByTask,
-    state,
+    tasks: rows.tasks,
+    runsByTask: rows.runsByTask,
+    state: rows.state,
     pending,
     unseen,
     leader,
     running: queue.running,
     queued: queue.queued,
-    honesty: honestyOf(currentDeps.platform(), leader),
+    honesty: honestyOf(currentDeps().platform(), leader),
   });
 }
 
-function reconcileNow(): void {
-  const eng = engine;
+/** Re-read the file into the view. Synchronous: the engine holds the open handle. */
+export function refreshScheduler(): void {
+  const eng = current;
   if (eng === undefined) return;
-  if (!eng.election.state.get().leader) {
-    refreshScheduler();
+  let rows: Rows;
+  try {
+    rows = readRows(eng.db);
+  } catch (err) {
+    patchView({ lastError: messageOf(err) });
     return;
   }
-  const deps = currentDeps;
+  publishRows(eng, rows);
+}
+
+function reconcileNow(trigger: ReconcileTrigger): void {
+  const eng = current;
+  if (eng === undefined) return;
+  if (!eng.election.state.get().leader || schedulerStore.get().needsReload) {
+    refreshScheduler(); // a follower — or a promoted tab over its stale handle (S3) — only reads
+    return;
+  }
+  const d = currentDeps();
   const db = eng.db;
-  const now = deps.now();
+  const now = d.now();
   const nowIso = now.toISOString();
-  let wrote = false;
+  let wrote = false; // a task or run row changed: every view re-reads
+  let movedTo: SchedulerState | undefined; // only the watermark moved: the view takes it in place
   let lastError: string | undefined;
+  let freshlyRead: Rows | undefined;
   try {
-    const tasks = db.listScheduledTasks();
-    const runsByTask = db.listAllScheduleRuns();
-    const state = db.getSchedulerState() ?? freshSchedulerState(nowIso);
-    const { actions, watermark } = plan({ tasks, runsByTask, state, now });
-    const tasksById = new Map(tasks.map((task) => [task.id, task] as const));
-    const host = hostInfoOf(deps.platform());
+    // A wake after a gap: a sibling tab may have died mid-run since boot (S5).
+    if ((trigger === 'late' || trigger === 'visible') && sweepStaleClaims(db, now, d.bounds) > 0) wrote = true;
+    const rows = !wrote && snapshotUsable(eng) ? (snapshot as RowsSnapshot) : (freshlyRead = readRows(db));
+    const state = rows.state ?? freshSchedulerState(nowIso);
+    const { actions, watermark } = plan({ tasks: rows.tasks, runsByTask: rows.runsByTask, state, now });
+    const tasksById = new Map(rows.tasks.map((task) => [task.id, task] as const));
+    const host = hostInfoOf(d.platform());
     for (const action of actions) {
       const task = tasksById.get(action.taskId);
       if (task === undefined) continue;
@@ -427,7 +431,7 @@ function reconcileNow(): void {
           wrote = true;
           break;
         case 'supersede': {
-          const older = (runsByTask[task.id] ?? []).find((row) => row.status === 'pending' && sameOccurrence(row, action.dueAt));
+          const older = (rows.runsByTask[task.id] ?? []).find((row) => row.status === 'pending' && sameOccurrence(row, action.dueAt));
           if (older !== undefined) {
             db.putScheduleRun({ ...older, status: 'skipped', reason: 'superseded', finishedAt: nowIso });
             wrote = true;
@@ -440,7 +444,7 @@ function reconcileNow(): void {
         case 'advance': {
           const fresh = db.getScheduledTask(task.id);
           if (fresh !== undefined) {
-            db.putScheduledTask({ ...fresh, ranThrough: laterInstant(fresh.ranThrough, action.ranThrough), updatedAt: nowIso });
+            db.putScheduledTask({ ...fresh, ranThrough: laterInstant(fresh.ranThrough, action.ranThrough) }); // bookkeeping, never `updatedAt` (M16)
             wrote = true;
           }
           break;
@@ -454,15 +458,22 @@ function reconcileNow(): void {
     // LAST, and only when it moved (a global pause keeps it where it was): every row above landed.
     const latest = db.getSchedulerState() ?? state;
     if (latest.watermark !== watermark) {
-      db.setSchedulerState({ ...latest, watermark });
-      wrote = true;
+      movedTo = { ...latest, watermark };
+      db.setSchedulerState(movedTo);
     }
   } catch (err) {
     lastError = messageOf(err);
   }
   patchView({ lastReconcileAt: nowIso, ...(lastError !== undefined ? { lastError } : { lastError: undefined }) });
-  if (wrote) bumpScheduleRevision(); // the revision listener re-reads the view
-  else refreshScheduler();
+  if (wrote) {
+    bumpScheduleRevision(); // the revision listener re-reads the view
+  } else if (freshlyRead !== undefined) {
+    publishRows(eng, { ...freshlyRead, state: movedTo ?? freshlyRead.state }); // read once: the view takes what the plan saw
+  } else if (movedTo !== undefined) {
+    // The plan ran over the view's own rows and only the watermark moved: no row to re-read (M3).
+    if (snapshot !== undefined) snapshot = { ...snapshot, state: movedTo };
+    patchView({ state: movedTo });
+  }
 }
 
 let inFlight: Promise<void> | undefined;
@@ -476,7 +487,7 @@ let coalesced: Promise<void> | undefined;
 export function reconcile(trigger: ReconcileTrigger): Promise<void> {
   if (inFlight === undefined) {
     inFlight = Promise.resolve()
-      .then(() => reconcileNow())
+      .then(() => reconcileNow(trigger))
       .finally(() => {
         inFlight = undefined;
       });
@@ -492,7 +503,7 @@ export function reconcile(trigger: ReconcileTrigger): Promise<void> {
 }
 
 function onTick(tick: Tick): void {
-  const eng = engine;
+  const eng = current;
   if (eng === undefined) return;
   if (eng.election.state.get().leader) {
     void reconcile(tick.kind === 'minute' ? 'tick' : tick.kind);
@@ -503,7 +514,7 @@ function onTick(tick: Tick): void {
 
 /** Once the user db says `ready` (now, or when it next does), init again — unless something already has. */
 function reinitWhenReady(): void {
-  if (initPromise !== undefined || engine !== undefined || reinitStop !== undefined) return;
+  if (initPromise !== undefined || current !== undefined || reinitStop !== undefined) return;
   const attempt = (): boolean => {
     if (userDbStatusStore.get().state !== 'ready') return false;
     reinitStop?.();
@@ -523,27 +534,27 @@ function onRegistryEpoch(): void {
 }
 
 async function boot(): Promise<void> {
-  const deps = currentDeps;
-  if (!deps.allows()) return;
+  const d = currentDeps();
+  if (!d.allows()) return;
   const gen = ++generation;
-  const db = await deps.db();
+  const db = await d.db();
   if (gen !== generation) return;
 
-  const now = deps.now();
+  const now = d.now();
   const nowIso = now.toISOString();
   if (db.getSchedulerState() === undefined) db.setSchedulerState(freshSchedulerState(nowIso));
-  sweepStaleClaims(db, now, deps.bounds);
+  sweepStaleClaims(db, now, d.bounds);
 
   const queue = createRunQueue({
-    db: deps.db,
-    execute: deps.execute,
-    now: deps.now,
-    hostInfo: () => hostInfoOf(deps.platform()),
-    notify: () => notifyOf(deps.platform()),
-    bounds: deps.bounds,
+    db: d.db,
+    execute: d.execute,
+    now: d.now,
+    hostInfo: () => hostInfoOf(d.platform()),
+    notify: () => notifyOf(d.platform()),
+    bounds: d.bounds,
   });
-  const election = createLeaderElection({ name: lockNameFor(db, deps.fileId), locks: deps.locks });
-  const ticker = deps.ticker(onTick, () => deps.now().getTime());
+  const election = createLeaderElection({ name: lockNameFor(db, d.fileId), locks: d.locks });
+  const ticker = d.ticker(onTick, () => d.now().getTime());
   const unsubscribes: Array<() => void> = [];
   const eng: Engine = {
     gen,
@@ -559,19 +570,20 @@ async function boot(): Promise<void> {
       queue.abortAll('file swap');
     },
   };
-  engine = eng;
+  current = eng;
 
   let wasLeader = false;
   unsubscribes.push(
     election.state.subscribe(() => {
       const leader = election.state.get();
-      patchView({ leader, honesty: honestyOf(deps.platform(), leader) });
-      if (leader.leader && !wasLeader && schedulerStore.get().ready) void reconcile('boot'); // promoted: the leader's first look
+      patchView({ leader, honesty: honestyOf(d.platform(), leader) });
+      // Promoted after boot: this tab's handle is a stale copy (S3) — ask for a reload, plan nothing.
+      if (leader.leader && !wasLeader && schedulerStore.get().ready) patchView({ needsReload: true });
       wasLeader = leader.leader;
     }),
     queue.state.subscribe(() => {
       const state = queue.state.get();
-      patchView({ running: state.running, queued: state.queued });
+      patchView({ running: state.running, queued: state.queued, ...(state.lastError !== undefined ? { lastError: state.lastError } : {}) });
     }),
     scheduleRevisionStore.subscribe(() => refreshScheduler()),
     libraryRevisionStore.subscribe(() => refreshScheduler()),
@@ -584,7 +596,7 @@ async function boot(): Promise<void> {
   ticker.start();
   await reconcile('boot');
   if (gen !== generation) return;
-  patchView({ ready: true, leader: election.state.get(), honesty: honestyOf(deps.platform(), election.state.get()) });
+  patchView({ ready: true, leader: election.state.get(), honesty: honestyOf(d.platform(), election.state.get()) });
 }
 
 /**
@@ -593,7 +605,7 @@ async function boot(): Promise<void> {
  */
 export function initScheduler(overrides: Partial<SchedulerDeps> = {}): Promise<void> {
   if (initPromise !== undefined) return initPromise;
-  currentDeps = { ...currentDeps, ...overrides };
+  deps = { ...currentDeps(), ...overrides };
   const started = boot().catch((err: unknown) => {
     patchView({ lastError: messageOf(err) });
     initPromise = undefined; // a failed boot may be tried again
@@ -609,9 +621,10 @@ export function initScheduler(overrides: Partial<SchedulerDeps> = {}): Promise<v
  */
 export function resetScheduler(): void {
   generation += 1;
-  const eng = engine;
-  engine = undefined;
+  const eng = current;
+  current = undefined;
   initPromise = undefined;
+  snapshot = undefined;
   eng?.stop();
   schedulerStore.set(initialSchedulerView());
 }
@@ -625,253 +638,5 @@ export function __resetSchedulerForTests(): void {
   reinitStop = undefined;
   inFlight = undefined;
   coalesced = undefined;
-  currentDeps = defaultDeps();
-}
-
-// ---------------------------------------------------------------- user acts
-
-export async function createTask(input: CreateTaskInput): Promise<TaskResult> {
-  const db = await currentDeps.db();
-  const now = currentDeps.now();
-  const nowIso = now.toISOString();
-  const cron = compileSpec(input.spec, now);
-  if (cron === undefined) return refuse('this schedule cannot be compiled — check the when');
-  const floor = frequencyFloorRefusal(input.spec, input.provenance, now);
-  if (floor !== undefined) return refuse(floor);
-  const versions = appVersionsFor(db, input.steps);
-  if (!versions.ok) return versions;
-  const draft: ScheduledTask = {
-    id: crypto.randomUUID(),
-    title: input.title,
-    enabled: true,
-    enabledAt: nowIso,
-    provenance: input.provenance,
-    ...(input.ownerAppId !== undefined ? { ownerAppId: input.ownerAppId } : {}),
-    steps: input.steps,
-    spec: input.spec,
-    cron,
-    ...(input.startsAt !== undefined ? { startsAt: input.startsAt } : {}),
-    ...(input.endsAt !== undefined ? { endsAt: input.endsAt } : {}),
-    missedPolicy: input.missedPolicy ?? defaultMissedPolicy(input.steps),
-    staleAfterMs: freshnessWindowMs(input.spec, now),
-    alert: input.alert ?? 'inbox',
-    appVersions: versions.versions,
-    createdAt: nowIso,
-    updatedAt: nowIso,
-    consecutiveFailures: 0,
-    unseenResults: 0,
-  };
-  return commitTask(db, draft);
-}
-
-export async function updateTask(taskId: string, patch: TaskPatch): Promise<TaskResult> {
-  const db = await currentDeps.db();
-  const task = db.getScheduledTask(taskId);
-  if (task === undefined) return refuse('no such schedule');
-  const now = currentDeps.now();
-  const nowIso = now.toISOString();
-  let { cron, staleAfterMs, appVersions } = task;
-  const spec = patch.spec ?? task.spec;
-  const steps = patch.steps ?? task.steps;
-  if (patch.spec !== undefined) {
-    const compiled = compileSpec(spec, now);
-    if (compiled === undefined) return refuse('this schedule cannot be compiled — check the when');
-    const floor = frequencyFloorRefusal(spec, task.provenance, now);
-    if (floor !== undefined) return refuse(floor);
-    cron = compiled;
-    staleAfterMs = freshnessWindowMs(spec, now);
-  }
-  if (patch.steps !== undefined) {
-    const versions = appVersionsFor(db, steps);
-    if (!versions.ok) return versions;
-    appVersions = versions.versions;
-  }
-  const next: ScheduledTask = {
-    ...task,
-    title: patch.title ?? task.title,
-    steps,
-    spec,
-    cron,
-    staleAfterMs,
-    appVersions,
-    missedPolicy: patch.missedPolicy ?? task.missedPolicy,
-    alert: patch.alert ?? task.alert,
-    ...(patch.startsAt !== undefined ? { startsAt: patch.startsAt } : {}),
-    ...(patch.endsAt !== undefined ? { endsAt: patch.endsAt } : {}),
-    updatedAt: nowIso,
-  };
-  return commitTask(db, next);
-}
-
-/** Enable = the user's *Resume* or *on* (`resumeTask`: pause cleared, window from now, fresh app versions); disable = off, pause reason cleared. */
-export async function setTaskEnabled(taskId: string, enabled: boolean): Promise<TaskResult> {
-  const db = await currentDeps.db();
-  const task = db.getScheduledTask(taskId);
-  if (task === undefined) return refuse('no such schedule');
-  const nowIso = currentDeps.now().toISOString();
-  let next: ScheduledTask;
-  if (enabled) {
-    const versions = appVersionsFor(db, task.steps);
-    if (!versions.ok) return versions;
-    next = resumeTask(task, nowIso, versions.versions);
-  } else {
-    next = { ...task, enabled: false };
-    delete next.pausedReason;
-  }
-  return commitTask(db, { ...next, updatedAt: nowIso });
-}
-
-export async function deleteTask(taskId: string): Promise<void> {
-  const db = await currentDeps.db();
-  if (engine?.queue.state.get().running?.taskId === taskId) engine.queue.cancelCurrent();
-  db.deleteScheduledTask(taskId);
-  bumpScheduleRevision();
-}
-
-function enqueueOrRefuse(db: UserDb, task: ScheduledTask, dueAt: string, trigger: 'manual' | 'catch-up', collapsedCount: number): ActResult {
-  const eng = engine;
-  if (eng === undefined) return refuse('scheduling is not running here');
-  if (db.getSchedulerState()?.globalPause === true) return refuse(globalPaused);
-  eng.queue.enqueue({ task, dueAt, trigger, collapsedCount });
-  return { ok: true };
-}
-
-/** The user's *run now*: one manual run, due this instant. Held by the global pause like every other. */
-export async function runNow(taskId: string): Promise<ActResult> {
-  const db = await currentDeps.db();
-  const task = db.getScheduledTask(taskId);
-  if (task === undefined) return refuse('no such schedule');
-  return enqueueOrRefuse(db, task, currentDeps.now().toISOString(), 'manual', 1);
-}
-
-function pendingRow(db: UserDb, taskId: string, dueAt: string): ScheduleRun | undefined {
-  return db.listScheduleRuns(taskId).find((row) => row.status === 'pending' && sameOccurrence(row, dueAt));
-}
-
-/** The missed card's *run*: the pending candidate goes to the queue, which replaces the row with its claim. */
-export async function runPending(taskId: string, dueAt: string): Promise<ActResult> {
-  const db = await currentDeps.db();
-  const task = db.getScheduledTask(taskId);
-  if (task === undefined) return refuse('no such schedule');
-  const row = pendingRow(db, taskId, dueAt);
-  if (row === undefined) return refuse('nothing is waiting for that time');
-  return enqueueOrRefuse(db, task, row.dueAt, 'catch-up', row.collapsedCount);
-}
-
-/** The missed card's *skip*: the candidate is recorded `skipped` (reason `user`) — permanent, like any other skip. */
-export async function skipPending(taskId: string, dueAt: string): Promise<ActResult> {
-  const db = await currentDeps.db();
-  const row = pendingRow(db, taskId, dueAt);
-  if (row === undefined) return refuse('nothing is waiting for that time');
-  db.putScheduleRun({ ...row, status: 'skipped', reason: 'user', finishedAt: currentDeps.now().toISOString() });
-  bumpScheduleRevision();
-  return { ok: true };
-}
-
-export async function runAllPending(): Promise<number> {
-  const db = await currentDeps.db();
-  let queued = 0;
-  for (const task of db.listScheduledTasks()) {
-    for (const row of db.listScheduleRuns(task.id)) {
-      if (row.status !== 'pending') continue;
-      if (enqueueOrRefuse(db, task, row.dueAt, 'catch-up', row.collapsedCount).ok) queued += 1;
-    }
-  }
-  return queued;
-}
-
-export async function skipAllPending(): Promise<number> {
-  const db = await currentDeps.db();
-  const finishedAt = currentDeps.now().toISOString();
-  let skipped = 0;
-  for (const [taskId, runs] of Object.entries(db.listAllScheduleRuns())) {
-    if (db.getScheduledTask(taskId) === undefined) continue;
-    for (const row of runs) {
-      if (row.status !== 'pending') continue;
-      db.putScheduleRun({ ...row, status: 'skipped', reason: 'user', finishedAt });
-      skipped += 1;
-    }
-  }
-  if (skipped > 0) bumpScheduleRevision();
-  return skipped;
-}
-
-/** A user GESTURE on one result (E7): stamps `seenAt` and takes one off the task's unseen count. Never app-derived. */
-export async function markSeen(taskId: string, dueAt: string): Promise<void> {
-  const db = await currentDeps.db();
-  const row = db.listScheduleRuns(taskId).find((entry) => sameOccurrence(entry, dueAt));
-  if (row === undefined || row.seenAt !== undefined) return;
-  const nowIso = currentDeps.now().toISOString();
-  db.markScheduleRunSeen(taskId, row.dueAt, nowIso);
-  const task = db.getScheduledTask(taskId);
-  if (task !== undefined) db.putScheduledTask({ ...markTaskSeen(task), updatedAt: nowIso });
-  bumpScheduleRevision();
-}
-
-/** *Mark all read*: every unseen result, every schedule — one gesture. */
-export async function markAllSeen(): Promise<number> {
-  const db = await currentDeps.db();
-  const nowIso = currentDeps.now().toISOString();
-  let marked = 0;
-  for (const task of db.listScheduledTasks()) {
-    let seen = 0;
-    for (const row of db.listScheduleRuns(task.id)) {
-      if (!RESULT_STATUSES.has(row.status) || row.seenAt !== undefined) continue;
-      db.markScheduleRunSeen(task.id, row.dueAt, nowIso);
-      seen += 1;
-    }
-    if (seen > 0) {
-      db.putScheduledTask({ ...markTaskSeen(task, seen), updatedAt: nowIso });
-      marked += seen;
-    }
-  }
-  if (marked > 0) bumpScheduleRevision();
-  return marked;
-}
-
-/** Settings' *Clear history* (one schedule, or all): the accessor keeps what is not yet dealt with. */
-export async function clearHistory(taskId?: string): Promise<void> {
-  const db = await currentDeps.db();
-  db.clearScheduleHistory(taskId);
-  bumpScheduleRevision();
-}
-
-/**
- * The global pause (E7). On: nothing is planned (the planner holds the watermark, so held
- * occurrences come back `late`, then missed like any other), waiting items are dropped
- * unclaimed and a run in flight is recorded `interrupted` (reason `paused`). Off: reconcile now.
- */
-export async function setGlobalPause(on: boolean): Promise<void> {
-  const db = await currentDeps.db();
-  const state = db.getSchedulerState() ?? freshSchedulerState(currentDeps.now().toISOString());
-  db.setSchedulerState({ ...state, globalPause: on });
-  if (on) engine?.queue.abortAll('paused');
-  bumpScheduleRevision();
-  if (!on) await reconcile('manual');
-}
-
-/** The running chip's *cancel*: the run in flight is recorded `interrupted` (reason `cancelled`). */
-export function cancelRunning(): void {
-  engine?.queue.cancelCurrent();
-}
-
-/**
- * The E8 hook. An app's version changed: for a SHARED or AGENT update, every schedule naming
- * the app at another version is paused `app-updated` (its recorded versions kept, so the
- * resume card can name the change); the user's OWN edits change nothing. Answers how many
- * schedules were paused. Its callers land in PR-B.
- */
-export async function noteAppVersion(appId: string, version: number, source: AppVersionSource): Promise<number> {
-  if (source === 'own') return 0;
-  const db = await currentDeps.db();
-  const nowIso = currentDeps.now().toISOString();
-  let paused = 0;
-  for (const task of db.listScheduledTasks()) {
-    const next = pauseForAppUpdate(task, appId, version);
-    if (next === task) continue;
-    db.putScheduledTask({ ...next, updatedAt: nowIso });
-    paused += 1;
-  }
-  if (paused > 0) bumpScheduleRevision();
-  return paused;
+  deps = undefined;
 }

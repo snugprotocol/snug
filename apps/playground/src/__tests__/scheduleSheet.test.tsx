@@ -5,6 +5,9 @@
 // asks the app's AI — and then says when it next runs. A sentence with no readable time is said so,
 // and the write is withheld.
 //
+// The words beside the schedule are the EDITOR's rule (`editorModel.remainderOf` over the one
+// `readSchedule` phrase), so the sheet and the create bar title the same sentence the same way.
+//
 // Through `ConfirmOverlay`, which PORTALS to <body>, so queries go through the document. A routed
 // mount, because the sheet navigates; the real memory user db, because the write is real.
 
@@ -17,7 +20,10 @@ import type { UserDb } from '@snugprotocol/db';
 
 import { CONSENT } from '../schedule/copy.js';
 import { ACTIONS, SENTENCE } from '../schedule/copy.editor.js';
-import { ScheduleSheet, wordsBesideSchedule } from '../schedule/ScheduleSheet.js';
+import { remainderOf } from '../schedule/editorModel.js';
+import { readSchedule } from '../schedule/parseScheduleText.js';
+import { newScheduleHref } from '../schedule/routes.js';
+import { ScheduleSheet } from '../schedule/ScheduleSheet.js';
 import { installTestUserDb } from './userdbTestHelper.js';
 
 declare global {
@@ -138,10 +144,11 @@ describe('the sheet', () => {
     await click(must('sheet-more-options'));
     await settleUntil(() => q('editor-probe') !== null, 'the editor route');
     expect(must('editor-probe').textContent).toBe(`/schedule/new?text=every+weekday+at+8&app=${encodeURIComponent(appId)}`);
+    expect(must('editor-probe').textContent).toBe(newScheduleHref({ text: 'every weekday at 8', app: appId }));
     expect(closes).toBe(1);
   });
 
-  it('remind me: schedule it writes a reminder at once — the sentence’s own words as the title and the message — and says when it next runs', async () => {
+  it('remind me: schedule it writes a reminder at once — the words beside the schedule, minus the intent, as the title and the message — and says when it next runs', async () => {
     await mount();
     await type(must('sheet-text'), 'remind me to stretch every weekday at 8');
     expect(must('sheet-text-note').textContent).toBe('Weekdays at 8:00 AM');
@@ -151,12 +158,50 @@ describe('the sheet', () => {
     expect(q('enable-consent')).toBeNull();
     const saved = db.listScheduledTasks();
     expect(saved).toHaveLength(1);
-    expect(saved[0]?.title).toBe('remind me to stretch');
-    expect(saved[0]?.steps).toEqual([{ kind: 'notify', title: 'remind me to stretch', body: 'remind me to stretch' }]);
+    expect(saved[0]?.title).toBe('stretch');
+    expect(saved[0]?.steps).toEqual([{ kind: 'notify', title: 'stretch', body: 'stretch' }]);
     expect(saved[0]?.spec).toEqual({ kind: 'weekly', days: ['mon', 'tue', 'wed', 'thu', 'fri'], time: '08:00', tz: 'device' });
     expect(saved[0]?.provenance).toBe('user');
     expect(saved[0]?.enabled).toBe(true);
     expect(must('sheet-done').textContent).toMatch(/^scheduled — next /);
+  });
+
+  it('the words beside the schedule are the editor’s rule (M6): spelled as typed, edges trimmed — and the app’s name when nothing is left', async () => {
+    const rows: ReadonlyArray<readonly [string, string, string]> = [
+      ['Every weekday at 8 — Stretch!', 'Stretch', 'Stretch'],
+      ['please water the ferns tomorrow at 9', 'water the ferns', 'water the ferns'],
+      ['at 5pm', 'Ledger', 'open Ledger'],
+    ];
+    for (const [sentence, title, body] of rows) {
+      const reading = readSchedule(sentence, NOW, 'device');
+      expect(reading, sentence).toBeDefined();
+      const words = remainderOf(sentence, reading?.phrase ?? '');
+      expect(words).toBe(title === 'Ledger' ? '' : title);
+      await mount();
+      await type(must('sheet-text'), sentence);
+      await click(must('sheet-kind-remind'));
+      await click(must('sheet-schedule-it'));
+      await settleUntil(() => q('sheet-done') !== null, `the scheduled line for ${sentence}`);
+      const saved = db.listScheduledTasks().at(-1);
+      expect(saved?.title, sentence).toBe(title);
+      expect(saved?.steps, sentence).toEqual([{ kind: 'notify', title, body }]);
+      await act(async () => {
+        root?.unmount();
+      });
+      container?.remove();
+      container = undefined;
+      root = undefined;
+    }
+  });
+
+  it('ask the AI: the words beside the schedule title the ask', async () => {
+    await mount();
+    await type(must('sheet-text'), 'summarise my week every friday at 5pm');
+    await type(must('sheet-prompt'), 'How did the week go?');
+    await click(must('sheet-schedule-it'));
+    await click(must('consent-enable'));
+    await settleUntil(() => q('sheet-done') !== null, 'the scheduled line');
+    expect(db.listScheduledTasks()[0]?.title).toBe('summarise my week');
   });
 
   it('ask the AI: schedule it lands on the consent panel with the prompt verbatim; schedule it there writes the ask-the-AI step', async () => {
@@ -188,11 +233,5 @@ describe('the sheet', () => {
     expect(q('enable-consent')).toBeNull();
     expect(q('sheet-schedule-it')).not.toBeNull();
     expect(db.listScheduledTasks()).toHaveLength(0);
-  });
-
-  it('wordsBesideSchedule: the sentence minus the schedule it read', () => {
-    expect(wordsBesideSchedule('remind me to stretch every weekday at 8', NOW)).toBe('remind me to stretch');
-    expect(wordsBesideSchedule('every friday at 5pm', NOW)).toBe('');
-    expect(wordsBesideSchedule('look at the numbers', NOW)).toBe('look at the numbers');
   });
 });

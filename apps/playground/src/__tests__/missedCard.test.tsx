@@ -8,10 +8,10 @@ import { act } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { StepOutcome } from '../schedule/engine-types.js';
-import { MISSED_ACTIONS, missedHeadline, missedRow, runningProgress } from '../schedule/copy.js';
-import { MISSED, aiCallsWord } from '../schedule/copy.page.js';
+import { MISSED_ACTIONS, RESULT_STATUS_WORD, aiCalls, missedHeadline, missedRow, runningProgress } from '../schedule/copy.js';
+import { MISSED } from '../schedule/copy.page.js';
 import { describeSpec } from '../schedule/cron.js';
-import { MissedCard, SKIP_UNDO_MS } from '../schedule/MissedCard.js';
+import { MissedCard, SKIP_UNDO_MS, outcomeWord } from '../schedule/MissedCard.js';
 import { schedulerStore } from '../schedule/scheduler.js';
 import { HOUR, NOW, THINK, click, iso, makeRun, makeTask, mount, settle, settleUntil, setupEnv, teardownEnv, texts, unmount, type Env } from './scheduleUiHarness.js';
 
@@ -110,7 +110,7 @@ describe('details', () => {
     const hourly = rows[1]!;
     expect(hourly.querySelector('.missed-row-when')?.textContent).toBe(missedRow(describeSpec({ kind: 'every', n: 1, unit: 'hours', tz: 'UTC' }), 4));
     expect(hourly.querySelector('.missed-row-when')?.textContent).toBe('Every hour · missed 4 times → runs once');
-    expect(hourly.querySelector('.missed-row-cost')?.textContent).toBe(aiCallsWord(0));
+    expect(hourly.querySelector('.missed-row-cost')?.textContent).toBe(aiCalls(0));
     expect(rows[2]!.querySelector('.missed-row-when')?.textContent).toBe('Every hour · missed once');
     expect(rows[2]!.querySelector('.missed-row-cost')?.textContent).toBe('2 AI calls');
     expect(texts(hourly, 'button')).toEqual([MISSED_ACTIONS.run, MISSED_ACTIONS.skip]);
@@ -153,7 +153,7 @@ describe('run them', () => {
     await settleUntil(() => byTestId(c, 'missed-outcomes') !== null, 'the outcomes');
     const outcomes = all(c, 'missed-outcome');
     expect(outcomes.map((row) => row.querySelector('.missed-row-title')?.textContent)).toEqual(['Review', 'Hourly', 'Spend']);
-    expect(outcomes.map((row) => row.querySelector('.missed-row-outcome')?.textContent)).toEqual([MISSED.done, MISSED.done, MISSED.done]);
+    expect(outcomes.map((row) => row.querySelector('.missed-row-outcome')?.textContent)).toEqual([RESULT_STATUS_WORD.ok, RESULT_STATUS_WORD.ok, RESULT_STATUS_WORD.ok]);
     expect(pendingCount()).toBe(0);
     await click(byTestId(c, 'missed-ok'));
     expect(byTestId(c, 'missed-card')).toBeNull();
@@ -174,7 +174,8 @@ describe('run them', () => {
     await release(2); // Spend
     await release(1); // Review
     await settleUntil(() => byTestId(c, 'missed-outcomes') !== null, 'the outcomes');
-    expect(all(c, 'missed-outcome').map((row) => row.querySelector('.missed-row-outcome')?.textContent)).toEqual([MISSED.done, 'interrupted', MISSED.done]);
+    expect(all(c, 'missed-outcome').map((row) => row.querySelector('.missed-row-outcome')?.textContent)).toEqual([RESULT_STATUS_WORD.ok, RESULT_STATUS_WORD.interrupted, RESULT_STATUS_WORD.ok]);
+    expect(RESULT_STATUS_WORD.interrupted).toBe('interrupted');
   });
 
   it('a failed run reads "failed" in its row', async () => {
@@ -189,7 +190,14 @@ describe('run them', () => {
     await release(2); // Spend
     await release(1); // Review
     await settleUntil(() => byTestId(c, 'missed-outcomes') !== null, 'the outcomes');
-    expect(all(c, 'missed-outcome').map((row) => row.querySelector('.missed-row-outcome')?.textContent)).toEqual([MISSED.done, 'failed', MISSED.done]);
+    expect(all(c, 'missed-outcome').map((row) => row.querySelector('.missed-row-outcome')?.textContent)).toEqual([RESULT_STATUS_WORD.ok, RESULT_STATUS_WORD.failed, RESULT_STATUS_WORD.ok]);
+    expect(RESULT_STATUS_WORD.failed).toBe('failed');
+  });
+
+  it('outcomeWord is the one status table: a run reads its status word, a candidate that is gone reads as skipped (M21: the batch carries {taskId, dueAt})', () => {
+    expect(outcomeWord(undefined)).toBe(RESULT_STATUS_WORD.skipped);
+    expect(outcomeWord(makeRun({ taskId: 't1', dueAt: iso(NOW), status: 'interrupted' }))).toBe(RESULT_STATUS_WORD.interrupted);
+    expect(outcomeWord(makeRun({ taskId: 't1', dueAt: iso(NOW), status: 'ok' }))).toBe('done');
   });
 });
 

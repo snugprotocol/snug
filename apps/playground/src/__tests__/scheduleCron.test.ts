@@ -12,12 +12,18 @@ import {
   compileSpec,
   describeSpec,
   isValidZone,
+  listWords,
+  minCronGapMs,
   nextOccurrence,
   occurrencesBetween,
+  pad2,
   parseCron,
   resolveZone,
+  sortDays,
   specFromCron,
   type CronFields,
+  WEEKDAY_KEYS,
+  WEEKEND_KEYS,
 } from '../schedule/cron.js';
 import type { ScheduleSpec } from '../schedule/types.js';
 
@@ -503,6 +509,19 @@ describe('occurrencesBetween — zone-aware day stepping', () => {
     ]);
   });
 
+  it('until a count with `spent` given: the caller’s record replaces the calendar count from the anchor (M9)', () => {
+    const spec: ScheduleSpec = { kind: 'daily', time: '09:00', tz: 'UTC', until: { kind: 'count', count: 3 } };
+    const anchor = at('2026-10-01T00:00:00Z'); // the calendar would say Oct 1 and 2 are spent
+    const from = at('2026-10-02T12:00:00Z');
+    const to = at('2026-10-31T00:00:00Z');
+    expect(iso(occurrencesBetween(spec, from, to, { anchor, spent: 0 }))).toEqual(['2026-10-03T09:00:00.000Z', '2026-10-04T09:00:00.000Z', '2026-10-05T09:00:00.000Z']);
+    expect(iso(occurrencesBetween(spec, from, to, { anchor, spent: 1 }))).toEqual(['2026-10-03T09:00:00.000Z', '2026-10-04T09:00:00.000Z']);
+    expect(occurrencesBetween(spec, from, to, { anchor, spent: 3 })).toEqual([]);
+    expect(occurrencesBetween(spec, from, to, { anchor, spent: 7 })).toEqual([]);
+    expect(nextOccurrence(spec, from, { anchor, spent: 2 })?.toISOString()).toBe('2026-10-03T09:00:00.000Z');
+    expect(nextOccurrence(spec, from, { anchor, spent: 3 })).toBeUndefined();
+  });
+
   it('until a count survives an anchor older than the 400-day bound', () => {
     const spec: ScheduleSpec = { kind: 'monthly', on: { kind: 'day', day: 15 }, time: '09:00', tz: 'UTC', until: { kind: 'count', count: 24 } };
     const anchor = at('2025-01-01T00:00:00Z'); // runs: 2025-01-15 … 2026-12-15
@@ -557,5 +576,40 @@ describe('occurrencesBetween — zone-aware day stepping', () => {
     // 2026 starts and ends on a Thursday: 52 weeks + 1 weekday = 261; Fri 2027-01-01 08:00 PST (16:00Z) is inside too.
     expect(got).toHaveLength(262);
     expect(elapsed).toBeLessThan(50);
+  });
+});
+
+describe('the editor’s shared helpers are exported from here (M14): WEEKDAY_KEYS, WEEKEND_KEYS, sortDays, pad2, listWords', () => {
+  it('spell the day sets in cron order from Monday, pad to two digits and list words with an "and"', () => {
+    expect(WEEKDAY_KEYS).toEqual(['mon', 'tue', 'wed', 'thu', 'fri']);
+    expect(WEEKEND_KEYS).toEqual(['sat', 'sun']);
+    expect(sortDays(['fri', 'mon', 'mon', 'wed'])).toEqual(['mon', 'wed', 'fri']);
+    expect(pad2(7)).toBe('07');
+    expect(pad2(12)).toBe('12');
+    expect(listWords([])).toBe('');
+    expect(listWords(['Mondays'])).toBe('Mondays');
+    expect(listWords(['Mondays', 'Fridays'])).toBe('Mondays and Fridays');
+    expect(listWords(['a', 'b', 'c'])).toBe('a, b and c');
+  });
+});
+
+describe('minCronGapMs — the smallest gap a cron can fire at, from its fields (S6)', () => {
+  const gap = (cron: string): number | undefined => {
+    const fields = parseCron(cron);
+    if (fields === undefined) throw new Error(`bad cron ${cron}`);
+    return minCronGapMs(fields, at('2026-10-09T12:20:00Z'));
+  };
+  it('adjacent minutes within an hour, the wrap to the next listed hour, the wrap to the next matching day', () => {
+    expect(gap('*/10 * * * *')).toBe(10 * 60_000);
+    expect(gap('0,45,46 * * * *')).toBe(60_000); // 45 → 46
+    expect(gap('0,59 0,23 * * *')).toBe(60_000); // 23:59 → 00:00
+    expect(gap('30 8,9 * * *')).toBe(3_600_000); // 08:30 → 09:30
+    expect(gap('0 8 * * 1-5')).toBe(86_400_000); // Mon → Tue
+    expect(gap('0 8 * * 5')).toBe(7 * 86_400_000); // Fri → Fri
+    expect(gap('0 8 1 * *')).toBe(28 * 86_400_000); // Feb 1 → Mar 1 is the shortest month seen
+  });
+  it('a cron that fires fewer than twice in 400 days has no gap', () => {
+    expect(gap('0 0 31 2 *')).toBeUndefined();
+    expect(gap('0 8 29 2 *')).toBeUndefined(); // a leap day: at most once inside the bound
   });
 });

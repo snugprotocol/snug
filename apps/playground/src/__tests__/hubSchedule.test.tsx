@@ -15,9 +15,10 @@ import { act } from 'react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { HUB } from '../schedule/copy.page.js';
+import { HUB, RELOAD } from '../schedule/copy.page.js';
 import { describeSpec } from '../schedule/cron.js';
-import { schedulerStore } from '../schedule/scheduler.js';
+import { templateCard } from '../schedule/Templates.js';
+import { schedulerStore, type SchedulerView } from '../schedule/scheduler.js';
 import { protectOfferStore } from '../vault/protectOffer.js';
 import { HubView } from '../views/HubView.js';
 import { ScheduleNavItem } from '../views/ScheduleView.js';
@@ -118,9 +119,30 @@ describe('the hub section (U1)', () => {
     expect(byTestId(c, 'schedule-hub-section')).not.toBeNull();
     const offers = [...c.querySelectorAll<HTMLElement>('[data-testid="schedule-hub-template"]')];
     expect(offers.map((offer) => offer.querySelector('.schedule-hub-title')?.textContent)).toEqual(['weekly spend review']);
+    // The same registry as the page's cards and the editor: the when is the fill's own.
+    const card = templateCard('spend-review', new Map([['starter:ledger', 'ledger']]));
+    expect(offers[0]?.querySelector('.schedule-hub-when')?.textContent).toBe(card.when);
+    expect(offers[0]?.querySelector('.schedule-hub-when')?.textContent).toBe('Fridays at 5:00 PM');
     expect(offers[0]?.textContent).toContain(HUB.setUp);
     await click(offers[0]?.querySelector('a'));
-    expect(path).toBe('/schedule/new?template=weekly-spend');
+    expect(path).toBe('/schedule/new?template=spend-review');
+    expect(path).toBe(card.href);
+  });
+
+  it('a tab promoted over a stale copy (view.needsReload) carries the reload strip — even with nothing scheduled and no starter installed (S3)', async () => {
+    await env.boot();
+    const c = renderHub();
+    await settle();
+    expect(byTestId(c, 'schedule-hub-section')).toBeNull();
+    await act(async () => {
+      schedulerStore.set({ ...schedulerStore.get(), needsReload: true } as SchedulerView);
+    });
+    const section = byTestId(c, 'schedule-hub-section');
+    expect(section).not.toBeNull();
+    const strip = section?.querySelector('[data-testid="schedule-reload"]');
+    expect(strip?.className).toContain('connection-note');
+    expect(strip?.textContent).toContain(RELOAD.note);
+    expect(strip?.querySelector('[data-testid="schedule-reload-act"]')?.textContent).toBe(RELOAD.act);
   });
 
   it('a host that does not allow scheduling (the engine never readies) shows no section even with rows in the file', async () => {

@@ -6,9 +6,10 @@
 // route, and the templates' "add <App>, then schedule it" link to the starter.
 //
 // The row anatomy (switch · kebab) needs a schedule to exist. The only honest way to make one
-// in a browser is the editor route (U3 — a sibling's), so the last test drives it through its
-// one pinned act, *schedule it* (CONSENT.enable), and SKIPS with a reason if that did not
-// produce a row — never a false green and never a red about another surface.
+// in a browser is the editor route (U3), so the last test drives it through its one pinned
+// act, *schedule it* (CONSENT.enable), and ASSERTS that a row came of it: the editor ships in
+// this PR, so an editor that cannot schedule a sentence is a red here, never a skip. The only
+// skip left is the integration fixture gate (`SNUG_E2E_HAS_APP`).
 //
 // Runs in the default `chromium` project (not the mobile project, which only matches
 // mobile.spec.ts): the 375 px leg sets the viewport itself.
@@ -107,7 +108,7 @@ test.describe('the schedule page (U2)', () => {
     await setTheme(page, 'dark');
   });
 
-  test('the create bar hands the sentence to the editor route (design F1)', async ({ page }) => {
+  test('the create bar hands the sentence — and only the sentence — to the editor route, which reads the when itself (design F1)', async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 900 });
     await page.goto('/schedule');
     const box = page.getByRole('textbox', { name: 'describe what and when' });
@@ -116,7 +117,11 @@ test.describe('the schedule page (U2)', () => {
     await expect.poll(() => new URL(page.url()).pathname).toBe('/schedule/new');
     const params = new URL(page.url()).searchParams;
     expect(params.get('text')).toBe('every weekday at 8, water the ferns');
-    expect(params.get('spec'), 'the grammar read the when and it rides along').not.toBeNull();
+    expect([...params.keys()], 'nothing but the sentence rides along (M10)').toEqual(['text']);
+    // The editor re-read the sentence deterministically: the weekly chip, Monday–Friday, 08:00.
+    await expect(page.getByTestId('spec-kind-weekly')).toHaveAttribute('aria-checked', 'true');
+    await expect(page.getByTestId('spec-time')).toHaveValue('08:00');
+    await expect(page.getByTestId('schedule-title')).toHaveValue('water the ferns');
   });
 
   test('a template whose starter is missing links to that starter’s run route, where install is the explicit act', async ({ page }) => {
@@ -168,15 +173,17 @@ test.describe('a row at 375 px (design F12)', () => {
 
   test('title + a 44 px switch, the when + next line, a 44 px kebab with run now · edit · history · delete', async ({ page }) => {
     await page.setViewportSize({ width: 375, height: 667 });
-    // Make one schedule through the editor route (U3): the sentence prefills it, *schedule it* enables.
+    // Make one schedule through the editor route (U3): the sentence prefills it — the when, the
+    // title and the reminder's own words ("water the ferns") — and *schedule it* enables it. A
+    // reminder spends nothing, so no consent surface stands between the act and the row.
     await page.goto(`/schedule/new?text=${encodeURIComponent('every weekday at 8, water the ferns')}`);
     const enable = page.getByRole('button', { name: 'schedule it' });
-    const editorOffersEnable = await enable.isVisible({ timeout: 10_000 }).catch(() => false);
-    if (editorOffersEnable) await enable.click();
-    await page.goto('/schedule');
+    await expect(enable, 'the editor offers its one act').toBeVisible({ timeout: 10_000 });
+    await expect(enable, 'the sentence filled the reminder, so nothing blocks the save').toBeEnabled();
+    await enable.click();
+    await expect.poll(() => new URL(page.url()).pathname, 'the save lands on the page').toBe('/schedule');
     const rows = page.getByTestId('schedule-row');
-    const created = (await rows.count()) > 0;
-    test.skip(!created, 'the editor route did not produce a schedule from the sentence (U3 is the editor’s own suite) — the row anatomy cannot be measured without one');
+    await expect(rows, 'the editor produced exactly one schedule from the sentence').toHaveCount(1);
 
     const row = rows.first();
     await expect(row.locator('.schedule-row-title')).toBeVisible();

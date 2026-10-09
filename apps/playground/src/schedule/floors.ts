@@ -7,9 +7,11 @@
 // `every N <unit>` it is the NOMINAL N×unit — the user's stated cadence — even though the
 // compiled cron aligns to the hour or day (`every 7 minutes` fires at :00, :07 … :56 and then
 // :00 again, a 4-minute gap once an hour): the floor measures intent and spend RATE, and the
-// nominal interval is the honest rate. Every other recurring form is SAMPLED: the next nine
-// occurrences from the anchor (`until` stripped — a schedule limited to one run still has a
-// period), the minimum of the eight gaps. A one-off has no period; a spec that cannot fire
+// nominal interval is the honest rate. A `custom` cron is measured from its parsed FIELDS
+// (`minCronGapMs` — Gate-5 S6: nine sampled occurrences never saw a minute list that is sparse
+// at the top of the hour and dense at its end). Every other recurring form is SAMPLED: the next
+// nine occurrences from the anchor (`until` stripped — a schedule limited to one run still has
+// a period), the minimum of the eight gaps. A one-off has no period; a spec that cannot fire
 // twice inside the engine's 400-day bound answers `undefined`, which every reader treats as
 // "slower than anything a floor or a window cares about".
 //
@@ -36,7 +38,7 @@ import {
   type TaskProvenance,
 } from '@snugprotocol/protocol';
 
-import { SEARCH_BOUND_DAYS, occurrencesBetween } from './cron.js';
+import { SEARCH_BOUND_DAYS, minCronGapMs, occurrencesBetween, parseCron } from './cron.js';
 
 const MINUTE_MS = 60_000;
 const DAY_MS = 86_400_000;
@@ -73,6 +75,10 @@ export function minIntervalMs(spec: ScheduleSpec, anchor: Date): number | undefi
       return undefined;
     case 'every':
       return spec.n * UNIT_MS[spec.unit];
+    case 'custom': {
+      const fields = parseCron(spec.cron);
+      return fields === undefined ? undefined : minCronGapMs(fields, anchor);
+    }
     default: {
       const to = new Date(anchor.getTime() + SEARCH_BOUND_DAYS * DAY_MS);
       const sampled = occurrencesBetween(withoutUntil(spec), anchor, to, { limit: SAMPLE_OCCURRENCES, anchor });

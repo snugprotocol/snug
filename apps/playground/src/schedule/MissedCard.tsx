@@ -7,13 +7,15 @@
 // One line: "3 schedules were missed while Snug was closed · 2 AI calls" · run them · skip ·
 // details. Details are per-schedule rows — the plain-words when, "missed 4 times → runs once",
 // the cost, run now / skip. *Run them* queues every candidate and the card shows "running 2
-// of 4…" with cancel, then each row's done/failed until *ok* lets the card leave.
+// of 4…" with cancel, then each row's outcome — the same status word every other surface
+// prints (`copy.RESULT_STATUS_WORD`) — until *ok* lets the card leave.
 //
 // UNDO. A skip is permanent once written (the row is `skipped`, reason `user`, and nothing
 // re-creates a candidate), so *skip* (all) does not write at once: it arms a short delay
 // (`SKIP_UNDO_MS`) with an *undo* that cancels it, and the write lands when the delay runs
-// out — or at once if the card unmounts first (the user's decision is kept, not lost). A
-// per-row skip in the details is immediate, like the engine's act.
+// out — or at once if the card unmounts first (the user's decision is kept, not lost; the
+// undo strip's sentence, `MISSED.skippingSoon`, documents that). A per-row skip in the
+// details is immediate, like the engine's act.
 //
 // When the card leaves (nothing pending, no batch to report) focus moves to the page's
 // heading, so a keyboard user is not dropped where a region used to be. `role="status"`,
@@ -21,21 +23,35 @@
 
 import { useEffect, useRef, useState, type ReactElement } from 'react';
 
+import type { ScheduleRun } from '@snugprotocol/protocol';
+
 import { allows } from '../platform/platform.js';
 import { Button } from '../ui/Button.js';
-import { MISSED_ACTIONS, missedHeadline, missedRow, runningProgress } from './copy.js';
-import { MISSED, aiCallsWord, statusWord } from './copy.page.js';
+import { MISSED_ACTIONS, RESULT_STATUS_WORD, aiCalls, missedHeadline, missedRow, runningProgress } from './copy.js';
+import { MISSED } from './copy.page.js';
 import { describeSpec } from './cron.js';
 import { aiStepsOf, pendingAiCalls, pendingRows, runsNewestFirst } from './pageModel.js';
 import { cancelRunning, runAllPending, runPending, skipAllPending, skipPending, useScheduler } from './scheduler.js';
+import { sameOccurrence } from './taskShape.js';
 
 /** How long *skip* waits before it writes, so *undo* has a moment. */
 export const SKIP_UNDO_MS = 5000;
 
+/** One candidate *run them* queued: the occurrence it names. */
+export interface BatchKey {
+  taskId: string;
+  dueAt: string;
+}
+
 interface Batch {
-  /** `taskId:dueAt` of every candidate *run them* queued, in order. */
-  keys: string[];
+  /** Every candidate *run them* queued, in the card's order. */
+  keys: BatchKey[];
   total: number;
+}
+
+/** The word a batch row ends on: the run's status word; a candidate that is gone reads as skipped. */
+export function outcomeWord(run: ScheduleRun | undefined): string {
+  return RESULT_STATUS_WORD[run === undefined ? 'skipped' : run.status];
 }
 
 export interface MissedCardProps {
@@ -105,7 +121,7 @@ export function MissedCard({ focusTarget = defaultFocusTarget, undoMs = SKIP_UND
   };
   const runThem = async (): Promise<void> => {
     setError(undefined);
-    const keys = rows.map((row) => `${row.run.taskId}:${row.run.dueAt}`);
+    const keys: BatchKey[] = rows.map((row) => ({ taskId: row.run.taskId, dueAt: row.run.dueAt }));
     const queued = await runAllPending();
     if (queued === 0) {
       setError('nothing could be queued — all schedules are paused');
@@ -119,14 +135,8 @@ export function MissedCard({ focusTarget = defaultFocusTarget, undoMs = SKIP_UND
     if (!answer.ok) setError(answer.reason);
   };
 
-  const outcomeOf = (key: string): string => {
-    const [taskId, dueAt] = key.split(/:(.+)/) as [string, string];
-    const run = runsNewestFirst(view.runsByTask[taskId]).find((entry) => entry.dueAt === dueAt || Date.parse(entry.dueAt) === Date.parse(dueAt));
-    if (run === undefined) return statusWord('skipped');
-    if (run.status === 'ok') return MISSED.done;
-    return statusWord(run.status);
-  };
-  const titleOf = (key: string): string => view.tasks.find((item) => item.id === key.split(':')[0])?.title ?? '';
+  const outcomeOf = (key: BatchKey): string => outcomeWord(runsNewestFirst(view.runsByTask[key.taskId]).find((entry) => sameOccurrence(entry, key.dueAt)));
+  const titleOf = (key: BatchKey): string => view.tasks.find((item) => item.id === key.taskId)?.title ?? '';
 
   const progress = batchAlive && working ? runningProgress(Math.max(1, Math.min(batch.total, batch.total - view.queued)), batch.total) : undefined;
 
@@ -145,7 +155,7 @@ export function MissedCard({ focusTarget = defaultFocusTarget, undoMs = SKIP_UND
         <div className="missed-outcomes" data-testid="missed-outcomes">
           <ul className="missed-rows">
             {batch.keys.map((key) => (
-              <li key={key} className="missed-row" data-testid="missed-outcome">
+              <li key={`${key.taskId}:${key.dueAt}`} className="missed-row" data-testid="missed-outcome">
                 <span className="missed-row-title">{titleOf(key)}</span>
                 <span className="missed-row-outcome">{outcomeOf(key)}</span>
               </li>
@@ -188,7 +198,7 @@ export function MissedCard({ focusTarget = defaultFocusTarget, undoMs = SKIP_UND
                 <li key={`${run.taskId}:${run.dueAt}`} className="missed-row" data-testid="missed-row">
                   <span className="missed-row-title">{item.title}</span>
                   <span className="missed-row-when">{missedRow(describeSpec(item.spec), run.collapsedCount)}</span>
-                  <span className="missed-row-cost">{aiCallsWord(aiStepsOf(item.steps))}</span>
+                  <span className="missed-row-cost">{aiCalls(aiStepsOf(item.steps))}</span>
                   <span className="missed-row-acts">
                     <Button variant="ghost" onClick={() => void act(runPending(run.taskId, run.dueAt))} data-testid="missed-row-run">
                       {MISSED_ACTIONS.run}

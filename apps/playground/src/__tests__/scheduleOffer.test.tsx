@@ -11,10 +11,11 @@ import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ChatMessage } from '../agent/useBuilderChat.js';
-import { OFFER } from '../schedule/copy.bits.js';
 import { chatOffer } from '../schedule/copy.js';
+import { OFFER } from '../schedule/copy.page.js';
 import { scheduleOffer } from '../schedule/parseScheduleText.js';
-import { ScheduleOffer, scheduleOfferHref } from '../schedule/ScheduleOffer.js';
+import { newScheduleHref } from '../schedule/routes.js';
+import { ScheduleOffer } from '../schedule/ScheduleOffer.js';
 import { ChatLog } from '../views/ChatLog.js';
 
 declare global {
@@ -83,8 +84,8 @@ describe('the offer under a user message', () => {
     expect(found[0]?.textContent).toContain(expected.text);
     const review = found[0]?.querySelector('a');
     expect(review?.textContent).toBe(expected.action);
-    expect(review?.getAttribute('href')).toBe(scheduleOfferHref(SCHEDULE_TEXT));
-    expect(scheduleOfferHref(SCHEDULE_TEXT)).toBe(`/schedule/new?text=${encodeURIComponent(SCHEDULE_TEXT)}`);
+    expect(review?.getAttribute('href')).toBe(newScheduleHref({ text: SCHEDULE_TEXT }));
+    expect(newScheduleHref({ text: SCHEDULE_TEXT })).toBe('/schedule/new?text=remind+me+every+weekday+at+8+to+stretch');
     // It sits as a sibling AFTER the bubble, never inside it.
     expect(found[0]?.closest('.msg')).toBeNull();
     expect(found[0]?.previousElementSibling?.classList.contains('msg-user')).toBe(true);
@@ -109,7 +110,7 @@ describe('the offer under a user message', () => {
     act(() => dismiss?.click());
     const left = offers(el);
     expect(left).toHaveLength(1);
-    expect(left[0]?.querySelector('a')?.getAttribute('href')).toBe(scheduleOfferHref('every day at 7 water the ferns'));
+    expect(left[0]?.querySelector('a')?.getAttribute('href')).toBe(newScheduleHref({ text: 'every day at 7 water the ferns' }));
   });
 
   it('parses each message ONCE across re-renders, and never calls a brain or the network', () => {

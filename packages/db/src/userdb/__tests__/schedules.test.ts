@@ -16,7 +16,7 @@
 // The frequency floor is NOT enforced here — it needs the cron core, which lives in the
 // playground; the accessor enforces shapes and caps only.
 
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   SCHEDULE_MAX_TASKS,
@@ -414,6 +414,31 @@ describe('runs — the per-task caps are proven by failing or pruning writes', (
     expect(after.filter((r) => r.status === 'ok').map((r) => r.dueAt)).toEqual([at(999)]);
   });
 
+  it('a SEEN needs-you row is prunable (tier 2): fifty needs-you results with one opened still admit the next run, and the opened one goes (S5)', () => {
+    for (let i = 0; i < SCHEDULE_RUNS_MAX_ENTRIES; i += 1) db.putScheduleRun(run('t1', at(i), { status: 'needs-you' }));
+    db.markScheduleRunSeen('t1', at(7), at(100));
+    expect(db.listScheduleRuns('t1')).toHaveLength(SCHEDULE_RUNS_MAX_ENTRIES);
+
+    db.putScheduleRun(run('t1', at(999), { status: 'running', startedAt: at(999) }));
+
+    const after = db.listScheduleRuns('t1');
+    expect(after).toHaveLength(SCHEDULE_RUNS_MAX_ENTRIES);
+    expect(after[0]).toMatchObject({ dueAt: at(999), status: 'running' });
+    expect(after.map((r) => r.dueAt)).not.toContain(at(7)); // the one the user already opened
+    expect(after.filter((r) => r.status === 'needs-you').every((r) => r.seenAt === undefined)).toBe(true);
+    // Only unopened ones left: the next write is refused, as before.
+    expect(codeOf(() => db.putScheduleRun(run('t1', at(1000))))).toBe(USERDB_ERROR_CODES.SCHEDULE_LIMIT);
+    // A seen needs-you goes AFTER every ok/skipped (tier 1) and beside the failures (tier 2), oldest first.
+    db.putScheduleRun(run('t1', at(8), { status: 'ok' }));
+    db.markScheduleRunSeen('t1', at(9), at(101));
+    db.putScheduleRun(run('t1', at(10), { status: 'failed' }));
+    db.putScheduleRun(run('t1', at(1001), { status: 'running', startedAt: at(1001) }));
+    expect(db.listScheduleRuns('t1').map((r) => r.dueAt)).not.toContain(at(8)); // tier 1 first
+    db.putScheduleRun(run('t1', at(1002), { status: 'running', startedAt: at(1002) }));
+    expect(db.listScheduleRuns('t1').map((r) => r.dueAt)).not.toContain(at(9)); // then the oldest of tier 2: the seen needs-you (at 9) before the failed (at 10)
+    expect(db.listScheduleRuns('t1').map((r) => r.dueAt)).toContain(at(10));
+  });
+
   it(`keeps a task's row at or under ${SCHEDULE_RUNS_MAX_BYTES} bytes — fewer than ${SCHEDULE_RUNS_MAX_ENTRIES} entries when they are heavy`, () => {
     let count = 0;
     while (count < SCHEDULE_RUNS_MAX_ENTRIES) {
@@ -514,12 +539,13 @@ describe('runs — markScheduleRunSeen and clearScheduleHistory', () => {
     expect(db.listScheduleRuns('t1').find((r) => r.dueAt === at(2))?.seenAt).toBeUndefined();
   });
 
-  it('clearScheduleHistory(taskId) drops results but KEEPS pending, needs-you and running entries', () => {
+  it('clearScheduleHistory(taskId) drops results — a SEEN needs-you among them (S5) — but KEEPS pending, unseen needs-you and running entries', () => {
     db.putScheduleRun(run('t1', at(1), { status: 'ok' }));
     db.putScheduleRun(run('t1', at(2), { status: 'failed' }));
     db.putScheduleRun(run('t1', at(3), { status: 'pending' }));
     db.putScheduleRun(run('t1', at(4), { status: 'needs-you' }));
     db.putScheduleRun(run('t1', at(5), { status: 'running', startedAt: at(5) }));
+    db.putScheduleRun(run('t1', at(6), { status: 'needs-you', seenAt: at(7) }));
     db.putScheduleRun(run('t2', at(6), { status: 'ok' }));
 
     db.clearScheduleHistory('t1');
@@ -541,6 +567,58 @@ describe('runs — markScheduleRunSeen and clearScheduleHistory', () => {
 
     expect(db.getSetting(scheduleRunsSettingKey('t1'))).toBeUndefined();
     expect(db.listScheduleRuns('t2').map((r) => r.status)).toEqual(['needs-you']);
+  });
+});
+
+describe('runs — the hot read path is memoized by the stored bytes (M3)', () => {
+  const TASKS = 20;
+
+  beforeEach(() => {
+    for (let t = 0; t < TASKS; t += 1) {
+      db.putScheduledTask(task(`t${t}`));
+      for (let i = 0; i < SCHEDULE_RUNS_MAX_ENTRIES; i += 1) {
+        db.putScheduleRun(run(`t${t}`, at(i), { status: i % 4 === 0 ? 'needs-you' : 'ok', steps: [{ status: 'ok', summary: 'the ferns are thirsty, '.repeat(20) }] }));
+      }
+    }
+  });
+
+  it(`a second listAllScheduleRuns over ${TASKS} tasks × ${SCHEDULE_RUNS_MAX_ENTRIES} runs parses NOTHING and answers in under 20 ms; a changed row re-parses only itself`, () => {
+    const parse = vi.spyOn(scheduleRunSchema, 'safeParse');
+    const t0 = performance.now();
+    const cold = db.listAllScheduleRuns();
+    const coldMs = performance.now() - t0;
+    expect(Object.keys(cold)).toHaveLength(TASKS);
+    const coldParses = parse.mock.calls.length;
+    expect(coldParses).toBeGreaterThanOrEqual(TASKS * SCHEDULE_RUNS_MAX_ENTRIES);
+
+    parse.mockClear();
+    const t1 = performance.now();
+    const warm = db.listAllScheduleRuns();
+    const warmMs = performance.now() - t1;
+    expect(parse, 'a row that did not change parses zero times').toHaveBeenCalledTimes(0);
+    expect(warm).toEqual(cold);
+    expect(warmMs, `cold ${coldMs.toFixed(1)} ms, warm ${warmMs.toFixed(1)} ms`).toBeLessThan(20);
+
+    // The answer is a COPY: a caller mutating it cannot poison the next read.
+    warm.t3?.splice(0, 1);
+    expect(db.listScheduleRuns('t3')).toHaveLength(SCHEDULE_RUNS_MAX_ENTRIES);
+
+    // One row changes: only that row's entries are parsed again.
+    parse.mockClear();
+    db.putScheduleRun(run('t5', at(999), { status: 'ok' }));
+    parse.mockClear(); // the write's own validation
+    const after = db.listAllScheduleRuns();
+    expect(parse.mock.calls.length).toBe(SCHEDULE_RUNS_MAX_ENTRIES); // t5's row (50 entries after pruning), nothing else
+    expect(after.t5?.[0]?.dueAt).toBe(at(999));
+    expect(db.listScheduleRuns('t5')[0]?.dueAt).toBe(at(999));
+    parse.mockRestore();
+  });
+
+  it('the memo is bounded to the rows that exist: a deleted task’s parse is dropped and never answered again', () => {
+    db.listAllScheduleRuns();
+    db.deleteScheduledTask('t4');
+    expect(db.listScheduleRuns('t4')).toEqual([]);
+    expect(db.listAllScheduleRuns().t4).toBeUndefined();
   });
 });
 

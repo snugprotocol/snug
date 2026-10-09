@@ -67,7 +67,7 @@ const run: ScheduleRun = {
   steps: [{ status: 'ok' }, { status: 'refused', summary: 'the AI would change rows' }],
   calls: { ai: 1, net: 0 },
   proposals: {
-    items: [{ sql: "UPDATE expenses SET cents = 999 WHERE label = 'coffee'", summary: 'Set both coffees to 9.99', counts: { changes: 2 } }],
+    items: [{ appId: 'ledger', sql: "UPDATE expenses SET cents = 999 WHERE label = 'coffee'", summary: 'Set both coffees to 9.99', counts: { changes: 2 } }],
     expiresAt: new Date(Date.now() + SCHEDULE_PROPOSAL_TTL_MS).toISOString(),
   },
 };
@@ -179,13 +179,13 @@ describe('the result detail', () => {
 });
 
 describe('the Settings card', () => {
-  it('names every control; the switches are role=switch named by their row labels', async () => {
+  it('names every control; the switch is role=switch named by its row label (the suggestions switch waits for PR-B)', async () => {
     schedulerStore.set({ ...initialSchedulerView(), ready: true, leader: { leader: true, canSeeSiblings: false, reason: 'no-locks' } });
     const el = await mount(<ScheduleSettingsCard />);
     expectEveryControlNamed(el);
     const switches = [...el.querySelectorAll('[role="switch"]')];
-    expect(switches).toHaveLength(2);
-    expect(switches.map((s) => accessibleName(s))).toEqual(['pause all schedules', 'never let apps suggest schedules']);
+    expect(switches).toHaveLength(1);
+    expect(switches.map((s) => accessibleName(s))).toEqual(['pause all schedules']);
     // The armed confirm is a named group, and its controls are named too.
     await act(async () => {
       el.querySelector<HTMLButtonElement>('[data-testid="schedule-clear-history"]')?.click();

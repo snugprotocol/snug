@@ -17,6 +17,14 @@
 //    (`listUnreadableScheduleKeys`), never thrown: one corrupted row must not stop the
 //    scheduler for every other task (the `parseRuntimeContract` posture).
 //
+// THE HOT READ PATH (M3). The engine lists every task's runs twice a minute, and the strict
+// parse's credential walk is the expensive half of a read. Each accessor instance memoizes
+// the parsed runs of a task's row by the row's EXACT stored bytes: a row whose bytes did not
+// change parses zero times, a changed row re-parses only itself, the map holds one entry per
+// task (dropped when the row goes), and every answer is a fresh array so a caller can never
+// poison the memo. `scrubScheduleRunRows` and the import pass run on bare handles and read
+// unmemoized — they are one-shot.
+//
 // NOT HERE: the frequency floor (it needs the cron core, which lives in the playground),
 // and anything about WHEN a task runs. This module only decides what the file says.
 //
@@ -35,7 +43,7 @@ import {
   SCHEDULE_RUNS_MAX_ENTRIES,
   SCHEDULE_RUNS_TOTAL_MAX_BYTES,
   USERDB_TABLES,
-  canonicalScheduledTask,
+  canonicalScheduleIntent,
   parseScheduledTask,
   parseSchedulerState,
   scheduleRunSchema,
@@ -177,30 +185,34 @@ function readRuns(raw: string | undefined, taskId: string): RunRow {
 
 // ----------------------------------------------------------------------- pruning
 
-/**
- * What pruning may take, in order: results nobody needs to act on first, then the
- * failures (their one line of history is worth less than room for the next result).
- * NEVER `pending` (a persisted catch-up candidate the missed card reads), `needs-you`
- * (a result waiting on the user) or `running` (a live claim — the boot sweep retires a
- * stale one to `interrupted`, which IS prunable). A task's `ranThrough` is the dedupe
- * record that survives any of this (ADR-0074 §5).
- */
-const PRUNE_TIERS: ReadonlyArray<ReadonlySet<RunStatus>> = [
-  new Set<RunStatus>(['ok', 'skipped']),
-  new Set<RunStatus>(['failed', 'capped', 'no-handler', 'interrupted']),
-];
-
-/** Survives `clearScheduleHistory`: everything that is not yet a result the user has dealt with. */
-const KEPT_ON_CLEAR: ReadonlySet<RunStatus> = new Set<RunStatus>(['pending', 'needs-you', 'running']);
-
 /** What pruning needs to know about an entry — read strictly (a validated run) or loosely (a raw row's element). */
 interface EntryView {
   /** Undefined for an entry that is not a readable run: worthless bytes, pruned before anything else. */
   status: RunStatus | undefined;
   dueAt: number;
+  /** The user opened it (`seenAt`) — what makes a `needs-you` row prunable. */
+  seen: boolean;
 }
 
-const strictView = (run: ScheduleRun): EntryView => ({ status: run.status, dueAt: instant(run.dueAt) });
+/**
+ * What pruning may take, in order: results nobody needs to act on first (and unreadable
+ * bytes), then the failures (their one line of history is worth less than room for the
+ * next result) and the `needs-you` results the user has already OPENED (S5: fifty of them
+ * nobody acted on must not silence the schedule forever). NEVER `pending` (a persisted
+ * catch-up candidate the missed card reads), an UNSEEN `needs-you` (a result still
+ * waiting on the user) or `running` (a live claim — the boot sweep retires a stale one to
+ * `interrupted`, which IS prunable). A task's `ranThrough` is the dedupe record that
+ * survives any of this (ADR-0074 §5).
+ */
+const PRUNE_TIERS: ReadonlyArray<(entry: EntryView) => boolean> = [
+  ({ status }) => status === undefined || status === 'ok' || status === 'skipped',
+  ({ status, seen }) => status === 'failed' || status === 'capped' || status === 'no-handler' || status === 'interrupted' || (status === 'needs-you' && seen),
+];
+
+/** Survives `clearScheduleHistory`: everything the user has not yet dealt with — a seen `needs-you` has been (S5). */
+const keptOnClear = (run: ScheduleRun): boolean => run.status === 'pending' || run.status === 'running' || (run.status === 'needs-you' && run.seenAt === undefined);
+
+const strictView = (run: ScheduleRun): EntryView => ({ status: run.status, dueAt: instant(run.dueAt), seen: run.seenAt !== undefined });
 
 const RUN_STATUS_SET: ReadonlySet<string> = new Set(RUN_STATUSES);
 
@@ -215,12 +227,13 @@ const RUN_STATUS_SET: ReadonlySet<string> = new Set(RUN_STATUSES);
  * for every entry it hands out. An unreadable entry reads as status-less: the first to go.
  */
 function looseView(entry: unknown): EntryView {
-  if (typeof entry !== 'object' || entry === null) return { status: undefined, dueAt: Number.NEGATIVE_INFINITY };
-  const { status, dueAt } = entry as { status?: unknown; dueAt?: unknown };
+  if (typeof entry !== 'object' || entry === null) return { status: undefined, dueAt: Number.NEGATIVE_INFINITY, seen: false };
+  const { status, dueAt, seenAt } = entry as { status?: unknown; dueAt?: unknown; seenAt?: unknown };
   const parsedDueAt = typeof dueAt === 'string' ? instant(dueAt) : Number.NaN;
   return {
     status: typeof status === 'string' && RUN_STATUS_SET.has(status) ? (status as RunStatus) : undefined,
     dueAt: Number.isNaN(parsedDueAt) ? Number.NEGATIVE_INFINITY : parsedDueAt,
+    seen: typeof seenAt === 'string',
   };
 }
 
@@ -254,16 +267,15 @@ function pruneVictim<T>(
   view: (entry: T) => EntryView,
   keep: T,
 ): { taskId: string; index: number } | undefined {
-  for (const tier of PRUNE_TIERS) {
+  for (const prunable of PRUNE_TIERS) {
     let victim: { taskId: string; index: number; dueAt: number } | undefined;
     for (const [taskId, entries] of rows) {
       for (let index = 0; index < entries.length; index += 1) {
         const entry = entries[index];
         if (entry === undefined || entry === keep) continue;
-        const { status, dueAt } = view(entry);
-        const prunable = status === undefined ? tier === PRUNE_TIERS[0] : tier.has(status);
-        if (!prunable) continue;
-        if (victim === undefined || dueAt < victim.dueAt) victim = { taskId, index, dueAt };
+        const seen = view(entry);
+        if (!prunable(seen)) continue;
+        if (victim === undefined || seen.dueAt < victim.dueAt) victim = { taskId, index, dueAt: seen.dueAt };
       }
     }
     if (victim !== undefined) return { taskId: victim.taskId, index: victim.index };
@@ -287,6 +299,24 @@ export function createScheduleAccessors(seams: ScheduleSeams): ScheduleAccessors
   }
   function notFound(message: string): never {
     return seams.refuse('NOT_FOUND', message);
+  }
+
+  /**
+   * The read memo (M3, see the header): one entry per task — the exact bytes the parse was
+   * made from and what they parsed to. A hit is a string compare; a miss re-parses that one
+   * row; an absent row drops the entry. Answers are COPIES.
+   */
+  const parsedRuns = new Map<string, { raw: string; runs: ScheduleRun[] }>();
+  function runsOf(taskId: string, raw: string | undefined): ScheduleRun[] {
+    if (raw === undefined) {
+      parsedRuns.delete(taskId);
+      return [];
+    }
+    const hit = parsedRuns.get(taskId);
+    if (hit !== undefined && hit.raw === raw) return hit.runs.slice();
+    const { runs } = readRuns(raw, taskId);
+    parsedRuns.set(taskId, { raw, runs });
+    return runs.slice();
   }
 
   function taskRows(): Array<{ key: string; task: ScheduledTask | undefined }> {
@@ -360,21 +390,26 @@ export function createScheduleAccessors(seams: ScheduleSeams): ScheduleAccessors
       assertOpen();
       deleteKey(seams, scheduleSettingKey(taskId));
       deleteKey(seams, scheduleRunsSettingKey(taskId));
+      parsedRuns.delete(taskId);
     },
 
     listScheduleRuns(taskId) {
       assertOpen();
-      return readRuns(rawValue(seams, scheduleRunsSettingKey(taskId)), taskId).runs;
+      return runsOf(taskId, rawValue(seams, scheduleRunsSettingKey(taskId)));
     },
 
     listAllScheduleRuns() {
       assertOpen();
       const out: Record<string, ScheduleRun[]> = {};
+      const present = new Set<string>();
       for (const [key, raw] of rowsUnder(seams, SCHEDULE_RUNS_SETTING_PREFIX)) {
         const taskId = taskIdFromScheduleRunsSettingKey(key);
         if (taskId === undefined) continue;
-        out[taskId] = readRuns(raw, taskId).runs;
+        present.add(taskId);
+        out[taskId] = runsOf(taskId, raw);
       }
+      // The memo holds nothing a row no longer backs: bounded to the rows that exist.
+      for (const taskId of parsedRuns.keys()) if (!present.has(taskId)) parsedRuns.delete(taskId);
       return out;
     },
 
@@ -450,7 +485,7 @@ export function createScheduleAccessors(seams: ScheduleSeams): ScheduleAccessors
       const key = scheduleRunsSettingKey(taskId);
       const raw = rawValue(seams, key);
       if (raw === undefined) return;
-      const { runs } = readRuns(raw, taskId);
+      const runs = runsOf(taskId, raw);
       const at = runs.findIndex((entry) => entry.dueAt === dueAt);
       if (at === -1) return;
       const stamped = scheduleRunSchema.safeParse({ ...runs[at], seenAt });
@@ -470,7 +505,7 @@ export function createScheduleAccessors(seams: ScheduleSeams): ScheduleAccessors
           : [{ key: scheduleRunsSettingKey(taskId), taskId, raw: rawValue(seams, scheduleRunsSettingKey(taskId)) }];
       for (const target of targets) {
         if (target.raw === undefined) continue;
-        const kept = readRuns(target.raw, target.taskId).runs.filter((entry) => KEPT_ON_CLEAR.has(entry.status));
+        const kept = runsOf(target.taskId, target.raw).filter(keptOnClear);
         if (kept.length === 0) deleteKey(seams, target.key);
         else seams.setSetting(target.key, kept);
       }
@@ -564,7 +599,7 @@ export const SCHEDULE_IMPORTED_CLAIM_MAX_AGE_MS = 24 * 3_600_000;
 
 /** What `importUserDb` snapshots from the OPEN handle before the candidate goes live. */
 export interface LocalScheduleSnapshot {
-  /** taskId → `canonicalScheduledTask` bytes of every readable local task. */
+  /** taskId → `canonicalScheduleIntent` bytes of every readable local task (M4: the intent, not the bookkeeping). */
   tasks: Map<string, string>;
   watermark: string | undefined;
 }
@@ -574,7 +609,7 @@ export function snapshotLocalSchedules(sql: SettingsSql): LocalScheduleSnapshot 
   for (const [key, raw] of rowsUnder(sql, SCHEDULE_SETTING_PREFIX)) {
     const taskId = taskIdFromScheduleSettingKey(key);
     const task = taskId === undefined ? undefined : readTask(raw, taskId);
-    if (task !== undefined) tasks.set(task.id, canonicalScheduledTask(task));
+    if (task !== undefined) tasks.set(task.id, canonicalScheduleIntent(task));
   }
   return { tasks, watermark: parseSchedulerState(rawValue(sql, SCHEDULER_STATE_SETTING_KEY))?.watermark };
 }
@@ -586,16 +621,20 @@ export function snapshotLocalSchedules(sql: SettingsSql): LocalScheduleSnapshot 
  *    dry-run against its own scratch copy, and a foreign file must never be able to
  *    plant an approval card (security F1), so the bytes never cross the file boundary in
  *    either direction;
- *  - with `interruptBefore` (import only): a `running`/`pending` claim older than it is
- *    `interrupted`, reason `imported`;
+ *  - with `importedAt` (import only, both paths — S1/S7): an entry whose `dueAt` is AFTER
+ *    that instant is DROPPED (nothing can have run for a time that has not come; a planted
+ *    one would dedupe the real occurrence and, as `pending`, sit on the missed card), and a
+ *    `running`/`pending` claim started or due more than a day before it, or after it, is
+ *    `interrupted` with reason `imported`;
  *  - an entry that does not parse is DROPPED: an entry the strict schema refuses cannot be
  *    shown to carry no proposal, and a non-array row is removed for the same reason.
  * Only rows that changed are rewritten, so a trusted pull keeps clean bytes stable.
  * Returns how many proposals were stripped.
  */
-export function scrubScheduleRunRows(sql: SettingsSql, opts: { interruptBefore?: string } = {}): number {
+export function scrubScheduleRunRows(sql: SettingsSql, opts: { importedAt?: string } = {}): number {
   let stripped = 0;
-  const bound = opts.interruptBefore === undefined ? undefined : instant(opts.interruptBefore);
+  const importedAt = opts.importedAt === undefined ? undefined : instant(opts.importedAt);
+  const oldest = importedAt === undefined ? undefined : importedAt - SCHEDULE_IMPORTED_CLAIM_MAX_AGE_MS;
   for (const [key, raw] of rowsUnder(sql, SCHEDULE_RUNS_SETTING_PREFIX)) {
     const taskId = taskIdFromScheduleRunsSettingKey(key);
     if (taskId === undefined) {
@@ -604,28 +643,48 @@ export function scrubScheduleRunRows(sql: SettingsSql, opts: { interruptBefore?:
     }
     const { runs, unreadable } = readRuns(raw, taskId);
     let changed = unreadable > 0;
-    const kept = runs.map((run) => {
+    const kept: ScheduleRun[] = [];
+    for (const run of runs) {
       let next = run;
+      if (importedAt !== undefined && instant(next.dueAt) > importedAt) {
+        changed = true;
+        continue;
+      }
       if (next.proposals !== undefined) {
         const { proposals: _proposals, ...rest } = next;
         next = rest;
         stripped += 1;
         changed = true;
       }
-      if (bound !== undefined && (next.status === 'running' || next.status === 'pending')) {
-        const since = next.status === 'running' ? (next.startedAt ?? next.dueAt) : next.dueAt;
-        if (instant(since) < bound) {
+      if (importedAt !== undefined && oldest !== undefined && (next.status === 'running' || next.status === 'pending')) {
+        const since = instant(next.status === 'running' ? (next.startedAt ?? next.dueAt) : next.dueAt);
+        if (since < oldest || since > importedAt) {
           next = { ...next, status: 'interrupted', reason: 'imported' };
           changed = true;
         }
       }
-      return next;
-    });
+      kept.push(next);
+    }
     if (!changed) continue;
     if (kept.length === 0) deleteKey(sql, key);
     else writeRaw(sql, key, kept);
   }
   return stripped;
+}
+
+/** The entries a demoted task may not keep (S1): a candidate the missed card would run, a result with a *run now* on it. */
+const ARMED_STATUSES: ReadonlySet<RunStatus> = new Set<RunStatus>(['pending', 'needs-you']);
+
+/** Drop a demoted task's `pending` and `needs-you` entries from its history row (S1); the rest of the row stays as it was read. */
+function disarmHistory(sql: SettingsSql, taskId: string): void {
+  const key = scheduleRunsSettingKey(taskId);
+  const raw = rawValue(sql, key);
+  if (raw === undefined) return;
+  const { runs, unreadable } = readRuns(raw, taskId);
+  const kept = runs.filter((run) => !ARMED_STATUSES.has(run.status));
+  if (kept.length === runs.length && unreadable === 0) return;
+  if (kept.length === 0) deleteKey(sql, key);
+  else writeRaw(sql, key, kept);
 }
 
 /** True when any history row could carry a proposal — the export's cheap test before it bothers with a copy. */
@@ -646,15 +705,19 @@ export function hasScheduleRunProposals(sql: SettingsSql): boolean {
  *
  * UNTRUSTED (`trustedOrigin` false — a file the user picked off disk, however empty the
  * hub; R-M2): a task is executable intent, so the same doctrine as connections and
- * runtime contracts applies. A task whose canonical bytes equal the local task of the
- * same id is left alone (a backup round trip must not disarm the user); every other
- * task lands `enabled:false, provenance:'imported'` with the rest of it intact and
- * readable, for the user to review and re-enable — the ONE consent surface (§4). A task
- * row that does not parse is removed: it cannot be demoted, and a later, more lenient
- * reader must not find it armed. The watermark becomes NOW (a foreign past must not turn
- * into a catch-up storm; `globalPause` is kept, the daily counters are zeroed), written
- * only when the file carries scheduling rows at all, so an old backup imports exactly as
- * before. Declines and mutes are dropped: they are the user's own answers to THEIR apps'
+ * runtime contracts applies. A task whose canonical INTENT bytes (`canonicalScheduleIntent`
+ * — M4: never `ranThrough`, `updatedAt` or a counter, which every run moves) equal the
+ * local task of the same id is left alone (a backup round trip must not disarm the user);
+ * every other task lands `enabled:false, provenance:'imported'` with the rest of it intact
+ * and readable, for the user to review and re-enable — the ONE consent surface (§4) — and
+ * its `pending` and `needs-you` entries go (S1: a demoted task must have nothing the missed
+ * card or a *run now* could fire). A `ranThrough` in the future is clamped to NOW on every
+ * untrusted task (S1: a planted record must not hold a schedule silent). A task row that
+ * does not parse is removed: it cannot be demoted, and a later, more lenient reader must
+ * not find it armed. The watermark becomes NOW (a foreign past must not turn into a
+ * catch-up storm; `globalPause` is kept, the daily counters are zeroed), written only when
+ * the file carries scheduling rows at all, so an old backup imports exactly as before.
+ * Declines and mutes are dropped: they are the user's own answers to THEIR apps'
  * suggestions, not something a file carries in.
  *
  * TRUSTED (the user's own configured origin — the sync pull and the recovery restore):
@@ -668,9 +731,7 @@ export function reconcileImportedSchedules(
   trustedOrigin: boolean,
   now: string = new Date().toISOString(),
 ): { demotedTasks: number; strippedProposals: number } {
-  const strippedProposals = scrubScheduleRunRows(sql, {
-    interruptBefore: new Date(instant(now) - SCHEDULE_IMPORTED_CLAIM_MAX_AGE_MS).toISOString(),
-  });
+  const strippedProposals = scrubScheduleRunRows(sql, { importedAt: now });
 
   let demotedTasks = 0;
   let sawScheduleRows = false;
@@ -683,12 +744,21 @@ export function reconcileImportedSchedules(
       deleteKey(sql, key);
       continue;
     }
-    if (localTasks.get(task.id) === canonicalScheduledTask(task)) continue;
-    const demoted = scheduledTaskSchema.safeParse({ ...task, enabled: false, provenance: 'imported' });
+    const clamped = task.ranThrough !== undefined && instant(task.ranThrough) > instant(now) ? { ...task, ranThrough: now } : task;
+    if (localTasks.get(task.id) === canonicalScheduleIntent(task)) {
+      if (clamped !== task) writeRaw(sql, key, clamped);
+      continue;
+    }
+    const demoted = scheduledTaskSchema.safeParse({ ...clamped, enabled: false, provenance: 'imported' });
     // Only the whole-object byte cap can refuse here (a longer provenance word on a task
     // sitting exactly at it); such a row cannot be made safe, so it goes.
-    if (!demoted.success) deleteKey(sql, key);
-    else writeRaw(sql, key, demoted.data);
+    if (!demoted.success) {
+      deleteKey(sql, key);
+      deleteKey(sql, scheduleRunsSettingKey(task.id));
+    } else {
+      writeRaw(sql, key, demoted.data);
+      disarmHistory(sql, task.id);
+    }
     demotedTasks += 1;
   }
 

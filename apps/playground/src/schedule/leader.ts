@@ -9,9 +9,18 @@
 // origin (`about:srcdoc`, `file://`) `navigator.locks.request()` REJECTS with a SecurityError
 // and never invokes the callback, and that module resolves only from inside the callback, so
 // it hangs forever there. Here every answer the manager can give — a grant, a `null`, a
-// rejection, a synchronous throw, or no answer at all — lands on the store, the last one by
-// a `probeMs` race. Where locks are absent or refuse, THIS context leads and `canSeeSiblings`
-// is false, so `hostHonesty()` can say that sibling tabs cannot be seen.
+// rejection, a synchronous throw — lands on the store. Where locks are absent or REFUSE, THIS
+// context leads and `canSeeSiblings` is false, so `hostHonesty()` can say that sibling tabs
+// cannot be seen.
+//
+// A MERE TIMEOUT NEVER LEADS (Gate-5 S9). A probe still unanswered at `probeMs` settles
+// `start()` so boot can go on, but as a FOLLOWER (`locks-pending`, siblings unknown): a manager
+// that is merely slow may be about to say the name is held, and leading on the clock would make
+// a second ticker over one file. The late answer is adopted when it comes — a grant leads under
+// locks, a null follows, a rejection leads with `locks-refused` (the MANAGER said no). Likewise
+// a parked promotion request the manager rejects asynchronously keeps this context a follower
+// and parks again after the bound; only a synchronous throw — a manager that worked a moment
+// ago and refuses now — takes the lead.
 //
 // The lock name is the caller's: `snug-scheduler:<file db uuid>`, so two files open in one
 // origin elect independently and a file swap means a new election (an election is one-shot:
@@ -25,8 +34,10 @@ export type LeaderReason =
   | 'locks'
   /** No lock manager at all (node, a very old browser): single context by definition. */
   | 'no-locks'
-  /** The manager rejected, threw, or never answered within the bound (opaque origin, `file://`). */
-  | 'locks-refused';
+  /** The manager rejected or threw (opaque origin, `file://`): this context leads, siblings unseen. */
+  | 'locks-refused'
+  /** The probe is still unanswered past its bound: NOT leading, siblings unknown (S9). */
+  | 'locks-pending';
 
 export interface LeaderState {
   /** This context runs the scheduler. */
@@ -44,7 +55,7 @@ export interface LeaderElectionOptions {
   name: string;
   /** The page's lock manager (`pageLocks()`); `undefined` means there is none. */
   locks?: LeaderLocks | undefined;
-  /** How long the probe may stay unanswered before this context leads anyway. */
+  /** How long the probe may stay unanswered before `start()` settles as a follower; also the retry pause for a rejected parked request. */
   probeMs?: number | undefined;
 }
 
@@ -79,6 +90,7 @@ const LEADER_NO_LOCKS: LeaderState = { leader: true, canSeeSiblings: false, reas
 const LEADER_REFUSED: LeaderState = { leader: true, canSeeSiblings: false, reason: 'locks-refused' };
 const LEADER_UNDER_LOCKS: LeaderState = { leader: true, canSeeSiblings: true, reason: 'locks' };
 const FOLLOWER: LeaderState = { leader: false, canSeeSiblings: true, reason: 'locks' };
+const UNANSWERED: LeaderState = { leader: false, canSeeSiblings: false, reason: 'locks-pending' };
 
 export function createLeaderElection(options: LeaderElectionOptions): LeaderElection {
   const { name, locks, probeMs = DEFAULT_PROBE_MS } = options;
@@ -94,6 +106,7 @@ export function createLeaderElection(options: LeaderElectionOptions): LeaderElec
   let started: Promise<void> | undefined;
   let settleStart: () => void = () => undefined;
   let probeTimer: ReturnType<typeof setTimeout> | undefined;
+  let retryTimer: ReturnType<typeof setTimeout> | undefined;
 
   const hold = (): Promise<void> =>
     new Promise<void>((release) => {
@@ -110,9 +123,14 @@ export function createLeaderElection(options: LeaderElectionOptions): LeaderElec
     probeTimer = undefined;
   };
 
-  /** Held elsewhere: park a blocking request behind the holder — the promotion when it closes. */
-  const follow = (manager: LeaderLocks): void => {
-    become(FOLLOWER);
+  const clearRetryTimer = (): void => {
+    if (retryTimer !== undefined) clearTimeout(retryTimer);
+    retryTimer = undefined;
+  };
+
+  /** Park a blocking request behind the holder — the promotion when it closes. */
+  const park = (manager: LeaderLocks): void => {
+    if (stopped) return;
     let queued: Promise<unknown>;
     try {
       queued = manager.request(name, (lock) => {
@@ -121,16 +139,28 @@ export function createLeaderElection(options: LeaderElectionOptions): LeaderElec
         return hold();
       });
     } catch {
+      // A manager that worked a moment ago and refuses now: the rule for refusal applies.
       become(LEADER_REFUSED);
       return;
     }
-    // A manager that worked a moment ago and refuses now: the rule for refusal applies.
     Promise.resolve(queued).catch(() => {
-      if (!state.get().leader) become(LEADER_REFUSED);
+      // Rejected asynchronously: still a follower (S9) — park again after the bound.
+      if (stopped || state.get().leader) return;
+      clearRetryTimer();
+      retryTimer = setTimeout(() => {
+        retryTimer = undefined;
+        park(manager);
+      }, probeMs);
     });
   };
 
-  /** `ifAvailable` under a `probeMs` race; an answer after the bound is still adopted. */
+  /** Held elsewhere: follow, and park the promotion request. */
+  const follow = (manager: LeaderLocks): void => {
+    become(FOLLOWER);
+    park(manager);
+  };
+
+  /** `ifAvailable` under a `probeMs` bound: unanswered at the bound → a follower for now; every answer is adopted when it comes. */
   const probe = (manager: LeaderLocks): void => {
     let answered = false;
     const answer = (next: LeaderState): void => {
@@ -139,7 +169,12 @@ export function createLeaderElection(options: LeaderElectionOptions): LeaderElec
       become(next);
       settleStart();
     };
-    probeTimer = setTimeout(() => answer(LEADER_REFUSED), probeMs);
+    probeTimer = setTimeout(() => {
+      probeTimer = undefined;
+      if (answered) return;
+      become(UNANSWERED);
+      settleStart();
+    }, probeMs);
     let request: Promise<unknown>;
     try {
       request = manager.request(name, { ifAvailable: true }, (lock) => {
@@ -186,6 +221,7 @@ export function createLeaderElection(options: LeaderElectionOptions): LeaderElec
       if (stopped) return;
       stopped = true;
       clearProbeTimer();
+      clearRetryTimer();
       for (const release of holds) release();
       holds.clear();
       settleStart();

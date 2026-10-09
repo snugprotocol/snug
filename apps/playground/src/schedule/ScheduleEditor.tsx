@@ -9,8 +9,9 @@
 // refusal comes back in words.
 //
 // THE DRAFT (`editorModel.ts`) is the whole state: one object, one `setDraft`, every control a
-// pure function of it. `now` is re-read whenever the draft changes, so the preview and the floor
-// refusal never drift from the clock the save will use.
+// pure function of it. THE CLOCK is the page's (`pageModel`): `useNow()` for what is shown —
+// the preview, the floor refusal, the consent bound — re-read once a minute like every row,
+// and `pageClock.now()` inside each act, so a test can hold one clock still for all of it.
 //
 // THE BRAIN ON THE COST LINE is the brain the app's question runs on NOW — the per-app pin over
 // the resolved default, keyless falling through to the demo brain — named as the brain chip
@@ -29,16 +30,14 @@ import { Button } from '../ui/Button.js';
 import { brainChipLabel } from '../views/BrainChip.js';
 import { EMPTY, alertLabel, alertSentence, imported, missedPolicyLabel, missedPolicySentence } from './copy.js';
 import { ACTIONS, SENTENCE, STEPS, TITLE } from './copy.editor.js';
-import { compileSpec, parseCron } from './cron.js';
+import { compileSpec, listWords, parseCron } from './cron.js';
 import {
   appBrainKind,
-  appIdsOf,
   approvedHostsByApp,
   costSteps,
   cronTextFor,
   defaultPolicyFor,
   defaultSpecFor,
-  listNames,
   prepareSteps,
   specFromCronText,
   titleFromSteps,
@@ -51,11 +50,13 @@ import {
 import { EnableConsent } from './EnableConsent.js';
 import { frequencyFloorRefusal } from './floors.js';
 import { hostHonesty } from './honesty.js';
-import { parseScheduleText, readSchedule } from './parseScheduleText.js';
+import { pageClock, useNow } from './pageModel.js';
+import { readSchedule } from './parseScheduleText.js';
 import { PreviewAndCost } from './PreviewAndCost.js';
 import { createTask, setTaskEnabled, updateTask, useScheduler, type TaskResult } from './scheduler.js';
 import { SpecControls } from './SpecControls.js';
 import { StepsEditor } from './StepsEditor.js';
+import { appIdsOf } from './taskShape.js';
 
 const MISSED_POLICIES: readonly MissedPolicy[] = ['ask', 'run-once', 'skip'];
 const ALERT_KINDS: readonly AlertKind[] = ['inbox', 'notification'];
@@ -88,8 +89,8 @@ export function ScheduleEditor({ initial, parseFailed: initialParseFailed, apps,
 
   const appNames = useMemo(() => new Map(apps.map((app) => [app.appId, app.displayName] as const)), [apps]);
   const appNameRecord = useMemo(() => Object.fromEntries(appNames), [appNames]);
-  // The clock the preview, the floor and the save read — re-read with every change of the draft.
-  const now = useMemo(() => new Date(), [draft]);
+  // The page's clock, for what is shown: the preview, the floor refusal, the consent bound.
+  const now = useNow();
   const provenance = task?.provenance ?? 'user';
   const importedDisabled = task !== undefined && task.provenance === 'imported' && !task.enabled;
 
@@ -102,7 +103,7 @@ export function ScheduleEditor({ initial, parseFailed: initialParseFailed, apps,
   const keys = useByokKeyPresence();
   const pinned = useAppProvider(firstThink?.appId ?? '');
   const brainLabel = brainChipLabel(appBrainKind({ brain, mode, provider, pinned, keys }));
-  const thinkAppNames = listNames(
+  const thinkAppNames = listWords(
     [...new Set(draft.steps.flatMap((step) => (step.kind === 'app-think' && step.missingApp === undefined && step.appId !== '' ? [step.appId] : [])))].map(
       (appId) => appNames.get(appId) ?? appId,
     ),
@@ -125,12 +126,13 @@ export function ScheduleEditor({ initial, parseFailed: initialParseFailed, apps,
   const update = (patch: Partial<EditorDraft>): void => setDraft((current) => ({ ...current, ...patch }));
 
   const onText = (text: string): void => {
-    const read = text.trim() === '' ? undefined : readSchedule(text, new Date(), draft.spec.tz);
+    const at = pageClock.now();
+    const read = text.trim() === '' ? undefined : readSchedule(text, at, draft.spec.tz);
     const spec = read?.spec;
     setParseFailed(text.trim() !== '' && spec === undefined);
     update({
       text,
-      ...(spec !== undefined ? { spec, mode: spec.kind, cron: cronTextFor(spec, new Date()) } : {}),
+      ...(spec !== undefined ? { spec, mode: spec.kind, cron: cronTextFor(spec, at) } : {}),
       // The title is the sentence MINUS the schedule phrase ("remind me to call mom at 5" →
       // "call mom"), the same rule the create bar's prefill uses — the whole sentence only when
       // nothing is left after the phrase.
@@ -139,9 +141,10 @@ export function ScheduleEditor({ initial, parseFailed: initialParseFailed, apps,
   };
 
   const onMode = (kind: SpecKind): void => {
-    if (kind === 'custom') update({ mode: 'custom', cron: cronTextFor(draft.spec, now) });
+    const at = pageClock.now();
+    if (kind === 'custom') update({ mode: 'custom', cron: cronTextFor(draft.spec, at) });
     else if (draft.spec.kind === kind) update({ mode: kind });
-    else update({ mode: kind, spec: defaultSpecFor(kind, draft.spec, now) });
+    else update({ mode: kind, spec: defaultSpecFor(kind, draft.spec, at) });
   };
 
   const onCron = (text: string): void => {
@@ -168,7 +171,9 @@ export function ScheduleEditor({ initial, parseFailed: initialParseFailed, apps,
         task === undefined
           ? await createTask({ title: save.title, steps: save.steps, spec: save.spec, missedPolicy: draft.missedPolicy, alert: draft.alert, provenance: 'user' })
           : await updateTask(task.id, { title: save.title, steps: save.steps, spec: save.spec, missedPolicy: draft.missedPolicy, alert: draft.alert });
-      if (result.ok && importedDisabled) result = await setTaskEnabled(task.id, true);
+      // The consent panel IS the review (Gate 5 S2): the engine refuses an imported schedule
+      // on every other path, so this call says so.
+      if (result.ok && importedDisabled) result = await setTaskEnabled(task.id, true, { reviewed: true });
     } catch (err) {
       result = { ok: false, reason: err instanceof Error ? err.message : String(err) };
     }

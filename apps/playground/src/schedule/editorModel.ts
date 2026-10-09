@@ -31,23 +31,23 @@ import {
   SCHEDULE_NOTIFY_BODY_MAX_CHARS,
   SCHEDULE_PROMPT_MAX_CHARS,
   SCHEDULE_TITLE_MAX_CHARS,
-  WEEKDAYS,
   isReadOnlySelect,
   type AlertKind,
   type MissedPolicy,
   type ScheduleSpec,
   type ScheduleStep,
-  type Weekday,
 } from '@snugprotocol/protocol';
 
 import { adapterKindFor } from '../agent/adapter.js';
+import { starterLook } from '../starter/starterLooks.js';
 import type { ActiveBrainKind } from '../state/activeBrain.js';
 import type { ByokProvider, KeyedProvider, PlaygroundMode } from '../state/mode.js';
 import type { Brain } from '../state/webllm.js';
 import { STEPS, TEMPLATE_TITLES } from './copy.editor.js';
-import { compileSpec, instantInZone, occurrencesBetween, parseCron, resolveZone, specFromCron, wallClockIn } from './cron.js';
+import { WEEKDAY_KEYS, compileSpec, instantInZone, occurrencesBetween, pad2, parseCron, resolveZone, specFromCron, wallClockIn } from './cron.js';
 import { defaultMissedPolicy } from './floors.js';
 import { readSchedule } from './parseScheduleText.js';
+import { appIdsOf } from './taskShape.js';
 
 const DAY_MS = 86_400_000;
 const WEEK_MS = 7 * DAY_MS;
@@ -56,9 +56,6 @@ const WEEK_OCCURRENCE_LIMIT = 7 * 24 * 60 + 1;
 
 export type SpecKind = ScheduleSpec['kind'];
 export const SPEC_KINDS: readonly SpecKind[] = ['once', 'every', 'daily', 'weekly', 'monthly', 'custom'];
-
-export const WEEKDAY_KEYS: readonly Weekday[] = ['mon', 'tue', 'wed', 'thu', 'fri'];
-export const WEEKEND_KEYS: readonly Weekday[] = ['sat', 'sun'];
 
 // ------------------------------------------------------------------------- drafts
 
@@ -95,8 +92,6 @@ export interface EditorDraft {
   missedTouched: boolean;
   alert: AlertKind;
 }
-
-export const pad2 = (n: number): string => String(n).padStart(2, '0');
 
 /** The next full hour after `now`, as an instant — the `once` default. */
 export function nextHour(now: Date): Date {
@@ -274,7 +269,13 @@ export function defaultPolicyFor(drafts: readonly StepDraft[]): MissedPolicy {
   return defaultMissedPolicy(costSteps(drafts));
 }
 
-// ---------------------------------------------------------------------- templates
+// ------------------------------------------------------------ templates: the ONE registry
+//
+// The four templates live HERE and nowhere else: `templateFill` is what the editor opens with
+// (`initialDraft`), and the cards on the page and in the hub section (`Templates.tsx`) are
+// rendered FROM the same fill — the title, `describeSpec(fill.spec)` as the when, the
+// starters the steps name, and which of them are missing — so a card can never promise a
+// when or a step the editor then opens without.
 
 export type TemplateName = keyof typeof TEMPLATE_TITLES;
 export const TEMPLATE_NAMES: readonly TemplateName[] = ['nudge', 'spend-review', 'friday-review', 'morning-weather'];
@@ -282,19 +283,29 @@ export const TEMPLATE_NAMES: readonly TemplateName[] = ['nudge', 'spend-review',
 export const isTemplateName = (value: string | null | undefined): value is TemplateName =>
   value !== null && value !== undefined && (TEMPLATE_NAMES as readonly string[]).includes(value);
 
-/** A starter an app template names: its folder (the `starter:<folder>` install identity) and the names it goes by. */
-interface TemplateApp {
+/** A starter an app template names: its folder (the `starter:<folder>` install identity), the name the shelf shows for it, and the names it goes by. */
+export interface TemplateApp {
   folder: string;
   name: string;
   aliases: readonly string[];
 }
 
-const LEDGER: TemplateApp = { folder: 'ledger', name: 'Ledger', aliases: ['ledger'] };
-const STANDUP: TemplateApp = { folder: 'github', name: 'Standup', aliases: ['standup', 'github'] };
-const WEATHER: TemplateApp = { folder: 'weather', name: 'Weather', aliases: ['weather', 'should i?'] };
+/** What the shelf calls a starter folder ("Ledger", "Should I?") — the one name a card, a step note and a hub row use. */
+export function templateAppName(folder: string): string {
+  return starterLook(folder).name ?? folder.replace(/-/g, ' ');
+}
+
+const starterApp = (folder: string, aliases: readonly string[]): TemplateApp => ({ folder, name: templateAppName(folder), aliases });
+
+const LEDGER = starterApp('ledger', ['ledger']);
+const STANDUP = starterApp('github', ['standup', 'github']);
+const WEATHER = starterApp('weather', ['weather', 'should i?']);
+
+/** The slice of an app record a template reads to find its starter: the install identity and the display name. */
+export type TemplateAppCandidate = Pick<AppRecord, 'appId' | 'displayName' | 'installSource'>;
 
 /** The installed app a template names: by install identity first, then by name. */
-export function findTemplateApp(apps: readonly AppRecord[], app: TemplateApp): AppRecord | undefined {
+export function findTemplateApp<T extends TemplateAppCandidate>(apps: readonly T[], app: TemplateApp): T | undefined {
   const source = `starter:${app.folder}`;
   const bySource = apps.find((candidate) => candidate.installSource === source);
   if (bySource !== undefined) return bySource;
@@ -319,7 +330,7 @@ export const TEMPLATE_PROMPTS = {
   standup: 'From the watchlist and the recent briefings, what carried over this week and what should I close out before Monday?',
 } as const;
 
-const thinkStep = (apps: readonly AppRecord[], app: TemplateApp, prompt: string, sql: readonly string[]): StepDraft => {
+const thinkStep = (apps: readonly TemplateAppCandidate[], app: TemplateApp, prompt: string, sql: readonly string[]): StepDraft => {
   const installed = findTemplateApp(apps, app);
   return {
     kind: 'app-think',
@@ -332,15 +343,32 @@ const thinkStep = (apps: readonly AppRecord[], app: TemplateApp, prompt: string,
   };
 };
 
+const runStep = (apps: readonly TemplateAppCandidate[], app: TemplateApp): StepDraft => {
+  const installed = findTemplateApp(apps, app);
+  return { kind: 'app-run', appId: installed?.appId ?? '', ...(installed === undefined ? { missingApp: app.name } : {}) };
+};
+
 export interface TemplateFill {
   title: string;
   steps: StepDraft[];
   spec: ScheduleSpec;
   alert: AlertKind;
+  /** The starters the steps name, in step order — a card's apps; empty for a reminder-only template. */
+  apps: readonly TemplateApp[];
+  /** Those of them NOT installed, in step order — a card's "add <App>, then schedule it"; the matching steps carry `missingApp`. */
+  missing: readonly TemplateApp[];
+  /** The glyph for a template with no app. */
+  glyph?: string;
 }
 
+/** The starters a template names, split by whether the file holds them — one lookup rule (`findTemplateApp`) for the steps and the card. */
+const namedApps = (installed: readonly TemplateAppCandidate[], apps: readonly TemplateApp[]): Pick<TemplateFill, 'apps' | 'missing'> => ({
+  apps,
+  missing: apps.filter((app) => findTemplateApp(installed, app) === undefined),
+});
+
 /** The four templates (spec S2), filled against the installed apps. */
-export function templateFill(name: TemplateName, apps: readonly AppRecord[], tz: ScheduleSpec['tz'] = 'device'): TemplateFill {
+export function templateFill(name: TemplateName, apps: readonly TemplateAppCandidate[], tz: ScheduleSpec['tz'] = 'device'): TemplateFill {
   switch (name) {
     case 'nudge':
       return {
@@ -348,6 +376,8 @@ export function templateFill(name: TemplateName, apps: readonly AppRecord[], tz:
         steps: [{ kind: 'notify', title: 'nudge', body: 'time to check in' }],
         spec: { kind: 'daily', time: '20:00', tz },
         alert: 'notification',
+        glyph: '🔔',
+        ...namedApps(apps, []),
       };
     case 'spend-review':
       return {
@@ -355,6 +385,7 @@ export function templateFill(name: TemplateName, apps: readonly AppRecord[], tz:
         steps: [thinkStep(apps, LEDGER, TEMPLATE_PROMPTS.spend, LEDGER_QUERIES)],
         spec: { kind: 'weekly', days: ['fri'], time: '17:00', tz },
         alert: 'inbox',
+        ...namedApps(apps, [LEDGER]),
       };
     case 'friday-review':
       return {
@@ -362,19 +393,16 @@ export function templateFill(name: TemplateName, apps: readonly AppRecord[], tz:
         steps: [thinkStep(apps, LEDGER, TEMPLATE_PROMPTS.money, LEDGER_QUERIES), thinkStep(apps, STANDUP, TEMPLATE_PROMPTS.standup, STANDUP_QUERIES)],
         spec: { kind: 'weekly', days: ['fri'], time: '17:00', tz },
         alert: 'inbox',
+        ...namedApps(apps, [LEDGER, STANDUP]),
       };
-    case 'morning-weather': {
-      const weather = findTemplateApp(apps, WEATHER);
+    case 'morning-weather':
       return {
         title: TEMPLATE_TITLES['morning-weather'],
-        steps: [
-          { kind: 'app-run', appId: weather?.appId ?? '', ...(weather === undefined ? { missingApp: WEATHER.name } : {}) },
-          { kind: 'notify', title: 'morning weather', body: 'your morning weather is ready' },
-        ],
+        steps: [runStep(apps, WEATHER), { kind: 'notify', title: 'morning weather', body: 'your morning weather is ready' }],
         spec: { kind: 'daily', time: '07:00', tz },
         alert: 'notification',
+        ...namedApps(apps, [WEATHER]),
       };
-    }
     default: {
       const never: never = name;
       return never;
@@ -475,7 +503,7 @@ export interface InitialDraftInput {
   text?: string | null;
   template?: string | null;
   app?: string | null;
-  apps: readonly AppRecord[];
+  apps: readonly TemplateAppCandidate[];
   now: Date;
 }
 
@@ -562,9 +590,6 @@ export function approvedHostsByApp(db: UserDb, appIds: readonly string[]): Recor
   return out;
 }
 
-/** The app ids a step list names, each once, in order. */
-export const appIdsOf = (steps: readonly ScheduleStep[]): string[] => [...new Set(steps.flatMap((step) => (step.kind === 'notify' ? [] : [step.appId])))];
-
 /**
  * The most AI calls one day of the next seven can spend: the busiest day's occurrences in the
  * zone × the *ask the AI* steps, never above the global ceiling the engine enforces (E7).
@@ -582,17 +607,6 @@ export function dailyAiBound(spec: ScheduleSpec, steps: readonly ScheduleStep[],
   let busiest = 0;
   for (const count of perDay.values()) busiest = Math.max(busiest, count);
   return Math.min(SCHEDULE_DAILY_CEILINGS.ai, busiest * ai);
-}
-
-/** "Ledger", "Ledger and Standup", "Ledger, Standup and Weather" — the cost line's app half. */
-export function listNames(names: readonly string[]): string {
-  if (names.length <= 1) return names[0] ?? '';
-  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1] as string}`;
-}
-
-/** Monday-first order, deduplicated — what the weekly panel stores. */
-export function sortDays(days: readonly Weekday[]): Weekday[] {
-  return [...new Set(days)].sort((a, b) => WEEKDAYS.indexOf(a) - WEEKDAYS.indexOf(b));
 }
 
 /** The IANA zones this runtime can name, for the pin select; empty where `Intl` cannot list them. */

@@ -31,7 +31,18 @@
 // longer than that is truncated, a spec that never matches answers `undefined`. `until.date`
 // means occurrences on or before the END of that day in the zone; `until.count` means the
 // N-th occurrence counted from `opts.anchor` is the last — the caller passes the task's
-// createdAt; without an anchor the window's own first N are the N.
+// createdAt; without an anchor the window's own first N are the N. With `opts.spent` the
+// caller's own record of how many have fired replaces that calendar count (Gate-5 M9: the
+// planner counts RECORDED runs, so a schedule paused through its occurrences still gets its
+// remaining fires).
+//
+// THE FLOOR'S QUESTION (Gate-5 S6). `minCronGapMs` answers the smallest gap a cron can fire at
+// from its FIELDS — adjacent minutes within an hour, the wrap to the next listed hour, the wrap
+// to the next matching calendar day — rather than from a handful of sampled occurrences, which a
+// minute list dense only at the hour's end could slip past.
+//
+// SHARED WITH THE EDITOR (Gate-5 M14): `WEEKDAY_KEYS`, `WEEKEND_KEYS`, `sortDays`, `pad2` and
+// `listWords` are exported from here so `editorModel.ts` and `describeSpec` spell them once.
 
 import { WEEKDAYS, type ScheduleSpec, type Weekday } from './types.js';
 
@@ -137,7 +148,8 @@ export const parseCron = (expr: string): CronFields | undefined => {
 // ---------------------------------------------------------------------------------------------
 // Small shared helpers
 
-const pad2 = (n: number): string => String(n).padStart(2, '0');
+/** Two digits, zero-padded — `7` → `07`. */
+export const pad2 = (n: number): string => String(n).padStart(2, '0');
 const sorted = (set: ReadonlySet<number>): number[] => [...set].sort((a, b) => a - b);
 const isInt = (n: number, lo: number, hi: number): boolean => Number.isInteger(n) && n >= lo && n <= hi;
 
@@ -153,7 +165,8 @@ const parseTime = (time: string): { hour: number; minute: number } | undefined =
 /** Monday-first key → cron number (mon=1 … sat=6, sun=0). */
 export const cronDayOf = (day: Weekday): number => (WEEKDAYS.indexOf(day) + 1) % 7;
 const weekdayOfCron = (n: number): Weekday => WEEKDAYS[(n + 6) % 7] as Weekday;
-const sortDays = (days: readonly Weekday[]): Weekday[] =>
+/** The distinct days in cron order from Monday. */
+export const sortDays = (days: readonly Weekday[]): Weekday[] =>
   [...new Set(days)].sort((a, b) => WEEKDAYS.indexOf(a) - WEEKDAYS.indexOf(b));
 
 const daysInMonth = (year: number, month: number): number => new Date(Date.UTC(year, month, 0)).getUTCDate();
@@ -391,8 +404,10 @@ const DAY_NAMES: Record<Weekday, string> = {
   sun: 'Sunday',
 };
 const NTH_WORDS = ['first', 'second', 'third', 'fourth'] as const;
-const WEEKDAY_KEYS: readonly Weekday[] = ['mon', 'tue', 'wed', 'thu', 'fri'];
-const WEEKEND_KEYS: readonly Weekday[] = ['sat', 'sun'];
+/** The editor's *weekdays* preset — a day SET, in cron order. */
+export const WEEKDAY_KEYS: readonly Weekday[] = ['mon', 'tue', 'wed', 'thu', 'fri'];
+/** The editor's *weekends* preset. */
+export const WEEKEND_KEYS: readonly Weekday[] = ['sat', 'sun'];
 
 const partFormatters = new Map<string, Intl.DateTimeFormat>();
 const cachedFormatter = (key: string, make: () => Intl.DateTimeFormat): Intl.DateTimeFormat => {
@@ -433,7 +448,8 @@ const ordinal = (n: number): string => {
   return `${n}${suffix}`;
 };
 
-const listWords = (words: readonly string[]): string =>
+/** "a", "a and b", "a, b and c" — the English list the descriptions and the editor both use. */
+export const listWords = (words: readonly string[]): string =>
   words.length <= 1 ? (words[0] ?? '') : `${words.slice(0, -1).join(', ')} and ${words[words.length - 1] as string}`;
 
 const sameDays = (a: readonly Weekday[], b: readonly Weekday[]): boolean => a.length === b.length && a.every((d, i) => d === b[i]);
@@ -623,6 +639,8 @@ export type OccurrenceOptions = {
   limit?: number;
   /** The task's createdAt/startsAt: the origin of an `every N days` stride and of `until.count`. */
   anchor?: Date;
+  /** How many of `until.count` have already fired, by the caller's own record — replaces the calendar count from the anchor (M9). */
+  spent?: number;
 };
 
 /**
@@ -656,9 +674,15 @@ export const occurrencesBetween = (spec: ScheduleSpec, from: Date, to: Date, opt
   if (spec.until?.kind === 'count') {
     const count = spec.until.count;
     if (!Number.isInteger(count) || count < 1) return [];
-    // Occurrences already spent in (anchor, from] — an open-ended pass that stops at `count`
-    // hits or after 400 empty days, so an old anchor is not cut off by the window bound.
-    const spent = anchorMs < fromMs ? enumerate(plan, zone, anchorMs, fromMs, dayUtcOf(zone, fromMs), count, SEARCH_BOUND_DAYS).length : 0;
+    // Occurrences already spent: the caller's record when it has one (M9); else the calendar's
+    // occurrences in (anchor, from] — an open-ended pass that stops at `count` hits or after
+    // 400 empty days, so an old anchor is not cut off by the window bound.
+    const spent =
+      opts.spent !== undefined && Number.isFinite(opts.spent)
+        ? Math.max(0, Math.floor(opts.spent))
+        : anchorMs < fromMs
+          ? enumerate(plan, zone, anchorMs, fromMs, dayUtcOf(zone, fromMs), count, SEARCH_BOUND_DAYS).length
+          : 0;
     remaining = Math.min(limit, count - spent);
     if (remaining < 1) return [];
   }
@@ -669,8 +693,50 @@ export const occurrencesBetween = (spec: ScheduleSpec, from: Date, to: Date, opt
 };
 
 /** The first instant strictly after `after`, within 400 days; undefined when there is none. */
-export const nextOccurrence = (spec: ScheduleSpec, after: Date, opts: { anchor?: Date } = {}): Date | undefined => {
+export const nextOccurrence = (spec: ScheduleSpec, after: Date, opts: { anchor?: Date; spent?: number } = {}): Date | undefined => {
   if (Number.isNaN(after.getTime())) return undefined;
   const to = new Date(after.getTime() + SEARCH_BOUND_DAYS * DAY_MS);
-  return occurrencesBetween(spec, after, to, { limit: 1, anchor: opts.anchor })[0];
+  return occurrencesBetween(spec, after, to, { limit: 1, anchor: opts.anchor, spent: opts.spent })[0];
+};
+
+// ---------------------------------------------------------------------------------------------
+// minCronGapMs (S6)
+
+/**
+ * The smallest gap, in ms, between two firings of a cron, read from its FIELDS: the closest
+ * two listed minutes within an hour, the wrap from the last minute of one listed hour to the
+ * first of the next, and the wrap from the last time of one matching day to the first time of
+ * the next matching day — the day gap found by stepping the calendar 400 days from `from`
+ * (cheap: no instant is converted). Measured on the wall clock, so a DST shift is ignored,
+ * like the nominal interval of `every N`: the floor measures intent and rate. `undefined` when
+ * the cron cannot fire twice (one time a day on a day that never comes within the bound).
+ */
+export const minCronGapMs = (fields: CronFields, from: Date): number | undefined => {
+  const minutes = sorted(fields.minutes);
+  const hours = sorted(fields.hours);
+  if (minutes.length === 0 || hours.length === 0 || Number.isNaN(from.getTime())) return undefined;
+  const first = minutes[0] as number;
+  const last = minutes[minutes.length - 1] as number;
+  let min = Number.POSITIVE_INFINITY;
+  for (let i = 1; i < minutes.length; i += 1) min = Math.min(min, (minutes[i] as number) - (minutes[i - 1] as number));
+  for (let i = 1; i < hours.length; i += 1) min = Math.min(min, ((hours[i] as number) - (hours[i - 1] as number)) * 60 - last + first);
+
+  // The smallest gap in days between two matching calendar days within the search bound.
+  const { dayOk } = planFromCron(fields);
+  const startDayUtc = Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), from.getUTCDate());
+  let previousDayUtc: number | undefined;
+  let minDays = Number.POSITIVE_INFINITY;
+  for (let dayUtc = startDayUtc, step = 0; step <= SEARCH_BOUND_DAYS; dayUtc += DAY_MS, step += 1) {
+    const d = new Date(dayUtc);
+    if (!dayOk(d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate(), d.getUTCDay(), dayUtc)) continue;
+    if (previousDayUtc !== undefined) minDays = Math.min(minDays, Math.round((dayUtc - previousDayUtc) / DAY_MS));
+    previousDayUtc = dayUtc;
+    if (minDays === 1) break;
+  }
+  if (Number.isFinite(minDays)) {
+    const firstHour = hours[0] as number;
+    const lastHour = hours[hours.length - 1] as number;
+    min = Math.min(min, (minDays - 1) * 1440 + (24 - lastHour) * 60 - last + firstHour * 60 + first);
+  }
+  return Number.isFinite(min) ? min * MINUTE_MS : undefined;
 };

@@ -50,6 +50,18 @@ describe('minIntervalMs — the smallest gap between consecutive occurrences', (
     expect(minIntervalMs(spec, ANCHOR)).toBe(expected);
   });
 
+  it('a custom cron is measured from its fields, not nine samples (S6): a minute list dense at the hour’s end, and a wrap across midnight', () => {
+    const dodge = custom('0,5,10,15,20,25,30,35,40,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59 * * * *'); // 24 an hour, 1-minute gaps at the end
+    expect(minIntervalMs(dodge, ANCHOR)).toBe(MINUTE);
+    expect(frequencyFloorRefusal(dodge, 'user', ANCHOR)).toContain('every 1 minute');
+    expect(minIntervalMs(custom('0,59 0,23 * * *'), ANCHOR)).toBe(MINUTE); // 23:59 → 00:00 the next day
+    expect(minIntervalMs(custom('30 9 * * 1'), ANCHOR)).toBe(7 * DAY);
+    expect(minIntervalMs(custom('0 9 1,2 * *'), ANCHOR)).toBe(DAY);
+    expect(minIntervalMs(custom('45 8 * * *'), ANCHOR)).toBe(DAY);
+    expect(minIntervalMs(custom('0 8,20 * * *'), ANCHOR)).toBe(12 * HOUR);
+    expect(minIntervalMs(custom('0 9 1 1,12 *'), ANCHOR)).toBe(31 * DAY); // Dec 1 → Jan 1
+  });
+
   it('samples without the until — a schedule limited to one run still has its period', () => {
     expect(minIntervalMs(daily('08:00', { kind: 'count', count: 1 }), ANCHOR)).toBe(DAY);
     expect(minIntervalMs(daily('08:00', { kind: 'date', date: '2026-10-09' }), ANCHOR)).toBe(DAY);

@@ -190,13 +190,31 @@ export function isReadOnlySelect(sql: string): boolean {
   return true;
 }
 
+/** String literals and quoted identifiers, so a keyword INSIDE one (`'select from the menu'`, a column named `"from"`) is data, not a read. */
+const QUOTED_RULE = /'(?:[^']|'')*'|"(?:[^"]|"")*"|`(?:[^`]|``)*`|\[[^\]]*\]/g;
+const DELETE_FROM_HEAD_RULE = /^\s*DELETE\s+FROM\b/i;
+const NESTED_READ_RULE = /\b(?:SELECT|FROM)\b/i;
+
 /**
- * A pending data change the AI proposed: ONE `INSERT`/`UPDATE`/`DELETE` statement, no
- * second statement, no ATTACH/DETACH/PRAGMA. DDL never rides a proposal — the engine
- * dry-runs these on the scratch copy and the user approves them one card at a time.
+ * A nested read anywhere in a DML statement — `INSERT … SELECT`, a `(SELECT …)` subquery,
+ * `UPDATE … FROM`, `WHERE id IN (SELECT …)` — reaches every table the app holds, so a
+ * scheduled proposal may carry only LITERAL values (S8). Quoted text is blanked first; the
+ * `DELETE FROM` head is the statement's own and not a read.
+ */
+function hasNestedRead(sql: string): boolean {
+  const bare = sql.replace(QUOTED_RULE, "''");
+  const body = DELETE_FROM_HEAD_RULE.test(bare) ? bare.replace(DELETE_FROM_HEAD_RULE, '') : bare;
+  return NESTED_READ_RULE.test(body);
+}
+
+/**
+ * A pending data change the AI proposed: ONE `INSERT`/`UPDATE`/`DELETE` statement over
+ * literal values — no second statement, no ATTACH/DETACH/PRAGMA, and no nested `SELECT`
+ * or `FROM` (`hasNestedRead`). DDL never rides a proposal — the engine dry-runs these on
+ * the scratch copy and the user approves them one card at a time.
  */
 export function isSingleDmlStatement(sql: string): boolean {
-  return DML_PREFIX_RULE.test(sql) && SINGLE_STATEMENT_RULE.test(sql) && !FORBIDDEN_TOKEN_RULE.test(sql);
+  return DML_PREFIX_RULE.test(sql) && SINGLE_STATEMENT_RULE.test(sql) && !FORBIDDEN_TOKEN_RULE.test(sql) && !hasNestedRead(sql);
 }
 
 // ------------------------------------------------------- credential refusal
@@ -453,9 +471,15 @@ export type ScheduledTask = z.infer<typeof scheduledTaskSchema>;
 
 // ----------------------------------------------------------------- the run
 
-/** One pending data change: the statement, the AI's one-line reason, the dry-run count. */
+/**
+ * One pending data change: the app it is FOR, the statement, the AI's one-line reason, the
+ * dry-run count. A run pools the items of every *Ask the AI* step it ran, and a task may ask
+ * several apps, so each item names its own app (S4) — the approval card dry-runs and applies
+ * it against THAT app's data, never the first step's.
+ */
 export const scheduleProposalItemSchema = z.strictObject({
-  sql: z.string().min(1).max(SCHEDULE_PROPOSAL_SQL_MAX_CHARS).refine(isSingleDmlStatement, 'a proposal is one INSERT, UPDATE or DELETE statement'),
+  appId,
+  sql: z.string().min(1).max(SCHEDULE_PROPOSAL_SQL_MAX_CHARS).refine(isSingleDmlStatement, 'a proposal is one INSERT, UPDATE or DELETE statement over literal values'),
   summary: z.string().max(SCHEDULE_PROPOSAL_SUMMARY_MAX_CHARS).optional(),
   counts: z.strictObject({ changes: z.int().min(0) }).optional(),
 });
@@ -582,6 +606,20 @@ export function proposalHash(proposal: ScheduleProposal): string {
  */
 export function canonicalScheduledTask(task: ScheduledTask): string {
   return JSON.stringify(sortKeysDeep(task));
+}
+
+/**
+ * Canonical bytes of a task's INTENT — what will run, when, how it is caught up and
+ * announced, and who asked for it — and nothing the engine writes on its own. The import
+ * guard compares THESE (M4): `ranThrough`, `updatedAt`, the counters, the pause, `enabledAt`,
+ * `appVersions` and `staleAfterMs` all move with ordinary use, so comparing the whole row
+ * would demote every task of a backup taken before its next run. `enabled` is deliberately
+ * out too: a backup restored over a task the user paused meanwhile restores the backup's
+ * state, which is the same intent they consented to.
+ */
+export function canonicalScheduleIntent(task: ScheduledTask): string {
+  const { steps, spec, cron, startsAt, endsAt, missedPolicy, alert, ownerAppId, provenance, title } = task;
+  return JSON.stringify(sortKeysDeep({ steps, spec, cron, startsAt, endsAt, missedPolicy, alert, ownerAppId, provenance, title }));
 }
 
 // ---------------------------------------------------------------- read path

@@ -76,6 +76,22 @@ export function relativeTime(target: Date, now: Date, locale = 'en-US'): string 
   return rtf.format(Math.round(days / 365), 'year');
 }
 
+/**
+ * The absolute form beside `relativeTime` — one `Intl` rendering for every surface that names an
+ * instant in full ("Oct 9, 2026, 7:00 AM"); the result detail pairs it with the relative one.
+ */
+export function absoluteTime(target: Date, locale = 'en-US', zone?: string): string {
+  const parts = new Intl.DateTimeFormat(locale, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    ...(zone !== undefined ? { timeZone: zone } : {}),
+  }).formatToParts(target);
+  return parts.map((part) => part.value).join('').replace(/\u202f/g, ' ');
+}
+
 // ------------------------------------------------------------------------ the steps
 
 export const appIdsOf = (steps: readonly ScheduleStep[]): string[] => [...new Set(steps.flatMap((step) => (step.kind === 'notify' ? [] : [step.appId])))];
@@ -129,13 +145,17 @@ export interface PendingRow {
   item: ScheduledTask;
 }
 
-/** The persisted catch-up candidates (`pending` rows), oldest due first — what the missed card lists. */
+/**
+ * The persisted catch-up candidates (`pending` rows) of ENABLED schedules, oldest due first —
+ * what the missed card lists. A schedule that is off (the user's switch, an engine pause, an
+ * untrusted import) is never offered to run from here (Gate-5 S1).
+ */
 export function pendingRows(tasks: readonly ScheduledTask[], runsByTask: Record<string, ScheduleRun[]>): PendingRow[] {
   const byId = new Map(tasks.map((item) => [item.id, item] as const));
   const rows: PendingRow[] = [];
   for (const [taskId, runs] of Object.entries(runsByTask)) {
     const item = byId.get(taskId);
-    if (item === undefined) continue;
+    if (item === undefined || !item.enabled) continue;
     for (const run of runs) if (run.status === 'pending') rows.push({ run, item });
   }
   return rows.sort((a, b) => Date.parse(a.run.dueAt) - Date.parse(b.run.dueAt));

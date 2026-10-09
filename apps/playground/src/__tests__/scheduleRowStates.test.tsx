@@ -13,10 +13,12 @@ import type { ConnectionRequirement, ScheduleStep } from '@snugprotocol/protocol
 
 import { HOST_OFFERS, type AppNeed } from '../platform/availability.js';
 import { appMissing, blockedHere, imported, paused } from '../schedule/copy.js';
+import { RELOAD } from '../schedule/copy.page.js';
 import {
   AppMissingNote,
   BlockedStepNote,
   PausedRow,
+  ReloadNote,
   ResultStatus,
   StatusDot,
   StepStatus,
@@ -196,6 +198,21 @@ describe('the tiny components', () => {
     for (const dot of dots) expect(dot.querySelector('.schedule-status-dot')?.getAttribute('aria-hidden')).toBe('true');
     expect(dots[0]?.className).toContain('is-ok');
     expect(dots[1]?.className).toContain('is-warn');
+  });
+
+  it('ReloadNote (S3): one line, one act — the sentence from copy.page, and the act reloads', () => {
+    const reload = vi.fn();
+    const el = render(<ReloadNote reload={reload} />);
+    const note = el.querySelector('[data-testid="schedule-reload"]');
+    expect(note?.className).toContain('connection-note');
+    expect(note?.getAttribute('role')).toBe('status');
+    expect(note?.textContent).toContain(RELOAD.note);
+    expect(RELOAD.note).toBe('another tab was running your schedules — reload to continue here');
+    const button = el.querySelector<HTMLButtonElement>('[data-testid="schedule-reload-act"]');
+    expect(button?.textContent).toBe(RELOAD.act);
+    expect(RELOAD.act).toBe('reload');
+    act(() => button?.click());
+    expect(reload).toHaveBeenCalledTimes(1);
   });
 
   it('Switch is a role=switch named by its label, flipping aria-checked through onChange', () => {

@@ -1,5 +1,8 @@
-// schedule/copy.ts — every user-facing sentence of the scheduling feature, in ONE module
-// (TASK-20261009-scheduling-framework C8; ADR-0074 §5, §6; Q8 / design F13, F14).
+// schedule/copy.ts — the scheduling feature's shared VOCABULARY and the sentences every
+// surface repeats, in ONE module (TASK-20261009-scheduling-framework C8; ADR-0074 §5, §6;
+// Q8 / design F13, F14). The other copy modules each name one surface and compose from here:
+// `copy.page.ts` (the page, the hub section, the Settings card, the chat offer),
+// `copy.editor.ts` (the editor, the sheet, the consent panel), `copy.result.ts` (one result).
 //
 // Pure strings and small pure functions, no React, no store: each arm is pinned
 // byte-for-byte in `scheduleCopy.test.ts`, and the same file's vocabulary scan refuses an
@@ -13,10 +16,19 @@
 // else — "run Ledger", "run now", "runs while this tab is open" — never the noun for an
 // execution. "routine" and "automation" read as someone else's product and are not used.
 //
+// THE UNIONS ARE THE PROTOCOL'S. The policies, the alert kinds, the pause reasons, the step
+// kinds and the host kinds are imported (types only) from `@snugprotocol/protocol`, and the
+// pause thresholds from `protection.ts` — nothing here restates a set the engine owns, so a
+// new arm there is a type error here, not a sentence that silently never shows.
+//
 // THE VOICE. Lowercase-leading labels like the rest of the playground, plain words, no
 // exclamation marks, the typographic apostrophe of the other copy modules. Every state has
 // ONE action (F14), and the honesty line is written where the user decides (F6): the editor,
 // the empty page, the consent surface — not only Settings.
+
+import type { AlertKind, MissedPolicy, PausedReason, RunStatus, ScheduleHostKind, ScheduleStep, StepResultStatus } from '@snugprotocol/protocol';
+
+import { PAUSE_AFTER_FAILURES, PAUSE_AFTER_UNSEEN } from './protection.js';
 
 /** The user-facing nouns (Q8). Views compose sentences from these rather than respelling them. */
 export const WORDS = {
@@ -30,7 +42,7 @@ export const WORDS = {
 } as const;
 
 /** The three step kinds, as the engine names them (`scheduleStepSchema`, C1). */
-export type StepKind = 'notify' | 'app-run' | 'app-think';
+export type StepKind = ScheduleStep['kind'];
 
 /**
  * A step's label: "remind me" / "run <app>" / "ask <app>’s AI". Without a name (the step's
@@ -52,12 +64,49 @@ export function stepLabel(kind: StepKind, appName?: string): string {
   }
 }
 
+/** "no AI calls" · "1 AI call" · "2 AI calls" — the ONE pluraliser every cost sentence uses. */
+export function aiCalls(n: number): string {
+  if (n === 0) return 'no AI calls';
+  return `${n} AI ${n === 1 ? 'call' : 'calls'}`;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Status words — the ONE word beside a result's dot, on every surface (U9)
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * The word a result reads as, by status — printed WITH the dot, never colour alone. The feed,
+ * the row's history, the detail's header and the missed card's outcomes all read this table,
+ * so a result is "missed" everywhere and never "waiting" on one page and "missed" on another.
+ */
+export const RESULT_STATUS_WORD: Readonly<Record<RunStatus, string>> = {
+  pending: 'missed',
+  running: 'running',
+  ok: 'done',
+  failed: 'failed',
+  skipped: 'skipped',
+  'needs-you': 'needs you',
+  interrupted: 'interrupted',
+  capped: 'capped',
+  'no-handler': 'not supported',
+};
+
+/** One step's status word, the same way. */
+export const STEP_STATUS_WORD: Readonly<Record<StepResultStatus, string>> = {
+  ok: 'done',
+  failed: 'failed',
+  blocked: 'blocked',
+  refused: 'refused',
+  'no-handler': 'not supported',
+  skipped: 'skipped',
+};
+
 // ---------------------------------------------------------------------------------------------
 // Honesty — what THIS host can do, in words (ADR-0074 §5; E9)
 // ---------------------------------------------------------------------------------------------
 
 export interface HostHonestyInput {
-  kind: 'web' | 'desktop' | 'host';
+  kind: ScheduleHostKind;
   /** The seat's subject ("this tab", "Snug for Mac", "this artifact"); the kind supplies a default. */
   hostLabel?: string;
   /** What the host can promise; absent = `page` (every host today). */
@@ -68,7 +117,7 @@ export interface HostHonestyInput {
   canSeeSiblingTabs?: boolean;
 }
 
-const HOST_LABEL_BY_KIND: Readonly<Record<HostHonestyInput['kind'], string>> = {
+const HOST_LABEL_BY_KIND: Readonly<Record<ScheduleHostKind, string>> = {
   web: 'this tab',
   desktop: 'Snug for Mac',
   host: 'this artifact',
@@ -96,8 +145,6 @@ export function nextLine(whenWords: string): string {
 // Policies — the missed-run choice (Q12) and the alert choice (Q6)
 // ---------------------------------------------------------------------------------------------
 
-export type MissedPolicy = 'ask' | 'run-once' | 'skip';
-
 export function missedPolicyLabel(policy: MissedPolicy): string {
   switch (policy) {
     case 'ask':
@@ -115,8 +162,6 @@ export function missedPolicyLabel(policy: MissedPolicy): string {
 
 /** The lead-in above the three policy choices. */
 export const missedPolicySentence = 'if Snug was closed at the time:';
-
-export type AlertKind = 'inbox' | 'notification';
 
 export function alertLabel(kind: AlertKind): string {
   switch (kind) {
@@ -166,18 +211,13 @@ export function blockedHere(reason: string): StateCopy {
 /** The step's app was deleted (C3 cascade); the one act removes the step. */
 export const appMissing: StateCopy = { text: 'this app was deleted', action: 'remove step' };
 
-export type PausedReason = 'failures' | 'ignored' | 'app-updated';
-
-/** The engine's own thresholds (E7), so the sentence is complete when no count is passed. */
-const PAUSE_DEFAULT_COUNT: Readonly<Record<Exclude<PausedReason, 'app-updated'>, number>> = { failures: 5, ignored: 30 };
-
-/** Why the engine paused this schedule (E7, E8); `count` is the number it actually hit. Resume is the one act. */
+/** Why the engine paused this schedule (E7, E8); `count` is the number it actually hit, the engine's threshold when none is passed. Resume is the one act. */
 export function paused(reason: PausedReason, count?: number): StateCopy {
   switch (reason) {
     case 'failures':
-      return { text: `paused: ${count ?? PAUSE_DEFAULT_COUNT.failures} failures in a row`, action: 'resume' };
+      return { text: `paused: ${count ?? PAUSE_AFTER_FAILURES} failures in a row`, action: 'resume' };
     case 'ignored':
-      return { text: `paused: nobody opened ${count ?? PAUSE_DEFAULT_COUNT.ignored} results`, action: 'resume' };
+      return { text: `paused: nobody opened ${count ?? PAUSE_AFTER_UNSEEN} results`, action: 'resume' };
     case 'app-updated':
       return { text: 'paused: this app was updated', action: 'resume' };
     default: {
@@ -206,10 +246,10 @@ export const globalPaused = 'all schedules are paused';
 // ---------------------------------------------------------------------------------------------
 
 /** "3 schedules were missed while Snug was closed · 2 AI calls" — singular handled, the tail omitted at 0. */
-export function missedHeadline(count: number, aiCalls: number): string {
+export function missedHeadline(count: number, calls: number): string {
   const head = count === 1 ? `1 ${WORDS.item} was ${WORDS.missed} while Snug was closed` : `${count} ${WORDS.items} were ${WORDS.missed} while Snug was closed`;
-  if (aiCalls === 0) return head;
-  return `${head} · ${aiCalls} AI ${aiCalls === 1 ? 'call' : 'calls'}`;
+  if (calls === 0) return head;
+  return `${head} · ${aiCalls(calls)}`;
 }
 
 /** One row of the card: when, and how many occurrences collapsed into this one candidate. */
@@ -249,8 +289,8 @@ export interface CostLineInput {
 
 /** "≈ 7 AI calls a week on Claude · sends rows from Ledger to that provider" — the privacy half only when rows go out. */
 export function costLine({ perWeek, brainLabel, appName, sendsRows }: CostLineInput): string {
-  if (perWeek === 0) return 'no AI calls';
-  const calls = `≈ ${perWeek} AI ${perWeek === 1 ? 'call' : 'calls'} a week on ${brainLabel}`;
+  if (perWeek === 0) return aiCalls(0);
+  const calls = `≈ ${aiCalls(perWeek)} a week on ${brainLabel}`;
   return sendsRows ? `${calls} · sends rows from ${appName} to that provider` : calls;
 }
 

@@ -10,11 +10,11 @@ import { act } from 'react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { EMPTY, followerTab, globalPaused, imported, needsYou, paused } from '../schedule/copy.js';
-import { GROUPS, PAGE, RESULTS, ROW, statusWord } from '../schedule/copy.page.js';
+import { EMPTY, RESULT_STATUS_WORD, followerTab, globalPaused, imported, needsYou, paused } from '../schedule/copy.js';
+import { GROUPS, PAGE, RELOAD, RESULTS, ROW } from '../schedule/copy.page.js';
 import { describeSpec } from '../schedule/cron.js';
-import { editorHrefForText } from '../schedule/ScheduleCreateBar.js';
-import { freshSchedulerState, schedulerStore } from '../schedule/scheduler.js';
+import { newScheduleHref } from '../schedule/routes.js';
+import { freshSchedulerState, schedulerStore, type SchedulerView } from '../schedule/scheduler.js';
 import { ScheduleView } from '../views/ScheduleView.js';
 import {
   HOUR,
@@ -133,18 +133,19 @@ describe('loading, empty, error (U2)', () => {
 });
 
 describe('the create bar (design F1)', () => {
-  it('submit opens the editor route with the sentence — and the parsed when beside it when the grammar reads it', async () => {
+  it('submit opens the editor route with the sentence and NOTHING else — the editor reads the when itself (M10)', async () => {
     await env.boot();
     const c = render();
     await settle();
     const input = q<HTMLInputElement>(c, 'input[aria-label="describe what and when"]');
     expect(input).not.toBeNull();
     expect((byTestId(c, 'schedule-create-submit') as HTMLButtonElement).disabled).toBe(true);
+    expect(byTestId(c, 'schedule-new')?.getAttribute('href')).toBe(newScheduleHref());
     await type(input!, 'every weekday at 8, water the ferns');
     await click(byTestId(c, 'schedule-create-submit'));
-    expect(path).toBe(editorHrefForText('every weekday at 8, water the ferns', new Date(NOW)));
-    expect(path).toContain('/schedule/new?text=every+weekday+at+8');
-    expect(path).toContain('&spec=');
+    expect(path).toBe(newScheduleHref({ text: 'every weekday at 8, water the ferns' }));
+    expect(path).toBe('/schedule/new?text=every+weekday+at+8%2C+water+the+ferns');
+    expect([...new URLSearchParams(path.split('?')[1]).keys()]).toEqual(['text']);
   });
 
   it('a sentence the grammar cannot read still opens the editor, with the text and no when', async () => {
@@ -180,8 +181,8 @@ describe('results (design F9)', () => {
     expect(rows.map((row) => row.dataset.status)).toEqual(['failed', 'needs-you', 'ok']);
     expect(rows.map((row) => row.dataset.unread)).toEqual(['true', 'true', 'false']);
     expect(rows.map((row) => q(row, '.schedule-dot') !== null)).toEqual([true, true, false]);
-    expect(q(rows[0]!, '.schedule-result-word')?.textContent).toBe(`${RESULTS.unread} · ${statusWord('failed')}`);
-    expect(q(rows[2]!, '.schedule-result-word')?.textContent).toBe(statusWord('ok'));
+    expect(q(rows[0]!, '.schedule-result-word')?.textContent).toBe(`${RESULTS.unread} · ${RESULT_STATUS_WORD.failed}`);
+    expect(q(rows[2]!, '.schedule-result-word')?.textContent).toBe(RESULT_STATUS_WORD.ok);
     expect(q(rows[0]!, '.schedule-result-summary')?.textContent).toBe('the brain did not answer');
     expect(q(rows[2]!, '.schedule-result-summary')?.textContent).toBe('all quiet');
     expect(q(rows[0]!, '.schedule-result-meta')?.textContent).toBe('Hourly · Ledger · 59 minutes ago');
@@ -259,6 +260,20 @@ describe('the groups (U2)', () => {
     await click(qa(c, '[data-testid="schedule-attention-act"]')[0]);
     expect(path).toBe('/schedule/t5');
   });
+
+  it('an imported row’s switch never enables it: the click opens the editor, where the consent panel is the one way on (S2)', async () => {
+    seedGroups();
+    await env.boot();
+    const c = render();
+    await settle();
+    const sw = q(c, '[data-schedule-id="t5"] [role="switch"]');
+    expect(sw?.getAttribute('aria-checked')).toBe('false');
+    expect(sw?.getAttribute('data-review-first')).toBe('true');
+    await click(sw);
+    expect(path).toBe('/schedule/t5');
+    expect(env.db.getScheduledTask('t5')?.enabled, 'nothing was enabled').toBe(false);
+    expect(q(c, '[data-testid="schedule-row-error"]')).toBeNull();
+  });
 });
 
 describe('a row (design F12)', () => {
@@ -280,6 +295,23 @@ describe('a row (design F12)', () => {
     expect(q(c, '[role="switch"]')?.getAttribute('aria-checked')).toBe('false');
     expect(rowTitles(c, 'paused')).toEqual(['Hourly']);
     expect(rowTitles(c, 'today')).toEqual([]);
+  });
+
+  it('a refused enable shows the engine’s reason inline, in words, and the row stays off (S2)', async () => {
+    env.db.putScheduledTask(makeTask({ id: 't8', title: 'Orphan', enabled: false, steps: [THINK('gone')] }));
+    await env.boot();
+    const c = render();
+    await settle();
+    expect(rowTitles(c, 'paused')).toEqual(['Orphan']);
+    const sw = q(c, '[data-schedule-id="t8"] [role="switch"]');
+    expect(sw?.getAttribute('data-review-first')).toBeNull();
+    await click(sw);
+    await settleUntil(() => q(c, '[data-testid="schedule-row-error"]') !== null, 'the refusal');
+    const note = q(c, '[data-testid="schedule-row-error"]');
+    expect(note?.getAttribute('role')).toBe('alert');
+    expect(note?.textContent).toMatch(/gone/);
+    expect(env.db.getScheduledTask('t8')?.enabled).toBe(false);
+    expect(path).toBe('');
   });
 
   it('line 2: the when, "next <relative>", and the app collapsed to a chip named after the app', async () => {
@@ -313,7 +345,7 @@ describe('a row (design F12)', () => {
     await click(qa(c, '.schedule-menu-item')[2]);
     const history = byTestId(c, 'schedule-history');
     expect(history).not.toBeNull();
-    expect(texts(history!, '.schedule-history-status')).toEqual([statusWord('ok')]);
+    expect(texts(history!, '.schedule-history-status')).toEqual([RESULT_STATUS_WORD.ok]);
     expect(history?.textContent).toContain('done');
     await click(byTestId(c, 'schedule-kebab'));
     await click(qa(c, '.schedule-menu-item')[2]);
@@ -367,6 +399,23 @@ describe('the banners', () => {
     await settle();
     expect(schedulerStore.get().leader?.leader).toBe(false);
     expect(byTestId(c, 'schedule-follower')?.textContent).toBe(followerTab);
+  });
+
+  it('a tab promoted over a stale copy (view.needsReload) shows the one-line reload strip with its act (S3)', async () => {
+    env.db.putScheduledTask(makeTask({ id: 't1', title: 'Hourly' }));
+    await env.boot();
+    const c = render();
+    await settle();
+    expect(byTestId(c, 'schedule-reload')).toBeNull();
+    await act(async () => {
+      // The engine sets this when the election promotes this tab over a copy another tab had moved on from.
+      schedulerStore.set({ ...schedulerStore.get(), needsReload: true } as SchedulerView);
+    });
+    const strip = byTestId(c, 'schedule-reload');
+    expect(strip?.className).toContain('connection-note');
+    expect(strip?.textContent).toContain(RELOAD.note);
+    expect(byTestId(c, 'schedule-reload-act')?.textContent).toBe(RELOAD.act);
+    expect(rowTitles(c, 'today'), 'the rows stay on screen beneath the strip').toEqual(['Hourly']);
   });
 });
 

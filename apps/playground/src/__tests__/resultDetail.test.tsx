@@ -6,34 +6,28 @@
 // `markSeen` stamps the production row, `runNow` enqueues through the production queue and
 // *apply to my data* reaches `executeApprovedWrite` — the one path from a proposed statement to
 // data — against a real table: the applied case changes rows, the drift case halts on a count
-// that moved, the failed case reports the dry-run error. Nothing here fakes the accessor.
+// that moved, the failed case reports the dry-run error, and a run that asked TWO apps applies
+// each item to its own app (the item names it — S4). Nothing here fakes the accessor.
+//
+// The last block is the ONE status vocabulary (M5): the feed, the detail and the missed card
+// print `copy.RESULT_STATUS_WORD` for every run status — no surface has words of its own.
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { UserDb } from '@snugprotocol/db';
-import { SCHEDULE_PROPOSAL_TTL_MS, type ScheduleProposalItem, type ScheduleRun, type ScheduleStep, type ScheduledTask } from '@snugprotocol/protocol';
+import { RUN_STATUSES, SCHEDULE_PROPOSAL_TTL_MS, type ScheduleProposalItem, type ScheduleRun, type ScheduleStep, type ScheduledTask } from '@snugprotocol/protocol';
 
 import type { SnugPlatform } from '../platform/platform.js';
-import {
-  CAPPED_WHAT,
-  DECLINED,
-  DRIFTED,
-  EXPIRED,
-  RESULT_MISSING,
-  absoluteTime,
-  applied,
-  callsLine,
-  hostWord,
-  interruptedWhy,
-  relativeTime,
-  wouldChange,
-} from '../schedule/copy.bits.js';
-import { capped, needsYou, noHandler } from '../schedule/copy.js';
+import { RESULT_STATUS_WORD, capped, needsYou, noHandler } from '../schedule/copy.js';
+import { CAPPED_WHAT, DECLINED, DRIFTED, EXPIRED, NO_APP_FOR_CHANGES, RESULT_MISSING, applied, callsLine, hostWord, interruptedWhy, wouldChange } from '../schedule/copy.result.js';
 import type { StepContext, StepExecutor } from '../schedule/engine-types.js';
-import { ResultDetail, changesAppId, proposalFor } from '../schedule/ResultDetail.js';
-import { __resetSchedulerForTests, initScheduler, type SchedulerDeps } from '../schedule/scheduler.js';
+import { outcomeWord } from '../schedule/MissedCard.js';
+import type { AppIndex } from '../schedule/pageModel.js';
+import { ResultDetail, itemAppId, proposalFor } from '../schedule/ResultDetail.js';
+import { ResultsList } from '../schedule/ResultsList.js';
+import { __resetSchedulerForTests, initScheduler, initialSchedulerView, schedulerStore, type SchedulerDeps } from '../schedule/scheduler.js';
 import { execFrame } from './dbFrames.js';
 import { installTestUserDb } from './userdbTestHelper.js';
 
@@ -109,9 +103,29 @@ const run = (over: Partial<ScheduleRun> = {}): ScheduleRun => ({
 
 /** A live batch expires seven days from the REAL clock — the detail reads `Date.now()` for expiry. */
 const batch = (
-  items: ScheduleProposalItem[] = [{ sql: SQL, summary: 'Set both coffees to 9.99', counts: { changes: 2 } }],
+  items: ScheduleProposalItem[] = [{ appId: 'ledger', sql: SQL, summary: 'Set both coffees to 9.99', counts: { changes: 2 } }],
   expiresAt = new Date(Date.now() + SCHEDULE_PROPOSAL_TTL_MS).toISOString(),
 ): NonNullable<ScheduleRun['proposals']> => ({ items, expiresAt });
+
+/** The second app a two-app schedule asks, with one table of its own. */
+const STANDUP_SQL = "UPDATE notes SET body = 'carried over' WHERE id = 1";
+async function installStandup(): Promise<void> {
+  db.installApp({ appId: 'standup', displayName: 'Standup', html: '<html>standup</html>' });
+  await db.applyAppDdl('standup', ['CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT NOT NULL)']);
+  const result = await db.driver.handle('standup', execFrame('INSERT INTO notes (id, body) VALUES (?, ?)', [1, 'open']));
+  if (!result.ok) throw new Error('seed failed');
+}
+async function noteBodies(): Promise<unknown[]> {
+  const result = await db.scratchRun('standup', [{ sql: 'SELECT body FROM notes ORDER BY id' }]);
+  return (result.statements[0]?.rows ?? []).map((row) => row[0]);
+}
+
+const unmountNow = (): void => {
+  act(() => root?.unmount());
+  root = undefined;
+  container?.remove();
+  container = undefined;
+};
 
 const seed = (t: ScheduledTask, r?: ScheduleRun): void => {
   db.putScheduledTask(t);
@@ -280,7 +294,7 @@ describe('changes waiting for your OK (ADR-0074 §6)', () => {
   });
 
   it('failed: a statement the dry run refuses reports the message and changes nothing', async () => {
-    seed(task(), run({ proposals: batch([{ sql: 'UPDATE nowhere SET x = 1', counts: { changes: 0 } }]) }));
+    seed(task(), run({ proposals: batch([{ appId: 'ledger', sql: 'UPDATE nowhere SET x = 1', counts: { changes: 0 } }]) }));
     await initScheduler(deps());
     const el = await open();
     await act(async () => {
@@ -306,8 +320,8 @@ describe('changes waiting for your OK (ADR-0074 §6)', () => {
   });
 
   it('declining one of two keeps the other, with the batch’s expiry', async () => {
-    const other = { sql: "DELETE FROM expenses WHERE label = 'rent'", counts: { changes: 1 } };
-    const live = batch([{ sql: SQL, counts: { changes: 2 } }, other]);
+    const other = { appId: 'ledger', sql: "DELETE FROM expenses WHERE label = 'rent'", counts: { changes: 1 } };
+    const live = batch([{ appId: 'ledger', sql: SQL, counts: { changes: 2 } }, other]);
     seed(task(), run({ proposals: live }));
     await initScheduler(deps());
     const el = await open();
@@ -328,17 +342,63 @@ describe('changes waiting for your OK (ADR-0074 §6)', () => {
     expect(button(el, 'apply to my data')).toBeUndefined();
   });
 
-  it('proposalFor builds the one write path’s shape: the step’s app, the single statement, no params, the stored count as the drift baseline', () => {
-    expect(proposalFor('ledger', { sql: SQL, summary: 'x', counts: { changes: 2 } })).toEqual({
+  it('a run that asked TWO apps applies each item to ITS OWN app, named on the row — never the first step’s (S4)', async () => {
+    await installStandup();
+    const standupStep: ScheduleStep = { kind: 'app-think', appId: 'standup', prompt: 'what carried over?', context: { maxRows: 50 } };
+    seed(
+      task({ steps: [THINK, standupStep] }),
+      run({
+        steps: [{ status: 'ok', summary: 'coffee' }, { status: 'ok', summary: 'notes' }],
+        proposals: batch([
+          { appId: 'ledger', sql: SQL, counts: { changes: 2 } },
+          { appId: 'standup', sql: STANDUP_SQL, summary: 'Mark the note carried over', counts: { changes: 1 } },
+        ]),
+      }),
+    );
+    await initScheduler(deps());
+    const el = await open();
+    const cards = [...el.querySelectorAll<HTMLElement>('[data-testid="schedule-change"]')];
+    expect(cards.map((card) => card.dataset.app)).toEqual(['ledger', 'standup']);
+    expect(cards[0]?.querySelector('[data-testid="schedule-change-count"]')?.textContent).toContain('would change 2 rows in Ledger');
+    expect(cards[1]?.querySelector('[data-testid="schedule-change-count"]')?.textContent).toContain('would change 1 row in Standup');
+    // Standup's first: its table changes, Ledger's does not.
+    await act(async () => {
+      [...cards[1]!.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'apply to my data')?.click();
+    });
+    await vi.waitFor(async () => expect(await noteBodies()).toEqual(['carried over']));
+    expect(await coffeeCents()).toEqual([450, 500]);
+    await vi.waitFor(() => expect(db.listScheduleRuns('t1')[0]?.proposals?.items.map((item) => item.appId)).toEqual(['ledger']));
+    await settle();
+    // Then Ledger's — against Ledger's data.
+    await act(async () => {
+      button(el, 'apply to my data')?.click();
+    });
+    await vi.waitFor(async () => expect(await coffeeCents()).toEqual([999, 999]));
+    await vi.waitFor(() => expect(db.listScheduleRuns('t1')[0]?.proposals).toBeUndefined());
+    await settle();
+    expect([...el.querySelectorAll('[data-testid="schedule-change-settled"]')]).toHaveLength(2);
+  });
+
+  it('an item that names no app is refused: the sentence, no apply, decline only', async () => {
+    schedulerStore.set({ ...initialSchedulerView(), ready: true, tasks: [task()], runsByTask: { t1: [run({ proposals: batch([{ appId: '', sql: SQL, counts: { changes: 2 } }]) })] } });
+    const el = await open();
+    expect(el.querySelector('[data-testid="schedule-change-no-app"]')?.textContent).toBe(NO_APP_FOR_CHANGES);
+    expect(el.querySelector('[data-testid="schedule-change-count"]')?.textContent).not.toContain(' in ');
+    expect(button(el, 'apply to my data')).toBeUndefined();
+    expect(button(el, 'decline')).toBeDefined();
+  });
+
+  it('proposalFor builds the one write path’s shape from the ITEM’s app: the single statement, no params, the stored count as the drift baseline', () => {
+    expect(proposalFor('ledger', { appId: 'ledger', sql: SQL, summary: 'x', counts: { changes: 2 } })).toEqual({
       appId: 'ledger',
       statements: [SQL],
       params: [[]],
       summary: 'x',
       previewed: [2],
     });
-    expect(proposalFor('ledger', { sql: SQL })).toEqual({ appId: 'ledger', statements: [SQL], params: [[]], summary: '', previewed: [0] });
-    expect(changesAppId({ steps: [NOTIFY, THINK] })).toBe('ledger');
-    expect(changesAppId({ steps: [NOTIFY] })).toBeUndefined();
+    expect(proposalFor('ledger', { appId: 'ledger', sql: SQL })).toEqual({ appId: 'ledger', statements: [SQL], params: [[]], summary: '', previewed: [0] });
+    expect(itemAppId({ appId: 'standup' })).toBe('standup');
+    expect(itemAppId({ appId: '' })).toBeUndefined();
   });
 });
 
@@ -386,23 +446,46 @@ describe('the states with one act', () => {
   });
 });
 
-describe('copy.bits — the pure sentences', () => {
-  it('relativeTime: minutes, hours, yesterday, days — and the future', () => {
-    const now = NOW;
-    expect(relativeTime(now - 10_000, now)).toBe('just now');
-    expect(relativeTime(now - 3 * 60_000, now)).toBe('3 min ago');
-    expect(relativeTime(now - 2 * 3_600_000, now)).toBe('2 hours ago');
-    expect(relativeTime(now - 3_600_000, now)).toBe('1 hour ago');
-    expect(relativeTime(now - 30 * 3_600_000, now)).toBe('yesterday');
-    expect(relativeTime(now - 4 * 86_400_000, now)).toBe('4 days ago');
-    expect(relativeTime(now + 20 * 60_000, now)).toBe('in 20 min');
-    expect(relativeTime(now + 30 * 3_600_000, now)).toBe('tomorrow');
-  });
+describe('one status vocabulary across surfaces (M5)', () => {
+  const index: AppIndex = { bySource: new Map(), ids: new Set(['ledger']), name: (appId) => (appId === 'ledger' ? 'Ledger' : appId), emoji: () => undefined };
+  const expected = RUN_STATUSES.map((status) => RESULT_STATUS_WORD[status]);
 
-  it('absoluteTime formats in the given locale', () => {
-    expect(absoluteTime(NOW, 'en-US')).toMatch(/2026/);
-  });
+  it('the feed, the detail and the missed card print copy.RESULT_STATUS_WORD for every run status', async () => {
+    expect(expected).toEqual(['missed', 'running', 'done', 'failed', 'skipped', 'needs you', 'interrupted', 'capped', 'not supported'].sort((a, b) => expected.indexOf(a) - expected.indexOf(b)));
+    expect(new Set(expected).size, 'every status has its own word').toBe(RUN_STATUSES.length);
 
+    // The feed: one row per status (seen, so the word stands alone).
+    const rows = RUN_STATUSES.map((status, i) => ({ run: run({ status, dueAt: new Date(NOW - i * 60_000).toISOString(), seenAt: DUE }), item: task(), at: DUE }));
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    await act(async () => {
+      root!.render(
+        <MemoryRouter>
+          <ResultsList rows={rows} apps={index} now={new Date(NOW)} />
+        </MemoryRouter>,
+      );
+    });
+    const feed = [...container.querySelectorAll('.schedule-result-word')].map((el) => el.textContent);
+    expect(feed).toEqual(expected);
+    unmountNow();
+
+    // The detail: the header's status word, per status.
+    const detail: string[] = [];
+    for (const status of RUN_STATUSES) {
+      schedulerStore.set({ ...initialSchedulerView(), ready: true, tasks: [task()], runsByTask: { t1: [run({ status })] } });
+      const el = await open();
+      detail.push(el.querySelector('[data-testid="schedule-status"]')?.textContent ?? '');
+      unmountNow();
+    }
+    expect(detail).toEqual(expected);
+
+    // The missed card's outcome rows.
+    expect(RUN_STATUSES.map((status) => outcomeWord(run({ status })))).toEqual(expected);
+  });
+});
+
+describe('copy.result — the pure sentences', () => {
   it('callsLine and hostWord', () => {
     expect(callsLine({ ai: 0, net: 0 })).toBe('no AI or network calls');
     expect(callsLine({ ai: 1, net: 0 })).toBe('1 AI call');
