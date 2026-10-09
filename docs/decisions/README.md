@@ -39,7 +39,7 @@ Append-only decision log for Snug. One file per decision: `NNNN-short-kebab-titl
 - [0018 — App runtime turns assemble from an authored, version-pinned runtime contract](0018-runtime-prompt-contract.md)
 - [0019 — App chat is intent-routed; data agency is scratch-isolated reads + human-approved writes](0019-intent-routed-app-chat-data-agency.md)
 - [0020 — Multi-option auth: the host defaults, discloses, and the user rebinds](0020-multi-option-auth-kind.md)
-- [0021 — Desktop shell transports: loopback OAuth, registry redirect postures, native fetch, file-backed userdb](0021-desktop-shell-transports.md)
+- [0021 — Desktop shell transports: loopback OAuth, registry redirect postures, native fetch, file-backed userdb](0021-desktop-shell-transports.md) — **amended 2026-10-09** (TASK-20261008-p0-clearance W3): the native-fetch scope made real (the RFC-1918 http entries never matched; now exact-octet regex hosts, tested by behaviour), https on any port, https to loopback/0-8/IPv6 literals denied
 - [0022 — Registry request seats, host-side signing functions, and auth-shaped failure surfacing](0022-registry-request-seats.md)
 - [0023 — LAN-class providers: user-supplied bridge hosts, pairing exchanges, scoped TLS trust](0023-lan-class-providers.md)
 - [0024 — The think rail is user-sized and dismissible; the frame view is deleted while its feed lives on](0024-think-rail-user-sized-frames-view-removed.md)

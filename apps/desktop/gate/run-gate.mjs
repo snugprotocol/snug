@@ -65,16 +65,19 @@ const RESULTS_TIMEOUT_MS = 10 * 60 * 1000;
  * so it reads the source and extracts the ids — a missing/renamed export is a
  * loud parse failure here rather than a silent divergence in CI.
  */
-const EXPECTED_IPC_IDS = (() => {
-  const source = fs.readFileSync(new URL('../src/gate/ipc.ts', import.meta.url), 'utf8');
-  const block = /export const IPC_CHECK_IDS = \[([\s\S]*?)\] as const;/.exec(source);
+function harnessIds(file, exportName) {
+  const source = fs.readFileSync(new URL(`../src/gate/${file}`, import.meta.url), 'utf8');
+  const block = new RegExp(`export const ${exportName} = \\[([\\s\\S]*?)\\] as const;`).exec(source);
   if (block === null) {
-    throw new Error('gate driver: could not find IPC_CHECK_IDS in src/gate/ipc.ts — the harness contract moved');
+    throw new Error(`gate driver: could not find ${exportName} in src/gate/${file} — the harness contract moved`);
   }
   const ids = [...block[1].matchAll(/'([^']+)'/g)].map((m) => m[1]);
-  if (ids.length === 0) throw new Error('gate driver: IPC_CHECK_IDS parsed empty — refusing to expect nothing');
+  if (ids.length === 0) throw new Error(`gate driver: ${exportName} parsed empty — refusing to expect nothing`);
   return ids;
-})();
+}
+const EXPECTED_IPC_IDS = harnessIds('ipc.ts', 'IPC_CHECK_IDS');
+/** The real-plugin http-scope checks (TASK-20261008-p0-clearance W3) — derived the same way. */
+const EXPECTED_NET_SCOPE_IDS = harnessIds('netScope.ts', 'NET_SCOPE_CHECK_IDS');
 const EXPECTED_HARNESS_IDS_STATIC = [
   'env-sqljs-loads',
   'env-crypto-usable',
@@ -388,6 +391,7 @@ async function main() {
     ...EXPECTED_HARNESS_IDS_STATIC,
     ...cspIds,
     ...EXPECTED_IPC_IDS,
+    ...EXPECTED_NET_SCOPE_IDS,
     'remap-absent-from-release-bundle',
     ...EXPECTED_PERSIST_IDS,
   ];

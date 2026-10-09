@@ -1,6 +1,6 @@
 # 0021 — Desktop shell transports: loopback OAuth, registry redirect postures, native fetch, file-backed userdb
 
-- **Status:** accepted (amended 2026-08-22 by ADR-0049: §1's registry-data class gains the web-surface seats `webRedirectPosture`/`webRegistration`; §7's "no client secrets held for the user" is re-scoped to *Snug-owned* secrets — user-registered BYOK secrets live in the user's own credential custody)
+- **Status:** accepted (amended 2026-08-22 by ADR-0049: §1's registry-data class gains the web-surface seats `webRedirectPosture`/`webRegistration`; §7's "no client secrets held for the user" is re-scoped to *Snug-owned* secrets — user-registered BYOK secrets live in the user's own credential custody) — **amended 2026-10-09** (TASK-20261008-p0-clearance W3, owner's call): §4's native-fetch scope is made real (exact-octet regex hosts for the RFC-1918 http rung, which never matched before), https is admitted on ANY port, and https to loopback / 0/8 / IPv6 literals is denied — see the dated addendum
 - **Date:** 2026-08-12
 - **Task:** TASK-20260812-desktop-hub-scaffold
 
@@ -92,6 +92,16 @@ preconditions for a Windows build to be *possible* are: wry honoring `for_main_f
 on WebView2 (or an equivalent SDK-level off-switch), plus a green Windows leg of the
 in-shell hard gate, plus `cdp_jwt`'s native-ECDSA requirement verified there — that last
 one is separately unverified on Windows and is easy to forget behind the louder R-5.
+
+## Addendum — §4 native fetch: the scope made real; https on any port (2026-10-09)
+
+*TASK-20261008-p0-clearance W3. The owner's answer 2026-10-08: "Fix RFC-1918 + https ports". This widens the scope by port, so per this ADR's own Consequences it is recorded here as an amendment to §4.*
+
+1. **The LAN http rung was never live.** `capabilities/main.json` wrote the ranges as `http://192.168.*.*:*`, `http://10.*.*.*:*` and sixteen `http://172.N.*.*:*`. tauri-plugin-http 2.5.9 parses entries with urlpattern 0.3, which canonicalises every fixed-text hostname part through `Url::set_host`. That IPv4-parses the digits, so `192.168.*.*` became the host `192.0.0.168*.*`, and every entry matched nothing in every release up to v0.1.3. A test pinned the strings and could not see it. **Decision:** the three ranges are exact-octet regex-group hosts, which urlpattern passes through uncanonicalised. They are tested by BEHAVIOUR: `src-tauri/src/http_scope.rs` runs the plugin's own (private, copied verbatim, version-tripwired) matcher over the file and proves http admission equals `lanfetch::is_rfc1918_ipv4_literal` over a swept sample. The in-shell gate asks the real plugin.
+2. **https on any port.** `https://**` compiled with an empty port, which means :443 only. So an approved https host on a non-default port (a Home Assistant on :8123, a Synology on :5001) failed on desktop while working on the web, where page fetch has no port scope. R-14 already says a port is not part of a host's identity. **Decision:** `https://*:*`.
+3. **…but never to loopback, 0/8 or an IPv6 literal.** Several platform-fetch callers sit outside connected-fetch's scheme and host-class gates: OAuth token/refresh/revoke, the token claim, the local-model adapter, BYOK, discovery, the relay and the Ollama probe. For them this scope is the port and loopback limit. **Decision:** a `deny` list (deny wins in `Scope::is_allowed`) refuses https to `localhost` and its subdomains, 127/8, 0/8 and every bracketed IPv6 literal on every port. This is narrower than `https://**` was for :443.
+
+Consequence: this is a shell change, so it reaches users with the next desktop release (its own explicit ask, ADR-0047).
 
 ## Alternatives considered
 

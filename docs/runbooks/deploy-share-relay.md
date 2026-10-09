@@ -133,9 +133,10 @@ relay) and `deploy-relay.mjs`'s preflight refuses the change.
 
 `wrangler dev` runs the Worker with a simulated R2 bucket; nothing touches the real bucket
 or host. Two constraints shape the recipe: the local playground's BROWSER needs its origin
-in the CORS allowlist, and the desktop's HTTP scope admits plain `http://` only on two
-loopback literals (the RFC-1918 entries never match — next-steps 2026-09-05), so the relay
-must sit on the debug stub port `127.0.0.1:43120`:
+in the CORS allowlist, and the desktop's HTTP scope admits plain `http://` only on the
+RFC-1918 ranges (any port — live since TASK-20261008-p0-clearance W3; they never matched
+before) and two single-purpose loopback literals. So the relay sits either on a LAN address
+(`http://192.168.x.y:8787`) or on the debug stub port `127.0.0.1:43120`:
 
 ```
 cd apps/share-relay && pnpm exec wrangler dev --ip 127.0.0.1 --port 43120 \

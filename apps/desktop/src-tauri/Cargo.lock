@@ -3835,6 +3835,7 @@ dependencies = [
  "minisign-verify",
  "rand 0.8.7",
  "rcgen",
+ "regex",
  "reqwest 0.12.28",
  "rustls",
  "serde",
@@ -3854,6 +3855,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "url",
+ "urlpattern",
  "webpki-roots",
 ]
 

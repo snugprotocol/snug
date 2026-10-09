@@ -165,6 +165,8 @@ The chain and every barrier in it:
    the user presses a button on the device itself, and the minted key writes straight to
    `snug_secrets`, never into app/LLM-visible state.
 
+**Live since 2026-10-09 on the desktop (TASK-20261008-p0-clearance W3).** Until then the plugin scope's RFC-1918 http entries matched nothing (the urlpattern canonicalisation defect — desktop-shell delta, *Native fetch*), so the plain-http leg of this chain was unreachable in practice on the desktop: an injected `api_key` row aimed at `http://192.168.1.1` died at the transport, not at a barrier. With the scope fixed it reaches the barriers above as designed — the consent band (2), the frozen ceiling (3) and the confirm gate for writes. The same fix lets the local-model adapter reach a LAN model server over http (it was classed local by `privateHost.ts` all along); an imported `localUrl` stays behind the F15 endpoint-confirm guard.
+
 **The barrier that carries the most weight is (2), and it is human judgment.** That is the same
 trade the Dynamic Auth v2 delta's R-1 names: the review screen is the price of admitting these
 seats, and it stops paying the moment the review degrades.
