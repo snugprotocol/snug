@@ -92,7 +92,7 @@ function typeInto(el: HTMLInputElement, value: string): void {
 }
 
 describe('structure (AC14)', () => {
-  it('renders the seven labelled sections', async () => {
+  it('renders the eight labelled sections', async () => {
     // MIGRATED five → six (TASK-20260821, ADR-0047): the "app" section carries the
     // shell version/update controls on desktop and the download pointer on web.
     // MIGRATED six → seven (TASK-20260822, ADR-0052): "feedback" carries the
@@ -101,7 +101,10 @@ describe('structure (AC14)', () => {
     // same card, now also carrying the legal links and (desktop) the EULA text.
     await render();
     const labels = [...(container?.querySelectorAll('.settings-section-label') ?? [])].map((n) => n.textContent);
-    expect(labels).toEqual(['brain', 'account', 'your file', 'connections', 'feedback', 'appearance', 'about']);
+    // MIGRATED seven → eight (TASK-20261009, ADR-0074): "schedule" — global pause, browser
+    // notifications, clear history — sits after connections; it is gated on `allows('schedule')`,
+    // which the web default allows.
+    expect(labels).toEqual(['brain', 'account', 'your file', 'connections', 'schedule', 'feedback', 'appearance', 'about']);
   });
 
   it('keeps the mode segment’s accessible name and three labels verbatim (the e2e pin)', async () => {
