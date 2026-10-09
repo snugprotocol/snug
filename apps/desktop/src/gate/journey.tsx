@@ -27,7 +27,7 @@
 
 import { createElement, StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { HashRouter } from 'react-router-dom';
+import { HashRouter } from 'react-router';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 
 import { App } from '@playground/App';

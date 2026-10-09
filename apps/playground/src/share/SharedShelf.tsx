@@ -8,7 +8,7 @@
 // name, emoji and description render as text, never as markup.
 
 import type { CSSProperties, ReactElement } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 
 import { sharedBundleSettingKey, shareInstallSource } from '@snugprotocol/db';
 import { useEffect, useState } from 'react';

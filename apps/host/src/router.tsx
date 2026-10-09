@@ -17,7 +17,7 @@
 // sandbox moves the kit with it.
 
 import type { ReactElement, ReactNode } from 'react';
-import { HashRouter, MemoryRouter } from 'react-router-dom';
+import { HashRouter, MemoryRouter } from 'react-router';
 
 export type RouterChoice = { kind: 'hash' } | { kind: 'memory'; initialEntries: [string] };
 

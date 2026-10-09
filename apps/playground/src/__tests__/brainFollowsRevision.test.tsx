@@ -20,7 +20,7 @@ import { createMemoryBackend } from '@snugprotocol/db';
 import { createRequire } from 'node:module';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { hostCapabilities } from '../platform/hostCapabilities.js';

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent, ReactElement } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams } from 'react-router';
 
 import { buildUserMessage, parseBuildPrompt } from '../agent/chips.js';
 import { knowledgeDeliveryFor } from '../agent/knowledgeDelivery.js';

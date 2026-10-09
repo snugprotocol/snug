@@ -7,7 +7,7 @@
 // offering a button that cannot work is the failure this screen exists to avoid.
 
 import type { MouseEvent, ReactElement } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 
 import { getPlatform } from '../platform/platform.js';
 import { setMode } from '../state/mode.js';

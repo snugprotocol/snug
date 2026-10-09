@@ -23,7 +23,7 @@
 
 import { useEffect, useState } from 'react';
 import type { ReactElement, ReactNode } from 'react';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 
 import { popularModelsFor } from '@snugprotocol/adapters';
 

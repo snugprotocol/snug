@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { HashRouter } from 'react-router-dom';
+import { HashRouter } from 'react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { SnugPlatform } from '@playground/platform/platform';

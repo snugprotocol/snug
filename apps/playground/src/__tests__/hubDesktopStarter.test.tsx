@@ -16,7 +16,7 @@
 //     that is aria-disabled (which `open.disabled` alone cannot see).
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { SnugPlatform } from '../platform/platform.js';

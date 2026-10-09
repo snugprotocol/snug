@@ -7,7 +7,7 @@
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import type { CSSProperties, KeyboardEvent, ReactElement } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router';
 
 import type { AgentTurnEvent } from '@snugprotocol/adapters';
 import { createDbDriver, createMemoryBackend, starterVersionSettingKey, type SnugDbDriver } from '@snugprotocol/db';

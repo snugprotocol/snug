@@ -4,7 +4,7 @@
 
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { HashRouter } from 'react-router-dom';
+import { HashRouter } from 'react-router';
 
 import { setPlatform } from '@playground/platform/platform';
 import { userDbStatusStore, getUserDb } from '@playground/state/userdb.js';

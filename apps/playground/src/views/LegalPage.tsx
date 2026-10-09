@@ -9,7 +9,7 @@
 // the two renderers walk the same three node kinds (text, link, list/table/quote).
 
 import type { ReactElement } from 'react';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 
 import type { Block, LegalDocument, Run } from '../legal/legalShared.js';
 import { ExternalLink } from '../ui/ExternalLink.js';

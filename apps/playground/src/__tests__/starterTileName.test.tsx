@@ -14,7 +14,7 @@
 // staying folder-shaped so nothing downstream re-keys on a human string.
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 declare global {

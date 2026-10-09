@@ -8,7 +8,7 @@
 // way; trying the one call the router needs, once, is the fact itself.
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { Link, Route, Routes, useLocation } from 'react-router-dom';
+import { Link, Route, Routes, useLocation } from 'react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { KitRouter, entryFromHash, pickRouter, type RouterWindow } from '../router.js';

@@ -15,7 +15,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 
 import { ChatLog } from '../views/ChatLog.js';
 import type { ChatMessage } from '../agent/useBuilderChat.js';

@@ -6,7 +6,7 @@
 // a small dismissible note tells the user what happened, linking to Settings.
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { openUserDb, type UserDb } from '@snugprotocol/db';
