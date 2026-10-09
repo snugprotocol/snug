@@ -13,10 +13,10 @@ import { SCHEDULE_STEP_SUMMARY_MAX_CHARS, type ScheduleStep, type ScheduledTask 
 import type { AgentTransport } from '@snugprotocol/runner';
 import { describe, expect, it, vi } from 'vitest';
 
-import { appMissing } from '../schedule/copy.js';
+import { NO_HIDDEN_FRAME, type AppRunDeps } from '../schedule/appRun.js';
+import { appMissing, blockedHere } from '../schedule/copy.js';
 import type { StepContext } from '../schedule/engine-types.js';
 import {
-  APP_RUN_LATER_SUMMARY,
   CANCELLED_SUMMARY,
   WITHHELD_SUMMARY,
   createStepExecutor,
@@ -98,11 +98,16 @@ describe('dispatch — one executor per step kind', () => {
     });
   });
 
-  it('app-run → refused by name in PR-A (the hidden frame arrives with PR-B); nothing spent', async () => {
+  it('app-run → the hidden-frame seams (PR-B, `appRun.ts`); a composition WITHOUT them is blocked by name, nothing spent', async () => {
     const step: ScheduleStep = { kind: 'app-run', appId: 'app-1' };
-    const outcome = await executeStep(step, context([step]));
-    expect(outcome).toEqual({ status: 'refused', summary: APP_RUN_LATER_SUMMARY, calls: { ai: 0, net: 0 } });
-    expect(APP_RUN_LATER_SUMMARY).toBe('running an app on a schedule arrives in a later release');
+    const without = createStepExecutor({ transportFor: () => undefined });
+    expect(await without(step, context([step]))).toEqual({ status: 'blocked', summary: blockedHere(NO_HIDDEN_FRAME).text, calls: { ai: 0, net: 0 } });
+    // With them: the seams are reached (the platform is the first thing the arm asks).
+    const platform = vi.fn(() => ({ kind: 'web' as const, capabilities: { subscriptionMode: true, hubSyncOrigin: true, lanHttpPrivate: false } }));
+    const appRun = { platform } as unknown as AppRunDeps;
+    const outcome = await createStepExecutor({ transportFor: () => undefined, appRun })(step, context([step]));
+    expect(platform).toHaveBeenCalledTimes(1);
+    expect(outcome.status).toBe('blocked'); // no scheduler seat on that fake platform — the arm refused by name (appRunHandshake.test.tsx drives the rest)
   });
 
   it('app-think → the injected transport is asked for the step’s app and its answer is the summary', async () => {

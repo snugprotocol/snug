@@ -87,6 +87,7 @@ import { createStore, useStore, type Store } from '../state/store.js';
 import { getUserDb, userDbStatusStore } from '../state/userdb.js';
 import { hostHonesty } from './copy.js';
 import { honestyInputFor } from './honesty.js';
+import { clearScheduleKey } from './appRun.js';
 import type { StepExecutor } from './engine-types.js';
 import { executeStep } from './executors.js';
 import { createLeaderElection, pageLocks, type LeaderElection, type LeaderLocks, type LeaderState } from './leader.js';
@@ -212,7 +213,13 @@ function honestyOf(platform: SnugPlatform, leader: LeaderState | undefined): str
  * claimed them is gone. A claim still inside its bound may belong to a live sibling tab and is
  * left alone; one without `startedAt` has no bound to be inside of.
  */
-export function sweepStaleClaims(db: UserDb, now: Date, bounds: RunBounds = DEFAULT_RUN_BOUNDS): number {
+export function sweepStaleClaims(
+  db: UserDb,
+  now: Date,
+  bounds: RunBounds = DEFAULT_RUN_BOUNDS,
+  /** Told of every claim swept, with its task when the file still holds one — the boot clears the run's kv handshake key here (PR-B A3). */
+  onSwept?: (run: ScheduleRun, task: ScheduledTask | undefined) => void,
+): number {
   const nowIso = now.toISOString();
   const tasksById = new Map(db.listScheduledTasks().map((task) => [task.id, task] as const));
   let swept = 0;
@@ -226,6 +233,7 @@ export function sweepStaleClaims(db: UserDb, now: Date, bounds: RunBounds = DEFA
       try {
         db.putScheduleRun({ ...run, status: 'interrupted', reason: 'stale claim', finishedAt: nowIso });
         swept += 1;
+        onSwept?.(run, task);
       } catch {
         // An orphan history (no schedule row) cannot be rewritten; the cascade removes it.
       }
@@ -543,7 +551,10 @@ async function boot(): Promise<void> {
   const now = d.now();
   const nowIso = now.toISOString();
   if (db.getSchedulerState() === undefined) db.setSchedulerState(freshSchedulerState(nowIso));
-  sweepStaleClaims(db, now, d.bounds);
+  // A claim the sweep retires can no longer answer its kv handshake: its `snug:schedule:<runId>`
+  // key is cleared from every app the task would have run (PR-B A3; a sibling tab's claim
+  // inside its bound is left alone, key included). Fire-and-forget: the key is a hint.
+  sweepStaleClaims(db, now, d.bounds, (run, task) => void clearScheduleKey(db, run, task));
 
   const queue = createRunQueue({
     db: d.db,

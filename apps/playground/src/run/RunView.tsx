@@ -12,17 +12,16 @@ import { Link, useNavigate, useParams } from 'react-router';
 import type { AgentTurnEvent } from '@snugprotocol/adapters';
 import { createDbDriver, createMemoryBackend, starterVersionSettingKey, type SnugDbDriver } from '@snugprotocol/db';
 import { FRAME_TYPES, type Frame } from '@snugprotocol/protocol';
-import { SnugAppFrame, type FrameDirection, type NetHandler, type RunnerHost } from '@snugprotocol/runner';
+import { SnugAppFrame, type FrameDirection, type RunnerHost } from '@snugprotocol/runner';
 
 import { NET_ERROR_CODES, type ConnectionRequirement } from '@snugprotocol/protocol';
-import { createAppTransport } from '../agent/transport.js';
 import { ReportErrorLink } from '../feedback/ReportErrorLink.js';
 import { useBuilderChat, type DataWriteCardState } from '../agent/useBuilderChat.js';
 import type { ChatCardState } from '../agent/cards.js';
 import { createOpenUrlHandlerFor } from '../state/openUrl.js';
-import { createNetHandlerFor } from '../state/net.js';
+import { composeAppRuntime } from './appRuntime.js';
 import { startSidecarLiveForApp, type SidecarSyncState } from '../state/sidecarLive.js';
-import { registerAppHost } from '../state/appHosts.js';
+import { publishAppEvent, registerAppHost } from '../state/appHosts.js';
 import {
   connectionWizardRevisionStore,
   isConnectionRepairableNetError,
@@ -65,6 +64,8 @@ import { Skeleton } from '../ui/Skeleton.js';
 import { initialRevealState, revealReduce, type RevealState } from './capability.js';
 import { DocsPanel } from './DocsPanel.js';
 import { RunHeaderActions } from './RunHeaderActions.js';
+import { useAppEventConsumer } from '../schedule/scheduleRequest.js';
+import { SuggestionStrip } from '../schedule/SuggestionStrip.js';
 import { HelperInstallCard } from '../connections/HelperInstallCard.js';
 import { WHATSAPP_HELPER, helperNeedsInstall, refreshHelperStatus } from '../state/helperInstall.js';
 import { initialLlmInspectorState, llmInspectorReduce, mergeLlmInspectorStates, type LlmInspectorState } from './llmInspector.js';
@@ -181,6 +182,8 @@ export default function RunView(): ReactElement {
   const [exhausted, setExhausted] = useState(false);
   const [navigatedAway, setNavigatedAway] = useState(false);
   const [frameEpoch, setFrameEpoch] = useState(0);
+  // TASK-20261009 P3: an app's `schedule-request` app-event becomes a suggestion on the strip below (one per frame generation).
+  const onAppEvent = useAppEventConsumer(id, frameEpoch);
   /** Some apps never announce — after host-ready + a grace period the header stops shimmering. */
   const [readySeen, setReadySeen] = useState(false);
   const [announceTimedOut, setAnnounceTimedOut] = useState(false);
@@ -320,10 +323,10 @@ export default function RunView(): ReactElement {
   // It is a memo dep for correctness on app-to-app navigation; the contract itself is
   // read PER SEND inside the transport, so an edit or revert needs no rebuild here
   // (fold F-M1 — there is no contentEpoch dependency and there does not need to be).
-  const realTransport = useMemo(
-    () => createAppTransport(mode, provider, onLlmEvent, id, onTurnStart),
-    [mode, provider, onLlmEvent, id, onTurnStart],
-  );
+  // The composition itself — transport, net handler, the frame's bindings — LIVES IN
+  // `run/appRuntime.ts` (TASK-20261009 A1): the scheduler's hidden frame composes the
+  // same seams, so they have one home; the memo over it is below the db driver.
+  //
   // A SHARED PREVIEW runs WITHOUT the LLM transport until the user arms it (ADR-0063
   // §4, plan-review finding 2): a stranger's code must not spend the user's tokens on
   // a click. A starter keeps the real transport — the pillar demo is the point. The
@@ -339,7 +342,6 @@ export default function RunView(): ReactElement {
     setAiArmed(false);
   }, [id]);
   const consentGate = useMemo(() => createConsentGateTransport(), []);
-  const transport = isSharedId(id) && !aiArmed ? consentGate : realTransport;
   // The envelope net capability (AL-03): a value-blind NetHandler the runner routes
   // net-request frames to. The executor (in state/net.ts) reads the app's frozen host
   // ceiling + credentials from the page user DB per use — the runner never sees a token.
@@ -350,21 +352,6 @@ export default function RunView(): ReactElement {
   // NOTHING here (offering a connect CTA on an off-ceiling attempt would coach
   // ceiling-widening in direct response to the attack, M12).
   const [netAuthError, setNetAuthError] = useState<{ appId: string; code: string } | null>(null);
-  // No handler where the platform allows no connections (TASK-20260905-host-kit P3, D4):
-  // `host-ready.net` is then false STRUCTURALLY, not by a flag the app must trust.
-  const netHandler = useMemo(
-    () =>
-      isUnownedId(id) || !allows('connections')
-        ? undefined
-        : createNetHandlerFor({
-            onNetError: (appId, code) => {
-              if (isConnectionRepairableNetError(code)) setNetAuthError({ appId, code });
-            },
-          }),
-    [id],
-  );
-  const netProps: { net: NetHandler; netAppId: string } | Record<string, never> =
-    netHandler !== undefined ? { net: netHandler, netAppId: id } : {};
   // The open-url capability (ADR-0038 D5): installed apps only — a read-only starter
   // keeps the flag false, so its copy-the-link fallback renders instead of a dialog a
   // browse session should never see. Host-assigned id, same rule as net.
@@ -399,6 +386,31 @@ export default function RunView(): ReactElement {
       cancelled = true;
     };
   }, [id]);
+  // THE RUNTIME (TASK-20261009 A1): the app's own transport, the value-blind net handler
+  // bound to the host-assigned id (none for an unowned id or a host without connections —
+  // `host-ready.net` false STRUCTURALLY), and the frame's capability bindings — composed in
+  // `run/appRuntime.ts`, which the scheduler's hidden frame shares. Built once the driver
+  // is known; the page's ORDINARY confirm gate answers here (the hidden frame injects its
+  // refusing gate — the one difference the seam allows). The shared preview's consent
+  // gate replaces the transport until the user arms it (above).
+  const runtime = useMemo(
+    () =>
+      db === null
+        ? undefined
+        : composeAppRuntime({
+            appId: id,
+            mode,
+            provider,
+            onLlmEvent,
+            onTurnStart,
+            driver: db,
+            onNetError: (appId, code) => {
+              if (isConnectionRepairableNetError(code)) setNetAuthError({ appId, code });
+            },
+          }),
+    [db, id, mode, provider, onLlmEvent, onTurnStart],
+  );
+  const frameRuntime = runtime === undefined ? undefined : { ...runtime, transport: isSharedId(id) && !aiArmed ? consentGate : runtime.transport };
 
   // AC18: a direct /run/starter--* visit (bookmark, back button, deep link) opens the
   // user's OWN copy when they already installed it — the same install_source identity
@@ -1266,6 +1278,8 @@ export default function RunView(): ReactElement {
             </div>
           </div>
         ) : null}
+        {/* TASK-20261009 P3: "<app> suggests: …" — the same strip family, ranked after the update note; never a modal. */}
+        {!isUnownedId(id) && allows('schedule') ? <SuggestionStrip appId={id} /> : null}
 
         <div className={`frame-wrap${inspector.inFlight > 0 ? ' thinking' : ''}`} data-testid="frame-wrap">
           {blocked !== undefined ? (
@@ -1273,7 +1287,7 @@ export default function RunView(): ReactElement {
             // export, versions, docs and the connections door, so an app this host cannot
             // run can still be taken to one that can.
             <RunBlocked name={blocked.name} emoji={blocked.emoji} blockers={blocked.blockers} />
-          ) : htmlState.phase === 'loading' || db === null || verdict === undefined ? (
+          ) : htmlState.phase === 'loading' || frameRuntime === undefined || verdict === undefined ? (
             <div className="run-overlay">
               <Skeleton width="60%" height="1.25rem" />
               <Skeleton width="40%" height="1rem" />
@@ -1288,17 +1302,22 @@ export default function RunView(): ReactElement {
               // the frame so the mount-captured transport can't go stale (Gate-5).
               key={`${id}:${mode}:${provider}:${frameEpoch}:${aiArmed ? 'ai' : 'preview'}`}
               html={htmlState.html}
-              transport={transport}
+              transport={frameRuntime.transport}
               budgetKey={`app:${id}`}
-              db={db}
-              dbNamespace={id}
               {...(streaming !== undefined ? { streaming } : {})}
-              {...netProps}
+              {...frameRuntime.frameProps}
               openUrl={openUrlHandler}
               theme={theme}
               title={meta?.displayName ?? 'Snug app'}
               controlsRef={controlsRef}
               onAnnounce={onAnnounce}
+              // The live frame's app-events reach two readers: the registry (TASK-20261009 A3 —
+              // a scheduled run delivered to THIS open app reads its `schedule-result` there,
+              // keyed by the host-assigned id) and the suggestion consumer (P3).
+              onAppEvent={(event, data) => {
+                publishAppEvent(id, event, data);
+                onAppEvent(event, data);
+              }}
               onFrame={onFrame}
               onBudgetExhausted={() => setExhausted(true)}
               onNavigatedAway={() => setNavigatedAway(true)}

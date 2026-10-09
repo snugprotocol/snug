@@ -96,6 +96,7 @@ import {
   isRowModifyingStatement,
   isSqlTailEmpty,
   normalizeCell,
+  type DbDriverResult,
   type DbPersistence,
   type SnugDbDriver,
 } from '../driver.js';
@@ -2146,19 +2147,33 @@ function construct(
    */
   const deletedApps = new Set<string>();
 
+  /** The tombstone's answer, for a frame and for the host-side kv alike. */
+  const deletedAppRefusal = (namespace: string): DbDriverResult => ({
+    ok: false as const,
+    code: USERDB_ERROR_CODES.NOT_FOUND,
+    message: `app "${namespace}" was deleted`,
+    retryable: false,
+  });
+
   /** Stable facade so `userDb.driver` survives importUserDb swapping the inner driver. */
   const driver: SnugDbDriver = {
     handle: (namespace, request) => {
-      if (deletedApps.has(namespace)) {
-        return Promise.resolve({
-          ok: false as const,
-          code: USERDB_ERROR_CODES.NOT_FOUND,
-          message: `app "${namespace}" was deleted`,
-          retryable: false,
-        });
-      }
+      if (deletedApps.has(namespace)) return Promise.resolve(deletedAppRefusal(namespace));
       noteNamespace(namespace);
       return inner.handle(namespace, request);
+    },
+    // The HOST-side kv (TASK-20261009 A3) crosses the same facade as a frame: the tombstone
+    // refuses it and `noteNamespace` keys the write-back, so a scheduled input the host
+    // writes lands in the file exactly as the app's own kv writes do.
+    kvSet: (namespace, key, value) => {
+      if (deletedApps.has(namespace)) return Promise.resolve(deletedAppRefusal(namespace));
+      noteNamespace(namespace);
+      return inner.kvSet(namespace, key, value);
+    },
+    kvGet: (namespace, key) => {
+      if (deletedApps.has(namespace)) return Promise.resolve(deletedAppRefusal(namespace));
+      noteNamespace(namespace);
+      return inner.kvGet(namespace, key);
     },
     get persistence() {
       return inner.persistence;

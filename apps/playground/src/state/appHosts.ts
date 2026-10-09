@@ -38,6 +38,25 @@ type NotifyEvent = (event: string, data?: unknown) => void;
 const hosts = new Map<string, { notify: NotifyEvent; token: symbol }>();
 
 /**
+ * Who wants to know when an app's live host registers or retracts (TASK-20261009 A2): the
+ * scheduler's hidden frame aborts its run when a visible RunView mounts the same app.
+ */
+type HostListener = (appId: string, live: boolean) => void;
+const hostListeners = new Set<HostListener>();
+
+/**
+ * The app→host events a LIVE frame forwards (TASK-20261009 A3): RunView's `onAppEvent`
+ * publishes here so a scheduled run delivered to the open app can read its `schedule-result`
+ * without holding the frame. Keyed by the HOST-assigned id the view registered under.
+ */
+type AppEventListener = (event: string, data: unknown) => void;
+const eventListeners = new Map<string, Set<AppEventListener>>();
+
+function announceHosts(appId: string, live: boolean): void {
+  for (const listener of hostListeners) listener(appId, live);
+}
+
+/**
  * Publish a running app's frame handle. Returns its own unregister.
  *
  * The returned unregister is TOKEN-SCOPED, and that is load-bearing rather than tidy:
@@ -49,15 +68,66 @@ const hosts = new Map<string, { notify: NotifyEvent; token: symbol }>();
 export function registerAppHost(appId: string, notify: NotifyEvent): () => void {
   const token = Symbol(appId);
   hosts.set(appId, { notify, token });
+  announceHosts(appId, true);
   return () => {
     // Only retract if this registration is still the current one.
-    if (hosts.get(appId)?.token === token) hosts.delete(appId);
+    if (hosts.get(appId)?.token === token) {
+      hosts.delete(appId);
+      announceHosts(appId, false);
+    }
   };
 }
 
 /** Is this app on screen and reachable right now? Drives whether the prompt is offered. */
 export function hasLiveAppHost(appId: string): boolean {
   return hosts.has(appId);
+}
+
+/** Hear every registration and retraction (`live` says which). Returns the unsubscribe. */
+export function subscribeAppHosts(listener: HostListener): () => void {
+  hostListeners.add(listener);
+  return () => {
+    hostListeners.delete(listener);
+  };
+}
+
+/**
+ * Ring one host-event into an app's LIVE frame — a HINT (an event name and ids), never
+ * content, for the same two ADR-0034 reasons `notifyAppRefresh` states. Returns whether a
+ * frame was there to ring; never throws.
+ */
+export function notifyAppHost(appId: string, event: string, data?: unknown): boolean {
+  const entry = hosts.get(appId);
+  if (!entry) return false;
+  try {
+    entry.notify(event, data);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** A live view forwards its frame's app-events here (the id is the view's, host-assigned). */
+export function publishAppEvent(appId: string, event: string, data: unknown): void {
+  const listeners = eventListeners.get(appId);
+  if (listeners === undefined) return;
+  for (const listener of listeners) listener(event, data);
+}
+
+/** Hear the app-events the live frame of `appId` forwards. Returns the unsubscribe. */
+export function subscribeAppEvents(appId: string, listener: AppEventListener): () => void {
+  let listeners = eventListeners.get(appId);
+  if (listeners === undefined) {
+    listeners = new Set();
+    eventListeners.set(appId, listeners);
+  }
+  listeners.add(listener);
+  return () => {
+    const current = eventListeners.get(appId);
+    if (current === undefined) return;
+    current.delete(listener);
+    if (current.size === 0) eventListeners.delete(appId);
+  };
 }
 
 /**
@@ -86,4 +156,6 @@ export function notifyAppRefresh(appId: string, slot: string): boolean {
 /** Test seam — the registry is module state, so suites must be able to clear it. */
 export function __resetAppHostsForTest(): void {
   hosts.clear();
+  hostListeners.clear();
+  eventListeners.clear();
 }

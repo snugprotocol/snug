@@ -34,7 +34,9 @@ import { SCHEDULE_STEP_SUMMARY_MAX_CHARS, findScheduleCredential, type ScheduleP
 import type { AgentTransport } from '@snugprotocol/runner';
 
 import { scrubCredentialProse } from '../security/credentialShapes.js';
+import { NO_HIDDEN_FRAME, defaultAppRunDeps, executeAppRun, type AppRunDeps } from './appRun.js';
 import { CANCELLED_SUMMARY, defaultTransportFor, executeAppThink } from './appThink.js';
+import { blockedHere } from './copy.js';
 import type { StepContext, StepExecutor, StepOutcome } from './engine-types.js';
 import { messageOf } from './taskShape.js';
 
@@ -43,13 +45,16 @@ export { CANCELLED_SUMMARY } from './appThink.js';
 export interface StepExecutorDeps {
   /** The app's OWN transport, or `undefined` when no brain can answer (the demo brain) — see `appThink.ts`. */
   transportFor(appId: string): AgentTransport | undefined;
+  /**
+   * The *Run [app]* seams (PR-B, `appRun.ts`): the hidden mount store, the live-host
+   * registry, the runtime composition. A composition WITHOUT them (a unit fake) answers an
+   * app-run step `blocked` by name rather than pretending to run anything.
+   */
+  appRun?: AppRunDeps | undefined;
 }
 
 /** What replaces a summary, an alert line or a failure message that looked like a credential. */
 export const WITHHELD_SUMMARY = 'a result was withheld because it looked like a credential';
-
-/** The PR-A answer for a *Run [app]* step. */
-export const APP_RUN_LATER_SUMMARY = 'running an app on a schedule arrives in a later release';
 
 const none = (): StepOutcome['calls'] => ({ ai: 0, net: 0 });
 
@@ -82,7 +87,7 @@ async function dispatch(step: ScheduleStep, ctx: StepContext, deps: StepExecutor
     case 'notify':
       return { status: 'ok', summary: step.body, calls: none(), alert: { title: step.title, body: step.body } };
     case 'app-run':
-      return { status: 'refused', summary: APP_RUN_LATER_SUMMARY, calls: none() };
+      return deps.appRun === undefined ? { status: 'blocked', summary: blockedHere(NO_HIDDEN_FRAME).text, calls: none() } : executeAppRun(step, ctx, deps.appRun);
     case 'app-think':
       return executeAppThink(step, ctx, deps);
     default: {
@@ -107,5 +112,15 @@ export function createStepExecutor(deps: StepExecutorDeps): StepExecutor {
   };
 }
 
-/** The production executor: the app transport resolved per call from the brain and the settings stores. */
-export const executeStep: StepExecutor = createStepExecutor({ transportFor: defaultTransportFor });
+/**
+ * The production executor: the app transport resolved per call from the brain and the settings
+ * stores, the *Run [app]* seams over the page's hidden mount store and live-host registry.
+ * Composed on FIRST USE, never at load (the M20 cycle: `appRun.ts` reaches `state/net.ts` and
+ * so `state/userdb.ts` → `scheduler.ts` → this module; a load-time dereference would hit a
+ * binding still in its temporal dead zone whichever module the bundle enters the cycle by).
+ */
+let production: StepExecutor | undefined;
+export const executeStep: StepExecutor = (step, ctx) => {
+  production ??= createStepExecutor({ transportFor: defaultTransportFor, appRun: defaultAppRunDeps() });
+  return production(step, ctx);
+};

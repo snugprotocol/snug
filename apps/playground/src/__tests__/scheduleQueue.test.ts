@@ -629,3 +629,73 @@ describe('the bound and the aborts', () => {
     expect(() => q.abortAll('x')).not.toThrow();
   });
 });
+
+describe('*Run [app]* rows (PR-B A2/A4/A5): what the hidden frame spends and says rides the row', () => {
+  const APP_RUN: ScheduleStep = { kind: 'app-run', appId: 'ledger' };
+  const state = () => ({ watermark: CREATED, globalPause: false, daily: { date: DUE.slice(0, 10), ai: 0, net: 0 } });
+
+  it('an app-run step’s net count (and its AI count) lands on the run row and on the day’s counters', async () => {
+    db.setSchedulerState(state());
+    const t = seed({ steps: [APP_RUN] });
+    const q = queue(recorder(() => ok('refreshed', { ai: 1, net: 3 })).execute);
+    q.enqueue(item(t));
+    await q.idle();
+    expect(rows()[0]).toMatchObject({ status: 'ok', calls: { ai: 1, net: 3 }, steps: [{ status: 'ok', summary: 'refreshed' }] });
+    expect(db.getSchedulerState()?.daily).toEqual({ date: DUE.slice(0, 10), ai: 1, net: 3 });
+  });
+
+  it('a `refused` app-run step (the refusing gate said no) folds the run to `needs-you` with the step’s own sentence as the reason', async () => {
+    const t = seed({ steps: [APP_RUN, NOTIFY] });
+    const q = queue(recorder((step) => (step.kind === 'app-run' ? { status: 'refused', summary: 'Ledger needs your OK — Snug doesn’t post to api.github.com while you’re away', calls: { ai: 0, net: 1 } } : ok('reminded'))).execute);
+    q.enqueue(item(t));
+    await q.idle();
+    expect(rows()[0]).toMatchObject({
+      status: 'needs-you',
+      reason: 'Ledger needs your OK — Snug doesn’t post to api.github.com while you’re away',
+      calls: { ai: 0, net: 1 },
+      steps: [{ status: 'refused' }, { status: 'ok', summary: 'reminded' }], // the reminder after it still ran
+    });
+    expect(db.getScheduledTask('t1')?.consecutiveFailures).toBe(0); // the gate's refusal is not the app's failure
+  });
+
+  it('a `no-handler` app-run step (the app never announced) folds the run to `no-handler` and counts toward the failure pause', async () => {
+    const t = seed({ steps: [APP_RUN] });
+    const q = queue(recorder(() => ({ status: 'no-handler', summary: 'Ledger doesn’t know how to run on a schedule yet', calls: { ai: 0, net: 0 } })).execute);
+    q.enqueue(item(t));
+    await q.idle();
+    expect(rows()[0]?.status).toBe('no-handler');
+    expect(db.getScheduledTask('t1')?.consecutiveFailures).toBe(1);
+  });
+
+  it('the context’s `interrupt(reason)` seam records the run `interrupted` with THAT reason — "app opened" (mutation: drop `interrupt` from the context → red)', async () => {
+    const t = seed({ steps: [APP_RUN, NOTIFY] });
+    const rec = recorder(
+      (_step, ctx) =>
+        new Promise<StepOutcome>((resolve, reject) => {
+          ctx.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+          ctx.interrupt?.('app opened');
+          if (ctx.interrupt === undefined) resolve(ok());
+        }),
+    );
+    const q = queue(rec.execute);
+    q.enqueue(item(t));
+    await q.idle();
+    expect(rows()[0]).toMatchObject({ status: 'interrupted', reason: 'app opened', steps: [{ status: 'skipped' }, { status: 'skipped' }] });
+  });
+
+  it('`spent()` tells a step what the run already charged, so a step can ask the ceiling honestly', async () => {
+    const t = seed({ steps: [APP_RUN, APP_RUN] });
+    const seen: Array<{ ai: number; net: number } | undefined> = [];
+    const rec = recorder((_step, ctx) => {
+      seen.push(ctx.spent?.());
+      return ok('x', { ai: 1, net: 2 });
+    });
+    const q = queue(rec.execute);
+    q.enqueue(item(t));
+    await q.idle();
+    expect(seen).toEqual([
+      { ai: 0, net: 0 },
+      { ai: 1, net: 2 },
+    ]);
+  });
+});
