@@ -6,6 +6,10 @@ Dated backlog of OPEN work only (ADR-0027: shipped/superseded history lives in g
 
 ## Now / next
 
+- **2026-10-10 — From TASK-20261009-scheduled-run-open-app (PR #197, ADR-0074 amended; a scheduled *Run [app]* now runs whether or not the app is open). Carried forward:**
+  - **The open copy's side of R-70:** the hidden frame's db binding refuses a transaction or an import, but the VISIBLE copy's own multi-request transaction can still capture a scheduled single-statement write, and a visible copy can blind-write state it cached at load (`usePersistedState`) over what the handler stored. Options: refuse cross-request transactions while a hidden run of that app is mounted, or a kv change signal so the open copy re-reads. No shipped starter is affected today.
+  - **A hidden run's 401/403 raises the reconnect chip on the open copy** (open-app delta R-b): benign, but the chip should say the scheduled run found the broken connection.
+  - **Owner walk:** *Should I?* open, *run Should I?* scheduled two minutes out — the result carries the forecast line, not *needs you*.
 - **2026-10-09 — From TASK-20261009-scheduling-framework PR-A (ADR-0074; the scheduler, the Schedule page, *Remind me* and *Ask the AI*; PR-B = *Run [app]* + every proposal channel + desktop notifications; PR-C = the weather starter's suggestion, owner-timed). Carried forward:**
   - **Promotion hand-over (threat model R-60):** a follower promoted to leader idles behind a reload strip because its in-memory copy is stale. The proper fix is a WRITER LOCK (`acquireUserDbWriterLock` exists unused in `packages/db`) plus a re-open seam so a follower takes over a FRESH copy of the file — a `packages/db` + playground task.
   - **Desktop background mode (own High task):** a menu-bar presence, keep-running-after-close, launch at login (`tauri-plugin-autostart`), the close-flush handshake and the exit-time sidecar reap reworked for hide-instead-of-quit. The single biggest reliability win for scheduling on a Mac; native notifications LANDED with PR-B (2026-10-09 — `apps/desktop/src/notify.ts`; the walk needs the bundled app).
