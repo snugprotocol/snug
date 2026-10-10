@@ -47,6 +47,17 @@ const frame = (method: 'GET' | 'POST', url = 'https://api.example.com/v1/items')
   ...(method === 'POST' ? { body: '{}' } : {}),
 });
 
+/**
+ * A send into the armed thread. Symbolic (`snug-connection://<slot>/…`): only that path hands the
+ * gate a `slot`, and a standing grant never answers a request without one (`standing-approval.ts`) —
+ * a literal URL would make the armed-grant negative below prove nothing.
+ */
+const THREAD_JID = 'friend@s.whatsapp.net';
+const threadPost = () => ({
+  ...frame('POST', `snug-connection://${SLOT}/chats/${encodeURIComponent(THREAD_JID)}/messages`),
+  body: JSON.stringify({ jid: THREAD_JID, text: 'hi' }),
+});
+
 /** A recording fetch that answers 200. */
 function recordingFetch(): { fetched: string[]; fetchImpl: (url: string, init?: RequestInit) => Promise<Response> } {
   const fetched: string[] = [];
@@ -110,14 +121,19 @@ describe('the handler with the scheduled gate (A5)', () => {
 
   it('an armed standing grant does NOT let a scheduled POST through either', async () => {
     const appId = seedConnectedApp();
-    armStandingApproval({ appId, slot: SLOT, threadJid: 'friend@s.whatsapp.net', trigger: 'all', maxPerWindow: 10, windowMs: 60_000, armedAt: Date.now(), sends: [] });
+    armStandingApproval({ appId, slot: SLOT, threadJid: THREAD_JID, trigger: 'all', maxPerWindow: 10, windowMs: 60_000, armedAt: Date.now(), sends: [] });
+    // The grant is live: on the ORDINARY gate the same symbolic send goes through without asking —
+    // so the refusal below is the scheduled gate's, not a request the grant never matched.
+    const ordinaryFetch = recordingFetch();
+    const ordinary = createNetHandlerFor({ fetchImpl: ordinaryFetch.fetchImpl });
+    expect((await ordinary.handle(appId, threadPost())).ok, 'the armed grant answers the ordinary gate').toBe(true);
+    expect(ordinaryFetch.fetched).toHaveLength(1);
+    expect(netConfirmStore.get()).toBeNull();
+
     const gate = createScheduledConfirmGate();
     const { fetched, fetchImpl } = recordingFetch();
     const scheduled = createNetHandlerFor({ fetchImpl, confirmGate: gate });
-    const result = await scheduled.handle(appId, {
-      ...frame('POST', 'https://api.example.com/chats/friend%40s.whatsapp.net/messages'),
-      body: JSON.stringify({ jid: 'friend@s.whatsapp.net', text: 'hi' }),
-    });
+    const result = await scheduled.handle(appId, threadPost());
     expect(result).toMatchObject({ ok: false, code: NET_ERROR_CODES.NET_CONFIRM_DENIED });
     expect(fetched).toEqual([]);
     expect(netConfirmStore.get()).toBeNull();

@@ -891,7 +891,9 @@ describe('a delegated run — the app is OPEN (ADR-0077)', () => {
 
   describe('AC4 — the run follows the app: once, and never after a change went out', () => {
     it('live → hidden: the app CLOSING mid-run (nothing granted) re-dispatches the SAME runId to the hidden frame under the refusing gate; its result lands; the key is written per dispatch and cleared once', async () => {
-      const deps = fakeDeps({ resultTimeoutMs: 5_000 });
+      // announceTimeoutMs as the AC5 tests: the default 40 ms is shorter than `vi.waitFor`'s 50 ms
+      // poll, so the re-dispatched hidden mount could time out before the test announces it.
+      const deps = fakeDeps({ announceTimeoutMs: 2_000, resultTimeoutMs: 5_000 });
       const kvSet = spyKv();
       deps.live.open(appId);
       const step: AppRunStep = { kind: 'app-run', appId };

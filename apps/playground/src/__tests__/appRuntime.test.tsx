@@ -24,6 +24,7 @@ import type { UserDb } from '@snugprotocol/db';
 import { collectSources } from '../access/consent.js';
 import { __setAccessDepsForTests, createGrantFromDecision, readerGeneration, resetAccessSession } from '../access/grants.js';
 import type { AppRuntime } from '../run/appRuntime.js';
+import { beginDelegatedRun, delegatedRunFor, endDelegatedRun } from '../schedule/runPlacement.js';
 import { createScheduledConfirmGate } from '../schedule/scheduledConfirmGate.js';
 import { __resetNetStateForTests, netConfirmStore } from '../state/net.js';
 import { installTestUserDb } from './userdbTestHelper.js';
@@ -113,13 +114,47 @@ const netOf = (runtime: AppRuntime): NetHandler => {
 };
 
 describe('composeAppRuntime — the seams RunView used to compose inline', () => {
-  it('the transport is the app’s OWN transport: built for the app id with the mode, provider and the inspector seams', () => {
+  it('the transport is the app’s OWN transport: built for the app id with the mode, provider and the inspector seams', async () => {
     const onLlmEvent = (): void => {};
     const onTurnStart = (): void => {};
+    const send = vi.fn<AgentTransport['send']>(async () => ({ ok: true, text: '{}' }));
+    transportSpy.mockReturnValue({ send });
     const runtime = composeAppRuntime({ appId: 'app-1', mode: 'byok', provider: 'mock', onLlmEvent, onTurnStart, driver: db.driver, attended: true, generation: 0 });
-    expect(runtime.transport).toBe(probe);
     expect(transportSpy).toHaveBeenCalledTimes(1);
     expect(transportSpy).toHaveBeenCalledWith('byok', 'mock', onLlmEvent, 'app-1', onTurnStart);
+    // BEHAVIOURAL, not identity (contract v2: the attended transport is the counting wrapper over the
+    // app's own): a send reaches the app's own transport with the same wire and the options WHOLE —
+    // the open app streams, so `signal` and `onDelta` must arrive untouched.
+    const sendOptions = { signal: new AbortController().signal, onDelta: (): void => {} };
+    expect(await runtime.transport.send('{"wire":1}', sendOptions)).toEqual({ ok: true, text: '{}' });
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0]![0]).toBe('{"wire":1}');
+    expect(send.mock.calls[0]![1]).toBe(sendOptions);
+  });
+
+  it('the visible frame COUNTS a delegated run’s thinks (ADR-0077 §4): one send while a run is in flight is one `calls.ai` on its record; with none in flight nothing is counted', async () => {
+    const runtime = composeAppRuntime({ appId: 'app-1', mode: 'byok', provider: 'mock', driver: db.driver, attended: true, generation: 3 });
+    const sendOptions = { signal: new AbortController().signal };
+    // No run in flight: a pass-through — nothing to count on, and nothing is created.
+    await runtime.transport.send('{}', sendOptions);
+    expect(delegatedRunFor('app-1')).toBeUndefined();
+    const begun = beginDelegatedRun({ appId: 'app-1', appName: 'App One', runId: 'run-1', taskId: 't1', title: 'Hourly digest', generation: 3 });
+    expect(begun.ok).toBe(true);
+    try {
+      expect(delegatedRunFor('app-1')!.calls).toEqual({ ai: 0, net: 0 });
+      await runtime.transport.send('{}', sendOptions);
+      expect(delegatedRunFor('app-1')!.calls).toEqual({ ai: 1, net: 0 });
+    } finally {
+      endDelegatedRun('app-1', 'run-1');
+    }
+    // After the run ends, sends are not counted anywhere (the record is gone; none is minted).
+    await runtime.transport.send('{}', sendOptions);
+    expect(delegatedRunFor('app-1')).toBeUndefined();
+  });
+
+  it('the hidden frame (attended: false) gets the app’s own transport UNWRAPPED — the hidden path wraps it itself (the capping, scrubbing sibling)', () => {
+    const runtime = composeAppRuntime({ appId: 'app-1', mode: 'byok', provider: 'mock', driver: db.driver, attended: false });
+    expect(runtime.transport).toBe(probe);
   });
 
   it('an owned app binds a value-blind net handler to ITS OWN id (host-assigned), and the frame props carry db + net together', () => {
