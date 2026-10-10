@@ -522,6 +522,22 @@ ADR-0077 → `accepted` + the fold section; ADR-0074 status line → `accepted (
 - **D6** The kit page had 26 KiB of headroom after PR #198; PR-3 adds a write planner to the Worker and a schema or two. The plan names the ceiling conversation as a possible STOP, not a silent bump.
 - **D7** Sidecar-fact sources stay deferred (Q17) with the taint design named; the owner can flip it with one word and PR-5 absorbs it (the egress note and a connected-call refusal while the grant is live).
 
+### PR-1 — Gate 4 decisions & surprises (2026-10-10, from the implementation lane's report; each verified against the contract)
+
+- **D-PR1-12 `DelegatedRun.grantedHost?: string`** (additive): `closedAfterChange(appName, host)` needs the host of the allowed call; the gate records it on a grant.
+- **D-PR1-13 `DispatchEnd` gains `{ kind: 'blocked'; message }`**: an app whose html vanished mid-run keeps today's `blocked` (`appMissing`).
+- **D-PR1-14 `Dispatch` carries `spent` and `afterHandover`**: the hidden path's ceiling questions count the step's earlier attempt (summed tallies); `afterHandover` drives the announce bound.
+- **D-PR1-15 The D-PR1-6 pre-check runs before each LIVE dispatch only** (first or after a handover), never before the hidden path — the kept pin `appRunHandshake.test.tsx:658` requires a day at the net ceiling to still mount the hidden frame and refuse per call, and D-PR1-6's own title says "before a delegated dispatch".
+- **D-PR1-16 A re-dispatch's announce wait is bounded by the deadline alone**; the first dispatch keeps `min(announceTimeoutMs, remaining)`.
+- **D-PR1-17 `outcomeOf` reads the refusals of the attempt that ENDED the step** (the cut attempt's record belongs to an abandoned handler run); tallies are still summed across attempts.
+- **D-PR1-18 The gate records nothing when the run's own signal withdraws a parked ask** (the record was already returned to the executor); D-PR1-9 names only the withdrawal.
+- **D-PR1-19 `state/net.ts`'s belt learns the retracted generation from a `delegatedRunStore` subscription**, because the registry has dropped its entry by the time a retraction is announced; the posture also dies structurally through the v2.1 token match.
+- **D-PR1-20 `list`/`release` keep the frame's own posture during a delegated run** — the contract closes `request`/`query` only; said in the handler's header. (The security diff review is asked whether that is safe.)
+- **Surprise S-PR1-1:** `appRuntime.test.tsx:120` pinned the attended transport by IDENTITY (`toBe(probe)`); the contract wraps it. Routed to the test lane as a behavioural pin (a send reaches the probe; a delegated run counts).
+- **Surprise S-PR1-2:** `resultDetail.test.tsx:439/:459` pin the old needs-you card text; the `needsYouTitle` card change waits for the test lane's updated pins (tests first), then lands.
+- **Surprise S-PR1-3:** `appRunHandshake.test.tsx:893` was fragile on `announceTimeoutMs: 40` vs `vi.waitFor`'s 50 ms poll — hardened by the test lane with `announceTimeoutMs: 2_000`.
+- **Measured:** playground 3643/3644 (the one red is S-PR1-1), host 681/681, desktop 231/231, e2e `schedule-flow.spec.ts` 5/5 (36.7 s, Node 22, port 8797), `check-threat-model` green (ledger `1031a017416a`), kit page 2,733,171 B (16,829 B under the ceiling). Diff: 23 files, +1,355 / −301.
+
 ## Session journal (append-only, newest last)
 
 ### 2026-10-10 18:45 UTC — Claude — planning session (Gates 1–2; STOPPED for owner approval)
