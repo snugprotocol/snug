@@ -10,16 +10,19 @@
 // flag, no new error code. The key is cleared on EVERY exit path, and the stale-claim sweep
 // clears the key of any claim a dead tab left behind (`clearScheduleKey`, from `scheduler.ts`).
 //
-// WHERE THE APP RUNS — THE TRIGGER DECIDES, AND IT NEVER RUNS BEHIND THE USER (S1).
+// WHERE THE APP RUNS — THE TRIGGER DECIDES; A TIMER NEVER DRIVES THE LIVE FRAME.
 //   `due` / `late` / `catch-up` (nobody asked right now): ONE hidden `SnugAppFrame` is mounted
 //   through `hiddenMountStore` (`ScheduledRunHost.tsx` renders it) with the runtime
 //   `run/appRuntime.ts` composes for RunView, and two differences — the STANDALONE refusing
 //   gate and the counting transport (below). The hidden frame runs the app's COMMITTED CURRENT
-//   version (`getAppHtml`). If the app is ON SCREEN at that moment, the step is `refused`
-//   (`APP_OPEN_REFUSAL`): Snug does not run an app behind the person using it — not in a
-//   hidden frame beside the live one (two instances over one store), and not in the live frame
-//   (whose gate is the ordinary one, armed by whatever the user remembered). The run folds to
-//   `needs-you`; its one act is *run now*.
+//   version (`getAppHtml`). It runs WHETHER OR NOT the app is on screen, and opening the app
+//   mid-run does not stop it (owner decision 2026-10-09, TASK-20261009-scheduled-run-open-app —
+//   a schedule runs on time, without asking). What PR-B's Gate-5 fold (S1) guarded against
+//   stays guarded: the run never rides the LIVE frame, whose gate is the ordinary one armed by
+//   whatever the user remembered — it gets its own frame, its own refusing gate and its own
+//   count. The accepted cost: two instances of one app (the visible one and this one) may run at
+//   once over the app's one store — each db/kv request is atomic at the host, the race is the
+//   app's (two read-modify-writes), as with the app open in two tabs (threat model R-62).
 //   `manual` (the user pressed *run now* / *run now and review*): the run is delivered ONLY to
 //   the LIVE frame — the hint rides the registry's notify, the result comes back through the
 //   app-events the view forwards (`publishAppEvent`) — under the page's ordinary gate, because
@@ -49,9 +52,9 @@
 // already spent (`ctx.spent`), so a run cannot slip past the ceiling by spending inside one
 // step. The counts ride the outcome's `calls`.
 //
-// A VISIBLE OPEN ABORTS THE HIDDEN RUN (F5). While the hidden frame runs, a RunView mounting
-// the same app (`subscribeAppHosts`) asks the queue to interrupt this run (`ctx.interrupt`,
-// reason `app opened`); the frame unmounts, the key is cleared, the run is recorded as such.
+// A VISIBLE OPEN DOES NOT ABORT THE HIDDEN RUN. PR-B's F5 interrupted the run when a RunView
+// mounted the same app; the owner's 2026-10-09 decision (a schedule runs on time, open app or
+// not) retired that, so the two frames simply coexist until the hidden one answers.
 //
 // REFUSED WITHOUT A SEAT. A platform that composes no `scheduler` seat (every shipped host
 // composes one — web, desktop, both kit bindings) gets no hidden frame: the step is `blocked`
@@ -90,8 +93,6 @@ export const SCHEDULE_RESULT_MAX_CHARS = 8 * 1024;
 /** The reason when a composition carries no hidden-frame seams, or the platform no scheduler seat. */
 export const NO_HIDDEN_FRAME = 'this host cannot run an app on a schedule';
 
-/** An unattended run found the app on screen (S1): refused, never run behind the user; the fold is `needs-you`. */
-export const APP_OPEN_REFUSAL = 'the app is open — Snug doesn’t run it behind you; close it or run now';
 
 /** A manual run with the app NOT on screen: refused by name — the view opens the app first, then runs. */
 export const openAndRunAgain = (appName: string): string => `open ${appName} and run it again`;
@@ -311,8 +312,7 @@ export async function executeAppRun(step: AppRunStep, ctx: StepContext, deps: Ap
     if (!live) return { status: 'refused', summary: openAndRunAgain(app.displayName), calls: none() };
     return runInLiveFrame(app, step, ctx, deps, key, payload);
   }
-  // Unattended: never behind the person using the app (S1); else the hidden frame, refusing gate.
-  if (live) return { status: 'refused', summary: APP_OPEN_REFUSAL, calls: none() };
+  // Unattended: the hidden frame under the refusing gate — open app or not; never the live frame.
   return runInHiddenFrame(app, step, ctx, deps, key, payload, createScheduledConfirmGate());
 }
 
@@ -442,13 +442,6 @@ async function runInHiddenFrame(
     onNavigatedAway: () => interrupted.resolve({ kind: 'failed', message: 'the app left its sandbox' }),
     onBudgetExhausted: () => interrupted.resolve({ kind: 'failed', message: 'the app kept answering off-script' }),
   };
-  // A visible open of the same app aborts the hidden run (F5): the queue records it `interrupted`.
-  const unwatch = deps.live.subscribe((id, isLive) => {
-    if (isLive && id === appId) {
-      ctx.interrupt?.('app opened');
-      interrupted.resolve({ kind: 'failed', message: 'app opened' });
-    }
-  });
   deps.mounts.set(mount);
   try {
     const announceBound = timer(deps.announceTimeoutMs);
@@ -481,7 +474,6 @@ async function runInHiddenFrame(
     const answer = await awaitResult(ctx, deps.resultTimeoutMs, result.promise, interrupted.promise);
     return outcomeOf(app, gate, answer, calls(), deps.resultTimeoutMs);
   } finally {
-    unwatch();
     if (deps.mounts.get() === mount) deps.mounts.set(undefined);
     await ctx.db.driver.kvSet(appId, key, null);
   }

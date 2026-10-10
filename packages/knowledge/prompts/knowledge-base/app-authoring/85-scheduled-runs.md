@@ -13,9 +13,8 @@ An app never owns a clock. The ONE timer in Snug is the host's scheduler, and a 
 exists only because the USER created or enabled it on the host's Schedule page — a
 recurring reminder, a question to an app's AI, or a run of an app: a fetch every hour, a
 brief every morning, a check every Friday. When a run of your app is due the host wakes
-the app itself in a hidden frame (if your app is open on screen at that moment, the host
-does not run it behind the user — the result reads *needs you* until the user runs it from
-there), hands it the run's input, and records what the app answers as a *result* the user
+the app itself in a hidden frame — even when your app is also open on screen, so your
+handler may run beside a visible copy of the same app — hands it the run's input, and records what the app answers as a *result* the user
 reads later. Nobody has to be looking.
 
 So the rule in "Never Think on a Timer" has exactly one sanctioned exception, and it is
@@ -110,6 +109,10 @@ module SDK get the same handshake typed as `useSnugSchedule(handler)` and
   `SCHEDULE_HANDLED` set covers this page, and if your work must not repeat across reloads
   (a message sent, a row appended), remember the `runId` you acted on in your own
   persisted state before acting.
+- **You may not be the only instance.** A scheduled run can land while the user has the app
+  open, so two copies of your app may run at once over the same store. Read what you need
+  from the store inside the handler (never from in-memory state the visible copy built), and
+  make every write safe to repeat.
 - **A result is a summary, not data.** The host shows `summary` to a person and never
   reads anything else from it. Keep what you fetched in your own key-value store or
   database, where the app shows it next time it opens.

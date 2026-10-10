@@ -8,7 +8,7 @@
 // a result is accepted only from the frame that received the hint, after the hint, once, for
 // this run, under a length cap and a strict parse — an unsolicited, duplicate, forged or
 // oversized one is DROPPED; no announce → `no-handler`, no result → `failed`; the key is cleared
-// on every exit; a visible open interrupts the run (`app opened`); the gate follows the trigger
+// on every exit; an unattended run runs in the hidden frame whether or not the app is open, and opening it mid-run does not interrupt it (owner decision 2026-10-09); the gate follows the trigger
 // and its record outranks the app's answer; the day's ceilings count what the run spent; the
 // live frame gets the hint without a hidden mount; no scheduler seat → blocked by name; the C1
 // negatives; and the PRODUCTION wire (`executeStep` → the real hidden mount store).
@@ -21,7 +21,6 @@ import type { UserDb } from '@snugprotocol/db';
 import type { SnugPlatform } from '../platform/platform.js';
 import {
   APP_CLOSED_SUMMARY,
-  APP_OPEN_REFUSAL,
   NO_HIDDEN_FRAME,
   SCHEDULE_RESULT_MAX_CHARS,
   appDidNotAnswer,
@@ -389,18 +388,18 @@ describe('the result is bound to the frame and the run, once, capped (F8)', () =
   });
 });
 
-describe('a visible open aborts the hidden run (F5)', () => {
-  it('a RunView mounting the same app mid-run asks the queue to interrupt with "app opened"; the frame goes and the key is cleared', async () => {
+describe('opening the app does not stop its scheduled run (owner decision 2026-10-09, TASK-20261009-scheduled-run-open-app)', () => {
+  it('a RunView mounting the same app mid-run does NOT interrupt it: no `interrupt`, the hidden frame stays, the result lands, the key is cleared', async () => {
     const deps = fakeDeps();
     const step: AppRunStep = { kind: 'app-run', appId };
-    const { context, interrupt, controller } = ctx(step);
+    const { context, interrupt } = ctx(step);
     const pending = executeAppRun(step, context, deps);
-    await hinted(deps);
+    const { mount } = await hinted(deps);
     deps.live.open(appId);
-    expect(interrupt).toHaveBeenCalledWith('app opened');
-    controller.abort(); // what the queue does on `interrupt`
-    const outcome = await pending;
-    expect(outcome.status).toBe('failed');
+    expect(interrupt).not.toHaveBeenCalled();
+    expect(deps.mounts.get()).toBe(mount);
+    mount.onAppEvent(SCHEDULE_RESULT_EVENT, { ok: true, summary: 'ran while you looked' });
+    expect(await pending).toMatchObject({ status: 'ok', summary: 'ran while you looked' });
     expect(deps.mounts.get()).toBeUndefined();
     expect('value' in (await kv())).toBe(false);
   });
@@ -523,28 +522,39 @@ describe('what the run spends is counted and capped (A4, A5)', () => {
   });
 });
 
-describe('S1 — an unattended trigger never runs behind an open app', () => {
-  it('due / late / catch-up with the app LIVE → `refused` with the "app is open" sentence: no hidden frame, no runtime, no hint, nothing written', async () => {
+describe('an unattended run of an OPEN app still runs — in the hidden frame, never the live one (owner decision 2026-10-09)', () => {
+  it('due / late / catch-up with the app LIVE → the hidden frame mounts under the scheduled gate, the live frame is never hinted, and the app’s result is recorded', async () => {
     for (const trigger of ['due', 'late', 'catch-up'] as const) {
+      hiddenMountStore.set(undefined);
       const deps = fakeDeps();
       deps.live.open(appId);
       const step: AppRunStep = { kind: 'app-run', appId, input: { city: 'Oslo' } };
-      const outcome = await executeAppRun(step, ctx(step, { trigger }).context, deps);
-      expect(outcome, trigger).toEqual({ status: 'refused', summary: APP_OPEN_REFUSAL, calls: { ai: 0, net: 0 } });
-      expect(deps.mounts.get(), trigger).toBeUndefined();
-      expect(deps.runtimeCalls, trigger).toEqual([]);
-      expect(deps.live.notified, trigger).toEqual([]);
-      expect('value' in (await kv()), trigger).toBe(false);
+      const pending = executeAppRun(step, ctx(step, { trigger }).context, deps);
+      const { mount, host } = await hinted(deps);
+      expect(deps.runtimeCalls, trigger).toHaveLength(1);
+      expect(deps.runtimeCalls[0]!.confirmGate, trigger).toBeDefined();
+      expect(host.notifyEvent, trigger).toHaveBeenCalledWith(SCHEDULE_RUN_EVENT, { taskId: 'task-1', runId: RUN_ID });
+      expect(deps.live.notified, trigger).toEqual([]); // the open app is never driven by a timer
+      mount.onAppEvent(SCHEDULE_RESULT_EVENT, { ok: true, summary: 'Oslo: dry until noon' });
+      expect(await pending, trigger).toMatchObject({ status: 'ok', summary: 'Oslo: dry until noon' });
     }
-    expect(APP_OPEN_REFUSAL).toBe('the app is open — Snug doesn’t run it behind you; close it or run now');
   });
 
-  it('the refusal folds to `needs-you` through the production executor (the queue reads `refused` as needs-you)', async () => {
+  it('a mutating call in that run is still refused by the scheduled gate → `refused` with the needs-you sentence, app open or not', async () => {
     const deps = fakeDeps();
     deps.live.open(appId);
-    const execute = createStepExecutor({ transportFor: () => undefined, appRun: deps });
     const step: AppRunStep = { kind: 'app-run', appId };
-    expect(await execute(step, ctx(step, { trigger: 'due' }).context)).toEqual({ status: 'refused', summary: APP_OPEN_REFUSAL, calls: { ai: 0, net: 0 } });
+    const pending = executeAppRun(step, ctx(step, { trigger: 'due' }).context, deps);
+    const { mount } = await hinted(deps);
+    const gate = deps.runtimeCalls[0]!.confirmGate as ScheduledConfirmGate;
+    expect(gate.confirm({ appId, host: 'api.github.com', method: 'POST', url: 'https://api.github.com/repos/x/issues' })).toBe(false);
+    mount.onAppEvent(SCHEDULE_RESULT_EVENT, { ok: true, summary: 'posted' });
+    expect(await pending).toEqual({ status: 'refused', summary: needsYou('Weather', 'post to api.github.com').text, calls: { ai: 0, net: 0 } });
+  });
+
+  it('the old open-app refusal is gone from the executor’s exports', async () => {
+    const mod = await import('../schedule/appRun.js');
+    expect('APP_OPEN_REFUSAL' in mod).toBe(false);
   });
 });
 
