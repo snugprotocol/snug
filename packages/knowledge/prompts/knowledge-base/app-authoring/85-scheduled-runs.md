@@ -69,8 +69,9 @@ const SCHEDULE_HANDLED = new Set(); // runIds already answered on this page
 async function onScheduledRun({ runId, taskId, input }) {
   // YOUR WORK: read your own data, call your approved API through snugNetRequest
   // (what useConnectedFetch wraps), then answer a SUMMARY — never rows.
-  // A mutating call (POST/PUT/PATCH/DELETE) is refused while nobody is present:
-  // answer ok:false with what you tried, and the host asks the user to run it visibly.
+  // A mutating call (POST/PUT/PATCH/DELETE) is refused while nobody is present, and asked
+  // ONCE in the host's own dialog when the app is open: on a refusal answer ok:false with what
+  // you tried, and the host asks the user to run it visibly.
   return { ok: true, summary: 'Checked. Nothing new since yesterday.' };
 }
 
