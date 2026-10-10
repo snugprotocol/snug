@@ -1,6 +1,6 @@
 # 0077 — One instance per app: a scheduled or on-demand run executes where the app lives
 
-- **Status:** proposed (TASK-20261010-host-broker PR-1, 2026-10-10; owner-delegated — Q5–Q7 of the task file are the defaults taken here, each reversible by one word). Becomes `accepted` when PR-1 merges; the same commit sets ADR-0074's status to `accepted (amended by 0075, 0077)`.
+- **Status:** accepted on merge (implemented by TASK-20261010-host-broker PR-1, 2026-10-10 — four fresh-context plan reviews folded at Gate 2, two diff reviews at Gate 5; recorded as proposed while the PR is open; owner-delegated — Q5–Q7 of the task file are the defaults taken here, each reversible by one word). ADR-0074's status line reads `accepted (amended by 0075, 0077)` in the same PR.
 - **Date:** 2026-10-10
 - **Task:** TASK-20261010-host-broker
 - **Amends:** ADR-0074 §4's Gate-5 fold ("a run the user did not start never rides an open app — presence is not consent") and its 2026-10-09 amendment ("an unattended *Run [app]* always runs in its own hidden frame … beside a visible copy if there is one, never in the live frame"). The principle stands; the mechanism changes: a run rides the live frame only under a gate that asks the present user and never a remembered approval. Retires threat-model R-70 for the delegated case (the headless case has no second instance to collide with).
