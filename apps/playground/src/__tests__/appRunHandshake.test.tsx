@@ -209,6 +209,23 @@ interface Fake extends AppRunDeps {
   brain: Inner;
 }
 
+/**
+ * The harness bounds. The step has ONE deadline fixed at its start (D-PR1-10: `resultTimeoutMs`
+ * covers mount + announce + kv write + hint + answer), and the harness observes the executor through
+ * `vi.waitFor`, which polls every 50 ms — so a default bound in the tens of milliseconds can expire
+ * between the hint and the poll that sees it, and the outer `finally` clears the key before the test
+ * reads it (CI, 2026-10-10). The defaults are therefore far past any poll; a test that ASSERTS a
+ * bound passes its own, named below, and derives its sentence from the same constant.
+ */
+const HARNESS_ANNOUNCE_MS = 2_000;
+const HARNESS_RESULT_MS = 5_000;
+/** A no-announce test's window: short, and the deadline (the harness default) is far behind it, so the end reads `no-handler`. */
+const SHORT_ANNOUNCE_MS = 40;
+/** A silent-app test that observes the run ALIVE first (the kv written, a refusal recorded): it must outlive `hinted()`'s 50 ms polls with room for a loaded runner, then expire. */
+const SILENT_RESULT_MS = 1_000;
+/** A silent-app test that observes nothing mid-run: the bound only has to expire. */
+const QUICK_RESULT_MS = 60;
+
 function fakeDeps(over: Partial<Omit<AppRunDeps, 'live'>> = {}, reply = '{"answer":"ok"}'): Fake {
   const sends: Inner['sends'] = [];
   const brain: Inner = {
@@ -230,8 +247,8 @@ function fakeDeps(over: Partial<Omit<AppRunDeps, 'live'>> = {}, reply = '{"answe
       return { transport: brain, frameProps: { db: db.driver, dbNamespace: input.appId } };
     },
     mounts: createStore<HiddenMount | undefined>(undefined),
-    announceTimeoutMs: 40,
-    resultTimeoutMs: 60,
+    announceTimeoutMs: HARNESS_ANNOUNCE_MS,
+    resultTimeoutMs: HARNESS_RESULT_MS,
     ...over,
   };
 }
@@ -433,7 +450,7 @@ describe('the hidden frame — the handshake end to end (A2, A3)', () => {
   });
 
   it('no announce within the bound → `no-handler` with the copy’s sentence; nothing was written; the frame is gone', async () => {
-    const deps = fakeDeps();
+    const deps = fakeDeps({ announceTimeoutMs: SHORT_ANNOUNCE_MS });
     const step: AppRunStep = { kind: 'app-run', appId };
     const pending = executeAppRun(step, ctx(step).context, deps);
     await mounted(deps);
@@ -444,13 +461,13 @@ describe('the hidden frame — the handshake end to end (A2, A3)', () => {
   });
 
   it('announced but never answered → `failed` with the bound named; the key is cleared', async () => {
-    const deps = fakeDeps();
+    const deps = fakeDeps({ resultTimeoutMs: SILENT_RESULT_MS });
     const step: AppRunStep = { kind: 'app-run', appId };
     const pending = executeAppRun(step, ctx(step).context, deps);
     await hinted(deps);
     expect(await kvValue()).toEqual({ taskId: 'task-1', runId: RUN_ID });
     const outcome = await pending;
-    expect(outcome).toEqual({ status: 'failed', summary: appDidNotAnswer(60), calls: { ai: 0, net: 0 } });
+    expect(outcome).toEqual({ status: 'failed', summary: appDidNotAnswer(SILENT_RESULT_MS), calls: { ai: 0, net: 0 } });
     expect(appDidNotAnswer(90_000)).toBe('the app didn’t answer within 90 s'); // what the production bound reads as
     expect('value' in (await kv())).toBe(false);
   });
@@ -677,7 +694,7 @@ describe('the gate follows the trigger, and its record outranks the app’s answ
   });
 
   it('a refusal followed by silence is still `refused`, not `failed` — the user is told what to review', async () => {
-    const deps = fakeDeps();
+    const deps = fakeDeps({ resultTimeoutMs: SILENT_RESULT_MS });
     const step: AppRunStep = { kind: 'app-run', appId };
     const pending = executeAppRun(step, ctx(step).context, deps);
     await hinted(deps);
@@ -937,8 +954,8 @@ describe('a delegated run — the app is OPEN (ADR-0077)', () => {
 
   describe('AC4 — the run follows the app: once, and never after a change went out', () => {
     it('live → hidden: the app CLOSING mid-run (nothing granted) re-dispatches the SAME runId to the hidden frame under the refusing gate; its result lands; the key is written per dispatch and cleared once', async () => {
-      // announceTimeoutMs as the AC5 tests: the default 40 ms is shorter than `vi.waitFor`'s 50 ms
-      // poll, so the re-dispatched hidden mount could time out before the test announces it.
+      // Explicit, as the AC5 tests: the re-dispatched hidden mount must outlive `vi.waitFor`'s 50 ms
+      // poll before the test announces it (the harness defaults now say the same — see `HARNESS_ANNOUNCE_MS`).
       const deps = fakeDeps({ announceTimeoutMs: 2_000, resultTimeoutMs: 5_000 });
       const kvSet = spyKv();
       deps.live.open(appId);
@@ -1127,7 +1144,7 @@ describe('a delegated run — the app is OPEN (ADR-0077)', () => {
     });
 
     it('registered and NEVER announced within the bound → `no-handler` with the copy’s sentence; no hint, no hidden mount, nothing left in the kv', async () => {
-      const deps = fakeDeps();
+      const deps = fakeDeps({ announceTimeoutMs: SHORT_ANNOUNCE_MS });
       const mounts = watchMounts(deps);
       deps.live.open(appId, { announce: false });
       const step: AppRunStep = { kind: 'app-run', appId };
@@ -1306,11 +1323,11 @@ describe('the live frame — a MANUAL run with the app on screen', () => {
   });
 
   it('a live frame that never answers → `failed`, the key cleared', async () => {
-    const deps = fakeDeps();
+    const deps = fakeDeps({ resultTimeoutMs: QUICK_RESULT_MS });
     deps.live.open(appId);
     const step: AppRunStep = { kind: 'app-run', appId };
     const outcome = await executeAppRun(step, ctx(step, { trigger: 'manual' }).context, deps);
-    expect(outcome).toEqual({ status: 'failed', summary: appDidNotAnswer(60), calls: { ai: 0, net: 0 } });
+    expect(outcome).toEqual({ status: 'failed', summary: appDidNotAnswer(QUICK_RESULT_MS), calls: { ai: 0, net: 0 } });
     expect('value' in (await kv())).toBe(false);
   });
 
