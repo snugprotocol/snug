@@ -35,4 +35,5 @@ Tests first in `appRunHandshake.test.tsx`: replace the S1 describe (open → ref
 - Done: task file; branch off main `7b8020e`.
 - Next step: tests first.
 - Review (fresh-context security lens): 0 blockers, 1 major (the shared connection — fixed with the scheduled db binding + tests; R-70 rewritten), 3 minors (stale comments in code-map/architecture/glossary/appHosts/queue — fixed; the dead `interrupt` seam — kept, its test reason neutral; the KB rule addressed the wrong instance — rewritten), plus a missing test (a result from the open copy is never taken — added; it was already green, so it guards a regression).
+- Gate 6 (`5aa54e8`): `SNUG_SERVER_PORT=8797 node scripts/gate-local.mjs --legs=workspace,smoke,e2e,desktop` → **PASS workspace · PASS smoke · PASS e2e · PASS desktop · DESELECTED rust · DESELECTED release — PARTIAL PASS, 4/6** (root test 30/30 tasks; e2e 95 + 90 passed). The first run's e2e leg never started: the owner's own `pnpm dev` server held port 8787 — left running, the gate moved to 8797. Retired into `docs/tasks/done/INDEX.md` with this PR; merged after the owner's review (Medium tier: AI review done, human review owed).
 
