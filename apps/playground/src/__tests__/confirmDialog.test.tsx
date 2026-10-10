@@ -221,3 +221,152 @@ describe('NetConfirmDialog — the scheduled variant (TASK-20261010-host-broker 
     expect(container.querySelector('input[type="checkbox"]')).not.toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------------------------
+// TASK-20261010-host-broker PR-1, Gate-5 folds F-4 and F-5.
+//
+// F-4 (security MINOR) THE DIALOG RESOLVES ITS OWN ENTRY, never the store head. Withdrawals now
+// move the queue head WITHOUT a user act (a scheduled ask withdrawn when its run ends or its
+// minute passes, `denyParkedConfirmByRequest`), so between the render the user is looking at and
+// the click, the head can become a DIFFERENT entry. A click must reach only the entry the dialog
+// rendered (or be dropped if that one is gone) — it must never grant the entry that slid under
+// the user's pointer. The pins move the head WITHOUT a re-render (inside one `act`, so React
+// commits nothing between the move and the click) and prove the DOM still showed the first entry
+// when the button was pressed, so a red here is the decision's routing, not a re-render.
+//
+// F-5 (security MINOR) the scheduled bodies DELIMIT the app name — `“<appName>”`, like the
+// schedule's title — so an app's display name cannot read as part of the host's sentence.
+// ---------------------------------------------------------------------------------------------
+
+describe('NetConfirmDialog — the decision reaches the entry it rendered (TASK-20261010-host-broker PR-1, fold F-4)', () => {
+  type Decision = { granted: boolean; rememberSession?: boolean };
+  const FIRST = { appId: 'app-1', host: 'api.example.com', method: 'POST' as const, url: 'https://api.example.com/v1/first' };
+  const SECOND = { appId: 'app-2', host: 'bank.example.com', method: 'POST' as const, url: 'https://bank.example.com/v1/transfer?to=someone' };
+
+  const button = (name: RegExp): HTMLButtonElement => {
+    const found = [...container.querySelectorAll('button')].find((b) => name.test((b.textContent ?? '').trim()));
+    if (found === undefined) throw new Error(`no button ${String(name)}`);
+    return found as HTMLButtonElement;
+  };
+
+  for (const variant of ['ordinary', 'scheduled'] as const) {
+    it(`${variant}: the head moves under the click (withdrawn, no re-render) → the SECOND entry never receives the grant; only the rendered entry is answered`, () => {
+      mount();
+      const first = vi.fn<(d: Decision) => void>();
+      const second = vi.fn<(d: Decision) => void>();
+      const tag = variant === 'scheduled' ? { scheduled: { title: 'Morning post', appName: 'Notes', runId: 'run-1' } } : {};
+      act(() => {
+        netConfirmStore.set({ request: FIRST, resolve: first, ...tag });
+      });
+      expect(container.textContent ?? '').toContain(FIRST.url);
+      const allow = button(variant === 'scheduled' ? new RegExp(`^${DELEGATED_CONFIRM.allow}$`) : /^allow$/);
+
+      let urlShownAtClick = '';
+      act(() => {
+        // The first entry is withdrawn out from under the dialog: the queue head is now the second.
+        netConfirmStore.set({ request: SECOND, resolve: second, ...tag });
+        urlShownAtClick = container.querySelector('.net-confirm-url')?.textContent ?? '';
+        allow.click();
+      });
+
+      expect(urlShownAtClick, 'harness: the dialog still showed the FIRST entry when the button was pressed').toBe(FIRST.url);
+      expect(second, 'the entry that slid under the click was never granted').not.toHaveBeenCalled();
+      expect(first.mock.calls.every(([decision]) => decision.granted === true)).toBe(true);
+    });
+  }
+
+  it('through the REAL queue: two scheduled confirms parked by the page’s own gate; the rendered head withdrawn by reference (`denyParkedConfirmByRequest`), then *allow once* → the second is NOT granted, nothing is sent for it, and it stays parked', async () => {
+    const net = await import('../state/net.js');
+    const { getUserDb } = await import('../state/userdb.js');
+    const { installTestUserDb } = await import('./userdbTestHelper.js');
+    const { beginDelegatedRun, endDelegatedRun, clearTouchedGeneration } = await import('../schedule/runPlacement.js');
+    net.__resetNetStateForTests();
+    await installTestUserDb();
+    const db = await getUserDb();
+    const requirement = {
+      slot: 'example',
+      kind: 'api_key' as const,
+      provider: { name: 'Example' },
+      fields: [{ key: 'api_key', label: 'API key', type: 'secret' as const }],
+      request: { headerTemplate: { 'X-Api-Key': '{{api_key}}' } },
+      declaredApiHosts: ['api.example.com'],
+    };
+    for (const appId of ['f4-a', 'f4-b']) {
+      db.installApp({ appId, displayName: appId, html: '<p>x</p>' });
+      db.setSecret(`auth:${appId}:example:api_key`, 'stored-key');
+      db.putDeclaredConnection(appId, 'example', requirement, 'inference');
+      db.approveConnection(appId, 'example');
+    }
+    const fetched: string[] = [];
+    const handler = net.createNetHandlerFor({
+      fetchImpl: async (url) => {
+        fetched.push(url);
+        return new Response('{}', { status: 200 });
+      },
+    });
+    const post = (appId: string, path: string) =>
+      handler.handle(appId, { v: 1, type: 'snug:net-request', requestId: `r-${appId}`, instanceId: 'ins-1', url: `https://api.example.com${path}`, method: 'POST', body: '{}' });
+    // A delegated run in flight for each app: the run-scoped gate (the frame path's default) parks a `scheduled` ask for each.
+    expect(beginDelegatedRun({ appId: 'f4-a', appName: 'Notes', runId: 'run-a', taskId: 't1', title: 'Morning post', generation: 0 }).ok).toBe(true);
+    expect(beginDelegatedRun({ appId: 'f4-b', appName: 'Bank', runId: 'run-b', taskId: 't2', title: 'Evening sweep', generation: 0 }).ok).toBe(true);
+    try {
+      mount();
+      const a = post('f4-a', '/v1/first');
+      await vi.waitFor(() => expect(net.netConfirmStore.get()?.request.appId).toBe('f4-a'));
+      let bSettled = false;
+      const b = post('f4-b', '/v1/transfer').then((result) => {
+        bSettled = true;
+        return result;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 20)); // the second ask parks BEHIND the head
+      act(() => undefined); // the dialog renders the head
+      const head = net.netConfirmStore.get()!;
+      expect(head.request.appId).toBe('f4-a');
+      expect(container.textContent ?? '').toContain('https://api.example.com/v1/first');
+      const allow = button(new RegExp(`^${DELEGATED_CONFIRM.allow}$`));
+
+      let headAtClick: string | undefined;
+      let urlShownAtClick = '';
+      act(() => {
+        net.denyParkedConfirmByRequest(head.request); // withdrawn without a user act: the head is now f4-b's entry
+        headAtClick = net.netConfirmStore.get()?.request.appId;
+        urlShownAtClick = container.querySelector('.net-confirm-url')?.textContent ?? '';
+        allow.click();
+      });
+      expect(headAtClick, 'harness: the queue head moved to the second entry before the click').toBe('f4-b');
+      expect(urlShownAtClick, 'harness: the dialog still showed the FIRST entry when the button was pressed').toBe('https://api.example.com/v1/first');
+      expect(await a).toMatchObject({ ok: false }); // the withdrawn ask answered no
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(fetched, 'nothing was sent for the entry that slid under the click').toEqual([]);
+      expect(bSettled, 'the second ask is still waiting for its own answer').toBe(false);
+      expect(net.netConfirmStore.get()?.request.appId, 'the second entry is still parked').toBe('f4-b');
+      endDelegatedRun('f4-b', 'run-b'); // its run ends: withdrawn
+      expect(await b).toMatchObject({ ok: false });
+    } finally {
+      endDelegatedRun('f4-a', 'run-a');
+      endDelegatedRun('f4-b', 'run-b');
+      clearTouchedGeneration('f4-a', 0);
+      clearTouchedGeneration('f4-b', 0);
+      net.__resetNetStateForTests();
+    }
+  });
+});
+
+describe('NetConfirmDialog — the scheduled bodies delimit the app name (TASK-20261010-host-broker PR-1, fold F-5)', () => {
+  const REQUEST = { appId: 'app-1', host: 'api.example.com', method: 'POST' as const, url: 'https://api.example.com/v1/items' };
+
+  it('the run body and the after-run body both render the app name in typographic quotes — “Weather”', () => {
+    mount();
+    act(() => {
+      netConfirmStore.set({ request: REQUEST, resolve: () => undefined, scheduled: { title: 'Morning forecast', appName: 'Weather', runId: 'run-1' } });
+    });
+    expect(container.textContent ?? '').toContain('“Weather”');
+    expect(DELEGATED_CONFIRM.body('Morning forecast', 'Weather', 'POST', 'api.example.com')).toContain('“Weather”');
+
+    act(() => {
+      netConfirmStore.set({ request: REQUEST, resolve: () => undefined, scheduled: { afterRun: true, appName: 'Weather' } });
+    });
+    expect(container.textContent ?? '').toContain('“Weather”');
+    expect(DELEGATED_CONFIRM.afterRunBody('Weather', 'POST', 'api.example.com')).toContain('“Weather”');
+  });
+});

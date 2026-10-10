@@ -11,7 +11,8 @@
 // this gate RECORDED (`refused`), in the app's words: "Ledger needs your OK — Snug doesn’t post to
 // api.github.com while you’re away". A run DELEGATED to the open app rides a different gate — the
 // run-scoped ASK gate (`runScopedGate.ts`), which asks the present user once and records WHY nothing
-// was sent; its refusals carry a `why`, these carry none.
+// was sent; its refusals carry a `why`, these carry none. ONE refusal type serves both
+// (`ScheduledRefusal`, defined in `runPlacement.ts` with `why?` optional and re-exported here).
 //
 // Reads (`GET`/`HEAD`) never reach a confirm gate at all (the executor asks only for mutating
 // methods), so a scheduled run can still refresh what it shows; counting those calls is the
@@ -22,11 +23,9 @@
 
 import type { NetConfirmGate, NetConfirmRequest } from '@snugprotocol/auth';
 
-/** What the gate refused — enough to say what the app tried, never the body or a credential. */
-export interface ScheduledRefusal {
-  host: string;
-  method: string;
-}
+import type { ScheduledRefusal } from './runPlacement.js';
+
+export type { ScheduledRefusal } from './runPlacement.js';
 
 export interface ScheduledConfirmGate extends NetConfirmGate {
   /** Every mutating call this gate refused, in order. The first is what the result names. */

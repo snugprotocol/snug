@@ -30,6 +30,9 @@ import {
   touchedGeneration,
   type DelegatedRun,
 } from '../schedule/runPlacement.js';
+// Gate-5 folds F-6 / F-12 need the REAL registry. Never `__resetAppHostsForTest` here: it wipes the
+// host listeners, including the belt `runPlacement.ts` installs at load (F-12).
+import { registerAppHost, setAppHostGeneration } from '../state/appHosts.js';
 
 const begun: Array<{ appId: string; runId: string; generation: number }> = [];
 
@@ -252,5 +255,63 @@ describe('delegatedRunStore — notifies on PRESENCE changes (the chip and the g
     } finally {
       unsubscribe();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// TASK-20261010-host-broker PR-1, Gate-5 folds F-6 and F-12 — the sticky posture against the REAL
+// registry (`state/appHosts.ts`). This suite imports `runPlacement.ts` and `appHosts.ts` ONLY —
+// never `state/net.ts` — so what it observes is `runPlacement.ts`'s own behaviour.
+//
+// F-6 (security MINOR) A REMOUNT mid-run: the instance that could have read the run's kv input is
+// the one that stays. `endDelegatedRun` refreshes the touched generation to the LIVE one while the
+// registration token still matches — so the new generation inherits the ask-only posture.
+//
+// F-12 (maintainability MINOR) THE BELT HAS ONE HOME: the registry listener that clears the touched
+// generation on a retraction lives in `runPlacement.ts`. Isolating the belt from the structural
+// token match takes one trick: a run begun with NO registration captures `token: undefined`, a
+// registration then hides the posture (token mismatch) and its retraction makes the tokens equal
+// again — so without a belt the posture REVIVES; with the belt, the retraction cleared it. (The
+// limit: this proves a retraction clears the record from `runPlacement.ts` alone; the realistic
+// begin-under-a-registration case is covered by the token match and by netState's retraction pin.)
+// ---------------------------------------------------------------------------------------------
+
+describe('the sticky posture against the real registry (Gate-5 folds F-6, F-12)', () => {
+  const unregisters: Array<() => void> = [];
+  afterEach(() => {
+    for (const unregister of unregisters.splice(0).reverse()) unregister();
+  });
+
+  function openView(appId: string, generation: number): () => void {
+    const unregister = registerAppHost(appId, vi.fn());
+    setAppHostGeneration(appId, generation);
+    unregisters.push(unregister);
+    return unregister;
+  }
+
+  it('F-6: a REMOUNT mid-run (generation 1 → 2, same registration) → after `endDelegatedRun` the touched generation is the LIVE one, 2', () => {
+    openView('pl-f6-remount', 1);
+    expect(begin('pl-f6-remount', { generation: 1 }).ok).toBe(true);
+    expect(touchedGeneration('pl-f6-remount')).toBe(1);
+    setAppHostGeneration('pl-f6-remount', 2); // RunView's frameEpoch effect: a remount is not a retraction
+    endDelegatedRun('pl-f6-remount', 'run-1');
+    expect(touchedGeneration('pl-f6-remount'), 'the instance that stays inherits the ask-only posture').toBe(2);
+  });
+
+  it('F-6 guard: without a remount the run ends on the generation it began on', () => {
+    openView('pl-f6-same', 3);
+    begin('pl-f6-same', { generation: 3 });
+    endDelegatedRun('pl-f6-same', 'run-1');
+    expect(touchedGeneration('pl-f6-same')).toBe(3);
+  });
+
+  it('F-12: a retraction clears the touched generation through `runPlacement.ts`’s OWN registry listener (`state/net.ts` never loaded here) — the posture does not revive when the tokens match again', () => {
+    begin('pl-f12-belt', { generation: 0 }); // no registration: the record captures token `undefined`
+    endDelegatedRun('pl-f12-belt', 'run-1');
+    expect(touchedGeneration('pl-f12-belt')).toBe(0);
+    const unregister = openView('pl-f12-belt', 0);
+    expect(touchedGeneration('pl-f12-belt'), 'a new registration hides it (token match)').toBeUndefined();
+    unregister(); // the retraction — the belt must clear the record now
+    expect(touchedGeneration('pl-f12-belt'), 'cleared by the belt, not merely hidden').toBeUndefined();
   });
 });

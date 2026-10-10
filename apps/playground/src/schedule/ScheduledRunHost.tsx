@@ -51,12 +51,17 @@ export function ScheduledRunHost(): ReactElement | null {
   // know the attribute, hence the spread. `tabindex="-1"` on the frame itself is the belt for a
   // browser without `inert`; `SnugAppFrame` forwards no attributes, so it is set on the element
   // after the mount (the frame is keyed by run, so once per run). The SAME effect's cleanup
-  // reports the frame gone to the run that owned it — once per run, never while it is still up.
+  // reports the frame gone to the run that owned it — once per run, never while it is still up:
+  // StrictMode (and React's dev double-invoke) runs the cleanup while the store STILL holds the
+  // mount and the frame is still rendered, so the cleanup reports only when the store has moved
+  // on from the mount it captured (Gate-5 F-9) — a cleared store or another run's mount.
   useEffect(() => {
     wrapRef.current?.querySelector('iframe')?.setAttribute('tabindex', '-1');
     const owner = mountRef.current;
     if (owner === undefined) return;
-    return () => owner.onUnmounted();
+    return () => {
+      if (hiddenMountStore.get() !== owner) owner.onUnmounted();
+    };
   }, [runId]);
   if (mount === undefined) return null;
   return (

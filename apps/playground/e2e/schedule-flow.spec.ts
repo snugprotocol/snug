@@ -1,3 +1,5 @@
+// RUN WITH NODE 22 — `better-sqlite3` fails to load under Node 24 (TASK-20261010-host-broker PR-1, Gate-5 fold F-14).
+// When the owner's dev server already holds port 8787, run with `SNUG_SERVER_PORT=8797` (lesson 2026-10-10).
 // schedule-flow.spec.ts — TASK-20261009-scheduling-framework A8: a scheduled *Run [app]* against
 // the net stub, in the real playground app under a faked clock (ADR-0074 §3 the kv handshake,
 // §5 catch-up, §6 the unattended posture).

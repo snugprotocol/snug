@@ -433,14 +433,16 @@ export const RUNNING_CHIP = {
  * title is the HOST's sentence — never the schedule's own title, an app-authored string must not
  * headline a consent surface; the body quotes the schedule and says in one breath that this was
  * not the user's click, that *allow once* means once and that silence means no. `afterRunBody` is
- * the sticky variant: the frame hosted a run earlier, so it stays ask-only until reopened.
+ * the sticky variant: the frame hosted a run earlier, so it stays ask-only until reopened. The
+ * schedule's title AND the app's name are app-authored strings on a consent surface, so both are
+ * delimited by the same typographic quotes (Gate-5 F-5) — a name cannot run into the sentence.
  */
 export const DELEGATED_CONFIRM = {
   title: `a ${WORDS.item} wants to make a change`,
   body: (title: string, appName: string, method: string, host: string): string =>
-    `“${title}” is running ${appName} and wants to send a ${method} request to ${host}. You didn’t click this — allow it once, or don’t. Nothing is remembered; no answer in a minute means nothing is sent.`,
+    `“${title}” is running “${appName}” and wants to send a ${method} request to ${host}. You didn’t click this — allow it once, or don’t. Nothing is remembered; no answer in a minute means nothing is sent.`,
   afterRunBody: (appName: string, method: string, host: string): string =>
-    `${appName} ran a ${WORDS.item} here earlier, so Snug asks every time: it wants to send a ${method} request to ${host}. Allow it once, or don’t — nothing is remembered until you reopen the app.`,
+    `“${appName}” ran a ${WORDS.item} here earlier, so Snug asks every time: it wants to send a ${method} request to ${host}. Allow it once, or don’t — nothing is remembered until you reopen the app.`,
   allow: 'allow once',
   deny: 'don’t send',
 } as const;
@@ -467,6 +469,12 @@ export function handedOverTwice(appName: string): string {
 export function closedAfterChange(appName: string, host: string): string {
   return `${appName} was closed after a change was sent to ${host} — check there before running again`;
 }
+
+/** A second delegated run asked for an app that already has one in flight (`runPlacement.ts` refuses it). */
+export const alreadyRunning = (appName: string): string => `${appName} is already running another ${WORDS.item}`;
+
+/** The live frame was there to be hinted and the ring did not land (`appRun.ts`). */
+export const APP_UNREACHABLE_SUMMARY = 'the open app could not be reached';
 
 /** The reconnect chip's attribution when a 401/403 happened inside a scheduled run (R-b closed). */
 export const AUTH_REPAIR_VIA_SCHEDULE = `a ${WORDS.item} ran into this`;

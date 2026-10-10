@@ -24,6 +24,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
+  APP_UNREACHABLE_SUMMARY,
   AUTH_REPAIR_VIA_SCHEDULE,
   CONSENT,
   DELEGATED_CONFIRM,
@@ -39,6 +40,7 @@ import {
   WORDS,
   aiCalls,
   alertLabel,
+  alreadyRunning,
   alertSentence,
   appMissing,
   blockedHere,
@@ -463,13 +465,14 @@ describe('the delegated run (TASK-20261010-host-broker PR-1) — exports and the
 });
 
 describe('the delegated run — the contract’s text, byte for byte', () => {
+  // Gate-5 fold F-5: the app name is DELIMITED — `“<appName>”`, like the schedule's title — in both bodies.
   it('DELEGATED_CONFIRM', () => {
     expect(DELEGATED_CONFIRM.title).toBe('a schedule wants to make a change');
     expect(DELEGATED_CONFIRM.body('Morning post', 'Notes', 'POST', 'api.example.com')).toBe(
-      '“Morning post” is running Notes and wants to send a POST request to api.example.com. You didn’t click this — allow it once, or don’t. Nothing is remembered; no answer in a minute means nothing is sent.',
+      '“Morning post” is running “Notes” and wants to send a POST request to api.example.com. You didn’t click this — allow it once, or don’t. Nothing is remembered; no answer in a minute means nothing is sent.',
     );
     expect(DELEGATED_CONFIRM.afterRunBody('Notes', 'POST', 'api.example.com')).toBe(
-      'Notes ran a schedule here earlier, so Snug asks every time: it wants to send a POST request to api.example.com. Allow it once, or don’t — nothing is remembered until you reopen the app.',
+      '“Notes” ran a schedule here earlier, so Snug asks every time: it wants to send a POST request to api.example.com. Allow it once, or don’t — nothing is remembered until you reopen the app.',
     );
     expect(DELEGATED_CONFIRM.allow).toBe('allow once');
     expect(DELEGATED_CONFIRM.deny).toBe('don’t send');
@@ -496,6 +499,21 @@ describe('the delegated run — the contract’s text, byte for byte', () => {
     expect(RUNNING_CHIP.inApp('Weather')).toBe('running in Weather');
     expect(AUTH_REPAIR_VIA_SCHEDULE).toBe('a schedule ran into this');
     expect(needsYouTitle('Ledger')).toBe('Ledger needs your OK');
+  });
+});
+
+// TASK-20261010-host-broker PR-1, Gate-5 fold F-11: two sentences that were literals in the code
+// move HERE — `runPlacement.ts`'s refusal of a second run and `appRun.ts`'s unreachable live frame.
+// Pinned byte for byte, free of the internal words, and no longer spelled in the two modules.
+describe('the delegated run — the two sentences folded into copy.ts (Gate-5 fold F-11)', () => {
+  it('`alreadyRunning(appName)` and `APP_UNREACHABLE_SUMMARY`: their text, no "task"/"proposal", and single-homed (the old literals are gone from `runPlacement.ts` and `appRun.ts`)', () => {
+    expect(alreadyRunning('Weather')).toBe('Weather is already running another schedule');
+    expect(alreadyRunning('Ledger')).toContain('Ledger');
+    expect(APP_UNREACHABLE_SUMMARY).toBe('the open app could not be reached');
+    expect([alreadyRunning('A'), APP_UNREACHABLE_SUMMARY].filter((text) => /\b(task|proposal)s?\b/i.test(text))).toEqual([]);
+    const code = (file: string): string => stripComments(readFileSync(path.join(PLAYGROUND_SRC, 'schedule', file), 'utf8'));
+    expect(stringLiterals(code('runPlacement.ts')).filter((text) => text.includes('is already running another schedule'))).toEqual([]);
+    expect(stringLiterals(code('appRun.ts')).filter((text) => text.includes('could not be reached'))).toEqual([]);
   });
 });
 

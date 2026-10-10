@@ -281,6 +281,25 @@ const runKeyCalls = (spy: KvSpy, runId = RUN_ID) => spy.mock.calls.filter(([id, 
 const writesOf = (spy: KvSpy, runId = RUN_ID) => runKeyCalls(spy, runId).filter(([, , value]) => value !== null);
 const clearsOf = (spy: KvSpy, runId = RUN_ID) => runKeyCalls(spy, runId).filter(([, , value]) => value === null);
 
+/**
+ * Gate-5 fold F-3: wrap the file driver's `kvSet` so the FIRST write of this run's key performs
+ * `during` (a retraction, a registration) AFTER the write lands and BEFORE it resolves — the window
+ * between the executor's kv write and its hint. Later writes and the clear pass through untouched.
+ * Returns the spy (restored by `vi.restoreAllMocks` or `mockRestore`).
+ */
+function duringRunWrite(during: () => void): KvSpy {
+  const real = db.driver.kvSet.bind(db.driver);
+  let fired = false;
+  return vi.spyOn(db.driver, 'kvSet').mockImplementation(async (id, key, value) => {
+    const answer = await real(id, key, value);
+    if (!fired && id === appId && key === scheduleKvKey(RUN_ID) && value !== null) {
+      fired = true;
+      during();
+    }
+    return answer;
+  });
+}
+
 /** The delegated run's hint reached the LIVE frame (through the registry's notify). */
 async function delegatedHint(deps: Fake): Promise<void> {
   await vi.waitFor(() => expect(deps.live.notified).toHaveLength(1));
@@ -560,6 +579,33 @@ describe('opening the app does not stop its scheduled run (owner decision 2026-1
     expect(writesOf(kvSet)).toHaveLength(2);
     expect(clearsOf(kvSet)).toHaveLength(1);
     expect('value' in (await kv())).toBe(false);
+  });
+
+  // Gate-5 fold F-3 (hidden twin): the app REGISTERING while the hidden attempt writes its kv input
+  // decides the handover BEFORE the hint — the hidden handler must never start (its `notifyEvent` is
+  // never rung), and the live frame is hinted only after the hidden frame reports unmounted.
+  it('F-3: the app OPENING during the hidden kv write → the hidden host is NEVER rung; the attempt hands over; the live frame is hinted (same runId) only after `onUnmounted`; the live result lands', async () => {
+    const deps = fakeDeps({ resultTimeoutMs: 5_000 });
+    const kvSet = duringRunWrite(() => deps.live.open(appId));
+    try {
+      const step: AppRunStep = { kind: 'app-run', appId };
+      const pending = executeAppRun(step, ctx(step, { trigger: 'due' }).context, deps);
+      const { mount, host } = await mounted(deps);
+      mount.onAnnounce();
+      await vi.waitFor(() => expect(deps.mounts.get()).toBeUndefined());
+      expect(host.notifyEvent, 'a hidden handler must not start after its handover was decided').not.toHaveBeenCalled();
+      await sleep(30);
+      expect(deps.live.notified, 'no live hint while the hidden instance may still be up').toEqual([]);
+      mount.onUnmounted();
+      await delegatedHint(deps);
+      deps.live.emit(appId, SCHEDULE_RESULT_EVENT, { ok: true, summary: 'ran once, on screen' });
+      expect(await pending).toMatchObject({ status: 'ok', summary: 'ran once, on screen' });
+      expect(host.notifyEvent).not.toHaveBeenCalled();
+      expect(clearsOf(kvSet)).toHaveLength(1);
+      expect('value' in (await kv())).toBe(false);
+    } finally {
+      kvSet.mockRestore();
+    }
   });
 
   it('ANOTHER app opening does not touch the run', async () => {
@@ -932,6 +978,75 @@ describe('a delegated run — the app is OPEN (ADR-0077)', () => {
       expect(outcome.summary).toBe(closedAfterChange('Weather', API_HOST));
       expect(mounts, 'the handler whose POST went out is never run again').toEqual([]);
       expect(deps.runtimeCalls).toEqual([]);
+    });
+
+    // Gate-5 fold F-3: the app closing DURING the live kv write (between the write and the hint) is a
+    // retraction like any other — re-checked before the hint: unattended → handover to the hidden
+    // frame (the same runId), manual → `the app was closed`. Never the generic "could not be reached".
+    it('F-3: the app CLOSING during the live kv write (unattended, nothing granted) → a HIDDEN re-dispatch of the same runId, not `failed`; the live frame is never hinted; the hidden result lands', async () => {
+      const deps = fakeDeps({ announceTimeoutMs: 2_000, resultTimeoutMs: 5_000 });
+      const kvSet = duringRunWrite(() => deps.live.close(appId));
+      deps.live.open(appId);
+      const step: AppRunStep = { kind: 'app-run', appId };
+      const pending = executeAppRun(step, ctx(step, { trigger: 'due' }).context, deps);
+      let early: unknown;
+      void pending.then((outcome) => {
+        early = outcome;
+      });
+      await vi.waitFor(() => expect(deps.mounts.get() !== undefined || early !== undefined).toBe(true));
+      expect(early, 'the step did not end — it followed the app to the hidden frame').toBeUndefined();
+      const { mount, host } = await hinted(deps);
+      expect(host.notifyEvent).toHaveBeenCalledWith(SCHEDULE_RUN_EVENT, { taskId: 'task-1', runId: RUN_ID });
+      expect(deps.live.notified, 'the closed live frame was never hinted').toEqual([]);
+      mount.onAppEvent(SCHEDULE_RESULT_EVENT, { ok: true, summary: 'finished out of sight' });
+      expect(await pending).toMatchObject({ status: 'ok', summary: 'finished out of sight' });
+      expect(writesOf(kvSet)).toHaveLength(2);
+      expect(clearsOf(kvSet)).toHaveLength(1);
+    });
+
+    it('F-3 manual twin: the app CLOSING during the live kv write of a MANUAL run → `failed: the app was closed` (M18), no hidden frame, no hint', async () => {
+      const deps = fakeDeps({ resultTimeoutMs: 5_000 });
+      const mounts = watchMounts(deps);
+      duringRunWrite(() => deps.live.close(appId));
+      deps.live.open(appId);
+      const step: AppRunStep = { kind: 'app-run', appId };
+      const outcome = await executeAppRun(step, ctx(step, { trigger: 'manual' }).context, deps);
+      expect(outcome).toEqual({ status: 'failed', summary: APP_CLOSED_SUMMARY, calls: { ai: 0, net: 0 } });
+      expect(deps.live.notified).toEqual([]);
+      expect(mounts).toEqual([]);
+      expect('value' in (await kv())).toBe(false);
+    });
+
+    // Gate-5 fold F-7 (security MINOR): never hand over after the user ANSWERED. A decisive refusal
+    // ("don't send") then the app closing must not re-run the handler hidden — that would overwrite
+    // the user's own sentence with whatever the hidden attempt ends on. The record reads the refusal.
+    it('F-7: a DECLINED scheduled dialog, then the app closing → NO hidden re-dispatch (nothing mounts, nothing composed); the step is `refused` with the user’s own sentence', async () => {
+      connectWeather();
+      const deps = fakeDeps({ resultTimeoutMs: 5_000 });
+      const mounts = watchMounts(deps);
+      deps.live.open(appId);
+      const { fetched, fetchImpl } = recordingFetch();
+      const live = liveRuntime(fetchImpl);
+      const step: AppRunStep = { kind: 'app-run', appId };
+      const { context, controller } = ctx(step, { trigger: 'due' });
+      let done = false;
+      const pending = executeAppRun(step, context, deps).finally(() => {
+        done = true;
+      });
+      await delegatedHint(deps);
+      const post = live.net.handle(appId, netFrame('POST'));
+      await vi.waitFor(() => expect(netConfirmStore.get()?.scheduled).toBeDefined());
+      resolveNetConfirm({ granted: false });
+      expect(await post).toMatchObject({ ok: false, code: NET_ERROR_CODES.NET_CONFIRM_DENIED });
+      deps.live.close(appId);
+      await vi.waitFor(() => expect(done || mounts.length > 0).toBe(true));
+      if (!done) controller.abort(); // a hidden re-dispatch mounted (the bug): settle it rather than wait out the deadline
+      const outcome = await pending;
+      expect(mounts, 'the user answered: the handler is never run again hidden').toEqual([]);
+      expect(deps.runtimeCalls).toEqual([]);
+      expect(outcome.status).toBe('refused');
+      expect(outcome.summary).toBe(needsYouDeclined('Weather', POST_VERB).text);
+      expect(fetched).toEqual([]);
     });
 
     it('a SECOND handover (hidden → live → hidden) ends the step `failed` by name; no second hidden frame', async () => {

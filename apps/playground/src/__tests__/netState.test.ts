@@ -342,6 +342,38 @@ describe('the run-scoped gate through the real handler (TASK-20261010-host-broke
     expect(await after).toMatchObject({ ok: false, code: NET_ERROR_CODES.NET_CONFIRM_DENIED });
   });
 
+  // Gate-5 fold F-6 (security MINOR): a REMOUNT mid-run (`frameEpoch` 1 → 2, the same registration)
+  // — the new generation is the instance that stays, and it could have read the run's kv input, so
+  // after the run IT is ask-only. Today's posture stayed on the replaced generation 1, so the
+  // remounted frame's POST passed through the remembered grant unasked.
+  it('F-6 REMOUNT: a run begun on generation 1, the frame remounted to 2 mid-run, the run ended → a POST from generation 2 parks an `afterRun`-tagged dialog — the remembered grant does not answer', async () => {
+    const appId = 'app-deleg-remount';
+    await seedApp(appId);
+    const net = countingFetch();
+    const handler = createNetHandlerFor({ fetchImpl: net.fetchImpl });
+    await rememberAndArm(appId, handler);
+    const sentBefore = net.urls.length;
+
+    openApp(appId, 1);
+    begin(appId, 1);
+    setAppHostGeneration(appId, 2); // RunView's frameEpoch effect — a remount, not a retraction
+    markAppHostAnnounced(appId, 2);
+    endDelegatedRun(appId, 'run-1');
+    cleanups.push(() => clearTouchedGeneration(appId, 2));
+
+    let answeredUnasked = false;
+    const after = handler.handle(appId, postFrame('after-remount')).then((result) => {
+      if (netConfirmStore.get() === null && result.ok) answeredUnasked = true;
+      return result;
+    });
+    await vi.waitFor(() => expect(answeredUnasked || netConfirmStore.get() !== null).toBe(true));
+    expect(answeredUnasked, 'the remounted frame’s POST went out on the remembered grant, unasked').toBe(false);
+    expect(netConfirmStore.get()!.scheduled).toMatchObject({ afterRun: true, appName: 'Net App' });
+    expect(net.urls).toHaveLength(sentBefore);
+    resolveNetConfirm({ granted: false });
+    expect(await after).toMatchObject({ ok: false, code: NET_ERROR_CODES.NET_CONFIRM_DENIED });
+  });
+
   it('a RETRACTION (the app closed) clears the sticky posture: reopened at the same generation, the next POST passes through the remembered grant', async () => {
     const appId = 'app-deleg-retract';
     await seedApp(appId);

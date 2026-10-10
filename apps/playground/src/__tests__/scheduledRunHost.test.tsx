@@ -10,7 +10,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
 import { FRAME_TYPES, PROTOCOL_VERSION } from '@snugprotocol/protocol';
-import { act } from 'react';
+import { StrictMode, act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -238,6 +238,37 @@ describe('ScheduledRunHost — reports its unmount (TASK-20261010-host-broker PR
     });
     await act(flush);
     expect(m.onUnmounted).not.toHaveBeenCalled();
+  });
+});
+
+// Gate-5 fold F-9 (maintainability MINOR): React StrictMode (dev) runs every effect's cleanup once
+// more right after the mount and re-runs the effect — a SIMULATED unmount while the store still holds
+// the mount. `onUnmounted` must not fire then (a handover's live hint would go out while the hidden
+// instance is still up); the cleanup reports gone only when the store no longer holds that mount.
+describe('ScheduledRunHost — StrictMode’s simulated cleanup is not an unmount (Gate-5 fold F-9)', () => {
+  it('mounted under <StrictMode> with the run already in the store → `onUnmounted` NOT called while the frame is up; clearing the store → called exactly once', async () => {
+    const m = mount();
+    hiddenMountStore.set(m); // the run is in the store BEFORE the host mounts, so StrictMode's double effect sees it
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    await act(async () => {
+      root!.render(
+        <StrictMode>
+          <ScheduledRunHost />
+        </StrictMode>,
+      );
+    });
+    await act(flush);
+    expect(container.querySelector(`[data-testid="${SCHEDULED_RUN_HOST_TEST_ID}"] iframe`), 'harness: the hidden frame is up').not.toBeNull();
+    expect(m.onUnmounted, 'StrictMode re-ran the cleanup while the store still holds the mount').not.toHaveBeenCalled();
+
+    await act(async () => {
+      hiddenMountStore.set(undefined);
+    });
+    await act(flush);
+    expect(m.onUnmounted).toHaveBeenCalledTimes(1);
+    expect(container.querySelector('iframe')).toBeNull();
   });
 });
 

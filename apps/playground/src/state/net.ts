@@ -36,11 +36,11 @@ import { NET_ERROR_CODES, type NetRequestFrame } from '@snugprotocol/protocol';
 import type { UserDb } from '@snugprotocol/db';
 
 import { suspendIfSourceRestricted } from '../access/grants.js';
-// Both LEAVES (load-time safe): `runPlacement.ts` imports `store.ts` and `appHosts.ts` only;
-// `runScopedGate.ts` imports types only.
-import { clearTouchedGeneration, delegatedRunFor, delegatedRunStore, touchedAppName, touchedGeneration } from '../schedule/runPlacement.js';
+// Both LEAVES (load-time safe): `runPlacement.ts` imports `store.ts`, `appHosts.ts` and the pure
+// `schedule/copy.ts` only; `runScopedGate.ts` imports types only.
+import { delegatedRunFor, touchedAppName, touchedGeneration } from '../schedule/runPlacement.js';
 import { createRunScopedGate } from '../schedule/runScopedGate.js';
-import { liveAppHostGeneration, subscribeAppHosts } from './appHosts.js';
+import { liveAppHostGeneration } from './appHosts.js';
 import { getUserDb, userDbStatusStore } from './userdb.js';
 import { createStore } from './store.js';
 import { harvestSidecarBody, persistIdentityDirectory } from './sidecarIdentity.js';
@@ -268,6 +268,8 @@ const standingGate = createStandingApprovalGate({
  * through `parkConfirm` under the `scheduled` tag and the standing→session chain is never
  * consulted; otherwise the request falls through to that chain untouched. The after-run tag names
  * the app by the display name the run recorded (`touchedAppName`), the id as the honest fallback.
+ * The sticky posture's lifetime — the token match and the retraction belt — is `runPlacement.ts`'s
+ * alone (Gate-5 F-12); this module only reads it.
  */
 const runScopedGate = createRunScopedGate({
   inner: standingGate,
@@ -280,26 +282,6 @@ const runScopedGate = createRunScopedGate({
       run !== undefined ? { title: run.title, appName: run.appName, runId: run.runId } : { afterRun: true, appName: touchedAppName(request.appId) ?? request.appId },
       signal,
     ),
-});
-
-/**
- * THE BELT ON THE STICKY POSTURE (D-PR1-3). The posture already dies structurally when the frame
- * retracts — the registration token the run captured is no longer the live one
- * (`runPlacement.ts`) — and this listener clears the record by name as well, so the rule "a
- * retraction clears it" holds even if the match were ever loosened. The generation to clear is the
- * one the run began on, learned from the store at each begin (the registry has already dropped
- * the entry when a retraction is announced).
- */
-const generationTouchedByRun = new Map<string, number>();
-delegatedRunStore.subscribe(() => {
-  for (const run of delegatedRunStore.get().values()) generationTouchedByRun.set(run.appId, run.generation);
-});
-subscribeAppHosts((appId, live) => {
-  if (live) return;
-  const generation = generationTouchedByRun.get(appId);
-  if (generation === undefined) return;
-  generationTouchedByRun.delete(appId);
-  clearTouchedGeneration(appId, generation);
 });
 
 /** Arm auto-reply for one thread. The app calls this from an explicit user gesture. */

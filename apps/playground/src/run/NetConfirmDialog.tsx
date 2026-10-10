@@ -13,11 +13,16 @@
 // the gate would not honour, and the decision it resolves carries no `rememberSession` key at
 // all. The `afterRun` tag is the sticky variant (the frame hosted a run earlier). Every string
 // comes from `schedule/copy.ts`.
+//
+// THE BUTTONS RESOLVE THE ENTRY THIS RENDER SHOWS (Gate-5 F-4), never "whatever is at the queue
+// head now": a scheduled confirm is WITHDRAWN by its run's signal without a user act, which moves
+// the head under an open dialog — a click that reached for the head could hand the user's *allow*
+// to a different app's request. `pending.resolve` is the entry's own exit (a gone entry is a no-op).
 import { useEffect, useState } from 'react';
 import type { ReactElement } from 'react';
 
 import { DELEGATED_CONFIRM } from '../schedule/copy.js';
-import { chatConfirmSurfaceStore, netConfirmStore, resolveNetConfirm, type PendingNetConfirm } from '../state/net.js';
+import { chatConfirmSurfaceStore, netConfirmStore, type PendingNetConfirm } from '../state/net.js';
 import { useStore } from '../state/store.js';
 import { Button } from '../ui/Button.js';
 
@@ -91,19 +96,19 @@ export function NetConfirmDialog(): ReactElement | null {
         <div className="field-row net-confirm-actions">
           {scheduled !== undefined ? (
             <>
-              <Button variant="ghost" onClick={() => resolveNetConfirm({ granted: false })}>
+              <Button variant="ghost" onClick={() => pending.resolve({ granted: false })}>
                 {DELEGATED_CONFIRM.deny}
               </Button>
-              <Button variant="primary" onClick={() => resolveNetConfirm({ granted: true })}>
+              <Button variant="primary" onClick={() => pending.resolve({ granted: true })}>
                 {DELEGATED_CONFIRM.allow}
               </Button>
             </>
           ) : (
             <>
-              <Button variant="ghost" onClick={() => resolveNetConfirm({ granted: false })}>
+              <Button variant="ghost" onClick={() => pending.resolve({ granted: false })}>
                 deny
               </Button>
-              <Button variant="primary" onClick={() => resolveNetConfirm({ granted: true, rememberSession: remember })}>
+              <Button variant="primary" onClick={() => pending.resolve({ granted: true, rememberSession: remember })}>
                 allow
               </Button>
             </>

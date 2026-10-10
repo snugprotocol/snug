@@ -22,27 +22,37 @@
 // STRUCTURALLY (contract v2.1): it captures the registration TOKEN beside the generation and
 // `touchedGeneration` answers only while that token is still the live one — a retraction and
 // re-registration mints a new token, so the posture dies by itself; a remount changes the
-// generation, so the gate's `touched === live` comparison fails by itself. `clearTouchedGeneration`
-// is the belt `state/net.ts` pulls from its registry listener, and it clears only the generation it
-// names (a stale clear never lifts a newer posture).
+// generation, so the gate's `touched === live` comparison fails by itself. A remount DURING the
+// run is the one case the comparison would miss (Gate-5 F-6): the new generation is the instance
+// that could have read the run's kv input, so `endDelegatedRun` moves the posture to the
+// generation live at the END of the run while the token still matches. The belt on top of the
+// structural rule has ONE home, here (F-12): a module-load registry listener clears the record on
+// a retraction through `clearTouchedGeneration`, which clears only the generation it names (a
+// stale clear never lifts a newer posture).
 //
-// A LEAF. Imports `state/store.ts` and `state/appHosts.ts` only — `state/net.ts`, `run/appRuntime.ts`,
-// `access/accessHandler.ts` and `RunningChip.tsx` sit above it, so loading it can never enter the
-// scheduler's import cycle.
+// A LEAF. Imports `state/store.ts`, `state/appHosts.ts` and `schedule/copy.ts` (pure strings) only —
+// `state/net.ts`, `state/openUrl.ts`, `run/appRuntime.ts`, `access/accessHandler.ts` and
+// `RunningChip.tsx` sit above it, so loading it can never enter the scheduler's import cycle.
 
-import { liveAppHostToken } from '../state/appHosts.js';
+import { liveAppHostGeneration, liveAppHostToken, subscribeAppHosts } from '../state/appHosts.js';
 import { createStore, type Store } from '../state/store.js';
+import { alreadyRunning } from './copy.js';
 
 export type Placement = 'live' | 'hidden';
 
 /** A run follows the app at most once (ADR-0077 §5). */
 export const MAX_HANDOVERS = 1;
 
-/** What the ask gate refused — enough to say what the app tried and WHY nothing was sent, never the body or a credential. */
+/**
+ * What a scheduled run's gate refused — enough to say what the app tried, never the body or a
+ * credential. The ONE refusal type (Gate-5 F-13): the run-scoped ask gate records WHY nothing was
+ * sent; the hidden frame's refusing gate (`scheduledConfirmGate.ts`, which re-exports this) has no
+ * dialog and records no `why`.
+ */
 export interface ScheduledRefusal {
   host: string;
   method: string;
-  why: 'declined' | 'timed-out' | 'already-asked';
+  why?: 'declined' | 'timed-out' | 'already-asked';
 }
 
 /** A run in flight on the live frame — a MUTABLE record; the store notifies on presence changes only. */
@@ -86,7 +96,7 @@ export function beginDelegatedRun(
   input: Pick<DelegatedRun, 'appId' | 'appName' | 'runId' | 'taskId' | 'title' | 'generation'>,
 ): { ok: true; run: DelegatedRun } | { ok: false; reason: string } {
   const current = delegatedRunStore.get();
-  if (current.has(input.appId)) return { ok: false, reason: `${input.appName} is already running another schedule` };
+  if (current.has(input.appId)) return { ok: false, reason: alreadyRunning(input.appName) };
   const controller = new AbortController();
   const run: DelegatedRun = {
     appId: input.appId,
@@ -109,11 +119,23 @@ export function beginDelegatedRun(
   return { ok: true, run };
 }
 
-/** End the run `runId` for `appId`: aborts its signal (every parked prompt withdraws), removes the entry, returns the final record. Another run id is left alone. */
+/**
+ * End the run `runId` for `appId`: aborts its signal (every parked prompt withdraws), removes the
+ * entry, returns the final record. Another run id is left alone. The sticky posture follows the
+ * frame to the generation live at the END of the run (F-6) — a remount mid-run is the instance that
+ * could have read the kv input — but only while the registration is still the one the run began
+ * under (a retraction and re-registration is a different view, and the posture has died with the
+ * token). With no registry (a unit suite) both tokens are `undefined` and nothing moves.
+ */
 export function endDelegatedRun(appId: string, runId: string): Pick<DelegatedRun, 'calls' | 'refused' | 'granted'> | undefined {
   const current = delegatedRunStore.get();
   const run = current.get(appId);
   if (run === undefined || run.runId !== runId) return undefined;
+  const record = touched.get(appId);
+  if (record !== undefined && record.token === liveAppHostToken(appId)) {
+    const generation = liveAppHostGeneration(appId);
+    if (generation !== undefined) record.generation = generation;
+  }
   const next = new Map(current);
   next.delete(appId);
   delegatedRunStore.set(next);
@@ -145,10 +167,23 @@ export function touchedAppName(appId: string): string | undefined {
   return liveTouched(appId)?.appName;
 }
 
-/** Clear the posture — only for the generation it names. Called on a retraction (the `state/net.ts` belt). */
+/** Clear the posture — only for the generation it names. Called on a retraction (the belt below) and by suites that end what they began. */
 export function clearTouchedGeneration(appId: string, generation: number): void {
   if (touched.get(appId)?.generation === generation) touched.delete(appId);
 }
+
+/**
+ * THE BELT ON THE STICKY POSTURE (D-PR1-3; its one home, F-12). The posture already dies
+ * structurally when the frame retracts — the token the run captured is no longer the live one —
+ * and this listener clears the record by name as well, so the rule "a retraction clears it" holds
+ * even if the match were ever loosened. A module-load subscription: `__resetAppHostsForTest` drops
+ * it with every other host listener, which is harmless (the token match does not depend on it).
+ */
+subscribeAppHosts((appId, live) => {
+  if (live) return;
+  const record = touched.get(appId);
+  if (record !== undefined) clearTouchedGeneration(appId, record.generation);
+});
 
 /** The one rule: the registry has the app → `live`; otherwise → `hidden`. */
 export function placeRun(live: { has(appId: string): boolean }, appId: string): Placement {

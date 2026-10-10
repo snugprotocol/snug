@@ -21,7 +21,9 @@
 // grant allowed *also while I'm away* (a session grant is this frame's but not readable, a
 // `refused` line with `attended: false`), and a `read` line says `attended: false`. After the run
 // the door reopens; the app's genuine ask is the ordinary strip, which needs the user's act anyway.
-// `list` and `release` keep the frame's own posture (nothing is read or asked through them).
+// `list` filters on the same presence as `query` admits (Gate-5 F-10) — it never advertises a grant
+// a query would refuse during the run; `release` keeps the frame's own posture (nothing is read or
+// asked through it).
 //
 // THE OPS.
 //  - `request`: a hidden frame is told `ACCESS_UNATTENDED` (nobody to ask; nothing recorded, no
@@ -381,8 +383,10 @@ export function createAccessHandlerFor(appId: string, frame: AccessFrame): Acces
   }
 
   function list(db: UserDb): AccessHandlerResult {
+    // Exactly `query`'s admission, read once for the whole list: this reader's, this frame's session grants, and — with nobody present (a hidden frame, or a delegated run in flight) — only those usable while away.
+    const presentNow = present();
     const grants = grantsForApp(db, appId, now())
-      .reads.filter((row) => row.live && (!row.session || ownsSession(row)) && (attended || row.grant.unattended))
+      .reads.filter((row) => row.live && (!row.session || ownsSession(row)) && (presentNow || row.grant.unattended))
       .map((row) => grantView(db, row.grant));
     return { ok: true, op: 'list', grants };
   }
