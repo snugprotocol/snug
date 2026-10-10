@@ -4,7 +4,7 @@ Every change pushed to `snugprotocol/spec`, newest first. Format: `## YYYY-MM-DD
 
 ---
 
-## 2026-10-10 — spec 1.1 (staged in the local clone, NOT pushed — the push is an owner act per session) — TASK-20261010-cross-app-access
+## 2026-10-10 — spec 1.1 — **PUSHED** `23654a6` (spec + schemas + README) · `1756de5` (whitepaper edition 4) via snugprotocol/spec#2, rebase-merged so the two staged commits landed as two — TASK-20261010-cross-app-access (owner's ask, same day)
 **Access between apps (ADR-0075) — the first post-1.0 minor, additive.** Two frames join the
 published set: `snug:access-request` (strict — `op ∈ request, query, list, release`; carries
 app-authored SQL and a release act; no app-id seat, the runner's binding is host-assigned) and
@@ -27,9 +27,9 @@ source-of-truth list; `SPEC-1.0.md` stays as a pointer stub).
 `shared` channel recorded as Part III prose contracts; with them §12.1's fourth proposer, the
 share act, §8.1's three sharing keys and the header's 2026-09-04 revision note), the `shared`
 provenance, and §8.1's scheduling keys — so the draft and the published spec no longer diverge.
-Staged as TWO commits in the local `snugprotocol/spec` clone: (1) `SPEC.md` + `schemas/` +
-README ("seven parts"); (2) the whitepaper edition 4 PDF after its review. Pushed only in a
-session carrying the owner's ask.
+Landed as TWO commits on `snugprotocol/spec` main: (1) `23654a6` — `SPEC.md` + `schemas/` +
+README ("seven parts"); (2) `1756de5` — the whitepaper edition 4 PDF after its review. Pushed
+2026-10-10 on the owner's ask (the repo's `main` requires a pull request — snugprotocol/spec#2).
 
 ## 2026-10-09 — INTERNAL / TRANSPARENCY, not staged for any push — TASK-20261009-scheduling-framework (ADR-0074)
 **Excluded from every spec push; no schema bytes changed; no version bump.** Scheduling is a
