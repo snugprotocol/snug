@@ -13,6 +13,16 @@
 // nothing else: the hidden frame has no generation and never reads, lists or releases one — not
 // even one ticked *also while I'm away* — so it is answered like any grant that is not its own.
 //
+// THE DOOR CLOSES FOR A DELEGATED RUN'S WINDOW (TASK-20261010-host-broker PR-1; ADR-0077 §3;
+// contract v2 D-PR1-8). A run the user did not start may execute on the VISIBLE frame
+// (`schedule/runPlacement.ts`); while one is in flight for this app the attended handler takes
+// the hidden frame's posture, read PER OP: `request` is told `ACCESS_UNATTENDED` (a timer-fired
+// run must not park a consent sheet — a stronger authority than a POST), `query` admits only a
+// grant allowed *also while I'm away* (a session grant is this frame's but not readable, a
+// `refused` line with `attended: false`), and a `read` line says `attended: false`. After the run
+// the door reopens; the app's genuine ask is the ordinary strip, which needs the user's act anyway.
+// `list` and `release` keep the frame's own posture (nothing is read or asked through them).
+//
 // THE OPS.
 //  - `request`: a hidden frame is told `ACCESS_UNATTENDED` (nobody to ask; nothing recorded, no
 //    window spent); then the shared ladder (`state/appAsk.ts` via consent.ts — the window per
@@ -60,6 +70,8 @@ import {
 import type { UserDb } from '@snugprotocol/db';
 import type { AccessHandler, AccessHandlerResult } from '@snugprotocol/runner';
 
+// A leaf (`state/store.ts` and `state/appHosts.ts` only) — safe to import here.
+import { delegatedRunFor } from '../schedule/runPlacement.js';
 import { appHasSidecarFact } from '../state/sidecarLive.js';
 import { accessAskLadder, accessAsksOff, collectSources, dismissStaleAccessAsk, parkAccessRequest, type ConsentOutcome } from './consent.js';
 import { ACCESS_APP_MESSAGES } from './copy.js';
@@ -156,6 +168,9 @@ export function createAccessHandlerFor(appId: string, frame: AccessFrame): Acces
   const iso = (at: number): string => new Date(at).toISOString();
   const readerName = (db: UserDb): string => db.getApp(appId)?.displayName ?? appId;
 
+  /** Is someone there to be asked RIGHT NOW: the visible frame, and no delegated run in flight for the app (D-PR1-8). */
+  const present = (): boolean => attended && delegatedRunFor(appId) === undefined;
+
   /** A session grant is this frame's only when this is the VISIBLE frame of its generation. */
   const ownsSession = (session: { generation?: number }): boolean => attended && session.generation === generation;
 
@@ -168,7 +183,7 @@ export function createAccessHandlerFor(appId: string, frame: AccessFrame): Acces
   }
 
   async function request(db: UserDb, frame: RequestOp): Promise<AccessHandlerResult> {
-    if (!attended) return refuse(ACCESS_ERROR_CODES.ACCESS_UNATTENDED, ACCESS_APP_MESSAGES.unattended, true);
+    if (!present()) return refuse(ACCESS_ERROR_CODES.ACCESS_UNATTENDED, ACCESS_APP_MESSAGES.unattended, true);
     const reader = db.getApp(appId);
     if (reader === undefined) return notGranted();
 
@@ -270,7 +285,9 @@ export function createAccessHandlerFor(appId: string, frame: AccessFrame): Acces
       return refuse(ACCESS_ERROR_CODES.ACCESS_EXPIRED, ACCESS_APP_MESSAGES.expired, false);
     }
     const tables = grant.scope.tables.map((table) => table.name);
-    if (!attended && !grant.unattended) {
+    // Read once per op: the posture the whole read is logged under (a run ending mid-read must not split it).
+    const attendedNow = present();
+    if (!attendedNow && !grant.unattended) {
       logRefused(db, grant.id, grant.sourceAppId, tables, at);
       return notGranted();
     }
@@ -323,7 +340,7 @@ export function createAccessHandlerFor(appId: string, frame: AccessFrame): Acces
           tables,
           ...(sql !== undefined ? { sql } : {}),
           rows: rows.length,
-          attended,
+          attended: attendedNow,
         });
       } catch {
         return queryFailed(); // a read the source's history cannot record does not happen

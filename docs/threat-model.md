@@ -1,6 +1,7 @@
 # Snug — Threat Model
 
-- **Version:** 3.7 · **Date:** 2026-10-10 · **Tasks:** TASK-20260820-threat-model-v1 (v1) · TASK-20260821-hardening-polish (v2) · TASK-20260821-launch-security-review (v3) · TASK-20260904-app-sharing (v3.1) · TASK-20261003-host-bindings-complete (v3.2) · TASK-20261008-p0-clearance (v3.3) · TASK-20261009-scheduling-framework (v3.4, v3.5) · TASK-20261009-scheduled-run-open-app (v3.6) · TASK-20261010-cross-app-access (v3.7)
+- **Version:** 3.8 · **Date:** 2026-10-10 · **Tasks:** TASK-20260820-threat-model-v1 (v1) · TASK-20260821-hardening-polish (v2) · TASK-20260821-launch-security-review (v3) · TASK-20260904-app-sharing (v3.1) · TASK-20261003-host-bindings-complete (v3.2) · TASK-20261008-p0-clearance (v3.3) · TASK-20261009-scheduling-framework (v3.4, v3.5) · TASK-20261009-scheduled-run-open-app (v3.6) · TASK-20261010-cross-app-access (v3.7) · TASK-20261010-host-broker (v3.8)
+- **What v3.8 added (2026-10-10).** One instance per app (ADR-0077): a scheduled run of an OPEN app no longer mounts a second, hidden copy beside it — it is DELEGATED to the visible frame under a run-scoped ask gate that asks the present user and consults no remembered or standing grant, the frame that hosted it stays ask-only until reopened, the access door closes for the run's window, a run follows the app at most once and never after a change went out, and the day's ceilings are asked before dispatch. R-62 and R-70 are rewritten (R-70 retires for the delegated case and keeps only the follower-tab shape); R-79 … R-84 record what is disclosed rather than prevented.
 - **What v3.7 added (2026-10-10).** The one sanctioned crossing between apps: a reader app reads a source app's tables under a user-granted, read-only, logged, revocable access grant (ADR-0075). The §5 row "LLM-authored SQL cannot reach hub tables or other apps' data" is rewritten for it; a new §5 family states what holds — the host-assigned binding, the scoped scratch copy in a bounded worker with its drops verified and credential columns withheld, the strict record with its import reconciliation, the source-kept history, the consent surface; R-71 … R-78 record what is disclosed rather than prevented.
 - **What v3.2 added (2026-10-04).** The local host process the agent plugin spawns can now
   answer an app's think on a second agent the user already has — their own `codex` CLI beside
@@ -90,7 +91,7 @@ personal sync origin the user connected — that is [ADR-0014](decisions/0014-cr
 custody working as designed; denial of service against the user's own browser tab or own
 self-hosted server; and third-party self-hosted infrastructure misconfiguration.
 
-**This document consolidates nineteen per-change threat-model deltas** (§8). A delta is written
+**This document consolidates twenty per-change threat-model deltas** (§8). A delta is written
 for someone who already knows the system and is reading one change; this is written for a
 stranger deciding whether to trust the whole thing. Where a delta's residual is restated
 here it is marked as inherited, because a model that re-sells an old residual as new is as
@@ -749,26 +750,33 @@ the committed version only, the user's own enable act on the consent surface, th
 ignored pauses, the inbox that shows every result. (Proposals delta R-a.)
 
 **R-62 — The user's own *Run now and review* rides the live frame under the page's ordinary gate
-and transport, uncounted.** The one run delivered to an open app is the `manual` run the user just
-started (the act opens the app first, then runs): its net calls go through RunView's handler — the
-ordinary gate, with the person who clicked at the confirm — and its thinks through RunView's
-transport; the row's `calls` are zero. A run the user did NOT start never rides the live frame: it
-runs in its own hidden frame under the refusing gate and the counting transport, open app or not
-(owner decision 2026-10-09; the open-app refusal of the Gate-5 fold is retired). *Bounded by:* one
-run per gesture; the frequency floor; the live frame's own budget. (Proposals delta R-b; open-app
+and transport, uncounted.** The `manual` run the user just started (the act opens the app first,
+then runs) goes through RunView's handler — the ordinary gate, with the person who clicked at the
+confirm — and RunView's transport; the row's `calls` are zero; it gains only the readiness wait
+(ADR-0077 §6). A run the user did NOT start may ALSO ride the live frame since ADR-0077 — but under
+the RUN-SCOPED ask gate (`schedule/runScopedGate.ts`, the frame path's default in `state/net.ts`):
+while the run is in flight a mutating call is parked for the present user under a host-composed
+title with no remember box and never reaches a remembered or armed grant; no answer in a minute,
+a decline or a second ask is a recorded refusal; the frame generation that hosted the run stays
+ask-only until the app is reopened; the access door closes for the window. Presence is still not
+consent — a human clicks, or nothing happens. *Bounded by:* one run per gesture for the manual
+case; the frequency floor; the live frame's own budget; for the delegated case the ceiling asked
+before dispatch and the counts on the run row. (Proposals delta R-b; open-app delta; one-instance
 delta.)
 
-**R-70 — Two instances of one app run at once over the app's one store and ONE connection.** While
-the app is open, a scheduled run's hidden frame is a second instance of it, and both reach the same
-sql.js connection. A single request is atomic at the host; connection state that spans requests is
-not — so the hidden frame's db binding (`schedule/scheduledDbDriver.ts`) refuses transaction control
-and a whole-database import by name, and a scheduled run never holds a transaction open. Still
-open: the VISIBLE copy's own transaction can capture a scheduled single-statement write, and the
-visible copy can blind-write state it cached at load over what the handler stored. Not the two-tabs
-case (a second tab is read-only, `userdb/locks.ts`). *Bounded by:* the refusing gate; one hidden
-mount at a time; no shipped starter uses a transaction; the knowledge base's handler rules (one
-statement per change, re-read before writing back). (Open-app delta R-a; a hidden run's 401/403 can
-raise the reconnect chip on the open copy — R-b there, benign.)
+**R-70 — Two instances of one app over one connection — now only across TABS.** Until ADR-0077 a
+scheduled run of an open app mounted a hidden second instance beside it over the same sql.js
+connection; placement (`schedule/runPlacement.ts`) retires that: the registry has the app → the
+run is delegated to the visible frame, else it takes the hidden frame — at any moment one instance
+per app in this tab, and a run follows the app across a handover rather than running beside it.
+What remains is the follower-tab shape: the leader tab runs the scheduler and an app open in a
+FOLLOWER tab is not "live" for it, so the hidden frame runs there beside the follower's copy; the
+hidden frame's db binding (`schedule/scheduledDbDriver.ts`) still refuses transaction control and a
+whole-database import by name. *Bounded by:* the follower tab is read-only (`userdb/locks.ts`);
+one hidden mount at a time; the knowledge base's handler rules (idempotent by `runId`, one
+statement per change, re-read before writing back). (Open-app delta R-a, retired for the delegated
+case by the one-instance delta; the open copy's reconnect chip now says "a schedule ran into this" —
+R-b there closed.)
 
 
 **R-71 — The reader's model sees what it reads.** Rows cross into a frame whose model will read them; a source's cell can carry an instruction the reader's model follows (R-8's class, now from a second app's data). *Bounded by:* the user chose the source and the tables with the sheet in front of them; every read is logged on the source; the mask and the withheld columns keep credentials out of the rows; the reader's own net ceiling and the open-url confirm bound where an instruction can send anything.
@@ -786,6 +794,18 @@ raise the reconnect chip on the open copy — R-b there, benign.)
 **R-77 — The provenance line trusts `install_source`.** The sheet reads an app with no `install_source` as *built here*, and an untrusted import carries that column verbatim, so a planted app can wear the most trusted provenance. *Bounded by:* the reader is still named by its LIBRARY row (never the announce); the provenance line is one line of several the user sees (the tables, the egress, the history); no app-level "arrived with an imported file" marker exists yet — it is the named follow-up.
 
 **R-78 — The hidden frame's generation.** The scheduler's hidden frame has no generation and therefore never uses a session grant (D30); a persisted grant ticked *also while I'm away* is readable by a scheduled run of the reader with nobody watching. *Bounded by:* the opt-in is a separate, default-off checkbox whose sentence names the condition; every such read is logged *while you were away*; the hidden frame runs under the refusing net gate, so what it reads cannot be sent anywhere a confirm would have gated.
+
+**R-79 — A frame that hosted a scheduled run loses *remember for this session* until reopened.** The sticky ask-only posture is per frame generation, so the user's own later POSTs from that frame re-confirm once each. *Bounded by:* one extra click per call; the after-run dialog says why; reopening the app restores the ordinary chain. (One-instance delta.)
+
+**R-80 — Inside a delegated window a run is counted, not stopped.** App code on the live frame cannot be interrupted by the host; a run that crosses a ceiling mid-window is marked `capped` after the fact. *Bounded by:* the pre-dispatch check (a run never starts without headroom); the 90 s bound; the live frame's own budget. (One-instance delta.)
+
+**R-81 — Over-attribution.** A user's own AI or net call inside the ≤ 90 s window is counted on the run row, and their own 401 is tagged "a schedule ran into this". *Bounded by:* the window's length; the chip's hedged sentence; nothing is refused because of it. (One-instance delta.)
+
+**R-82 — The open app's own powers are the delegated run's powers.** The live frame's db binding allows BEGIN/COMMIT and `import`, and its replies are not deliver-scrubbed (the step's summary and alert still are). *Bounded by:* these are exactly the powers the open app already exercises for the user's own clicks; the hidden path keeps its narrower bindings. (One-instance delta.)
+
+**R-83 — One instance holds per TAB, and presence means "mounted", not "visible".** An app open in a follower tab is not live for the leader's scheduler (the hidden frame runs beside it — R-70's shape, in that one case); a RunView in a backgrounded tab receives a delegated run whose dialog nobody sees and times out to *needs you*. *Bounded by:* the follower tab is read-only (`userdb/locks.ts`); the timeout is the honest outcome. (One-instance delta.)
+
+**R-84 — A frame remount mid-run is not a handover.** The in-flight attempt ends by the result bound (as a manual run does today) — one slow failure, never a double send. *Rider:* a remount handover (next-steps). (One-instance delta.)
 **R-63 — The demo brain answers a hidden frame's thinks like RunView's.** Under the mock
 adapter the hidden frame's own transport answers scripted turns as it does for the visible app
 (unlike *Ask the AI*, which refuses the demo brain by name); each reply COUNTS against the day's
@@ -1126,6 +1146,8 @@ macOS, and a Linux opener exists, untested on a real Linux desktop.
 
 **v3.7 note (2026-10-10, TASK-20261010-cross-app-access).** One row added (`threat-model-delta-cross-app-access.md`) and §5 gains the family "Access between apps": the one sanctioned crossing — a reader app reads a source app's tables under an access grant the user gives on host chrome, read-only, scoped to tables with their columns frozen, timed, revocable from anywhere, logged on the source; the request frame is strict with no app-id seat and the runner's binding is host-assigned; the read runs on a scoped scratch copy (drops verified, credential columns withheld, `query_only`, the two guards) in a dedicated worker with its own engine under a 2 s wall clock; the grant record is strict, byte-capped, credential-free, disarmed on an untrusted import, swept on delete; the source's history is bounded and cannot be made to lie; a replaced reader, a changed source and a linked-device source suspend. The §5 row "LLM-authored SQL cannot reach hub tables or other apps' data" is rewritten with the one exception stated. Eight residuals recorded as R-71 … R-78 (the reader's model sees what it reads; rows can leave through the reader's own approved paths; the user's own edits keep the grant; two instances of the source; session vs persisted grants across sync; names and sizes of dropped objects; the provenance line trusts `install_source`; the hidden frame's unattended reads).
 
+**v3.8 note (2026-10-10, TASK-20261010-host-broker PR-1).** One row added (`threat-model-delta-one-instance.md`). ADR-0077 ends the second copy: an unattended *Run [app]* of an OPEN app is delegated to the visible frame instead of mounting a hidden instance beside it, and the hidden frame is used only when the app is closed. The principle the Gate-5 fold named survives — "presence is not consent" — by mechanism rather than placement: the live frame's handler defaults to a run-scoped ask gate that consults the placement store per request, parks a mutating call for the present user on the one confirm queue under a host-composed title with no remember box, never consults a remembered or armed grant, allows one outstanding ask per run, withdraws a parked ask when its run ends or its minute passes, and keeps the frame generation that hosted a run ask-only until the app is reopened; the access handler closes for the window; a run follows the app at most once, never after an allowed change, with the hidden frame's unmount awaited before the live hint and a result accepted only from the hinted generation; one deadline per step inside the queue's bound; the ceiling is asked before a delegated dispatch and a crossed ceiling marks the run `capped`; auth-shaped failures inside a run are attributed to it. R-62 rewritten; R-70 rewritten (retired for the delegated case, the follower-tab shape kept); R-b of the open-app delta closed; six residuals recorded as R-79 … R-84 (the sticky frame loses *remember for this session*; counted, not stopped, inside the window; over-attribution of the user's own click; the open app's own powers; one instance per tab and presence ≠ visibility; a remount is not a handover).
+
 <!-- DELTA-LEDGER:BEGIN -->
 
 | Delta | Pinned hash | Consolidated into |
@@ -1149,6 +1171,7 @@ macOS, and a Linux opener exists, untested on a real Linux desktop.
 | `docs/security/threat-model-delta-scheduling-proposals.md` | `98c511b26e38` | §5 scheduled tasks — *Run [app]* and the proposal channels · R-54 closed · R-59 closed · R-61, R-62, R-63, R-64, R-65, R-66, R-67, R-68, R-69 |
 | `docs/security/threat-model-delta-scheduled-run-open-app.md` | `02e0e226efe6` | §5 scheduled tasks — an unattended *Run [app]* of an open app · R-62 amended · R-70 |
 | `docs/security/threat-model-delta-cross-app-access.md` | `f761c089aa66` | §5 access between apps — the §5 SQL-reach row rewritten · R-71, R-72, R-73, R-74, R-75, R-76, R-77, R-78 |
+| `docs/security/threat-model-delta-one-instance.md` | `1031a017416a` | §5 scheduled tasks — one instance per app, the run-scoped ask gate · R-62 rewritten · R-70 rewritten · R-79, R-80, R-81, R-82, R-83, R-84 |
 <!-- DELTA-LEDGER:END -->
 
 ---

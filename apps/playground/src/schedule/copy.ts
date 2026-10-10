@@ -249,8 +249,11 @@ export function paused(reason: PausedReason, count?: number): StateCopy {
   }
 }
 
-/** The global daily ceiling was reached (E7); `what` names it ("AI call", "network call"). No act — tomorrow is the act. */
-export function capped(what: string): string {
+/** The two ceilings, in the words `ResultsList` already uses (contract v2.2). */
+export type CappedWhat = 'AI call' | 'network call';
+
+/** The global daily ceiling was reached (E7); `what` names it. No act — tomorrow is the act. */
+export function capped(what: CappedWhat): string {
   return `daily ${what} limit reached — resumes tomorrow`;
 }
 
@@ -414,8 +417,56 @@ export const EMPTY = {
   createPlaceholder: 'describe what and when — every weekday at 8, summarise my ledger',
 } as const;
 
-/** The chip that says a run is in flight, with its one act (security F15). */
+/** The chip that says a run is in flight, with its one act (security F15); `inApp` when the run is delegated to the OPEN app (ADR-0077 §2). */
 export const RUNNING_CHIP = {
   label: `a ${WORDS.item} is running`,
   cancel: 'cancel',
+  inApp: (appName: string): string => `running in ${appName}`,
 } as const;
+
+// ---------------------------------------------------------------------------------------------
+// The delegated run (TASK-20261010-host-broker PR-1; ADR-0077 §3–§5) — a run on the OPEN app
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * The confirm dialog when a run the user did not start asks to make a change on the open app. The
+ * title is the HOST's sentence — never the schedule's own title, an app-authored string must not
+ * headline a consent surface; the body quotes the schedule and says in one breath that this was
+ * not the user's click, that *allow once* means once and that silence means no. `afterRunBody` is
+ * the sticky variant: the frame hosted a run earlier, so it stays ask-only until reopened.
+ */
+export const DELEGATED_CONFIRM = {
+  title: `a ${WORDS.item} wants to make a change`,
+  body: (title: string, appName: string, method: string, host: string): string =>
+    `“${title}” is running ${appName} and wants to send a ${method} request to ${host}. You didn’t click this — allow it once, or don’t. Nothing is remembered; no answer in a minute means nothing is sent.`,
+  afterRunBody: (appName: string, method: string, host: string): string =>
+    `${appName} ran a ${WORDS.item} here earlier, so Snug asks every time: it wants to send a ${method} request to ${host}. Allow it once, or don’t — nothing is remembered until you reopen the app.`,
+  allow: 'allow once',
+  deny: 'don’t send',
+} as const;
+
+/** The three *needs you* sentences — which of the three happened: the user declined, nobody answered, or the app asked again. One act, as `needsYou`. */
+export function needsYouDeclined(appName: string, verb: string): StateCopy {
+  return { text: `you said don’t send — ${appName} didn’t ${verb}`, action: needsYou(appName, verb).action };
+}
+
+export function needsYouUnanswered(appName: string, verb: string): StateCopy {
+  return { text: `${appName} asked to ${verb} and nobody answered in a minute — nothing was sent`, action: needsYou(appName, verb).action };
+}
+
+export function needsYouAlreadyAsked(appName: string, verb: string): StateCopy {
+  return { text: `${appName} tried to ${verb} again after you answered — nothing more was sent`, action: needsYou(appName, verb).action };
+}
+
+/** A run follows the app at most once (ADR-0077 §5): the second handover ends the step. */
+export function handedOverTwice(appName: string): string {
+  return `${appName} opened and closed twice while this ran — nothing was recorded`;
+}
+
+/** The app closed after a mutating call was allowed: never re-run a handler whose change went out. */
+export function closedAfterChange(appName: string, host: string): string {
+  return `${appName} was closed after a change was sent to ${host} — check there before running again`;
+}
+
+/** The reconnect chip's attribution when a 401/403 happened inside a scheduled run (R-b closed). */
+export const AUTH_REPAIR_VIA_SCHEDULE = `a ${WORDS.item} ran into this`;

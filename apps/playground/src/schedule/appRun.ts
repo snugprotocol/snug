@@ -1,65 +1,84 @@
 // schedule/appRun.ts — the *Run [app]* executor and the kv handshake
 // (TASK-20261009-scheduling-framework A2, A3, A5; ADR-0074 §3, §5, §6; security F5, F8, F16;
-// Gate-5 PR-B S1/M1, M9, M12, M18, M22).
+// Gate-5 PR-B S1/M1, M9, M12, M18, M22; TASK-20261010-host-broker PR-1 — ADR-0077, one instance
+// per app).
 //
 // THE SHAPE OF A RUN. The host writes the step's input into the app's OWN kv under
 // `snug:schedule:<runId>` (`scheduleKey.ts` — the input is ≤ 1 KiB by the task schema; the
 // driver's host-side seat caps the whole payload), rings the EXISTING `host-event` channel with
 // a hint that carries ids and nothing else (`schedule-run { taskId, runId }` — R7: hints, never
 // content), and reads the app's `app-event 'schedule-result'`. No new frame, no `host-ready`
-// flag, no new error code. The key is cleared on EVERY exit path, and the stale-claim sweep
-// clears the key of any claim a dead tab left behind (`clearScheduleKey`, from `scheduler.ts`).
+// flag, no new error code. The key is written per dispatch (the same key) and cleared ONCE in the
+// executor's outer `finally`; the stale-claim sweep clears the key of any claim a dead tab left
+// behind (`clearScheduleKey`, from `scheduler.ts`).
 //
-// WHERE THE APP RUNS — THE TRIGGER DECIDES; A TIMER NEVER DRIVES THE LIVE FRAME.
-//   `due` / `late` / `catch-up` (nobody asked right now): ONE hidden `SnugAppFrame` is mounted
-//   through `hiddenMountStore` (`ScheduledRunHost.tsx` renders it) with the runtime
-//   `run/appRuntime.ts` composes for RunView, and two differences — the STANDALONE refusing
-//   gate and the counting transport (below). The hidden frame runs the app's COMMITTED CURRENT
-//   version (`getAppHtml`). It runs WHETHER OR NOT the app is on screen, and opening the app
-//   mid-run does not stop it (owner decision 2026-10-09, TASK-20261009-scheduled-run-open-app —
-//   a schedule runs on time, without asking). What PR-B's Gate-5 fold (S1) guarded against
-//   stays guarded: the run never rides the LIVE frame, whose gate is the ordinary one armed by
-//   whatever the user remembered — it gets its own frame, its own refusing gate and its own
-//   count. The accepted cost: two instances of one app (the visible one and this one) may run at
-//   once over the app's one store — each db/kv request is atomic at the host, the race is the
-//   app's (two read-modify-writes), as with the app open in two tabs (threat model R-62).
-//   `manual` (the user pressed *run now* / *run now and review*): the run is delivered ONLY to
-//   the LIVE frame — the hint rides the registry's notify, the result comes back through the
-//   app-events the view forwards (`publishAppEvent`) — under the page's ordinary gate, because
-//   the user is at the app, and its calls ride the live frame's own transport (not this
-//   executor's to count). When the app is not open the step is `refused` by name
-//   (`openAndRunAgain`): the view navigates to the app BEFORE it calls `runNow`, so this is the
-//   answer only to a manual run nobody is looking at — never a hidden frame under the ordinary
-//   gate. The app closing mid-run ends the step `failed` at once (M18).
+// ONE INSTANCE PER APP — PLACEMENT (ADR-0077 §1–§2). At any moment an app has at most one running
+// instance in this tab: the visible frame when the app is open, the hidden frame otherwise. For an
+// unattended trigger (`due` · `late` · `catch-up`) `runPlacement.ts` decides by one rule — the
+// registry HAS the app → DELEGATED to the live frame (`dispatchLive`), else the ONE hidden
+// `SnugAppFrame` (`dispatchHidden`, through `hiddenMountStore`; `ScheduledRunHost.tsx` renders it)
+// with the runtime `run/appRuntime.ts` composes, the STANDALONE refusing gate and the counting
+// transport. Two frames of one app never share the connection again (R-70 retired for this case).
+//
+// A DELEGATED RUN RIDES THE RUN-SCOPED ASK GATE (ADR-0077 §3). What PR-B's Gate-5 fold (S1) guarded
+// against stays guarded — "presence is not consent": the live frame's net handler defaults to the
+// run-scoped gate (`state/net.ts`), which consults the placement store per request. While this run
+// is in flight (`beginDelegatedRun` … `endDelegatedRun`) a mutating call never reaches a remembered
+// or armed grant: the present user is asked once through the ordinary dialog under a host-composed
+// title; no answer in a minute, a decline, or a second ask is a refusal RECORDED on the run — and
+// the record outranks what the app reports (`outcomeOf` says WHICH of the three happened). The
+// frame generation that hosted a delegated run stays ask-only afterwards (the sticky posture,
+// `touchedGeneration`), so a handler cannot post its result first and POST afterwards. The access
+// handler closes the same way for the window (D-PR1-8). The live frame's transport, db binding
+// and replies are the open app's own — the powers it already has for the user's clicks (D-PR1-7).
+//
+// COUNTING FOLLOWS THE RUN (ADR-0077 §4). The hidden frame's transport is wrapped by
+// `scheduledTransport.ts` (every send asked of the day's AI ceiling; `onCounted` reports each call
+// that reached the brain into this executor's own count) and its net handler's `onNetCall` asks
+// the network ceiling before every request — both read the counters in the file PLUS what this run
+// already spent (`ctx.spent`) PLUS the step's earlier attempts. The live frame counts on the run's
+// record instead (`run/appRuntime.ts`'s decorators) and never refuses mid-window: the ceiling is
+// asked BEFORE a delegated dispatch — either counter without headroom for one more call →
+// `refused`, `capped: true`, nothing dispatched (D-PR1-6) — and a tally that crosses a ceiling
+// inside the window marks the outcome `capped` without stopping app code. Tallies are SUMMED across
+// attempts; the counts ride the outcome's `calls`.
+//
+// A RUN FOLLOWS THE APP — ONCE, AND NEVER AFTER A CHANGE WENT OUT (ADR-0077 §5). Opening the app
+// mid-hidden-run cuts that attempt and re-dispatches the SAME `runId` to the live frame once the
+// hidden frame has reported unmounted (`HiddenMount.onUnmounted`, ≤ 1 s) and the live one has
+// announced; closing the app mid-delegated-run re-dispatches hidden. At most `MAX_HANDOVERS` per
+// run — a second ends the step `failed` (`copy.handedOverTwice`). A delegated attempt in which the
+// user ALLOWED a mutating call is never handed over: a retraction after that ends the step `failed`
+// (`copy.closedAfterChange`) rather than running a handler whose POST already went out. One deadline
+// per step (D-PR1-10): fixed at the first dispatch, every announce and result wait is bounded by
+// what it has left, so a handover never runs past the queue's 120 s bound. A `frameEpoch` remount
+// mid-run is not a handover in PR-1 — the attempt ends by the result bound (R-84).
+//
+// READINESS (ADR-0077 §6). Every live hint — `manual` too — waits for the frame to be READY
+// (registered AND announced at its current generation, `awaitAppHostReady`) ≤ the announce bound;
+// a frame that never announces is `no-handler`, a frame that retracts is a handover (unattended) or
+// `the app was closed` (manual, M18). A `schedule-result` settles a delegated run ONLY from the
+// generation that was hinted (security 5).
+//
+// `manual` (the user pressed *run now* / *run now and review*) is otherwise untouched (D-PR1-2):
+// delivered ONLY to the LIVE frame under the page's ordinary gate, uncounted; with the app not
+// open it is `refused` by name (`openAndRunAgain`) — the view navigates to the app BEFORE it calls
+// `runNow`, so this is the answer only to a manual run nobody is looking at.
 //
 // THE RESULT IS BOUND, ONCE, CAPPED (F8). A result is accepted only from the frame that
-// received the hint (the mount's own closure, or the live registry's events for that app),
-// only after the hint was posted, only once, only for this `runId` when the result names one;
-// its serialised length is capped BEFORE the strict parse (`scheduleResultSchema`). Anything
-// else is dropped without a word: an unsolicited, duplicate, forged or oversized result is the
-// one thing an app can send that the host must not act on.
-//
-// THE GATE (A5, §6). Every hidden-frame run carries the STANDALONE refusing gate
-// (`scheduledConfirmGate.ts`): a mutating call is refused with the existing
-// `NET_CONFIRM_DENIED`, the gate RECORDS it, and the step is `refused` with the sentence
-// `copy.needsYou` composes from the record — whatever the app then reports. The run folds to
-// `needs-you` with *run now and review* as its one act.
-//
-// WHAT IS COUNTED (A4, A5). The hidden frame's transport is wrapped by `scheduledTransport.ts`
-// (every send asked of the day's AI ceiling; `onCounted` reports each call that reached the
-// brain into this executor's own count); its net handler's `onNetCall` seam asks the day's
-// network ceiling before every request. Both read the counters in the file PLUS what this run
-// already spent (`ctx.spent`), so a run cannot slip past the ceiling by spending inside one
-// step. The counts ride the outcome's `calls`.
-//
-// A VISIBLE OPEN DOES NOT ABORT THE HIDDEN RUN. PR-B's F5 interrupted the run when a RunView
-// mounted the same app; the owner's 2026-10-09 decision (a schedule runs on time, open app or
-// not) retired that, so the two frames simply coexist until the hidden one answers.
+// received the hint (the mount's own closure, or the live registry's events at the hinted
+// generation), only after the hint was posted, only once, only for this `runId` when the result
+// names one; its serialised length is capped BEFORE the strict parse (`scheduleResultSchema`).
+// Anything else is dropped without a word: an unsolicited, duplicate, forged or oversized result is
+// the one thing an app can send that the host must not act on.
 //
 // REFUSED WITHOUT A SEAT. A platform that composes no `scheduler` seat (every shipped host
 // composes one — web, desktop, both kit bindings) gets no hidden frame: the step is `blocked`
 // by name. No read of the platform's `kind` (the S4 lint). A unit fake that wants exactly that
 // answer composes `blockedAppRunDeps()` (M12) rather than leaving the seams out.
+//
+// Timers are `setTimeout` + `Date.now()` only — never `AbortSignal.timeout`, never `performance.now()`
+// (vitest's fake clock drives the suites).
 
 import { z } from 'zod';
 
@@ -70,13 +89,26 @@ import type { AgentTransport, RunnerHost } from '@snugprotocol/runner';
 
 import { getPlatform, type SnugPlatform } from '../platform/platform.js';
 import { composeAppRuntime, type FrameCapabilityProps } from '../run/appRuntime.js';
-import { hasLiveAppHost, notifyAppHost, subscribeAppEvents, subscribeAppHosts } from '../state/appHosts.js';
+import { awaitAppHostReady, hasLiveAppHost, liveAppHostGeneration, notifyAppHost, subscribeAppEvents, subscribeAppHosts } from '../state/appHosts.js';
 import { modeStore, providerStore } from '../state/mode.js';
 import { createStore, type Store } from '../state/store.js';
 import { CANCELLED_SUMMARY } from './appThink.js';
-import { appMissing, blockedHere, needsYou, noHandler } from './copy.js';
+import {
+  appMissing,
+  blockedHere,
+  capped,
+  closedAfterChange,
+  handedOverTwice,
+  needsYou,
+  needsYouAlreadyAsked,
+  needsYouDeclined,
+  needsYouUnanswered,
+  noHandler,
+  type CappedWhat,
+} from './copy.js';
 import type { StepContext, StepOutcome } from './engine-types.js';
-import { dailyCounters, wouldExceedCeiling } from './protection.js';
+import { dailyCounters, wouldExceedCeiling, type DailyCounters } from './protection.js';
+import { MAX_HANDOVERS, beginDelegatedRun, endDelegatedRun, placeRun, type DelegatedRun, type Placement, type ScheduledRefusal } from './runPlacement.js';
 import { SCHEDULE_RESULT_EVENT, SCHEDULE_RUN_EVENT, scheduleKvKey } from './scheduleKey.js';
 import { scheduledDbDriver } from './scheduledDbDriver.js';
 import { createScheduledConfirmGate, scheduledRefusalVerb, type ScheduledConfirmGate } from './scheduledConfirmGate.js';
@@ -90,10 +122,11 @@ export const SCHEDULE_ANNOUNCE_TIMEOUT_MS = 10_000;
 export const SCHEDULE_RESULT_TIMEOUT_MS = 90_000;
 /** The serialised length a result may have BEFORE it is parsed at all. */
 export const SCHEDULE_RESULT_MAX_CHARS = 8 * 1024;
+/** After a hidden → live handover, how long the live hint waits for the hidden frame to report unmounted. */
+export const HIDDEN_UNMOUNT_WAIT_MS = 1_000;
 
 /** The reason when a composition carries no hidden-frame seams, or the platform no scheduler seat. */
 export const NO_HIDDEN_FRAME = 'this host cannot run an app on a schedule';
-
 
 /** A manual run with the app NOT on screen: refused by name — the view opens the app first, then runs. */
 export const openAndRunAgain = (appName: string): string => `open ${appName} and run it again`;
@@ -152,6 +185,8 @@ export interface HiddenMount {
   onAppEvent(event: string, data: unknown): void;
   onNavigatedAway(): void;
   onBudgetExhausted(): void;
+  /** The frame is GONE (the host component's effect cleanup, keyed by `runId`) — a handover's live hint waits for it (ADR-0077 §5). */
+  onUnmounted(): void;
 }
 
 /** ONE hidden mount at a time (the queue runs one step at a time). The host component renders it. */
@@ -161,12 +196,17 @@ export const hiddenMountStore: Store<HiddenMount | undefined> = createStore<Hidd
 
 /** The live-host registry as the executor sees it (`state/appHosts.ts` in production). */
 export interface LiveAppHosts {
+  /** Registered in this tab — what placement reads. */
   has(appId: string): boolean;
   notify(appId: string, event: string, data: unknown): boolean;
   /** Fires on every registration (`live: true`) and retraction. */
   subscribe(listener: (appId: string, live: boolean) => void): () => void;
-  /** The app-events the live view forwards for `appId`. */
-  subscribeEvents(appId: string, listener: (event: string, data: unknown) => void): () => void;
+  /** The app-events the live view forwards for `appId`, each with the frame generation it came from. */
+  subscribeEvents(appId: string, listener: (event: string, data: unknown, generation: number) => void): () => void;
+  /** Registered AND announced at the current generation within `ms` — true; false on the bound or a retraction. */
+  awaitReady(appId: string, ms: number): Promise<boolean>;
+  /** The registered view's frame generation. */
+  generation(appId: string): number | undefined;
 }
 
 export interface AppRunRuntimeInput {
@@ -199,7 +239,14 @@ export function defaultAppRunDeps(): AppRunDeps {
       return { transport: runtime.transport, frameProps: runtime.frameProps };
     },
     mounts: hiddenMountStore,
-    live: { has: hasLiveAppHost, notify: notifyAppHost, subscribe: subscribeAppHosts, subscribeEvents: subscribeAppEvents },
+    live: {
+      has: hasLiveAppHost,
+      notify: notifyAppHost,
+      subscribe: subscribeAppHosts,
+      subscribeEvents: subscribeAppEvents,
+      awaitReady: awaitAppHostReady,
+      generation: liveAppHostGeneration,
+    },
     announceTimeoutMs: SCHEDULE_ANNOUNCE_TIMEOUT_MS,
     resultTimeoutMs: SCHEDULE_RESULT_TIMEOUT_MS,
   };
@@ -218,7 +265,14 @@ export function blockedAppRunDeps(): AppRunDeps {
       throw new Error('a blocked composition composes no runtime');
     },
     mounts: createStore<HiddenMount | undefined>(undefined),
-    live: { has: () => false, notify: () => false, subscribe: () => () => undefined, subscribeEvents: () => () => undefined },
+    live: {
+      has: () => false,
+      notify: () => false,
+      subscribe: () => () => undefined,
+      subscribeEvents: () => () => undefined,
+      awaitReady: () => Promise.resolve(false),
+      generation: () => undefined,
+    },
     announceTimeoutMs: 0,
     resultTimeoutMs: 0,
   };
@@ -226,7 +280,8 @@ export function blockedAppRunDeps(): AppRunDeps {
 
 // ------------------------------------------------------------------ the executor
 
-const none = (): StepOutcome['calls'] => ({ ai: 0, net: 0 });
+type Calls = StepOutcome['calls'];
+const none = (): Calls => ({ ai: 0, net: 0 });
 
 /** One line for a run the app did not answer in time. */
 export const appDidNotAnswer = (ms: number): string => `the app didn’t answer within ${Math.round(ms / 1000)} s`;
@@ -254,21 +309,148 @@ function timer(ms: number): { promise: Promise<void>; stop: () => void } {
   };
 }
 
-/** What can end EITHER phase from outside the app's own answer: the queue's abort, or a failure the frame or the registry signalled. */
-type Interrupted = { kind: 'aborted' } | { kind: 'failed'; message: string };
-/** How the announce phase ends (the hidden frame only). */
-type AnnouncePhase = { kind: 'announced' } | { kind: 'timeout' } | Interrupted;
-/** How the result phase ends (both frames). */
-type ResultPhase = { kind: 'result'; result: ScheduleResult } | { kind: 'timeout' } | Interrupted;
+/** How one dispatch of the step ended. `handover` is the loop's to act on; everything else is `outcomeOf`'s. */
+type DispatchEnd =
+  | { kind: 'result'; result: ScheduleResult }
+  | { kind: 'timeout' }
+  | { kind: 'aborted' }
+  | { kind: 'failed'; message: string }
+  | { kind: 'blocked'; message: string }
+  | { kind: 'no-handler' }
+  | { kind: 'handover'; to: Placement };
 
-/** The step outcome once the app answered (or did not): the gate's record outranks what the app reports. */
-function outcomeOf(app: AppRecord, gate: ScheduledConfirmGate | undefined, answer: ResultPhase, calls: StepOutcome['calls'], resultTimeoutMs: number): StepOutcome {
-  if (gate !== undefined && gate.refused.length > 0) {
-    return { status: 'refused', summary: needsYou(app.displayName, scheduledRefusalVerb(gate.refused[0])).text, calls };
+/** How the hidden frame's announce phase ends. */
+type AnnouncePhase = { kind: 'announced' } | DispatchEnd;
+
+/** A refusal as either gate records it: the hidden gate says what was tried; the ask gate says why nothing was sent. */
+type RefusalRecord = { host: string; method: string; why?: ScheduledRefusal['why'] };
+
+/** One attempt of the step: how it ended, what it spent, what its gate refused. */
+interface Attempt {
+  end: DispatchEnd;
+  calls: Calls;
+  refused: readonly RefusalRecord[];
+}
+
+/** What every dispatch of one step shares. */
+interface Dispatch {
+  mode: 'manual' | 'unattended';
+  app: AppRecord;
+  step: AppRunStep;
+  ctx: StepContext;
+  deps: AppRunDeps;
+  key: string;
+  payload: { taskId: string; runId: string; input?: unknown };
+  /** The step's one deadline (D-PR1-10): every wait inside a dispatch is bounded by what it has left. */
+  deadline: number;
+  /** What the step's EARLIER attempts spent — the ceiling questions count it. */
+  spent: Calls;
+  /** This dispatch follows a handover: its announce wait is bounded by the deadline alone (D-PR1-10). */
+  afterHandover: boolean;
+}
+
+/** What the deadline has left, never negative. */
+const remaining = (d: Dispatch): number => Math.max(0, d.deadline - Date.now());
+
+/**
+ * How long a dispatch waits for the frame to announce: the first dispatch the announce window
+ * (≤ 10 s, else `no-handler` — the app has no hook), capped by the deadline; a re-dispatch what the
+ * deadline has left (D-PR1-10's "bounded by `deadline − now`") — the step already began on this app,
+ * and what remains of its one deadline is the honest bound for the instance it moved to.
+ */
+const announceBoundMs = (d: Dispatch): number => (d.afterHandover ? remaining(d) : Math.min(d.deps.announceTimeoutMs, remaining(d)));
+
+/** The queue's abort as an end, whenever it fires. */
+function abortedEnd(signal: AbortSignal): Promise<DispatchEnd> {
+  return new Promise<DispatchEnd>((resolve) => {
+    const settle = (): void => resolve({ kind: 'aborted' });
+    if (signal.aborted) settle();
+    else signal.addEventListener('abort', settle, { once: true });
+  });
+}
+
+/** The result phase shared by both frames: the first of the app's answer, the bound, the abort, or an interruption. */
+async function awaitResult(ctx: StepContext, boundMs: number, result: Promise<ScheduleResult>, interrupted: Promise<DispatchEnd>): Promise<DispatchEnd> {
+  const bound = timer(boundMs);
+  try {
+    return await Promise.race<DispatchEnd>([
+      result.then((value) => ({ kind: 'result', result: value })),
+      bound.promise.then(() => ({ kind: 'timeout' })),
+      abortedEnd(ctx.signal),
+      interrupted,
+    ]);
+  } finally {
+    bound.stop();
   }
-  switch (answer.kind) {
+}
+
+// ------------------------------------------------------------------ the ceilings
+
+/** The file's counters for today, plus what the run already spent, plus what this step spent so far. */
+function countersSoFar(ctx: StepContext, soFar: Calls): DailyCounters {
+  const nowIso = ctx.now().toISOString();
+  const state = ctx.db.getSchedulerState();
+  const daily = state === undefined ? { date: nowIso.slice(0, 10), ai: 0, net: 0 } : dailyCounters(state, nowIso);
+  const spent = ctx.spent?.() ?? { ai: 0, net: 0 };
+  return { date: daily.date, ai: daily.ai + spent.ai + soFar.ai, net: daily.net + spent.net + soFar.net };
+}
+
+/** The ceiling question the hidden frame asks per call. */
+function ceilingAllows(ctx: StepContext, soFar: Calls, add: { ai?: number; net?: number }): boolean {
+  return wouldExceedCeiling(countersSoFar(ctx, soFar), add) === undefined;
+}
+
+/** Which ceiling has no headroom for ONE more call — asked BEFORE a delegated dispatch (D-PR1-6). */
+function ceilingWithoutHeadroom(ctx: StepContext, soFar: Calls): CappedWhat | undefined {
+  switch (wouldExceedCeiling(countersSoFar(ctx, soFar), { ai: 1, net: 1 })) {
+    case 'ai':
+      return 'AI call';
+    case 'net':
+      return 'network call';
+    case undefined:
+      return undefined;
+  }
+}
+
+/** Did the step's summed tally CROSS a ceiling inside its window? The row says so; app code was not stopped (R-80). */
+function crossedCeiling(ctx: StepContext, calls: Calls): boolean {
+  return wouldExceedCeiling(countersSoFar(ctx, calls), {}) !== undefined;
+}
+
+// ------------------------------------------------------------------ the outcome
+
+/**
+ * The refusal the step names (contract v2.2): the first DECISIVE one — the user declined, or
+ * nobody answered — outranks an `already-asked` one parked behind it; only when every refusal is
+ * `already-asked` does the step say the app asked again. The hidden gate's refusals carry no `why`.
+ */
+function refusalToName(refused: readonly RefusalRecord[]): RefusalRecord | undefined {
+  if (refused.length === 0) return undefined;
+  return refused.find((refusal) => refusal.why === 'declined' || refusal.why === 'timed-out') ?? refused[0];
+}
+
+function refusalSentence(appName: string, refusal: RefusalRecord): string {
+  const verb = scheduledRefusalVerb(refusal);
+  switch (refusal.why) {
+    case 'declined':
+      return needsYouDeclined(appName, verb).text;
+    case 'timed-out':
+      return needsYouUnanswered(appName, verb).text;
+    case 'already-asked':
+      return needsYouAlreadyAsked(appName, verb).text;
+    case undefined:
+      return needsYou(appName, verb).text;
+  }
+}
+
+/** The step outcome once an attempt ended (never on a handover): the gate's record outranks what the app reports. */
+function outcomeOf(app: AppRecord, attempt: Attempt, resultTimeoutMs: number): StepOutcome {
+  const { end, calls } = attempt;
+  const refusal = refusalToName(attempt.refused);
+  if (refusal !== undefined) return { status: 'refused', summary: refusalSentence(app.displayName, refusal), calls };
+  switch (end.kind) {
     case 'result': {
-      const { result } = answer;
+      const { result } = end;
       if (!result.ok) return { status: 'failed', summary: result.summary ?? 'the app reported a failure', calls };
       return {
         status: 'ok',
@@ -282,21 +464,19 @@ function outcomeOf(app: AppRecord, gate: ScheduledConfirmGate | undefined, answe
     case 'aborted':
       return { status: 'failed', summary: CANCELLED_SUMMARY, calls };
     case 'failed':
-      return { status: 'failed', summary: answer.message, calls };
+      return { status: 'failed', summary: end.message, calls };
+    case 'blocked':
+      return { status: 'blocked', summary: end.message, calls };
+    case 'no-handler':
+      return { status: 'no-handler', summary: noHandler(app.displayName).text, calls };
+    case 'handover':
+      // The loop acts on every handover it may; one it may not is said by name.
+      return { status: 'failed', summary: handedOverTwice(app.displayName), calls };
     default: {
-      const never: never = answer;
+      const never: never = end;
       return never;
     }
   }
-}
-
-/** The ceiling question, asked per call: the file's counters, plus what the run already spent, plus this step so far. */
-function ceilingAllows(ctx: StepContext, soFar: { ai: number; net: number }, add: { ai?: number; net?: number }): boolean {
-  const nowIso = ctx.now().toISOString();
-  const state = ctx.db.getSchedulerState();
-  const daily = state === undefined ? { date: nowIso.slice(0, 10), ai: 0, net: 0 } : dailyCounters(state, nowIso);
-  const spent = ctx.spent?.() ?? { ai: 0, net: 0 };
-  return wouldExceedCeiling({ date: daily.date, ai: daily.ai + spent.ai + soFar.ai, net: daily.net + spent.net + soFar.net }, add) === undefined;
 }
 
 export async function executeAppRun(step: AppRunStep, ctx: StepContext, deps: AppRunDeps): Promise<StepOutcome> {
@@ -308,124 +488,169 @@ export async function executeAppRun(step: AppRunStep, ctx: StepContext, deps: Ap
   const { appId } = step;
   const key = scheduleKvKey(ctx.run.id);
   const payload = { taskId: ctx.run.taskId, runId: ctx.run.id, ...(step.input !== undefined ? { input: step.input } : {}) };
-  const live = deps.live.has(appId);
+  const shared = { app, step, ctx, deps, key, payload };
 
   if (ctx.run.trigger === 'manual') {
-    // The user asked, so the user is at the app — or the view brings them there first.
-    if (!live) return { status: 'refused', summary: openAndRunAgain(app.displayName), calls: none() };
-    return runInLiveFrame(app, step, ctx, deps, key, payload);
-  }
-  // Unattended: the hidden frame under the refusing gate — open app or not; never the live frame.
-  return runInHiddenFrame(app, step, ctx, deps, key, payload, createScheduledConfirmGate());
-}
-
-/** The result phase shared by both frames: the first of the app's answer, the bound, the abort, or an interruption. */
-async function awaitResult(ctx: StepContext, resultTimeoutMs: number, result: Promise<ScheduleResult>, interrupted: Promise<Interrupted>): Promise<ResultPhase> {
-  const bound = timer(resultTimeoutMs);
-  const aborted = new Promise<ResultPhase>((resolve) => {
-    const settle = (): void => resolve({ kind: 'aborted' });
-    if (ctx.signal.aborted) settle();
-    else ctx.signal.addEventListener('abort', settle, { once: true });
-  });
-  try {
-    return await Promise.race<ResultPhase>([
-      result.then((value) => ({ kind: 'result', result: value })),
-      bound.promise.then(() => ({ kind: 'timeout' })),
-      aborted,
-      interrupted,
-    ]);
-  } finally {
-    bound.stop();
-  }
-}
-
-/** A manual run delivered to the app ON SCREEN, under the page's own gate; the app closing ends it (M18). */
-async function runInLiveFrame(
-  app: AppRecord,
-  step: AppRunStep,
-  ctx: StepContext,
-  deps: AppRunDeps,
-  key: string,
-  payload: { taskId: string; runId: string; input?: unknown },
-): Promise<StepOutcome> {
-  const { appId } = step;
-  const result = deferred<ScheduleResult>();
-  const interrupted = deferred<Interrupted>();
-  let hinted = false;
-  let seen = false;
-  const unsubscribeEvents = deps.live.subscribeEvents(appId, (event, data) => {
-    if (!hinted || seen || event !== SCHEDULE_RESULT_EVENT) return;
-    const parsed = parseScheduleResult(data, ctx.run.id);
-    if (parsed === undefined) return;
-    seen = true;
-    result.resolve(parsed);
-  });
-  const unwatch = deps.live.subscribe((id, isLive) => {
-    if (!isLive && id === appId) interrupted.resolve({ kind: 'failed', message: APP_CLOSED_SUMMARY });
-  });
-  try {
-    const wrote = await ctx.db.driver.kvSet(appId, key, payload);
-    if (!wrote.ok) return { status: 'failed', summary: wrote.message, calls: none() };
-    hinted = true; // before the ring: an app may answer in the same tick
-    if (!deps.live.notify(appId, SCHEDULE_RUN_EVENT, { taskId: ctx.run.taskId, runId: ctx.run.id })) {
-      return { status: 'failed', summary: 'the open app could not be reached', calls: none() };
+    // The user asked, so the user is at the app — or the view brings them there first. The live
+    // frame's own gate and transport answer its calls: nothing here to count (R-62).
+    if (!deps.live.has(appId)) return { status: 'refused', summary: openAndRunAgain(app.displayName), calls: none() };
+    try {
+      const attempt = await dispatchLive({ ...shared, mode: 'manual', deadline: Date.now() + deps.resultTimeoutMs, spent: none(), afterHandover: false });
+      return outcomeOf(app, { ...attempt, calls: none() }, deps.resultTimeoutMs);
+    } finally {
+      await ctx.db.driver.kvSet(appId, key, null);
     }
-    const answer = await awaitResult(ctx, deps.resultTimeoutMs, result.promise, interrupted.promise);
-    // The live frame's calls ride its own transport and gate — nothing here to count.
-    return outcomeOf(app, undefined, answer, none(), deps.resultTimeoutMs);
+  }
+
+  // Unattended: where the app lives (ADR-0077 §2), one deadline (D-PR1-10), at most one handover (§5).
+  const deadline = Date.now() + deps.resultTimeoutMs;
+  let placement = placeRun(deps.live, appId);
+  let handovers = 0;
+  const calls = none();
+  const withCap = (outcome: StepOutcome): StepOutcome => (crossedCeiling(ctx, calls) ? { ...outcome, capped: true } : outcome);
+  try {
+    for (;;) {
+      if (placement === 'live') {
+        // The ceiling is asked BEFORE a delegated dispatch (D-PR1-6): inside the window calls are counted, never refused.
+        const limit = ceilingWithoutHeadroom(ctx, calls);
+        if (limit !== undefined) return { status: 'refused', capped: true, summary: capped(limit), calls: { ...calls } };
+      }
+      const dispatch: Dispatch = { ...shared, mode: 'unattended', deadline, spent: { ...calls }, afterHandover: handovers > 0 };
+      const attempt = placement === 'live' ? await dispatchLive(dispatch) : await dispatchHidden(dispatch, createScheduledConfirmGate());
+      calls.ai += attempt.calls.ai;
+      calls.net += attempt.calls.net;
+      if (attempt.end.kind === 'handover') {
+        if (handovers >= MAX_HANDOVERS) return withCap({ status: 'failed', summary: handedOverTwice(app.displayName), calls: { ...calls } });
+        handovers += 1;
+        placement = attempt.end.to;
+        continue;
+      }
+      return withCap(outcomeOf(app, { ...attempt, calls: { ...calls } }, deps.resultTimeoutMs));
+    }
   } finally {
-    unwatch();
-    unsubscribeEvents();
     await ctx.db.driver.kvSet(appId, key, null);
   }
 }
 
-/** An unattended run in the ONE hidden frame, under the refusing gate and the counting transport. */
-async function runInHiddenFrame(
-  app: AppRecord,
-  step: AppRunStep,
-  ctx: StepContext,
-  deps: AppRunDeps,
-  key: string,
-  payload: { taskId: string; runId: string; input?: unknown },
-  gate: ScheduledConfirmGate,
-): Promise<StepOutcome> {
-  const { appId } = step;
-  const html = ctx.db.getAppHtml(appId);
-  if (html === undefined) return { status: 'blocked', summary: appMissing.text, calls: none() };
-  if (deps.mounts.get() !== undefined) return { status: 'failed', summary: 'another scheduled run is still mounted', calls: none() };
+// ------------------------------------------------------------------ the live frame
+
+/**
+ * A run delivered to the app ON SCREEN. Waits for the frame to be READY (bounded by the announce
+ * window and the deadline); an unattended run then begins its delegated record (the ask gate, the
+ * counting seams and the access door all read it), writes the key, hints through the registry and
+ * reads the result from the forwarded events — the hinted generation's only. The app closing
+ * mid-run: `manual` → `failed` (M18); unattended → a handover to the hidden frame, unless the user
+ * ALLOWED a change in this attempt — then `failed` by name, never a re-run. The record is ended in
+ * `finally`, whatever happened, and is what the attempt reports.
+ */
+async function dispatchLive(d: Dispatch): Promise<Attempt> {
+  const { appId } = d.step;
+  const { live } = d.deps;
+  const runId = d.ctx.run.id;
+
+  const ready = await Promise.race<boolean | 'aborted'>([live.awaitReady(appId, announceBoundMs(d)), abortedEnd(d.ctx.signal).then(() => 'aborted' as const)]);
+  if (ready === 'aborted') return { end: { kind: 'aborted' }, calls: none(), refused: [] };
+  const generation = live.generation(appId);
+  if (!ready || generation === undefined) {
+    if (live.has(appId) && generation !== undefined) {
+      // Registered, never announced: the app has no listener — unless the deadline, not the announce window, ran out.
+      return { end: remaining(d) <= 0 ? { kind: 'timeout' } : { kind: 'no-handler' }, calls: none(), refused: [] };
+    }
+    return { end: d.mode === 'unattended' ? { kind: 'handover', to: 'hidden' } : { kind: 'failed', message: APP_CLOSED_SUMMARY }, calls: none(), refused: [] };
+  }
+
+  let run: DelegatedRun | undefined;
+  if (d.mode === 'unattended') {
+    const begun = beginDelegatedRun({ appId, appName: d.app.displayName, runId, taskId: d.ctx.run.taskId, title: d.ctx.task.title, generation });
+    if (!begun.ok) return { end: { kind: 'failed', message: begun.reason }, calls: none(), refused: [] };
+    run = begun.run;
+  }
+
+  const result = deferred<ScheduleResult>();
+  const interrupted = deferred<DispatchEnd>();
+  let hinted = false;
+  let seen = false;
+  const unsubscribeEvents = live.subscribeEvents(appId, (event, data, from) => {
+    // After the hint, once, this run — and ONLY from the generation that was hinted (security 5).
+    if (!hinted || seen || event !== SCHEDULE_RESULT_EVENT || from !== generation) return;
+    const parsed = parseScheduleResult(data, runId);
+    if (parsed === undefined) return;
+    seen = true;
+    result.resolve(parsed);
+  });
+  const unwatch = live.subscribe((id, isLive) => {
+    if (isLive || id !== appId) return;
+    if (run === undefined) interrupted.resolve({ kind: 'failed', message: APP_CLOSED_SUMMARY });
+    else if (run.granted > 0) interrupted.resolve({ kind: 'failed', message: closedAfterChange(d.app.displayName, run.grantedHost ?? 'the network') });
+    else interrupted.resolve({ kind: 'handover', to: 'hidden' });
+  });
+
+  let end: DispatchEnd;
+  let record: Pick<DelegatedRun, 'calls' | 'refused' | 'granted'> | undefined;
+  try {
+    const wrote = await d.ctx.db.driver.kvSet(appId, d.key, d.payload);
+    if (!wrote.ok) end = { kind: 'failed', message: wrote.message };
+    else {
+      hinted = true; // before the ring: an app may answer in the same tick
+      if (!live.notify(appId, SCHEDULE_RUN_EVENT, { taskId: d.ctx.run.taskId, runId })) end = { kind: 'failed', message: 'the open app could not be reached' };
+      else end = await awaitResult(d.ctx, remaining(d), result.promise, interrupted.promise);
+    }
+  } finally {
+    unwatch();
+    unsubscribeEvents();
+    // The run ends with the attempt (result, bound, cancel, handover): every parked scheduled confirm withdraws.
+    if (run !== undefined) record = endDelegatedRun(appId, runId);
+  }
+  return { end, calls: record === undefined ? none() : { ...record.calls }, refused: record?.refused ?? [] };
+}
+
+// ---------------------------------------------------------------- the hidden frame
+
+/**
+ * An unattended run in the ONE hidden frame, under the refusing gate and the counting transport —
+ * only when the app is closed. The app REGISTERING mid-attempt hands the run over to the live
+ * frame: the attempt is cut, the mount cleared, and the hidden frame's unmount awaited (≤ 1 s) so
+ * the two instances never overlap.
+ */
+async function dispatchHidden(d: Dispatch, gate: ScheduledConfirmGate): Promise<Attempt> {
+  const { appId } = d.step;
+  const runId = d.ctx.run.id;
+  const html = d.ctx.db.getAppHtml(appId);
+  if (html === undefined) return { end: { kind: 'blocked', message: appMissing.text }, calls: none(), refused: gate.refused };
+  if (d.deps.mounts.get() !== undefined) return { end: { kind: 'failed', message: 'another scheduled run is still mounted' }, calls: none(), refused: gate.refused };
 
   // The counting seams (M22): this executor keeps the step's own count — the transport reports
   // each call that reached the brain (`onCounted`), the net handler asks before each request —
-  // and both ceiling questions read it with what the run already spent.
+  // and both ceiling questions read it with what the run and the step's earlier attempts spent.
   let ai = 0;
   let net = 0;
-  const soFar = (): { ai: number; net: number } => ({ ai, net });
+  const soFar = (): Calls => ({ ai: d.spent.ai + ai, net: d.spent.net + net });
   const onNetCall = (): boolean => {
-    if (!ceilingAllows(ctx, soFar(), { net: 1 })) return false;
+    if (!ceilingAllows(d.ctx, soFar(), { net: 1 })) return false;
     net += 1;
     return true;
   };
-  // The db binding refuses a transaction or a whole-database import: the visible copy shares the connection.
-  const runtime = deps.runtimeFor({ appId, driver: scheduledDbDriver(ctx.db.driver), confirmGate: gate, onNetCall });
+  // The db binding refuses a transaction or a whole-database import (cheap defence against a crash-stranded transaction).
+  const runtime = d.deps.runtimeFor({ appId, driver: scheduledDbDriver(d.ctx.db.driver), confirmGate: gate, onNetCall });
   const transport = createScheduledTransport(runtime.transport, {
-    onCall: () => ceilingAllows(ctx, soFar(), { ai: 1 }),
+    onCall: () => ceilingAllows(d.ctx, soFar(), { ai: 1 }),
     onCounted: () => {
       ai += 1;
     },
   });
-  const calls = (): StepOutcome['calls'] => ({ ai, net });
+  const calls = (): Calls => ({ ai, net });
 
   const announce = deferred<void>();
   const result = deferred<ScheduleResult>();
-  const interrupted = deferred<Interrupted>();
+  const interrupted = deferred<DispatchEnd>();
+  const unmounted = deferred<void>();
   let announced = false;
   let hinted = false;
   let seen = false;
   const controls: HiddenMount['controls'] = { current: null };
   const mount: HiddenMount = {
     appId,
-    runId: ctx.run.id,
+    runId,
     html,
     transport,
     frameProps: runtime.frameProps,
@@ -438,47 +663,67 @@ async function runInHiddenFrame(
     onAppEvent: (event, data) => {
       // Bound to THIS closure (the frame that received the hint), after the hint, once, this run.
       if (!hinted || seen || event !== SCHEDULE_RESULT_EVENT) return;
-      const parsed = parseScheduleResult(data, ctx.run.id);
+      const parsed = parseScheduleResult(data, runId);
       if (parsed === undefined) return;
       seen = true;
       result.resolve(parsed);
     },
     onNavigatedAway: () => interrupted.resolve({ kind: 'failed', message: 'the app left its sandbox' }),
     onBudgetExhausted: () => interrupted.resolve({ kind: 'failed', message: 'the app kept answering off-script' }),
+    onUnmounted: () => unmounted.resolve(),
   };
-  deps.mounts.set(mount);
+  // The app OPENING hands the run over (ADR-0077 §5) — an unattended run only; a manual run is never hidden.
+  const unwatch =
+    d.mode === 'unattended'
+      ? d.deps.live.subscribe((id, isLive) => {
+          if (isLive && id === appId) interrupted.resolve({ kind: 'handover', to: 'live' });
+        })
+      : (): void => undefined;
+  if (d.mode === 'unattended' && d.deps.live.has(appId)) {
+    unwatch();
+    return { end: { kind: 'handover', to: 'live' }, calls: calls(), refused: gate.refused };
+  }
+  d.deps.mounts.set(mount);
+
+  let end: DispatchEnd;
   try {
-    const announceBound = timer(deps.announceTimeoutMs);
-    const aborted = new Promise<AnnouncePhase>((resolve) => {
-      const settle = (): void => resolve({ kind: 'aborted' });
-      if (ctx.signal.aborted) settle();
-      else ctx.signal.addEventListener('abort', settle, { once: true });
-    });
+    const announceBound = timer(announceBoundMs(d));
     let first: AnnouncePhase;
     try {
       first = await Promise.race<AnnouncePhase>([
         announce.promise.then(() => ({ kind: 'announced' })),
         announceBound.promise.then(() => ({ kind: 'timeout' })),
-        aborted,
+        abortedEnd(d.ctx.signal),
         interrupted.promise,
       ]);
     } finally {
       announceBound.stop();
     }
-    if (first.kind === 'timeout') return { status: 'no-handler', summary: noHandler(app.displayName).text, calls: calls() };
-    if (first.kind !== 'announced') return outcomeOf(app, gate, first, calls(), deps.resultTimeoutMs);
-
-    const wrote = await ctx.db.driver.kvSet(appId, key, payload);
-    if (!wrote.ok) return { status: 'failed', summary: wrote.message, calls: calls() };
-    const host = controls.current;
-    if (host === null) return { status: 'failed', summary: 'the hidden frame has no host', calls: calls() };
-    hinted = true; // before the ring: the app may answer in the same tick
-    host.notifyEvent(SCHEDULE_RUN_EVENT, { taskId: ctx.run.taskId, runId: ctx.run.id });
-
-    const answer = await awaitResult(ctx, deps.resultTimeoutMs, result.promise, interrupted.promise);
-    return outcomeOf(app, gate, answer, calls(), deps.resultTimeoutMs);
+    if (first.kind === 'timeout') end = remaining(d) <= 0 ? first : { kind: 'no-handler' };
+    else if (first.kind !== 'announced') end = first;
+    else {
+      const wrote = await d.ctx.db.driver.kvSet(appId, d.key, d.payload);
+      const host = controls.current;
+      if (!wrote.ok) end = { kind: 'failed', message: wrote.message };
+      else if (host === null) end = { kind: 'failed', message: 'the hidden frame has no host' };
+      else {
+        hinted = true; // before the ring: the app may answer in the same tick
+        host.notifyEvent(SCHEDULE_RUN_EVENT, { taskId: d.ctx.run.taskId, runId });
+        end = await awaitResult(d.ctx, remaining(d), result.promise, interrupted.promise);
+      }
+    }
   } finally {
-    if (deps.mounts.get() === mount) deps.mounts.set(undefined);
-    await ctx.db.driver.kvSet(appId, key, null);
+    unwatch();
+    if (d.deps.mounts.get() === mount) d.deps.mounts.set(undefined);
   }
+  if (end.kind === 'handover') {
+    // Never two instances at once: the live hint waits for the hidden frame to report gone.
+    const bound = timer(HIDDEN_UNMOUNT_WAIT_MS);
+    try {
+      await Promise.race([unmounted.promise, bound.promise]);
+    } finally {
+      bound.stop();
+    }
+  }
+  return { end, calls: calls(), refused: gate.refused };
 }

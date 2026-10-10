@@ -17,8 +17,12 @@
 // a time, so there is at most one mount; the executor sets the mount when the handshake starts
 // and clears it on every exit path. This component only renders what the store holds and lends
 // the executor the frame's controls (`notifyEvent` for the `schedule-run` hint) and its
-// callbacks (announce, app-event, the two failure signals). Mounted ONCE in `App.tsx`, beside
-// `ConnectionWizardNote`, so a run can happen on any route.
+// callbacks (announce, app-event, the two failure signals, and — ADR-0077 §5 — `onUnmounted`,
+// called from the effect cleanup keyed by `runId` when the store clears or another run's mount
+// replaces this one, so a hidden attempt handed over to the open app never overlaps it: the
+// executor awaits it before it hints the live frame). Mounted ONCE in `App.tsx`, beside
+// `ConnectionWizardNote`, so a run can happen on any route. It mounts ONLY when the app is
+// closed: an open app takes the run on its own frame (`runPlacement.ts`).
 
 import { useEffect, useRef } from 'react';
 import type { CSSProperties, ReactElement } from 'react';
@@ -37,14 +41,23 @@ export const SCHEDULED_RUN_HOST_TEST_ID = 'scheduled-run-host';
 export function ScheduledRunHost(): ReactElement | null {
   const mount = useStore(hiddenMountStore);
   const wrapRef = useRef<HTMLDivElement>(null);
+  // The mount this render holds, readable from the run-keyed effect without re-running it on a
+  // store write that carries an equal mount for the same run.
+  const mountRef = useRef(mount);
+  mountRef.current = mount;
+  const runId = mount?.runId;
   // OUT OF THE TAB ORDER as well as out of sight (S5). `inert` on the wrapper takes the whole
   // subtree out of focus, hit-testing and the accessibility tree — React 18's typings do not
   // know the attribute, hence the spread. `tabindex="-1"` on the frame itself is the belt for a
   // browser without `inert`; `SnugAppFrame` forwards no attributes, so it is set on the element
-  // after the mount (the frame is keyed by run, so once per run).
+  // after the mount (the frame is keyed by run, so once per run). The SAME effect's cleanup
+  // reports the frame gone to the run that owned it — once per run, never while it is still up.
   useEffect(() => {
     wrapRef.current?.querySelector('iframe')?.setAttribute('tabindex', '-1');
-  }, [mount?.runId]);
+    const owner = mountRef.current;
+    if (owner === undefined) return;
+    return () => owner.onUnmounted();
+  }, [runId]);
   if (mount === undefined) return null;
   return (
     <div ref={wrapRef} data-testid={SCHEDULED_RUN_HOST_TEST_ID} aria-hidden="true" style={WRAP_STYLE} {...{ inert: '' }}>

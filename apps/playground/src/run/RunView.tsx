@@ -23,7 +23,7 @@ import { dismissPendingAccess } from '../access/consent.js';
 import { composeAppRuntime } from './appRuntime.js';
 import { UpdatePausesNote } from './UpdatePausesNote.js';
 import { startSidecarLiveForApp, type SidecarSyncState } from '../state/sidecarLive.js';
-import { publishAppEvent, registerAppHost } from '../state/appHosts.js';
+import { markAppHostAnnounced, publishAppEvent, registerAppHost, setAppHostGeneration } from '../state/appHosts.js';
 import {
   connectionWizardRevisionStore,
   isConnectionRepairableNetError,
@@ -288,6 +288,15 @@ export default function RunView(): ReactElement {
   useEffect(() => {
     return registerAppHost(id, (event, data) => controlsRef.current?.notifyEvent(event, data));
   }, [id]);
+
+  // The registry's frame GENERATION (TASK-20261010-host-broker PR-1; ADR-0077 §6) — its own
+  // effect, so a `frameEpoch` remount changes the generation and clears `announced` without ever
+  // reading as a retraction (registration stays on `[id]` above). A scheduled run delegated to this
+  // open app waits for the announce of THIS generation before it hints, and accepts a result only
+  // from it.
+  useEffect(() => {
+    setAppHostGeneration(id, frameEpoch);
+  }, [id, frameEpoch]);
 
   // THE LIVE PUMP (ADR-0034 §2): while THIS view has an app with an approved
   // sidecar-symbolic-host connection mounted, long-poll the helper's hint stream through
@@ -709,6 +718,8 @@ export default function RunView(): ReactElement {
   const onAnnounce = useCallback(
     (frame: Parameters<typeof revealReduce>[1]): void => {
       dispatchReveal(frame);
+      // The app's listener exists now: this frame generation is READY for a scheduled hint (ADR-0077 §6).
+      markAppHostAnnounced(id, frameEpoch);
       // A (re-)announce is a fresh app instance in this frame: an ask the previous instance
       // left on the strip has nobody to answer it — dismissed, nothing recorded (AC11).
       dismissPendingAccess(id, { onlyApp: true });
@@ -720,7 +731,7 @@ export default function RunView(): ReactElement {
         ...(frame.iconColor !== undefined ? { iconColor: frame.iconColor } : {}),
       });
     },
-    [id],
+    [id, frameEpoch],
   );
 
   // First observed db op → remember it (the app's `usesDb` fact, carried by the app row
@@ -1328,9 +1339,10 @@ export default function RunView(): ReactElement {
               onAnnounce={onAnnounce}
               // The live frame's app-events reach two readers: the registry (TASK-20261009 A3 —
               // a scheduled run delivered to THIS open app reads its `schedule-result` there,
-              // keyed by the host-assigned id) and the suggestion consumer (P3).
+              // keyed by the host-assigned id and stamped with THIS frame generation, ADR-0077 §6)
+              // and the suggestion consumer (P3).
               onAppEvent={(event, data) => {
-                publishAppEvent(id, event, data);
+                publishAppEvent(id, event, data, frameEpoch);
                 onAppEvent(event, data);
               }}
               onFrame={onFrame}
