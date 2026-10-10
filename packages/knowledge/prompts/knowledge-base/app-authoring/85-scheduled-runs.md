@@ -110,9 +110,11 @@ module SDK get the same handshake typed as `useSnugSchedule(handler)` and
   (a message sent, a row appended), remember the `runId` you acted on in your own
   persisted state before acting.
 - **You may not be the only instance.** A scheduled run can land while the user has the app
-  open, so two copies of your app may run at once over the same store. Read what you need
-  from the store inside the handler (never from in-memory state the visible copy built), and
-  make every write safe to repeat.
+  open, so two copies of your app run at once over the same store. Make every change ONE
+  statement — a scheduled run's `BEGIN`/`COMMIT` (and a whole-database import) is refused,
+  because both copies share one connection. In the code the user sees, re-read from the store
+  before you write back state you cached at load (a blind `usePersistedState` write would undo
+  what the handler stored), and make every write safe to repeat.
 - **A result is a summary, not data.** The host shows `summary` to a person and never
   reads anything else from it. Keep what you fetched in your own key-value store or
   database, where the app shows it next time it opens.

@@ -743,13 +743,17 @@ runs in its own hidden frame under the refusing gate and the counting transport,
 run per gesture; the frequency floor; the live frame's own budget. (Proposals delta R-b; open-app
 delta.)
 
-**R-70 — Two instances of one app may run at once over the app's one store.** While the app is
-open, a scheduled run's hidden frame is a second instance of it. Each db and kv request is atomic at
-the host, so nothing is torn; the race is the app's own (two read-modify-writes; the visible
-instance holding state the hidden one changed). The same shape as the app open in two tabs.
-*Bounded by:* the refusing gate (no unattended write leaves the machine); one hidden mount at a
-time; the knowledge base's handler rules (idempotent by `runId`, read and write through the store).
-(Open-app delta R-a.)
+**R-70 — Two instances of one app run at once over the app's one store and ONE connection.** While
+the app is open, a scheduled run's hidden frame is a second instance of it, and both reach the same
+sql.js connection. A single request is atomic at the host; connection state that spans requests is
+not — so the hidden frame's db binding (`schedule/scheduledDbDriver.ts`) refuses transaction control
+and a whole-database import by name, and a scheduled run never holds a transaction open. Still
+open: the VISIBLE copy's own transaction can capture a scheduled single-statement write, and the
+visible copy can blind-write state it cached at load over what the handler stored. Not the two-tabs
+case (a second tab is read-only, `userdb/locks.ts`). *Bounded by:* the refusing gate; one hidden
+mount at a time; no shipped starter uses a transaction; the knowledge base's handler rules (one
+statement per change, re-read before writing back). (Open-app delta R-a; a hidden run's 401/403 can
+raise the reconnect chip on the open copy — R-b there, benign.)
 
 **R-63 — The demo brain answers a hidden frame's thinks like RunView's.** Under the mock
 adapter the hidden frame's own transport answers scripted turns as it does for the visible app
@@ -1087,7 +1091,7 @@ macOS, and a Linux opener exists, untested on a real Linux desktop.
 
 **v3.5 note (2026-10-09, TASK-20261009-scheduling-framework PR-B).** One row added (`threat-model-delta-scheduling-proposals.md`) and §5 gains the sibling family "Scheduled tasks — *Run [app]* and the proposal channels": the hidden frame is the same `SnugAppFrame` (sandbox and CSP byte-identical), one at a time, the committed version only, never the app's live host, aborted by a visible open, and refused by name when the app is ALREADY open (presence is not consent) — only the user's own *Run now and review* rides the live frame, after opening the app; the kv handshake carries ids on the event channel and the content in the app's own kv under the task's 1 KiB cap behind the same tombstone, with the result bound to the hinted frame and the one `runId`, once, length-capped then strict-parsed, and stale keys swept at boot; the scheduled net handler carries a standalone refusing gate that imports neither the session nor the standing gate and counts every call at the handler; every hidden-frame think is counted and scrubbed by a decorator that never forwards deltas; the builder tool and the `schedule` lane (an exhaustive lane switch), the app suggestion strip (strict parse, sender only, rate, one pending, declines by hash, mutes, cap) and one consent surface with one writer; the SDK hook answers once per `runId`; desktop notifications sit behind the Settings opt-in read per call and two gate rows. R-54 CLOSED (the value scrub stands at the executor for the scheduled handler too — pinned by an echo row); R-59 closed as the record of the split; nine residuals recorded as R-61 … R-69 (the app's own code unattended; the user's own live-frame run uncounted; the demo brain counted; the artifact binding's connections-off run; suggestion fatigue; the app-written summary; the silent app's bound; the gate rows on macOS only; the bundled-app walk).
 
-**v3.6 note (2026-10-09, TASK-20261009-scheduled-run-open-app).** One row added (`threat-model-delta-scheduled-run-open-app.md`). The owner decided a scheduled job runs on time whether or not the app is open: an unattended *Run [app]* of an OPEN app now runs in its own hidden frame (the refusing gate and the counting transport, never the live frame) instead of being refused, and opening the app mid-run no longer interrupts it. R-62 amended; R-70 added (two instances of one app over one store).
+**v3.6 note (2026-10-09, TASK-20261009-scheduled-run-open-app).** One row added (`threat-model-delta-scheduled-run-open-app.md`). The owner decided a scheduled job runs on time whether or not the app is open: an unattended *Run [app]* of an OPEN app now runs in its own hidden frame (the refusing gate and the counting transport, never the live frame) instead of being refused, and opening the app mid-run no longer interrupts it. R-62 amended; R-70 added (two instances of one app over one store and one connection — the hidden frame's db binding refuses a transaction or an import).
 
 <!-- DELTA-LEDGER:BEGIN -->
 
@@ -1110,7 +1114,7 @@ macOS, and a Linux opener exists, untested on a real Linux desktop.
 | `docs/security/threat-model-delta-brains-and-chat.md` | `d168df71c3f0` | §4 boundary 3 · §5 local runner and its brains · R-11 note · R-40 note · R-44, R-45, R-46, R-47, R-48, R-49 (Gate 5) |
 | `docs/security/threat-model-delta-scheduling.md` | `30716624ec62` | §5 scheduled tasks · R-50, R-51, R-52, R-53, R-54, R-55, R-56, R-57, R-58, R-59, R-60 |
 | `docs/security/threat-model-delta-scheduling-proposals.md` | `98c511b26e38` | §5 scheduled tasks — *Run [app]* and the proposal channels · R-54 closed · R-59 closed · R-61, R-62, R-63, R-64, R-65, R-66, R-67, R-68, R-69 |
-| `docs/security/threat-model-delta-scheduled-run-open-app.md` | `da3e40280eaa` | §5 scheduled tasks — an unattended *Run [app]* of an open app · R-62 amended · R-70 |
+| `docs/security/threat-model-delta-scheduled-run-open-app.md` | `02e0e226efe6` | §5 scheduled tasks — an unattended *Run [app]* of an open app · R-62 amended · R-70 |
 <!-- DELTA-LEDGER:END -->
 
 ---

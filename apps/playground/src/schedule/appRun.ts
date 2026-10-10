@@ -78,6 +78,7 @@ import { appMissing, blockedHere, needsYou, noHandler } from './copy.js';
 import type { StepContext, StepOutcome } from './engine-types.js';
 import { dailyCounters, wouldExceedCeiling } from './protection.js';
 import { SCHEDULE_RESULT_EVENT, SCHEDULE_RUN_EVENT, scheduleKvKey } from './scheduleKey.js';
+import { scheduledDbDriver } from './scheduledDbDriver.js';
 import { createScheduledConfirmGate, scheduledRefusalVerb, type ScheduledConfirmGate } from './scheduledConfirmGate.js';
 import { createScheduledTransport } from './scheduledTransport.js';
 
@@ -403,7 +404,8 @@ async function runInHiddenFrame(
     net += 1;
     return true;
   };
-  const runtime = deps.runtimeFor({ appId, driver: ctx.db.driver, confirmGate: gate, onNetCall });
+  // The db binding refuses a transaction or a whole-database import: the visible copy shares the connection.
+  const runtime = deps.runtimeFor({ appId, driver: scheduledDbDriver(ctx.db.driver), confirmGate: gate, onNetCall });
   const transport = createScheduledTransport(runtime.transport, {
     onCall: () => ceilingAllows(ctx, soFar(), { ai: 1 }),
     onCounted: () => {

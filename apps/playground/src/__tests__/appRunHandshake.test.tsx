@@ -552,6 +552,38 @@ describe('an unattended run of an OPEN app still runs — in the hidden frame, n
     expect(await pending).toEqual({ status: 'refused', summary: needsYou('Weather', 'post to api.github.com').text, calls: { ai: 0, net: 0 } });
   });
 
+  it('a result the VISIBLE copy posts is never taken for the hidden run — only the hidden frame’s own answer settles it', async () => {
+    const deps = fakeDeps({ resultTimeoutMs: 5_000 }); // long enough that only an answer can settle it
+    deps.live.open(appId);
+    const step: AppRunStep = { kind: 'app-run', appId };
+    let settled = false;
+    const pending = executeAppRun(step, ctx(step, { trigger: 'due' }).context, deps).then((o) => {
+      settled = true;
+      return o;
+    });
+    const { mount } = await hinted(deps);
+    deps.live.emit(appId, SCHEDULE_RESULT_EVENT, { ok: true, summary: 'from the open copy', runId: RUN_ID });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(settled).toBe(false);
+    mount.onAppEvent(SCHEDULE_RESULT_EVENT, { ok: true, summary: 'from the hidden copy' });
+    expect(await pending).toMatchObject({ status: 'ok', summary: 'from the hidden copy' });
+  });
+
+  it('the hidden run’s db binding is the scheduled guard: a BEGIN is refused by name, a plain read passes', async () => {
+    const deps = fakeDeps();
+    deps.live.open(appId);
+    const step: AppRunStep = { kind: 'app-run', appId };
+    const pending = executeAppRun(step, ctx(step, { trigger: 'due' }).context, deps);
+    const { mount } = await hinted(deps);
+    const driver = deps.runtimeCalls[0]!.driver;
+    expect(driver).not.toBe(db.driver);
+    const req = (over: Record<string, unknown>) => ({ v: 1, type: 'snug:db-request', requestId: 'r', instanceId: 'i', ...over }) as never;
+    expect(await driver.handle(appId, req({ op: 'exec', sql: 'BEGIN' }))).toMatchObject({ ok: false });
+    expect((await driver.handle(appId, req({ op: 'exec', sql: 'SELECT 1' }))).ok).toBe(true);
+    mount.onAppEvent(SCHEDULE_RESULT_EVENT, { ok: true });
+    await pending;
+  });
+
   it('the old open-app refusal is gone from the executor’s exports', async () => {
     const mod = await import('../schedule/appRun.js');
     expect('APP_OPEN_REFUSAL' in mod).toBe(false);

@@ -27,10 +27,12 @@ Tests first in `appRunHandshake.test.tsx`: replace the S1 describe (open → ref
 
 ## Decisions & surprises
 
-- The accepted residual: two instances of the same app (the visible one and the hidden one) can run at once over the app's one store. Each db/kv request is atomic at the host; the race is app-level (two read-modify-writes). Same shape as the app open in two tabs. The KB tells handlers to read and write through the store and stay idempotent by `runId`.
+- The two instances share ONE sql.js connection (fresh-context review, major): a transaction spanning requests would interleave across them, and the original "same as two tabs" framing was wrong (a second tab is read-only). Closed for the scheduled side with `schedule/scheduledDbDriver.ts` (no transaction control, no import in the hidden frame); still open: the visible copy's own transaction or a blind write-back of cached state (R-70). No shipped starter uses a transaction.
 
 ## Session journal (append-only, newest last)
 
 ### 2026-10-09 — Claude — session
 - Done: task file; branch off main `7b8020e`.
 - Next step: tests first.
+- Review (fresh-context security lens): 0 blockers, 1 major (the shared connection — fixed with the scheduled db binding + tests; R-70 rewritten), 3 minors (stale comments in code-map/architecture/glossary/appHosts/queue — fixed; the dead `interrupt` seam — kept, its test reason neutral; the KB rule addressed the wrong instance — rewritten), plus a missing test (a result from the open copy is never taken — added; it was already green, so it guards a regression).
+
