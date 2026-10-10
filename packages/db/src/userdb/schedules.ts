@@ -49,6 +49,7 @@ import {
   scheduleRunSchema,
   scheduledTaskSchema,
   schedulerStateSchema,
+  utf8ByteLength,
   type RunStatus,
   type ScheduleRun,
   type ScheduleStep,
@@ -113,7 +114,6 @@ export type ScheduleAccessors = Pick<
 // ----------------------------------------------------------------------- helpers
 
 const SETTINGS = USERDB_TABLES.settings;
-const utf8Bytes = (text: string): number => new TextEncoder().encode(text).length;
 /** The escaped-prefix LIKE pattern the `auth:` and `shareLink:` sweeps use — `!`, `%`, `_` are literal. */
 const likePrefix = (prefix: string): string => `${prefix.replace(/([!%_])/g, '!$1')}%`;
 const PREFIX_WHERE = `key LIKE ? ESCAPE '!'`;
@@ -283,7 +283,7 @@ function pruneVictim<T>(
   return undefined;
 }
 
-const bytesOf = (entries: ReadonlyArray<unknown>): number => utf8Bytes(JSON.stringify(entries));
+const bytesOf = (entries: ReadonlyArray<unknown>): number => utf8ByteLength(JSON.stringify(entries));
 
 // --------------------------------------------------------------------- accessors
 

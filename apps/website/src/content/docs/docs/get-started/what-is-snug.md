@@ -19,7 +19,7 @@ upgrades their model, and cheaper when they point it at a small local one.
 
 Two protocol features make that practical:
 
-- **Envelopes** — thirteen versioned JSON frame types over `postMessage`, published as
+- **Envelopes** — fifteen versioned JSON frame types over `postMessage`, published as
   [JSON Schemas](/docs/spec/schemas/). An app works in any conformant host.
 - **Runtime contracts** — each app carries a compact, version-pinned description of what it is
   and what a good answer looks like. Its turns are assembled from that contract, never from the
@@ -43,6 +43,7 @@ The security model is enforced by architecture, not by policy:
   **human-approved, host-frozen ceiling** of allowed hosts.
 - Credentials live in the user's own file and are injected by the host executor — they never
   enter the app iframe, never reach the LLM, and never reach an app publisher.
+- An app reads another app's tables only under a user-granted, logged, revocable access grant — the one sanctioned crossing, and the user sees exactly what is shared and where it can go before allowing it.
 
 The [threat model and security argument](/docs/whitepaper/) are written down, including what
 is accepted and *not* mitigated.

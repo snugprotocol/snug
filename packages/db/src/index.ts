@@ -72,6 +72,10 @@ export {
   type ScratchRunResult,
   type ScratchStatement,
   type ScratchStatementResult,
+  // TASK-20261010-cross-app-access AC7: the source side of the consent sheet.
+  type AppDataColumn,
+  type AppDataTable,
+  type DescribeAppDataResult,
   MAX_QUERY_RESULT_BYTES,
   MAX_QUERY_ROWS,
 } from './userdb/userdb.js';
@@ -131,16 +135,43 @@ export {
   scheduleSettingKey,
   taskIdFromScheduleRunsSettingKey,
   taskIdFromScheduleSettingKey,
+  // Access between apps (TASK-20261010-cross-app-access, ADR-0075 §2, §7): the four
+  // namespaces the access record keeps in `snug_settings`, single-homed like the rest.
+  ACCESS_GRANT_SETTING_PREFIX,
+  ACCESS_LOG_SETTING_PREFIX,
+  ACCESS_DECLINED_SETTING_PREFIX,
+  ACCESS_MUTED_SETTING_PREFIX,
+  accessDeclinedSettingKey,
+  accessDeclinedSettingPrefixFor,
+  accessGrantSettingKey,
+  accessLogSettingKey,
+  accessMutedSettingKey,
+  grantIdFromAccessGrantSettingKey,
+  readerAppIdFromAccessMutedSettingKey,
+  sourceAppIdFromAccessLogSettingKey,
 } from './userdb/app-settings-keys.js';
 
 // The import/export bound a `running`/`pending` claim is retired under (TASK-20261009 C4).
 export { SCHEDULE_IMPORTED_CLAIM_MAX_AGE_MS } from './userdb/schedules.js';
+
+// Access between apps (TASK-20261010-cross-app-access): the record types the accessors speak,
+// and the PURE scoped read the access engine's Worker runs on its own sql.js instance (AC6).
+export { type AccessDecline, type AccessImportReport } from './userdb/access.js';
+export {
+  scopedScratchRead,
+  type ScopedReadCaps,
+  type ScopedReadDrift,
+  type ScopedReadResult,
+  type ScopedReadScope,
+  type ScopedReadStatement,
+} from './scoped-read.js';
 
 // App sharing (TASK-20260904, ADR-0063): build / install / update one app as a bundle, and
 // the first-bytes sniff that tells a bundle from a user file.
 export {
   AGENT_INSTALL_SOURCE_PREFIX,
   SHARE_INSTALL_SOURCE_PREFIX,
+  STARTER_INSTALL_SOURCE_PREFIX,
   agentInstallSource,
   buildAppBundle,
   declareSharedConnections,

@@ -747,10 +747,14 @@ describe('the swap seams (E1)', () => {
   });
 });
 
-describe('noteAppVersion is a thin delegate to appDrift.ts (the E8 rule has ONE home, at the db altitude)', () => {
-  it('acts.ts calls `pauseSchedulesForAppVersion` and no longer walks the tasks itself', () => {
+describe('noteAppVersion is a thin delegate to the ONE app-version fan-out (the E8 rule has ONE home, at the db altitude; TASK-20261010-cross-app-access D18 — the fan-out also suspends the access the app holds)', () => {
+  // The POSITIVE half — acts.ts calls the fan-out exactly once — is accessDrift.test.ts's ('the
+  // three places an app changes under the user call the fan-out'), and the behaviour is the
+  // 0 / 1 / 1-paused rows above; this row keeps only what acts.ts must NOT do, so a
+  // behaviour-preserving rewrite of the delegate never reds it (W6 finding 24).
+  it('acts.ts never calls `pauseSchedulesForAppVersion` directly and no longer walks the tasks itself', () => {
     const acts = readFileSync(path.resolve(__dirname, '..', 'schedule', 'acts.ts'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:'"`\\])\/\/[^\n]*/g, '$1');
-    expect(acts).toMatch(/pauseSchedulesForAppVersion\(await deps\.db\(\), appId, version, source, deps\.now\(\)\.toISOString\(\)\)/);
+    expect(acts).not.toMatch(/\bpauseSchedulesForAppVersion\s*\(/);
     expect(acts).not.toMatch(/\bpauseForAppUpdate\b/);
     expect(acts).toMatch(/export type \{ AppVersionSource \} from '\.\/appDrift\.js'/);
   });

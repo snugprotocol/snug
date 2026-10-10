@@ -13,16 +13,19 @@ describe('JSON Schema export (AC-7)', () => {
     for (const key of Object.keys(a)) expect(a[key]).toBe(b[key]);
   });
 
-  it('covers every frame plus the chat envelope', () => {
+  // Sixteen files since spec 1.1 (TASK-20261010-cross-app-access: + the access pair).
+  it('covers every frame plus the chat envelope — sixteen files', () => {
     const names = Object.keys(buildJsonSchemas());
-    for (const expected of [
+    const expected = [
       'app-announce.json', 'host-ready.json', 'app-message.json', 'app-cancel.json',
       'app-response.json', 'db-request.json', 'db-response.json', 'host-event.json',
       'app-event.json', 'net-request.json', 'net-response.json',
-      'open-url-request.json', 'open-url-result.json', 'app-request-envelope.json',
-    ]) {
-      expect(names).toContain(expected);
-    }
+      'open-url-request.json', 'open-url-result.json',
+      'access-request.json', 'access-response.json',
+      'app-request-envelope.json',
+    ];
+    expect(expected).toHaveLength(16);
+    expect([...names].sort()).toEqual([...expected].sort());
   });
 
   it('committed schemas/ files are in sync with the source of truth', () => {

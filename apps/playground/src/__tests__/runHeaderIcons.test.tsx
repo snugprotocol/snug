@@ -26,8 +26,14 @@
 
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { FRAME_TYPES, PROTOCOL_VERSION, accessRequestHash } from '@snugprotocol/protocol';
+import type { UserDb } from '@snugprotocol/db';
+
+import { collectSources, pendingAccessStore, type PendingAccessRequest } from '../access/consent.js';
+import { ACCESS_SHEET } from '../access/copy.js';
+import { createGrantFromDecision, resetAccessSession } from '../access/grants.js';
 import { RunHeaderActions } from '../run/RunHeaderActions.js';
 import { appModelStore } from '../state/appModel.js';
 import { modeStore, modelStore, providerStore } from '../state/mode.js';
@@ -45,8 +51,12 @@ const APP = 'app-header-icons';
 
 let container: HTMLDivElement | undefined;
 let root: Root | undefined;
+let db: UserDb;
 
 beforeEach(async () => {
+  await act(async () => {
+    resetAccessSession();
+  });
   appModelStore.set({});
   modelStore.set(undefined);
   modeStore.set('byok');
@@ -54,7 +64,7 @@ beforeEach(async () => {
   ollamaStore.set('unknown');
   webllmFlagStore.set(false);
   webgpuStore.set('unknown');
-  await installTestUserDb();
+  db = await installTestUserDb();
 });
 
 afterEach(async () => {
@@ -85,6 +95,14 @@ interface RenderOptions {
 }
 
 async function renderActions(options: RenderOptions = {}): Promise<void> {
+  // A second render in one test unmounts the first: a leaked root keeps listening to the stores
+  // (the access revision among them) and re-renders outside act when the next test resets them.
+  if (root !== undefined) {
+    await act(async () => {
+      root!.unmount();
+    });
+    container?.remove();
+  }
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
@@ -304,5 +322,156 @@ describe('the buttons still do their jobs', () => {
       shareBtn()!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
     expect(shared).toBe(1);
+  });
+});
+
+// TASK-20261010-cross-app-access AC19 / D20: the ⋈ — between the schedule control and share,
+// only when the app has access state (access either way, a pending ask, or declined asks — the
+// ⚯ rule) and the host allows access. Order is pinned by DOM position, never by source text.
+describe('the access control ⋈ (TASK-20261010 AC19, D20)', () => {
+  const accessBtn = (): HTMLElement | null => byTestId('access-app');
+  const scheduleBtn = (): HTMLElement | null => byTestId('schedule-app');
+
+  async function twoApps(): Promise<{ budget: string; ledger: string }> {
+    const budget = db.installApp({ displayName: 'Budget', html: '<!doctype html><title>b</title>' }).appId;
+    const ledger = db.installApp({ displayName: 'Ledger', html: '<!doctype html><title>l</title>' }).appId;
+    await db.applyAppDdl(ledger, ['CREATE TABLE transactions (id INTEGER PRIMARY KEY, amount INTEGER)']);
+    await db.driver.handle(ledger, { v: PROTOCOL_VERSION, type: FRAME_TYPES.dbRequest, requestId: 'seed', instanceId: 'seed', op: 'exec', sql: 'INSERT INTO transactions (amount) VALUES (1)' });
+    return { budget, ledger };
+  }
+
+  async function allowBudget(budget: string, ledger: string): Promise<void> {
+    const ranked = await collectSources(db, budget);
+    const source = [...ranked.matched, ...ranked.rest].find((candidate) => candidate.appId === ledger)!;
+    await createGrantFromDecision(db, { readerAppId: budget, source, tables: ['transactions'], duration: 'day', unattended: false, purpose: 'to show spending', provenance: 'app', generation: 0, now: Date.now() });
+  }
+
+  async function settle(): Promise<void> {
+    for (let i = 0; i < 6; i += 1) {
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+    }
+  }
+
+  afterEach(async () => {
+    await act(async () => {
+      pendingAccessStore.set({});
+      resetAccessSession();
+    });
+  });
+
+  it('is absent for an app with no access state', async () => {
+    const { budget } = await twoApps();
+    await renderActions({ appId: budget });
+    await settle();
+    expect(accessBtn()).toBeNull();
+    expect(scheduleBtn()).not.toBeNull();
+    expect(shareBtn()).not.toBeNull();
+  });
+
+  it('with access either way: an icon button named "access" with its tooltip, BETWEEN schedule and share', async () => {
+    const { budget, ledger } = await twoApps();
+    await allowBudget(budget, ledger);
+    for (const appId of [budget, ledger]) {
+      await renderActions({ appId });
+      await settle();
+      const el = accessBtn();
+      expect(el, `the ⋈ renders for ${appId === budget ? 'the app that reads' : 'the app that is read'}`).not.toBeNull();
+      expect(el!.getAttribute('aria-label')).toBe(ACCESS_SHEET.iconLabel);
+      expect(el!.getAttribute('aria-label')).toBe('access');
+      expect(el!.getAttribute('title')).toBe(ACCESS_SHEET.iconTitle);
+      expect(el!.getAttribute('aria-haspopup')).toBe('dialog');
+      expect((el!.textContent ?? '').trim()).toBe('⋈');
+      expect(el!.className).toContain('btn-icon');
+      expect(precedes(scheduleBtn()!, el!)).toBe(true);
+      expect(precedes(el!, shareBtn()!)).toBe(true);
+      // Nothing between them: the ⋈ is the schedule control's next sibling, and share is its.
+      expect(scheduleBtn()!.nextElementSibling).toBe(el);
+      expect(el!.nextElementSibling).toBe(shareBtn());
+    }
+  });
+
+  it('a pending ask alone is access state', async () => {
+    const { budget } = await twoApps();
+    await renderActions({ appId: budget });
+    await settle();
+    expect(accessBtn()).toBeNull();
+    await act(async () => {
+      pendingAccessStore.set({ [budget]: { readerAppId: budget, generation: 0, provenance: 'app' } as unknown as PendingAccessRequest });
+    });
+    await settle();
+    expect(accessBtn()).not.toBeNull();
+  });
+
+  it('a declined ask alone is access state', async () => {
+    const { budget } = await twoApps();
+    db.addAccessDecline(budget, accessRequestHash({ hints: { words: ['spending'] } }), { purpose: 'to show spending', hints: { words: ['spending'] }, at: new Date().toISOString() });
+    await renderActions({ appId: budget });
+    await settle();
+    expect(accessBtn()).not.toBeNull();
+  });
+
+  it('is absent for a read-only starter', async () => {
+    const { budget, ledger } = await twoApps();
+    await allowBudget(budget, ledger);
+    await renderActions({ appId: budget, isStarter: true });
+    await settle();
+    expect(accessBtn()).toBeNull();
+  });
+
+  it('is absent where the host does not allow access — and present under the same host with access on (the twin)', async () => {
+    const { budget, ledger } = await twoApps();
+    await allowBudget(budget, ledger);
+    const { HOST_OFF_CAPABILITIES, hostPlatform } = await import('./fixtures/hostPlatform.js');
+    for (const access of [false, true]) {
+      await act(async () => {
+        root?.unmount();
+      });
+      container?.remove();
+      // The platform is set once per module graph: a fresh graph per posture, the same file in both.
+      vi.resetModules();
+      const platform = await import('../platform/platform.js');
+      platform.setPlatform(hostPlatform({ capabilities: { ...HOST_OFF_CAPABILITIES, access } }));
+      (await import('../state/userdb.js')).setUserDbForTests(db);
+      const { RunHeaderActions: FreshActions } = await import('../run/RunHeaderActions.js');
+      container = document.createElement('div');
+      document.body.appendChild(container);
+      root = createRoot(container);
+      await act(async () => {
+        root!.render(<FreshActions appId={budget} isStarter={false} connectionSlots={0} onManageConnections={() => undefined} onShare={() => undefined} />);
+      });
+      await settle();
+      if (access) expect(accessBtn(), 'access on: the ⋈ renders').not.toBeNull();
+      else expect(accessBtn(), 'access off: no ⋈').toBeNull();
+    }
+    vi.resetModules();
+  });
+
+  it('opens the access sheet on click', async () => {
+    const { budget, ledger } = await twoApps();
+    await allowBudget(budget, ledger);
+    await renderActions({ appId: budget });
+    await settle();
+    expect(accessBtn()!.getAttribute('aria-expanded')).toBe('false');
+    accessBtn()!.focus();
+    await act(async () => {
+      accessBtn()!.click();
+    });
+    await settle();
+    const dialog = document.querySelector('[data-testid="access-sheet"]');
+    expect(dialog).not.toBeNull();
+    // Named by its own title (ConfirmOverlay's labelledBy), focus inside on ✕.
+    expect(document.getElementById(dialog!.getAttribute('aria-labelledby')!)?.textContent).toBe(ACCESS_SHEET.title('Budget'));
+    expect(document.activeElement).toBe(document.querySelector('[data-testid="access-sheet-close"]'));
+    expect(accessBtn()!.getAttribute('aria-expanded')).toBe('true');
+    // Escape closes it, and focus goes back to the ⋈ that opened it.
+    await act(async () => {
+      document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    });
+    await settle();
+    expect(document.querySelector('[data-testid="access-sheet"]')).toBeNull();
+    expect(accessBtn()!.getAttribute('aria-expanded')).toBe('false');
+    expect(document.activeElement).toBe(accessBtn());
   });
 });

@@ -67,6 +67,7 @@ const APP_ORIGIN_TYPES = new Set<string>([
   FRAME_TYPES.dbRequest,
   FRAME_TYPES.netRequest,
   FRAME_TYPES.appEvent,
+  FRAME_TYPES.accessRequest, // TASK-20261010-cross-app-access AC5 — collected for accessRequests()
 ]);
 
 export interface HostStub {
@@ -88,6 +89,12 @@ export interface HostStub {
   dbFail(requestId: string, error: Partial<ResponseError>): void;
   netSucceed(requestId: string, fields?: Record<string, unknown>): void;
   netFail(requestId: string, error: Partial<ResponseError>): void;
+  /** Access-request frames observed on the window (TASK-20261010-cross-app-access AC5). */
+  accessRequests(): AppFrame[];
+  /** Answers one access-request with a success response; `fields` carries `op` and its result seats. */
+  accessSucceed(requestId: string, fields: Record<string, unknown>): void;
+  /** Answers one access-request with an error response (errors as data). */
+  accessFail(requestId: string, error: Partial<ResponseError>): void;
   dispose(): void;
 }
 
@@ -156,6 +163,13 @@ export function hostStub(): HostStub {
     },
     netFail(requestId, over) {
       stub.post({ v: PROTOCOL_VERSION, type: FRAME_TYPES.netResponse, requestId, ok: false, error: error(over) });
+    },
+    accessRequests: () => fromApp.filter((f) => f.type === FRAME_TYPES.accessRequest),
+    accessSucceed(requestId, fields) {
+      stub.post({ v: PROTOCOL_VERSION, type: FRAME_TYPES.accessResponse, requestId, ok: true, ...fields });
+    },
+    accessFail(requestId, over) {
+      stub.post({ v: PROTOCOL_VERSION, type: FRAME_TYPES.accessResponse, requestId, ok: false, error: error(over) });
     },
     dispose() {
       window.removeEventListener('message', listener);

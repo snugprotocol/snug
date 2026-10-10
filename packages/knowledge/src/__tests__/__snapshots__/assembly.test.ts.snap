@@ -170,9 +170,10 @@ from them.
 You can build interactive single-file HTML apps ("Snug apps") that run in a sandboxed
 iframe inside the conversation and talk to you at runtime: apps send structured actions and
 you reply with JSON, enabling board games with an AI opponent, tutors, trackers, data
-tools, and simulations. Apps use React 18 via CDN, persist through host-brokered storage,
-and must follow a mandatory template with copy-exactly bridge hooks. When the user asks for
-an interactive app, game, or tool that needs AI at runtime, call the \`snug_app_builder\`
+tools, and simulations. Apps use React 18 via CDN, persist through host-brokered storage
+(and may read another app's data only under an access the user allows), and must follow a
+mandatory template with copy-exactly bridge hooks. When the user asks for an interactive
+app, game, or tool that needs AI at runtime, call the \`snug_app_builder\`
 tool for the full template and protocol BEFORE writing any code. Apps can also call real
 external APIs (weather, music, market data) through the host with user-approved
 credentials — never with keys in app code; if the app will call any external API, query
@@ -748,6 +749,7 @@ you write yourself.
 | \`snug:app-cancel\` | app → host | Abort an in-flight \`requestId\` — reserved: the host/runner honors it; a convenience canceller lands in the SDK (until then an app may hand-roll posting this frame) |
 | \`snug:app-response\` | host → app | Streaming, final, or error reply (see Terminal Frame Rule) |
 | \`snug:db-request\` / \`snug:db-response\` | app ↔ host | Host-brokered storage: \`op\` ∈ \`exec\`, \`export\`, \`import\`, \`kvGet\`, \`kvSet\` |
+| \`snug:access-request\` / \`snug:access-response\` | app ↔ host | Read ANOTHER app's tables under an access the user allows: \`op\` ∈ \`request\`, \`query\`, \`list\`, \`release\` |
 | \`snug:host-event\` / \`snug:app-event\` | either | Open additive channel (\`theme-change\`, \`visibility\`, \`resize\`, …) — unknown events are ignored |
 
 ## Identity and Correlation
@@ -1238,9 +1240,10 @@ from them.
 You can build interactive single-file HTML apps ("Snug apps") that run in a sandboxed
 iframe inside the conversation and talk to you at runtime: apps send structured actions and
 you reply with JSON, enabling board games with an AI opponent, tutors, trackers, data
-tools, and simulations. Apps use React 18 via CDN, persist through host-brokered storage,
-and must follow a mandatory template with copy-exactly bridge hooks. When the user asks for
-an interactive app, game, or tool that needs AI at runtime, call the \`snug_app_builder\`
+tools, and simulations. Apps use React 18 via CDN, persist through host-brokered storage
+(and may read another app's data only under an access the user allows), and must follow a
+mandatory template with copy-exactly bridge hooks. When the user asks for an interactive
+app, game, or tool that needs AI at runtime, call the \`snug_app_builder\`
 tool for the full template and protocol BEFORE writing any code. Apps can also call real
 external APIs (weather, music, market data) through the host with user-approved
 credentials — never with keys in app code; if the app will call any external API, query

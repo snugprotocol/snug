@@ -73,7 +73,11 @@ export function handInBeforePaint(handIn: Promise<unknown>, ms: number = HAND_IN
   });
 }
 
-export function composeHostPlatform(probe: ProbeResult, win: ComposeWindow, doc: ComposeDocument, wasm: Uint8Array): Composition {
+/**
+ * `access` is the boot's Worker probe, asked once by `planBoot` (TASK-20261010-cross-app-access
+ * AC20/AC23): `false` composes the page `access: false`; absent leaves the table's `true`.
+ */
+export function composeHostPlatform(probe: ProbeResult, win: ComposeWindow, doc: ComposeDocument, wasm: Uint8Array, access?: boolean): Composition {
   // A working copy in MEMORY (Safari denies third-party storage) is gone with the tab —
   // the chip says so beside the artifact arms (correctness review 14).
   const custody = createCustodyStore(probe.storage.kind === 'memory' ? { workingCopy: 'memory' } : {});
@@ -140,6 +144,7 @@ export function composeHostPlatform(probe: ProbeResult, win: ComposeWindow, doc:
     custody: custodySeat,
     saveFile: createExportSeat({ downloads: probe.host?.downloads, store: custody }),
     agentHandIns: handIns.seat,
+    ...(access !== undefined ? { access } : {}),
   });
 
   return {

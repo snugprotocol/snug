@@ -255,6 +255,9 @@ importers:
       jsdom:
         specifier: ^30.0.1
         version: 30.0.1
+      typescript:
+        specifier: ^5.5.0
+        version: 5.9.3
       vite:
         specifier: ^6.4.3
         version: 6.4.3(@types/node@26.1.2)(lightningcss@1.33.0)

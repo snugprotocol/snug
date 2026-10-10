@@ -42,7 +42,8 @@ import {
 } from '@snugprotocol/protocol';
 
 import { bumpScheduleRevision } from '../platform/signals.js';
-import { pauseSchedulesForAppVersion, type AppVersionSource } from './appDrift.js';
+import { onAppVersionChanged } from '../state/appVersionChanged.js';
+import type { AppVersionSource } from './appDrift.js';
 import { globalPaused } from './copy.js';
 import { compileSpec } from './cron.js';
 import { defaultMissedPolicy, frequencyFloorRefusal, freshnessWindowMs } from './floors.js';
@@ -388,11 +389,13 @@ export function cancelRunning(): void {
 /**
  * The E8 hook at the engine's altitude: an app's version changed. The rule — a SHARED or
  * AGENT update pauses every schedule naming the app at another version, the user's OWN edit
- * pauses nothing — lives in `appDrift.ts` at the db altitude, where the hand-in and the
- * shared-install paths call it with the db they hold; this act is the same call over the
- * engine's installed db and clock. Answers how many schedules were paused.
+ * pauses nothing — lives in `appDrift.ts` at the db altitude, and is reached, with the access
+ * the app holds as a reader (TASK-20261010-cross-app-access AC14), through the ONE fan-out
+ * `state/appVersionChanged.ts` — where the hand-in and the shared-install paths call it with the
+ * db they hold; this act is the same call over the engine's installed db and clock. Answers how
+ * many schedules were paused.
  */
 export async function noteAppVersion(appId: string, version: number, source: AppVersionSource): Promise<number> {
   const deps = currentDeps();
-  return pauseSchedulesForAppVersion(await deps.db(), appId, version, source, deps.now().toISOString());
+  return onAppVersionChanged(await deps.db(), appId, version, source, deps.now().toISOString()).schedulesPaused;
 }

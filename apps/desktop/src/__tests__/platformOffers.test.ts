@@ -75,3 +75,17 @@ describe('the scheduler seat (TASK-20261009 H3 + H1; ADR-0074 §7)', () => {
     expect(Object.getOwnPropertyDescriptor(scheduler, 'notify')?.get).toBeUndefined();
   });
 });
+
+describe('access between apps (TASK-20261010-cross-app-access AC23; ADR-0075)', () => {
+  it('the desktop INHERITS access through absence-means-enabled: no `access` key on its capabilities, and allows("access") is true through the playground’s reader', async () => {
+    vi.resetModules();
+    const { createDesktopPlatform } = await import('../platform-desktop.js');
+    const platform = createDesktopPlatform();
+    // A literal `access: false` here would hide every access surface on the Mac; a literal `true`
+    // would be a second statement of the default. Absence is the contract (platform.ts).
+    expect('access' in platform.capabilities).toBe(false);
+    const { allows, setPlatform } = await import('@playground/platform/platform');
+    setPlatform(platform);
+    expect(allows('access')).toBe(true);
+  });
+});

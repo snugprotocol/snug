@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 270" role="img" aria-label="Access between apps: the reader asks; the user reviews on host chrome and picks the source and tables; the host writes the grant, runs the one read on a scoped scratch copy in its own worker, logs the read on the source and hands the rows back to the reader">
+  <defs>
+    <marker id="f11-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#5b6472"/>
+    </marker>
+    <marker id="f11-b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#a8712a"/>
+    </marker>
+  </defs>
+
+  <!-- rows back to the reader (top return line) -->
+  <path d="M676 40 L676 22 L80 22 L80 36" fill="none" stroke="#a8712a" stroke-width="1.4" marker-end="url(#f11-b)"/>
+  <rect x="226" y="14" width="268" height="16" fill="#fff"/>
+  <text x="360" y="25" text-anchor="middle" class="f-edge-alt">6 · snug:access-response — the rows, credential columns masked</text>
+
+  <!-- row 1: ask → review → grant → read -->
+  <rect x="16" y="40" width="128" height="84" rx="6" fill="#fdf7ee" stroke="#a8712a" stroke-width="1.4" stroke-dasharray="5 3"/>
+  <text x="80" y="58" text-anchor="middle" class="f-label">1 · Reader app</text>
+  <text x="80" y="73" text-anchor="middle" class="f-mono-sm">snug:access-request</text>
+  <text x="80" y="87" text-anchor="middle" class="f-tiny">after a user act, with one</text>
+  <text x="80" y="98" text-anchor="middle" class="f-tiny">sentence of purpose —</text>
+  <text x="80" y="109" text-anchor="middle" class="f-tiny">it never names a source</text>
+
+  <rect x="164" y="40" width="158" height="84" rx="6" fill="#fdf7ee" stroke="#a8712a" stroke-width="1.8"/>
+  <text x="243" y="58" text-anchor="middle" class="f-label">2 · Host strip + sheet</text>
+  <text x="243" y="73" text-anchor="middle" class="f-tiny">host chrome the app cannot draw over;</text>
+  <text x="243" y="85" text-anchor="middle" class="f-tiny">a strip, never a modal</text>
+  <text x="243" y="97" text-anchor="middle" class="f-tiny">the USER picks source, tables, duration</text>
+  <text x="243" y="109" text-anchor="middle" class="f-tiny">and reads where rows can go — first</text>
+
+  <rect x="342" y="40" width="166" height="84" rx="6" fill="#fff" stroke="#5b6472" stroke-width="1.2"/>
+  <text x="425" y="58" text-anchor="middle" class="f-label">3 · Access grant</text>
+  <text x="425" y="73" text-anchor="middle" class="f-tiny">a host record in the user's file —</text>
+  <text x="425" y="85" text-anchor="middle" class="f-tiny">read-only · tables, columns frozen</text>
+  <text x="425" y="97" text-anchor="middle" class="f-tiny">timed · revocable from anywhere</text>
+  <text x="425" y="109" text-anchor="middle" class="f-tiny">suspends: reader replaced, source changed</text>
+
+  <rect x="528" y="40" width="176" height="84" rx="6" fill="#fff" stroke="#5b6472" stroke-width="1.2"/>
+  <text x="616" y="58" text-anchor="middle" class="f-label">4 · Scoped read, own worker</text>
+  <text x="616" y="73" text-anchor="middle" class="f-tiny">scratch copy: triggers, views, other</text>
+  <text x="616" y="85" text-anchor="middle" class="f-tiny">tables, snug_kv dropped — and verified</text>
+  <text x="616" y="97" text-anchor="middle" class="f-tiny">credential columns withheld · one SELECT</text>
+  <text x="616" y="109" text-anchor="middle" class="f-tiny">2 s wall clock — overrun ends the worker</text>
+
+  <path d="M144 82 L160 82" fill="none" stroke="#5b6472" stroke-width="1.3" marker-end="url(#f11-a)"/>
+  <path d="M322 82 L338 82" fill="none" stroke="#5b6472" stroke-width="1.3" marker-end="url(#f11-a)"/>
+  <path d="M508 82 L524 82" fill="none" stroke="#5b6472" stroke-width="1.3" marker-end="url(#f11-a)"/>
+
+  <!-- row 2 -->
+  <rect x="16" y="158" width="128" height="58" rx="6" fill="#fbfbfc" stroke="#c9ced6" stroke-width="1"/>
+  <text x="80" y="175" text-anchor="middle" class="f-label">Named before consent</text>
+  <text x="80" y="189" text-anchor="middle" class="f-tiny">the reader's brain, by name</text>
+  <text x="80" y="200" text-anchor="middle" class="f-tiny">its approved connections</text>
+  <text x="80" y="211" text-anchor="middle" class="f-tiny">any link it may ask to open</text>
+  <path d="M144 187 C 160 187, 170 160, 186 128" fill="none" stroke="#c9ced6" stroke-width="1.1" stroke-dasharray="3 3"/>
+
+  <rect x="164" y="158" width="158" height="58" rx="6" fill="#fbfbfc" stroke="#5b6472" stroke-width="1" stroke-dasharray="4 3"/>
+  <text x="243" y="175" text-anchor="middle" class="f-label">The user's apps, ranked</text>
+  <text x="243" y="189" text-anchor="middle" class="f-tiny">by relevance, on host chrome —</text>
+  <text x="243" y="200" text-anchor="middle" class="f-tiny">the reader never sees this list</text>
+  <path d="M243 158 L243 128" fill="none" stroke="#5b6472" stroke-width="1.2" marker-end="url(#f11-a)"/>
+
+  <rect x="342" y="158" width="166" height="58" rx="6" fill="#fdf7ee" stroke="#a8712a" stroke-width="1.3"/>
+  <text x="425" y="175" text-anchor="middle" class="f-label">5 · History on the source</text>
+  <text x="425" y="189" text-anchor="middle" class="f-tiny">every read logged: what, how many</text>
+  <text x="425" y="200" text-anchor="middle" class="f-tiny">rows, whether anyone was looking</text>
+  <text x="425" y="211" text-anchor="middle" class="f-tiny">bounded · latest lifecycle line kept</text>
+  <path d="M548 124 L548 187 L512 187" fill="none" stroke="#a8712a" stroke-width="1.3" marker-end="url(#f11-b)"/>
+
+  <rect x="572" y="158" width="132" height="58" rx="6" fill="#f5f7fa" stroke="#5b6472" stroke-width="1.3"/>
+  <text x="638" y="175" text-anchor="middle" class="f-label">Source app — live data</text>
+  <text x="638" y="189" text-anchor="middle" class="f-tiny">copied into the worker;</text>
+  <text x="638" y="200" text-anchor="middle" class="f-tiny">never itself the thing</text>
+  <text x="638" y="211" text-anchor="middle" class="f-tiny">being queried</text>
+  <path d="M638 158 L638 128" fill="none" stroke="#5b6472" stroke-width="1.3" stroke-dasharray="4 3" marker-end="url(#f11-a)"/>
+  <text x="644" y="146" class="f-edge">copy</text>
+
+  <!-- invariant -->
+  <rect x="16" y="234" width="688" height="26" rx="4" fill="#fbfbfc" stroke="#c9ced6" stroke-width="1"/>
+  <text x="360" y="251" text-anchor="middle" class="f-note">Revocable from the source's side, the reader's side or Settings; swept with either application; an imported file disarms every grant the user did not give here.</text>
+</svg>

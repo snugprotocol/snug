@@ -19,6 +19,7 @@
  */
 
 import type { UserDb } from '@snugprotocol/db';
+import { STARTER_INSTALL_SOURCE_PREFIX } from '@snugprotocol/db';
 import { canonicalRuntimeContract, runtimeContractSchema, type RuntimeContract } from '@snugprotocol/protocol';
 
 import { starterSource } from './starterSource.js';
@@ -78,8 +79,6 @@ export async function bundledStarterContracts(): Promise<Record<string, string>>
   return out;
 }
 
-const STARTER_SOURCE_PREFIX = 'starter:';
-
 /**
  * Copy the starter's contract onto `appId`, when there is one to copy.
  *
@@ -91,8 +90,8 @@ export async function installStarterRuntimeContract(db: UserDb, appId: string): 
   if (app === undefined) return;
 
   const source = app.installSource;
-  if (source === undefined || !source.startsWith(STARTER_SOURCE_PREFIX)) return;
-  const folder = source.slice(STARTER_SOURCE_PREFIX.length);
+  if (source === undefined || !source.startsWith(STARTER_INSTALL_SOURCE_PREFIX)) return;
+  const folder = source.slice(STARTER_INSTALL_SOURCE_PREFIX.length);
   if (folder === '') return;
 
   // Never clobber an existing contract: a user who re-authored theirs must not lose it to

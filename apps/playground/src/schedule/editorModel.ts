@@ -26,7 +26,7 @@
 // *edit…* on the card is one click from the full form; the save is the user's own
 // (`provenance: 'user'`), because once edited the schedule is theirs.
 
-import type { AppRecord, UserDb } from '@snugprotocol/db';
+import { STARTER_INSTALL_SOURCE_PREFIX, type AppRecord, type UserDb } from '@snugprotocol/db';
 import {
   CONNECTION_STATUS,
   SCHEDULE_APP_INPUT_MAX_BYTES,
@@ -350,7 +350,7 @@ export type TemplateAppCandidate = Pick<AppRecord, 'appId' | 'displayName' | 'in
 
 /** The installed app a template names: by install identity first, then by name. */
 export function findTemplateApp<T extends TemplateAppCandidate>(apps: readonly T[], app: TemplateApp): T | undefined {
-  const source = `starter:${app.folder}`;
+  const source = `${STARTER_INSTALL_SOURCE_PREFIX}${app.folder}`;
   const bySource = apps.find((candidate) => candidate.installSource === source);
   if (bySource !== undefined) return bySource;
   return apps.find((candidate) => app.aliases.includes(candidate.displayName.trim().toLowerCase()));

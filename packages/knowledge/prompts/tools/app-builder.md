@@ -11,7 +11,8 @@ Retrieves the Snug app authoring knowledge base: the mandatory single-file HTML 
 with the copy-exactly bridge hooks, the frame/envelope protocol and JSON reply contract,
 host-brokered persistence (key-value and SQL), connected external APIs (host-mediated
 auth, credentials, and the connection-declaring render directive), the app-type catalog
-with a worked chess example, design-quality rules, defensive-coding rules, and the pinned
+with a worked chess example, design-quality rules, defensive-coding rules, access between
+apps (query it when the user wants an app that reads another app's data), and the pinned
 table of known-good CDN library URLs.
 
 Call this BEFORE writing or modifying any Snug app, and again whenever you need a specific
@@ -25,6 +26,6 @@ Keywords or a short question selecting which knowledge sections to return, match
 section headings and content. Examples: `"template"`, `"html skeleton hooks"`,
 `"streaming errors PARSE_FAILED"`, `"persistence sql schema"`, `"connected api auth"`,
 `"external api credentials"`, `"chess example"`, `"design theme dark mode"`,
-`"cdn chess.js url"`. Use a broad query like `"overview"` first when building a new app,
-then narrow queries for details. An empty or very generic query returns the overview and
-section map.
+`"read another app's data"`, `"cdn chess.js url"`. Use a broad query like `"overview"` first
+when building a new app, then narrow queries for details. An empty or very generic query
+returns the overview and section map.

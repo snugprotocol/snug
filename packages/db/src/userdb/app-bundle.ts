@@ -43,7 +43,7 @@ import {
   type ConnectionRequirement,
 } from '@snugprotocol/protocol';
 
-import { AGENT_INSTALL_SOURCE_PREFIX, agentInstallSource, sharedBundleSettingKey } from './app-settings-keys.js';
+import { AGENT_INSTALL_SOURCE_PREFIX, STARTER_INSTALL_SOURCE_PREFIX, agentInstallSource, sharedBundleSettingKey } from './app-settings-keys.js';
 import { ConnectionNotAdmitted, USERDB_ERROR_CODES, UserDbError, type AppDocRecord, type UserDb } from './userdb.js';
 
 // ----------------------------------------------------------------------- build
@@ -76,7 +76,7 @@ export function shareInstallSource(lineage: string): string {
  * it too); re-exported here as part of the bundle surface. Prose in the spec, not schema:
  * `install_source` is free TEXT with a partial unique index.
  */
-export { AGENT_INSTALL_SOURCE_PREFIX, agentInstallSource };
+export { AGENT_INSTALL_SOURCE_PREFIX, STARTER_INSTALL_SOURCE_PREFIX, agentInstallSource };
 
 /** Which channel a bundle arrives on. `'shared'` is ADR-0063's (the default, byte-for-byte); `'agent'` is the artifact hand-in. */
 export type BundleProvenance = 'shared' | 'agent';

@@ -251,8 +251,10 @@ export interface SchedulerSeat {
  * LINK acts. The kit keeps `appExport` on while `share` is off, so a kit-edited app can be
  * handed back to the agent. `schedule` (TASK-20261009 C7) gates EVERY scheduling surface —
  * the page, the editor route, the run-header strip, the chat offer, the missed card.
+ * `access` (TASK-20261010-cross-app-access AC20, ADR-0075) gates access between apps — the
+ * frame's access binding, the strip, the consent sheet, the run header's ⋈ and the Settings card.
  */
-export type HostSurface = 'brainSettings' | 'account' | 'sync' | 'connections' | 'share' | 'appExport' | 'schedule';
+export type HostSurface = 'brainSettings' | 'account' | 'sync' | 'connections' | 'share' | 'appExport' | 'schedule' | 'access';
 
 /**
  * Structurally identical to connectionWizard's `ConnectionChannelLike`, defined
@@ -498,6 +500,14 @@ export interface SnugPlatform {
      * while its page is open); only a host that says `false` hides every scheduling surface.
      */
     schedule?: boolean;
+    /**
+     * Access between apps (TASK-20261010-cross-app-access AC20/AC23, ADR-0075). Optional, and
+     * ABSENCE MEANS ENABLED like the flags above: web, desktop and every test-constructed
+     * platform carry the access binding and its surfaces; the kit says `true` in
+     * `hostCapabilities()` where its boot probe could construct a blob Worker (the read runs in
+     * one, under a wall clock) and `false` where it could not — capability truth (ADR-0072 §4).
+     */
+    access?: boolean;
     /**
      * Whether an OAuth redirect can come back to this host (TASK-20261003, ADR-0072 §4).
      * Optional, and ABSENCE MEANS AVAILABLE, like the surface flags: web and desktop keep their

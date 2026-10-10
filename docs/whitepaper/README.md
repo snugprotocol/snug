@@ -1,16 +1,17 @@
 # The Snug Protocol whitepaper
 
 Source for **"The Snug Protocol: An Open Protocol for Agent-Backed Personal Software"**
-(Jeetu Maker), **edition 3 — the 1.0 edition** — the design rationale, threat model, and
-security argument behind **Specification 1.0** (wire protocol · portable user database ·
-connected applications · runtime contracts · linked-device connections).
+(Jeetu Maker), **edition 4 — the 1.1 edition** — the design rationale, threat model, and
+security argument behind **Specification 1.1** (wire protocol · portable user database ·
+connected applications · runtime contracts · linked-device connections · access between
+apps).
 
 | | |
 |---|---|
 | **Source** | [`src/paper.html`](src/paper.html) · [`src/paper.css`](src/paper.css) · [`src/figures/`](src/figures/) |
-| **Output** | [`dist/snug-protocol-whitepaper.pdf`](dist/) — A4, 10 figures |
-| **Spec fixture** | [`../spec-drafts/SPEC-1.0.md`](../spec-drafts/SPEC-1.0.md) + `packages/protocol/schemas/` |
-| **Tasks** | edition 3: `TASK-20260822-spec-10-final` · edition 2: `TASK-20260820-spec-v03-whitepaper` · edition 1: `TASK-20260807-protocol-whitepaper` |
+| **Output** | [`dist/snug-protocol-whitepaper.pdf`](dist/) — A4, 35 pages, 11 figures |
+| **Spec fixture** | [`../spec-drafts/SPEC.md`](../spec-drafts/SPEC.md) + `packages/protocol/schemas/` |
+| **Tasks** | edition 4: `TASK-20261010-cross-app-access` · edition 3: `TASK-20260822-spec-10-final` · edition 2: `TASK-20260820-spec-v03-whitepaper` · edition 1: `TASK-20260807-protocol-whitepaper` |
 
 ## Build
 
@@ -27,7 +28,7 @@ assembled single-file HTML in `dist/` for debugging.
 pipeline apply shrink-to-fit to the ENTIRE document (every font scales ×~0.91, the page
 count drops ~12%, and every hand-authored TOC hint goes stale) — found 2026-08-22 when an
 Edition cell briefly rode as a fourth item. Fold new facts into an existing cell
-(`1.0 · edition 3`); a page-count change on rebuild is the tell.
+(`1.1 · edition 4`); a page-count change on rebuild is the tell.
 
 **Let the build finish.** It renders through Chrome and then rewrites the PDF's `/Info`
 dictionary; killing it midway leaves a PDF with no author metadata. The checker catches
@@ -46,19 +47,19 @@ dependencies. Keeping the source as HTML also keeps it greppable, which is what 
 The spec is normative; this paper only explains it. `scripts/check-whitepaper.mjs`
 treats the spec as a **fixture** and fails when the two disagree — so a constant or frame
 name cannot silently drift here as the protocol moves. Pre-publication the fixture is
-`docs/spec-drafts/SPEC-1.0.md` plus the schemas in `packages/protocol/schemas/` (the
-monorepo is the master, per SPEC_SYNC); after the 1.0 push, point it at a
-`snugprotocol/spec` clone with `--spec <path>` — there it reads `SPEC.md` (the 1.0
+`docs/spec-drafts/SPEC.md` plus the schemas in `packages/protocol/schemas/` (the
+monorepo is the master, per SPEC_SYNC); after the 1.1 push, point it at a
+`snugprotocol/spec` clone with `--spec <path>` — there it reads `SPEC.md` (the 1.1
 document; the historical draft filenames are pointer stubs, never fixtures).
 
 | | Enforces |
 |---|---|
 | **AC1/AC2** | PDF builds; embedded `/Title` and `/Author` are correct (metadata, not just the cover) |
 | **AC3** | Every protocol constant matches the spec draft, including the seven-kind set |
-| **AC4** | Frame inventory matches `schemas/*.json` (thirteen frames); all R5 codes documented |
-| **AC5** | 1.0 surfaces COVERED; the paper claims 1.0 and carries no draft/RC self-description; superseded facts (dropped tables, old counts) absent |
+| **AC4** | Frame inventory matches `schemas/*.json` (fifteen frames); all R5 codes documented |
+| **AC5** | 1.1 surfaces COVERED (access between apps included); the paper claims 1.1 and carries no draft/RC self-description; superseded facts (dropped tables, old counts) absent |
 | **AC6** | No anti-positioning language; `host-blind`/`zero-knowledge`/`end-to-end` disclaimed, never claimed; ADR-0040's honest class statement and ADR-0043's bounded claim travel with their features |
-| **AC7** | Figures are inline vector, numbered, and each cited in prose (≥10) |
+| **AC7** | Figures are inline vector, numbered, and each cited in prose (≥11) |
 | **AC8** | Structural completeness; section numbering cannot drift |
 
 ### Two things the checker cannot see

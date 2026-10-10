@@ -18,6 +18,8 @@
 import type { ReactElement } from 'react';
 import { Link } from 'react-router';
 
+import { STARTER_INSTALL_SOURCE_PREFIX } from '@snugprotocol/db';
+
 import { starterLook } from '../starter/starterLooks.js';
 import { Card } from '../ui/Card.js';
 import { TEMPLATES } from './copy.page.js';
@@ -28,7 +30,7 @@ import { newScheduleHref } from './routes.js';
 export { templateAppName };
 
 /** The starter folder's install identity, the hub's dedup rule (`starter:<folder>`). */
-export const starterSourceOf = (folder: string): string => `starter:${folder}`;
+export const starterSourceOf = (folder: string): string => `${STARTER_INSTALL_SOURCE_PREFIX}${folder}`;
 export const starterRunHref = (folder: string): string => `/run/starter--${folder}`;
 
 /**

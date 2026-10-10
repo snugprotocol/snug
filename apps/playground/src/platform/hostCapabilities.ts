@@ -32,6 +32,13 @@ export type HostCapabilities = SnugPlatform['capabilities'];
  * local runner, a plain file. Stated `true` rather than left absent for the same reason as the
  * launch booleans: a reader that compares against `true` and one that compares against
  * `false` must agree.
+ *
+ * `access` is ON (TASK-20261010-cross-app-access AC20/AC23, ADR-0075): the engine lives in the
+ * playground and the read runs in a blob Worker it constructs, so every kit binding can offer
+ * access between apps — stated `true` for the same reason as `schedule`. It is the one flag a
+ * binding turns off on a MEASURED fact: the kit's boot probes a blob Worker once
+ * (`canConstructWorker`) and composes `{ access: false }` where none constructs (capability
+ * truth, ADR-0072 §4) — the frame then carries no access binding, so `host-ready.access` is false.
  */
 export function hostCapabilities(overrides: Partial<HostCapabilities> = {}): HostCapabilities {
   return {
@@ -46,6 +53,7 @@ export function hostCapabilities(overrides: Partial<HostCapabilities> = {}): Hos
     share: false,
     appExport: true,
     schedule: true,
+    access: true,
     ...overrides,
   };
 }

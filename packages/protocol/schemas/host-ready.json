@@ -3,6 +3,9 @@
   "properties": {
     "capabilities": {
       "properties": {
+        "access": {
+          "type": "boolean"
+        },
         "auth": {
           "type": "boolean"
         },

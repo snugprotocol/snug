@@ -1,0 +1,402 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "anyOf": [
+    {
+      "properties": {
+        "grant": {
+          "properties": {
+            "access": {
+              "maxLength": 32,
+              "minLength": 1,
+              "type": "string"
+            },
+            "duration": {
+              "enum": [
+                "session",
+                "day",
+                "week",
+                "always"
+              ],
+              "type": "string"
+            },
+            "expiresAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+              "type": "string"
+            },
+            "id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "source": {
+              "properties": {
+                "displayName": {
+                  "maxLength": 80,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "iconColor": {
+                  "maxLength": 32,
+                  "type": "string"
+                },
+                "iconEmoji": {
+                  "maxLength": 8,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "displayName"
+              ],
+              "type": "object"
+            },
+            "tables": {
+              "items": {
+                "properties": {
+                  "columns": {
+                    "items": {
+                      "maxLength": 64,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "maxItems": 64,
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "name": {
+                    "pattern": "^[A-Za-z][A-Za-z0-9_]{0,40}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name",
+                  "columns"
+                ],
+                "type": "object"
+              },
+              "maxItems": 32,
+              "minItems": 1,
+              "type": "array"
+            },
+            "unattended": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "id",
+            "access",
+            "source",
+            "tables",
+            "duration",
+            "unattended"
+          ],
+          "type": "object"
+        },
+        "ok": {
+          "const": true,
+          "type": "boolean"
+        },
+        "op": {
+          "const": "request",
+          "type": "string"
+        },
+        "requestId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "type": {
+          "const": "snug:access-response",
+          "type": "string"
+        },
+        "v": {
+          "const": 1,
+          "type": "number"
+        }
+      },
+      "required": [
+        "v",
+        "type",
+        "requestId",
+        "ok",
+        "op",
+        "grant"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "columns": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "ok": {
+          "const": true,
+          "type": "boolean"
+        },
+        "op": {
+          "const": "query",
+          "type": "string"
+        },
+        "requestId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "rows": {
+          "items": {
+            "items": {},
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "totalRows": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "type": {
+          "const": "snug:access-response",
+          "type": "string"
+        },
+        "v": {
+          "const": 1,
+          "type": "number"
+        }
+      },
+      "required": [
+        "v",
+        "type",
+        "requestId",
+        "ok",
+        "op",
+        "columns",
+        "rows"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "grants": {
+          "items": {
+            "properties": {
+              "access": {
+                "maxLength": 32,
+                "minLength": 1,
+                "type": "string"
+              },
+              "duration": {
+                "enum": [
+                  "session",
+                  "day",
+                  "week",
+                  "always"
+                ],
+                "type": "string"
+              },
+              "expiresAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                "type": "string"
+              },
+              "id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "source": {
+                "properties": {
+                  "displayName": {
+                    "maxLength": 80,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "iconColor": {
+                    "maxLength": 32,
+                    "type": "string"
+                  },
+                  "iconEmoji": {
+                    "maxLength": 8,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "displayName"
+                ],
+                "type": "object"
+              },
+              "tables": {
+                "items": {
+                  "properties": {
+                    "columns": {
+                      "items": {
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "maxItems": 64,
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "name": {
+                      "pattern": "^[A-Za-z][A-Za-z0-9_]{0,40}$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "columns"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 32,
+                "minItems": 1,
+                "type": "array"
+              },
+              "unattended": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "access",
+              "source",
+              "tables",
+              "duration",
+              "unattended"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "ok": {
+          "const": true,
+          "type": "boolean"
+        },
+        "op": {
+          "const": "list",
+          "type": "string"
+        },
+        "requestId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "type": {
+          "const": "snug:access-response",
+          "type": "string"
+        },
+        "v": {
+          "const": 1,
+          "type": "number"
+        }
+      },
+      "required": [
+        "v",
+        "type",
+        "requestId",
+        "ok",
+        "op",
+        "grants"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "ok": {
+          "const": true,
+          "type": "boolean"
+        },
+        "op": {
+          "const": "release",
+          "type": "string"
+        },
+        "requestId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "type": {
+          "const": "snug:access-response",
+          "type": "string"
+        },
+        "v": {
+          "const": 1,
+          "type": "number"
+        }
+      },
+      "required": [
+        "v",
+        "type",
+        "requestId",
+        "ok",
+        "op"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "error": {
+          "properties": {
+            "attemptsRemaining": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "code": {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "rawExcerpt": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "retryable"
+          ],
+          "type": "object"
+        },
+        "ok": {
+          "const": false,
+          "type": "boolean"
+        },
+        "requestId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "type": {
+          "const": "snug:access-response",
+          "type": "string"
+        },
+        "v": {
+          "const": 1,
+          "type": "number"
+        }
+      },
+      "required": [
+        "v",
+        "type",
+        "requestId",
+        "ok",
+        "error"
+      ],
+      "type": "object"
+    }
+  ]
+}

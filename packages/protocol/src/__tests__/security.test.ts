@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { STRIP_HEADERS, scanForCredentialValues, stripCredentialHeaders } from '../index.js';
+import { STRIP_HEADERS, isCredentialKeyName, scanForCredentialValues, stripCredentialHeaders } from '../index.js';
 
 describe('stripCredentialHeaders (C1 — deterministic MUST)', () => {
   it('strips every listed credential header case-insensitively', () => {
@@ -59,6 +59,19 @@ describe('scanForCredentialValues (C1 — value-shape detection, review finding 
     });
     expect(rejects).toHaveLength(0);
     expect(warnings).toHaveLength(0);
+  });
+
+  it('isCredentialKeyName is the ONE key-name rule: the scan\'s key-context rule and every column judgement agree (TASK-20261010-cross-app-access)', () => {
+    for (const name of ['api_key', 'apiKey', 'API-KEY', 'password', 'passwd', 'secret', 'client_secret', 'access_token', 'id-token', 'refresh_token', 'private_key', 'credential', 'Authorization', 'token', 'tokens', 'TOKEN']) {
+      expect(isCredentialKeyName(name), name).toBe(true);
+    }
+    for (const name of ['amount', 'category', 'note', 'tokenizer', 'token_count', 'user', 'email', 'description', 'id']) {
+      expect(isCredentialKeyName(name), name).toBe(false);
+    }
+    // The same rule decides the scan's key context: high entropy under a credential-ish key rejects, under a neutral key only warns.
+    const secret = 'Ab1!Cd2@Ef3#Gh4$Ij5%Kl6^Mn7&Op8*Qr9(St0)Uv';
+    expect(scanForCredentialValues({ api_key: secret }).rejects).toHaveLength(1);
+    expect(scanForCredentialValues({ blob: secret }).rejects).toHaveLength(0);
   });
 
   it('handles cycles and non-object input without throwing', () => {

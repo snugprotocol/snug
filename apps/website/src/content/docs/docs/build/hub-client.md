@@ -55,7 +55,7 @@ lenient mode.
 
 ## Conformance as you go
 
-[Part VI](/docs/spec/part-6-conformance/) states the normative requirements;
+[Part VII](/docs/spec/part-7-conformance/) states the normative requirements;
 [Appendix A](/docs/spec/appendices/) is the error-code registry and
 [Appendix B](/docs/spec/appendices/) the constants (frame size classes among them). Three
 habits from the reference implementation worth copying:
@@ -74,5 +74,5 @@ All of this exists as MIT packages if your stack is TypeScript:
 `@snugprotocol/runner` (stage 1), `@snugprotocol/protocol` (validation),
 `@snugprotocol/db` (stages 3–4), `@snugprotocol/auth` (stage 5), with
 [`apps/playground`](https://github.com/snugprotocol/snug) as the worked assembly. A
-non-TypeScript host implements the same spec — the schemas and Part VI are the contract,
+non-TypeScript host implements the same spec — the schemas and Part VII are the contract,
 not the packages.

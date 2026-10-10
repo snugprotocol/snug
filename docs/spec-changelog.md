@@ -4,6 +4,33 @@ Every change pushed to `snugprotocol/spec`, newest first. Format: `## YYYY-MM-DD
 
 ---
 
+## 2026-10-10 — spec 1.1 (staged in the local clone, NOT pushed — the push is an owner act per session) — TASK-20261010-cross-app-access
+**Access between apps (ADR-0075) — the first post-1.0 minor, additive.** Two frames join the
+published set: `snug:access-request` (strict — `op ∈ request, query, list, release`; carries
+app-authored SQL and a release act; no app-id seat, the runner's binding is host-assigned) and
+`snug:access-response` (tolerant — the db-response shape; a reserved `access: 'write'` is never
+a MAJOR bump). `host-ready.capabilities.access?: boolean`. §2's inventory becomes fifteen; a
+new **Part VI — Access between apps** (§21 the model · §22 the access-grant record and the
+history · §23 the frames · §24 host obligations · §25 deferred by name) is inserted after
+Part V and **Conformance becomes Part VII** (its wire bullets and apps' feature-detect name
+`access`, and it gains a Part VI block); §8.1 gains the four access keys with the ONE
+stated exception to "host-internal machinery" (the grant row's import reconciliation is
+normative); R2's exception list and R5's registry sentence name the access request and the
+`ACCESS_*` codes; Appendix A gains twelve codes; Appendix B the access constants; Appendix C
+sixteen files with fact 1 stating the access pair's precise exception and fact 2 naming the
+§22 records as prose contracts. `schemas/` regenerated
+(16 files; `host-ready.json` gains `access`). The draft is renamed `docs/spec-drafts/SPEC.md`
+(version, a dated revision note and `access.ts`/`record-guards.ts` in the header's
+source-of-truth list; `SPEC-1.0.md` stays as a pointer stub).
+**Promoted with this revision (Q13):** the three items the 1.0 push never received —
+§12.14 app bundles (the "(internal draft…)" label removed; `snug-app-bundle/1` and the
+`shared` channel recorded as Part III prose contracts; with them §12.1's fourth proposer, the
+share act, §8.1's three sharing keys and the header's 2026-09-04 revision note), the `shared`
+provenance, and §8.1's scheduling keys — so the draft and the published spec no longer diverge.
+Staged as TWO commits in the local `snugprotocol/spec` clone: (1) `SPEC.md` + `schemas/` +
+README ("seven parts"); (2) the whitepaper edition 4 PDF after its review. Pushed only in a
+session carrying the owner's ask.
+
 ## 2026-10-09 — INTERNAL / TRANSPARENCY, not staged for any push — TASK-20261009-scheduling-framework (ADR-0074)
 **Excluded from every spec push; no schema bytes changed; no version bump.** Scheduling is a
 host feature, not protocol (ADR-0074 §1): nothing enters `packages/protocol/schemas/`, the
@@ -49,7 +76,7 @@ receiver computes `appBundleId` (sha-256 over key-sorted canonical JSON). The re
 `parseAppBundle` distinguishes too-large / not-json / not-a-bundle / invalid so a user who
 picked the wrong file kind is told that.
 
-## 2026-08-27 — **PREPARED, NOT PUSHED** — spec 1.0 editorial correction (§1 opener) — TASK-20260827-ownership-positioning — spec commit _pending_
+## 2026-08-27 — **PUSHED `06139cf`** — spec 1.0 editorial correction (§1 opener) — TASK-20260827-ownership-positioning — spec commit `06139cf`
 
 One sentence in `SPEC.md` §1, version held at 1.0 (ADR-0050's editorial-correction path).
 The Overview opened "Snug connects agents to apps" — a one-line comparison to another

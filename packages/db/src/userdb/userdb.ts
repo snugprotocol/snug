@@ -23,7 +23,7 @@ import {
   resealContainer,
   type Secrets as ContainerSecrets,
 } from '../crypto/container.js';
-import type { BindParams, Database, SqlJsStatic } from 'sql.js';
+import type { Database, SqlJsStatic } from 'sql.js';
 import {
   APP_KV_TABLE,
   AUTH_MAX_SLOTS_PER_APP,
@@ -48,6 +48,7 @@ import {
   connectionRequirementSchema,
   deriveConnectionAllowedHosts,
   hostSetEquals,
+  isCredentialKeyName,
   isValidAppObjectName,
   parseRuntimeContract,
   runtimeContractSchema,
@@ -57,6 +58,9 @@ import {
   type ConnectionProvenance,
   type ConnectionRequirement,
   type ConnectionStatus,
+  type AccessGrant,
+  type AccessHints,
+  type AccessLogEntry,
   type DbRequestFrame,
   type RuntimeContract,
   type ScheduleRun,
@@ -87,15 +91,23 @@ import {
   sweepSchedulesForDeletedApp,
   type SettingsSql,
 } from './schedules.js';
+import {
+  createAccessAccessors,
+  reconcileImportedAccessGrants,
+  snapshotLocalAccessGrants,
+  sweepAccessForDeletedApp,
+  type AccessDecline,
+  type AccessImportReport,
+} from './access.js';
+import { jsonCharWeight, runScratchStatement } from './scratch-statement.js';
+import { selectableColumns } from '../scoped-read.js';
+import { quoteIdent, selectRows } from '../sqlite-helpers.js';
 import { base64ToBytes } from '../base64.js';
 import {
   KV_TABLE_DDL,
   createDbDriver,
   sqlJsInitConfig,
   forbiddenStatementReason,
-  isRowModifyingStatement,
-  isSqlTailEmpty,
-  normalizeCell,
   type DbDriverResult,
   type DbPersistence,
   type SnugDbDriver,
@@ -171,6 +183,19 @@ export const USERDB_ERROR_CODES = {
    * (`pending`, `needs-you`, `running` are never pruned). Nothing was written.
    */
   SCHEDULE_LIMIT: 'USERDB_SCHEDULE_LIMIT',
+  /**
+   * An access grant, an access-history entry or a decline failed the protocol's strict parse
+   * at the write boundary (TASK-20261010-cross-app-access AC8, ADR-0075 §2) — the 16 KiB grant
+   * cap, the record invariants (D25) and the C1 credential refusal all surface here. Nothing
+   * was written.
+   */
+  ACCESS_INVALID: 'USERDB_ACCESS_INVALID',
+  /**
+   * An access write would cross a cap that nothing prunable can make room under: the 100
+   * LIVE-grant seat count, or a history holding nothing but entries pruning may never take
+   * (the latest granted/revoked/suspended/released entry of each grant). Nothing was written.
+   */
+  ACCESS_LIMIT: 'USERDB_ACCESS_LIMIT',
 } as const;
 
 export type UserDbErrorCode = (typeof USERDB_ERROR_CODES)[keyof typeof USERDB_ERROR_CODES];
@@ -526,6 +551,33 @@ export interface UserDbImportReport {
    * EVERY import — a foreign file can never plant an approval card.
    */
   schedules: { demotedTasks: number; strippedProposals: number };
+  /**
+   * The access pass (TASK-20261010-cross-app-access AC10, ADR-0075 §9): grants that landed
+   * `suspended / imported` because they were not intent-identical to a local grant (always 0
+   * on a trusted pull), grant rows that did not parse and were removed (untrusted only — a
+   * trusted pull keeps them, the schedules precedent), and history entries newly tagged
+   * `imported` (untrusted only).
+   */
+  access: AccessImportReport;
+}
+
+/** One column of an app's table, as the consent sheet shows it (TASK-20261010 AC7). */
+export interface AppDataColumn {
+  name: string;
+  /** Credential-named (`isCredentialKeyName`): never shared, shown as *never shared*. */
+  sensitive: boolean;
+}
+
+/** One table of an app's data: its columns (`selectableColumns` — `PRAGMA table_xinfo`, generated columns included) and its row count. */
+export interface AppDataTable {
+  name: string;
+  columns: AppDataColumn[];
+  rowCount: number;
+}
+
+/** What `describeAppData` answers — the source side of the consent sheet. */
+export interface DescribeAppDataResult {
+  tables: AppDataTable[];
 }
 
 /** One statement submitted to `scratchRun` — SQL plus its bound parameters. */
@@ -676,6 +728,25 @@ export interface UserDb {
    * a refused statement stops the batch.
    */
   scratchRun(appId: string, statements: readonly ScratchStatement[]): Promise<ScratchRunResult>;
+
+  /**
+   * The app's LIVE runtime bytes — the `scratchRun` export path (driver export → base64 →
+   * bytes), for the access engine to post into its Worker (TASK-20261010 AC7, ADR-0075 §6).
+   * Throws NOT_FOUND for an app the file does not hold or one deleted this session (the
+   * tombstone) — without the guard the driver would materialise a phantom namespace for the
+   * id; SCRATCH_UNAVAILABLE when the snapshot itself fails.
+   */
+  exportAppRuntime(appId: string): Promise<Uint8Array>;
+  /**
+   * The app's tables, each with its columns (`PRAGMA table_xinfo` via `selectableColumns`, the
+   * scoped read's own drift list — generated columns included, a virtual table's hidden ones
+   * not — on a throwaway copy of the SAME exported bytes; quoted identifiers and constraints
+   * survive) flagged `sensitive` when
+   * credential-named, and its row count (TASK-20261010 AC7). Flushes first (the `deleteApp`
+   * precedent). `snug_kv` and SQLite's internal tables are never listed; an app with no tables
+   * answers `{ tables: [] }`. Throws NOT_FOUND like `exportAppRuntime`.
+   */
+  describeAppData(appId: string): Promise<DescribeAppDataResult>;
 
   /** The app's registered schema (verbatim natural DDL), or undefined when it has none. */
   getAppSchema(appId: string): AppSchemaJson | undefined;
@@ -871,6 +942,51 @@ export interface UserDb {
   isScheduleMuted(appId: string): boolean;
   /** Mute (or unmute — clearing DELETES the row) suggestions from one app. */
   setScheduleMuted(appId: string, muted: boolean): void;
+
+  // ------------------------- access between apps (TASK-20261010-cross-app-access, ADR-0075)
+  //
+  // The access record is a family of namespaced `snug_settings` rows (keys in
+  // `app-settings-keys.ts`, storage in `access.ts`): `accessGrant:<id>` a grant,
+  // `accessLog:<sourceAppId>` the source's bounded history, `accessDeclined:<readerAppId>:<hash>`
+  // and `accessMuted:<readerAppId>` the user's answers to a reader's asks. Every writer parses
+  // through the protocol's strict schemas FIRST (ACCESS_INVALID leaves the file byte-identical);
+  // every reader is tolerant.
+
+  /** Every `accessGrant:` row that parses (and whose body names its key's id), in key order. */
+  listAccessGrants(): AccessGrant[];
+  getAccessGrant(grantId: string): AccessGrant | undefined;
+  /**
+   * Insert or replace one grant, stored as the PARSED object. Refuses ACCESS_INVALID (the
+   * strict schema), NOT_FOUND when the reader or the source is not an app the file holds,
+   * and ACCESS_LIMIT when the grant is LIVE (active, `until` not passed) and 100 OTHER live
+   * grants already hold seats — ended and suspended grants hold none. After a write, ENDED
+   * rows (revoked, or an `until` passed) that ended more than 30 days ago are pruned.
+   */
+  putAccessGrant(grant: AccessGrant): void;
+  /** Delete one grant row. An unknown id is a no-op. */
+  deleteAccessGrant(grantId: string): void;
+  /** The source's history, newest first. Unreadable entries are skipped. */
+  listAccessLog(sourceAppId: string): AccessLogEntry[];
+  /**
+   * Append one entry to the source's history (newest first), coalescing ONLY an identical
+   * `(grantId, sql)` read within a minute into one entry with `count`, then pruning to the
+   * caps — 200 entries / 64 KiB per source, 1 MiB across sources — unreadable bytes first,
+   * then reads (oldest first), then other entries, NEVER the latest granted/revoked/
+   * suspended/released entry of a grant; when nothing prunable is left the write is refused
+   * (ACCESS_LIMIT). ACCESS_INVALID for an entry the strict schema refuses; NOT_FOUND for a
+   * source the file does not hold.
+   */
+  appendAccessLog(sourceAppId: string, entry: AccessLogEntry): void;
+  /** *Clear history*: drop the reads, KEEP every lifecycle entry; a row with nothing left is deleted. */
+  clearAccessLog(sourceAppId: string): void;
+  /** The reader's declined asks, newest first. */
+  listAccessDeclines(readerAppId: string): AccessDecline[];
+  /** Record *don't allow* for an ask, keyed by its `accessRequestHash`. Validated (ACCESS_INVALID). */
+  addAccessDecline(readerAppId: string, hash: string, decline: { purpose: string; hints: AccessHints; at: string }): void;
+  clearAccessDecline(readerAppId: string, hash: string): void;
+  isAccessMuted(readerAppId: string): boolean;
+  /** Mute (or unmute — clearing DELETES the row) a reader's asks. */
+  setAccessMuted(readerAppId: string, muted: boolean): void;
   getProfileField(key: string): unknown;
   setProfileField(key: string, value: unknown): void;
   getSecret(key: string): string | undefined;
@@ -990,8 +1106,7 @@ function readUserVersion(db: Database): number {
   return typeof value === 'number' ? value : 0;
 }
 
-/** `"…"`-quote an identifier. Table names are rule-validated BEFORE quoting; column names may be arbitrary. */
-const quoteIdent = (name: string): string => `"${name.replace(/"/g, '""')}"`;
+// `quoteIdent` (sqlite-helpers.ts): table names are rule-validated BEFORE quoting; column names may be arbitrary.
 
 function hasColumn(db: Database, table: string, column: string): boolean {
   const info = db.exec(`PRAGMA table_info(${table})`);
@@ -1190,19 +1305,6 @@ function wipeLegacyAuthSlice(db: Database): number {
 }
 
 // ------------------------------------------------------- auth-spec reconciliation
-
-/** Module-level row reader (used against the incoming import candidate too). */
-function selectRows(target: Database, sql: string, params?: unknown[]): unknown[][] {
-  const statement = target.prepare(sql);
-  try {
-    if (params !== undefined && params.length > 0) statement.bind(params as never);
-    const rows: unknown[][] = [];
-    while (statement.step()) rows.push(statement.get() as unknown[]);
-    return rows;
-  } finally {
-    statement.free();
-  }
-}
 
 /** The `schedules.ts` seam over a bare handle — the cascade's transaction, an import candidate, an export copy. */
 function sqlOn(target: Database): SettingsSql {
@@ -2333,8 +2435,50 @@ function construct(
     },
   });
 
+  // The access accessors (TASK-20261010 AC8): the same seams, plus the app-row check (a grant
+  // or a history never names an app the file does not hold) and the clock.
+  const accessAccessors = createAccessAccessors({
+    assertOpen,
+    select,
+    run,
+    setSetting: (key, value) => kvSet(USERDB_TABLES.settings, key, value),
+    refuse: (code, message) => {
+      throw new UserDbError(USERDB_ERROR_CODES[code], message);
+    },
+    hasApp: (appId) => getApp(appId) !== undefined,
+    now: () => Date.now(),
+  });
+
+  /**
+   * The app's runtime as bytes — the ONE export path `scratchRun`, `exportAppRuntime` and
+   * `describeAppData` share. The caller guards the app first.
+   */
+  async function runtimeSnapshot(appId: string): Promise<Uint8Array> {
+    const snapshot = await driver.handle(appId, internalFrame({ op: 'export' }));
+    if (!snapshot.ok || snapshot.bytesBase64 === undefined) {
+      const detail = snapshot.ok ? 'no bytes' : snapshot.message;
+      throw new UserDbError(USERDB_ERROR_CODES.SCRATCH_UNAVAILABLE, `cannot snapshot app runtime: ${detail}`);
+    }
+    const bytes = base64ToBytes(snapshot.bytesBase64);
+    if (bytes === undefined) {
+      throw new UserDbError(USERDB_ERROR_CODES.SCRATCH_UNAVAILABLE, 'app runtime snapshot was not valid base64');
+    }
+    return bytes;
+  }
+
+  /**
+   * The access guard: an app the file holds and that was not deleted this session. Checked
+   * BEFORE the driver is touched — the driver's export would otherwise register (and the next
+   * flush materialise) a namespace for an id no app owns.
+   */
+  function assertLiveApp(appId: string): void {
+    if (deletedApps.has(appId)) throw new UserDbError(USERDB_ERROR_CODES.NOT_FOUND, `app "${appId}" was deleted`);
+    if (getApp(appId) === undefined) throw new UserDbError(USERDB_ERROR_CODES.NOT_FOUND, `unknown app "${appId}"`);
+  }
+
   const userDb: UserDb = {
     ...scheduleAccessors,
+    ...accessAccessors,
     get persistence(): DbPersistence {
       return backend.kind === 'memory' ? 'none' : backend.kind;
     },
@@ -2583,6 +2727,11 @@ function construct(
         //     `scheduleDeclined:<appId>:*` by escaped prefix and `scheduleMuted:<appId>`
         //     by equality. Three sweeps, each mutation-checked by delete-app.test.ts.
         sweepSchedulesForDeletedApp(sqlOn(db), appId);
+        // 3c'''. Access between apps (TASK-20261010 AC9, ADR-0075 §9): every grant where this
+        //     app is the reader OR the source, its own `accessLog:<appId>` history, its
+        //     `accessDeclined:<appId>:*` by escaped prefix and its `accessMuted:<appId>` by
+        //     equality. Five sweeps, each mutation-checked by delete-app.test.ts.
+        sweepAccessForDeletedApp(sqlOn(db), appId);
         // 3d. The sidecar identity directory, when this app held the LAST approved
         //     sidecar-ceiling connection (TASK-20260820, R-9 lifecycle). Inside the
         //     transaction: the check reads the connection rows step 3 just deleted, so
@@ -2773,16 +2922,7 @@ function construct(
       // instance. This is the whole isolation story: hub tables and other apps' tables
       // were never in these bytes (ADR-0010 materialization), and nothing writes this
       // instance back — the driver's save path only ever runs on ITS own handles.
-      const snapshot = await driver.handle(appId, internalFrame({ op: 'export' }));
-      if (!snapshot.ok || snapshot.bytesBase64 === undefined) {
-        const detail = snapshot.ok ? 'no bytes' : snapshot.message;
-        throw new UserDbError(USERDB_ERROR_CODES.SCRATCH_UNAVAILABLE, `cannot snapshot app runtime: ${detail}`);
-      }
-      const scratchBytes = base64ToBytes(snapshot.bytesBase64);
-      if (scratchBytes === undefined) {
-        throw new UserDbError(USERDB_ERROR_CODES.SCRATCH_UNAVAILABLE, 'app runtime snapshot was not valid base64');
-      }
-      const scratch = new SQL.Database(scratchBytes);
+      const scratch = new SQL.Database(await runtimeSnapshot(appId));
       try {
         for (const entry of statements) {
           // The SAME guards as the real executor, from the same function (D7).
@@ -2791,90 +2931,55 @@ function construct(
             results.push({ error: `forbidden statement: ${forbidden}` });
             break;
           }
-          let statement;
-          try {
-            const iterator = scratch.iterateStatements(entry.sql);
-            const first = iterator.next();
-            if (first.done === true) {
-              results.push({ error: 'no SQL statement to execute' });
-              break;
-            }
-            statement = first.value;
-            if (!isSqlTailEmpty(iterator.getRemainingSQL())) {
-              results.push({
-                error:
-                  'exec accepts exactly one SQL statement — split multi-statement scripts into separate entries',
-              });
-              break;
-            }
-            const params = entry.params;
-            if (params !== undefined && params.length > 0) {
-              statement.bind(params.map((p) => (p === undefined ? null : p)) as BindParams);
-            }
-            const columns = statement.getColumnNames();
-            const rows: unknown[][] = [];
-            let totalRows = 0;
-            let truncated = false;
-            let bytes = 0;
-            while (statement.step()) {
-              totalRows += 1;
-              if (truncated) continue; // keep counting so `totalRows` is honest
-              const row = (statement.get() as unknown[]).map(normalizeCell);
-              // Byte cap checked BEFORE keeping the row: a single fat row must not push
-              // the payload past the cap it exists to enforce.
-              bytes += JSON.stringify(row).length;
-              if (rows.length >= MAX_QUERY_ROWS || bytes > MAX_QUERY_RESULT_BYTES) {
-                truncated = true;
-                continue;
-              }
-              rows.push(row);
-            }
-            /**
-             * `getRowsModified()` is `sqlite3_changes()` — the count for the LATEST
-             * completed statement, NOT a running total for the connection.
-             *
-             * This was implemented as a delta against a previous reading, which is right
-             * only for the first write and produces NEGATIVE counts afterwards (verified:
-             * DELETE 2 rows then UPDATE 1 row reported `[2, -1]`). The approval card
-             * rendered that number, and the TOCTOU drift check could not catch it because
-             * it re-ran the same arithmetic on both sides and got the same wrong answer.
-             * Found by the P4 whole-surface review; regression-tested in scratch-run.
-             *
-             * The count is attached to every MODIFYING statement, including one with a
-             * `RETURNING` clause. Keying it on `columns.length === 0` meant a
-             * `DELETE … RETURNING id` carried rows but no count, so the card said
-             * "0 row(s)" for a destructive statement and drift could never fire for it —
-             * and the statement text is the model's to choose.
-             *
-             * But `sqlite3_changes()` is also STICKY (R-M1, 2026-08-11): it keeps
-             * reporting the last modifying statement's count for every statement that
-             * follows. A `DELETE` then `SELECT` batch therefore previewed as `[3, 3]`,
-             * and the approval card told the user a SELECT would change 3 rows. Worse,
-             * that second number is not an independent measurement — it is a copy of the
-             * first — so the TOCTOU drift check could never derive a real signal from it.
-             *
-             * The discriminator is the statement's KIND, not a runtime counter: a DELETE
-             * matching nothing must still report 0 (the user needs to see it), while a
-             * SELECT must report nothing at all. `total_changes()` cannot tell those two
-             * apart — both leave it untouched — which is why this keys off the verb.
-             */
-            const modifies = isRowModifyingStatement(entry.sql);
-            results.push({
-              ...(columns.length > 0 ? { rows, columns } : {}),
-              ...(modifies ? { changes: scratch.getRowsModified() } : {}),
-              ...(truncated ? { truncated, totalRows } : {}),
-            });
-          } catch (err) {
-            results.push({ error: errorMessage(err) });
-            break;
-          } finally {
-            statement?.free();
-          }
+          // The ONE per-statement runner (scratch-statement.ts), shared with the scoped
+          // read; this caller weighs rows in JSON CHARACTERS — its pinned behaviour.
+          const outcome = runScratchStatement(scratch, entry.sql, entry.params, {
+            maxRows: MAX_QUERY_ROWS,
+            maxBytes: MAX_QUERY_RESULT_BYTES,
+            rowWeight: jsonCharWeight,
+          });
+          results.push(outcome);
+          if (outcome.error !== undefined) break;
         }
       } finally {
         scratch.close(); // the copy — and every mutation made to it — is discarded here
       }
       return { statements: results };
+    },
+
+    // ------------------------------------------- access between apps (TASK-20261010 AC7)
+
+    async exportAppRuntime(appId) {
+      assertOpen();
+      assertLiveApp(appId);
+      return runtimeSnapshot(appId);
+    },
+
+    async describeAppData(appId) {
+      assertOpen();
+      assertLiveApp(appId);
+      // Flush first (the deleteApp precedent), so the description and the file agree; the
+      // counts are taken on the SAME exported bytes the columns are read from.
+      await inner.flush();
+      const copy = new SQL.Database(await runtimeSnapshot(appId));
+      try {
+        const names = selectRows(
+          copy,
+          `SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite!_%' ESCAPE '!' AND lower(name) <> ? ORDER BY name`,
+          [APP_KV_TABLE],
+        ).map((row) => String(row[0]));
+        const tables: AppDataTable[] = names.map((name) => {
+          const quoted = quoteIdent(name);
+          // The drift check's own column list (generated columns included), so a scope built
+          // from this description never drifts and never reads a column it did not show.
+          const columns = selectableColumns(copy, name).map((column) => ({ name: column, sensitive: isCredentialKeyName(column) }));
+          const rowCount = Number(selectRows(copy, `SELECT count(*) FROM ${quoted}`)[0]?.[0] ?? 0);
+          return { name, columns, rowCount };
+        });
+        return { tables };
+      } finally {
+        copy.close(); // the throwaway copy — nothing here writes back
+      }
     },
 
     // ------------------------------------------------------------- schema registry
@@ -3622,6 +3727,9 @@ function construct(
       // the two snapshots above — the pass compares the candidate against what THIS hub
       // already holds, and runs before the candidate goes live.
       const localSchedules = snapshotLocalSchedules(sqlOn(db));
+      // Access grants (TASK-20261010 AC10): the local grants' canonical INTENT, for the same
+      // reason — an imported grant stays as it is only when it equals one this hub holds.
+      const localAccessGrants = snapshotLocalAccessGrants(sqlOn(db));
       /**
        * TRUSTED RESTORE (R-M2, 2026-08-11). Keying "known" off the open DB's contracts made
        * an EMPTY hub mean "nothing is known", so every contract was nulled — and an empty
@@ -3652,6 +3760,9 @@ function construct(
           localSchedules.watermark,
           options?.trustedOrigin === true,
         ),
+        // A grant is authority, so the same doctrine: untrusted → suspended / imported unless
+        // intent-identical; trusted → kept. Unparseable grant rows go on both paths.
+        access: reconcileImportedAccessGrants(sqlOn(next), localAccessGrants, options?.trustedOrigin === true),
       };
       // A staged schedule suggestion on a chat message is a proposal too (S9): an untrusted
       // file's cards go; a trusted pull keeps the user's own.

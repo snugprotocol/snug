@@ -1,4 +1,5 @@
 import {
+  ACCESS_ERROR_CODES,
   ERROR_CODES,
   FRAME_TYPES,
   LIMITS,
@@ -9,6 +10,8 @@ import {
   frameWithinLimits,
   parseAgentReply,
   parseFrame,
+  type AccessRequestFrame,
+  type AccessResponseFrame,
   type AppAnnounceFrame,
   type AppCancelFrame,
   type AppMessageFrame,
@@ -22,6 +25,8 @@ import {
   type Responder,
 } from '@snugprotocol/protocol';
 import type {
+  AccessHandler,
+  AccessHandlerResult,
   AgentTransport,
   BudgetStore,
   DbDriver,
@@ -90,13 +95,16 @@ export interface RunnerHostBaseOptions extends RunnerHostCallbacks {
 
 /**
  * db capability requires BOTH a driver and a host-assigned namespace (F5); the net
- * capability (AL-03) likewise requires BOTH a handler and a host-assigned `netAppId` —
- * both enforced at the type level so an embedder cannot supply one half. The net
- * binding mirrors `dbNamespace`: HOST-assigned, never app-claimed.
+ * capability (AL-03) likewise requires BOTH a handler and a host-assigned `netAppId`, and
+ * the access capability (ADR-0075) BOTH a handler and a host-assigned `accessAppId` — all
+ * enforced at the type level so an embedder cannot supply one half. The net and access
+ * bindings mirror `dbNamespace`: HOST-assigned, never app-claimed (the announce `appId`
+ * identifies no one).
  */
 export type RunnerHostOptions = RunnerHostBaseOptions &
   ({ db: DbDriver; dbNamespace: string } | { db?: undefined; dbNamespace?: undefined }) &
-  ({ net: NetHandler; netAppId: string } | { net?: undefined; netAppId?: undefined }) & {
+  ({ net: NetHandler; netAppId: string } | { net?: undefined; netAppId?: undefined }) &
+  ({ access: AccessHandler; accessAppId: string } | { access?: undefined; accessAppId?: undefined }) & {
     /**
      * The open-url capability (ADR-0038 D5) — optional and standalone: unlike db/net it
      * needs no id binding, because the frame carries only a URL and the handler is the
@@ -125,6 +133,46 @@ export interface RunnerHost {
 interface InFlight {
   controller: AbortController;
   responder: Responder;
+}
+
+/** A capability handler's error answer — the shape DbDriverResult/NetHandlerResult/AccessHandlerResult share. */
+interface CapabilityError {
+  ok: false;
+  code: string;
+  message: string;
+  retryable: boolean;
+}
+
+/** The response frame type each routed capability answers on. */
+type CapabilityResponseType = typeof FRAME_TYPES.dbResponse | typeof FRAME_TYPES.netResponse | typeof FRAME_TYPES.accessResponse;
+
+/**
+ * One routed capability (db, net, access) as DATA for `routeCapability`: the shared ladder
+ * is written once, and each seat names only what differs — its words, its response frame
+ * type, its host-assigned binding, its success mapper and its over-cap terminal code.
+ */
+interface CapabilitySeat<Request extends Frame & { requestId: string; instanceId: string }, Ok extends { ok: true }> {
+  /** The capability's name as it appears in the error copy (`db`, `net`, `access`). */
+  readonly name: string;
+  /** The frame class the copy names (`the db frame size limit`, `the frame size limit`, …). */
+  readonly limit: string;
+  /** Fallback message when the handler throws a non-Error. */
+  readonly threw: string;
+  readonly responseType: CapabilityResponseType;
+  /** The handler with its HOST-assigned id, or undefined when the embedder gave none. */
+  readonly binding:
+    | { readonly handler: { handle(boundId: string, request: Request): Promise<Ok | CapabilityError> }; readonly boundId: string }
+    | undefined;
+  /** In-flight requestIds — the duplicate/flood discipline of app messages (Gate-5). */
+  readonly inFlight: Set<string>;
+  /** Builds the success response frame from the handler's result. */
+  readonly ok: (requestId: string, result: Ok) => Frame;
+  /** The SMALL terminal code an over-cap response becomes (never silence). */
+  readonly sizeCode: string;
+}
+
+function isCapabilityError(result: { ok: boolean }): result is CapabilityError {
+  return !result.ok;
 }
 
 function createMemoryBudgetStore(): BudgetStore {
@@ -187,10 +235,6 @@ export function createRunnerHost(options: RunnerHostOptions): RunnerHost {
   /** Outstanding srcdoc-assignment credits; a load with zero credits is an escape. */
   let allowedLoads = 0;
   const inFlight = new Map<string, InFlight>();
-  /** In-flight db requestIds — same duplicate/flood discipline as app messages (Gate-5). */
-  const dbInFlight = new Set<string>();
-  /** In-flight net requestIds — same discipline as the db seam (AL-03). */
-  const netInFlight = new Set<string>();
   /**
    * ONE pending open-url request per instance (ADR-0038): each open is a modal human
    * decision, so a queue would be a dialog-spam primitive. A second request while one
@@ -226,6 +270,7 @@ export function createRunnerHost(options: RunnerHostOptions): RunnerHost {
         auth: false,
         net: options.net !== undefined,
         openUrl: options.openUrl !== undefined,
+        access: options.access !== undefined,
       },
       theme,
       ...(options.locale !== undefined ? { locale: options.locale } : {}),
@@ -468,143 +513,171 @@ export function createRunnerHost(options: RunnerHostOptions): RunnerHost {
     entry.controller.abort();
   }
 
-  function postDbError(requestId: string, code: string, message: string, retryable: boolean): void {
-    post({
+  // ------------------------------------------------------- routed capabilities
+
+  /**
+   * db (F5): storage identity is the HOST-assigned `dbNamespace` — never the app-claimed
+   * appId — and an over-cap result is a terminal HOST_ERROR in the db frame class.
+   */
+  const dbSeat: CapabilitySeat<DbRequestFrame, Extract<DbDriverResult, { ok: true }>> = {
+    name: 'db',
+    limit: 'the db frame size limit',
+    threw: 'db driver threw',
+    responseType: FRAME_TYPES.dbResponse,
+    binding: options.db !== undefined ? { handler: options.db, boundId: options.dbNamespace } : undefined,
+    inFlight: new Set<string>(),
+    sizeCode: ERROR_CODES.HOST_ERROR,
+    ok: (requestId, result): DbResponseFrame => ({
       v: PROTOCOL_VERSION,
       type: FRAME_TYPES.dbResponse,
       requestId,
-      ok: false,
-      error: { code, message: clampMessage(message), retryable },
-    });
-  }
-
-  async function handleDbRequest(frame: DbRequestFrame): Promise<void> {
-    if (frame.instanceId !== instanceId) return; // stale instance — drop silently
-    if (!frameWithinLimits(frame)) {
-      postDbError(frame.requestId, ERROR_CODES.HOST_ERROR, 'db-request exceeds the db frame size limit', false);
-      return;
-    }
-    if (options.db === undefined) {
-      postDbError(frame.requestId, ERROR_CODES.HOST_ERROR, 'this host has no db capability', false);
-      return;
-    }
-    if (dbInFlight.has(frame.requestId)) {
-      postDbError(frame.requestId, ERROR_CODES.HOST_ERROR, `db requestId ${frame.requestId} is already in flight`, false);
-      return;
-    }
-    if (dbInFlight.size >= MAX_IN_FLIGHT) {
-      postDbError(frame.requestId, ERROR_CODES.HOST_ERROR, `too many concurrent db requests (max ${MAX_IN_FLIGHT})`, true);
-      return;
-    }
-    dbInFlight.add(frame.requestId);
-    const boundInstance = instanceId;
-    let result: DbDriverResult;
-    try {
-      // Storage identity is the HOST-assigned namespace — never app-claimed appId (F5).
-      result = await options.db.handle(options.dbNamespace, frame);
-    } catch (err) {
-      result = {
-        ok: false,
-        code: ERROR_CODES.HOST_ERROR,
-        message: err instanceof Error ? err.message : 'db driver threw',
-        retryable: true,
-      };
-    } finally {
-      dbInFlight.delete(frame.requestId);
-    }
-    if (destroyed || navigatedAway || instanceId !== boundInstance) return; // superseded meanwhile
-    if (!result.ok) {
-      postDbError(frame.requestId, result.code, result.message, result.retryable);
-      return;
-    }
-    const response: DbResponseFrame = {
-      v: PROTOCOL_VERSION,
-      type: FRAME_TYPES.dbResponse,
-      requestId: frame.requestId,
       ok: true,
       ...(result.rows !== undefined ? { rows: result.rows } : {}),
       ...(result.columns !== undefined ? { columns: result.columns } : {}),
       ...(result.value !== undefined ? { value: result.value } : {}),
       ...(result.bytesBase64 !== undefined ? { bytesBase64: result.bytesBase64 } : {}),
-    };
-    if (!frameWithinLimits(response)) {
-      postDbError(frame.requestId, ERROR_CODES.HOST_ERROR, 'db result exceeds the db frame size limit', false);
-      return;
-    }
-    post(response);
-  }
+    }),
+  };
 
-  function postNetError(requestId: string, code: string, message: string, retryable: boolean): void {
-    post({
+  /**
+   * net (AL-03): the runner is value-blind (R4) — it hands over the frame and posts back
+   * whatever the handler returns, never reading a credential value. The `netAppId` binding
+   * is host-assigned (mirrors dbNamespace, F5/R5). B1: an oversized net-response can NEVER
+   * be silently dropped at the bridge — it becomes a SMALL terminal NET_SIZE_EXCEEDED (the
+   * executor caps while reading; this is the belt for a handler that returns an over-cap
+   * body anyway).
+   */
+  const netSeat: CapabilitySeat<NetRequestFrame, Extract<NetHandlerResult, { ok: true }>> = {
+    name: 'net',
+    limit: 'the net frame size limit',
+    threw: 'net handler threw',
+    responseType: FRAME_TYPES.netResponse,
+    binding: options.net !== undefined ? { handler: options.net, boundId: options.netAppId } : undefined,
+    inFlight: new Set<string>(),
+    sizeCode: NET_ERROR_CODES.NET_SIZE_EXCEEDED,
+    ok: (requestId, result): NetResponseFrame => ({
       v: PROTOCOL_VERSION,
       type: FRAME_TYPES.netResponse,
       requestId,
-      ok: false,
-      error: { code, message: clampMessage(message), retryable },
-    });
-  }
-
-  /**
-   * Route a validated net-request to the HOST-assigned handler (AL-03) — the runner is
-   * value-blind (R4): it hands over the frame and posts back whatever the handler
-   * returns, never reading a credential value. The `netAppId` binding is host-assigned,
-   * never app-claimed (mirrors dbNamespace, F5). An oversized net-response can only ever
-   * become a NET_SIZE_EXCEEDED terminal frame, never silence (B1).
-   */
-  async function handleNetRequest(frame: NetRequestFrame): Promise<void> {
-    if (frame.instanceId !== instanceId) return; // stale instance — drop silently
-    if (!frameWithinLimits(frame)) {
-      postNetError(frame.requestId, ERROR_CODES.HOST_ERROR, 'net-request exceeds the net frame size limit', false);
-      return;
-    }
-    if (options.net === undefined) {
-      postNetError(frame.requestId, ERROR_CODES.HOST_ERROR, 'this host has no net capability', false);
-      return;
-    }
-    if (netInFlight.has(frame.requestId)) {
-      postNetError(frame.requestId, ERROR_CODES.HOST_ERROR, `net requestId ${frame.requestId} is already in flight`, false);
-      return;
-    }
-    if (netInFlight.size >= MAX_IN_FLIGHT) {
-      postNetError(frame.requestId, ERROR_CODES.HOST_ERROR, `too many concurrent net requests (max ${MAX_IN_FLIGHT})`, true);
-      return;
-    }
-    netInFlight.add(frame.requestId);
-    const boundInstance = instanceId;
-    let result: NetHandlerResult;
-    try {
-      // The net binding is the HOST-assigned netAppId — never the app-claimed appId (F5/R5).
-      result = await options.net.handle(options.netAppId, frame);
-    } catch (err) {
-      result = {
-        ok: false,
-        code: ERROR_CODES.HOST_ERROR,
-        message: err instanceof Error ? err.message : 'net handler threw',
-        retryable: true,
-      };
-    } finally {
-      netInFlight.delete(frame.requestId);
-    }
-    if (destroyed || navigatedAway || instanceId !== boundInstance) return; // superseded meanwhile
-    if (!result.ok) {
-      postNetError(frame.requestId, result.code, result.message, result.retryable);
-      return;
-    }
-    const response: NetResponseFrame = {
-      v: PROTOCOL_VERSION,
-      type: FRAME_TYPES.netResponse,
-      requestId: frame.requestId,
       ok: true,
       status: result.status,
       headers: result.headers,
       body: result.body,
       ...(result.truncated !== undefined ? { truncated: result.truncated } : {}),
-    };
+    }),
+  };
+
+  /**
+   * access (ADR-0075 §1): the binding is the HOST-assigned `accessAppId` (≡ the dbNamespace
+   * discipline — the announce appId never identifies a reader or a source). Value-blind:
+   * the runner routes the validated access-request and posts the handler's answer; the
+   * grant, the scope, the rows and the SQL are the handler's business. The pair rides the
+   * DEFAULT frame class (LIMITS.MAX_FRAME_BYTES); the engine truncates in band at
+   * ACCESS_MAX_RESULT_BYTES, so an over-cap answer reaching here is a handler bug and
+   * becomes a SMALL terminal ACCESS_SIZE_EXCEEDED — the runner's belt, never silence.
+   */
+  const accessSeat: CapabilitySeat<AccessRequestFrame, Extract<AccessHandlerResult, { ok: true }>> = {
+    name: 'access',
+    limit: 'the frame size limit',
+    threw: 'access handler threw',
+    responseType: FRAME_TYPES.accessResponse,
+    binding: options.access !== undefined ? { handler: options.access, boundId: options.accessAppId } : undefined,
+    inFlight: new Set<string>(),
+    sizeCode: ACCESS_ERROR_CODES.ACCESS_SIZE_EXCEEDED,
+    ok: (requestId, result): AccessResponseFrame => {
+      const envelope = { v: PROTOCOL_VERSION, type: FRAME_TYPES.accessResponse, requestId } as const;
+      // Enumerated per op (not spread) so only the fields the protocol defines cross.
+      switch (result.op) {
+        case 'request':
+          return { ...envelope, ok: true, op: 'request', grant: result.grant };
+        case 'query':
+          return {
+            ...envelope,
+            ok: true,
+            op: 'query',
+            columns: result.columns,
+            rows: result.rows,
+            ...(result.truncated !== undefined ? { truncated: result.truncated } : {}),
+            ...(result.totalRows !== undefined ? { totalRows: result.totalRows } : {}),
+          };
+        case 'list':
+          return { ...envelope, ok: true, op: 'list', grants: result.grants };
+        case 'release':
+          return { ...envelope, ok: true, op: 'release' };
+        default: {
+          // Unreachable for a typed handler; a JS handler answering an unknown op still
+          // gets the app a named terminal frame rather than an undefined post.
+          const unknown: never = result;
+          void unknown;
+          return { ...envelope, ok: false, error: { code: ERROR_CODES.HOST_ERROR, message: 'access handler answered an unknown op', retryable: false } };
+        }
+      }
+    },
+  };
+
+  function postCapabilityError(
+    responseType: CapabilityResponseType,
+    requestId: string,
+    code: string,
+    message: string,
+    retryable: boolean,
+  ): void {
+    post({ v: PROTOCOL_VERSION, type: responseType, requestId, ok: false, error: { code, message: clampMessage(message), retryable } });
+  }
+
+  /**
+   * The ONE ladder every routed capability shares (db, net, access): stale instance →
+   * dropped silently; a request over its frame class → HOST_ERROR; no handler → a named
+   * HOST_ERROR (never the router's silent drop); a duplicate in-flight requestId →
+   * HOST_ERROR; MAX_IN_FLIGHT → a RETRYABLE HOST_ERROR; the handler is called with the
+   * HOST-assigned binding (never anything the app claimed); a thrown handler → a retryable
+   * HOST_ERROR (errors as data is the seam's contract); a request whose instance was
+   * superseded meanwhile is answered by nobody; an over-cap response → the seat's SMALL
+   * terminal size code. Every accepted request gets exactly one terminal frame.
+   */
+  async function routeCapability<Request extends Frame & { requestId: string; instanceId: string }, Ok extends { ok: true }>(
+    seat: CapabilitySeat<Request, Ok>,
+    frame: Request,
+  ): Promise<void> {
+    if (frame.instanceId !== instanceId) return; // stale instance — drop silently
+    const fail = (code: string, message: string, retryable: boolean): void =>
+      postCapabilityError(seat.responseType, frame.requestId, code, message, retryable);
+    if (!frameWithinLimits(frame)) {
+      fail(ERROR_CODES.HOST_ERROR, `${seat.name}-request exceeds ${seat.limit}`, false);
+      return;
+    }
+    const binding = seat.binding;
+    if (binding === undefined) {
+      fail(ERROR_CODES.HOST_ERROR, `this host has no ${seat.name} capability`, false);
+      return;
+    }
+    if (seat.inFlight.has(frame.requestId)) {
+      fail(ERROR_CODES.HOST_ERROR, `${seat.name} requestId ${frame.requestId} is already in flight`, false);
+      return;
+    }
+    if (seat.inFlight.size >= MAX_IN_FLIGHT) {
+      fail(ERROR_CODES.HOST_ERROR, `too many concurrent ${seat.name} requests (max ${MAX_IN_FLIGHT})`, true);
+      return;
+    }
+    seat.inFlight.add(frame.requestId);
+    const boundInstance = instanceId;
+    let result: Ok | CapabilityError;
+    try {
+      // The binding is HOST-assigned — never the app-claimed appId (F5/R5).
+      result = await binding.handler.handle(binding.boundId, frame);
+    } catch (err) {
+      result = { ok: false, code: ERROR_CODES.HOST_ERROR, message: err instanceof Error ? err.message : seat.threw, retryable: true };
+    } finally {
+      seat.inFlight.delete(frame.requestId);
+    }
+    if (destroyed || navigatedAway || instanceId !== boundInstance) return; // superseded meanwhile
+    if (isCapabilityError(result)) {
+      fail(result.code, result.message, result.retryable);
+      return;
+    }
+    const response = seat.ok(frame.requestId, result);
     if (!frameWithinLimits(response)) {
-      // B1: an oversized net-response can NEVER be silently dropped at the bridge — it
-      // becomes a SMALL terminal NET_SIZE_EXCEEDED (the executor caps while reading; this
-      // is the belt to that braces for a handler that returns an over-cap body anyway).
-      postNetError(frame.requestId, NET_ERROR_CODES.NET_SIZE_EXCEEDED, 'net result exceeds the net frame size limit', false);
+      fail(seat.sizeCode, `${seat.name} result exceeds ${seat.limit}`, false);
       return;
     }
     post(response);
@@ -667,6 +740,10 @@ export function createRunnerHost(options: RunnerHostOptions): RunnerHost {
       post({ v: PROTOCOL_VERSION, type: FRAME_TYPES.dbResponse, requestId, ok: false, error });
     } else if (rawType === FRAME_TYPES.netRequest) {
       post({ v: PROTOCOL_VERSION, type: FRAME_TYPES.netResponse, requestId, ok: false, error });
+    } else if (rawType === FRAME_TYPES.accessRequest) {
+      // A pre-ready request (instanceId: null) is MALFORMED with its requestId recovered:
+      // answered here, so the app's promise settles on a fact instead of hanging.
+      post({ v: PROTOCOL_VERSION, type: FRAME_TYPES.accessResponse, requestId, ok: false, error });
     } else if (rawType === FRAME_TYPES.appMessage) {
       post({ v: PROTOCOL_VERSION, type: FRAME_TYPES.appResponse, requestId, ok: false, error });
     }
@@ -689,6 +766,7 @@ export function createRunnerHost(options: RunnerHostOptions): RunnerHost {
       case FRAME_TYPES.dbRequest:
       case FRAME_TYPES.netRequest:
       case FRAME_TYPES.openUrlRequest:
+      case FRAME_TYPES.accessRequest:
       case FRAME_TYPES.appEvent:
         break;
       default:
@@ -706,10 +784,13 @@ export function createRunnerHost(options: RunnerHostOptions): RunnerHost {
         handleAppCancel(frame);
         return;
       case FRAME_TYPES.dbRequest:
-        void handleDbRequest(frame);
+        void routeCapability(dbSeat, frame);
         return;
       case FRAME_TYPES.netRequest:
-        void handleNetRequest(frame);
+        void routeCapability(netSeat, frame);
+        return;
+      case FRAME_TYPES.accessRequest:
+        void routeCapability(accessSeat, frame);
         return;
       case FRAME_TYPES.openUrlRequest:
         void handleOpenUrlRequest(frame);

@@ -16,6 +16,8 @@ export {
 } from './host.js';
 
 export {
+  type AccessHandler,
+  type AccessHandlerResult,
   type AgentTransport,
   type AgentTransportOptions,
   type BudgetStore,

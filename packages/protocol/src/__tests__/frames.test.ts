@@ -94,6 +94,53 @@ describe('parseFrame — happy paths', () => {
     });
     expect(streaming.ok && final.ok && err.ok).toBe(true);
   });
+
+  // TASK-20261010-cross-app-access (AC1): the access pair joins the frame inventory (15 frames).
+  it('parses snug:access-request (every op) and snug:access-response (every variant)', () => {
+    const grantId = '3f2b8c1e-9a4d-4e6f-8b2a-1c3d5e7f9a0b';
+    const req = { v: 1, type: FRAME_TYPES.accessRequest, requestId: 'a1', instanceId: 'i1' } as const;
+    const resp = { v: 1, type: FRAME_TYPES.accessResponse, requestId: 'a1' } as const;
+    const grant = {
+      id: grantId,
+      access: 'read',
+      source: { displayName: 'Ledger' },
+      tables: [{ name: 'transactions', columns: ['amount'] }],
+      duration: 'session',
+      unattended: false,
+    };
+    const frames: unknown[] = [
+      { ...req, op: 'request', purpose: 'to show spending by category', hints: { words: ['spending'], tables: ['transactions'] } },
+      { ...req, op: 'query', grantId, sql: 'SELECT amount FROM transactions', params: [] },
+      { ...req, op: 'list' },
+      { ...req, op: 'release', grantId },
+      { ...resp, ok: true, op: 'request', grant },
+      { ...resp, ok: true, op: 'query', columns: ['amount'], rows: [[1]], truncated: false, totalRows: 1 },
+      { ...resp, ok: true, op: 'list', grants: [grant] },
+      { ...resp, ok: true, op: 'release' },
+      { ...resp, ok: false, error: { code: 'ACCESS_NOT_GRANTED', message: 'no such access', retryable: false } },
+    ];
+    for (const f of frames) {
+      const result = parseFrame(f);
+      expect(result.ok, `frame ${JSON.stringify(f)} should parse`).toBe(true);
+    }
+    // The request is strict (an unknown key is MALFORMED); the response is tolerant.
+    const strict = parseFrame({ ...req, op: 'list', appId: 'evil' });
+    expect(!strict.ok && !strict.ignored && strict.code).toBe('MALFORMED');
+    expect(parseFrame({ ...resp, ok: true, op: 'release', future: 1 }).ok).toBe(true);
+  });
+
+  it('parses host-ready without capabilities.access (a 1.0 frame) and with it', () => {
+    const ready = (capabilities: Record<string, unknown>) =>
+      parseFrame({ v: 1, type: FRAME_TYPES.hostReady, instanceId: 'ins-1', protocolVersions: [1], capabilities, theme: 'light' });
+    const without = ready({ streaming: true, db: true, auth: false, net: true, openUrl: false });
+    expect(without.ok).toBe(true);
+    if (without.ok) expect((without.frame as HostReadyFrame).capabilities.access).toBeUndefined();
+    const withAccess = ready({ streaming: true, db: true, auth: false, access: true });
+    expect(withAccess.ok).toBe(true);
+    if (withAccess.ok) expect((withAccess.frame as HostReadyFrame).capabilities.access).toBe(true);
+    const bad = ready({ streaming: true, db: true, auth: false, access: 1 });
+    expect(!bad.ok && !bad.ignored && bad.code).toBe('MALFORMED');
+  });
 });
 
 describe('parseFrame — versioning (R1)', () => {

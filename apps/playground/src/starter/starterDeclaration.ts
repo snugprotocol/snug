@@ -32,6 +32,7 @@
 import { connectionRequirementSchema, type ConnectionRequirement } from '@snugprotocol/protocol';
 import { admitConnectionRequirement } from '@snugprotocol/auth';
 import type { UserDb } from '@snugprotocol/db';
+import { STARTER_INSTALL_SOURCE_PREFIX } from '@snugprotocol/db';
 
 import { STARTER_PREFIX } from './starterApps.js';
 import { isNamedLoadRefusal } from '../run/copy.js';
@@ -181,9 +182,9 @@ function parseManifest(raw: string, folder: string): ConnectionRequirement | nul
 export async function resolveDeclaredIntent(db: UserDb, appId: string): Promise<DeclaredIntent> {
   const app = db.getApp(appId);
   const source = app?.installSource;
-  if (source === undefined || !source.startsWith('starter:')) return {};
+  if (source === undefined || !source.startsWith(STARTER_INSTALL_SOURCE_PREFIX)) return {};
 
-  const folder = source.slice('starter:'.length);
+  const folder = source.slice(STARTER_INSTALL_SOURCE_PREFIX.length);
   const found = await bundled(folder);
   if (found === null) return {};
 

@@ -369,6 +369,9 @@ describe('AC1 — render directive stays OUT of json-schemas SOURCES (extends th
   it('buildJsonSchemas() still exports exactly the v0.3 wire set', () => {
     expect(Object.keys(buildJsonSchemas()).sort()).toEqual(
       [
+        // + the access pair, deliberately (TASK-20261010-cross-app-access, spec 1.1).
+        'access-request.json',
+        'access-response.json',
         'app-announce.json',
         'app-cancel.json',
         'app-event.json',

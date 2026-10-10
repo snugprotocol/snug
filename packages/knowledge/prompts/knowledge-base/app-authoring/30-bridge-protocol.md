@@ -21,6 +21,7 @@ you write yourself.
 | `{{frameType:appCancel}}` | app → host | Abort an in-flight `requestId` — reserved: the host/runner honors it; a convenience canceller lands in the SDK (until then an app may hand-roll posting this frame) |
 | `{{frameType:appResponse}}` | host → app | Streaming, final, or error reply (see Terminal Frame Rule) |
 | `{{frameType:dbRequest}}` / `{{frameType:dbResponse}}` | app ↔ host | Host-brokered storage: `op` ∈ `exec`, `export`, `import`, `kvGet`, `kvSet` |
+| `{{frameType:accessRequest}}` / `{{frameType:accessResponse}}` | app ↔ host | Read ANOTHER app's tables under an access the user allows: `op` ∈ `request`, `query`, `list`, `release` |
 | `{{frameType:hostEvent}}` / `{{frameType:appEvent}}` | either | Open additive channel (`theme-change`, `visibility`, `resize`, …) — unknown events are ignored |
 
 ## Identity and Correlation

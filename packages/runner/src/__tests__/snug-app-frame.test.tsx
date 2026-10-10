@@ -1,12 +1,13 @@
 // React wrapper ACs: exact sandbox attribute, CSP-injected srcDoc assigned after host
 // creation, StrictMode double-mount safety, html-change = reset flow (same host), theme
 // passthrough, controlsRef, and unmount teardown.
-import { FRAME_TYPES } from '@snugprotocol/protocol';
+import { FRAME_TYPES, PROTOCOL_VERSION } from '@snugprotocol/protocol';
 import { StrictMode, act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Frame, HostReadyFrame } from '@snugprotocol/protocol';
 import type { RunnerHost } from '../host.js';
+import type { AccessHandler } from '../transport.js';
 import { SnugAppFrame, type SnugAppFrameProps } from '../react/SnugAppFrame.js';
 import type { FrameDirection } from '../host.js';
 import { announceFrame, flush, jsonReply, postFromApp } from './harness.js';
@@ -139,6 +140,40 @@ describe('SnugAppFrame', () => {
     await act(flush);
     const defaulted = absent.posted.find((f) => (f as { type?: string }).type === FRAME_TYPES.hostReady) as HostReadyFrame | undefined;
     expect(defaulted?.capabilities.streaming).toBe(true);
+  });
+
+  it('forwards `access` + `accessAppId` as a PAIR: the ready advertises access and a request reaches the handler with the host-assigned id (TASK-20261010-cross-app-access AC3)', async () => {
+    // The explicit-forward pin: SnugAppFrame enumerates host options one by one, so a
+    // dropped `access` (or a dropped `accessAppId`) would be SILENT — the app would see
+    // access: false, or the handler would be called with an undefined binding.
+    const handle = vi.fn<AccessHandler['handle']>(async () => ({ ok: true as const, op: 'list' as const, grants: [] }));
+    const withAccess = await render({ access: { handle }, accessAppId: 'host-assigned-reader' });
+    postFromApp(withAccess.iframe, announceFrame({ appId: 'evil' }));
+    await act(flush);
+    const ready = withAccess.posted.find((f) => (f as { type?: string }).type === FRAME_TYPES.hostReady) as HostReadyFrame | undefined;
+    expect(ready?.capabilities.access).toBe(true);
+    postFromApp(withAccess.iframe, {
+      v: PROTOCOL_VERSION,
+      type: FRAME_TYPES.accessRequest,
+      requestId: 'acc-1',
+      instanceId: ready!.instanceId,
+      op: 'list',
+    });
+    await act(flush);
+    expect(handle).toHaveBeenCalledTimes(1);
+    expect(handle.mock.calls[0]![0]).toBe('host-assigned-reader');
+    expect(withAccess.posted.find((f) => (f as { type?: string }).type === FRAME_TYPES.accessResponse)).toMatchObject({
+      requestId: 'acc-1',
+      ok: true,
+      op: 'list',
+    });
+
+    // Twin: without the pair the ready says access: false.
+    const absent = await render();
+    postFromApp(absent.iframe, announceFrame());
+    await act(flush);
+    const bare = absent.posted.find((f) => (f as { type?: string }).type === FRAME_TYPES.hostReady) as HostReadyFrame | undefined;
+    expect(bare?.capabilities.access).toBe(false);
   });
 
   it('is StrictMode-safe: double-mounted effects leave exactly ONE live host', async () => {

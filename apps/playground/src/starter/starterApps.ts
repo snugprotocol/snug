@@ -3,6 +3,7 @@
 // glob — TASK-20260905-host-kit AC14) so they run without any server on web and desktop,
 // and on demand in the host kit.
 
+import { STARTER_INSTALL_SOURCE_PREFIX } from '@snugprotocol/db';
 import type { ConnectionRequirement } from '@snugprotocol/protocol';
 
 import { starterSource } from './starterSource.js';
@@ -60,7 +61,7 @@ export function isStarterId(id: string): boolean {
  * run view silently disagree about whether a starter is installed.
  */
 export function starterInstallSource(starterId: string): string {
-  return `starter:${starterId.slice(STARTER_PREFIX.length)}`;
+  return `${STARTER_INSTALL_SOURCE_PREFIX}${starterId.slice(STARTER_PREFIX.length)}`;
 }
 
 export async function loadStarterHtml(id: string): Promise<string | undefined> {

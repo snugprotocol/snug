@@ -1,0 +1,278 @@
+/* theme/access.css — the strip and the consent sheet of access between apps
+   (TASK-20261010-cross-app-access AC18), and the rules both sheets share (the ⋈ sheet imports
+   this file too). Every colour, radius, space and type size is a tokens.css token (the 20 px
+   radio/checkbox box matches schedule-editor.css's); the surfaces reuse `.connection-note.is-strip`, `.net-confirm-*`, `.release-notes-*`,
+   `.check-label`, `.btn` and `.hint` from app.css.
+
+   375 px: the card is the overlay's width minus its gutter; every row wraps (names, chips,
+   quotes break anywhere rather than push the card wide); the duration radios are ALWAYS a
+   vertical column, so no width can make them a row that overflows. */
+
+/* The app's purpose, quoted: a text node in its own bidi context, so an RTL run or a stray
+   direction mark cannot reorder the host's words around it. The marks are in the text
+   (copy.ts `STRIP.quote`), so the element adds none of its own. */
+.access-quote {
+  unicode-bidi: isolate;
+  quotes: none;
+  font-style: italic;
+  color: var(--fg);
+  overflow-wrap: anywhere;
+}
+
+.access-quote::before,
+.access-quote::after {
+  content: none;
+}
+
+/* On the consent sheet the quote is its OWN block — a tinted panel with a rule at its start — so
+   where the app's words end is drawn by the host, never told by a quote glyph the app can also
+   type (a purpose that "closes" the quote and appends host-sounding words stays inside the
+   panel; W6 finding 4). The one-line strip keeps the inline quote. */
+.access-sheet .access-quote {
+  display: block;
+  margin-top: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-inline-start: 3px solid var(--border-strong);
+  border-radius: var(--radius-s);
+  background: var(--surface-2);
+}
+
+/* ---------------------------------------------------------------- the sheet */
+
+.access-sheet {
+  min-width: 0;
+}
+
+.access-sheet-head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+  min-width: 0;
+}
+
+.access-sheet-head > div {
+  min-width: 0;
+}
+
+.access-sheet-head .net-confirm-title {
+  overflow-wrap: anywhere;
+}
+
+.access-tile {
+  flex: none;
+  width: var(--tap);
+  height: var(--tap);
+  display: grid;
+  place-items: center;
+  font-size: var(--text-l);
+  border-radius: var(--radius-m);
+  background: color-mix(in srgb, var(--tile-color, var(--ember)) 22%, var(--surface-2));
+}
+
+.access-provenance {
+  margin: 0;
+  color: var(--fg-muted);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+.access-sheet-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.access-says {
+  margin: 0;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.access-section {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.access-section-title {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-s);
+  font-weight: 700;
+  color: var(--fg);
+}
+
+.access-sheet input[type='radio'],
+.access-sheet input[type='checkbox'] {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  min-height: 0;
+  margin: 0;
+  accent-color: var(--ember);
+}
+
+.access-sheet .check-label {
+  align-items: flex-start;
+  gap: var(--space-2);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* ---------------------------------------------------------------- from: the candidates */
+
+.access-sources {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.access-source {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  padding: var(--space-2) var(--space-3);
+  min-width: 0;
+}
+
+.access-source.is-chosen {
+  border-color: var(--ember);
+  background: var(--ember-glow);
+}
+
+.access-source-name {
+  font-weight: 700;
+}
+
+.access-source-summary {
+  margin: var(--space-1) 0 0;
+  padding-left: var(--space-5);
+  color: var(--fg-muted);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+.access-tables {
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0 0 0 var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.access-chips {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin: var(--space-1) 0 0;
+  padding: 0 0 0 var(--space-5);
+  min-width: 0;
+}
+
+.access-chip {
+  max-width: 100%;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--surface-2);
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+/* Listed so the person sees it exists; never part of what is allowed (D23). */
+.access-chip.is-sensitive {
+  border-style: dashed;
+  background: transparent;
+  color: var(--fg-faint);
+}
+
+.access-chip-mark {
+  font-family: var(--font-ui);
+  color: var(--warn);
+}
+
+.access-chip.is-more {
+  font-family: var(--font-ui);
+  background: transparent;
+}
+
+.access-excluded {
+  margin: 0;
+  color: var(--fg-faint);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+/* ---------------------------------------------------------------- for how long */
+
+/* Vertical at every width (the 375 px rule — pinned by the e2e). */
+.access-durations {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.access-away {
+  margin-top: var(--space-3);
+}
+
+/* ---------------------------------------------------------------- where it can go */
+
+.access-egress {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: var(--text-s);
+  color: var(--fg-muted);
+  overflow-wrap: anywhere;
+}
+
+.access-egress li {
+  padding-left: var(--space-3);
+  border-left: 2px solid var(--border);
+}
+
+.access-egress li[data-kind='away'] {
+  border-left-color: var(--warn);
+  color: var(--fg);
+}
+
+/* ---------------------------------------------------------------- the acts */
+
+.access-sheet-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.access-pick-table {
+  flex-basis: 100%;
+  margin: 0;
+  text-align: right;
+  color: var(--fg-muted);
+  font-size: var(--text-xs);
+}
+
+/* ---------------------------------------------------------------- the strip */
+
+.access-strip-says {
+  overflow-wrap: anywhere;
+}
+
+.access-strip-wait {
+  flex-basis: 100%;
+}

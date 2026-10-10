@@ -158,6 +158,14 @@ export function shareLinkSettingPrefixFor(appId: string): string {
  */
 export const AGENT_INSTALL_SOURCE_PREFIX = 'agent:';
 
+/**
+ * The STARTER install-source prefix (`starter:<folder>`, the starter catalogue's installs) —
+ * homed beside the agent and share prefixes so every reader of an install source (the starter
+ * modules, the Hub, the access consent sheet's provenance line) spells it ONCE
+ * (TASK-20261010-cross-app-access W6 finding 15).
+ */
+export const STARTER_INSTALL_SOURCE_PREFIX = 'starter:';
+
 export function agentInstallSource(lineage: string): string {
   return `${AGENT_INSTALL_SOURCE_PREFIX}${lineage}`;
 }
@@ -297,4 +305,92 @@ export function appIdFromScheduleMutedSettingKey(key: string): string | undefine
   if (!key.startsWith(SCHEDULE_MUTED_SETTING_PREFIX)) return undefined;
   const appId = key.slice(SCHEDULE_MUTED_SETTING_PREFIX.length);
   return appId.length === 0 ? undefined : appId;
+}
+
+// ------------------------- access between apps (TASK-20261010-cross-app-access, ADR-0075 §2, §7)
+//
+// The access record lives in `snug_settings` too (spec 1.1 §8.1's carve-out: a hub
+// implementing Part VI persists under these keys). Four namespaces: grants are keyed by
+// GRANT, the history by SOURCE app (the source keeps the history — ADR-0075 §7), declines
+// and the mute by READER app. The accessors in `access.ts`, `deleteApp`'s cascade and the
+// import reconciliation are the three writers, and all three spell every key through here.
+// Every parser tests the FULL prefix (colon included), so `accessGrant:` and `accessLog:`
+// can never be read as each other, nor `accessMuted:` as `accessDeclined:`.
+
+/** The `accessGrant:` namespace prefix — one row per grant. */
+export const ACCESS_GRANT_SETTING_PREFIX = 'accessGrant:';
+
+/** `accessGrant:<grantId>` — the grant itself (`accessGrantSchema` JSON). */
+export function accessGrantSettingKey(grantId: string): string {
+  if (grantId.length === 0) throw new Error('grantId must be non-empty');
+  return `${ACCESS_GRANT_SETTING_PREFIX}${grantId}`;
+}
+
+/** The grantId a settings key names, or `undefined` if the key is not a grant row. */
+export function grantIdFromAccessGrantSettingKey(key: string): string | undefined {
+  if (!key.startsWith(ACCESS_GRANT_SETTING_PREFIX)) return undefined;
+  const grantId = key.slice(ACCESS_GRANT_SETTING_PREFIX.length);
+  return grantId.length === 0 ? undefined : grantId;
+}
+
+/** The `accessLog:` namespace prefix — one bounded row per SOURCE app. */
+export const ACCESS_LOG_SETTING_PREFIX = 'accessLog:';
+
+/**
+ * `accessLog:<sourceAppId>` — the history of every read of this app's data and every
+ * grant's lifecycle, as ONE JSON array, newest first, bounded by entries, by bytes per
+ * source and by bytes across every source. One row per app ⇒ equality-deleted in
+ * `deleteApp`'s cascade.
+ */
+export function accessLogSettingKey(sourceAppId: string): string {
+  if (sourceAppId.length === 0) throw new Error('sourceAppId must be non-empty');
+  return `${ACCESS_LOG_SETTING_PREFIX}${sourceAppId}`;
+}
+
+/** The source app a settings key names, or `undefined` if the key is not a history row. */
+export function sourceAppIdFromAccessLogSettingKey(key: string): string | undefined {
+  if (!key.startsWith(ACCESS_LOG_SETTING_PREFIX)) return undefined;
+  const sourceAppId = key.slice(ACCESS_LOG_SETTING_PREFIX.length);
+  return sourceAppId.length === 0 ? undefined : sourceAppId;
+}
+
+/** The `accessDeclined:` namespace prefix. */
+export const ACCESS_DECLINED_SETTING_PREFIX = 'accessDeclined:';
+
+/**
+ * `accessDeclined:<readerAppId>:<hash>` — the user said *don't allow* to this reader's ask,
+ * identified by `accessRequestHash()` over its semantic fields (ADR-0075 §4); the value is
+ * `{ purpose, hints, at }` so the reader's sheet can list it with *allow…*. MANY rows per
+ * reader, so the cascade is a prefix delete on `accessDeclinedSettingPrefixFor(readerAppId)`
+ * (the `scheduleDeclined:` shape). Dropped whole on an untrusted import.
+ */
+export function accessDeclinedSettingKey(readerAppId: string, hash: string): string {
+  if (hash.length === 0) throw new Error('hash must be non-empty');
+  return `${accessDeclinedSettingPrefixFor(readerAppId)}${hash}`;
+}
+
+/** The per-reader prefix every `accessDeclined:` row of one app shares — the cascade's LIKE pattern base. */
+export function accessDeclinedSettingPrefixFor(readerAppId: string): string {
+  if (readerAppId.length === 0) throw new Error('readerAppId must be non-empty');
+  return `${ACCESS_DECLINED_SETTING_PREFIX}${readerAppId}:`;
+}
+
+/** The `accessMuted:` namespace prefix. */
+export const ACCESS_MUTED_SETTING_PREFIX = 'accessMuted:';
+
+/**
+ * `accessMuted:<readerAppId>` — *stop asking*: this reader's `request` is declined without a
+ * strip. Absent means not muted, which is why clearing DELETES the row. One row per app ⇒
+ * equality-deleted in `deleteApp`'s cascade; dropped on an untrusted import.
+ */
+export function accessMutedSettingKey(readerAppId: string): string {
+  if (readerAppId.length === 0) throw new Error('readerAppId must be non-empty');
+  return `${ACCESS_MUTED_SETTING_PREFIX}${readerAppId}`;
+}
+
+/** The reader app a settings key names, or `undefined` if the key is not a mute marker. */
+export function readerAppIdFromAccessMutedSettingKey(key: string): string | undefined {
+  if (!key.startsWith(ACCESS_MUTED_SETTING_PREFIX)) return undefined;
+  const readerAppId = key.slice(ACCESS_MUTED_SETTING_PREFIX.length);
+  return readerAppId.length === 0 ? undefined : readerAppId;
 }

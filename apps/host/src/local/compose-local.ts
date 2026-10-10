@@ -227,6 +227,13 @@ export function composeLocalPlatform(
    * can drive it; in the page it is one store per boot over `localStorage`.
    */
   brainChoices?: BrainChoiceStore,
+  /**
+   * The boot's Worker probe, asked ONCE by `planBoot` (TASK-20261010-cross-app-access AC20/AC23):
+   * `false` composes the page `access: false` — the read runs in a blob Worker, and a page that
+   * cannot construct one must not offer access between apps (capability truth, ADR-0072 §4).
+   * Absent or `true` → the table's `true`.
+   */
+  access?: boolean,
 ): LocalComposition {
   const custody = createCustodyStore();
   const handIns = createHandInSeat();
@@ -269,6 +276,7 @@ export function composeLocalPlatform(
       // a user registers was taken (ADR-0068 D-B13), and the `oauth` offer — every sign-in
       // tile, the wizard's wall — reads this. An older wire that does not say is available.
       oauthRedirect: status.oauthRedirect !== false,
+      ...(access === false ? { access: false } : {}),
     }),
   };
 

@@ -76,7 +76,7 @@ export function AgentUpdateControls({ appId, onUpdated }: AgentUpdateControlsPro
             is lost — your current version stays in the versions panel and you can revert to it any time. Your data, chats
             and docs are untouched either way.
           </p>
-          <UpdatePausesNote appId={appId} />
+          <UpdatePausesNote appId={appId} source="agent" />
           <div className="field-row net-confirm-actions">
             <Button variant="ghost" data-testid="agent-update-cancel" onClick={() => setConfirmOpen(false)}>
               keep my version

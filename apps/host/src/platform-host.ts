@@ -7,8 +7,10 @@
 // refuse the call anyway), no LAN, sidecar, helper, OAuth, file-open or update seats.
 //
 // The capability block is `hostCapabilities()` — the ONE table every host binding composes
-// from (K4), which records why each flag stands as it does. This binding changes nothing in
-// it: connections stay off, and the per-app export stays on.
+// from (K4), which records why each flag stands as it does. This binding changes one thing in
+// it, and only on a measured fact: `access` goes off where the boot's Worker probe could not
+// construct one (TASK-20261010-cross-app-access AC20/AC23 — capability truth, ADR-0072 §4).
+// Connections stay off, and the per-app export stays on.
 
 import type { PersistenceBackend } from '@snugprotocol/db';
 
@@ -25,6 +27,12 @@ export interface HostPlatformSeats {
   agentHandIns?: AgentHandInSeat;
   /** The scheduler's seat (TASK-20261009 H3) — `schedulerSeatFor(binding)`, composed per binding. */
   scheduler?: SchedulerSeat;
+  /**
+   * The boot's Worker probe (`canConstructWorker`, asked ONCE in `planBoot`): `false` → the page
+   * is composed `access: false` — access between apps reads in a blob Worker, and a page that
+   * cannot construct one must not offer it. Absent or `true` → the table stands.
+   */
+  access?: boolean;
 }
 
 /**
@@ -68,6 +76,6 @@ export function createHostPlatform(probe: ProbeResult, sqlJsWasmBinary: Uint8Arr
     ...(seats.saveFile !== undefined ? { saveFile: seats.saveFile } : {}),
     ...(seats.agentHandIns !== undefined ? { agentHandIns: seats.agentHandIns } : {}),
     ...(seats.scheduler !== undefined ? { scheduler: seats.scheduler } : {}),
-    capabilities: hostCapabilities(),
+    capabilities: hostCapabilities(seats.access === false ? { access: false } : {}),
   };
 }

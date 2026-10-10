@@ -24,12 +24,16 @@ describe('finding 1 — exported schemas must not forbid unknown fields (R2), ex
   // R2's v0.3 exception: the net and open-url frames are STRICT by design — their fields
   // become real-world effects, so an unknown key is a rejection, and their published
   // schemas MUST carry additionalProperties: false. The tolerant core must still not.
-  // (SPEC-1.0.md §2/§5 R2; publication flip: TASK-20260820-spec-v03-whitepaper.)
+  // (SPEC.md §2/§5 R2; publication flip: TASK-20260820-spec-v03-whitepaper.)
+  // Spec 1.1 (TASK-20261010-cross-app-access, ADR-0075 D2/D16): the access REQUEST joins the
+  // strict set (it carries SQL and a release act); the access RESPONSE is deliberately
+  // TOLERANT, so it stays out — and the else-branch below pins that it never closes.
   const STRICT_SCHEMAS = new Set([
     'net-request.json',
     'net-response.json',
     'open-url-request.json',
     'open-url-result.json',
+    'access-request.json',
   ]);
 
   it('tolerant schemas never contain additionalProperties: false; strict schemas always do', () => {

@@ -86,6 +86,8 @@ import { isLocalEndpointHost, localEndpointHostOf } from '../security/privateHos
 import { LICENSE_URL, PRIVACY_PATH, TERMS_PATH, THREAT_MODEL_URL } from '../legal/legalShared.js';
 import { ConnectionSlotsCard } from './ConnectionSlotsCard.js';
 import { ScheduleSettingsCard } from '../schedule/ScheduleSettingsCard.js';
+import { AccessSettingsCard } from '../access/AccessSettingsCard.js';
+import { SETTINGS_CARD } from '../access/copy.js';
 
 const MODE_LABELS: Record<PlaygroundMode, string> = {
   byok: 'bring your own key',
@@ -297,6 +299,15 @@ export function SettingsView(): ReactElement {
               the click, never at boot), the host's honesty line, clear history, and the
               never-let-apps-suggest switch. Gated like every scheduling surface (C7). */}
           <ScheduleSettingsCard />
+        </Section>
+      ) : null}
+
+      {allows('access') ? (
+        <Section label={SETTINGS_CARD.title}>
+          {/* TASK-20261010-cross-app-access AC19: every access across apps, the per-browser
+              never-let-apps-ask switch, per-app unmute, clear history, and the creation act.
+              Gated like every access surface (AC20). */}
+          <AccessSettingsCard />
         </Section>
       ) : null}
 

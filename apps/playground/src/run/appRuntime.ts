@@ -26,19 +26,57 @@
 // THE NET RULE IS ONE RULE: an app reaches the network only when it is OWNED (an uninstalled
 // starter has no auth spec; a shared preview is uninstalled by definition) and the host allows
 // connections — then `host-ready.net` is false STRUCTURALLY, not by a flag the app must trust.
+//
+// THE ACCESS RULE (TASK-20261010-cross-app-access AC20, ADR-0075) has the same shape: the third
+// pair — the access handler and its HOST-assigned id — is bound only for an OWNED app where the
+// host allows access (a starter browse or a shared preview has no row to read from or to keep a
+// history against), so `host-ready.access` is false structurally everywhere else. `attended` is
+// REQUIRED, never defaulted: the visible frame says `true` (someone is there to be asked), the
+// scheduler's hidden frame `false` (an ask is refused `ACCESS_UNATTENDED`, a read needs the
+// grant's *also while I'm away*). A default would let one mount inherit the other's answer.
+// `generation` is the host's frame generation the handler keys on (RunView's `frameEpoch`) —
+// REQUIRED for the visible frame and ABSENT for the hidden one, which owns no session ("while
+// it's open") access at any epoch; nothing is defaulted (a default 0 would collide with the first
+// epoch, and a session grant's readability would hang on a number the user cannot see). The
+// handler module is called only inside
+// `composeAppRuntime`, never at module load: this module still sits on an import cycle
+// (state/net.ts → state/userdb.ts → … → the scheduler → schedule/appRun.ts → here →
+// access/accessHandler.ts), so nothing here may touch an access module while modules load.
 
 import type { AgentTurnEvent } from '@snugprotocol/adapters';
 import type { NetConfirmGate } from '@snugprotocol/auth';
 import type { SnugDbDriver } from '@snugprotocol/db';
-import type { AgentTransport, NetHandler } from '@snugprotocol/runner';
+import type { AccessHandler, AgentTransport, NetHandler } from '@snugprotocol/runner';
 
+import { createAccessHandlerFor } from '../access/accessHandler.js';
 import { createAppTransport } from '../agent/transport.js';
 import { allows } from '../platform/platform.js';
 import { isUnownedId } from '../share/sharedInbox.js';
 import type { ByokProvider, PlaygroundMode } from '../state/mode.js';
 import { createNetHandlerFor, type CreateNetHandlerOptions } from '../state/net.js';
 
-export interface ComposeAppRuntimeOptions {
+// The two "may this app …" rules live in a LEAF module (review finding 7: the composition imports the
+// access handler, whose consent path reads egress, which needs the network rule); every caller
+// imports them from there.
+import { appMayReachNetwork, appMayUseAccess } from './appCapabilityRules.js';
+
+/**
+ * Whether someone is looking at this frame — REQUIRED, no default (AC20): the visible run view
+ * says `true` with its frame generation, the scheduler's hidden frame `false` with none. The
+ * access handler refuses an unattended ask and reads, unattended, only through a persisted grant
+ * the user allowed *also while I'm away*.
+ */
+export type FrameAttendance =
+  | {
+      attended: true;
+      /** The host's frame generation the access handler keys on (RunView's `frameEpoch`). */
+      generation: number;
+    }
+  | { attended: false; generation?: undefined };
+
+export type ComposeAppRuntimeOptions = ComposeAppRuntimeBase & FrameAttendance;
+
+interface ComposeAppRuntimeBase {
   /** The HOST-assigned app id — the db namespace and the net binding, never anything the app claims. */
   appId: string;
   mode: PlaygroundMode;
@@ -59,20 +97,25 @@ export interface ComposeAppRuntimeOptions {
   driver: SnugDbDriver;
 }
 
-/** The frame's capability bindings, spread onto `SnugAppFrame`: db + namespace always, net + its id when the app may reach the network. */
-export type FrameCapabilityProps = { db: SnugDbDriver; dbNamespace: string } & ({ net: NetHandler; netAppId: string } | { net?: undefined; netAppId?: undefined });
+/**
+ * The frame's capability bindings, spread onto `SnugAppFrame`: db + namespace always, net + its id
+ * when the app may reach the network, access + its id when the app may read another app's data.
+ */
+export type FrameCapabilityProps = { db: SnugDbDriver; dbNamespace: string } & NetPair & AccessPair;
+
+/** The net handler and the id it is bound to — both, or neither. */
+type NetPair = { net: NetHandler; netAppId: string } | { net?: undefined; netAppId?: undefined };
+/** The access handler and the id it is bound to — both, or neither. */
+type AccessPair = { access: AccessHandler; accessAppId: string } | { access?: undefined; accessAppId?: undefined };
 
 export interface AppRuntime {
   /** The app's OWN transport (ADR-0018 contract, the per-app pin, the R-9 scrub — all per send). */
   transport: AgentTransport;
-  /** The frame's bindings: db + namespace always; the value-blind net handler and its host-assigned id only where this app may reach the network (M5: nothing is duplicated beside them). */
+  /** The frame's bindings: db + namespace always; the value-blind net handler and the access handler, each with its host-assigned id, only where this app may use them (M5: nothing is duplicated beside them). */
   frameProps: FrameCapabilityProps;
 }
 
-/** Whether this app may reach the network here — ONE rule for the visible and the hidden frame. */
-export function appMayReachNetwork(appId: string): boolean {
-  return !isUnownedId(appId) && allows('connections');
-}
+
 
 export function composeAppRuntime(options: ComposeAppRuntimeOptions): AppRuntime {
   const { appId } = options;
@@ -85,7 +128,10 @@ export function composeAppRuntime(options: ComposeAppRuntimeOptions): AppRuntime
         ...(options.confirmGate !== undefined ? { confirmGate: options.confirmGate } : {}),
       })
     : undefined;
-  const frameProps: FrameCapabilityProps =
-    netHandler !== undefined ? { db: options.driver, dbNamespace: appId, net: netHandler, netAppId: appId } : { db: options.driver, dbNamespace: appId };
+  const netPair: NetPair = netHandler !== undefined ? { net: netHandler, netAppId: appId } : {};
+  const accessPair: AccessPair = appMayUseAccess(appId)
+    ? { access: createAccessHandlerFor(appId, options.attended ? { attended: true, generation: options.generation } : { attended: false }), accessAppId: appId }
+    : {};
+  const frameProps: FrameCapabilityProps = { db: options.driver, dbNamespace: appId, ...netPair, ...accessPair };
   return { transport, frameProps };
 }

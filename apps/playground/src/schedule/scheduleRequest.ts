@@ -30,6 +30,11 @@
 // Everything after the parse — the file's reads, the Settings flag — runs under one catch: a
 // throw there is a named `failed` decision (M11), never an exception out of the frame seam.
 //
+// THE LADDER IS SHARED. The rate limit, the mutes, the declines and the one-pending rule are the
+// generic rungs of `state/appAsk.ts` (TASK-20261010-cross-app-access W3 — the access ask runs the
+// same ladder); this module keeps only what is the schedule's own: the event name, the size cap and
+// strict parse, the sender rule, the cap of five, and the store's pending shape.
+//
 // A module store (the `appHosts` registry's shape): `RunView` wires the consumer in one line
 // (`useAppEventConsumer`) and mounts the strip in one; the strip subscribes by app id. The
 // decline and mute acts write the file's own rows (`addScheduleDecline`, `setScheduleMuted`),
@@ -40,12 +45,14 @@ import { useCallback } from 'react';
 import { SCHEDULED_TASK_MAX_BYTES, proposalHash, scheduleProposalSchema, type ScheduleProposal } from '@snugprotocol/protocol';
 import type { UserDb } from '@snugprotocol/db';
 
+import { createAppAsk } from '../state/appAsk.js';
 import { getAppMeta } from '../state/appMeta.js';
-import { createStore, type Store } from '../state/store.js';
+import type { Store } from '../state/store.js';
 import { getUserDb } from '../state/userdb.js';
 import { enableProposedTask, namesOnly } from './enableProposedTask.js';
 import type { TaskResult } from './scheduler.js';
-import { NO_SUGGESTIONS_KEY, readFlag } from './ScheduleSettingsCard.js';
+import { readFlag } from '../state/browserFlags.js';
+import { NO_SUGGESTIONS_KEY } from './ScheduleSettingsCard.js';
 
 /** The app-event name an app posts to suggest a schedule for itself (ADR-0074 §3). */
 export const SCHEDULE_REQUEST_EVENT = 'schedule-request';
@@ -76,13 +83,6 @@ export interface ScheduleRequestInput {
   data: unknown;
 }
 
-/** The pending suggestion per app — at most one each. */
-export const suggestionStore: Store<Readonly<Record<string, PendingSuggestion>>> = createStore<Readonly<Record<string, PendingSuggestion>>>({});
-
-export function pendingSuggestionFor(appId: string): PendingSuggestion | undefined {
-  return suggestionStore.get()[appId];
-}
-
 interface Deps {
   getDb: () => Promise<UserDb>;
   now: () => number;
@@ -93,8 +93,27 @@ interface Deps {
 const defaultDeps = (): Deps => ({ getDb: getUserDb, now: Date.now, noSuggestions: () => readFlag(NO_SUGGESTIONS_KEY) });
 let deps: Deps = defaultDeps();
 
-/** The rate limit's memory: the last request per APP, with the instance it came from — bounded by the apps a page shows (M10). */
-const lastRequest = new Map<string, { generation: number; at: number }>();
+/**
+ * The shared ladder (`state/appAsk.ts`): its rate memory is the last request per APP with the
+ * instance it came from — bounded by the apps a page shows (M10) — and a new generation has its
+ * own minute (`rateBy: 'generation'`). Its questions read the CURRENT deps at the call, so the
+ * test seam swaps them.
+ */
+const ask = createAppAsk<ScheduleProposal, PendingSuggestion>({
+  minGapMs: SCHEDULE_REQUEST_MIN_GAP_MS,
+  hash: proposalHash,
+  isMuted: (db, appId) => db.isScheduleMuted(appId),
+  isDeclined: (db, appId, hash) => db.listScheduleDeclines(appId).includes(hash),
+  globalMute: () => deps.noSuggestions(),
+  rateBy: 'generation',
+});
+
+/** The pending suggestion per app — at most one each. */
+export const suggestionStore: Store<Readonly<Record<string, PendingSuggestion>>> = ask.store;
+
+export function pendingSuggestionFor(appId: string): PendingSuggestion | undefined {
+  return ask.pendingFor(appId);
+}
 
 /** The serialised size of a request in UTF-8 bytes — what the cap counts (S11); `undefined` when it cannot be serialised. */
 export function requestBytes(data: unknown): number | undefined {
@@ -108,14 +127,7 @@ export function requestBytes(data: unknown): number | undefined {
 }
 
 function setPending(appId: string, next: PendingSuggestion | undefined): void {
-  const current = suggestionStore.get();
-  if (next === undefined) {
-    if (!(appId in current)) return;
-    const { [appId]: _gone, ...rest } = current;
-    suggestionStore.set(rest);
-    return;
-  }
-  suggestionStore.set({ ...current, [appId]: next });
+  ask.setPending(appId, next);
 }
 
 /** How many of the file's schedules this app proposed for itself. */
@@ -136,9 +148,7 @@ export function withOwnStepsAs(proposal: ScheduleProposal, announcedId: string |
 export async function consumeScheduleRequest(input: ScheduleRequestInput): Promise<RequestDecision> {
   if (input.event !== SCHEDULE_REQUEST_EVENT) return 'ignored';
   const at = deps.now();
-  const last = lastRequest.get(input.appId);
-  if (last !== undefined && last.generation === input.generation && at - last.at < SCHEDULE_REQUEST_MIN_GAP_MS) return 'rate-limited';
-  lastRequest.set(input.appId, { generation: input.generation, at });
+  if (ask.rateLimited(input.appId, input.generation, at)) return 'rate-limited';
 
   const bytes = requestBytes(input.data);
   if (bytes === undefined || bytes > SCHEDULE_REQUEST_MAX_BYTES) return 'unreadable';
@@ -154,12 +164,11 @@ export async function consumeScheduleRequest(input: ScheduleRequestInput): Promi
     const app = db.getApp(input.appId);
     if (app === undefined) return 'unknown-app';
     if (!namesOnly(proposal, input.appId)) return 'other-app';
-    if (deps.noSuggestions() || db.isScheduleMuted(input.appId)) return 'muted';
+    if (ask.muted(db, input.appId)) return 'muted';
     const hash = proposalHash(proposal);
-    if (db.listScheduleDeclines(input.appId).includes(hash)) return 'declined';
+    if (ask.declined(db, input.appId, hash)) return 'declined';
     if (appProposedCount(db, input.appId) >= APP_PROPOSED_TASK_CAP) return 'capped';
-    const current = pendingSuggestionFor(input.appId);
-    if (current !== undefined && current.generation === input.generation) return 'pending';
+    if (ask.pendingBlocks(input.appId, input.generation)) return 'pending';
 
     setPending(input.appId, { appId: input.appId, appName: app.displayName, generation: input.generation, proposal, hash, receivedAt: at });
     return 'accepted';
@@ -221,11 +230,10 @@ export function __setScheduleRequestDepsForTests(over?: Partial<Deps>): void {
 
 export function __resetScheduleRequestsForTests(): void {
   deps = defaultDeps();
-  lastRequest.clear();
-  suggestionStore.set({});
+  ask.clear();
 }
 
 /** How many apps the rate limit remembers — the bound M10 pins. */
 export function __rateLimitSizeForTests(): number {
-  return lastRequest.size;
+  return ask.rateMemorySize();
 }

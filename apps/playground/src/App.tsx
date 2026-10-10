@@ -32,6 +32,7 @@ import { ScheduledRunHost } from './schedule/ScheduledRunHost.js';
 import { ConnectionWizardSheet } from './connections/ConnectionWizardSheet.js';
 import { OAuthCallbackPage } from './connections/OAuthCallbackPage.js';
 import { NetConfirmDialog } from './run/NetConfirmDialog.js';
+import { AccessConsentSheet } from './access/AccessConsentSheet.js';
 import { OpenUrlConfirmDialog } from './run/OpenUrlConfirmDialog.js';
 import { Button } from './ui/Button.js';
 import { initProtectOffer } from './vault/protectOffer.js';
@@ -369,6 +370,10 @@ export function App(): ReactElement {
           mount the route doesn't render is a promise that never settles. */}
       <NetConfirmDialog />
       <OpenUrlConfirmDialog />
+      {/* The access consent sheet (TASK-20261010-cross-app-access AC20): app-level for the
+          same reason — the strip's *review* opens it from the run view, but Settings and an
+          app's access sheet open it from any route. It yields to the two confirms above. */}
+      <AccessConsentSheet />
     </div>
   );
 }

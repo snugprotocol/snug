@@ -1,5 +1,6 @@
 // RunHeaderActions.tsx — the per-app controls in the run header: which model this app
-// uses, its connections, and the share control (TASK-20260904-app-sharing).
+// uses, its connections, its schedule, its access between apps (⋈), and the share control
+// (TASK-20260904-app-sharing).
 //
 // THE PER-APP `.snug` EXPORT IS GONE (ADR-0063 §2). It was a SQLite slice of the app's
 // DATA named `.snug` — byte-indistinguishable from a whole user file, so the desktop
@@ -32,6 +33,8 @@
 import type { ReactElement } from 'react';
 import { useState } from 'react';
 
+import { AccessSheet, useHasAccessState } from '../access/AccessSheet.js';
+import { ACCESS_SHEET } from '../access/copy.js';
 import { Button } from '../ui/Button.js';
 import { allows } from '../platform/platform.js';
 import { RUN_HEADER_SCHEDULE } from '../schedule/copy.editor.js';
@@ -77,6 +80,10 @@ export function RunHeaderActions({
   // The schedule sheet's open state lives HERE, not in RunView: the sheet portals to <body>
   // (ConfirmOverlay), so nothing about the header's layout changes while it is open.
   const [scheduleOpen, setScheduleOpen] = useState(false);
+  // The access sheet's open state, the same way (it portals too). The ⋈ shows only for an owned
+  // app with ACCESS STATE where the host allows access — the hook reads nothing otherwise.
+  const [accessOpen, setAccessOpen] = useState(false);
+  const accessState = useHasAccessState(appId, !isStarter && allows('access'));
   return (
     <>
       {/*
@@ -187,6 +194,27 @@ export function RunHeaderActions({
         </Button>
       ) : null}
       {/*
+        THE ACCESS CONTROL (TASK-20261010-cross-app-access AC19, D20) — between the schedule
+        control and share, so share keeps the cluster's last slot. Glyph `⋈` — a join, monochrome
+        like its neighbours; the accessible name is "access". Rendered only when the app HAS
+        access state (access either way, a pending ask, or a declined ask — the ⚯ rule: no empty
+        door) on an owned app where the host allows access. Opens the ⋈ sheet (portaled).
+      */}
+      {accessState ? (
+        <Button
+          variant="ghost"
+          onClick={() => setAccessOpen(true)}
+          className="btn-icon"
+          data-testid="access-app"
+          aria-label={ACCESS_SHEET.iconLabel}
+          aria-haspopup="dialog"
+          aria-expanded={accessOpen}
+          title={ACCESS_SHEET.iconTitle}
+        >
+          ⋈
+        </Button>
+      ) : null}
+      {/*
         THE SHARE CONTROL (TASK-20260904, AC10) — last in the cluster, which places it
         between the connections door and RunView's theme toggle (owner ask). Owned apps
         only: `onShare` is absent for a starter or a shared preview. Glyph `⇪` — the
@@ -209,6 +237,7 @@ export function RunHeaderActions({
       ) : null}
       {/* Portaled to <body>: renders no node here, so the share control stays the cluster's last. */}
       {scheduleOpen ? <ScheduleSheet appId={appId} onClose={() => setScheduleOpen(false)} /> : null}
+      {accessOpen ? <AccessSheet appId={appId} onClose={() => setAccessOpen(false)} /> : null}
     </>
   );
 }

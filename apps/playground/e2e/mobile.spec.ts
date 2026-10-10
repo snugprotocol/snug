@@ -22,8 +22,12 @@
 //              actually hidden (Playwright visibility — geometry, per lessons
 //              2026-08-14, not class names); toggling back restores the app.
 
+import fs from 'node:fs';
+import path from 'node:path';
+
 import { expect, test, type Page } from '@playwright/test';
-import { AWAITS_INTEGRATION } from './helpers';
+import { ACCESS_SHEET, STRIP } from '../src/access/copy';
+import { AWAITS_INTEGRATION, playgroundDir } from './helpers';
 
 const hasApp = process.env.SNUG_E2E_HAS_APP === '1';
 
@@ -198,5 +202,80 @@ test.describe('820px viewport (phone landscape / tablet portrait) — either/or,
     await toggle.click();
     await expect(page.locator('[data-testid="frame-wrap"] iframe')).toBeVisible();
     await expect(page.getByTestId('mobile-think')).toHaveCount(0);
+  });
+});
+
+// TASK-20261010-cross-app-access AC22 (the standing gap this file named: every run-view test
+// above runs a STARTER, whose header has none of the owned-app controls). An OWNED app's header
+// cluster — model, connections, schedule, the access ⋈ (D20), share — plus the run view's own
+// theme and view toggles, at 375px, with the ⋈ actually present: two fixture apps installed as
+// `snug-app-bundle/1` documents through Settings (the access.spec precedent), and the reader's
+// ask pending — a pending ask is access state, so the ⋈ renders beside the strip.
+test.describe('375px viewport — an owned app’s run header', () => {
+  test.skip(!hasApp, AWAITS_INTEGRATION);
+
+  const fixture = (name: string): string => fs.readFileSync(path.join(playgroundDir(), 'e2e', 'fixtures', name), 'utf8');
+  const bundle = (displayName: string, html: string): Buffer =>
+    Buffer.from(
+      JSON.stringify({
+        format: 'snug-app-bundle/1',
+        lineage: crypto.randomUUID(),
+        sharedAt: new Date().toISOString(),
+        app: { displayName, usesDb: true },
+        html,
+        connections: [],
+      }),
+    );
+  const appFrame = (page: Page) => page.frameLocator('[data-testid="frame-wrap"] iframe[sandbox="allow-scripts"]');
+
+  async function install(page: Page, file: string, displayName: string, html: string): Promise<void> {
+    await page
+      .locator('[data-testid="add-shared-app"] input[type="file"]')
+      .setInputFiles({ name: file, mimeType: 'application/json', buffer: bundle(displayName, html) });
+    await expect(page).toHaveURL(/\/run\/shared--[0-9a-f]{64}/, { timeout: 20_000 });
+    await page.getByTestId('shared-install').click();
+    await expect(page).toHaveURL(/\/run\/[0-9a-f-]{36}$/, { timeout: 20_000 });
+    await expect(appFrame(page).locator('#status')).toHaveText('ready', { timeout: 30_000 });
+  }
+
+  test('the header cluster with the ⋈ present fits: no control off screen, no horizontal overflow', async ({ page }) => {
+    test.setTimeout(90_000);
+    await page.goto('/settings');
+    await install(page, 'ledger.snug', 'Ledger', fixture('access-source.html'));
+    // Settings again by its link — a click, never a reload (the file lives in this context's OPFS).
+    await page.getByRole('link', { name: 'settings' }).click();
+    await expect(page).toHaveURL(/\/settings$/);
+    await install(page, 'budget.snug', 'Budget', fixture('access-reader.html'));
+
+    // The owned app's header WITHOUT the ⋈ first (no access state yet)…
+    await expect(page.getByTestId('access-app')).toHaveCount(0);
+    await expect(page.getByTestId('share-app')).toBeVisible();
+    await expectNoHorizontalScroll(page);
+
+    // …then the reader asks (a user act in the app), the strip shows, and the ⋈ joins the cluster.
+    await appFrame(page).locator('#ask').click();
+    await expect(page.getByTestId('access-ask-title')).toHaveText(STRIP.title('Budget'), { timeout: 15_000 });
+    const door = page.getByRole('button', { name: ACCESS_SHEET.iconLabel, exact: true });
+    await expect(door).toBeVisible();
+    const viewport = page.viewportSize();
+    expect(viewport).not.toBeNull();
+    const controls = door.locator('..').getByRole('button');
+    const count = await controls.count();
+    expect(count, 'the cluster holds the ⋈ and its neighbours').toBeGreaterThan(1);
+    for (let i = 0; i < count; i += 1) {
+      const box = await controls.nth(i).boundingBox();
+      if (box === null) continue; // a control this width hides
+      expect(box.x, 'a header control starts on screen').toBeGreaterThanOrEqual(0);
+      expect(box.x + box.width, 'a header control ends on screen').toBeLessThanOrEqual(viewport!.width + 1);
+    }
+    const doorBox = await door.boundingBox();
+    expect(doorBox, 'the ⋈ has a box').not.toBeNull();
+    expect(doorBox!.height, 'the ⋈ is a real touch target (≥44px)').toBeGreaterThanOrEqual(44);
+    await expectNoHorizontalScroll(page);
+
+    // Leave nothing pending: the strip's *not now*.
+    await page.getByTestId('access-ask-not-now').click();
+    await expect(page.getByTestId('access-ask-outcome')).toHaveAttribute('data-outcome', 'not-now');
+    await expectNoHorizontalScroll(page);
   });
 });

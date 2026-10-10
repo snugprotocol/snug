@@ -10,8 +10,8 @@
 import { installAppFromBundle, sharedBundleSettingKey, shareInstallSource, updateAppFromBundle, isEditedCopy } from '@snugprotocol/db';
 import type { UserDb } from '@snugprotocol/db';
 
-import { pauseSchedulesForAppVersion } from '../schedule/appDrift.js';
 import { refreshAppMeta } from '../state/appMeta.js';
+import { onAppVersionChanged } from '../state/appVersionChanged.js';
 import { getUserDb } from '../state/userdb.js';
 import { getSharedEntry, removeSharedEntry, sharedEntryForLineage, type SharedEntry } from './sharedInbox.js';
 
@@ -88,7 +88,8 @@ export async function applySharedUpdate(appId: string, bundleId: string): Promis
   if (entry === undefined) throw new Error('that shared app is no longer on your shelf');
   const db = await getUserDb();
   const result = await updateAppFromBundle(db, appId, entry.bundle, { bundleId });
-  if (result.status === 'updated') pauseSchedulesForAppVersion(db, appId, result.version, 'shared', new Date().toISOString()); // E8: the app changed under its schedules
+  // E8 (and ADR-0075 §9): the app changed under its schedules and the access it holds — ONE fan-out.
+  if (result.status === 'updated') onAppVersionChanged(db, appId, result.version, 'shared', new Date().toISOString());
   await removeSharedEntry(bundleId);
   await refreshAppMeta();
   return result.status === 'updated' ? { version: result.version } : { status: 'already-current' };

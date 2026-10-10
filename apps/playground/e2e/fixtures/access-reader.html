@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<!--
+  e2e/fixtures/access-reader.html — "Budget", the READER fixture of the access-between-apps e2e
+  (TASK-20261010-cross-app-access AC22; e2e/access.spec.ts). Not a starter. Two blocks are copied,
+  never retyped:
+    - sections 1–3 below are the copy-exactly hooks block of
+      packages/knowledge/prompts/knowledge-base/app-authoring/20-html-template.md, RENDERED
+      (getKnowledgeBase() of @snugprotocol/knowledge — byte-identical to the same sections of
+      schedule-app.html, which is packages/sdk/embedded/snug-hooks.js indented);
+    - the ACCESS BETWEEN APPS block is the cross-app helper of
+      packages/knowledge/prompts/knowledge-base/app-authoring/87-cross-app-access.md, RENDERED the
+      same way ({{frameType:…}} and {{protocolVersion}} injected from @snugprotocol/protocol), with
+      only `onAccessChanged`'s body written for this app — exactly what the KB page asks of an app.
+  SYNC RULE: when 20-html-template.md's hooks or 87-cross-app-access.md's helper change, re-render
+  them (node -e "import('@snugprotocol/knowledge').then(k => …getKnowledgeBase()…)" after
+  `pnpm --filter @snugprotocol/knowledge build`) and paste them here again — never edit them in place.
+  The app: every ask is a USER act (a button), never on load. #status prints the last op and its
+  answer (`request: ok` / `query: ACCESS_REVOKED` / `access-changed <grantId>`), #result the rows
+  or the refusal, #view the last access the host answered (kept with usePersistedState so it
+  survives a reopen), #changed the last access-changed hint, and #log EVERY access answer and
+  access-changed hint this page ever received — the whole of what the reader learned, so the spec
+  can prove it never saw the user's other apps.
+-->
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Budget</title>
+  <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7/babel.min.js"></script>
+  <style>
+    :root { --bg: #ffffff; --fg: #17171f; --muted: #6b7280; --card: #f4f4f8; --border: #e2e2ea; --accent: #6c5ce7; }
+    :root[data-theme="dark"] { --bg: #15151d; --fg: #ececf4; --muted: #9a9aad; --card: #20202c; --border: #32323f; --accent: #8b7cf7; }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 16px; background: var(--bg); color: var(--fg); font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+    button { min-width: 44px; min-height: 44px; cursor: pointer; margin: 0 8px 8px 0; }
+    pre { white-space: pre-wrap; word-break: break-all; font-size: 12px; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useEffect, useCallback, useMemo, useRef } = React;
+
+    // ============================================================
+    // 1. SNUG BRIDGE RUNTIME (MANDATORY — copy exactly, never edit)
+    // ============================================================
+    const SnugBridge = {
+      instanceId: null,
+      theme: 'light',
+      capabilities: {},
+      ready: false,
+      pending: new Map(),    // requestId -> { resolve, onStream }
+      dbPending: new Map(),  // requestId -> resolve
+      netPending: new Map(), // requestId -> resolve
+      listeners: new Set(),  // re-render triggers for hooks
+
+      post(frame) {
+        window.parent.postMessage({ v: 1, instanceId: this.instanceId, ...frame }, '*');
+      },
+      notify() { for (const fn of this.listeners) fn(); },
+    };
+
+    window.addEventListener('message', (event) => {
+      const data = event.data;
+      if (!data || data.v !== 1) return;
+
+      if (data.type === 'snug:host-ready') {
+        SnugBridge.instanceId = data.instanceId;
+        if (data.theme) SnugBridge.theme = data.theme;
+        if (data.capabilities) SnugBridge.capabilities = data.capabilities;
+        SnugBridge.ready = true;
+        SnugBridge.notify();
+        return;
+      }
+
+      if (data.type === 'snug:app-response') {
+        const entry = SnugBridge.pending.get(data.requestId);
+        if (!entry) return; // unknown or superseded requestId — ignore
+        if (data.streaming) {
+          // Cumulative provisional text — display only. NEVER resolve here.
+          if (entry.onStream && typeof data.text === 'string') entry.onStream(data.text);
+          return;
+        }
+        SnugBridge.pending.delete(data.requestId); // terminal — exactly one per requestId
+        entry.resolve(data.ok ? { ok: true, data: data.data } : { ok: false, error: data.error });
+        return;
+      }
+
+      if (data.type === 'snug:db-response') {
+        const resolve = SnugBridge.dbPending.get(data.requestId);
+        if (!resolve) return;
+        SnugBridge.dbPending.delete(data.requestId);
+        // Result fields (rows/columns/value/bytesBase64) live at the TOP LEVEL of the frame.
+        resolve(data.ok
+          ? { ok: true, rows: data.rows, columns: data.columns, value: data.value, bytesBase64: data.bytesBase64 }
+          : { ok: false, error: data.error });
+        return;
+      }
+
+      if (data.type === 'snug:net-response') {
+        const resolve = SnugBridge.netPending.get(data.requestId);
+        if (!resolve) return;
+        SnugBridge.netPending.delete(data.requestId);
+        // Result fields (status/headers/body/truncated) live at the TOP LEVEL of the frame.
+        resolve(data.ok
+          ? { ok: true, status: data.status, headers: data.headers, body: data.body, truncated: data.truncated }
+          : { ok: false, error: data.error });
+        return;
+      }
+
+      if (data.type === 'snug:host-event') {
+        if (data.event === 'theme-change' && data.data && data.data.theme) {
+          SnugBridge.theme = data.data.theme;
+          SnugBridge.notify();
+        }
+        // Unknown host events MUST be ignored (the protocol is additive).
+      }
+    });
+
+    function snugDbRequest(op, args) {
+      return new Promise((resolve) => {
+        const requestId = crypto.randomUUID();
+        SnugBridge.dbPending.set(requestId, resolve);
+        SnugBridge.post({ type: 'snug:db-request', requestId, op, ...args });
+      });
+    }
+
+    function snugNetRequest(fields) {
+      if (!SnugBridge.ready) return Promise.resolve({ ok: false, error: { code: 'HOST_ERROR', message: 'not connected to host yet', retryable: true } });
+      return new Promise((resolve) => {
+        const requestId = crypto.randomUUID();
+        SnugBridge.netPending.set(requestId, resolve);
+        SnugBridge.post({ type: 'snug:net-request', requestId, ...fields });
+      });
+    }
+
+    // ============================================================
+    // 2. useSnugApp (MANDATORY — copy exactly, never edit)
+    // ============================================================
+    function useSnugApp(meta) {
+      const [, setTick] = useState(0);
+      const [isWaiting, setIsWaiting] = useState(false);
+      const [lastResponse, setLastResponse] = useState(null);
+      const inFlight = useRef(0);
+      const metaRef = useRef(meta);
+
+      useEffect(() => {
+        const rerender = () => setTick((n) => n + 1);
+        SnugBridge.listeners.add(rerender);
+        const m = metaRef.current;
+        SnugBridge.post({
+          type: 'snug:app-announce',
+          appId: m.appId,
+          displayName: m.displayName,
+          description: m.description,
+          iconEmoji: m.iconEmoji,
+          iconColor: m.iconColor,
+        });
+        return () => SnugBridge.listeners.delete(rerender);
+      }, []);
+
+      const sendMessage = useCallback((action, payload, opts) => {
+        if (!SnugBridge.ready) return Promise.resolve({ ok: false, error: { code: 'HOST_ERROR', message: 'not connected to host yet', retryable: true } });
+        const requestId = crypto.randomUUID(); // fresh per request — multiple in flight are legal
+        inFlight.current += 1;
+        setIsWaiting(true);
+        return new Promise((resolve) => {
+          SnugBridge.pending.set(requestId, {
+            onStream: opts && opts.onStream,
+            resolve: (result) => {
+              inFlight.current -= 1;
+              if (inFlight.current === 0) setIsWaiting(false);
+              setLastResponse(result);
+              resolve(result);
+            },
+          });
+          SnugBridge.post({
+            type: 'snug:app-message',
+            requestId,
+            appId: metaRef.current.appId,
+            action,
+            payload,
+            state: opts && opts.state,
+            responseSchema: opts && opts.responseSchema,
+          });
+        });
+      }, []);
+
+      return {
+        isReady: SnugBridge.ready,
+        theme: SnugBridge.theme,
+        isWaiting,
+        lastResponse,
+        sendMessage,
+      };
+    }
+
+    // ============================================================
+    // 3. usePersistedState (MANDATORY — copy exactly, never edit)
+    // Storage is HOST-BROKERED key-value. The sandboxed iframe has a
+    // null origin: no browser storage API works here.
+    // ============================================================
+    function usePersistedState(key, initialValue) {
+      const [state, setState] = useState(initialValue);
+      // Tracks WHICH key hydrated: a key change must re-hydrate before any write-back,
+      // or the old key's state would overwrite the new key's stored value.
+      const [hydratedKey, setHydratedKey] = useState(null);
+      const initialRef = useRef(initialValue);
+
+      useEffect(() => {
+        let cancelled = false;
+        const hydrate = async () => {
+          const result = await snugDbRequest('kvGet', { key });
+          if (cancelled) return;
+          if (result.ok && result.value != null) {
+            const stored = result.value;
+            const init = initialRef.current;
+            // Merge objects with defaults so fields added in newer code are never undefined.
+            setState(
+              stored && typeof stored === 'object' && !Array.isArray(stored) &&
+              init && typeof init === 'object' && !Array.isArray(init)
+                ? { ...init, ...stored }
+                : stored
+            );
+          } else {
+            setState(initialRef.current); // nothing stored under this key — back to defaults
+          }
+          setHydratedKey(key);
+        };
+        const onReady = () => {
+          if (!SnugBridge.ready) return;
+          SnugBridge.listeners.delete(onReady);
+          hydrate();
+        };
+        if (SnugBridge.ready) hydrate();
+        else SnugBridge.listeners.add(onReady);
+        return () => { cancelled = true; SnugBridge.listeners.delete(onReady); };
+      }, [key]);
+
+      useEffect(() => {
+        if (hydratedKey !== key) return;
+        snugDbRequest('kvSet', { key, value: state }); // fire-and-forget; host acks via db-response
+      }, [hydratedKey, key, state]);
+
+      return [state, setState];
+    }
+
+    // ============================================================
+    // ACCESS BETWEEN APPS — read another app's data; see "Access Between Apps"
+    // ============================================================
+    const SNUG_ACCESS_PENDING = new Map(); // requestId -> resolve
+
+    function snugAccessRequest(op, fields) {
+      if (!SnugBridge.ready) return Promise.resolve({ ok: false, error: { code: 'HOST_ERROR', message: 'not connected to host yet', retryable: true } });
+      if (SnugBridge.capabilities.access !== true) return Promise.resolve({ ok: false, error: { code: 'HOST_ERROR', message: 'this host does not offer access between apps', retryable: false } });
+      return new Promise((resolve) => {
+        const requestId = crypto.randomUUID();
+        SNUG_ACCESS_PENDING.set(requestId, resolve);
+        SnugBridge.post({ type: 'snug:access-request', requestId, op, ...fields });
+      });
+    }
+
+    function onAccessChanged(grantId) {
+      // This app's own work (the KB leaves this body to the app): note the hint; the visible
+      // page says it heard it, and *read again after the change* reads with that id.
+      HEARD.changed = grantId;
+      noteHeard();
+    }
+
+    window.addEventListener('message', (event) => {
+      const data = event.data;
+      if (event.source !== window.parent || !data || data.v !== 1) return;
+      if (data.type === 'snug:access-response') {
+        const resolve = SNUG_ACCESS_PENDING.get(data.requestId);
+        if (!resolve) return; // not ours, or already answered
+        SNUG_ACCESS_PENDING.delete(data.requestId);
+        // The answer's fields (grant / columns, rows, truncated, totalRows / grants) are at the TOP LEVEL.
+        resolve(data.ok ? data : { ok: false, error: data.error });
+        return;
+      }
+      if (data.type === 'snug:host-event' && data.event === 'access-changed') {
+        const change = data.data;
+        if (change && typeof change.grantId === 'string' && change.grantId) onAccessChanged(change.grantId);
+      }
+    });
+
+    // ============================================================
+    // 6. RESPONSE SCHEMA — this app never thinks; kept for the template's shape
+    // ============================================================
+    const RESPONSE_SCHEMA = { message: 'string' };
+
+    // ============================================================
+    // 7. YOUR APP
+    // ============================================================
+    const SPENDING_SQL = 'SELECT amount, category FROM transactions ORDER BY amount DESC';
+    /** A table this app is never allowed (the user ticks transactions only): it must be ABSENT. */
+    const ACCOUNTS_SQL = 'SELECT name, balance FROM accounts';
+    /** An unbounded read: the host's wall clock must stop it, not this page. */
+    const BOMB_SQL = 'WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c) SELECT count(*) FROM c';
+
+    // What this page has heard from the host about access — the module-level store the
+    // listeners above write and the component reads.
+    const HEARD = { log: [], changed: null };
+    const heardListeners = new Set();
+    const noteHeard = () => { for (const fn of heardListeners) fn(); };
+    window.addEventListener('message', (event) => {
+      const data = event.data;
+      if (event.source !== window.parent || !data || data.v !== 1) return;
+      if (data.type === 'snug:access-response' || (data.type === 'snug:host-event' && data.event === 'access-changed')) {
+        HEARD.log.push(JSON.stringify(data));
+        noteHeard();
+      }
+    });
+
+    function describeError(error) {
+      return (error && error.code) + ' · ' + (error && error.retryable ? 'retryable' : 'final') + ' · ' + (error && error.message);
+    }
+
+    function App() {
+      const { isReady, theme } = useSnugApp({
+        appId: 'e2e-access-budget',
+        displayName: 'Budget',
+        description: 'Shows spending by category, from data another app keeps.',
+        iconEmoji: '💸',
+        iconColor: '#2f7de1',
+      });
+      // The last access the host answered — kept, so a reopened Budget can still name it.
+      const [held, setHeld] = usePersistedState('access-held', null);
+      const [status, setStatus] = useState('ready');
+      const [result, setResult] = useState('');
+      const [, setTick] = useState(0);
+      useEffect(() => {
+        const rerender = () => setTick((n) => n + 1);
+        heardListeners.add(rerender);
+        return () => heardListeners.delete(rerender);
+      }, []);
+      useEffect(() => {
+        document.documentElement.dataset.theme = theme;
+      }, [theme]);
+      useEffect(() => {
+        if (HEARD.changed) setStatus('access-changed ' + HEARD.changed);
+      }, [HEARD.changed]);
+
+      // A user act: ask to read another app's data. Never on load.
+      const ask = async () => {
+        setStatus('request: waiting');
+        setResult('');
+        const asked = await snugAccessRequest('request', {
+          purpose: 'to show spending by category',
+          hints: { tables: ['transactions'], words: ['spending', 'category'] },
+        });
+        if (!asked.ok) {
+          setStatus('request: ' + asked.error.code);
+          setResult(describeError(asked.error));
+          return;
+        }
+        setHeld(asked.grant);
+        setStatus('request: ok');
+        setResult('from ' + asked.grant.source.displayName + ' · tables: ' + asked.grant.tables.map((t) => t.name).join(', ') + ' · ' + asked.grant.duration);
+      };
+
+      const read = async (grantId, sql) => {
+        if (!grantId) {
+          setStatus('query: nothing held');
+          return;
+        }
+        setStatus('query: waiting');
+        setResult('');
+        const answer = await snugAccessRequest('query', { grantId, sql });
+        if (!answer.ok) {
+          setStatus('query: ' + answer.error.code);
+          setResult(describeError(answer.error));
+          return;
+        }
+        setStatus('query: ok');
+        setResult('rows: ' + answer.rows.length + ' · columns: ' + answer.columns.join(', '));
+      };
+
+      const list = async () => {
+        setStatus('list: waiting');
+        const answer = await snugAccessRequest('list', {});
+        if (!answer.ok) {
+          setStatus('list: ' + answer.error.code);
+          setResult(describeError(answer.error));
+          return;
+        }
+        setStatus('list: ok');
+        setResult('holds: ' + answer.grants.length + (answer.grants.length > 0 ? ' · from ' + answer.grants.map((g) => g.source.displayName).join(', ') : ''));
+      };
+
+      const heldId = held && held.id;
+      if (!isReady) return <div id="status">connecting</div>;
+      return (
+        <main>
+          <h1>Budget</h1>
+          <div>
+            <button type="button" id="ask" onClick={ask}>use another app's data</button>
+            <button type="button" id="query" onClick={() => read(heldId, SPENDING_SQL)}>show spending</button>
+            <button type="button" id="query-accounts" onClick={() => read(heldId, ACCOUNTS_SQL)}>read accounts</button>
+            <button type="button" id="bomb" onClick={() => read(heldId, BOMB_SQL)}>count forever</button>
+            <button type="button" id="requery" disabled={!HEARD.changed} onClick={() => read(HEARD.changed, SPENDING_SQL)}>read again after the change</button>
+            <button type="button" id="list" onClick={list}>what can I read</button>
+          </div>
+          <div id="status">{status}</div>
+          <div id="result">{result}</div>
+          <div id="held">{heldId || 'none'}</div>
+          <div id="changed">{HEARD.changed ? 'access-changed ' + HEARD.changed : ''}</div>
+          <pre id="view">{held ? JSON.stringify(held) : ''}</pre>
+          <pre id="log">{HEARD.log.join('\n')}</pre>
+        </main>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
