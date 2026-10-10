@@ -19,6 +19,17 @@
 //   - the `scheduleMuted:<appId>` equality delete  → "… and its mute … are gone".
 // A multi-app task is deliberately NOT rewritten: the engine derives `appMissing` on a
 // step result from the missing app at run time, so the task row stays byte-identical.
+//
+// ACCESS BETWEEN APPS (TASK-20261010-cross-app-access AC9, ADR-0075 §9). Step 3c''' sweeps
+// the access rows inside the same transaction, one sweep per row below — remove one and its
+// row reds (each was mutation-checked by hand):
+//   - every grant where the app is the READER        → "… every grant where it is the reader …";
+//   - every grant where the app is the SOURCE        → "… every grant where it is the source …";
+//   - the `accessLog:<appId>` equality delete        → "… its own history row …";
+//   - the `accessDeclined:<appId>:` prefix delete    → "… its declines …";
+//   - the `accessMuted:<appId>` equality delete      → "… its mute …".
+// A sibling app's rows — its grants, its history (even the entries naming the deleted
+// reader: the source keeps its history), its declines and its mute — are untouched.
 
 import initSqlJs from 'sql.js';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -27,7 +38,12 @@ import {
   APP_KV_TABLE,
   USERDB_FILE,
   USERDB_TABLES,
+  accessGrantSchema,
+  accessLogEntrySchema,
+  accessRequestHash,
   appDataToken,
+  type AccessGrant,
+  type AccessLogEntry,
   scheduleRunSchema,
   scheduledTaskSchema,
   type ScheduleRun,
@@ -40,6 +56,10 @@ import { createMemoryBackend, type MemoryBackend } from '../../persistence.js';
 import { openUserDb, type UserDb } from '../userdb.js';
 import { execFrame, kvSetFrame } from '../../__tests__/helpers.js';
 import {
+  accessDeclinedSettingKey,
+  accessGrantSettingKey,
+  accessLogSettingKey,
+  accessMutedSettingKey,
   scheduleDeclinedSettingKey,
   scheduleMutedSettingKey,
   scheduleRunsSettingKey,
@@ -524,5 +544,150 @@ describe('deleteApp — scheduled tasks, declines and the mute (TASK-20261009 C3
     await db.deleteApp(appId);
 
     expect(db.listUnreadableScheduleKeys()).toEqual([scheduleSettingKey('unreadable')]);
+  });
+});
+
+// ------------------------------------------------ access between apps (TASK-20261010 AC9)
+
+const ACCESS_AT = '2026-10-10T08:00:00.000Z';
+
+function accessGrant(readerAppId: string, sourceAppId: string): AccessGrant {
+  return accessGrantSchema.parse({
+    id: crypto.randomUUID(),
+    readerAppId,
+    sourceAppId,
+    scope: { tables: [{ name: 'games', columns: ['id', 'result'] }] },
+    access: 'read',
+    purpose: 'to compare results',
+    duration: { kind: 'always' },
+    unattended: false,
+    status: 'active',
+    provenance: 'app',
+    readerVersion: 1,
+    grantedAt: ACCESS_AT,
+    updatedAt: ACCESS_AT,
+  });
+}
+
+function accessEntry(grant: AccessGrant, readerName: string): AccessLogEntry {
+  return accessLogEntrySchema.parse({ at: ACCESS_AT, kind: 'granted', grantId: grant.id, readerAppId: grant.readerAppId, readerName });
+}
+
+const declineHash = accessRequestHash({ hints: { tables: ['games'] } });
+const decline = { purpose: 'to compare results', hints: { tables: ['games'] }, at: ACCESS_AT };
+
+/** Three apps with access state in every direction: goner reads keeper, keeper reads goner, keeper reads other. */
+async function seedAccess(): Promise<{
+  goner: string;
+  keeper: string;
+  other: string;
+  gonerReadsKeeper: AccessGrant;
+  keeperReadsGoner: AccessGrant;
+  keeperReadsOther: AccessGrant;
+}> {
+  const goner = await seedFullApp('goner', 'src-goner');
+  const keeper = await seedFullApp('keeper', 'src-keeper');
+  const other = await seedFullApp('other', 'src-other');
+  const gonerReadsKeeper = accessGrant(goner, keeper);
+  const keeperReadsGoner = accessGrant(keeper, goner);
+  const keeperReadsOther = accessGrant(keeper, other);
+  for (const grant of [gonerReadsKeeper, keeperReadsGoner, keeperReadsOther]) db.putAccessGrant(grant);
+  // Each source's history: keeper's names the goner as a reader; goner's names the keeper.
+  db.appendAccessLog(keeper, accessEntry(gonerReadsKeeper, 'goner'));
+  db.appendAccessLog(goner, accessEntry(keeperReadsGoner, 'keeper'));
+  db.appendAccessLog(other, accessEntry(keeperReadsOther, 'keeper'));
+  db.addAccessDecline(goner, declineHash, decline);
+  db.addAccessDecline(keeper, declineHash, decline);
+  db.setAccessMuted(goner, true);
+  db.setAccessMuted(keeper, true);
+  await db.flush();
+  return { goner, keeper, other, gonerReadsKeeper, keeperReadsGoner, keeperReadsOther };
+}
+
+async function expectRowsGone(keys: readonly string[]): Promise<void> {
+  const after = await readUserDbTables();
+  for (const key of keys) {
+    expect(after.query(`SELECT 1 FROM ${USERDB_TABLES.settings} WHERE key = ?`, [key]), `row ${key} survived`).toHaveLength(0);
+  }
+}
+
+describe('deleteApp — access grants, history, declines and the mute (TASK-20261010 AC9)', () => {
+  it('removes every grant where it is the reader', async () => {
+    const { goner, gonerReadsKeeper } = await seedAccess();
+    await db.deleteApp(goner);
+    expect(db.getAccessGrant(gonerReadsKeeper.id)).toBeUndefined();
+    await expectRowsGone([accessGrantSettingKey(gonerReadsKeeper.id)]);
+  });
+
+  it('removes every grant where it is the source', async () => {
+    const { goner, keeperReadsGoner } = await seedAccess();
+    await db.deleteApp(goner);
+    expect(db.getAccessGrant(keeperReadsGoner.id)).toBeUndefined();
+    await expectRowsGone([accessGrantSettingKey(keeperReadsGoner.id)]);
+  });
+
+  it('removes its own history row (accessLog:<appId>)', async () => {
+    const { goner } = await seedAccess();
+    await db.deleteApp(goner);
+    await expectRowsGone([accessLogSettingKey(goner)]);
+  });
+
+  it('removes its declines (accessDeclined:<appId>:*)', async () => {
+    const { goner } = await seedAccess();
+    db.addAccessDecline(goner, accessRequestHash({ hints: { words: ['chess'] } }), { ...decline, hints: { words: ['chess'] } });
+    await db.deleteApp(goner);
+    expect(db.listSettingKeys().filter((key) => key.startsWith(`accessDeclined:${goner}:`))).toEqual([]);
+    await expectRowsGone([accessDeclinedSettingKey(goner, declineHash)]);
+  });
+
+  it('removes its mute (accessMuted:<appId>)', async () => {
+    const { goner } = await seedAccess();
+    await db.deleteApp(goner);
+    expect(db.isAccessMuted(goner)).toBe(false);
+    await expectRowsGone([accessMutedSettingKey(goner)]);
+  });
+
+  it('a grant row that no longer parses but names the app is removed too — a later lenient reader must not find it', async () => {
+    const { goner } = await seedAccess();
+    const plantedKey = accessGrantSettingKey(crypto.randomUUID());
+    db.setSetting(plantedKey, { readerAppId: goner, sourceAppId: 'anyone', junk: true });
+    await db.deleteApp(goner);
+    await expectRowsGone([plantedKey]);
+  });
+
+  it("a sibling app's rows are untouched — its grants, its history (even entries naming the deleted reader), its declines and its mute", async () => {
+    const { goner, keeper, other, gonerReadsKeeper, keeperReadsOther } = await seedAccess();
+    const keeperHistory = db.listAccessLog(keeper);
+    const otherHistory = db.listAccessLog(other);
+
+    await db.deleteApp(goner);
+
+    expect(db.getAccessGrant(keeperReadsOther.id)).toEqual(keeperReadsOther);
+    expect(db.listAccessLog(keeper)).toEqual(keeperHistory);
+    expect(db.listAccessLog(keeper)[0]?.grantId).toBe(gonerReadsKeeper.id);
+    expect(db.listAccessLog(other)).toEqual(otherHistory);
+    expect(db.listAccessDeclines(keeper).map((d) => d.hash)).toEqual([declineHash]);
+    expect(db.isAccessMuted(keeper)).toBe(true);
+  });
+
+  it('the sweeps run INSIDE the cascade transaction: a failed delete leaves every access row in place', async () => {
+    const { goner, gonerReadsKeeper, keeperReadsGoner } = await seedAccess();
+    const bytes = await db.exportUserDb({ includeSecrets: true });
+    const SQL = await initSqlJs({ locateFile: locateWasm });
+    const doctored = new SQL.Database(bytes);
+    doctored.run(
+      `CREATE TRIGGER test_block_app_delete BEFORE DELETE ON ${USERDB_TABLES.apps} BEGIN SELECT RAISE(ABORT, 'injected failure'); END`,
+    );
+    const doctoredBytes = doctored.export();
+    doctored.close();
+    await db.importUserDb(doctoredBytes, { trustedOrigin: true });
+
+    await expect(db.deleteApp(goner)).rejects.toThrow();
+
+    expect(db.getAccessGrant(gonerReadsKeeper.id)).toEqual(gonerReadsKeeper);
+    expect(db.getAccessGrant(keeperReadsGoner.id)).toEqual(keeperReadsGoner);
+    expect(db.listAccessLog(goner)).toHaveLength(1);
+    expect(db.listAccessDeclines(goner)).toHaveLength(1);
+    expect(db.isAccessMuted(goner)).toBe(true);
   });
 });

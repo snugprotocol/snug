@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState, type CSSProperties, type MutableRefObject, type ReactElement, type Ref } from 'react';
 import { injectCsp } from '../csp.js';
 import { createRunnerHost, type RunnerHost, type RunnerHostBaseOptions, type RunnerHostOptions } from '../host.js';
-import type { DbDriver, NetHandler, OpenUrlHandler } from '../transport.js';
+import type { AccessHandler, DbDriver, NetHandler, OpenUrlHandler } from '../transport.js';
 
 export type SnugAppFrameProps = Omit<RunnerHostBaseOptions, 'iframe'> &
   ({ db: DbDriver; dbNamespace: string } | { db?: undefined; dbNamespace?: undefined }) &
-  ({ net: NetHandler; netAppId: string } | { net?: undefined; netAppId?: undefined }) & {
+  ({ net: NetHandler; netAppId: string } | { net?: undefined; netAppId?: undefined }) &
+  /** Access between apps (ADR-0075) — the handler and its HOST-assigned id travel as a pair, like db/net. */
+  ({ access: AccessHandler; accessAppId: string } | { access?: undefined; accessAppId?: undefined }) & {
     /** The open-url capability (ADR-0038 D5) — mount-captured like db/net. */
     openUrl?: OpenUrlHandler;
     /** The untrusted app HTML. RUNNER_CSP is injected before it ever reaches the iframe. */
@@ -35,7 +37,7 @@ function applyRef(ref: Ref<RunnerHost | null> | undefined, value: RunnerHost | n
  * Semantics (deliberate, documented):
  * - The host is keyed on the mounted iframe element and created once per mount.
  *   Identity options (transport, budgetKey, budgetStore, db, dbNamespace, net, netAppId,
- *   locale, streaming) are captured at mount — pass a React `key` to remount when they must change.
+ *   access, accessAppId, locale, streaming) are captured at mount — pass a React `key` to remount when they must change.
  * - `html` changes flow through the RESET path, not host recreation: the same host
  *   persists, the srcdoc reassignment is counted as an expected load, and in-flight
  *   work is superseded with SUPERSEDED terminal frames on the reload — never dropped
@@ -92,6 +94,7 @@ export function SnugAppFrame(props: SnugAppFrameProps): ReactElement {
       onNavigatedAway: () => propsRef.current.onNavigatedAway?.(),
       ...(initial.db !== undefined ? { db: initial.db, dbNamespace: initial.dbNamespace } : {}),
       ...(initial.net !== undefined ? { net: initial.net, netAppId: initial.netAppId } : {}),
+      ...(initial.access !== undefined ? { access: initial.access, accessAppId: initial.accessAppId } : {}),
       ...(initial.openUrl !== undefined ? { openUrl: initial.openUrl } : {}),
     } as RunnerHostOptions);
     hostRef.current = host;

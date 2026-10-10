@@ -44,22 +44,33 @@ describe('announce → host-ready handshake', () => {
     });
   });
 
-  it('advertises db capability if and only if a driver is configured; auth is always false; net iff a handler is configured', async () => {
+  it('advertises db capability if and only if a driver is configured; auth is always false; net iff a handler is configured; access iff an access handler is configured', async () => {
     const withDb = await mount({
       options: { db: { handle: async () => ({ ok: true as const }) }, dbNamespace: 'ns' },
     });
     await withDb.connect();
-    expect(withDb.readies().at(-1)!.capabilities).toEqual({ streaming: true, db: true, auth: false, net: false, openUrl: false });
+    expect(withDb.readies().at(-1)!.capabilities).toEqual({ streaming: true, db: true, auth: false, net: false, openUrl: false, access: false });
 
     const withoutDb = await mount();
     await withoutDb.connect();
-    expect(withoutDb.readies().at(-1)!.capabilities).toEqual({ streaming: true, db: false, auth: false, net: false, openUrl: false });
+    expect(withoutDb.readies().at(-1)!.capabilities).toEqual({ streaming: true, db: false, auth: false, net: false, openUrl: false, access: false });
 
     const withNet = await mount({
       options: { net: { handle: async () => ({ ok: true as const, status: 200, headers: {}, body: '' }) }, netAppId: 'app' },
     });
     await withNet.connect();
-    expect(withNet.readies().at(-1)!.capabilities).toEqual({ streaming: true, db: false, auth: false, net: true, openUrl: false });
+    expect(withNet.readies().at(-1)!.capabilities).toEqual({ streaming: true, db: false, auth: false, net: true, openUrl: false, access: false });
+
+    // Access between apps (TASK-20261010-cross-app-access AC3): advertised iff an access
+    // handler AND its host-assigned accessAppId are configured — the pair, like db/net.
+    const withAccess = await mount({
+      options: {
+        access: { handle: async () => ({ ok: true as const, op: 'release' as const }) },
+        accessAppId: 'reader',
+      },
+    });
+    await withAccess.connect();
+    expect(withAccess.readies().at(-1)!.capabilities).toEqual({ streaming: true, db: false, auth: false, net: false, openUrl: false, access: true });
   });
 
   it('advertises streaming false only when the embedder declares it; absent means true (TASK-20260905-host-kit AC6)', async () => {
@@ -68,7 +79,7 @@ describe('announce → host-ready handshake', () => {
     // and nothing more — the transport it wraps is what emits or withholds deltas.
     const declared = await mount({ options: { streaming: false } });
     await declared.connect();
-    expect(declared.readies().at(-1)!.capabilities).toEqual({ streaming: false, db: false, auth: false, net: false, openUrl: false });
+    expect(declared.readies().at(-1)!.capabilities).toEqual({ streaming: false, db: false, auth: false, net: false, openUrl: false, access: false });
 
     const explicit = await mount({ options: { streaming: true } });
     await explicit.connect();

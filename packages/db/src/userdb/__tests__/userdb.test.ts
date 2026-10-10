@@ -9,14 +9,26 @@ import {
   USERDB_LIMITS,
   USERDB_SCHEMA_VERSION,
   USERDB_TABLES,
+  accessGrantSchema,
+  accessLogEntrySchema,
+  accessRequestHash,
+  canonicalAccessGrantIntent,
   scheduleRunSchema,
   scheduledTaskSchema,
+  type AccessGrant,
+  type AccessLogEntry,
   type ScheduleRun,
   type ScheduledTask,
 } from '@snugprotocol/protocol';
-import { locateWasm } from '../../__tests__/helpers.js';
+import { execFrame, kvSetFrame, locateWasm } from '../../__tests__/helpers.js';
+import { namespaceToFileName } from '../../namespace.js';
+import { scopedScratchRead } from '../../scoped-read.js';
 import { createMemoryBackend, type MemoryBackend } from '../../persistence.js';
 import {
+  accessDeclinedSettingKey,
+  accessGrantSettingKey,
+  accessLogSettingKey,
+  accessMutedSettingKey,
   SCHEDULER_STATE_SETTING_KEY,
   scheduleDeclinedSettingKey,
   scheduleMutedSettingKey,
@@ -24,7 +36,7 @@ import {
   scheduleSettingKey,
 } from '../app-settings-keys.js';
 import { SCHEDULE_IMPORTED_CLAIM_MAX_AGE_MS } from '../schedules.js';
-import { openUserDb, UserDbError, type UserDb } from '../userdb.js';
+import { openUserDb, USERDB_ERROR_CODES, UserDbError, type UserDb } from '../userdb.js';
 
 const open = async (backend: MemoryBackend, overrides: Record<string, unknown> = {}): Promise<UserDb> => {
   const result = await openUserDb({ backend, locateWasm, persistDebounceMs: 1, ...overrides });
@@ -751,5 +763,383 @@ describe('getFileId — the file identity the scheduler keys its leader lock on 
     if (second.status !== 'ok') throw new Error('reopen failed');
     expect(second.userDb.getFileId()).toBe(id);
     await second.userDb.close();
+  });
+});
+
+// ---------------------------------------------- access between apps (TASK-20261010 AC7, AC10)
+//
+// AC7 — the two reads the access engine needs from the SOURCE: `exportAppRuntime` (the live
+// runtime bytes a scoped read copies; the `scratchRun` export path behind the `getApp` guard
+// and the deleted-app tombstone) and `describeAppData` (what the consent sheet shows: tables,
+// columns with a `sensitive` flag, row counts — from the SAME exported bytes).
+//
+// AC10 — the import pass on the CANDIDATE, beside the scheduler's: an UNTRUSTED file's grants
+// land `suspended / imported` unless intent-identical to a local grant of the same id; a
+// TRUSTED pull keeps them; an untrusted file's declines and mutes are dropped and its history
+// entries tagged `imported`; a grant row that does not parse is removed and reported.
+//
+// Mutation checks (run by hand): drop the exportAppRuntime guard → the phantom-file row reds;
+// skip the demotion → the "lands suspended" row reds; skip the tag → the tagging row reds.
+
+const SOURCE_APP = '0b1c7e3a-5f2d-4c8e-9a61-2d3e4f5a6b7c';
+const READER_APP = '7f6e5d4c-3b2a-4190-8f7e-6d5c4b3a2918';
+const GHOST_APP = 'f0f0f0f0-0000-4000-8000-000000000000';
+const ACCESS_AT = '2026-10-10T08:00:00.000Z';
+
+async function bytesOf(db: UserDb, appId: string): Promise<unknown[][]> {
+  const SQL = await initSqlJs({ locateFile: locateWasm });
+  const copy = new SQL.Database(await db.exportAppRuntime(appId));
+  try {
+    return copy.exec('SELECT amount FROM transactions ORDER BY amount')[0]?.values ?? [];
+  } finally {
+    copy.close();
+  }
+}
+
+async function codeOfAsync(promise: Promise<unknown>): Promise<string | undefined> {
+  try {
+    await promise;
+    return undefined;
+  } catch (err) {
+    return err instanceof UserDbError ? err.code : `not a UserDbError: ${String(err)}`;
+  }
+}
+
+describe('exportAppRuntime — the live runtime bytes behind the getApp guard and the tombstone (TASK-20261010 AC7)', () => {
+  it('answers the app’s live runtime bytes — a row written a moment ago is in them', async () => {
+    const db = await open(backend);
+    const app = db.installApp({ displayName: 'Ledger', html: '<html></html>' });
+    await db.applyAppDdl(app.appId, ['CREATE TABLE transactions (id INTEGER PRIMARY KEY, amount INTEGER NOT NULL)']);
+    await db.driver.handle(app.appId, execFrame('INSERT INTO transactions (amount) VALUES (450), (500)'));
+    expect(await bytesOf(db, app.appId)).toEqual([[450], [500]]);
+    await db.close();
+  });
+
+  it('an unknown app is NOT_FOUND — and no phantom namespace file appears for it', async () => {
+    const db = await open(backend);
+    expect(await codeOfAsync(db.exportAppRuntime(GHOST_APP))).toBe(USERDB_ERROR_CODES.NOT_FOUND);
+    await db.flush();
+    await db.close();
+    expect(await backend.load(namespaceToFileName(GHOST_APP))).toBeUndefined();
+  });
+
+  it('a deleted app is NOT_FOUND — the tombstone, not a sandbox error', async () => {
+    const db = await open(backend);
+    const app = db.installApp({ displayName: 'Ledger', html: '<html></html>' });
+    await db.applyAppDdl(app.appId, ['CREATE TABLE transactions (id INTEGER PRIMARY KEY, amount INTEGER NOT NULL)']);
+    await db.deleteApp(app.appId);
+    expect(await codeOfAsync(db.exportAppRuntime(app.appId))).toBe(USERDB_ERROR_CODES.NOT_FOUND);
+    await db.close();
+  });
+});
+
+describe('describeAppData — tables, columns (sensitive flagged) and row counts from the exported bytes (TASK-20261010 AC7)', () => {
+  it('lists every table with its columns from PRAGMA table_info — a quoted reserved word with a CHECK survives — and its row count; snug_kv is not listed', async () => {
+    const db = await open(backend);
+    const app = db.installApp({ displayName: 'Ledger', html: '<html></html>' });
+    await db.applyAppDdl(app.appId, [
+      'CREATE TABLE transactions (id INTEGER PRIMARY KEY, amount INTEGER NOT NULL, "order" TEXT CHECK ("order" <> \'\'), api_key TEXT, user_password TEXT)',
+      'CREATE TABLE notes (body TEXT)',
+    ]);
+    await db.driver.handle(app.appId, execFrame(`INSERT INTO transactions (amount, "order") VALUES (450, 'first'), (500, 'second')`));
+    await db.driver.handle(app.appId, kvSetFrame('pin', '1234'));
+
+    expect(await db.describeAppData(app.appId)).toEqual({
+      tables: [
+        { name: 'notes', columns: [{ name: 'body', sensitive: false }], rowCount: 0 },
+        {
+          name: 'transactions',
+          columns: [
+            { name: 'id', sensitive: false },
+            { name: 'amount', sensitive: false },
+            { name: 'order', sensitive: false },
+            { name: 'api_key', sensitive: true },
+            { name: 'user_password', sensitive: true },
+          ],
+          rowCount: 2,
+        },
+      ],
+    });
+    await db.close();
+  });
+
+  it('counts a row written but not yet persisted (it flushes first, and counts on the same exported bytes)', async () => {
+    const db = await open(backend, { persistDebounceMs: 60_000 });
+    const app = db.installApp({ displayName: 'Ledger', html: '<html></html>' });
+    await db.applyAppDdl(app.appId, ['CREATE TABLE transactions (id INTEGER PRIMARY KEY, amount INTEGER NOT NULL)']);
+    await db.driver.handle(app.appId, execFrame('INSERT INTO transactions (amount) VALUES (1)'));
+    await db.driver.handle(app.appId, execFrame('INSERT INTO transactions (amount) VALUES (2)'));
+    const described = await db.describeAppData(app.appId);
+    expect(described.tables.map((t) => [t.name, t.rowCount])).toEqual([['transactions', 2]]);
+    await db.close();
+  });
+
+  it('an app with no tables answers { tables: [] } — a kv-only app included', async () => {
+    const db = await open(backend);
+    const bare = db.installApp({ displayName: 'Bare', html: '<html></html>' });
+    const kvOnly = db.installApp({ displayName: 'Kv', html: '<html></html>' });
+    await db.driver.handle(kvOnly.appId, kvSetFrame('score', 3));
+    expect(await db.describeAppData(bare.appId)).toEqual({ tables: [] });
+    expect(await db.describeAppData(kvOnly.appId)).toEqual({ tables: [] });
+    await db.close();
+  });
+
+  // Review finding 3: `PRAGMA table_info` hides GENERATED columns, yet the scoped copy still
+  // answers a SELECT on them — so the sheet must show them (table_xinfo, hidden 2/3), flagged
+  // `sensitive` by the same name rule, and a scope built from this description must not drift.
+  it('lists GENERATED columns (stored and virtual) like ordinary ones — the sheet says exactly what the copy answers — and a scope built from it reads without drift', async () => {
+    const db = await open(backend);
+    const app = db.installApp({ displayName: 'Ledger', html: '<html></html>' });
+    await db.applyAppDdl(app.appId, [
+      'CREATE TABLE t (name TEXT, password TEXT, shadow TEXT GENERATED ALWAYS AS (password) STORED, name_copy TEXT GENERATED ALWAYS AS (name) VIRTUAL, api_key TEXT GENERATED ALWAYS AS (upper(name)) VIRTUAL)',
+    ]);
+    await db.driver.handle(app.appId, execFrame("INSERT INTO t (name, password) VALUES ('a', 'pw-one')"));
+
+    const described = await db.describeAppData(app.appId);
+    expect(described.tables).toEqual([
+      {
+        name: 't',
+        columns: [
+          { name: 'name', sensitive: false },
+          { name: 'password', sensitive: true },
+          { name: 'shadow', sensitive: false },
+          { name: 'name_copy', sensitive: false },
+          { name: 'api_key', sensitive: true },
+        ],
+        rowCount: 1,
+      },
+    ]);
+
+    // The consent sheet's own derivation: every column that is not sensitive.
+    const scope = { tables: described.tables.map((table) => ({ name: table.name, columns: table.columns.filter((c) => !c.sensitive).map((c) => c.name) })) };
+    const SQL = await initSqlJs({ locateFile: locateWasm });
+    const result = scopedScratchRead(SQL, await db.exportAppRuntime(app.appId), scope, { sql: 'SELECT name, shadow, name_copy FROM t' }, { maxRows: 500, maxBytes: 65_536 });
+    expect(result).toMatchObject({ ok: true, rows: [['a', '***', 'a']] });
+    await db.close();
+  });
+
+  it('an unknown or deleted app is NOT_FOUND', async () => {
+    const db = await open(backend);
+    expect(await codeOfAsync(db.describeAppData(GHOST_APP))).toBe(USERDB_ERROR_CODES.NOT_FOUND);
+    const app = db.installApp({ displayName: 'Ledger', html: '<html></html>' });
+    await db.deleteApp(app.appId);
+    expect(await codeOfAsync(db.describeAppData(app.appId))).toBe(USERDB_ERROR_CODES.NOT_FOUND);
+    await db.close();
+  });
+});
+
+function accessGrant(overrides: Record<string, unknown> = {}): AccessGrant {
+  return accessGrantSchema.parse({
+    id: crypto.randomUUID(),
+    readerAppId: READER_APP,
+    sourceAppId: SOURCE_APP,
+    scope: { tables: [{ name: 'transactions', columns: ['amount', 'category'] }] },
+    access: 'read',
+    purpose: 'to show spending by category',
+    duration: { kind: 'always' },
+    unattended: false,
+    status: 'active',
+    provenance: 'app',
+    readerVersion: 1,
+    grantedAt: ACCESS_AT,
+    updatedAt: ACCESS_AT,
+    ...overrides,
+  });
+}
+
+function accessEntry(grantId: string, overrides: Record<string, unknown> = {}): AccessLogEntry {
+  return accessLogEntrySchema.parse({ at: ACCESS_AT, kind: 'granted', grantId, readerAppId: READER_APP, readerName: 'Budget', ...overrides });
+}
+
+function installAccessApps(db: UserDb): void {
+  db.installApp({ appId: SOURCE_APP, displayName: 'Ledger', html: '<html>ledger</html>' });
+  db.installApp({ appId: READER_APP, displayName: 'Budget', html: '<html>budget</html>' });
+}
+
+/** A donor file carrying the two apps and whatever `plant` writes — exported WITH secrets, like a sync push. */
+const accessDonor = (plant: (donor: UserDb) => void): Promise<Uint8Array> =>
+  donorBytes((donor) => {
+    installAccessApps(donor);
+    plant(donor);
+  });
+
+const declineHash = accessRequestHash({ hints: { tables: ['transactions'] } });
+const decline = { purpose: 'to show spending by category', hints: { tables: ['transactions'] }, at: ACCESS_AT };
+
+describe('importUserDb — access grants are disarmed unless intent-identical (TASK-20261010 AC10)', () => {
+  it('an UNTRUSTED file: a grant the hub has never seen lands suspended / imported, the rest of it intact, and is reported', async () => {
+    const theirs = accessGrant({ reads: 4 });
+    const bytes = await accessDonor((donor) => donor.putAccessGrant(theirs));
+    const db = await open(backend);
+
+    const report = await db.importUserDb(bytes);
+
+    const landed = db.getAccessGrant(theirs.id);
+    expect(landed).toMatchObject({ status: 'suspended', suspendedReason: 'imported', purpose: theirs.purpose, scope: theirs.scope, reads: 4 });
+    expect(landed?.revokedAt).toBeUndefined();
+    expect(report.access).toEqual({ suspendedGrants: 1, removedGrants: 0, taggedLogEntries: 0 });
+    await db.close();
+  });
+
+  it('an UNTRUSTED file: an intent-identical grant stays as it was; the same id with another intent is suspended', async () => {
+    const mine = accessGrant();
+    const edited = accessGrant();
+    const bytes = await accessDonor((donor) => {
+      // The same intent with moved bookkeeping (a read happened elsewhere) and keys in another order.
+      const moved = { ...mine, reads: 9, lastReadAt: ACCESS_AT, updatedAt: '2026-10-11T08:00:00.000Z' };
+      donor.setSetting(accessGrantSettingKey(mine.id), Object.fromEntries(Object.entries(moved).reverse()));
+      donor.putAccessGrant({ ...edited, purpose: 'to read everything, forever' });
+    });
+    const db = await open(backend);
+    installAccessApps(db);
+    db.putAccessGrant(mine);
+    db.putAccessGrant(edited);
+
+    const report = await db.importUserDb(bytes);
+
+    expect(db.getAccessGrant(mine.id)).toMatchObject({ status: 'active', reads: 9 });
+    expect(canonicalAccessGrantIntent(db.getAccessGrant(mine.id)!)).toBe(canonicalAccessGrantIntent(mine));
+    expect(db.getAccessGrant(edited.id)).toMatchObject({ status: 'suspended', suspendedReason: 'imported', purpose: 'to read everything, forever' });
+    expect(report.access.suspendedGrants).toBe(1);
+    await db.close();
+  });
+
+  it('an UNTRUSTED file: a suspended grant becomes suspended / imported; a revoked one stays revoked (already disarmed, never made revivable)', async () => {
+    const paused = accessGrant({ status: 'suspended', suspendedReason: 'reader-updated' });
+    const stopped = accessGrant({ status: 'revoked', revokedAt: ACCESS_AT });
+    const bytes = await accessDonor((donor) => {
+      donor.putAccessGrant(paused);
+      donor.putAccessGrant(stopped);
+    });
+    const db = await open(backend);
+
+    const report = await db.importUserDb(bytes);
+
+    expect(db.getAccessGrant(paused.id)).toMatchObject({ status: 'suspended', suspendedReason: 'imported' });
+    expect(db.getAccessGrant(stopped.id)).toEqual(stopped);
+    expect(report.access.suspendedGrants).toBe(1);
+    await db.close();
+  });
+
+  it('a TRUSTED pull keeps every grant exactly as it is', async () => {
+    const theirs = accessGrant();
+    const bytes = await accessDonor((donor) => donor.putAccessGrant(theirs));
+    const db = await open(backend);
+
+    const report = await db.importUserDb(bytes, { trustedOrigin: true });
+
+    expect(db.getAccessGrant(theirs.id)).toEqual(theirs);
+    expect(report.access).toEqual({ suspendedGrants: 0, removedGrants: 0, taggedLogEntries: 0 });
+    await db.close();
+  });
+
+  it('an UNTRUSTED file’s declines and mutes are dropped; a TRUSTED pull keeps them', async () => {
+    const bytes = await accessDonor((donor) => {
+      donor.addAccessDecline(READER_APP, declineHash, decline);
+      donor.setAccessMuted(READER_APP, true);
+    });
+
+    const untrusted = await open(createMemoryBackend());
+    await untrusted.importUserDb(bytes);
+    expect(untrusted.listAccessDeclines(READER_APP)).toEqual([]);
+    expect(untrusted.isAccessMuted(READER_APP)).toBe(false);
+    expect(untrusted.listSettingKeys()).not.toContain(accessDeclinedSettingKey(READER_APP, declineHash));
+    expect(untrusted.listSettingKeys()).not.toContain(accessMutedSettingKey(READER_APP));
+    await untrusted.close();
+
+    const trusted = await open(createMemoryBackend());
+    await trusted.importUserDb(bytes, { trustedOrigin: true });
+    expect(trusted.listAccessDeclines(READER_APP).map((d) => d.hash)).toEqual([declineHash]);
+    expect(trusted.isAccessMuted(READER_APP)).toBe(true);
+    await trusted.close();
+  });
+
+  it('an UNTRUSTED file’s history entries are all tagged imported (idempotent — an already-tagged entry is not counted again); a TRUSTED pull tags nothing', async () => {
+    const g = accessGrant();
+    const bytes = await accessDonor((donor) => {
+      donor.putAccessGrant(g);
+      donor.appendAccessLog(SOURCE_APP, accessEntry(g.id));
+      donor.appendAccessLog(SOURCE_APP, accessEntry(g.id, { kind: 'read', at: '2026-10-10T09:00:00.000Z', sql: 'SELECT 1', rows: 1 }));
+      donor.appendAccessLog(SOURCE_APP, accessEntry(g.id, { kind: 'revoked', at: '2026-10-10T10:00:00.000Z', imported: true }));
+    });
+
+    const untrusted = await open(createMemoryBackend());
+    const report = await untrusted.importUserDb(bytes);
+    const log = untrusted.listAccessLog(SOURCE_APP);
+    expect(log).toHaveLength(3);
+    expect(log.every((e) => e.imported === true)).toBe(true);
+    expect(report.access.taggedLogEntries).toBe(2);
+    // Importing the adopted file again tags nothing new.
+    const again = await untrusted.exportUserDb({ includeSecrets: true });
+    const second = await open(createMemoryBackend());
+    expect((await second.importUserDb(again)).access.taggedLogEntries).toBe(0);
+    expect(second.listAccessLog(SOURCE_APP).every((e) => e.imported === true)).toBe(true);
+    await second.close();
+    await untrusted.close();
+
+    const trusted = await open(createMemoryBackend());
+    const trustedReport = await trusted.importUserDb(bytes, { trustedOrigin: true });
+    expect(trusted.listAccessLog(SOURCE_APP).map((e) => e.imported ?? false)).toEqual([true, false, false]);
+    expect(trustedReport.access.taggedLogEntries).toBe(0);
+    await trusted.close();
+  });
+
+  it('a grant row that does not parse is REMOVED and reported on an UNTRUSTED import', async () => {
+    const good = accessGrant();
+    const exported = await accessDonor((donor) => donor.putAccessGrant(good));
+    const junkKey = accessGrantSettingKey(crypto.randomUUID());
+    const mismatchKey = accessGrantSettingKey(crypto.randomUUID());
+    const bytes = await plantRaw(exported, [
+      [junkKey, { readerAppId: READER_APP, status: 'active' }],
+      [mismatchKey, accessGrant()], // the body names another id
+    ]);
+
+    const db = await open(createMemoryBackend());
+    const report = await db.importUserDb(bytes);
+    expect(report.access.removedGrants).toBe(2);
+    expect(db.listSettingKeys()).not.toContain(junkKey);
+    expect(db.listSettingKeys()).not.toContain(mismatchKey);
+    expect(db.getAccessGrant(good.id)).toBeDefined();
+    await db.close();
+  });
+
+  // The schedules precedent (review finding 2): a TRUSTED pull is the user's own file from their
+  // own origin — a row this hub cannot parse may be a NEWER hub's grant (a field 1.1 does not
+  // know). It is already inert here (the tolerant read answers "no such grant"); deleting it
+  // would sync the deletion back and cost the newer device its grant.
+  it('a TRUSTED pull keeps a grant row it cannot parse — inert here, intact for the hub that wrote it — and reports no removal', async () => {
+    const good = accessGrant();
+    const exported = await accessDonor((donor) => donor.putAccessGrant(good));
+    const future = accessGrant();
+    const futureKey = accessGrantSettingKey(future.id);
+    const futureBody = { ...future, auditTrail: 'a field a later spec adds' };
+    const bytes = await plantRaw(exported, [[futureKey, futureBody]]);
+
+    const db = await open(createMemoryBackend());
+    const report = await db.importUserDb(bytes, { trustedOrigin: true });
+    expect(report.access.removedGrants).toBe(0);
+    expect(db.getSetting(futureKey)).toEqual(futureBody);
+    expect(db.getAccessGrant(future.id)).toBeUndefined(); // inert: the tolerant read does not honour it
+    expect(db.listAccessGrants().map((g) => g.id)).toEqual([good.id]);
+    await db.close();
+  });
+
+  it('the export carries grants and history: export → trusted import preserves both byte for byte', async () => {
+    const db = await open(backend);
+    installAccessApps(db);
+    const g = accessGrant({ duration: { kind: 'until', at: '2026-10-17T08:00:00.000Z' } });
+    db.putAccessGrant(g);
+    db.appendAccessLog(SOURCE_APP, accessEntry(g.id));
+    db.appendAccessLog(SOURCE_APP, accessEntry(g.id, { kind: 'read', at: '2026-10-10T09:00:00.000Z', sql: 'SELECT amount FROM transactions', rows: 3, attended: false }));
+    const exported = await db.exportUserDb();
+    expect(await settingFromBytes(exported, accessGrantSettingKey(g.id))).toEqual(g);
+    expect(await settingFromBytes(exported, accessLogSettingKey(SOURCE_APP))).toEqual(db.listAccessLog(SOURCE_APP));
+
+    const restored = await open(createMemoryBackend());
+    await restored.importUserDb(exported, { trustedOrigin: true });
+    expect(restored.listAccessGrants()).toEqual([g]);
+    expect(restored.listAccessLog(SOURCE_APP)).toEqual(db.listAccessLog(SOURCE_APP));
+    await restored.close();
+    await db.close();
   });
 });

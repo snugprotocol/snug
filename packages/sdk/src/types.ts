@@ -1,4 +1,4 @@
-import type { ResponseError } from '@snugprotocol/protocol';
+import type { AccessGrantView as ProtocolAccessGrantView, AccessHints, AccessParam, ResponseError } from '@snugprotocol/protocol';
 
 /** App identity shown by the host — display metadata, never a security identity (R4). */
 export interface SnugAppMeta {
@@ -19,6 +19,11 @@ export interface HostCapabilities {
   streaming?: boolean;
   db?: boolean;
   auth?: boolean;
+  /**
+   * Access between apps (spec 1.1 Part VI, ADR-0075): `true` when this host routes
+   * `snug:access-request`. Absent from a 1.0 host — render the honest fallback, never assume.
+   */
+  access?: boolean;
 }
 
 /**
@@ -92,4 +97,74 @@ export type ConnectedFetchResult =
  */
 export interface ConnectedFetch {
   fetch(url: string, opts?: ConnectedFetchOptions): Promise<ConnectedFetchResult>;
+}
+
+// ---------------------------------------------------------------- access between apps (ADR-0075)
+
+/**
+ * What the reader LEARNS about an access grant: the source's display name and icon, the
+ * granted tables with their columns, the duration and expiry — never the source's library id
+ * or the user's other apps. The protocol's `accessGrantViewSchema`, inferred (one definition):
+ * `access` is `'read'` at 1.1 and an open string so a future grant kind still parses.
+ */
+export type AccessGrantView = ProtocolAccessGrantView;
+
+/** The failure arm every access call shares — errors are data (R5 open codes; known ones in `ACCESS_ERROR_CODES`). */
+export type AccessFailure = { ok: false; error: ResponseError };
+
+/** `request` answered: the user allowed it, and this is what was granted. */
+export type AccessRequestResult = { ok: true; grant: AccessGrantView } | AccessFailure;
+
+/**
+ * `query` answered: ONE read-only SELECT's columns and rows from a scoped copy of the source.
+ * `truncated` is set when the host cut the answer at its row or byte cap; `totalRows` is then
+ * the statement's full count.
+ */
+export type AccessQueryResult =
+  | { ok: true; columns: string[]; rows: unknown[][]; truncated?: boolean; totalRows?: number }
+  | AccessFailure;
+
+/** `list` answered: this app's live access grants (none is an empty list, not an error). */
+export type AccessListResult = { ok: true; grants: AccessGrantView[] } | AccessFailure;
+
+/** `release` answered: the grant is given back. */
+export type AccessReleaseResult = { ok: true } | AccessFailure;
+
+/**
+ * Relevance hints for the host's ranking of the user's apps — hints only; the USER picks the
+ * source. The protocol's own inferred type (`accessHintsSchema`; caps `ACCESS_HINT_WORDS_MAX`,
+ * `ACCESS_HINT_WORD_MAX_CHARS`, `ACCESS_HINT_TABLES_MAX`), never a retyped shape.
+ */
+export type AccessRequestHints = AccessHints;
+
+export interface AccessRequestOptions {
+  hints?: AccessRequestHints;
+  /** The id of a grant being asked for again (an expired or stopped one). */
+  renew?: string;
+}
+
+/** The `onChange` hint: ids only (R7) — call `list()` or `query()` to learn what changed. */
+export interface AccessChange {
+  grantId: string;
+}
+
+/**
+ * Host-brokered access to ANOTHER app's tables (useSnugAccess; spec 1.1 Part VI). The app
+ * never names a source: it states a purpose, the user picks the app and tables on host UI the
+ * app cannot draw over, and the app learns only what was granted. Every read is logged on the
+ * source and every grant can be stopped at any moment. Every call ALWAYS resolves (errors as
+ * data); before host-ready it resolves a retryable `HOST_ERROR`, and on a host that does not
+ * advertise `capabilities.access === true` a non-retryable `HOST_ERROR` (render the fallback).
+ */
+export interface SnugAccess {
+  /** Ask the user for access — after a user act, never on load. `purpose` is one plain line, shown quoted. */
+  request(purpose: string, opts?: AccessRequestOptions): Promise<AccessRequestResult>;
+  /** Run ONE read-only `SELECT` on a granted source's tables. */
+  query(grantId: string, sql: string, params?: AccessParam[]): Promise<AccessQueryResult>;
+  /** This app's live access grants. */
+  list(): Promise<AccessListResult>;
+  /** Give a grant back. */
+  release(grantId: string): Promise<AccessReleaseResult>;
+  /** Called when one of this app's grants changed on the host (stopped, paused, expired). Returns the unsubscribe. */
+  onChange(listener: (data: AccessChange) => void): () => void;
 }

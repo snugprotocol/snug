@@ -17,12 +17,27 @@ export {
   useSnugSchedule,
 } from './schedule.js';
 export { onHostEvent } from './bridge.js';
+// Access between apps (TASK-20261010-cross-app-access, ADR-0075; spec 1.1 Part VI): the
+// module-form hook and the host-event name (the protocol's constant, re-exported). The embedded
+// form carries the same shape as a knowledge-base snippet beside the copy-exactly block (Q9).
+export { ACCESS_CHANGED_EVENT, useSnugAccess } from './access.js';
 
 export type { HostEventListener } from './bridge.js';
 export type { SnugScheduleHandler, SnugScheduleNotify, SnugScheduleResult, SnugScheduledRun } from './schedule.js';
 /** The proposal shape `proposeSchedule` posts — the protocol's `scheduleProposalSchema`, inferred. */
 export type { ScheduleProposal } from '@snugprotocol/protocol';
+/** The scalar a `query` param may be — the protocol's `accessParamSchema`, inferred. */
+export type { AccessParam } from '@snugprotocol/protocol';
 export type {
+  AccessChange,
+  AccessFailure,
+  AccessGrantView,
+  AccessListResult,
+  AccessQueryResult,
+  AccessReleaseResult,
+  AccessRequestHints,
+  AccessRequestOptions,
+  AccessRequestResult,
   AppDb,
   ConnectedFetch,
   ConnectedFetchOptions,
@@ -31,6 +46,7 @@ export type {
   HostCapabilities,
   SendMessageOptions,
   SendMessageResult,
+  SnugAccess,
   SnugAppMeta,
   SnugTheme,
   UseSnugAppResult,

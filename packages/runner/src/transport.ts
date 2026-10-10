@@ -1,4 +1,4 @@
-import type { DbRequestFrame, NetRequestFrame } from '@snugprotocol/protocol';
+import type { AccessRequestFrame, AccessResponseFrame, DbRequestFrame, NetRequestFrame } from '@snugprotocol/protocol';
 
 /**
  * Outcome of one transport attempt — errors as data, never thrown across the boundary.
@@ -95,6 +95,37 @@ export type NetHandlerResult =
  */
 export interface NetHandler {
   handle(netAppId: string, request: NetRequestFrame): Promise<NetHandlerResult>;
+}
+
+/** A response-frame variant minus its envelope (`v`/`type`/`requestId`), distributed over the union. */
+type WithoutEnvelope<F> = F extends unknown ? Omit<F, 'v' | 'type' | 'requestId'> : never;
+
+/**
+ * Result of one access operation — errors as data, mirroring DbDriverResult/NetHandlerResult.
+ * Success is exactly one of the protocol's `snug:access-response` success variants WITHOUT
+ * `v`/`type`/`requestId` (derived from `accessResponseSchema`, never retyped):
+ * `request` → `{ ok: true, op: 'request', grant }` · `query` → `{ ok: true, op: 'query',
+ * columns, rows, truncated?, totalRows? }` · `list` → `{ ok: true, op: 'list', grants }` ·
+ * `release` → `{ ok: true, op: 'release' }`. Known error codes live in the protocol's
+ * ACCESS_ERROR_CODES (R5 open-string rule); the runner adds the envelope and posts it.
+ */
+export type AccessHandlerResult =
+  | WithoutEnvelope<Extract<AccessResponseFrame, { ok: true }>>
+  | { ok: false; code: string; message: string; retryable: boolean };
+
+/**
+ * Host-brokered access-between-apps handler (ADR-0075 §1; implemented in apps/playground
+ * by the access engine — consent, grants, the scoped read in its own Worker). `accessAppId`
+ * is the HOST-assigned `accessAppId` option — the dbNamespace discipline (F5): it is decided
+ * by the embedder, NEVER by the app-claimed announce `appId`, which identifies no one; so a
+ * reader can never name itself, another reader or a source. The runner is value-blind: it
+ * routes the validated access-request frame and posts the access-response the handler
+ * returns, and never reads a grant, a scope, a row or the SQL (the AC4 lint proves the
+ * runner imports no storage, sql.js, Worker or access-engine module). An over-cap answer
+ * becomes a small terminal ACCESS_SIZE_EXCEEDED at the bridge, never silence.
+ */
+export interface AccessHandler {
+  handle(accessAppId: string, request: AccessRequestFrame): Promise<AccessHandlerResult>;
 }
 
 /**

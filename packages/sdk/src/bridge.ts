@@ -7,9 +7,11 @@ import {
   FRAME_TYPES,
   PROTOCOL_VERSION,
   parseFrame,
+  type AccessOp,
+  type AccessResponseFrame,
   type ResponseError,
 } from '@snugprotocol/protocol';
-import type { ConnectedFetchResult, HostCapabilities, SendMessageResult, SnugTheme } from './types.js';
+import type { AccessFailure, ConnectedFetchResult, HostCapabilities, SendMessageResult, SnugTheme } from './types.js';
 
 /** Result of one host-brokered db op, resolved from TOP-LEVEL db-response frame fields. */
 export type DbBridgeResult =
@@ -32,6 +34,11 @@ interface BridgeState {
   dbPending: Map<string, (result: DbBridgeResult) => void>;
   /** requestId → net resolve (AL-03). */
   netPending: Map<string, (result: ConnectedFetchResult) => void>;
+  /**
+   * requestId → access settle (TASK-20261010-cross-app-access AC5). Each entry maps the PARSED
+   * terminal access-response to its own op's result, so the bridge never guesses the op.
+   */
+  accessPending: Map<string, (frame: AccessResponseFrame) => void>;
   /** Re-render triggers for mounted hooks. */
   listeners: Set<() => void>;
   /**
@@ -45,7 +52,7 @@ interface BridgeState {
 /** A subscriber to one named host-event; receives the frame's `data` seat (unknown — validate it). */
 export type HostEventListener = (data: unknown) => void;
 
-const initialState = (): Omit<BridgeState, 'pending' | 'dbPending' | 'netPending' | 'listeners' | 'hostEventListeners'> => ({
+const initialState = (): Omit<BridgeState, 'pending' | 'dbPending' | 'netPending' | 'accessPending' | 'listeners' | 'hostEventListeners'> => ({
   instanceId: null,
   theme: 'light',
   capabilities: {},
@@ -57,6 +64,7 @@ export const bridge: BridgeState = {
   pending: new Map(),
   dbPending: new Map(),
   netPending: new Map(),
+  accessPending: new Map(),
   listeners: new Set(),
   hostEventListeners: new Map(),
 };
@@ -118,6 +126,13 @@ function onMessage(event: MessageEvent): void {
             }
           : { ok: false, error: frame.error },
       );
+      return;
+    }
+    case FRAME_TYPES.accessResponse: {
+      const settle = bridge.accessPending.get(frame.requestId);
+      if (!settle) return; // unknown or already-answered requestId — ignore
+      bridge.accessPending.delete(frame.requestId); // terminal — exactly one per requestId
+      settle(frame);
       return;
     }
     case FRAME_TYPES.hostEvent: {
@@ -208,6 +223,51 @@ export function netRequest(fields: Record<string, unknown>): Promise<ConnectedFe
   });
 }
 
+/**
+ * Post a `snug:access-request` and resolve on its terminal `snug:access-response`, mapped by
+ * the caller's `settle` (TASK-20261010-cross-app-access AC5). ALWAYS resolves, never rejects
+ * and never hangs on a host that will not answer:
+ * - before host-ready it posts nothing and answers the retryable HOST_ERROR (the netRequest
+ *   precedent — the strict request needs the host-assigned instanceId);
+ * - on a ready host that does not advertise `capabilities.access === true` (a 1.0 host, which
+ *   ignores the unknown frame type; a 1.1 host with no handler) it posts nothing and answers a
+ *   non-retryable HOST_ERROR — the capability's absence is how the app renders its fallback;
+ * - a post the browser refuses (postMessage throws DataCloneError) answers a non-retryable
+ *   HOST_ERROR and leaves nothing pending.
+ * `fields` carries the protocol's `op` and its seats.
+ */
+export function accessRequest<R>(
+  fields: { op: AccessOp } & Record<string, unknown>,
+  settle: (frame: AccessResponseFrame) => R,
+): Promise<R | AccessFailure> {
+  ensureListener();
+  if (!bridge.ready) {
+    return Promise.resolve({
+      ok: false,
+      error: { code: ERROR_CODES.HOST_ERROR, message: 'not connected to host yet', retryable: true },
+    });
+  }
+  if (bridge.capabilities.access !== true) {
+    return Promise.resolve({
+      ok: false,
+      error: { code: ERROR_CODES.HOST_ERROR, message: 'this host does not offer access between apps', retryable: false },
+    });
+  }
+  return new Promise((resolve) => {
+    const requestId = crypto.randomUUID();
+    bridge.accessPending.set(requestId, (frame) => resolve(settle(frame)));
+    try {
+      postToHost({ type: FRAME_TYPES.accessRequest, requestId, ...fields });
+    } catch {
+      bridge.accessPending.delete(requestId);
+      resolve({
+        ok: false,
+        error: { code: ERROR_CODES.HOST_ERROR, message: 'the access request could not be posted', retryable: false },
+      });
+    }
+  });
+}
+
 /** The pre-ready guard result: appMessage frames need the host-assigned instanceId. */
 export function notConnectedResult(): SendMessageResult {
   return {
@@ -225,6 +285,7 @@ export function __resetSnugBridgeForTests(): void {
   bridge.pending.clear();
   bridge.dbPending.clear();
   bridge.netPending.clear();
+  bridge.accessPending.clear();
   bridge.listeners.clear();
   bridge.hostEventListeners.clear();
 }
