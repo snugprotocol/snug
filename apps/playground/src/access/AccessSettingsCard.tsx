@@ -5,7 +5,7 @@
 //     known one here), re-read on every access revision;
 //   - the per-browser *never let apps ask to read other apps' data* switch. It writes
 //     `NO_ACCESS_ASKS_KEY` — the key's ONE home is consent.ts, beside `accessAsksOff`, the global
-//     mute the ask ladder reads — with the schedule card's `writeFlag` (the same `'1'`/absent
+//     mute the ask ladder reads — with `state/browserFlags.ts`'s `writeFlag` (the same `'1'`/absent
 //     shape as `NO_SUGGESTIONS_KEY`). Its custody is said under it: this browser only, never the
 //     file (Q15);
 //   - the apps the user told to stop asking, each with *let Budget ask again*;
@@ -17,9 +17,10 @@ import { useEffect, useId, useState, type ReactElement } from 'react';
 
 import type { AppRecord } from '@snugprotocol/db';
 
+import '../theme/access.css';
 import '../theme/access-sheet.css';
 import { appMayUseAccess } from '../run/appCapabilityRules.js';
-import { writeFlag } from '../schedule/ScheduleSettingsCard.js';
+import { writeFlag } from '../state/browserFlags.js';
 import { Switch } from '../schedule/ScheduleStates.js';
 import { Button } from '../ui/Button.js';
 import { Card } from '../ui/Card.js';

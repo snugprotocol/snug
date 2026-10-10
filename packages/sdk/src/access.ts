@@ -102,7 +102,7 @@ function readChange(data: unknown): AccessChange | undefined {
  *   view, or `ACCESS_DECLINED` / `ACCESS_PENDING` / `ACCESS_NO_SOURCES` / … as data.
  * - `query(grantId, sql, params)` — ONE read-only SELECT on the granted tables.
  * - `list()` — this app's live grants. `release(grantId)` — give one back.
- * - `onChange(listener)` — a grant was stopped, paused or expired on the host; re-`list()`.
+ * - `onChange(listener)` — a grant was stopped or paused on the host; re-`list()` (an expiry is not announced: the next `query` answers `ACCESS_EXPIRED`).
  *
  * Every call ALWAYS resolves. Before host-ready it answers the retryable HOST_ERROR; on a host
  * without `capabilities.access === true` it answers a non-retryable HOST_ERROR (show the fallback).

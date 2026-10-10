@@ -31,7 +31,8 @@ const initSqlJs = untypedInitSqlJs as (config?: { locateFile?: (file: string) =>
 /** How the engine is started from what the host sent — swappable only so a suite can count it. */
 export type EngineLoader = (init: ScopedReadInit['init']) => Promise<SqlJsStatic>;
 
-const loadEngine: EngineLoader = (init) =>
+/** The engine as a real worker starts it — exported so a suite can wrap it (a first start that fails, then this). */
+export const loadEngine: EngineLoader = (init) =>
   init.wasmBinary !== undefined
     ? initSqlJs({ wasmBinary: exactBuffer(init.wasmBinary) })
     : initSqlJs({ locateFile: () => init.wasmUrl ?? '' });
@@ -58,22 +59,39 @@ function isJob(message: unknown): message is ScopedReadJob {
 
 const failed = (message: string): ScopedReadResult => ({ ok: false, reason: 'failed', message });
 
+/** What a job answers when the engine could not start — the host retires this worker on it. */
+export const ENGINE_FAILED_MESSAGE = 'the read engine could not start';
+
 /**
- * One worker's state machine: `init` starts the engine (once — a second `init` is ignored),
- * a job is answered with the pure read's outcome, anything else is ignored. Never throws: an
- * engine that will not start, or a read that throws, answers `failed` for that job.
+ * One worker's state machine: `init` starts the engine (once — a second `init` is ignored while
+ * it is starting or started), a job is answered with the pure read's outcome, anything else is
+ * ignored. Never throws: a read that throws answers `failed` for that job; an engine that will
+ * not start answers `failed` with `engineFailed: true` — and is NOT memoised, so the next `init`
+ * tries again (the host retires the worker on that answer and re-sends `init` to a fresh one).
  */
 export function createScopedReadResponder(load: EngineLoader = loadEngine): (message: unknown) => Promise<ScopedReadAnswer | undefined> {
   let engine: Promise<SqlJsStatic> | undefined;
   return async (message) => {
     if (isInit(message)) {
-      engine ??= load(message.init);
+      if (engine === undefined) {
+        const starting = load(message.init).catch((err: unknown) => {
+          engine = undefined; // never memoise a failed start
+          throw err;
+        });
+        starting.catch(() => undefined); // a start no job awaits is not an unhandled rejection
+        engine = starting;
+      }
       return undefined;
     }
     if (!isJob(message)) return undefined;
-    if (engine === undefined) return { id: message.id, result: failed('the read engine was not started') };
+    if (engine === undefined) return { id: message.id, result: failed('the read engine was not started'), engineFailed: true };
+    let SQL: SqlJsStatic;
     try {
-      const SQL = await engine;
+      SQL = await engine;
+    } catch {
+      return { id: message.id, result: failed(ENGINE_FAILED_MESSAGE), engineFailed: true };
+    }
+    try {
       return { id: message.id, result: scopedScratchRead(SQL, message.bytes, message.scope, message.statement, message.caps) };
     } catch (err) {
       return { id: message.id, result: failed(err instanceof Error ? err.message : String(err)) };

@@ -6,7 +6,7 @@
 // boundary; every failure is an ok:false DbDriverResult (errors-as-data, docs/standards).
 import initSqlJs from 'sql.js';
 import type { BindParams, Database, SqlJsStatic } from 'sql.js';
-import { LIMITS, SCHEDULE_APP_INPUT_MAX_BYTES, type DbRequestFrame } from '@snugprotocol/protocol';
+import { LIMITS, SCHEDULE_APP_INPUT_MAX_BYTES, utf8ByteLength, type DbRequestFrame } from '@snugprotocol/protocol';
 import { base64ToBytes, bytesToBase64 } from './base64.js';
 import { DB_ERROR_CODES } from './errors.js';
 import { namespaceToFileName } from './namespace.js';
@@ -158,8 +158,6 @@ const fail = (code: string, message: string, retryable: boolean): DbDriverResult
 });
 
 const errorMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
-
-const utf8Bytes = (text: string): number => new TextEncoder().encode(text).byteLength;
 
 function hasSqliteMagic(bytes: Uint8Array): boolean {
   if (bytes.length < SQLITE_MAGIC.length) return false;
@@ -382,7 +380,7 @@ export function createDbDriver(options: CreateDbDriverOptions = {}): SnugDbDrive
       while (statement.step()) {
         rows.push((statement.get() as unknown[]).map(normalizeCell));
       }
-      const payloadBytes = utf8Bytes(JSON.stringify({ rows, columns }));
+      const payloadBytes = utf8ByteLength(JSON.stringify({ rows, columns }));
       if (payloadBytes > LIMITS.MAX_DB_FRAME_BYTES - FRAME_OVERHEAD_BYTES) {
         return fail(
           DB_ERROR_CODES.TOO_LARGE,
@@ -436,7 +434,7 @@ export function createDbDriver(options: CreateDbDriverOptions = {}): SnugDbDrive
     }
     const json = JSON.stringify(value);
     if (json === undefined) return fail(DB_ERROR_CODES.INTERNAL, 'the value cannot be serialised as JSON', false);
-    const bytes = utf8Bytes(json);
+    const bytes = utf8ByteLength(json);
     if (bytes > HOST_KV_VALUE_MAX_BYTES) {
       return fail(DB_ERROR_CODES.TOO_LARGE, `value is ${bytes} bytes — the host-side kv cap is ${HOST_KV_VALUE_MAX_BYTES} bytes`, false);
     }

@@ -42,7 +42,8 @@ import {
 } from '@snugprotocol/protocol';
 
 import { createAccessHandlerFor } from '../access/accessHandler.js';
-import { NO_ACCESS_ASKS_KEY, pendingAccessStore, requestAccessForUser, type ConsentDecision, type PendingAccessRequest } from '../access/consent.js';
+import { NO_ACCESS_ASKS_KEY, pendingAccessStore, type ConsentDecision, type PendingAccessRequest } from '../access/consent.js';
+import { startUserAsk } from '../access/userAsk.js';
 import { ACCESS_APP_MESSAGES, ACCESS_SHEET } from '../access/copy.js';
 import { __setAccessDepsForTests, accessRevisionStore, createGrantFromDecision, grantsForApp, resetAccessSession, type AnyAccessGrant } from '../access/grants.js';
 import { provenanceLine } from '../access/provenance.js';
@@ -450,8 +451,8 @@ describe('AC11 request — the ask becomes a strip, and the answer waits for the
     await expect.poll(() => gathered.mock.calls.length).toBeGreaterThan(0);
     unregister.pop()?.(); // the reader's view closes mid-gather
     release();
-    const settled = await Promise.race([answer, new Promise((resolve) => setTimeout(() => resolve('held'), 300))]);
-    expect(settled).toEqual(refusal('ACCESS_DECLINED', ACCESS_APP_MESSAGES.notNow, true));
+    // Awaited directly: a genuinely held answer is caught by the test timeout and names this row (W6 finding 30).
+    expect(await answer).toEqual(refusal('ACCESS_DECLINED', ACCESS_APP_MESSAGES.notNow, true));
     expect(pendingAccessStore.get()).toEqual({});
     expect(db.listAccessDeclines(budget)).toEqual([]);
     expect(db.isAccessMuted(budget)).toBe(false);
@@ -482,9 +483,47 @@ describe('AC11 request — the ask becomes a strip, and the answer waits for the
     await expect.poll(() => gathered.mock.calls.length).toBeGreaterThan(0);
     createAccessHandlerFor(budget, { attended: true, generation: 1 }); // a remount
     release();
-    const settled = await Promise.race([answer, new Promise((resolve) => setTimeout(() => resolve('held'), 300))]);
-    expect(settled).toEqual(refusal('ACCESS_DECLINED', ACCESS_APP_MESSAGES.notNow, true));
+    // Awaited directly: a genuinely held answer is caught by the test timeout and names this row (W6 finding 30).
+    expect(await answer).toEqual(refusal('ACCESS_DECLINED', ACCESS_APP_MESSAGES.notNow, true));
     expect(pendingAccessStore.get()).toEqual({});
+  });
+
+  // W6 finding 29 — the user's own ask is never replaced by an app's, in either order.
+  it('a pending ask the USER started survives an app’s ask — either order — which is answered ACCESS_PENDING (retryable)', async () => {
+    // Order 1: the user asks from host chrome while the app is closed (generation -1), then the app opens and asks.
+    await startUserAsk(budget);
+    const users = pendingAccessStore.get()[budget]!;
+    expect(users).toMatchObject({ provenance: 'user', generation: -1 });
+    const handler = createAccessHandlerFor(budget, { attended: true, generation: 0 });
+    expect(await handler.handle(budget, askFrame())).toEqual(refusal('ACCESS_PENDING', ACCESS_APP_MESSAGES.pending, true));
+    expect(pendingAccessStore.get()[budget]).toBe(users);
+    expect(users.purpose).toBe(ACCESS_SHEET.userPurpose('Budget'));
+    void users.resolve({ kind: 'not-now' });
+
+    // Order 2: the app is open (generation 0), the user asks, then the app asks.
+    clock.now += ACCESS_REQUEST_MIN_GAP_MS;
+    await startUserAsk(budget);
+    const second = pendingAccessStore.get()[budget]!;
+    expect(second.provenance).toBe('user');
+    expect(await handler.handle(budget, askFrame())).toEqual(refusal('ACCESS_PENDING', ACCESS_APP_MESSAGES.pending, true));
+    expect(pendingAccessStore.get()[budget]).toBe(second);
+  });
+
+  // W6 finding 9 — D36 on the APP path: an allow of a renewing ask under the default *while it's
+  // open* writes a new session grant and STOPS the renewed one, exactly like the host-chrome path.
+  it('an app ask that RENEWS a paused access, allowed for the session: exactly one live access for the pair; the old one stopped with a revoked line', async () => {
+    const { suspendAccess } = await import('../access/grants.js');
+    const old = await grantFor({ duration: 'week' });
+    await suspendAccess(db, old.id, 'reader-updated', new Date(clock.now).toISOString());
+    const handler = createAccessHandlerFor(budget, { attended: true, generation: 0 });
+    const answer = await askAndDecide(handler, askFrame({ renew: old.id }), allowLedger('session'));
+    expect(answer).toMatchObject({ ok: true, op: 'request', grant: { duration: 'session' } });
+    await expect.poll(() => db.getAccessGrant(old.id)?.status).toBe('revoked');
+    const reads = grantsForApp(db, budget, clock.now).reads;
+    expect(reads.filter((row) => row.live)).toHaveLength(1);
+    expect(reads.filter((row) => row.live)[0]).toMatchObject({ session: true });
+    expect(reads.some((row) => row.grant.status === 'suspended'), 'no paused row lingers beside its successor').toBe(false);
+    expect(kindsOf(ledger)).toContain('revoked');
   });
 
   it('the HOST-assigned id is the identity: a call under any other accessAppId is not this reader’s and is refused like an unknown grant', async () => {
@@ -621,6 +660,32 @@ describe('AC12 query — one read-only SELECT on a scoped copy, logged on the so
     expect(await handler.handle(budget, queryFrame(paused.id, 'SELECT 1'))).toEqual(refusal('ACCESS_REVOKED', ACCESS_APP_MESSAGES.paused, false));
   });
 
+  // W6 finding 8 — the default duration: a stopped SESSION grant answers ACCESS_REVOKED, like a
+  // stopped persisted one (AC12/AC22, spec §23.4), never the "ask first" of an unknown id.
+  it('a stopped SESSION grant → ACCESS_REVOKED for its own generation — through the host’s stop and the reader’s release alike', async () => {
+    const handler = createAccessHandlerFor(budget, { attended: true, generation: 0 });
+    const { revokeAccess } = await import('../access/grants.js');
+    const stopped = await grantFor({ duration: 'session', generation: 0 });
+    expect(await handler.handle(budget, queryFrame(stopped.id, 'SELECT count(*) FROM transactions'))).toMatchObject({ ok: true });
+    await revokeAccess(stopped.id);
+    const afterStop = await handler.handle(budget, queryFrame(stopped.id, 'SELECT 1'));
+    expect(afterStop).toEqual(refusal('ACCESS_REVOKED', ACCESS_APP_MESSAGES.revoked, false));
+    expect(JSON.stringify(afterStop)).not.toBe(JSON.stringify(await handler.handle(budget, queryFrame(UNKNOWN_ID, 'SELECT 1'))));
+
+    clock.now += 61_000;
+    const released = await grantFor({ duration: 'session', generation: 0 });
+    expect(await handler.handle(budget, releaseFrame(released.id))).toEqual({ ok: true, op: 'release' });
+    expect(await handler.handle(budget, queryFrame(released.id, 'SELECT 1'))).toEqual(refusal('ACCESS_REVOKED', ACCESS_APP_MESSAGES.revoked, false));
+    expect(await handler.handle(budget, releaseFrame(released.id)), 'released twice: nothing left to give back').toEqual(refusal('ACCESS_NOT_GRANTED', ACCESS_APP_MESSAGES.notGranted, false));
+
+    // The sheets and list show neither (a stopped session access has nothing to renew or remove) …
+    expect(grantsForApp(db, budget, clock.now).reads).toEqual([]);
+    expect(await handler.handle(budget, listFrame())).toEqual({ ok: true, op: 'list', grants: [] });
+    // … and the tombstone dies with its frame: the next generation knows nothing of it.
+    const next = createAccessHandlerFor(budget, { attended: true, generation: 1 });
+    expect(await next.handle(budget, queryFrame(stopped.id, 'SELECT 1'))).toEqual(refusal('ACCESS_NOT_GRANTED', ACCESS_APP_MESSAGES.notGranted, false));
+  });
+
   it('another reader’s grant and an unknown id answer BYTE-IDENTICALLY ACCESS_NOT_GRANTED', async () => {
     const theirs = await grantFor({ reader: pantry });
     const handler = createAccessHandlerFor(budget, { attended: true, generation: 0 });
@@ -743,8 +808,15 @@ describe('AC12 query — one read-only SELECT on a scoped copy, logged on the so
   it('an engine error → ACCESS_QUERY_FAILED; an engine refusal → ACCESS_QUERY_REFUSED', async () => {
     const grant = await grantFor();
     const handler = createAccessHandlerFor(budget, { attended: true, generation: 0 });
-    configureScopedRead({ createWorker: answeringWorkers(() => ({ ok: false, reason: 'failed', message: 'the scoped copy still holds "accounts"' })), wasm: { wasmUrl: locateWasm() }, now: () => clock.now });
+    // W6 finding 12: a scoping failure is a TYPED reason — its message names a source object and
+    // never reaches the app, whatever its wording; an ordinary SQL error's message does.
+    configureScopedRead({ createWorker: answeringWorkers(() => ({ ok: false, reason: 'copy-failed', message: 'the scoped copy still contains "accounts"' })), wasm: { wasmUrl: locateWasm() }, now: () => clock.now });
     expect(await handler.handle(budget, queryFrame(grant.id, 'SELECT 1')), 'an internal fail-closed message never reaches the app').toEqual(refusal('ACCESS_QUERY_FAILED', ACCESS_APP_MESSAGES.queryFailed, false));
+    resetScopedReadForTests();
+    configureScopedRead({ createWorker: answeringWorkers(() => ({ ok: false, reason: 'failed', message: 'no such column: nope' })), wasm: { wasmUrl: locateWasm() }, now: () => clock.now });
+    expect(await handler.handle(budget, queryFrame(grant.id, 'SELECT nope FROM transactions'))).toEqual(
+      refusal('ACCESS_QUERY_FAILED', `${ACCESS_APP_MESSAGES.queryFailed}: no such column: nope`, false),
+    );
     resetScopedReadForTests();
     configureScopedRead({ createWorker: answeringWorkers(() => ({ ok: false, reason: 'refused', message: 'forbidden statement: load_extension' })), wasm: { wasmUrl: locateWasm() }, now: () => clock.now });
     expect(await handler.handle(budget, queryFrame(grant.id, 'SELECT load_extension(1)'))).toEqual(refusal('ACCESS_QUERY_REFUSED', ACCESS_APP_MESSAGES.queryRefused, false));
@@ -784,6 +856,49 @@ describe('AC12 query — one read-only SELECT on a scoped copy, logged on the so
         ['lunch', '***', 500, 'fine'],
       ],
     });
+  });
+
+  // W6 finding 1 — end to end through the real worker: the value mask is on the COPY, so a
+  // transform in the reader's own statement cannot carry a credential-shaped cell past it.
+  it('a credential-shaped VALUE under a neutral column crosses masked even through a transform in the reader’s statement', async () => {
+    const key = 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJ';
+    await db.driver.handle(ledger, { v: PROTOCOL_VERSION, type: FRAME_TYPES.dbRequest, requestId: `seed-${++seq}`, instanceId: 'seed', op: 'exec', sql: `INSERT INTO transactions (amount, category) VALUES (1, '${key}')` });
+    const grant = await grantFor();
+    const handler = createAccessHandlerFor(budget, { attended: true, generation: 0 });
+    for (const sql of ["SELECT ' ' || category AS v FROM transactions", 'SELECT hex(category) FROM transactions', 'SELECT substr(category, 4) FROM transactions', 'SELECT category FROM transactions']) {
+      clock.now += 1;
+      const answer = await handler.handle(budget, queryFrame(grant.id, sql));
+      expect(answer, sql).toMatchObject({ ok: true });
+      expect(JSON.stringify(answer), sql).not.toMatch(/sk-ant-api03|abcdefghijklmnop|736B2D616E74/i);
+    }
+  });
+
+  // W6 finding 7 — a read queued behind another is re-checked against its grant when it dequeues.
+  it('a read QUEUED behind a slow one never reaches the worker once its grant is stopped meanwhile: ACCESS_REVOKED', async () => {
+    const grant = await grantFor();
+    const { revokeAccess } = await import('../access/grants.js');
+    const jobs: unknown[] = [];
+    configureScopedRead({
+      createWorker: () => ({
+        onmessage: null,
+        onerror: null,
+        postMessage(msg) {
+          if (typeof msg === 'object' && msg !== null && 'id' in msg) jobs.push(msg);
+        },
+        terminate() {},
+      }),
+      wasm: { wasmUrl: locateWasm() },
+      now: () => clock.now,
+      timeoutMs: 600,
+    });
+    const handler = createAccessHandlerFor(budget, { attended: true, generation: 0 });
+    const slow = handler.handle(budget, queryFrame(grant.id, 'SELECT 1'));
+    const queued = handler.handle(budget, queryFrame(grant.id, 'SELECT 2'));
+    await expect.poll(() => jobs.length).toBe(1);
+    await revokeAccess(grant.id);
+    expect(await slow).toEqual(refusal('ACCESS_QUERY_FAILED', ACCESS_APP_MESSAGES.tookTooLong, false));
+    expect(await queued).toEqual(refusal('ACCESS_REVOKED', ACCESS_APP_MESSAGES.revoked, false));
+    expect(jobs, 'the queued read was never posted').toHaveLength(1);
   });
 
   it('a stop that lands WHILE the read runs wins: no rows leave, nothing is logged as read, and the grant is never written back active', async () => {
@@ -826,7 +941,7 @@ describe('AC12 query — one read-only SELECT on a scoped copy, logged on the so
 
 describe('the user’s own creation act — *let Budget read another app…*', () => {
   it('parks a USER ask carrying the host’s purpose — never the act’s label as if Budget had said it — and an allow writes that purpose on the record', async () => {
-    await requestAccessForUser(budget);
+    await startUserAsk(budget);
     const pending = pendingAccessStore.get()[budget]!;
     expect(pending).toMatchObject({ provenance: 'user', purpose: ACCESS_SHEET.userPurpose('Budget') });
     expect(pending.purpose).not.toBe(ACCESS_SHEET.create('Budget'));
@@ -858,6 +973,19 @@ describe('AC13 list and release', () => {
     clock.now += DAY;
     const later = await handler.handle(budget, listFrame());
     expect(later.ok && later.op === 'list' ? later.grants.map((view) => view.id) : []).toEqual([session.id]);
+  });
+
+  // W6 finding 10 — a grant that outlived its source's library row (a delete outside the library
+  // seam, an inconsistent file) is never answered as a view with no name — the reader's own parser
+  // would refuse it and the call would never settle.
+  it('a session grant whose SOURCE row is gone is left out of list — every view the reader gets names its source', async () => {
+    const session = await grantFor({ duration: 'session', generation: 0 });
+    const handler = createAccessHandlerFor(budget, { attended: true, generation: 0 });
+    expect(await handler.handle(budget, listFrame())).toMatchObject({ ok: true, grants: [{ id: session.id, source: { displayName: 'Ledger' } }] });
+    await db.deleteApp(ledger); // directly — not through the library seam that resets the session
+    const answer = await handler.handle(budget, listFrame());
+    expect(answer).toEqual({ ok: true, op: 'list', grants: [] });
+    expect(JSON.stringify(answer)).not.toContain('"displayName":""');
   });
 
   it('a hidden frame lists only the grants it may use while you are away', async () => {

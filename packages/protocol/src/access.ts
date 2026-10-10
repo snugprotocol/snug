@@ -129,6 +129,10 @@ export const ACCESS_CHANGED_EVENT = 'access-changed';
 
 const DAY_MS = 86_400_000;
 
+/** The span each EXPIRING duration grants — the one table both directions below derive from. */
+const EXPIRING_SPANS_MS = { day: DAY_MS, week: 7 * DAY_MS } as const;
+type ExpiringDuration = keyof typeof EXPIRING_SPANS_MS;
+
 /**
  * The absolute expiry a duration implies, as an ISO instant — `undefined` for the session
  * grant (it ends with the reader's frame generation) and for `always` (it ends when the
@@ -137,13 +141,26 @@ const DAY_MS = 86_400_000;
 export function durationToExpiry(kind: AccessDuration, now: number): string | undefined {
   switch (kind) {
     case 'day':
-      return new Date(now + DAY_MS).toISOString();
     case 'week':
-      return new Date(now + 7 * DAY_MS).toISOString();
+      return new Date(now + EXPIRING_SPANS_MS[kind]).toISOString();
     case 'session':
     case 'always':
       return undefined;
   }
+}
+
+/**
+ * The inverse of `durationToExpiry` for a grant that expires: the duration whose span is NEAREST
+ * the span from `grantedAt` to `expiresAt` (exact for every instant `durationToExpiry` wrote; a
+ * hand-written or foreign span reads as the closest choice the user could have made).
+ */
+export function durationFromExpiry(grantedAt: string, expiresAt: string): ExpiringDuration {
+  const span = Date.parse(expiresAt) - Date.parse(grantedAt);
+  let nearest: ExpiringDuration = 'day';
+  for (const kind of Object.keys(EXPIRING_SPANS_MS) as ExpiringDuration[]) {
+    if (Math.abs(EXPIRING_SPANS_MS[kind] - span) < Math.abs(EXPIRING_SPANS_MS[nearest] - span)) nearest = kind;
+  }
+  return nearest;
 }
 
 // ------------------------------------------------------------------ error codes (Appendix A)

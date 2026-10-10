@@ -22,6 +22,7 @@ import { useId, useState } from 'react';
 import type { ReactElement } from 'react';
 
 import { WEB_NOTIFY_OPT_IN_KEY, readWebNotifyOptIn } from '../platform/webNotify.js';
+import { readFlag, writeFlag } from '../state/browserFlags.js';
 import { Card } from '../ui/Card.js';
 import { Button } from '../ui/Button.js';
 import { followerTab, globalPaused } from './copy.js';
@@ -35,22 +36,7 @@ export const NOTIFY_OPT_IN_KEY = WEB_NOTIFY_OPT_IN_KEY;
 /** The mute-every-app flag the suggestion strip's intake reads (`'1'` when on) — written by the switch below. */
 export const NO_SUGGESTIONS_KEY = 'snug:schedule-no-suggestions';
 
-export function readFlag(key: string): boolean {
-  try {
-    return localStorage.getItem(key) === '1';
-  } catch {
-    return false;
-  }
-}
-
-export function writeFlag(key: string, on: boolean): void {
-  try {
-    if (on) localStorage.setItem(key, '1');
-    else localStorage.removeItem(key);
-  } catch {
-    // Storage denied (a private window, a blocked origin): the switch still answers for the session.
-  }
-}
+// The per-browser `'1'`/absent flag convention is the leaf `state/browserFlags.ts`'s.
 
 export type NotifyPermission = NotificationPermission | 'unavailable';
 

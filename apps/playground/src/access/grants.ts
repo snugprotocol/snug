@@ -21,10 +21,12 @@
 // windows, the expired marks — is dropped by `resetAccessSession`, the file-swap seam, together
 // with consent.ts's pending asks and scopedRead.ts's cache.
 //
-// LOAD ORDER. This engine sits inside an import cycle (the run runtime composes it; it reads
-// the egress rules from the run runtime), so NO module under access/ calls another access
-// module at its top level — only leaf modules (the stores) are touched while modules load, and
-// everything else is reached inside functions.
+// LOAD ORDER. This engine sits inside import cycles — the file-swap seams (`state/net.ts`,
+// `state/userdb.ts`, `state/library.ts`, `state/sync.ts`) import this module for
+// `resetAccessSession`, and their own graphs reach the run runtime that composes the handler —
+// so NO module under access/ calls another access module at its top level: only leaf modules
+// (the stores) are touched while modules load, and everything else is reached inside functions.
+// (The egress rules come from the leaf `run/appCapabilityRules.ts`, not through the runtime.)
 //
 // THE RETRACT LISTENER is armed on USE (`armAccessListeners` — a handler composed, a grant
 // made, an ask parked), never at module load: a load-time subscription is a side effect, and a
@@ -35,6 +37,7 @@ import {
   ACCESS_CHANGED_EVENT,
   ACCESS_QUERY_RATE_PER_MINUTE,
   accessGrantSchema,
+  durationFromExpiry,
   durationToExpiry,
   type AccessDuration,
   type AccessGrant,
@@ -132,7 +135,6 @@ const frameEnds = new Map<string, number>();
 let allEnds = 0;
 
 const QUERY_WINDOW_MS = 60_000;
-const DAY_MS = 86_400_000;
 const iso = (at: number): string => new Date(at).toISOString();
 
 /** The reader's attended frame generation, when one is open — a session grant made from host chrome binds to it (or, absent, to the next frame). */
@@ -232,12 +234,11 @@ export function queryRateLimited(appId: string, at: number): boolean {
 
 // ------------------------------------------------------------------------------ derived facts
 
-/** The duration the user chose. A persisted `until` reads `day` or `week` by its span from the allow. */
+/** The duration the user chose. A persisted `until` reads `day` or `week` by the protocol's own inverse of `durationToExpiry`. */
 export function durationOf(grant: AnyAccessGrant): AccessDuration {
   if (grant.duration.kind === 'session') return 'session';
   if (grant.duration.kind === 'always') return 'always';
-  const span = Date.parse(grant.duration.at) - Date.parse(grant.grantedAt);
-  return span < 3 * DAY_MS ? 'day' : 'week';
+  return durationFromExpiry(grant.grantedAt, grant.duration.at);
 }
 
 export function expiresAtOf(grant: AnyAccessGrant): string | undefined {
@@ -266,17 +267,23 @@ export function findAccessGrant(db: UserDb, grantId: string): FoundAccessGrant |
   }
 }
 
-/** What the reader LEARNS about a grant (ADR-0075 §5): the source's library name and tile, the tables with their columns, the duration. */
+/**
+ * What the reader LEARNS about a grant (ADR-0075 §5): the source's library name and tile, the
+ * tables with their columns, the duration. THROWS when the source has no library row — a view
+ * with no name would be refused by the reader's own parser and the call would never settle, so
+ * the caller answers a host error instead (W6 finding 10).
+ */
 export function grantView(db: UserDb, grant: AnyAccessGrant): AccessGrantView {
   const source = db.getApp(grant.sourceAppId);
+  if (source === undefined) throw new Error('the other app is not in this file');
   const expiresAt = expiresAtOf(grant);
   return {
     id: grant.id,
     access: grant.access,
     source: {
-      displayName: source?.displayName ?? '',
-      ...(source?.iconEmoji !== undefined ? { iconEmoji: source.iconEmoji } : {}),
-      ...(source?.iconColor !== undefined ? { iconColor: source.iconColor } : {}),
+      displayName: source.displayName,
+      ...(source.iconEmoji !== undefined ? { iconEmoji: source.iconEmoji } : {}),
+      ...(source.iconColor !== undefined ? { iconColor: source.iconColor } : {}),
     },
     tables: grant.scope.tables.map((table) => ({ name: table.name, columns: [...table.columns] })),
     duration: durationOf(grant),
@@ -285,12 +292,19 @@ export function grantView(db: UserDb, grant: AnyAccessGrant): AccessGrantView {
   };
 }
 
-/** Every grant the app is part of, both directions, persisted and in memory, with the derived facts. */
+/**
+ * Every grant the app is part of, both directions, persisted and in memory, with the derived facts.
+ * Left out: a STOPPED session grant (its tombstone only answers the reader `ACCESS_REVOKED` until
+ * its frame ends — there is nothing to renew or remove), and a grant whose reader or source has no
+ * library row (it can be neither shown nor described to the reader — W6 finding 10).
+ */
 export function grantsForApp(db: UserDb, appId: string, now: number): { reads: LiveGrantRow[]; readBy: LiveGrantRow[] } {
   const found: FoundAccessGrant[] = [
     ...db.listAccessGrants().map((grant) => ({ grant, session: false })),
-    ...[...sessions.values()].map((entry) => ({ grant: entry.grant, session: true, generation: entry.generation })),
-  ];
+    ...[...sessions.values()]
+      .filter((entry) => entry.grant.status !== 'revoked')
+      .map((entry) => ({ grant: entry.grant, session: true, generation: entry.generation })),
+  ].filter((entry) => db.getApp(entry.grant.readerAppId) !== undefined && db.getApp(entry.grant.sourceAppId) !== undefined);
   const nameOf = (id: string): string => db.getApp(id)?.displayName ?? '';
   const row = (entry: FoundAccessGrant): LiveGrantRow => {
     const expiresAt = expiresAtOf(entry.grant);
@@ -400,8 +414,9 @@ export async function createGrantFromDecision(db: UserDb, input: CreateGrantInpu
   });
 
   const at = iso(input.now);
-  const persistedDuration: AccessGrantDuration =
-    input.duration === 'session' || input.duration === 'always' ? { kind: 'always' } : { kind: 'until', at: durationToExpiry(input.duration, input.now)! };
+  // `durationToExpiry` answers no instant for exactly the durations that never expire (the session, always).
+  const expiry = durationToExpiry(input.duration, input.now);
+  const persistedDuration: AccessGrantDuration = expiry === undefined ? { kind: 'always' } : { kind: 'until', at: expiry };
 
   const renewing = input.renew === undefined ? undefined : findAccessGrant(db, input.renew);
   const inPlace: AccessGrant | undefined =
@@ -457,11 +472,16 @@ export async function createGrantFromDecision(db: UserDb, input: CreateGrantInpu
   return grant;
 }
 
-/** Stop or give back: `revoked` + `revokedAt`, the history line, the ring, the bump. False when already stopped. */
+/**
+ * Stop or give back: `revoked` + `revokedAt`, the history line, the ring, the bump. False when
+ * already stopped. A SESSION grant keeps a revoked TOMBSTONE in memory (W6 finding 8): its reader's
+ * next `query` answers `ACCESS_REVOKED` like any stopped grant, never the "ask first" of an unknown
+ * id; the tombstone is dropped with its frame (retract, newer generation, session reset) like the
+ * grant was, and the sheets never list it.
+ */
 function endGrant(db: UserDb, found: FoundAccessGrant, kind: 'revoked' | 'released', at: string): boolean {
   if (found.grant.status === 'revoked') return false;
-  if (found.session) sessions.delete(found.grant.id);
-  else db.putAccessGrant({ ...withoutEndings(found.grant as AccessGrant), status: 'revoked', revokedAt: at, updatedAt: at });
+  store(db, found, { ...withoutEndings(found.grant), status: 'revoked', revokedAt: at, updatedAt: at });
   logQuietly(db, found.grant.sourceAppId, lifecycleLine(db, found.grant, kind, at));
   clearScopedReadCache(found.grant.id);
   ringReader(found.grant.readerAppId, found.grant.id);

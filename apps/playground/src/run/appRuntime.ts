@@ -39,8 +39,9 @@
 // it's open") access at any epoch; nothing is defaulted (a default 0 would collide with the first
 // epoch, and a session grant's readability would hang on a number the user cannot see). The
 // handler module is called only inside
-// `composeAppRuntime` — the access engine reads this module's `appMayReachNetwork`, so nothing
-// here may touch it while modules load.
+// `composeAppRuntime`, never at module load: this module still sits on an import cycle
+// (state/net.ts → state/userdb.ts → … → the scheduler → schedule/appRun.ts → here →
+// access/accessHandler.ts), so nothing here may touch an access module while modules load.
 
 import type { AgentTurnEvent } from '@snugprotocol/adapters';
 import type { NetConfirmGate } from '@snugprotocol/auth';
@@ -55,9 +56,8 @@ import type { ByokProvider, PlaygroundMode } from '../state/mode.js';
 import { createNetHandlerFor, type CreateNetHandlerOptions } from '../state/net.js';
 
 // The two "may this app …" rules live in a LEAF module (review finding 7: the composition imports the
-// access handler, whose consent path reads egress, which needs the network rule); re-exported here
-// so every existing caller keeps its import.
-export { appMayReachNetwork, appMayUseAccess } from './appCapabilityRules.js';
+// access handler, whose consent path reads egress, which needs the network rule); every caller
+// imports them from there.
 import { appMayReachNetwork, appMayUseAccess } from './appCapabilityRules.js';
 
 /**

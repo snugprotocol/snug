@@ -11,9 +11,18 @@
 //
 // THE CACHE. The source's live bytes (`exportAppRuntime`, the caller's thunk) are kept per
 // GRANT for `ACCESS_SCOPED_CACHE_MS`, so a reader paging through results does not export the
-// source per page. Every read first EVICTS the entries past the window (any grant's), so a stale
-// copy — up to 16 MiB each — is never held for the rest of the session. The worker gets a COPY,
-// transferred — the cached buffer is never detached.
+// source per page. Each entry carries its own eviction timer for that window, and every read
+// also first EVICTS the entries past the window (any grant's) — so a stale copy, up to 16 MiB
+// each, is never held for the rest of the session, read again or not (W6 finding 6). The worker
+// gets a COPY, transferred — the cached buffer is never detached.
+//
+// A QUEUED READ IS RE-CHECKED when it dequeues (`stillLive`, the caller's grant check): a read
+// that waited behind others while its grant was stopped or paused answers `ended` before any
+// export, slice or worker work (W6 finding 7).
+//
+// AN ENGINE THAT WILL NOT START (a failed wasm fetch) is not memoised: the worker answers the job
+// `engineFailed`, the host retires it like a worker error, and the next read builds a fresh worker
+// and sends the engine source again (W6 finding 5).
 // Every scoping step (drops, withheld columns, `query_only`) runs in the worker on that copy.
 //
 // NO WORKER. Where no Worker can be constructed, a read answers `unavailable` without fetching
@@ -61,14 +70,15 @@ export interface ScopedReadJob {
   caps: ScopedReadCaps;
 }
 
-/** worker → host. */
+/** worker → host. `engineFailed`: the worker's engine could not start — the host retires that worker. */
 export interface ScopedReadAnswer {
   id: number;
   result: ScopedReadResult;
+  engineFailed?: true;
 }
 
-/** The engine's outcome, or the host side's own two: the wall clock fired, or no Worker exists here. */
-export type ScopedReadOutcome = ScopedReadResult | { ok: false; reason: 'timeout' | 'unavailable'; message: string };
+/** The engine's outcome, or the host side's own three: the wall clock fired, no Worker exists here, or the grant ended while the read was queued. */
+export type ScopedReadOutcome = ScopedReadResult | { ok: false; reason: 'timeout' | 'unavailable' | 'ended'; message: string };
 
 export interface ScopedReadInput {
   grantId: string;
@@ -77,6 +87,8 @@ export interface ScopedReadInput {
   scope: ScopedReadScope;
   statement: ScopedReadStatement;
   caps: ScopedReadCaps;
+  /** Whether the grant may still be read — asked when the read DEQUEUES; false answers `ended` with nothing fetched or posted. */
+  stillLive?: () => boolean;
 }
 
 interface Config {
@@ -97,7 +109,7 @@ let live: { worker: WorkerLike; initialised: boolean } | undefined;
 /** Reads run one at a time through the one worker. */
 let queue: Promise<unknown> = Promise.resolve();
 let nextJobId = 1;
-const cache = new Map<string, { bytes: Uint8Array; at: number }>();
+const cache = new Map<string, { bytes: Uint8Array; at: number; timer: ReturnType<typeof setTimeout> }>();
 
 /** Tests (and nothing else) inject the worker, the engine source, the clock and the timeout. */
 export function configureScopedRead(opts: { createWorker?: () => WorkerLike; wasm?: ScopedReadEngineSource; now?: () => number; timeoutMs?: number }): void {
@@ -136,16 +148,24 @@ export function canConstructWorker(): boolean {
   }
 }
 
+/** Drop one cache entry and its eviction timer. */
+function evict(grantId: string): void {
+  const entry = cache.get(grantId);
+  if (entry === undefined) return;
+  clearTimeout(entry.timer);
+  cache.delete(grantId);
+}
+
 /** Drop one grant's cached bytes, or every grant's (revoke, suspend and the session reset call this). */
 export function clearScopedReadCache(grantId?: string): void {
-  if (grantId === undefined) cache.clear();
-  else cache.delete(grantId);
+  if (grantId === undefined) for (const id of [...cache.keys()]) evict(id);
+  else evict(grantId);
 }
 
 /** Terminate the worker, clear the cache and the configuration. */
 export function resetScopedReadForTests(): void {
   retire();
-  cache.clear();
+  clearScopedReadCache();
   queue = Promise.resolve();
   config = defaultConfig();
 }
@@ -215,7 +235,16 @@ const workerAvailable = (): boolean => config.createWorker !== undefined || type
 
 /** Drop every entry no read may use any more — the window is the entry's whole life. */
 function evictStale(now: number): void {
-  for (const [grantId, entry] of cache) if (now - entry.at >= ACCESS_SCOPED_CACHE_MS) cache.delete(grantId);
+  for (const [grantId, entry] of [...cache]) if (now - entry.at >= ACCESS_SCOPED_CACHE_MS) evict(grantId);
+}
+
+/** The entry's own end: evicted after the window whether or not another read comes (never keeps a process alive). */
+function evictionTimer(grantId: string): ReturnType<typeof setTimeout> {
+  const timer = setTimeout(() => {
+    if (cache.get(grantId)?.timer === timer) cache.delete(grantId);
+  }, ACCESS_SCOPED_CACHE_MS);
+  (timer as { unref?: () => void }).unref?.();
+  return timer;
 }
 
 /** Test seam: the grants whose bytes are cached, in insertion order. */
@@ -229,7 +258,8 @@ async function sourceBytes(input: ScopedReadInput): Promise<Uint8Array> {
   const hit = cache.get(input.grantId);
   if (hit !== undefined) return hit.bytes;
   const bytes = await input.bytes();
-  cache.set(input.grantId, { bytes, at: now });
+  evict(input.grantId);
+  cache.set(input.grantId, { bytes, at: now, timer: evictionTimer(input.grantId) });
   return bytes;
 }
 
@@ -253,7 +283,8 @@ function runOnWorker(worker: WorkerLike, job: Omit<ScopedReadJob, 'id'>): Promis
     worker.onmessage = (event) => {
       const answer = event.data as Partial<ScopedReadAnswer> | null;
       if (answer === null || typeof answer !== 'object' || answer.id !== id || answer.result === undefined) return;
-      settle(answer.result, false);
+      // An engine that could not start is retired like a worker error: the next read starts afresh.
+      settle(answer.result, answer.engineFailed === true);
     };
     worker.onerror = () => settle({ ok: false, reason: 'failed', message: 'the read engine stopped' }, true);
     try {
@@ -271,6 +302,7 @@ function runOnWorker(worker: WorkerLike, job: Omit<ScopedReadJob, 'id'>): Promis
  */
 export function scopedRead(input: ScopedReadInput): Promise<ScopedReadOutcome> {
   const run = async (): Promise<ScopedReadOutcome> => {
+    if (input.stillLive !== undefined && !input.stillLive()) return { ok: false, reason: 'ended', message: 'the access ended while the read waited' };
     if (!workerAvailable()) return { ok: false, reason: 'unavailable', message: 'no worker' };
     const bytes = await sourceBytes(input);
     const worker = await acquireWorker();

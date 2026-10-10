@@ -21,6 +21,7 @@
 
 import { seedDocsAbsentOnly } from '@snugprotocol/db';
 import type { UserDb } from '@snugprotocol/db';
+import { STARTER_INSTALL_SOURCE_PREFIX } from '@snugprotocol/db';
 
 import { starterSource, type StarterAuthoringBundle } from './starterSource.js';
 
@@ -42,8 +43,6 @@ export async function bundledStarterAuthoring(): Promise<Record<string, StarterA
   if (fixtures !== undefined) return fixtures;
   return starterSource().authoring();
 }
-
-const STARTER_SOURCE_PREFIX = 'starter:';
 
 /** `vision.md` → `vision`. Slugs are the filenames the AC9 gate already constrains. */
 function slugOf(filename: string): string {
@@ -68,8 +67,8 @@ export async function installStarterDocs(db: UserDb, appId: string): Promise<voi
   if (app === undefined) return;
 
   const source = app.installSource;
-  if (source === undefined || !source.startsWith(STARTER_SOURCE_PREFIX)) return;
-  const folder = source.slice(STARTER_SOURCE_PREFIX.length);
+  if (source === undefined || !source.startsWith(STARTER_INSTALL_SOURCE_PREFIX)) return;
+  const folder = source.slice(STARTER_INSTALL_SOURCE_PREFIX.length);
   if (folder === '') return;
 
   try {

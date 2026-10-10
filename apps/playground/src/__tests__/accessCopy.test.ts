@@ -60,6 +60,8 @@ import {
   type GrantStateView,
 } from '../access/copy.js';
 import { nameCollides, provenanceLine, readerProvenanceKind } from '../access/provenance.js';
+import { starterSourceOf } from '../schedule/Templates.js';
+import { STARTER_PREFIX, starterInstallSource } from '../starter/starterApps.js';
 import { EXCLUDED_REASONS } from '../access/relevance.js';
 
 // Local-time fixtures: every clock below is built from local components, so the pins hold in
@@ -268,6 +270,9 @@ describe('the consent sheet', () => {
     expect(CONSENT_SHEET.away).toBe("also while I'm away");
     expect(CONSENT_SHEET.awayHint('Budget')).toBe('if Budget ever runs on a schedule');
     expect(CONSENT_SHEET.pickATable).toBe('choose at least one table');
+    // W6 keys, added after the freeze (findings 35, 41).
+    expect(CONSENT_SHEET.pickAnApp).toBe('choose an app');
+    expect(CONSENT_SHEET.userTitle('Budget')).toBe("let Budget read another app's data");
   });
 
   it('the durations: the session option names the reader and says when it ends', () => {
@@ -358,9 +363,11 @@ describe('the access sheet, history and the Settings card (AC19 copy)', () => {
     expect(ACCESS_SHEET.reads('Budget')).toBe('Budget reads');
     expect(ACCESS_SHEET.readBy('Ledger')).toBe('what reads Ledger');
     expect(ACCESS_SHEET.row('Budget', 'Ledger', ['transactions'])).toBe("Budget has access to Ledger's transactions");
+    // W6 finding 42: an ended or paused row never says "has access".
+    expect(ACCESS_SHEET.endedRow('Budget', 'Ledger', ['transactions'])).toBe("Budget's access to Ledger's transactions");
     expect(ACCESS_SHEET.history).toBe('history');
     expect(ACCESS_SHEET.historyImported).toBe('from an imported file');
-    expect(ACCESS_SHEET.noHistory).toBe('nothing read yet');
+    expect(ACCESS_SHEET.noHistory).toBe('no reads on record');
     expect(ACCESS_SHEET.whatItAsked).toBe('what it asked');
     expect(ACCESS_SHEET.declinedAsks).toBe('declined asks');
     expect(ACCESS_SHEET.allowDeclined).toBe('allow…');
@@ -422,7 +429,7 @@ describe('the access sheet, history and the Settings card (AC19 copy)', () => {
 
   it('the Settings card states the switch’s custody', () => {
     expect(SETTINGS_CARD.title).toBe('access between apps');
-    expect(SETTINGS_CARD.intro).toBe("which of your apps can read another app's data — the app that was read keeps a history of every read");
+    expect(SETTINGS_CARD.intro).toBe("which of your apps can read another app's data — the app that was read keeps a history of its reads");
     expect(SETTINGS_CARD.empty).toBe("no app can read another app's data yet");
     expect(SETTINGS_CARD.neverAsk).toBe("never let apps ask to read other apps' data");
     expect(SETTINGS_CARD.neverAskHint).toBe('kept in this browser only — it does not travel with your file');
@@ -489,7 +496,7 @@ describe('the egress words (AC15)', () => {
     expect(EGRESS.noConnections).toBe('no connections of its own');
     expect(EGRESS.openUrl).toBe('any link it asks you to open — you see the address first');
     expect(EGRESS.away).toBe('also while you’re away — on a schedule it can read and send with no one watching');
-    expect(EGRESS.closing('Ledger')).toBe('the copy is made here, on this device; Ledger keeps a history of every read');
+    expect(EGRESS.closing('Ledger')).toBe('the copy is made here, on this device; Ledger keeps a history of its reads');
   });
 });
 
@@ -503,6 +510,9 @@ describe('provenance — the reader’s line the host derives (D11)', () => {
     expect(readerProvenanceKind({ installSource: 'share:7e2d' })).toBe('share');
     expect(readerProvenanceKind({ installSource: 'agent:6f1c1d4e-2b3a-4c5d-8e9f-0a1b2c3d4e5f' })).toBe('agent');
     expect(readerProvenanceKind({ installSource: 'starter:weather' })).toBe('starter');
+    // W6 finding 15: the line reads what the starter module WRITES — one spelling, homed in the db.
+    expect(readerProvenanceKind({ installSource: starterInstallSource(`${STARTER_PREFIX}weather`) })).toBe('starter');
+    expect(readerProvenanceKind({ installSource: starterSourceOf('weather') })).toBe('starter');
   });
 
   it('an installSource the host does not know is NEVER read as built here — it is not built by you', () => {

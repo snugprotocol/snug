@@ -15,7 +15,11 @@
  *  - measure bytes as characters → "the byte cap is measured in UTF-8 BYTES …" reds;
  *  - skip the drift check → the three drift rows red;
  *  - skip the credential-column scrub → "a credential-named column … crosses as ***" reds;
- *  - drift through `table_info` (hides generated columns) → the two GENERATED drift rows red.
+ *  - drift through `table_info` (hides generated columns) → the two GENERATED drift rows red;
+ *  - move the withhold before the trigger drop → "triggers are dropped BEFORE the credential
+ *    withhold …" reds (W6 finding 26);
+ *  - skip the value mask on the copy → the "transform … carries nothing out" row reds (W6 finding 1);
+ *  - answer a scoping failure as `failed` → the two `copy-failed` rows red (W6 finding 12).
  */
 
 import { readFileSync } from 'node:fs';
@@ -256,6 +260,123 @@ describe('scopedScratchRead — physical absence (drop triggers FIRST, then view
     const rows = rowsOf(result);
     expect(rows.map((row) => row[0])).toEqual(['a', 'b']);
     expect(JSON.stringify(rows)).not.toMatch(/pw-one|pw-two/);
+  });
+  // W6 finding 26 — the ORDER, not only the end state: the withhold UPDATE runs on a copy whose
+  // triggers are already gone. A trigger on a GRANTED table that fires on an UPDATE of the
+  // credential column would otherwise copy the secret into a column the reader may read.
+  it('triggers are dropped BEFORE the credential withhold: an UPDATE trigger cannot copy the secret into a readable column', () => {
+    const bytes = sourceBytes([
+      'CREATE TABLE accounts (name TEXT, balance INTEGER, api_key TEXT)',
+      "INSERT INTO accounts (name, balance, api_key) VALUES ('checking', 100, 'hunter2')",
+      'CREATE TRIGGER leak AFTER UPDATE OF api_key ON accounts BEGIN UPDATE accounts SET name = OLD.api_key; END',
+    ]);
+    const result = read(bytes, 'SELECT name, api_key FROM accounts', { tables: [{ name: 'accounts', columns: ['name', 'balance'] }] });
+    expect(rowsOf(result)).toEqual([['checking', '***']]);
+    expect(JSON.stringify(result)).not.toContain('hunter2');
+  });
+});
+
+// W6 finding 1 — the VALUE mask lives on the copy, where the reader's SQL cannot reach behind it:
+// a credential-shaped value under a NEUTRAL column is overwritten before the statement runs, so
+// no transform in the reader's own statement (a prefix, hex, substr, a cast) carries it out.
+describe('scopedScratchRead — a credential-shaped VALUE under a neutral column is masked on the copy', () => {
+  const KEY = 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJ';
+  const JWT = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U';
+  const SETTINGS = [
+    'CREATE TABLE settings (name TEXT, value TEXT)',
+    `INSERT INTO settings (name, value) VALUES ('anthropic', '${KEY}'), ('session', 'Bearer ${JWT}'), ('theme', 'dark')`,
+  ];
+  const GRANT_SETTINGS = { tables: [{ name: 'settings', columns: ['name', 'value'] }] };
+  const leaks = (result: ScopedReadResult): boolean => /sk-ant-api03|eyJhbGci|abcdefghijklmnop|Bearer/.test(JSON.stringify(result));
+
+  it('a direct read answers *** for the credential cells and the ordinary cell as it is', () => {
+    const result = read(sourceBytes(SETTINGS), 'SELECT name, value FROM settings ORDER BY name', GRANT_SETTINGS);
+    expect(rowsOf(result)).toEqual([['anthropic', '***'], ['session', '***'], ['theme', 'dark']]);
+  });
+
+  it('a transform in the reader\'s statement carries nothing out — prefix, hex, substr, cast, replace, unicode walk', () => {
+    const bytes = sourceBytes(SETTINGS);
+    for (const sql of [
+      "SELECT ' ' || value AS v FROM settings",
+      'SELECT hex(value) FROM settings',
+      'SELECT substr(value, 4) FROM settings',
+      'SELECT CAST(value AS BLOB) FROM settings',
+      "SELECT replace(value, 'sk-', 'xx-') FROM settings",
+      'SELECT group_concat(unicode(substr(value, 8, 1))) FROM settings',
+      'SELECT lower(value), upper(value) FROM settings',
+    ]) {
+      const result = read(bytes, sql, GRANT_SETTINGS);
+      expect(result.ok, sql).toBe(true);
+      expect(leaks(result), sql).toBe(false);
+      // hex/unicode of the KEY's distinctive tail would read as these:
+      expect(JSON.stringify(result), sql).not.toMatch(/616263646566|736B2D616E74/i);
+    }
+  });
+
+  it('a credential stored as a BLOB is masked too (a CAST would otherwise read it as text)', () => {
+    const db = new SQL.Database();
+    let bytes: Uint8Array;
+    try {
+      db.run('CREATE TABLE blobs (label TEXT, body BLOB)');
+      db.run('INSERT INTO blobs (label, body) VALUES (?, ?)', ['k', new TextEncoder().encode(KEY)]);
+      bytes = db.export();
+    } finally {
+      db.close();
+    }
+    const result = read(bytes, "SELECT label, CAST(body AS TEXT), ' ' || CAST(body AS TEXT) FROM blobs", { tables: [{ name: 'blobs', columns: ['label', 'body'] }] });
+    expect(result.ok).toBe(true);
+    expect(leaks(result)).toBe(false);
+  });
+
+  it('two different credentials under a UNIQUE NOT NULL column are both masked — the constraint never makes the mask refuse', () => {
+    const bytes = sourceBytes([
+      'CREATE TABLE vault (label TEXT, body TEXT NOT NULL UNIQUE)',
+      `INSERT INTO vault (label, body) VALUES ('a', '${KEY}'), ('b', 'Bearer ${JWT}'), ('c', 'plain')`,
+    ]);
+    const result = read(bytes, "SELECT label, '>' || body FROM vault ORDER BY label", { tables: [{ name: 'vault', columns: ['label', 'body'] }] });
+    expect(result.ok).toBe(true);
+    expect(leaks(result)).toBe(false);
+    expect(rowsOf(result)[2]).toEqual(['c', '>plain']);
+  });
+
+  it('a GENERATED column derived from a masked neutral column recomputes from the mask', () => {
+    const bytes = sourceBytes([
+      'CREATE TABLE s (name TEXT, value TEXT, shout TEXT GENERATED ALWAYS AS (upper(value)) VIRTUAL)',
+      `INSERT INTO s (name, value) VALUES ('k', '${KEY}')`,
+    ]);
+    const result = read(bytes, "SELECT ' ' || shout FROM s", { tables: [{ name: 's', columns: ['name', 'value', 'shout'] }] });
+    expect(result.ok).toBe(true);
+    expect(JSON.stringify(result)).not.toMatch(/SK-ANT-API03/);
+  });
+
+  it('a GENERATED column that BUILDS a credential the copy cannot overwrite fails the read closed, as a scoping failure', () => {
+    const bytes = sourceBytes([
+      "CREATE TABLE s (name TEXT, tail TEXT, built TEXT GENERATED ALWAYS AS ('sk-ant-api03-' || tail) VIRTUAL)",
+      "INSERT INTO s (name, tail) VALUES ('k', 'abcdefghijklmnopqrstuvwxyz0123')",
+    ]);
+    const result = read(bytes, "SELECT ' ' || built FROM s", { tables: [{ name: 's', columns: ['name', 'tail', 'built'] }] });
+    expect(result).toMatchObject({ ok: false, reason: 'copy-failed' });
+    expect(JSON.stringify(result)).not.toMatch(/sk-ant-api03-abcdef/);
+  });
+});
+
+// W6 finding 12 — the engine's fail-closed scoping failures are a TYPED arm, so the host never
+// parses prose to learn that a message names an object of the source.
+describe('scopedScratchRead — a scoping failure is its own reason, never "failed"', () => {
+  it('a credential column no value can be written to (STRICT BLOB NOT NULL) answers copy-failed — and nothing is run', () => {
+    const spy = spyEngine();
+    const bytes = sourceBytes([
+      'CREATE TABLE k (label TEXT, api_key BLOB NOT NULL) STRICT',
+      "INSERT INTO k (label, api_key) VALUES ('a', X'68756E74657232')",
+    ]);
+    const statement = 'SELECT label FROM k';
+    const result = scopedScratchRead(spy.engine, bytes, { tables: [{ name: 'k', columns: ['label'] }] }, { sql: statement }, CAPS);
+    expect(result).toMatchObject({ ok: false, reason: 'copy-failed' });
+    expect(spy.seen).not.toContain(statement);
+  });
+
+  it('an ordinary SQL error is still "failed" (the twin)', () => {
+    expect(read(sourceBytes(LEDGER), 'SELECT nope FROM transactions')).toMatchObject({ ok: false, reason: 'failed' });
   });
 });
 

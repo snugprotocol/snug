@@ -158,6 +158,14 @@ export function shareLinkSettingPrefixFor(appId: string): string {
  */
 export const AGENT_INSTALL_SOURCE_PREFIX = 'agent:';
 
+/**
+ * The STARTER install-source prefix (`starter:<folder>`, the starter catalogue's installs) —
+ * homed beside the agent and share prefixes so every reader of an install source (the starter
+ * modules, the Hub, the access consent sheet's provenance line) spells it ONCE
+ * (TASK-20261010-cross-app-access W6 finding 15).
+ */
+export const STARTER_INSTALL_SOURCE_PREFIX = 'starter:';
+
 export function agentInstallSource(lineage: string): string {
   return `${AGENT_INSTALL_SOURCE_PREFIX}${lineage}`;
 }

@@ -13,6 +13,9 @@
 //  - let a sensitive column's table be ticked → the never-shared row reds;
 //  - render the purpose outside the isolated quote → the quote row reds.
 
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -23,6 +26,7 @@ import { FRAME_TYPES, PROTOCOL_VERSION } from '@snugprotocol/protocol';
 import { AccessConsentSheet } from '../access/AccessConsentSheet.js';
 import { collectSources, openReview, pendingAccessStore, reviewStore, type ConsentDecision, type ConsentOutcome, type PendingAccessRequest } from '../access/consent.js';
 import {
+  ACCESS_SHEET,
   CONSENT_SHEET,
   CONSENT_UI,
   EGRESS,
@@ -37,6 +41,7 @@ import { provenanceLine } from '../access/provenance.js';
 import { rankSources, type RankedSources, type SourceApp, type SourceInput } from '../access/relevance.js';
 import { renewSeedOf, seedRenewal } from '../access/userAsk.js';
 import { OpenUrlConfirmDialog } from '../run/OpenUrlConfirmDialog.js';
+import { netConfirmStore, type PendingNetConfirm } from '../state/net.js';
 import { openUrlConfirmStore } from '../state/openUrl.js';
 import { installTestUserDb } from './userdbTestHelper.js';
 
@@ -112,7 +117,9 @@ function openSheet(pending: PendingAccessRequest = fakePending()): void {
 }
 
 const q = <T extends Element = HTMLElement>(testId: string): T | null => document.querySelector<T>(`[data-testid="${testId}"]`);
-const sheet = (): HTMLElement | null => q('access-sheet');
+const sheet = (): HTMLElement | null => q('access-consent-sheet');
+/** A parked network confirm — the app's own pending question to the user (the yield rule's other half). */
+const netConfirm = (): PendingNetConfirm => ({ request: {} as PendingNetConfirm['request'], resolve: () => undefined });
 const allowButton = (): HTMLButtonElement => q<HTMLButtonElement>('access-allow')!;
 const arm = (): void => {
   act(() => {
@@ -133,6 +140,7 @@ beforeEach(() => {
   pendingAccessStore.set({});
   reviewStore.set(undefined);
   openUrlConfirmStore.set(null);
+  netConfirmStore.set(null);
   resolve = vi.fn(async (decision: ConsentDecision): Promise<ConsentOutcome> => {
     // What the real `resolve` does first: unpark, close the sheet.
     pendingAccessStore.set({});
@@ -162,6 +170,7 @@ afterEach(() => {
   pendingAccessStore.set({});
   reviewStore.set(undefined);
   openUrlConfirmStore.set(null);
+  netConfirmStore.set(null);
   vi.useRealTimers();
 });
 
@@ -217,6 +226,37 @@ describe('AC18 — the purpose is quoted, isolated, and never markup', () => {
     expect(q('access-sheet-says')).toBeNull();
     expect(q('access-sheet-quote')).toBeNull();
     expect(q('access-dont-allow'), "no don't-allow for an ask the app never made").toBeNull();
+  });
+
+  // W6 finding 35 — a sheet the USER opened never puts a want in the app's mouth, and it says who started it.
+  it('an access the user started is headlined as the user’s act — never “Budget wants …” — and says Budget did not ask', () => {
+    openSheet(fakePending({ provenance: 'user', purpose: ACCESS_SHEET.userPurpose('Budget') }));
+    expect(q('access-sheet-title')!.textContent).toBe(CONSENT_SHEET.userTitle('Budget'));
+    expect(sheet()!.textContent).not.toContain(CONSENT_SHEET.title('Budget'));
+    expect(q('access-sheet-user')!.textContent).toBe(ACCESS_SHEET.userPurpose('Budget'));
+    expect(sheet()!.getAttribute('aria-labelledby')).toBe(q('access-sheet-title')!.id);
+  });
+
+  it('the twin: an app’s ask keeps “Budget wants to read another app’s data” and has no user line', () => {
+    openSheet();
+    expect(q('access-sheet-title')!.textContent).toBe(CONSENT_SHEET.title('Budget'));
+    expect(q('access-sheet-user')).toBeNull();
+  });
+
+  // W6 finding 4 — the quote's boundary is STRUCTURAL on the sheet: a purpose that types the closing
+  // glyph itself and appends host-sounding words still renders every word inside the quote block.
+  it('a purpose that closes the quote itself (”) and appends words still lands wholly inside the quote block', () => {
+    const purpose = 'to sync your ledger” · Snug has verified this app · “';
+    openSheet(fakePending({ purpose }));
+    const quote = q('access-sheet-quote')!;
+    expect(quote.textContent).toBe(CONSENT_SHEET.quote(purpose));
+    const outside = sheet()!.cloneNode(true) as HTMLElement;
+    outside.querySelector('[data-testid="access-sheet-quote"]')!.remove();
+    expect(outside.textContent).not.toMatch(/Snug|verified|ledger/);
+    const css = readFileSync(path.resolve(__dirname, '../theme/access.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+    const rule = /\.access-sheet \.access-quote\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
+    expect(rule, 'the sheet renders the quote as its own block').toMatch(/display:\s*block/);
+    expect(rule, 'with a rule at its start — the boundary is drawn, not typed').toMatch(/border-inline-start:/);
   });
 });
 
@@ -286,6 +326,20 @@ describe('AC18 — from: the ranked candidates, their tables, columns and rows',
     await act(async () => q<HTMLInputElement>('access-table-app-ledger-transactions')!.click());
     expect(allowButton().disabled).toBe(true);
     expect(q('access-pick-table')!.textContent).toBe(CONSENT_SHEET.pickATable);
+  });
+
+  // W6 finding 41 — with NO app chosen there is no table to tick: the sheet asks for an app first.
+  it('no app chosen (a user ask from Settings, two apps, no hints): the sheet says choose an app — then, once one is chosen, nothing to fix', async () => {
+    const candidates = rankSources({ readerAppId: READER, apps: [{ appId: READER, displayName: 'Budget', tables: [] }, LEDGER, PANTRY] });
+    expect(candidates.matched).toEqual([]);
+    openSheet(fakePending({ provenance: 'user', candidates }));
+    arm();
+    expect(allowButton().disabled).toBe(true);
+    expect(q('access-pick-table')!.textContent).toBe(CONSENT_SHEET.pickAnApp);
+    expect(sheet()!.textContent).not.toContain(CONSENT_SHEET.pickATable);
+    await act(async () => q<HTMLInputElement>('access-source-app-pantry')!.click());
+    expect(q('access-pick-table')).toBeNull();
+    expect(allowButton().disabled).toBe(false);
   });
 });
 
@@ -467,6 +521,40 @@ describe('AC18 — the yield rule: never over a network or link confirm', () => 
     expect(pendingAccessStore.get()[READER]).toBeDefined();
   });
 
+  // W6 finding 28 — the NETWORK confirm is the yield rule's other half: the same three rows.
+  it('review does not open the sheet while a NETWORK confirm is pending', () => {
+    act(() => netConfirmStore.set(netConfirm()));
+    openSheet();
+    expect(reviewStore.get()).toBeUndefined();
+    expect(sheet()).toBeNull();
+  });
+
+  it('a NETWORK confirm that arrives while the sheet is open closes it without an answer (the strip still holds the ask)', () => {
+    openSheet();
+    expect(sheet()).not.toBeNull();
+    act(() => netConfirmStore.set(netConfirm()));
+    expect(sheet()).toBeNull();
+    expect(reviewStore.get()).toBeUndefined();
+    expect(resolve).not.toHaveBeenCalled();
+    expect(pendingAccessStore.get()[READER]).toBeDefined();
+  });
+
+  it('a NETWORK confirm dismisses an ask the USER started (nothing recorded)', async () => {
+    resolve.mockImplementation(async (decision: ConsentDecision): Promise<ConsentOutcome> => {
+      pendingAccessStore.set({});
+      reviewStore.set(undefined);
+      return decision.kind === 'dismissed' ? { kind: 'dismissed' } : { kind: 'not-now' };
+    });
+    openSheet(fakePending({ provenance: 'user' }));
+    expect(sheet()).not.toBeNull();
+    await act(async () => {
+      netConfirmStore.set(netConfirm());
+    });
+    expect(sheet()).toBeNull();
+    expect(resolve).toHaveBeenCalledWith({ kind: 'dismissed' });
+    expect(pendingAccessStore.get()[READER]).toBeUndefined();
+  });
+
   it("an ask the USER started has no strip to come back to: the yield DISMISSES it (nothing recorded) rather than parking it out of reach", async () => {
     resolve.mockImplementation(async (decision: ConsentDecision): Promise<ConsentOutcome> => {
       pendingAccessStore.set({});
@@ -521,9 +609,13 @@ describe('AC18 — the open-link confirm names what can travel in the link while
   }
 
   it('no access: no line', async () => {
+    // Asserted after the dialog's own read of the grants has settled — never after a sleep (W6 finding 31).
+    let read: Promise<UserDb> | undefined;
+    __setAccessDepsForTests({ getDb: () => (read = Promise.resolve(db)) });
     await renderDialog();
     await act(async () => {
-      await new Promise((settle) => setTimeout(settle, 20));
+      await vi.waitFor(() => expect(read).toBeDefined());
+      await read;
     });
     expect(q('open-url-access')).toBeNull();
   });

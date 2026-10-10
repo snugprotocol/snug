@@ -83,9 +83,13 @@ Normative rules (all MUST, for a hub implementing Part VI):
    empty the hub — Part II §9's doctrine) every grant whose **canonical intent** — the
    key-sorted, whitespace-free JSON of `{ id, readerAppId, sourceAppId, scope, access,
    purpose, duration, unattended, provenance }` and nothing the engine writes on its own —
-   differs from a local grant of the same id lands `suspended / imported`; an intent-identical
-   grant stays as it arrived; a `revoked` grant stays revoked (it is never re-armable); a row
-   that does not parse is removed and reported; every `accessDeclined:*` and `accessMuted:*`
+   differs from an ACTIVE local grant of the same id lands `suspended / imported`; an
+   intent-identical grant stays as it arrived ONLY when the reader's current code in the
+   imported file equals the local reader's code — consent is bound to the code it was given
+   to, so a file that replaces the reader lands its grant `suspended / imported`; a grant the
+   local file holds REVOKED is written back revoked (the user's stop is a tombstone no
+   imported copy can lift); an imported `revoked` grant stays revoked (it is never
+   re-armable); a row that does not parse is removed and reported; every `accessDeclined:*` and `accessMuted:*`
    row is dropped; every imported history entry is tagged `imported: true`. On a TRUSTED pull
    (the user's own sync origin, the recovery restore) every row is kept exactly as it is —
    including a grant row the hub cannot parse, which stays inert.
@@ -248,12 +252,15 @@ A host that advertises `capabilities.access` MUST:
     `ACCESS_SOURCE_MAX_BYTES`, 16 MiB) from which every trigger (first), every view, every
     table outside the grant, `snug_kv` and the statistics tables have been physically
     dropped and the drops verified, every credential-named column of a granted table
-    withheld, and `PRAGMA query_only` set; in an execution context the page does not share
+    withheld, every credential-SHAPED value under a neutral column of a granted table
+    overwritten on the copy (a reader's own statement — an alias, `hex()`, `substr()` — cannot
+    reach behind the copy), and `PRAGMA query_only` set; in an execution context the page does not share
     (a dedicated worker with its own engine) under a wall clock of `ACCESS_QUERY_TIMEOUT_MS`
     (2 s) that terminates the context when it fires; suspend `reader-misbehaved` after
     `ACCESS_TIMEOUT_STRIKES` (3) consecutive timeouts.
 13. Mask, by column name, every cell under a credential-named column and every cell the C1
-    value scan rejects (`***`); cap rows and UTF-8 bytes in band with `truncated`/`totalRows`.
+    value scan rejects (`***`) — the belt on the rows, after the copy itself was withheld and
+    masked; cap rows and UTF-8 bytes in band with `truncated`/`totalRows`.
 14. Log every read on the SOURCE — `read` with the statement's first 200 characters (walked
     whole first; omitted on a hit), the row count and whether anyone was looking — BEFORE the
     rows leave; log `granted`, `refused` (a hidden frame on a grant without `unattended`, at

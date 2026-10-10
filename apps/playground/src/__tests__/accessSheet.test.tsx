@@ -34,6 +34,7 @@ import {
   grantsForApp,
   noteRead,
   resetAccessSession,
+  revokeAccess,
   suspendAccess,
   type AnyAccessGrant,
   type LiveGrantRow,
@@ -379,6 +380,22 @@ describe('ONE GrantRow for both directions (both parties named, the known side m
     expect(db.getAccessGrant(grant.id)).toBeUndefined();
   });
 
+  // W6 finding 42 — the sentence carries the state: a stopped or paused row never says "has access".
+  it('a stopped row and a paused row read "Budget’s access to Ledger’s transactions" — never "has access" — with the parties still split', async () => {
+    const stopped = await allow({ duration: 'week' });
+    await revokeAccess(stopped.id);
+    const paused = await allow({ duration: 'week' });
+    await suspendAccess(db, paused.id, 'reader-updated', new Date(clock.now).toISOString());
+    await renderSheet(budget);
+    const rows = rowsIn('access-reads');
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      expect(one('access-row-sentence', row)?.textContent).toBe(ACCESS_SHEET.endedRow('Budget', 'Ledger', ['transactions']));
+      expect(one('access-row-sentence', row)?.textContent).not.toContain('has access');
+      expect([...row.querySelectorAll('[data-known="true"]')].map((el) => el.textContent)).toEqual(['Budget']);
+    }
+  });
+
   it('a paused row says why and *allow again* parks a prefilled ask that renews THAT access, then opens the review', async () => {
     const onClose = vi.fn();
     const grant = await allow({ duration: 'week' });
@@ -498,7 +515,7 @@ describe("the source's history", () => {
     expect(css).not.toMatch(/summary::-webkit-details-marker/);
   });
 
-  it('imported entries sit under their own heading; an empty history says *nothing read yet*', async () => {
+  it('imported entries sit under their own heading; an empty history says *no reads on record*', async () => {
     const grant = await allow();
     db.clearAccessLog(ledger);
     await renderSheet(ledger);
@@ -516,7 +533,7 @@ describe("the source's history", () => {
     expect(one('access-history-words', imported!)?.textContent).toBe('read items · 1 row · 1 min ago · while you were away');
   });
 
-  it('a source that is read but has no reads yet says *nothing read yet* beside its lifecycle lines', async () => {
+  it('a source that is read but has no reads yet says *no reads on record* beside its lifecycle lines', async () => {
     await allow();
     await renderSheet(ledger);
     expect(one('access-history-empty')?.textContent).toBe(ACCESS_SHEET.noHistory);

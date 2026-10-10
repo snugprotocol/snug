@@ -269,7 +269,7 @@ function seedConnections(): void {
 }
 
 const OPEN_URL: EgressLine = { kind: 'open-url', text: 'any link it asks you to open — you see the address first' };
-const CLOSING: EgressLine = { kind: 'closing', text: 'the copy is made here, on this device; Ledger keeps a history of every read' };
+const CLOSING: EgressLine = { kind: 'closing', text: 'the copy is made here, on this device; Ledger keeps a history of its reads' };
 const DEMO_BRAIN: EgressLine = { kind: 'brain', text: 'its AI — the demo brain, which answers here and sends nothing out' };
 
 describe('egressFor — every place the reader can send what it reads (AC15)', () => {
@@ -341,7 +341,7 @@ describe('egressFor — every place the reader can send what it reads (AC15)', (
 
   it('closes with the source’s name: the copy is made here, and the source keeps the history', () => {
     const lines = egressFor(db, APP, { unattended: false, sourceName: 'Pantry' });
-    expect(lines.at(-1)).toEqual({ kind: 'closing', text: 'the copy is made here, on this device; Pantry keeps a history of every read' });
+    expect(lines.at(-1)).toEqual({ kind: 'closing', text: 'the copy is made here, on this device; Pantry keeps a history of its reads' });
   });
 
   it('never says the data stays on this device under a list of places it can go', () => {

@@ -10,7 +10,7 @@ import { CONSENT_SHEET, CONSENT_UI } from './copy.js';
 import { isOfferable, type RankedSource } from './relevance.js';
 
 /** Chips shown per table before the rest collapse into "+n more". */
-export const CHIPS_MAX = 8;
+const CHIPS_MAX = 8;
 
 export interface TableChooserProps {
   source: RankedSource;

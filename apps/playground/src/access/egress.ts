@@ -77,7 +77,7 @@ const fileHasKey =
  * REQUIRED — no default to the synchronous presence store, which can disagree with the file the
  * send path reads (a brain line saying "with your key" for a turn that routes to the demo brain).
  */
-export function readerBrainRoute(appId: string, hasKey: (provider: 'anthropic' | 'openai') => boolean): ReaderBrainRoute {
+function readerBrainRoute(appId: string, hasKey: (provider: 'anthropic' | 'openai') => boolean): ReaderBrainRoute {
   const provider = providerStore.get();
   const brain = currentBrain();
   if (brain.kind === 'host') {

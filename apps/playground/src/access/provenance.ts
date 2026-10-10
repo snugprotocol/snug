@@ -13,14 +13,11 @@
 // its ABSENCE means the user's own builder made the app. Any other value — an unknown prefix,
 // an empty string — reads as the share line ("not built by you"), the conservative claim.
 
-import { AGENT_INSTALL_SOURCE_PREFIX, SHARE_INSTALL_SOURCE_PREFIX, type AppRecord } from '@snugprotocol/db';
+import { AGENT_INSTALL_SOURCE_PREFIX, SHARE_INSTALL_SOURCE_PREFIX, STARTER_INSTALL_SOURCE_PREFIX, type AppRecord } from '@snugprotocol/db';
 
 import { PROVENANCE, dayMonth } from './copy.js';
 
 export type ReaderProvenanceKind = 'built' | 'share' | 'agent' | 'starter';
-
-/** The starter install identity (`starter:<folder>`) — the starter module's own prefix, read-only here. */
-const STARTER_INSTALL_SOURCE_PREFIX = 'starter:';
 
 export function readerProvenanceKind(app: Pick<AppRecord, 'installSource'>): ReaderProvenanceKind {
   const source = app.installSource;

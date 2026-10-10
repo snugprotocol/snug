@@ -9,9 +9,10 @@
 //     every live access it reads through — active and not expired, persisted or for the session
 //     — exactly the set `suspendAccessForAppVersion` will pause, named by the other apps.
 //
-// The access half is said only for an update E8's rule pauses access for (`readerUpdateSuspends`
-// — a shared or an agent update; both confirms that mount this note are one of those, so the
-// default is `shared`). Nothing renders when neither half has anything to name.
+// The access half is said only for an update E8's rule pauses access for (`readerUpdateSuspends`).
+// Every mount SAYS which update it confirms (`source` is required — the agent's confirm passes
+// `agent`, the shelf's `shared`), so the sentence follows E8's rule rather than a default that
+// happens to match it today. Nothing renders when neither half has anything to name.
 
 import { useEffect, useRef, useState, type ReactElement } from 'react';
 
@@ -48,7 +49,8 @@ function useAccessPausing(appId: string, enabled: boolean): string | undefined {
           settle(undefined);
           return;
         }
-        settle(updatePausesAccess(db.getApp(appId)?.displayName ?? live[0]!.readerName, sources));
+        const readerName = db.getApp(appId)?.displayName ?? live.find((row) => row.readerName !== '')?.readerName ?? '';
+        settle(readerName === '' ? undefined : updatePausesAccess(readerName, sources));
       })
       .catch(() => settle(undefined));
     return () => {
@@ -58,7 +60,7 @@ function useAccessPausing(appId: string, enabled: boolean): string | undefined {
   return sentence;
 }
 
-export function UpdatePausesNote({ appId, source = 'shared' }: { appId: string; source?: ReaderVersionSource }): ReactElement | null {
+export function UpdatePausesNote({ appId, source }: { appId: string; source: ReaderVersionSource }): ReactElement | null {
   const { tasks } = useScheduler();
   const schedules = updatePausesSentence(schedulesNamingApp(tasks, appId).map((task) => task.title));
   const access = useAccessPausing(appId, readerUpdateSuspends(source));

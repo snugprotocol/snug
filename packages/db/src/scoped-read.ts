@@ -15,7 +15,8 @@
 //     rows). A non-granted table is therefore PHYSICALLY ABSENT: the read fails with "no such
 //     table", there is no name guard to get wrong. The drops are VERIFIED against
 //     sqlite_master before anything else runs;
-//  3. withhold every credential-named column of a granted table (see below);
+//  3. withhold every credential-named column of a granted table (see below), THEN mask every
+//     credential-shaped VALUE under any other column of a granted table (see below);
 //  4. `PRAGMA query_only = 1`;
 //  5. the drift check: each granted table's live NON-credential columns (`selectableColumns`
 //     — `PRAGMA table_xinfo`, generated columns included, the same list the consent sheet
@@ -40,6 +41,23 @@
 // A generated column derived from it recomputes from the withheld value. If no value can be
 // written the read fails closed rather than leak.
 //
+// MASKED VALUES (step 3, second half — W6 finding 1). A credential-SHAPED value can sit under a
+// neutral column name (`settings.value = 'sk-ant-…'`). A mask applied to the ANSWER is keyed on
+// the answer's cells, and the reader's own SQL decides what those are: `' ' || value`,
+// `hex(value)`, `substr(value, 4)` carry the key past any start-anchored value scan. So the mask
+// is applied HERE, on the copy, before the statement can reach it: every TEXT (and BLOB, read as
+// UTF-8) cell of every ordinary column of a granted table that the protocol's value scan rejects
+// (`scanForCredentialValues`, in its column's context) is overwritten with the same fallbacks as
+// a withheld column. A GENERATED column recomputes from what it is derived from; one that still
+// answers a credential shape after that (it BUILDS one) cannot be overwritten, so the read fails
+// closed. Cost: one pass over the granted tables per read, bounded by the 16 MiB source cap and
+// the host's wall clock.
+//
+// SCOPING FAILURES ARE TYPED. A copy that still holds a stray object, or a value that could not be
+// withheld or masked, answers `reason: 'copy-failed'` — its message names an object of the
+// source and is for the host's own diagnostics, never for the reader (W6 finding 12: the host
+// switches on the reason, it never parses prose).
+//
 // FREE-PAGE RESIDUE. Dropped tables leave their bytes in free pages of the copy. They are
 // unreachable here: this sql.js build has no `dbstat` and no `sqlite_dbpage` (both pinned by
 // the tests), ATTACH and every PRAGMA are refused by the first guard, and `writable_schema`
@@ -56,8 +74,9 @@
 // table". The threat-model delta and the spec prose state both residuals beside D23.
 
 import type { BindParams, Database, SqlJsStatic } from 'sql.js';
-import { isCredentialKeyName, isReadOnlySelect } from '@snugprotocol/protocol';
+import { isCredentialKeyName, isReadOnlySelect, scanForCredentialValues } from '@snugprotocol/protocol';
 import { forbiddenStatementReason } from './driver.js';
+import { quoteIdent, selectRows } from './sqlite-helpers.js';
 import { jsonUtf8Weight, runScratchStatement } from './userdb/scratch-statement.js';
 
 /** The granted tables, each with the columns recorded (FROZEN) at consent — an `AccessScope` satisfies it. */
@@ -85,7 +104,9 @@ export interface ScopedReadDrift {
 
 export type ScopedReadResult =
   | { ok: true; columns: string[]; rows: unknown[][]; truncated?: boolean; totalRows?: number }
-  | { ok: false; reason: 'drift' | 'refused' | 'failed'; drift?: ScopedReadDrift; message: string };
+  | { ok: false; reason: 'drift' | 'refused' | 'failed'; drift?: ScopedReadDrift; message: string }
+  /** The copy could not be scoped (a stray object, a value that could not be withheld or masked): failed CLOSED. The message names a source object — never for the reader. */
+  | { ok: false; reason: 'copy-failed'; message: string };
 
 const KV_TABLE = 'snug_kv';
 
@@ -93,19 +114,7 @@ const KV_TABLE = 'snug_kv';
 const NOT_ONE_READ_MESSAGE =
   'only one read-only SELECT (or WITH … SELECT) is allowed — no PRAGMA, ATTACH, DETACH, writes or multiple statements';
 
-const quoteIdent = (name: string): string => `"${name.replace(/"/g, '""')}"`;
 const errorMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
-
-function selectRows(scratch: Database, sql: string, params?: unknown[]): unknown[][] {
-  const statement = scratch.prepare(sql, (params ?? []) as BindParams);
-  try {
-    const rows: unknown[][] = [];
-    while (statement.step()) rows.push(statement.get() as unknown[]);
-    return rows;
-  } finally {
-    statement.free();
-  }
-}
 
 function namesOf(scratch: Database, type: 'trigger' | 'view'): string[] {
   return selectRows(scratch, 'SELECT name FROM sqlite_master WHERE type = ?', [type]).map((row) => String(row[0]));
@@ -173,6 +182,68 @@ function withholdCredentialColumns(scratch: Database, tables: readonly string[])
   return undefined;
 }
 
+const utf8 = new TextDecoder('utf-8', { fatal: false });
+
+/** Whether one stored cell is credential-SHAPED in its column's context (a BLOB is judged as the UTF-8 text a CAST would read). */
+function credentialShaped(column: string, cell: unknown): boolean {
+  const text = typeof cell === 'string' ? cell : cell instanceof Uint8Array ? utf8.decode(cell) : undefined;
+  return text !== undefined && scanForCredentialValues({ [column]: text }).rejects.length > 0;
+}
+
+/** The distinct credential-shaped values of one column of one table (TEXT and BLOB cells only). */
+function credentialValues(scratch: Database, table: string, column: string): unknown[] {
+  const found: unknown[] = [];
+  const seen = new Set<string>();
+  const statement = scratch.prepare(
+    `SELECT ${quoteIdent(column)} FROM ${quoteIdent(table)} WHERE typeof(${quoteIdent(column)}) IN ('text', 'blob')`,
+  );
+  try {
+    while (statement.step()) {
+      const cell = statement.get()[0];
+      if (!credentialShaped(column, cell)) continue;
+      const key = typeof cell === 'string' ? `t:${cell}` : `b:${Array.from(cell as Uint8Array).join(',')}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      found.push(cell);
+    }
+  } finally {
+    statement.free();
+  }
+  return found;
+}
+
+/**
+ * Overwrite every credential-SHAPED value under a NEUTRAL column of each granted table in the copy
+ * (the credential-NAMED ones are already withheld whole). Generated columns recompute; one that
+ * still answers a credential shape cannot be overwritten. Answers the column that could not be
+ * masked, if any.
+ */
+function maskCredentialValues(scratch: Database, tables: readonly string[]): string | undefined {
+  for (const table of tables) {
+    const info = selectRows(scratch, `PRAGMA table_xinfo(${quoteIdent(table)})`)
+      .filter((row) => Number(row[6]) !== 1 && !isCredentialKeyName(String(row[1])))
+      .map((row) => ({ column: String(row[1]), generated: Number(row[6]) >= 2 }));
+    for (const { column } of info.filter((entry) => !entry.generated)) {
+      for (const value of credentialValues(scratch, table, column)) {
+        const masked = WITHHELD_VALUES.some((replacement) => {
+          try {
+            scratch.run(`UPDATE ${quoteIdent(table)} SET ${quoteIdent(column)} = ${replacement} WHERE ${quoteIdent(column)} = ?`, [value] as BindParams);
+            return true;
+          } catch {
+            return false;
+          }
+        });
+        if (!masked) return `${table}.${column}`;
+      }
+    }
+    // After every base column is masked: a generated column that STILL answers a credential builds one.
+    for (const { column } of info.filter((entry) => entry.generated)) {
+      if (credentialValues(scratch, table, column).length > 0) return `${table}.${column}`;
+    }
+  }
+  return undefined;
+}
+
 /**
  * Every column a SELECT on `table` can name, in declaration order — the ONE definition the
  * drift check and `describeAppData` (the consent sheet) share, so a fresh grant never drifts.
@@ -218,14 +289,14 @@ export function scopedScratchRead(
 
     dropOutsideScope(scratch, granted);
     const stray = strayObject(scratch, granted);
-    if (stray !== undefined) return { ok: false, reason: 'failed', message: `the scoped copy still holds "${stray}"` };
+    if (stray !== undefined) return { ok: false, reason: 'copy-failed', message: `the scoped copy still holds "${stray}"` };
 
     const present = new Set(selectRows(scratch, "SELECT lower(name) FROM sqlite_master WHERE type = 'table'").map((row) => String(row[0])));
-    const withheld = withholdCredentialColumns(
-      scratch,
-      scope.tables.map((table) => table.name).filter((name) => present.has(name.toLowerCase())),
-    );
-    if (withheld !== undefined) return { ok: false, reason: 'failed', message: `the column ${withheld} could not be withheld` };
+    const grantedPresent = scope.tables.map((table) => table.name).filter((name) => present.has(name.toLowerCase()));
+    const withheld = withholdCredentialColumns(scratch, grantedPresent);
+    if (withheld !== undefined) return { ok: false, reason: 'copy-failed', message: `the column ${withheld} could not be withheld` };
+    const unmasked = maskCredentialValues(scratch, grantedPresent);
+    if (unmasked !== undefined) return { ok: false, reason: 'copy-failed', message: `a value in ${unmasked} could not be masked` };
 
     scratch.run('PRAGMA query_only = 1');
 

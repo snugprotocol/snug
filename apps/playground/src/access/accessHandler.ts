@@ -98,9 +98,6 @@ const notNow = (): AccessHandlerResult => refuse(ACCESS_ERROR_CODES.ACCESS_DECLI
 const hostError = (): AccessHandlerResult => refuse(ERROR_CODES.HOST_ERROR, ACCESS_APP_MESSAGES.hostError, true);
 const queryFailed = (message: string = ACCESS_APP_MESSAGES.queryFailed): AccessHandlerResult => refuse(ACCESS_ERROR_CODES.ACCESS_QUERY_FAILED, message, false);
 
-/** The engine's own fail-closed refusals name objects of the source — they never reach the app. */
-const INTERNAL_FAILURE = /^the (scoped copy still holds|column \S+ could not be withheld)/;
-
 /** The mask's replacement — the scan's and the scoped copy's own. */
 const MASK = '***';
 
@@ -128,7 +125,7 @@ function answerFor(db: UserDb, outcome: ConsentOutcome, grant: AnyAccessGrant | 
  * cell): every cell under a credential-named column crosses as `***` whatever it holds, and any
  * cell the value scan rejects in its column's context crosses as `***` too (ADR-0075 §6, D14).
  */
-export function maskRows(columns: readonly string[], rows: readonly unknown[][]): unknown[][] {
+function maskRows(columns: readonly string[], rows: readonly unknown[][]): unknown[][] {
   return rows.map((row) =>
     row.map((cell, index) => {
       const column = columns[index] ?? '';
@@ -217,7 +214,16 @@ export function createAccessHandlerFor(appId: string, frame: AccessFrame): Acces
           ? { renew: { grantId: renewed.grant.id, sourceAppId: renewed.grant.sourceAppId, tables: renewed.grant.scope.tables.map((table) => table.name) } }
           : {}),
         hash: accessRequestHash(semantics),
-        settle: (outcome, grant) => resolve(answerFor(db, outcome, grant)),
+        settle: (outcome, grant) => {
+          // Exactly one terminal answer, whatever building it throws (a view of a grant whose source vanished).
+          let answer: AccessHandlerResult;
+          try {
+            answer = answerFor(db, outcome, grant);
+          } catch {
+            answer = hostError();
+          }
+          resolve(answer);
+        },
       });
     });
   }
@@ -284,6 +290,12 @@ export function createAccessHandlerFor(appId: string, frame: AccessFrame): Acces
           return bytes;
         },
         scope: grant.scope,
+        // Re-checked when the read DEQUEUES: a stop or a pause that landed while it waited behind
+        // other reads ends it before any export, slice or worker (W6 finding 7).
+        stillLive: () => {
+          const current = ownGrant(db, grant.id);
+          return current !== undefined && current.grant.status === 'active' && !isExpired(current.grant, now());
+        },
         statement: { sql: frame.sql, ...(frame.params !== undefined ? { params: frame.params } : {}) },
         caps: { maxRows: ACCESS_MAX_ROWS, maxBytes: ACCESS_MAX_RESULT_BYTES },
       });
@@ -292,12 +304,13 @@ export function createAccessHandlerFor(appId: string, frame: AccessFrame): Acces
     }
 
     const stamp = iso(now());
+    /** The grant ended while the read waited or ran: a stop or a pause wins — no rows leave. */
+    const endedMeanwhile = (current: FoundAccessGrant | undefined): AccessHandlerResult =>
+      refuse(ACCESS_ERROR_CODES.ACCESS_REVOKED, current?.grant.status === 'suspended' ? ACCESS_APP_MESSAGES.paused : ACCESS_APP_MESSAGES.revoked, false);
     if (outcome.ok) {
       // The read took time: a stop or a pause that landed meanwhile wins — no rows leave.
       const current = ownGrant(db, grant.id);
-      if (current === undefined || current.grant.status !== 'active') {
-        return refuse(ACCESS_ERROR_CODES.ACCESS_REVOKED, current?.grant.status === 'suspended' ? ACCESS_APP_MESSAGES.paused : ACCESS_APP_MESSAGES.revoked, false);
-      }
+      if (current === undefined || current.grant.status !== 'active') return endedMeanwhile(current);
       const rows = maskRows(outcome.columns, outcome.rows);
       const sql = loggedSql(frame.sql);
       try {
@@ -325,6 +338,14 @@ export function createAccessHandlerFor(appId: string, frame: AccessFrame): Acces
       };
     }
     switch (outcome.reason) {
+      case 'ended': {
+        const current = ownGrant(db, grant.id);
+        if (current !== undefined && current.grant.status === 'active' && isExpired(current.grant, now())) {
+          markExpiredOnce(db, current.grant, now());
+          return refuse(ACCESS_ERROR_CODES.ACCESS_EXPIRED, ACCESS_APP_MESSAGES.expired, false);
+        }
+        return endedMeanwhile(current);
+      }
       case 'unavailable':
         return queryFailed(ACCESS_APP_MESSAGES.noWorker);
       case 'timeout':
@@ -335,8 +356,10 @@ export function createAccessHandlerFor(appId: string, frame: AccessFrame): Acces
         return refuse(ACCESS_ERROR_CODES.ACCESS_REVOKED, ACCESS_APP_MESSAGES.sourceChanged, false);
       case 'refused':
         return refuse(ACCESS_ERROR_CODES.ACCESS_QUERY_REFUSED, ACCESS_APP_MESSAGES.queryRefused, false);
+      case 'copy-failed':
+        return queryFailed(); // its message names an object of the source — never for the app (typed, never parsed: W6 finding 12)
       case 'failed':
-        return INTERNAL_FAILURE.test(outcome.message) ? queryFailed() : queryFailed(`${ACCESS_APP_MESSAGES.queryFailed}: ${outcome.message}`);
+        return queryFailed(`${ACCESS_APP_MESSAGES.queryFailed}: ${outcome.message}`);
     }
   }
 

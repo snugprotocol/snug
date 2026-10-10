@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, KeyboardEvent, ReactElement } from 'react';
 import { Link, useNavigate } from 'react-router';
 
+import { STARTER_INSTALL_SOURCE_PREFIX } from '@snugprotocol/db';
+
 import { parseBuildPrompt } from '../agent/chips.js';
 import { ProtectionOffer } from '../vault/ProtectionOffer.js';
 import { useProtectOffer } from '../vault/protectOffer.js';
@@ -140,7 +142,7 @@ function HubHome(): ReactElement {
     void getUserDb().then(async (db) => {
       const next = new Map<string, number>();
       for (const [source, appId] of installedBySource) {
-        if (!source.startsWith('starter:')) continue;
+        if (!source.startsWith(STARTER_INSTALL_SOURCE_PREFIX)) continue;
         const status = await starterUpdateStatus(db, appId).catch(() => undefined);
         if (status?.updateAvailable === true) next.set(source, status.latestVersion);
       }

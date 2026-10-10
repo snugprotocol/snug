@@ -24,6 +24,7 @@ import { useEffect, useId, useRef, useState, type ReactElement } from 'react';
 import type { AccessDecline } from '@snugprotocol/db';
 import type { AccessLogEntry } from '@snugprotocol/protocol';
 
+import '../theme/access.css';
 import '../theme/access-sheet.css';
 import { useStore } from '../state/store.js';
 import { Button } from '../ui/Button.js';

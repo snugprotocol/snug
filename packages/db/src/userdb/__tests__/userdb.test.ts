@@ -1021,6 +1021,74 @@ describe('importUserDb — access grants are disarmed unless intent-identical (T
     await db.close();
   });
 
+  // W6 findings 2/27 — only a LIVE local grant vouches for its imported twin. A grant the user
+  // STOPPED keeps its tombstone (an older copy of the file must never re-arm it), and a local
+  // grant that is paused is never un-paused by a file.
+  it('an UNTRUSTED file: a grant the user STOPPED is still stopped after importing an older copy that carries it active', async () => {
+    const g = accessGrant();
+    const bytes = await accessDonor((donor) => donor.putAccessGrant(g)); // the backup from before the stop
+    const db = await open(backend);
+    installAccessApps(db);
+    const stoppedAt = '2026-10-11T09:00:00.000Z';
+    db.putAccessGrant({ ...g, status: 'revoked', revokedAt: stoppedAt, updatedAt: stoppedAt });
+
+    const report = await db.importUserDb(bytes);
+
+    expect(db.getAccessGrant(g.id)).toMatchObject({ status: 'revoked', revokedAt: stoppedAt, updatedAt: stoppedAt });
+    expect(db.getAccessGrant(g.id)?.suspendedReason).toBeUndefined();
+    expect(report.access).toEqual({ suspendedGrants: 0, removedGrants: 0, taggedLogEntries: 0 });
+    await db.close();
+  });
+
+  it('an UNTRUSTED file: an intent-identical twin of a locally PAUSED grant lands suspended / imported, never active', async () => {
+    const g = accessGrant();
+    const bytes = await accessDonor((donor) => donor.putAccessGrant(g));
+    const db = await open(backend);
+    installAccessApps(db);
+    db.putAccessGrant({ ...g, status: 'suspended', suspendedReason: 'reader-updated' });
+
+    const report = await db.importUserDb(bytes);
+
+    expect(db.getAccessGrant(g.id)).toMatchObject({ status: 'suspended', suspendedReason: 'imported' });
+    expect(report.access.suspendedGrants).toBe(1);
+    await db.close();
+  });
+
+  // W6 finding 3 — the import seam of D18: consent given to the reader's OLD code does not survive
+  // a file that replaces that code, exactly as a share link or an agent hand-in would not.
+  it('an UNTRUSTED file that replaces the READER\'s code: its intent-identical grant lands suspended / imported', async () => {
+    const g = accessGrant();
+    const bytes = await donorBytes((donor) => {
+      donor.installApp({ appId: SOURCE_APP, displayName: 'Ledger', html: '<html>ledger</html>' });
+      donor.installApp({ appId: READER_APP, displayName: 'Budget', html: '<html>EVIL budget that exfiltrates</html>' });
+      donor.putAccessGrant(g);
+    });
+    const db = await open(backend);
+    installAccessApps(db);
+    db.putAccessGrant(g);
+
+    const report = await db.importUserDb(bytes);
+
+    expect(db.getAppHtml(READER_APP)).toContain('EVIL');
+    expect(db.getAccessGrant(g.id)).toMatchObject({ status: 'suspended', suspendedReason: 'imported' });
+    expect(report.access.suspendedGrants).toBe(1);
+    await db.close();
+  });
+
+  it('the twin: the same reader code (a backup round trip) keeps the intent-identical grant active', async () => {
+    const g = accessGrant();
+    const bytes = await accessDonor((donor) => donor.putAccessGrant(g));
+    const db = await open(backend);
+    installAccessApps(db);
+    db.putAccessGrant(g);
+
+    const report = await db.importUserDb(bytes);
+
+    expect(db.getAccessGrant(g.id)).toMatchObject({ status: 'active' });
+    expect(report.access.suspendedGrants).toBe(0);
+    await db.close();
+  });
+
   it('a TRUSTED pull keeps every grant exactly as it is', async () => {
     const theirs = accessGrant();
     const bytes = await accessDonor((donor) => donor.putAccessGrant(theirs));

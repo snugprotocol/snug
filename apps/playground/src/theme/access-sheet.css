@@ -1,13 +1,8 @@
 /* theme/access-sheet.css — the run header's ⋈ sheet and Settings → access between apps
    (TASK-20261010-cross-app-access AC19). Tokens only; every row wraps, so nothing scrolls
-   sideways at 375 px. Imported from access/AccessSheet.tsx and access/AccessSettingsCard.tsx. */
-
-.access-sheet-body {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-  min-width: 0;
-}
+   sideways at 375 px. Imported from access/AccessSheet.tsx and access/AccessSettingsCard.tsx,
+   beside theme/access.css, which homes the rules both sheets share (`.access-sheet`,
+   `.access-sheet-body`) — each rule lives in ONE file. */
 
 .access-sheet-section {
   display: flex;

@@ -33,13 +33,13 @@ import { ACCESS_REQUEST_MIN_GAP_MS, ACCESS_SOURCE_MAX_BYTES, accessRequestHash, 
 import type { AppRecord, UserDb } from '@snugprotocol/db';
 
 import { createAppAsk, type AppAsk } from '../state/appAsk.js';
+import { readFlag } from '../state/browserFlags.js';
 import { netConfirmStore } from '../state/net.js';
 import { openUrlConfirmStore } from '../state/openUrl.js';
 import { appHasSidecarFact } from '../state/sidecarLive.js';
 import { createStore, type Store } from '../state/store.js';
-import { ACCESS_SHEET } from './copy.js';
 import { egressFor, type EgressLine } from './egress.js';
-import { accessDeps, armAccessListeners, bumpAccessRevision, createGrantFromDecision, readerGeneration, type AnyAccessGrant } from './grants.js';
+import { accessDeps, armAccessListeners, bumpAccessRevision, createGrantFromDecision, readerGeneration, revokeAccess, type AnyAccessGrant } from './grants.js';
 import { nameCollides, provenanceLine } from './provenance.js';
 import { preselectedTables, rankSources, type RankedSource, type RankedSources, type SourceInput } from './relevance.js';
 
@@ -87,18 +87,13 @@ export interface PendingAccessRequest {
 
 /**
  * The per-browser *never let apps ask to read other apps' data* switch (Q15 — like the schedule's:
- * `'1'` when on, the row absent when off — the Settings card writes it with the schedule card's
- * `writeFlag`). Read here directly rather than through that card's `readFlag`: the card module
- * pulls in the scheduler, whose hidden-frame runtime composes this engine — an import cycle.
+ * the ONE `'1'`/absent convention of the leaf `state/browserFlags.ts`, which the Settings card
+ * writes it with and this reads it with).
  */
 export const NO_ACCESS_ASKS_KEY = 'snug:access-no-asks';
 
 export function accessAsksOff(): boolean {
-  try {
-    return localStorage.getItem(NO_ACCESS_ASKS_KEY) === '1';
-  } catch {
-    return false; // storage denied: the switch cannot have been turned on here
-  }
+  return readFlag(NO_ACCESS_ASKS_KEY);
 }
 
 /** The shared intake ladder, keyed on the host-assigned id; one window per APP. */
@@ -118,7 +113,7 @@ export const pendingAccessStore: Store<Readonly<Record<string, PendingAccessRequ
 export const reviewStore: Store<string | undefined> = createStore<string | undefined>(undefined);
 
 /** The yield rule: no sheet while a network or open-url confirm is waiting for the user. */
-export function mayOpenReview(): boolean {
+function mayOpenReview(): boolean {
   return netConfirmStore.get() === null && openUrlConfirmStore.get() === null;
 }
 
@@ -228,6 +223,12 @@ async function carryOut(input: ParkAccessRequestInput, pending: PendingAccessReq
         now: accessDeps().now(),
         ...(input.renew !== undefined ? { renew: input.renew.grantId } : {}),
       });
+      // D36 on EVERY path (the app's ask and the user's alike): an allow that wrote a NEW access for
+      // the renewed pair — the default *while it's open*, or another duration — REPLACES the old one,
+      // so a paused row never lingers with *allow again* beside its successor (W6 finding 9).
+      if (input.renew !== undefined && grant.id !== input.renew.grantId && grant.sourceAppId === input.renew.sourceAppId) {
+        await revokeAccess(input.renew.grantId);
+      }
       return {
         outcome: { kind: 'allowed', grantId: grant.id, sourceAppId: source.appId, sourceName: source.displayName, tables: grant.scope.tables.map((table) => table.name), duration: decision.duration },
         grant,
@@ -318,26 +319,4 @@ export function resetConsentSession(appId?: string): void {
   for (const reader of readers) dismissPendingAccess(reader);
   accessAskLadder.clear(appId);
   if (appId === undefined || reviewStore.get() === appId) reviewStore.set(undefined);
-}
-
-/**
- * The host-chrome creation act — *let Budget read another app…* on the reader's access sheet or
- * in Settings: provenance `user`, the fixed host purpose (`ACCESS_SHEET.userPurpose` — the host's
- * words, never the act's label, which would read as a sentence the app said), the ranked
- * candidates; parks the pending (or reuses the one already waiting) and opens the review. Not an
- * app ask: no ladder.
- */
-export async function requestAccessForUser(readerAppId: string): Promise<void> {
-  if (accessAskLadder.pendingFor(readerAppId) !== undefined) {
-    openReview(readerAppId);
-    return;
-  }
-  const db = await accessDeps().getDb();
-  const reader = db.getApp(readerAppId);
-  if (reader === undefined) return;
-  const candidates = await collectSources(db, readerAppId);
-  if (accessAskLadder.pendingFor(readerAppId) === undefined) {
-    parkAccessRequest({ db, reader, generation: readerGeneration(readerAppId) ?? -1, purpose: ACCESS_SHEET.userPurpose(reader.displayName), provenance: 'user', candidates });
-  }
-  openReview(readerAppId);
 }

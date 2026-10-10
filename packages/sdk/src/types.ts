@@ -165,6 +165,6 @@ export interface SnugAccess {
   list(): Promise<AccessListResult>;
   /** Give a grant back. */
   release(grantId: string): Promise<AccessReleaseResult>;
-  /** Called when one of this app's grants changed on the host (stopped, paused, expired). Returns the unsubscribe. */
+  /** Called when one of this app's grants was stopped or paused on the host (an expiry is not announced — the next `query` answers `ACCESS_EXPIRED`). Returns the unsubscribe. */
   onChange(listener: (data: AccessChange) => void): () => void;
 }

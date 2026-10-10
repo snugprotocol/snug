@@ -1360,9 +1360,9 @@ before allowing, exactly where the reader can send what it reads: its brain by n
 approved connection by provider and host, any link it may ask to open. The result is an
 <strong>access grant</strong>: a host record the user alone can write, strict and
 byte-capped, carrying the granted tables with their columns frozen, suspended the moment the
-reader's code is replaced by a shared bundle or an agent hand-in, or the source's shape
-changes under it, revocable from the source's side, the reader's side or Settings, and swept with either
-application.</p>
+reader's code is replaced by a shared bundle or an agent hand-in, and at its next read when the
+source's shape has changed under it, revocable from the source's side, the reader's side or
+Settings, and swept with either application.</p>
 
 <p>A read is one read-only <code>SELECT</code> on a <em>scoped scratch copy</em> of the
 source's live database, executed in a dedicated worker that owns its own engine under a

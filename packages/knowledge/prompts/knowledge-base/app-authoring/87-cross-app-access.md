@@ -49,8 +49,11 @@ and one of three answers comes back:
 - the user allowed it → `ok: true` with what was allowed (see "What Your App Learns");
 - *not now* → `ACCESS_DECLINED` with `retryable: true` — you may ask again, after another
   user act;
-- *don't allow* or *stop asking* → `ACCESS_DECLINED` with `retryable: false` — the same ask
-  stays declined. Never repeat it; carry on without the other app's data.
+- *don't allow* → `ACCESS_DECLINED` with `retryable: false` — THIS ask (its hints) stays declined.
+  Never repeat it; carry on without the other app's data.
+- *stop asking* → the same answer for EVERY later ask from your app, whatever its hints or
+  purpose, until the user turns asks back on in Settings — stop asking altogether and carry on
+  without the other app's data.
 
 ## The Two Frames and Their Four Ops
 
@@ -113,11 +116,12 @@ whose `access` you do not know. Columns whose names look like credentials (`api_
 The user can stop access at any moment — from the other app's sheet, from yours, or from
 Settings. It also pauses on its own when your app is updated from a share link or by the
 agent, when the other app's tables change, and it ends when its time runs out. The next
-`query` answers `ACCESS_REVOKED` or `ACCESS_EXPIRED`. When it happens while your app is
-open, the host posts `{{frameType:hostEvent}}` with `event: 'access-changed'` and
-`data: { grantId }` — ids only, never content. Then re-`list`, show the user what the app
-can still read, and offer a button to ask again; never ask again by itself. To give access
-back yourself, `release` it.
+`query` answers `ACCESS_REVOKED` or `ACCESS_EXPIRED`. When it is stopped or paused while your
+app is open, the host posts `{{frameType:hostEvent}}` with `event: 'access-changed'` and
+`data: { grantId }` — ids only, never content. An expiry is not announced: you learn it from
+the next `query` (`ACCESS_EXPIRED`) or a re-`list`. Then re-`list`, show the user what the
+app can still read, and offer a button to ask again; never ask again by itself. To give
+access back yourself, `release` it.
 
 Prefer reading again over copying the other app's rows into your own storage: when the user
 stops the access, a copy would outlive it.
@@ -169,7 +173,7 @@ function snugAccessRequest(op, fields) {
 }
 
 function onAccessChanged(grantId) {
-  // YOUR WORK: an access was stopped, paused or ran out. Ask what the app still holds —
+  // YOUR WORK: an access was stopped or paused. Ask what the app still holds —
   // snugAccessRequest('list') — and show it. Never ask for access again from here.
 }
 
@@ -219,7 +223,7 @@ Bundler-built apps on the module SDK get the same exchange typed as `useSnugAcce
 ## Rules for Reading Another App
 
 - **Ask after a user act, never on load.** One ask per user act; a declined ask is not
-  repeated, and a muted app is not asked again.
+  repeated, and after *stop asking* the app asks no more.
 - **One plain purpose.** The user decides on your one line — make it true and specific.
 - **Assume nothing lasts.** `ACCESS_REVOKED` and `ACCESS_EXPIRED` are ordinary outcomes;
   on `access-changed`, re-`list` and show what is still readable.

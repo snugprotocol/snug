@@ -40,7 +40,7 @@ import '../theme/access.css';
 import { Button } from '../ui/Button.js';
 import { ConfirmOverlay } from '../ui/ConfirmOverlay.js';
 import { dismissReview, pendingAccessStore, reviewStore, type ConsentDecision, type PendingAccessRequest } from './consent.js';
-import { CONSENT_SHEET, allowLabel } from './copy.js';
+import { ACCESS_SHEET, CONSENT_SHEET, allowLabel } from './copy.js';
 import { DurationControl } from './DurationControl.js';
 import { EgressNote } from './EgressNote.js';
 import { answerAccess } from './outcome.js';
@@ -196,14 +196,15 @@ function ConsentSheetBody({ pending }: { pending: PendingAccessRequest }): React
   const tileStyle = { '--tile-color': pending.readerIcon?.color ?? 'var(--ember)' } as CSSProperties;
 
   return (
-    <ConfirmOverlay labelledBy={titleId} onDismiss={notNow} initialFocusRef={notNowRef} trapFocus cardClassName="release-notes-card access-sheet" data-testid="access-sheet">
+    <ConfirmOverlay labelledBy={titleId} onDismiss={notNow} initialFocusRef={notNowRef} trapFocus cardClassName="release-notes-card access-sheet" data-testid="access-consent-sheet">
       <div className="access-sheet-head">
         <span className="access-tile" style={tileStyle} aria-hidden="true" data-testid="access-sheet-tile">
           {pending.readerIcon?.emoji ?? '⬡'}
         </span>
         <div>
           <h2 id={titleId} className="net-confirm-title" data-testid="access-sheet-title">
-            {CONSENT_SHEET.title(readerName)}
+            {/* An ask the USER started is theirs — never a want put in the app's mouth (W6 finding 35). */}
+            {pending.provenance === 'user' ? CONSENT_SHEET.userTitle(readerName) : CONSENT_SHEET.title(readerName)}
           </h2>
           <p className="access-provenance" data-testid="access-sheet-provenance">
             {pending.readerProvenance}
@@ -219,7 +220,12 @@ function ConsentSheetBody({ pending }: { pending: PendingAccessRequest }): React
               {CONSENT_SHEET.quote(pending.purpose)}
             </q>
           </p>
-        ) : null}
+        ) : (
+          <p className="access-says" data-testid="access-sheet-user">
+            {/* The host's own sentence (D34), never the pending's text: nothing an app wrote is ever shown unquoted. */}
+            {ACCESS_SHEET.userPurpose(readerName)}
+          </p>
+        )}
 
         <section className="access-section" aria-labelledby={fromId}>
           <h3 id={fromId} className="access-section-title">
@@ -246,7 +252,8 @@ function ConsentSheetBody({ pending }: { pending: PendingAccessRequest }): React
       <div className="access-sheet-actions">
         {!ready ? (
           <p className="access-pick-table" data-testid="access-pick-table">
-            {CONSENT_SHEET.pickATable}
+            {/* No app chosen means no table on screen to tick: ask for the app first (W6 finding 41). */}
+            {chosen === undefined ? CONSENT_SHEET.pickAnApp : CONSENT_SHEET.pickATable}
           </p>
         ) : null}
         {pending.provenance === 'app' ? (

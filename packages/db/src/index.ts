@@ -171,6 +171,7 @@ export {
 export {
   AGENT_INSTALL_SOURCE_PREFIX,
   SHARE_INSTALL_SOURCE_PREFIX,
+  STARTER_INSTALL_SOURCE_PREFIX,
   agentInstallSource,
   buildAppBundle,
   declareSharedConnections,

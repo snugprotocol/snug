@@ -48,6 +48,7 @@ import {
   accessPurposeSchema,
   canonicalAccessGrantIntent,
   parseAccessGrant,
+  utf8ByteLength,
   type AccessGrant,
   type AccessHints,
   type AccessLogEntry,
@@ -116,7 +117,6 @@ export type AccessAccessors = Pick<
 // ----------------------------------------------------------------------- helpers
 
 const SETTINGS = USERDB_TABLES.settings;
-const utf8Bytes = (text: string): number => new TextEncoder().encode(text).length;
 /** The escaped-prefix LIKE pattern the `auth:`, `shareLink:` and `scheduleDeclined:` sweeps use — `!`, `%`, `_` are literal. */
 const likePrefix = (prefix: string): string => `${prefix.replace(/([!%_])/g, '!$1')}%`;
 const PREFIX_WHERE = `key LIKE ? ESCAPE '!'`;
@@ -181,8 +181,12 @@ function untilPassed(duration: unknown, now: number): boolean {
   return kind === 'until' && typeof at === 'string' && instant(at) <= now;
 }
 
-/** LIVE: status `active` and not expired. Read loosely, so a row the strict parse refuses but that CLAIMS to be live still holds a seat. */
-function isLive(grant: { status?: unknown; duration?: unknown }, now: number): boolean {
+/**
+ * ACTIVE AND UNEXPIRED: status `active` and an `until` not passed. Read loosely, so a row the strict
+ * parse refuses but that CLAIMS to be live still holds a seat. (Not the engine's `isUsableNow`,
+ * which also checks the source's sidecar fact.)
+ */
+function isActiveUnexpired(grant: { status?: unknown; duration?: unknown }, now: number): boolean {
   return grant.status === 'active' && !untilPassed(grant.duration, now);
 }
 
@@ -328,7 +332,7 @@ function pruneVictim(
   return undefined;
 }
 
-const bytesOf = (entries: ReadonlyArray<unknown>): number => utf8Bytes(JSON.stringify(entries));
+const bytesOf = (entries: ReadonlyArray<unknown>): number => utf8ByteLength(JSON.stringify(entries));
 
 /**
  * The coalesced entry when `next` continues `head`, else `undefined`. ONLY an identical
@@ -442,12 +446,12 @@ export function createAccessAccessors(seams: AccessSeams): AccessAccessors {
       // The cap counts OTHER live rows, so a replace at the cap still lands and a 101st live
       // grant does not. Ended and suspended grants hold no seat — but re-activating one is a
       // new live grant and is counted like one.
-      if (isLive(next, now)) {
+      if (isActiveUnexpired(next, now)) {
         let live = 0;
         for (const [otherKey, raw] of rowsUnder(seams, ACCESS_GRANT_SETTING_PREFIX)) {
           if (otherKey === key) continue;
           const other = looseObject(raw);
-          if (other !== undefined && isLive(other, now)) live += 1;
+          if (other !== undefined && isActiveUnexpired(other, now)) live += 1;
         }
         if (live >= ACCESS_MAX_GRANTS) limit(`the file already holds ${ACCESS_MAX_GRANTS} live access grants`);
       }
@@ -634,15 +638,46 @@ export function sweepAccessForDeletedApp(sql: SettingsSql, appId: string): void 
 
 // --------------------------------------------------------------- import (AC10)
 
-/** grantId → `canonicalAccessGrantIntent` of every readable LOCAL grant, read from the open handle before the candidate goes live. */
-export function snapshotLocalAccessGrants(sql: SettingsSql): Map<string, string> {
-  const grants = new Map<string, string>();
+/** What `importUserDb` reads from the OPEN handle about the local grants before the candidate goes live. */
+export interface LocalAccessGrantSnapshot {
+  /** grantId → `canonicalAccessGrantIntent` of every ACTIVE local grant — the only ones that may vouch for an imported twin. */
+  live: Map<string, string>;
+  /** grantId → the local TOMBSTONE of every grant the user stopped (an import never re-arms it). */
+  revoked: Map<string, { revokedAt: string; updatedAt: string }>;
+  /** readerAppId → the reader's CURRENT code (html) here, for every reader of an active local grant. */
+  readerHtml: Map<string, string | undefined>;
+}
+
+/** An app's current version's html in the handle `sql` reads, or `undefined` when it holds no such app. */
+function currentHtml(sql: SettingsSql, appId: string): string | undefined {
+  const raw = sql.select(
+    `SELECT v.html FROM ${USERDB_TABLES.apps} a JOIN ${USERDB_TABLES.appVersions} v ON v.app_id = a.app_id AND v.version = a.current_version WHERE a.app_id = ?`,
+    [appId],
+  )[0]?.[0];
+  return raw === undefined || raw === null ? undefined : String(raw);
+}
+
+/**
+ * The local grants, read from the open handle before the candidate goes live (W6 findings 2/3/27):
+ * the intent of each ACTIVE grant (a revoked or paused local grant never vouches — the user's stop
+ * or the pending review would otherwise vanish), the tombstone of each STOPPED grant, and the
+ * current code of each active grant's reader (consent given to that code survives a file only
+ * while the code does).
+ */
+export function snapshotLocalAccessGrants(sql: SettingsSql): LocalAccessGrantSnapshot {
+  const snapshot: LocalAccessGrantSnapshot = { live: new Map(), revoked: new Map(), readerHtml: new Map() };
   for (const [key, raw] of rowsUnder(sql, ACCESS_GRANT_SETTING_PREFIX)) {
     const grantId = grantIdFromAccessGrantSettingKey(key);
     const grant = grantId === undefined ? undefined : readGrant(raw, grantId);
-    if (grant !== undefined) grants.set(grant.id, canonicalAccessGrantIntent(grant));
+    if (grant === undefined) continue;
+    if (grant.status === 'revoked' && grant.revokedAt !== undefined) {
+      snapshot.revoked.set(grant.id, { revokedAt: grant.revokedAt, updatedAt: grant.updatedAt });
+    } else if (grant.status === 'active') {
+      snapshot.live.set(grant.id, canonicalAccessGrantIntent(grant));
+      if (!snapshot.readerHtml.has(grant.readerAppId)) snapshot.readerHtml.set(grant.readerAppId, currentHtml(sql, grant.readerAppId));
+    }
   }
-  return grants;
+  return snapshot;
 }
 
 /** What `importUserDb` reports about the access pass. */
@@ -664,9 +699,13 @@ export interface AccessImportReport {
  * UNTRUSTED (a file the user picked off disk): a grant row that does not parse — or whose body
  * names another id than its key — is REMOVED and counted: it cannot be shown or demoted, and a
  * later, more lenient reader must not find it armed. A grant is AUTHORITY, so the connection and
- * schedule doctrine applies. A grant whose `canonicalAccessGrantIntent` equals the local grant
- * of the same id stays exactly as it arrived (a backup round trip must not disarm the user —
- * counters and status move with ordinary use and are not intent). Every other grant lands
+ * schedule doctrine applies. A grant the user STOPPED here keeps its local tombstone whatever the
+ * file says (`revoked`, the local `revokedAt` — an older copy of the file never re-arms a stop;
+ * spec §22). A grant whose `canonicalAccessGrantIntent` equals an ACTIVE local grant of the same
+ * id — and whose reader's current code in the file is the code this hub holds — stays exactly
+ * as it arrived (a backup round trip must not disarm the user — counters and status move with
+ * ordinary use and are not intent); a file that swaps the READER's code does not carry the
+ * consent given to the old code (D18 at the file seam). Every other grant lands
  * `suspended / imported` with `updatedAt` = the import instant and the rest of it intact, for
  * the user to review and *allow again* — EXCEPT a `revoked` grant, which stays revoked: it is
  * already inert, and suspending it would make a grant the user never gave revivable with one
@@ -682,7 +721,7 @@ export interface AccessImportReport {
  */
 export function reconcileImportedAccessGrants(
   sql: SettingsSql,
-  localGrants: ReadonlyMap<string, string>,
+  localGrants: LocalAccessGrantSnapshot,
   trustedOrigin: boolean,
   importedAt: string = new Date().toISOString(),
 ): AccessImportReport {
@@ -701,7 +740,21 @@ export function reconcileImportedAccessGrants(
       removedGrants += 1;
       continue;
     }
-    if (localGrants.get(grant.id) === canonicalAccessGrantIntent(grant)) continue;
+    const tombstone = localGrants.revoked.get(grant.id);
+    if (tombstone !== undefined) {
+      if (grant.status === 'revoked') continue;
+      const { suspendedReason: _reason, ...rest } = grant;
+      const stopped = accessGrantSchema.safeParse({ ...rest, status: 'revoked', revokedAt: tombstone.revokedAt, updatedAt: tombstone.updatedAt });
+      if (stopped.success) writeRaw(sql, key, stopped.data);
+      else {
+        deleteKey(sql, key);
+        removedGrants += 1;
+      }
+      continue;
+    }
+    const sameReaderCode =
+      localGrants.readerHtml.has(grant.readerAppId) && localGrants.readerHtml.get(grant.readerAppId) === currentHtml(sql, grant.readerAppId);
+    if (sameReaderCode && localGrants.live.get(grant.id) === canonicalAccessGrantIntent(grant)) continue;
     if (grant.status === 'revoked') continue;
     if (grant.status === 'suspended' && grant.suspendedReason === 'imported') continue;
     const demoted = accessGrantSchema.safeParse({ ...grant, status: 'suspended', suspendedReason: 'imported', updatedAt: importedAt });

@@ -10,6 +10,10 @@
 // FRESH one (mutation: skip the terminate → red); the 10 s per-grant bytes cache; the no-Worker
 // refusal; a thrown worker → `failed` and a fresh worker; an entry past the window is EVICTED by
 // the next read of any grant (a stale copy — up to 16 MiB — is never held for the session).
+// W6 fix lane: an idle entry's own timer evicts it (mutation: no timer → the idle row reds); a
+// queued read re-checks its grant when it dequeues (mutation: skip `stillLive` → the queued row
+// reds); an engine that fails to start retires its worker (mutation: settle without retiring →
+// the engine row reds).
 
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -26,7 +30,7 @@ import {
   scopedRead,
   type WorkerLike,
 } from '../access/scopedRead.js';
-import { createScopedReadResponder } from '../access/scopedRead.worker.js';
+import { createScopedReadResponder, loadEngine } from '../access/scopedRead.worker.js';
 import { installTestUserDb, locateWasm } from './userdbTestHelper.js';
 
 const CAPS = { maxRows: ACCESS_MAX_ROWS, maxBytes: ACCESS_MAX_RESULT_BYTES };
@@ -270,6 +274,102 @@ describe('the per-grant bytes cache', () => {
     await expect(read('g1', 'SELECT 1', () => Promise.reject(new Error('too big')))).rejects.toThrow('too big');
     expect(await read('g1', 'SELECT 1')).toMatchObject({ ok: true });
     expect(jobsOf(recorder)).toHaveLength(1);
+  });
+});
+
+// W6 finding 6 — an idle entry ends on its own timer: no further read is needed to evict it.
+describe('the per-grant bytes cache — eviction without another read', () => {
+  it('an idle grant’s bytes are gone after the window without another read', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const recorder = newRecorder();
+      configureScopedRead({ createWorker: inlineWorkers(recorder), wasm: { wasmUrl: locateWasm() }, now: () => clock.now });
+      expect(await read('g1', 'SELECT 1')).toMatchObject({ ok: true });
+      expect(__scopedReadCachedGrantsForTests()).toEqual(['g1']);
+      vi.advanceTimersByTime(ACCESS_SCOPED_CACHE_MS - 1);
+      expect(__scopedReadCachedGrantsForTests(), 'inside the window').toEqual(['g1']);
+      vi.advanceTimersByTime(1);
+      expect(__scopedReadCachedGrantsForTests()).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+// W6 finding 7 — a read is re-checked against its grant when it DEQUEUES.
+describe('a queued read whose grant ended meanwhile', () => {
+  it('after the stop, the queued jobs for that grant never reach the worker — nothing fetched, no worker rebuilt', async () => {
+    const recorder = newRecorder();
+    configureScopedRead({ createWorker: silentWorkers(recorder), wasm: { wasmUrl: locateWasm() }, timeoutMs: 300, now: () => clock.now });
+    let live = true;
+    let fetches = 0;
+    const bytes = () => {
+      fetches += 1;
+      return Promise.resolve(sourceBytes);
+    };
+    const job = (sql: string) => scopedRead({ grantId: 'g1', bytes, scope: SCOPE, statement: { sql }, caps: CAPS, stillLive: () => live });
+    const first = job('WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r) SELECT count(*) FROM r');
+    const queued = [job('SELECT 1'), job('SELECT 2'), job('SELECT 3')];
+    await vi.waitFor(() => expect(jobsOf(recorder)).toHaveLength(1));
+    live = false; // the grant is suspended while the first read runs
+    expect(await first).toMatchObject({ ok: false, reason: 'timeout' });
+    for (const outcome of await Promise.all(queued)) expect(outcome).toMatchObject({ ok: false, reason: 'ended' });
+    expect(jobsOf(recorder)).toHaveLength(1);
+    expect(recorder.created, 'no worker was rebuilt for a read that cannot run').toBe(1);
+    expect(fetches).toBe(1);
+  });
+});
+
+// W6 finding 5 — a worker whose engine failed to start is retired, and the next read starts afresh.
+describe('an engine that fails to start', () => {
+  it('an engine that fails to load is retried on the next read: the worker is retired and a fresh one is sent the engine again', async () => {
+    let loads = 0;
+    const recorder = newRecorder();
+    configureScopedRead({
+      createWorker: () => {
+        recorder.created += 1;
+        // The first start fails (an aborted wasm fetch); every later one is the real engine.
+        const respond = createScopedReadResponder((init) => (++loads === 1 ? Promise.reject(new Error('sql-wasm.wasm: fetch failed')) : loadEngine(init)));
+        const worker: WorkerLike = {
+          onmessage: null,
+          onerror: null,
+          postMessage(msg, transfer) {
+            recorder.posted.push({ msg, transfer });
+            void respond(msg).then((answer) => {
+              if (answer !== undefined) worker.onmessage?.({ data: answer });
+            });
+          },
+          terminate() {
+            recorder.terminated += 1;
+          },
+        };
+        return worker;
+      },
+      wasm: { wasmUrl: locateWasm() },
+      now: () => clock.now,
+    });
+    const failed = await read('g1', 'SELECT 1');
+    expect(failed).toMatchObject({ ok: false, reason: 'failed' });
+    expect(recorder.terminated, 'the worker whose engine never started is retired').toBe(1);
+    expect(await read('g1', 'SELECT amount FROM transactions ORDER BY amount')).toEqual({ ok: true, columns: ['amount'], rows: [[450], [500]] });
+    expect(recorder.created).toBe(2);
+    expect(initsOf(recorder)).toHaveLength(2);
+    expect(await read('g2', 'SELECT 1 AS n')).toEqual({ ok: true, columns: ['n'], rows: [[1]] });
+    expect(recorder.created, 'a started engine is kept').toBe(2);
+  });
+
+  it('the responder does not memoise a failed start: a second init on the same worker tries again', async () => {
+    let loads = 0;
+    const respond = createScopedReadResponder(async () => {
+      loads += 1;
+      throw new Error('fetch failed');
+    });
+    await respond({ init: { wasmUrl: 'x' } });
+    const answer = await respond({ id: 1, bytes: new Uint8Array(), scope: SCOPE, statement: { sql: 'SELECT 1' }, caps: CAPS });
+    expect(answer).toMatchObject({ id: 1, engineFailed: true, result: { ok: false, reason: 'failed' } });
+    await respond({ init: { wasmUrl: 'x' } });
+    await respond({ id: 2, bytes: new Uint8Array(), scope: SCOPE, statement: { sql: 'SELECT 1' }, caps: CAPS });
+    expect(loads).toBe(2);
   });
 });
 

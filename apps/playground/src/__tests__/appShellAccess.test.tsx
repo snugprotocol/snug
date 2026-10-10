@@ -16,9 +16,10 @@ import type { UserDb } from '@snugprotocol/db';
 import { FRAME_TYPES, PROTOCOL_VERSION } from '@snugprotocol/protocol';
 
 import { App } from '../App.js';
-import { pendingAccessStore, requestAccessForUser, reviewStore } from '../access/consent.js';
+import { pendingAccessStore, reviewStore } from '../access/consent.js';
 import { CONSENT_SHEET } from '../access/copy.js';
 import { __setAccessDepsForTests, resetAccessSession } from '../access/grants.js';
+import { startUserAsk } from '../access/userAsk.js';
 import { installTestUserDb } from './userdbTestHelper.js';
 
 declare global {
@@ -66,17 +67,18 @@ describe('AC20 — the consent sheet renders from the App shell', () => {
       );
     });
 
-    const title = CONSENT_SHEET.title('Budget');
+    // The user's own act is headlined as theirs — never "Budget wants …" (W6 finding 35).
+    const title = CONSENT_SHEET.userTitle('Budget');
     expect(document.body.textContent).not.toContain(title);
 
     // The host-chrome creation act: parks the ask and opens its review — no RunView anywhere.
     await act(async () => {
-      await requestAccessForUser(budget);
+      await startUserAsk(budget);
     });
     expect(reviewStore.get()).toBe(budget);
 
     await act(async () => {
-      await vi.waitFor(() => expect(document.querySelector('[data-testid="access-sheet"]')).not.toBeNull());
+      await vi.waitFor(() => expect(document.querySelector('[data-testid="access-consent-sheet"]')).not.toBeNull());
     });
     expect(document.body.textContent).toContain(title);
     // The one app with data is offered (and, alone, chosen).
@@ -86,7 +88,7 @@ describe('AC20 — the consent sheet renders from the App shell', () => {
       document.querySelector<HTMLButtonElement>('[data-testid="access-not-now"]')!.click();
     });
     await act(async () => {
-      await vi.waitFor(() => expect(document.querySelector('[data-testid="access-sheet"]')).toBeNull());
+      await vi.waitFor(() => expect(document.querySelector('[data-testid="access-consent-sheet"]')).toBeNull());
     });
     expect(pendingAccessStore.get()[budget]).toBeUndefined();
   });

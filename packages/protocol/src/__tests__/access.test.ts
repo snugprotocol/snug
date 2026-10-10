@@ -62,6 +62,7 @@ import {
   accessResponseSchema,
   buildJsonSchemas,
   canonicalAccessGrantIntent,
+  durationFromExpiry,
   durationToExpiry,
   findRecordCredential,
   findScheduleCredential,
@@ -248,6 +249,18 @@ describe('AC1 — the frame-type literals and the constants table (Appendix B)',
     expect(durationToExpiry('week', now)).toBe('2026-10-17T09:00:00.000Z');
     expect(durationToExpiry('session', now)).toBeUndefined();
     expect(durationToExpiry('always', now)).toBeUndefined();
+  });
+
+  // W6 finding 18 — the inverse lives beside the forward map, derived from the same spans, so an
+  // engine never re-derives "which duration was this" with a threshold of its own.
+  it('durationFromExpiry inverts durationToExpiry for every expiring duration, and reads a hand-written span as the NEAREST one', () => {
+    const now = Date.parse('2026-10-10T09:00:00.000Z');
+    const granted = new Date(now).toISOString();
+    for (const kind of ['day', 'week'] as const) expect(durationFromExpiry(granted, durationToExpiry(kind, now)!)).toBe(kind);
+    const at = (days: number): string => new Date(now + days * 86_400_000).toISOString();
+    expect(durationFromExpiry(granted, at(2))).toBe('day');
+    expect(durationFromExpiry(granted, at(5))).toBe('week');
+    expect(durationFromExpiry(granted, at(30))).toBe('week');
   });
 });
 

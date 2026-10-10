@@ -231,7 +231,7 @@ describe('the same creation act', () => {
     await renderCard();
     const pick = one('access-create-pick') as HTMLSelectElement;
     expect(pick.tagName).toBe('SELECT');
-    expect(pick.getAttribute('aria-label')).toBeTruthy();
+    expect(pick.getAttribute('aria-label')).toBe(SETTINGS_CARD.createPick);
     expect([...pick.options].map((option) => option.textContent).sort()).toEqual(['Budget', 'Ledger', 'Pantry']);
     await act(async () => {
       pick.value = budget;
@@ -246,13 +246,6 @@ describe('the same creation act', () => {
   });
 });
 
-describe('SettingsView mounts the card only where the host allows access', () => {
-  it('the mount is gated by allows(access), in the schedule card mount shape', async () => {
-    const { existsSync, readFileSync } = await import('node:fs');
-    const { resolve } = await import('node:path');
-    const path = ['src/views/SettingsView.tsx', 'apps/playground/src/views/SettingsView.tsx'].map((rel) => resolve(process.cwd(), rel)).find((candidate) => existsSync(candidate));
-    expect(path).toBeDefined();
-    const source = readFileSync(path!, 'utf8');
-    expect(source).toMatch(/\{allows\('access'\) \? \(\s*<Section label=\{SETTINGS_CARD\.title\}>\s*(\{\/\*[\s\S]*?\*\/\}\s*)?<AccessSettingsCard \/>\s*<\/Section>\s*\) : null\}/);
-  });
-});
+// SettingsView mounts the card only where the host allows access: pinned by BEHAVIOUR in
+// hostSettings.test.tsx ('Settings → access between apps is mounted only where the host allows
+// access' — absent with access off, present with it on), not by the shape of the JSX (W6 finding 34).

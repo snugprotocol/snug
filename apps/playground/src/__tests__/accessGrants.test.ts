@@ -194,7 +194,7 @@ describe('revokeAccess — the host’s stop', () => {
     expect(accessRevisionStore.get()).toBeGreaterThan(revision);
   });
 
-  it('a session grant is dropped from memory, logged revoked, and rung', async () => {
+  it('a session grant is stopped — no sheet lists it (its tombstone answers only its own frame, W6 finding 8) — logged revoked, and rung', async () => {
     listen(budget);
     const grant = await allow({ duration: 'session' });
     await revokeAccess(grant.id);

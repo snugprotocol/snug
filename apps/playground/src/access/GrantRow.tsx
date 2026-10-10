@@ -3,7 +3,9 @@
 // this component and nothing else, so an access reads the same wherever the user meets it.
 //
 // BOTH PARTIES ARE NAMED. The sentence is the copy module's own (`ACCESS_SHEET.row` — "Budget has
-// access to Ledger's transactions"); on an app's own sheet the NAME the user already knows (the
+// access to Ledger's transactions" — for a live row; `ACCESS_SHEET.endedRow` — "Budget's access
+// to Ledger's transactions" — for a stopped, expired or paused one, so the sentence never claims
+// an access the state words beside it deny); on an app's own sheet the NAME the user already knows (the
 // app whose sheet it is) is MUTED, so the eye lands on the other app — and on the source's sheet
 // the tables stay at full weight (they are what the row tells a source). The split is found inside
 // the copy's sentence (the reading app's name first; the tables phrase — "<source>'s <tables>",
@@ -28,7 +30,7 @@ import { startUserAsk } from './userAsk.js';
 export type GrantRowSide = 'reads' | 'read-by' | 'every';
 
 /** The engine's row as the copy module's view — every seat passed, the duration always. */
-export function grantRowView(row: LiveGrantRow): GrantStateView {
+function grantRowView(row: LiveGrantRow): GrantStateView {
   return {
     status: row.grant.status,
     suspendedReason: row.grant.suspendedReason,
@@ -51,8 +53,7 @@ interface SentenceParts {
   read: { whole: string } | { sourceName: string; joiner: string; tables: string };
 }
 
-function sentenceParts(readerName: string, sourceName: string, tables: readonly string[]): SentenceParts | undefined {
-  const sentence = ACCESS_SHEET.row(readerName, sourceName, tables);
+function sentenceParts(sentence: string, readerName: string, sourceName: string, tables: readonly string[]): SentenceParts | undefined {
   const phrase = tablesPhrase(sourceName, tables);
   if (readerName === '' || !sentence.startsWith(readerName) || !sentence.endsWith(phrase) || sentence.length < readerName.length + phrase.length) return undefined;
   const list = listWords(tables);
@@ -64,12 +65,12 @@ function sentenceParts(readerName: string, sourceName: string, tables: readonly 
 }
 
 /** *allow again*: a prefilled ask that renews THIS access with its own duration, then the review (userAsk.ts). */
-export async function allowAccessAgain(row: LiveGrantRow): Promise<void> {
+async function allowAccessAgain(row: LiveGrantRow): Promise<void> {
   await startUserAsk(row.grant.readerAppId, { renew: { grant: row.grant, duration: row.duration } });
 }
 
 /** *remove*: a STOPPED access leaves the list (its history lines stay with the source). Anything else is left alone. */
-export async function removeStoppedAccess(grantId: string): Promise<void> {
+async function removeStoppedAccess(grantId: string): Promise<void> {
   const db = await accessDeps().getDb();
   const found = findAccessGrant(db, grantId);
   if (found === undefined || found.session || found.grant.status !== 'revoked') return;
@@ -91,8 +92,12 @@ export function GrantRow({ row, side, now, onBeforeReview }: GrantRowProps): Rea
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
   const tables = row.grant.scope.tables.map((table) => table.name);
-  const parts = sentenceParts(row.readerName, row.sourceName, tables);
   const state = grantStateCopy(grantRowView(row), now);
+  // A row is live exactly when its one act is *stop* — the same test that draws it ended.
+  const live = state.act?.kind === 'stop';
+  const sentence = (live ? ACCESS_SHEET.row : ACCESS_SHEET.endedRow)(row.readerName, row.sourceName, tables);
+  const parts = sentenceParts(sentence, row.readerName, row.sourceName, tables);
+  const act = state.act;
 
   const carryOut = async (kind: GrantActKind): Promise<void> => {
     setBusy(true);
@@ -112,10 +117,10 @@ export function GrantRow({ row, side, now, onBeforeReview }: GrantRowProps): Rea
   };
 
   return (
-    <li className={`access-row${state.act?.kind === 'stop' ? '' : ' is-ended'}`} data-testid="access-row" data-side={side} data-access-id={row.grant.id}>
+    <li className={`access-row${live ? '' : ' is-ended'}`} data-testid="access-row" data-side={side} data-access-id={row.grant.id}>
       <p className="access-row-sentence" id={sentenceId} data-testid="access-row-sentence">
         {parts === undefined ? (
-          ACCESS_SHEET.row(row.readerName, row.sourceName, tables)
+          sentence
         ) : (
           <>
             <span className={`access-row-party${side === 'reads' ? ' is-known' : ''}`} {...(side === 'reads' ? { 'data-known': 'true' } : {})}>
@@ -144,17 +149,17 @@ export function GrantRow({ row, side, now, onBeforeReview }: GrantRowProps): Rea
         <span className="access-row-words" data-testid="access-row-words">
           {state.words}
         </span>
-        {state.act !== undefined ? (
+        {act !== undefined ? (
           <Button
-            variant={state.act.kind === 'stop' ? 'ghost' : 'default'}
+            variant={act.kind === 'stop' ? 'ghost' : 'default'}
             className="access-row-act"
             data-testid="access-row-act"
-            data-act={state.act.kind}
+            data-act={act.kind}
             aria-describedby={sentenceId}
             disabled={busy}
-            onClick={() => void carryOut(state.act!.kind)}
+            onClick={() => void carryOut(act.kind)}
           >
-            {state.act.label}
+            {act.label}
           </Button>
         ) : null}
       </div>

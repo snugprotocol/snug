@@ -442,6 +442,7 @@ export {
   accessSqlSchema,
   accessTableNameSchema,
   canonicalAccessGrantIntent,
+  durationFromExpiry,
   durationToExpiry,
   isAccessErrorCode,
   parseAccessGrant,

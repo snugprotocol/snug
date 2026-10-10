@@ -51,7 +51,8 @@ import type { Store } from '../state/store.js';
 import { getUserDb } from '../state/userdb.js';
 import { enableProposedTask, namesOnly } from './enableProposedTask.js';
 import type { TaskResult } from './scheduler.js';
-import { NO_SUGGESTIONS_KEY, readFlag } from './ScheduleSettingsCard.js';
+import { readFlag } from '../state/browserFlags.js';
+import { NO_SUGGESTIONS_KEY } from './ScheduleSettingsCard.js';
 
 /** The app-event name an app posts to suggest a schedule for itself (ADR-0074 §3). */
 export const SCHEDULE_REQUEST_EVENT = 'schedule-request';

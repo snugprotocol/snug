@@ -101,7 +101,7 @@ export function relativeTime(value: string | number, now: number): string {
 // ---------------------------------------------------------------------------------------------
 
 /** A duration as the end of a sentence: "… · while it's open" (the strip's outcome, a live row). */
-export const DURATION_WORDS: Readonly<Record<AccessDuration, string>> = {
+const DURATION_WORDS: Readonly<Record<AccessDuration, string>> = {
   session: "while it's open",
   day: 'for a day',
   week: 'for a week',
@@ -183,6 +183,10 @@ export const CONSENT_SHEET = {
   notNow: 'not now',
   dontAllow: "don't allow",
   pickATable: 'choose at least one table',
+  /** The title of an ask the USER started from host chrome — theirs, never the app's want (W6 key, added after the freeze). */
+  userTitle: (readerName: string): string => `let ${readerName} read another app's data`,
+  /** The instruction while no app is chosen — there is no table on screen to tick yet (W6 key, added after the freeze). */
+  pickAnApp: 'choose an app',
 } as const;
 
 /**
@@ -273,7 +277,8 @@ export const EGRESS = {
   noConnections: 'no connections of its own',
   openUrl: 'any link it asks you to open — you see the address first',
   away: 'also while you’re away — on a schedule it can read and send with no one watching',
-  closing: (sourceName: string): string => `the copy is made here, on this device; ${sourceName} keeps a history of every read`,
+  /** "of its reads", never "every": the history is capped, coalesced and clearable (W6 finding 43). */
+  closing: (sourceName: string): string => `the copy is made here, on this device; ${sourceName} keeps a history of its reads`,
 } as const;
 
 /** The keyed providers' names on the brain line: "Claude (Anthropic)". */
@@ -388,9 +393,12 @@ export const ACCESS_SHEET = {
   reads: (appName: string): string => `${appName} reads`,
   readBy: (appName: string): string => `what reads ${appName}`,
   row: (readerName: string, sourceName: string, tables: readonly string[]): string => `${readerName} has access to ${tablesPhrase(sourceName, tables)}`,
+  /** A stopped, expired or paused row — never "has access" beside words that say it has not (W6 key, added after the freeze). */
+  endedRow: (readerName: string, sourceName: string, tables: readonly string[]): string => `${readerName}'s access to ${tablesPhrase(sourceName, tables)}`,
   history: 'history',
   historyImported: 'from an imported file',
-  noHistory: 'nothing read yet',
+  /** True before the first read AND after *clear history* (which keeps each access's read count) — W6 finding 39. */
+  noHistory: 'no reads on record',
   whatItAsked: 'what it asked',
   declinedAsks: 'declined asks',
   allowDeclined: 'allow…',
@@ -461,7 +469,7 @@ export function historyLine(
 
 export const SETTINGS_CARD = {
   title: 'access between apps',
-  intro: "which of your apps can read another app's data — the app that was read keeps a history of every read",
+  intro: "which of your apps can read another app's data — the app that was read keeps a history of its reads",
   empty: "no app can read another app's data yet",
   neverAsk: "never let apps ask to read other apps' data",
   /** The switch's custody, stated (Q15): per browser, like the schedule's. */

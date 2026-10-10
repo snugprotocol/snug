@@ -24,7 +24,7 @@
  */
 
 import type { UserDb } from '@snugprotocol/db';
-import { starterVersionSettingKey } from '@snugprotocol/db';
+import { STARTER_INSTALL_SOURCE_PREFIX, starterVersionSettingKey } from '@snugprotocol/db';
 import { canonicalRuntimeContract, runtimeContractSchema, type RuntimeContract } from '@snugprotocol/protocol';
 
 import { isNamedLoadRefusal } from '../run/copy.js';
@@ -33,8 +33,6 @@ import { installStarterConnections, normalizeStarterHtml } from './starterDeclar
 import { installStarterDocs } from './starterDocs.js';
 import { bundledStarterContracts, recordStarterContract, starterWrittenContract } from './starterRuntimeContract.js';
 import { starterMetaFor, type StarterMeta } from './starterMeta.js';
-
-const STARTER_SOURCE_PREFIX = 'starter:';
 
 export interface StarterUpdateStatus {
   folder: string;
@@ -69,8 +67,8 @@ export function __resetStarterUpdateFixturesForTests(): void {
 
 function starterFolderOf(db: UserDb, appId: string): string | undefined {
   const source = db.getApp(appId)?.installSource;
-  if (source === undefined || !source.startsWith(STARTER_SOURCE_PREFIX)) return undefined;
-  const folder = source.slice(STARTER_SOURCE_PREFIX.length);
+  if (source === undefined || !source.startsWith(STARTER_INSTALL_SOURCE_PREFIX)) return undefined;
+  const folder = source.slice(STARTER_INSTALL_SOURCE_PREFIX.length);
   return folder === '' ? undefined : folder;
 }
 

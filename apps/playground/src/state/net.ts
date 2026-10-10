@@ -251,11 +251,22 @@ export function invalidateNetGrants(appId: string): void {
  */
 function recheckAccessSource(appId: string): void {
   if (userDbStatusStore.get().state !== 'ready') return;
-  void getUserDb()
+  lastAccessSourceRecheck = getUserDb()
     .then((db) => suspendIfSourceRestricted(db, appId, new Date().toISOString()))
-    .catch((err: unknown) => {
-      console.warn('access between apps: the re-check after a connection change failed', err);
-    });
+    .then(
+      () => undefined,
+      (err: unknown) => {
+        console.warn('access between apps: the re-check after a connection change failed', err);
+      },
+    );
+}
+
+/** The latest source re-check, settled — never rejects. */
+let lastAccessSourceRecheck: Promise<void> = Promise.resolve();
+
+/** Test seam: resolves when the latest re-check `invalidateNetGrants` started has settled, so a "paused nothing" row asserts after it ran — never after a sleep. */
+export function __accessSourceRecheckSettledForTests(): Promise<void> {
+  return lastAccessSourceRecheck;
 }
 
 

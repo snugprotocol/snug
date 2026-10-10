@@ -28,6 +28,7 @@ import {
 import { CONSENT_UI, STRIP, STRIP_OUTCOME } from '../access/copy.js';
 import { __setAccessDepsForTests, grantsForApp, resetAccessSession } from '../access/grants.js';
 import { answerAccess } from '../access/outcome.js';
+import { netConfirmStore, type PendingNetConfirm } from '../state/net.js';
 import { openUrlConfirmStore } from '../state/openUrl.js';
 import { installTestUserDb } from './userdbTestHelper.js';
 
@@ -88,6 +89,7 @@ beforeEach(() => {
   pendingAccessStore.set({});
   reviewStore.set(undefined);
   openUrlConfirmStore.set(null);
+  netConfirmStore.set(null);
   resolve = vi.fn(async (decision: ConsentDecision): Promise<ConsentOutcome> => {
     pendingAccessStore.set({});
     reviewStore.set(undefined);
@@ -106,6 +108,7 @@ afterEach(() => {
   pendingAccessStore.set({});
   reviewStore.set(undefined);
   openUrlConfirmStore.set(null);
+  netConfirmStore.set(null);
 });
 
 describe('AC18 — the strip', () => {
@@ -156,12 +159,12 @@ describe('AC18 — the three acts', () => {
     review.focus();
     await act(async () => review.click());
     expect(reviewStore.get()).toBe(READER);
-    expect(q('access-sheet')).not.toBeNull();
+    expect(q('access-consent-sheet')).not.toBeNull();
     expect(document.activeElement).toBe(q('access-not-now'));
     expect(resolve).not.toHaveBeenCalled();
     // A link confirm arrives: the sheet yields, unanswered, and focus returns to review.
     act(() => openUrlConfirmStore.set({ appId: READER, url: 'https://example.com/', resolve: () => undefined }));
-    expect(q('access-sheet')).toBeNull();
+    expect(q('access-consent-sheet')).toBeNull();
     expect(document.activeElement).toBe(q('access-ask-review'));
   });
 
@@ -176,7 +179,7 @@ describe('AC18 — the three acts', () => {
       document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
     });
     expect(resolve).toHaveBeenCalledWith({ kind: 'not-now' });
-    expect(q('access-sheet')).toBeNull();
+    expect(q('access-consent-sheet')).toBeNull();
     expect(q('access-ask-review')).toBeNull();
     const line = q('access-ask-outcome')!;
     expect(line.getAttribute('data-outcome')).toBe('not-now');
@@ -212,6 +215,20 @@ describe('AC18 — the three acts', () => {
     expect(CONSENT_UI.answerOtherFirst).toBe('answer the open question first, then review');
     // The confirm goes: the note goes with it, and review works.
     act(() => openUrlConfirmStore.set(null));
+    expect(q('access-ask-wait')).toBeNull();
+    await act(async () => q<HTMLButtonElement>('access-ask-review')!.click());
+    expect(reviewStore.get()).toBe(READER);
+  });
+
+  // W6 finding 28 — the NETWORK confirm's twin of the row above.
+  it('review while a NETWORK confirm is open does not open the sheet — the strip says to answer that first', async () => {
+    mount();
+    park();
+    act(() => netConfirmStore.set({ request: {} as PendingNetConfirm['request'], resolve: () => undefined }));
+    await act(async () => q<HTMLButtonElement>('access-ask-review')!.click());
+    expect(reviewStore.get()).toBeUndefined();
+    expect(q('access-ask-wait')!.textContent).toBe(CONSENT_UI.answerOtherFirst);
+    act(() => netConfirmStore.set(null));
     expect(q('access-ask-wait')).toBeNull();
     await act(async () => q<HTMLButtonElement>('access-ask-review')!.click());
     expect(reviewStore.get()).toBe(READER);

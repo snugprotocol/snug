@@ -17,7 +17,7 @@ import { createMemoryBackend, openUserDb, type UserDb } from '@snugprotocol/db';
 import { createRequire } from 'node:module';
 
 import type { SnugPlatform } from '../platform/platform.js';
-import { hostPlatform as hostFixture } from './fixtures/hostPlatform.js';
+import { HOST_OFF_CAPABILITIES, hostPlatform as hostFixture } from './fixtures/hostPlatform.js';
 
 declare global {
   // eslint-disable-next-line no-var
@@ -104,6 +104,19 @@ const includeSecretsBox = (): HTMLInputElement | undefined =>
   ([...(container?.querySelectorAll('label.check-label') ?? [])] as HTMLElement[])
     .find((l) => /include secrets/.test(l.textContent ?? ''))
     ?.querySelector('input[type="checkbox"]') ?? undefined;
+
+// TASK-20261010-cross-app-access W6 finding 34 — the access card's mount is pinned by BEHAVIOUR:
+// gone where the host does not allow access, present under the same host with it on (the twin).
+describe('Settings → access between apps is mounted only where the host allows access', () => {
+  for (const access of [false, true]) {
+    it(`host with access ${access ? 'on: the card renders' : 'off: no card'}`, async () => {
+      const g = await fresh(hostFixture({ capabilities: { ...HOST_OFF_CAPABILITIES, access } }));
+      await render(<g.SettingsView />);
+      if (access) expect(byTestId('access-settings-card')).not.toBeNull();
+      else expect(byTestId('access-settings-card')).toBeNull();
+    });
+  }
+});
 
 describe('Settings under the host platform (D15 + capability truth)', () => {
   it('host: brain, account and connections sections are gone; your file, feedback, appearance, about stay', async () => {

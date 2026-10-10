@@ -41,7 +41,7 @@ import { scheduleRevisionStore } from '../platform/signals.js';
 import { registerAppHost } from '../state/appHosts.js';
 import { onAppVersionChanged } from '../state/appVersionChanged.js';
 import { createUserDbLibrary } from '../state/library.js';
-import { invalidateNetGrants } from '../state/net.js';
+import { __accessSourceRecheckSettledForTests, invalidateNetGrants } from '../state/net.js';
 import { resetUserDbForTests } from '../state/userdb.js';
 import { installTestUserDb } from './userdbTestHelper.js';
 
@@ -267,7 +267,7 @@ describe('invalidateNetGrants — a connection change re-checks the app as a SOU
     const { readsLedger } = await seedGrants();
     const lines = linesOf(ledger).length;
     invalidateNetGrants(ledger);
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await __accessSourceRecheckSettledForTests(); // the re-check RAN — the negative is asserted after it, never after a sleep (W6 finding 31)
     expect(statusOf(readsLedger.id)?.status).toBe('active');
     expect(linesOf(ledger)).toHaveLength(lines);
   });

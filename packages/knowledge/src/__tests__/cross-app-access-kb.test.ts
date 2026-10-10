@@ -67,12 +67,14 @@ const SDK_TYPES_SOURCE = readFileSync(path.join(repoRoot, 'packages', 'sdk', 'sr
 const SDK_GUARD_MESSAGES = (() => {
   const block = /export function accessRequest[\s\S]*?\n\}/.exec(SDK_BRIDGE_SOURCE)?.[0];
   if (block === undefined) throw new Error('packages/sdk/src/bridge.ts no longer exports accessRequest');
-  const messages = [...block.matchAll(/message: '([^']+)', retryable: (true|false)/g)].map((m) => ({
-    message: m[1] as string,
-    retryable: m[2] === 'true',
-  }));
-  if (messages.length < 2) throw new Error('accessRequest no longer answers its two guard results');
-  return { notReady: messages[0]!, noCapability: messages[1]! };
+  // Keyed by the GUARD CONDITION each result follows, never by source order (W6 finding 33): a
+  // reorder of the two guards in bridge.ts changes nothing here.
+  const after = (guard: string): { message: string; retryable: boolean } => {
+    const m = new RegExp(`${guard}\\s*\\{[\\s\\S]*?message: '([^']+)', retryable: (true|false)`).exec(block);
+    if (m === null) throw new Error(`accessRequest no longer answers a guard result after ${guard}`);
+    return { message: m[1] as string, retryable: m[2] === 'true' };
+  };
+  return { notReady: after('if \\(!bridge\\.ready\\)'), noCapability: after('if \\(bridge\\.capabilities\\.access !== true\\)') };
 })();
 
 /** The method names of `SnugAccess`, read from the SDK's types. */
@@ -250,7 +252,12 @@ describe('AC24 content sync — the exchange the KB teaches is the one the proto
     expect(text).toContain('*review* · *not now* · *stop asking*');
     expect(text).toContain('never a modal');
     expect(text).toContain('*not now* → `ACCESS_DECLINED` with `retryable: true`');
-    expect(text).toContain("*don't allow* or *stop asking* → `ACCESS_DECLINED` with `retryable: false`");
+    // W6 finding 37 — the two final answers are told apart: *don't allow* declines THIS ask;
+    // *stop asking* answers EVERY later ask the same, until the user turns asks back on.
+    expect(text).toContain("*don't allow* → `ACCESS_DECLINED` with `retryable: false` — THIS ask (its hints) stays declined");
+    expect(text).toContain('*stop asking* → the same answer for EVERY later ask from your app');
+    expect(text).toContain('after *stop asking* the app asks no more');
+    expect(text).not.toContain('a muted app is not asked again');
     expect(text).toContain('*while it\'s open*');
     expect(text).toContain('*until I stop it*');
     expect(text).toContain('*also while I\'m away*');
@@ -280,6 +287,12 @@ describe('AC24 content sync — the exchange the KB teaches is the one the proto
     expect(changes).toContain(`\`event: '${ACCESS_CHANGED_EVENT}'\``);
     expect(changes).toContain('`data: { grantId }` — ids only');
     expect(changes).toContain('re-`list`');
+    // W6 finding 36 — the engine never rings on expiry (spec §23.3): the page must not promise it.
+    expect(changes).toContain('An expiry is not announced');
+    expect(changes).toContain('`ACCESS_EXPIRED`');
+    const helperCode = section(rendered(KB_FILE), '## The Cross-App Helper (copy beside the hooks block)');
+    expect(helperCode).toContain('an access was stopped or paused');
+    expect(helperCode).not.toMatch(/ran out/);
     expect(SDK_INDEX_SOURCE).toMatch(/export \{[^}]*\buseSnugAccess\b[^}]*\} from '\.\/access\.js'/);
     const helper = prose(section(rendered(KB_FILE), '## The Cross-App Helper (copy beside the hooks block)'));
     expect(helper).toContain("`useSnugAccess()` from `@snugprotocol/sdk`");

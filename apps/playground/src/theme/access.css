@@ -1,6 +1,7 @@
 /* theme/access.css — the strip and the consent sheet of access between apps
-   (TASK-20261010-cross-app-access AC18). Every colour, radius, space and size is a tokens.css
-   token; the surfaces reuse `.connection-note.is-strip`, `.net-confirm-*`, `.release-notes-*`,
+   (TASK-20261010-cross-app-access AC18), and the rules both sheets share (the ⋈ sheet imports
+   this file too). Every colour, radius, space and type size is a tokens.css token (the 20 px
+   radio/checkbox box matches schedule-editor.css's); the surfaces reuse `.connection-note.is-strip`, `.net-confirm-*`, `.release-notes-*`,
    `.check-label`, `.btn` and `.hint` from app.css.
 
    375 px: the card is the overlay's width minus its gutter; every row wraps (names, chips,
@@ -21,6 +22,19 @@
 .access-quote::before,
 .access-quote::after {
   content: none;
+}
+
+/* On the consent sheet the quote is its OWN block — a tinted panel with a rule at its start — so
+   where the app's words end is drawn by the host, never told by a quote glyph the app can also
+   type (a purpose that "closes" the quote and appends host-sounding words stays inside the
+   panel; W6 finding 4). The one-line strip keeps the inline quote. */
+.access-sheet .access-quote {
+  display: block;
+  margin-top: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-inline-start: 3px solid var(--border-strong);
+  border-radius: var(--radius-s);
+  background: var(--surface-2);
 }
 
 /* ---------------------------------------------------------------- the sheet */

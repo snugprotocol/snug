@@ -101,6 +101,7 @@ import {
 } from './access.js';
 import { jsonCharWeight, runScratchStatement } from './scratch-statement.js';
 import { selectableColumns } from '../scoped-read.js';
+import { quoteIdent, selectRows } from '../sqlite-helpers.js';
 import { base64ToBytes } from '../base64.js';
 import {
   KV_TABLE_DDL,
@@ -1105,8 +1106,7 @@ function readUserVersion(db: Database): number {
   return typeof value === 'number' ? value : 0;
 }
 
-/** `"…"`-quote an identifier. Table names are rule-validated BEFORE quoting; column names may be arbitrary. */
-const quoteIdent = (name: string): string => `"${name.replace(/"/g, '""')}"`;
+// `quoteIdent` (sqlite-helpers.ts): table names are rule-validated BEFORE quoting; column names may be arbitrary.
 
 function hasColumn(db: Database, table: string, column: string): boolean {
   const info = db.exec(`PRAGMA table_info(${table})`);
@@ -1305,19 +1305,6 @@ function wipeLegacyAuthSlice(db: Database): number {
 }
 
 // ------------------------------------------------------- auth-spec reconciliation
-
-/** Module-level row reader (used against the incoming import candidate too). */
-function selectRows(target: Database, sql: string, params?: unknown[]): unknown[][] {
-  const statement = target.prepare(sql);
-  try {
-    if (params !== undefined && params.length > 0) statement.bind(params as never);
-    const rows: unknown[][] = [];
-    while (statement.step()) rows.push(statement.get() as unknown[]);
-    return rows;
-  } finally {
-    statement.free();
-  }
-}
 
 /** The `schedules.ts` seam over a bare handle — the cascade's transaction, an import candidate, an export copy. */
 function sqlOn(target: Database): SettingsSql {
