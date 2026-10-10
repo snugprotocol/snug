@@ -186,6 +186,53 @@ export const CONSENT_SHEET = {
 } as const;
 
 /**
+ * Sentences the strip and the consent sheet needed beyond the frozen set (W3b, UI-1 — keys
+ * ADDED after the freeze, nothing renamed).
+ */
+export const CONSENT_UI = {
+  /** The strip's note when *review* has to wait: a network or link confirm is open (the yield rule). */
+  answerOtherFirst: 'answer the open question first, then review',
+  /** The strip's line after its *stop* (the undo of an allow). */
+  stopped: (readerName: string, sourceName: string, tables: readonly string[]): string =>
+    `stopped — ${readerName} no longer reads ${tablesPhrase(sourceName, tables)}`,
+  /** The strip's line when the allow could not be written — the engine's reason in words (only through `failedWords`). */
+  failed: (message: string): string => `that did not work — ${message}`,
+  /** The strip's line when the allow could not be written for a reason the user has no words for (W3b fix lane). */
+  nothingAllowed: 'that did not work — nothing was allowed',
+  /** A table on the sheet with its row count: "transactions · 412 rows". */
+  tableRows: (table: string, rowCount: number): string => `${table} · ${rowsWord(rowCount)}`,
+  /** The accessible name of a table's column chips. */
+  columnsOf: (table: string): string => `columns of ${table}`,
+} as const;
+
+/**
+ * The allow refusals the access engine ITSELF words for a person (`createGrantFromDecision`, the
+ * pending's own *not offered*) — said as they are. Every other message (a file or protocol
+ * refusal: the live-access cap, a full history, a record the schema refused) carries internal
+ * words and caps, so it is never shown: the line says nothing was allowed instead.
+ */
+const SAYABLE_ALLOW_REFUSALS: readonly RegExp[] = [
+  /^the asking app is not in this file$/,
+  /^an app never needs access to itself$/,
+  /^the other app is not in this file$/,
+  /^that app keeps messages from others to itself$/,
+  /^choose at least one table$/,
+  /^the other app offers no table "[^"\n]{1,64}"$/,
+  /^"[^"\n]{1,64}" has nothing that can be read$/,
+  /^that app was not offered$/,
+];
+
+/** The strip's line for a failed allow: the engine's own reason when it is one of its sentences, else `nothingAllowed`. */
+export function failedWords(message: string): string {
+  return SAYABLE_ALLOW_REFUSALS.some((rule) => rule.test(message)) ? CONSENT_UI.failed(message) : CONSENT_UI.nothingAllowed;
+}
+
+/** The open-link confirm's extra line while the app holds live access (AC18): what it read can leave in the address. */
+export function openUrlCarries(sourceNames: readonly string[]): string {
+  return `what it read from ${listWords(sourceNames)} can travel in this link`;
+}
+
+/**
  * The excluded apps, as ONE footer sentence (AC16): "3 apps have no data to read · Telepath
  * keeps messages from others to itself". Clauses in a fixed order — no data, too large,
  * messages from others, the asking app — and empty when nothing was excluded.
@@ -355,6 +402,8 @@ export const ACCESS_SHEET = {
    */
   userPurpose: (readerName: string): string => `you started this yourself — ${readerName} did not ask`,
   nothing: (appName: string): string => `${appName} reads no other app, and no app reads ${appName}`,
+  /** The ⋈ sheet's ✕ (W3b key, added after the freeze). */
+  close: 'close',
 } as const;
 
 const SUSPEND_HISTORY_WORDS: Readonly<Record<AccessSuspendReason, string>> = {
@@ -422,6 +471,14 @@ export const SETTINGS_CARD = {
   clearHistory: 'clear history',
   clearHistoryHint: 'when access was allowed, stopped or paused stays on record',
   create: ACCESS_SHEET.create,
+  // W3b keys, added after the freeze: *clear history*'s inline confirm and the creation act's picker.
+  clearArm: "clear every read from every app's history?",
+  clearConfirm: 'clear',
+  clearKeep: 'keep',
+  /** The status line after the clear. */
+  cleared: 'history cleared',
+  /** The accessible name of the creation act's app picker. */
+  createPick: 'which app',
 } as const;
 
 /** The update confirm names the access that will pause (AC21) beside the schedules. */

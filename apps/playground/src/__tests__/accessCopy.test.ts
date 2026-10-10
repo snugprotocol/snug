@@ -37,6 +37,7 @@ import {
   ACCESS_APP_MESSAGES,
   ACCESS_SHEET,
   CONSENT_SHEET,
+  CONSENT_UI,
   EGRESS,
   GRANT_ACTS,
   SETTINGS_CARD,
@@ -45,9 +46,11 @@ import {
   allowLabel,
   durationOption,
   excludedFooter,
+  failedWords,
   grantStateCopy,
   historyLine,
   listWords,
+  openUrlCarries,
   readsWord,
   relativeTime,
   rowsWord,
@@ -307,6 +310,46 @@ describe('the consent sheet', () => {
   });
 });
 
+describe('the strip and consent sheet keys W3b added after the freeze (CONSENT_UI, openUrlCarries)', () => {
+  it('each sentence, byte for byte', () => {
+    expect(CONSENT_UI.answerOtherFirst).toBe('answer the open question first, then review');
+    expect(CONSENT_UI.stopped('Budget', 'Ledger', ['transactions'])).toBe("stopped — Budget no longer reads Ledger's transactions");
+    expect(CONSENT_UI.stopped('Budget', 'Ledger', ['transactions', 'accounts'])).toBe("stopped — Budget no longer reads Ledger's transactions and accounts");
+    expect(CONSENT_UI.failed('choose at least one table')).toBe('that did not work — choose at least one table');
+    expect(CONSENT_UI.nothingAllowed).toBe('that did not work — nothing was allowed');
+    expect(CONSENT_UI.tableRows('transactions', 412)).toBe('transactions · 412 rows');
+    expect(CONSENT_UI.tableRows('accounts', 1)).toBe('accounts · 1 row');
+    expect(CONSENT_UI.tableRows('empty', 0)).toBe('empty · no rows');
+    expect(CONSENT_UI.columnsOf('transactions')).toBe('columns of transactions');
+    expect(openUrlCarries(['Ledger'])).toBe('what it read from Ledger can travel in this link');
+    expect(openUrlCarries(['Ledger', 'Pantry'])).toBe('what it read from Ledger and Pantry can travel in this link');
+  });
+
+  it("failedWords says the engine's OWN refusals of an allow, and one fixed sentence for anything else (a db or protocol message never reaches the user)", () => {
+    for (const reason of [
+      'the asking app is not in this file',
+      'an app never needs access to itself',
+      'the other app is not in this file',
+      'that app keeps messages from others to itself',
+      'choose at least one table',
+      'the other app offers no table "transactions"',
+      '"secrets" has nothing that can be read',
+      'that app was not offered',
+    ]) {
+      expect(failedWords(reason)).toBe(CONSENT_UI.failed(reason));
+    }
+    for (const raw of [
+      'the file already holds 100 live access grants',
+      'the access history of "Ledger" holds nothing that may be pruned (200 entries / 65536 bytes)',
+      'an access grant may not carry a credential',
+      'choose at least one table — and also this',
+      '',
+    ]) {
+      expect(failedWords(raw)).toBe(CONSENT_UI.nothingAllowed);
+    }
+  });
+});
+
 describe('the access sheet, history and the Settings card (AC19 copy)', () => {
   it('the run header icon and the sheet’s sections', () => {
     expect(ACCESS_SHEET.iconLabel).toBe('access');
@@ -325,6 +368,8 @@ describe('the access sheet, history and the Settings card (AC19 copy)', () => {
     // The purpose a USER-made access carries: the host's words, never a sentence put in the app's mouth.
     expect(ACCESS_SHEET.userPurpose('Budget')).toBe('you started this yourself — Budget did not ask');
     expect(ACCESS_SHEET.nothing('Budget')).toBe('Budget reads no other app, and no app reads Budget');
+    // W3b key, added after the freeze: the ⋈ sheet's ✕.
+    expect(ACCESS_SHEET.close).toBe('close');
   });
 
   it('history rows in words', () => {
@@ -385,6 +430,15 @@ describe('the access sheet, history and the Settings card (AC19 copy)', () => {
     expect(SETTINGS_CARD.unmute('Budget')).toBe('let Budget ask again');
     expect(SETTINGS_CARD.clearHistory).toBe('clear history');
     expect(SETTINGS_CARD.clearHistoryHint).toBe('when access was allowed, stopped or paused stays on record');
+  });
+
+  it('the Settings card’s clear-history confirm and the creation act’s app picker (W3b keys, added after the freeze)', () => {
+    expect(SETTINGS_CARD.clearArm).toBe("clear every read from every app's history?");
+    expect(SETTINGS_CARD.clearConfirm).toBe('clear');
+    expect(SETTINGS_CARD.clearKeep).toBe('keep');
+    expect(SETTINGS_CARD.cleared).toBe('history cleared');
+    expect(SETTINGS_CARD.createPick).toBe('which app');
+    expect(SETTINGS_CARD.create('Budget')).toBe('let Budget read another app…');
   });
 
   it('the update confirm names the access that will pause', () => {

@@ -92,7 +92,7 @@ function typeInto(el: HTMLInputElement, value: string): void {
 }
 
 describe('structure (AC14)', () => {
-  it('renders the eight labelled sections', async () => {
+  it('renders the nine labelled sections', async () => {
     // MIGRATED five → six (TASK-20260821, ADR-0047): the "app" section carries the
     // shell version/update controls on desktop and the download pointer on web.
     // MIGRATED six → seven (TASK-20260822, ADR-0052): "feedback" carries the
@@ -104,7 +104,11 @@ describe('structure (AC14)', () => {
     // MIGRATED seven → eight (TASK-20261009, ADR-0074): "schedule" — global pause, browser
     // notifications, clear history — sits after connections; it is gated on `allows('schedule')`,
     // which the web default allows.
-    expect(labels).toEqual(['brain', 'account', 'your file', 'connections', 'schedule', 'feedback', 'appearance', 'about']);
+    // MIGRATED eight → nine (TASK-20261010-cross-app-access, ADR-0075): "access between apps"
+    // (SETTINGS_CARD.title) — every access across apps, the per-browser asking switch, unmutes,
+    // clear history and the creation act — sits after schedule; gated on `allows('access')`,
+    // which the web default allows.
+    expect(labels).toEqual(['brain', 'account', 'your file', 'connections', 'schedule', 'access between apps', 'feedback', 'appearance', 'about']);
   });
 
   it('keeps the mode segment’s accessible name and three labels verbatim (the e2e pin)', async () => {

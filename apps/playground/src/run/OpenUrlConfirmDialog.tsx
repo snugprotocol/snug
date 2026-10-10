@@ -11,14 +11,46 @@
 //     the same gesture through the shell's https-only system opener.
 //  4. 'noopener,noreferrer' — the opened page gets no window handle and no referrer.
 import type { ReactElement } from 'react';
+import { useEffect, useState } from 'react';
 
+import { openUrlCarries } from '../access/copy.js';
+import { accessDeps, grantsForApp, useAccessRevision } from '../access/grants.js';
 import { openUrlConfirmStore, resolveOpenUrlConfirm } from '../state/openUrl.js';
 import { useStore } from '../state/store.js';
+import { userDbStatusStore } from '../state/userdb.js';
 import { getPlatform } from '../platform/platform.js';
 import { Button } from '../ui/Button.js';
 
+/**
+ * The apps `appId` can read RIGHT NOW (live access — TASK-20261010-cross-app-access AC18): what it
+ * read from them can leave in the address it asks to open, so the confirm says so. Read only once
+ * the file is open — this dialog never boots it.
+ */
+function useLiveAccessSources(appId: string | undefined): string[] {
+  const revision = useAccessRevision();
+  const [names, setNames] = useState<string[]>([]);
+  useEffect(() => {
+    setNames([]);
+    if (appId === undefined || userDbStatusStore.get().state !== 'ready') return undefined;
+    let cancelled = false;
+    void accessDeps()
+      .getDb()
+      .then((db) => {
+        if (cancelled) return;
+        const live = grantsForApp(db, appId, accessDeps().now()).reads.filter((row) => row.live);
+        setNames([...new Set(live.map((row) => row.sourceName).filter((name) => name !== ''))]);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [appId, revision]);
+  return names;
+}
+
 export function OpenUrlConfirmDialog(): ReactElement | null {
   const pending = useStore(openUrlConfirmStore);
+  const accessSources = useLiveAccessSources(pending?.appId);
   if (pending === null) return null;
 
   let host = '';
@@ -62,6 +94,11 @@ export function OpenUrlConfirmDialog(): ReactElement | null {
         <p className="net-confirm-body">
           <code data-testid="open-url-full">{normalizedUrl}</code>
         </p>
+        {accessSources.length > 0 ? (
+          <p className="net-confirm-body" data-testid="open-url-access">
+            {openUrlCarries(accessSources)}
+          </p>
+        ) : null}
         <div className="net-confirm-actions">
           <Button variant="primary" data-testid="open-url-confirm" onClick={confirm}>
             open {host}
