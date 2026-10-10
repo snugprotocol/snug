@@ -21,9 +21,10 @@ export interface StepContext {
   /** The host's notification seat, when it carries one — the executor SUGGESTS, the queue decides. */
   notify?: SchedulerSeat['notify'] | undefined;
   /**
-   * Ask the queue to record THIS run `interrupted` with `reason` and abort it (PR-B A2: the
-   * hidden frame's run when a visible RunView mounts the same app — reason `app opened`).
-   * The executor still answers its outcome once the signal fires; the queue folds the run.
+   * Ask the queue to record THIS run `interrupted` with `reason` and abort it. The executor
+   * still answers its outcome once the signal fires; the queue folds the run. (Its PR-B caller —
+   * aborting a hidden run when the app opened — was retired 2026-10-09: a scheduled run now runs
+   * whether or not the app is open. The seam stays for an executor that must stop its own run.)
    */
   interrupt?: ((reason: string) => void) | undefined;
   /** What the steps before this one already spent on this run — the ceiling counts it (PR-B A4/A5). */

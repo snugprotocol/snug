@@ -38,8 +38,9 @@ type NotifyEvent = (event: string, data?: unknown) => void;
 const hosts = new Map<string, { notify: NotifyEvent; token: symbol }>();
 
 /**
- * Who wants to know when an app's live host registers or retracts (TASK-20261009 A2): the
- * scheduler's hidden frame aborts its run when a visible RunView mounts the same app.
+ * Who wants to know when an app's live host registers or retracts (TASK-20261009 A2): a
+ * MANUAL scheduled run on the live frame settles `failed` when that app closes. (The hidden
+ * frame no longer aborts when the app opens — owner decision 2026-10-09.)
  */
 type HostListener = (appId: string, live: boolean) => void;
 const hostListeners = new Set<HostListener>();

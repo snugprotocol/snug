@@ -256,10 +256,10 @@ export async function deleteTask(taskId: string): Promise<void> {
  *
  * THE GATE FOLLOWS THE TRIGGER (PR-B A5, ADR-0074 §6). A `manual` run is the one trigger with
  * the user PRESENT, so a *Run [app]* step under it runs the app under the page's ORDINARY
- * confirm gate — a mutating call parks the confirm dialog the user is here to answer (in the
- * live frame when the app is open, else in the hidden frame; the dialog is app-level either
- * way). Every other trigger — `due`, `late`, `catch-up` (the missed card's *Run them* included)
- * — runs under the STANDALONE refusing gate, so nothing is posted while nobody is watching and
+ * confirm gate — a mutating call parks the confirm dialog the user is here to answer, in the
+ * LIVE frame (the view opens the app before it calls `runNow`). Every other trigger — `due`,
+ * `late`, `catch-up` (the missed card's *Run them* included) — runs in the hidden frame, open
+ * app or not, under the STANDALONE refusing gate, so nothing is posted while nobody is watching and
  * the result says "needs you" with *run now and review* as its one act. The choice is made in
  * `appRun.ts` from `ctx.run.trigger`; this act only names the trigger.
  */

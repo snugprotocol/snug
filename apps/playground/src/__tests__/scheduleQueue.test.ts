@@ -692,20 +692,20 @@ describe('*Run [app]* rows (PR-B A2/A4/A5): what the hidden frame spends and say
     expect(db.getScheduledTask('t1')?.consecutiveFailures).toBe(1);
   });
 
-  it('the context’s `interrupt(reason)` seam records the run `interrupted` with THAT reason — "app opened" (mutation: drop `interrupt` from the context → red)', async () => {
+  it('the context’s `interrupt(reason)` seam records the run `interrupted` with THAT reason — "stopped by its step" (mutation: drop `interrupt` from the context → red)', async () => {
     const t = seed({ steps: [APP_RUN, NOTIFY] });
     const rec = recorder(
       (_step, ctx) =>
         new Promise<StepOutcome>((resolve, reject) => {
           ctx.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
-          ctx.interrupt?.('app opened');
+          ctx.interrupt?.('stopped by its step');
           if (ctx.interrupt === undefined) resolve(ok());
         }),
     );
     const q = queue(rec.execute);
     q.enqueue(item(t));
     await q.idle();
-    expect(rows()[0]).toMatchObject({ status: 'interrupted', reason: 'app opened', steps: [{ status: 'skipped' }, { status: 'skipped' }] });
+    expect(rows()[0]).toMatchObject({ status: 'interrupted', reason: 'stopped by its step', steps: [{ status: 'skipped' }, { status: 'skipped' }] });
   });
 
   it('`spent()` tells a step what the run already charged, so a step can ask the ceiling honestly', async () => {

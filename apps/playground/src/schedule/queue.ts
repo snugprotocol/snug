@@ -331,8 +331,9 @@ export function createRunQueue(deps: RunQueueDeps): RunQueue {
       db,
       signal: controller.signal,
       now: deps.now,
-      // PR-B seams: a step may ask for THIS run to be interrupted with a reason (the hidden
-      // frame when the app opens visibly), and may read what the run already spent.
+      // PR-B seams: a step may ask for THIS run to be interrupted with a reason (no shipped
+      // executor does since 2026-10-09 — opening the app no longer stops a hidden run), and may
+      // read what the run already spent.
       interrupt: abort,
       spent: () => ({ ...calls }),
     };
