@@ -35,6 +35,7 @@ import {
   testConnection,
 } from '../state/connectionWizard.js';
 import { AuthRepairChip } from '../run/AuthRepairChip.js';
+import { AUTH_REPAIR_VIA_SCHEDULE } from '../schedule/copy.js';
 import { ConnectionWizardSheet } from '../connections/ConnectionWizardSheet.js';
 import { getUserDb } from '../state/userdb.js';
 
@@ -436,5 +437,38 @@ describe('AuthRepairChip — the quiet run-surface trace of the failing (appId, 
     authShapedFailureStore.set({ appId: APP, slot: SLOT, status: 403 });
     dismissAuthShapedFailure();
     expect(authShapedFailureStore.get()).toBeNull();
+  });
+
+  // TASK-20261010-host-broker PR-1 (ADR-0077 §4; R-b closed): an auth-shaped failure inside a
+  // scheduled run is ATTRIBUTED to the run — the store entry carries `via: 'scheduled-run'` and
+  // the chip says so inline, one line, and in its tooltip — so the user does not read a 401
+  // their schedule hit as something the open app did in front of them. Without `via`, the chip
+  // is byte-for-byte what it was.
+  it('`via: scheduled-run` on the entry: the chip text and its tooltip carry AUTH_REPAIR_VIA_SCHEDULE, the provider still named', async () => {
+    await seedApprovedApp();
+    await renderChip(APP);
+    await act(async () => {
+      authShapedFailureStore.set({ appId: APP, slot: SLOT, status: 401, via: 'scheduled-run' });
+      await Promise.resolve();
+    });
+    const chip = container.querySelector('[data-testid="auth-repair-chip"]');
+    expect(chip).not.toBeNull();
+    expect(chip!.textContent).toContain(AUTH_REPAIR_VIA_SCHEDULE);
+    expect(chip!.textContent).toContain('Example');
+    expect(chip!.getAttribute('title')).toContain(AUTH_REPAIR_VIA_SCHEDULE);
+    expect(button(/check this connection/i)).toBeDefined();
+  });
+
+  it('NEGATIVE: without `via` the chip is unchanged — no schedule attribution', async () => {
+    await seedApprovedApp();
+    await renderChip(APP);
+    await act(async () => {
+      authShapedFailureStore.set({ appId: APP, slot: SLOT, status: 401 });
+      await Promise.resolve();
+    });
+    const chip = container.querySelector('[data-testid="auth-repair-chip"]');
+    expect(typeof AUTH_REPAIR_VIA_SCHEDULE).toBe('string');
+    expect(chip!.textContent).not.toContain(AUTH_REPAIR_VIA_SCHEDULE);
+    expect(chip!.getAttribute('title')).not.toContain(AUTH_REPAIR_VIA_SCHEDULE);
   });
 });

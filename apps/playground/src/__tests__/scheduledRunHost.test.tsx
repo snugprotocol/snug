@@ -43,6 +43,7 @@ function mount(over: Partial<HiddenMount> = {}): HiddenMount {
     onAppEvent: vi.fn(),
     onNavigatedAway: vi.fn(),
     onBudgetExhausted: vi.fn(),
+    onUnmounted: vi.fn(),
     ...over,
   };
 }
@@ -187,6 +188,56 @@ describe('ScheduledRunHost — one hidden frame, the same component', () => {
     const ready = posted.find((frame) => frame.type === FRAME_TYPES.hostReady) as { capabilities?: { streaming?: boolean; openUrl?: boolean } } | undefined;
     expect(ready?.capabilities?.streaming).toBe(false);
     expect(ready?.capabilities?.openUrl).toBe(false); // no user to confirm an open from a hidden frame
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// TASK-20261010-host-broker PR-1 (ADR-0077 §5; contract v2 D-PR1-4) — the hidden frame REPORTS
+// that it is gone. A hidden attempt handed over to the live frame must not overlap it: the
+// executor awaits `HiddenMount.onUnmounted()` before it hints the live frame, so the component
+// calls it from its effect CLEANUP keyed by `runId` — when the store is cleared and when the mount
+// is replaced by another run's. Exactly once per mount, and never while the frame is still up.
+// ---------------------------------------------------------------------------------------------
+
+describe('ScheduledRunHost — reports its unmount (TASK-20261010-host-broker PR-1)', () => {
+  it('`onUnmounted` is NOT called while the frame is up', async () => {
+    await render();
+    const m = mount();
+    await show(m);
+    expect(m.onUnmounted).not.toHaveBeenCalled();
+  });
+
+  it('clearing `hiddenMountStore` calls the mount’s `onUnmounted` once, and the frame is gone', async () => {
+    await render();
+    const m = mount();
+    await show(m);
+    await act(async () => {
+      hiddenMountStore.set(undefined);
+    });
+    await act(flush);
+    expect(m.onUnmounted).toHaveBeenCalledTimes(1);
+    expect(container!.querySelector('iframe')).toBeNull();
+  });
+
+  it('a mount for ANOTHER run (the runId changes) calls the PREVIOUS mount’s `onUnmounted` — and not the new one’s', async () => {
+    await render();
+    const first = mount({ runId: 'run-1' });
+    await show(first);
+    const second = mount({ runId: 'run-2' });
+    await show(second);
+    expect(first.onUnmounted).toHaveBeenCalledTimes(1);
+    expect(second.onUnmounted).not.toHaveBeenCalled();
+  });
+
+  it('a re-render with the SAME runId (a store write of an equal mount) is not an unmount', async () => {
+    await render();
+    const m = mount({ runId: 'run-1' });
+    await show(m);
+    await act(async () => {
+      hiddenMountStore.set({ ...m });
+    });
+    await act(flush);
+    expect(m.onUnmounted).not.toHaveBeenCalled();
   });
 });
 

@@ -14,12 +14,21 @@
 // (an app cannot verify the sender) and ride the 256 KB frame class where the runner
 // DROPS an oversize frame silently. So the signal is an INVALIDATION — "your data is
 // stale, go and refetch through the governed seam" — never a delivery of data.
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   registerAppHost,
   notifyAppRefresh,
   hasLiveAppHost,
   __resetAppHostsForTest,
+  // TASK-20261010-host-broker PR-1 (ADR-0077 §6): readiness and generations.
+  awaitAppHostReady,
+  isAppHostReady,
+  liveAppHostGeneration,
+  markAppHostAnnounced,
+  publishAppEvent,
+  setAppHostGeneration,
+  subscribeAppEvents,
+  subscribeAppHosts,
 } from '../state/appHosts.js';
 
 describe('the running-app host registry', () => {
@@ -127,5 +136,154 @@ describe('the running-app host registry', () => {
     });
     expect(() => notifyAppRefresh('app-1', 'gmail')).not.toThrow();
     expect(notifyAppRefresh('app-1', 'gmail')).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// TASK-20261010-host-broker PR-1 — readiness is explicit (ADR-0077 §6; contract v2 D-PR1-5).
+//
+// The registry used to register on MOUNT, before the frame announced, with no generation and no
+// readiness: *run now* navigated then hinted before the app's listener existed (a 90 s
+// `failed`). Entries now carry `{generation, announced}`. Registration stays keyed on the app
+// (a remount must NEVER read as a retraction — that is why `setAppHostGeneration` fires no host
+// listener), a separate effect sets the generation and clears `announced`, and only an announce
+// for the CURRENT generation marks the entry ready. A `schedule-result` is accepted only from
+// the generation that was hinted, so every app-event carries the generation it came from.
+// ---------------------------------------------------------------------------------------------
+
+describe('readiness and generations (TASK-20261010-host-broker PR-1, ADR-0077 §6)', () => {
+  beforeEach(() => {
+    __resetAppHostsForTest();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('a fresh registration is generation 0, registered but NOT ready — `hasLiveAppHost` keeps meaning "registered"', () => {
+    expect(liveAppHostGeneration('app-1')).toBeUndefined();
+    registerAppHost('app-1', vi.fn());
+    expect(hasLiveAppHost('app-1')).toBe(true);
+    expect(liveAppHostGeneration('app-1')).toBe(0);
+    expect(isAppHostReady('app-1')).toBe(false);
+    markAppHostAnnounced('app-1', 0);
+    expect(isAppHostReady('app-1')).toBe(true);
+  });
+
+  it('`setAppHostGeneration` sets the generation and CLEARS `announced` — and fires NO host listener (a remount is not a retraction)', () => {
+    registerAppHost('app-1', vi.fn());
+    markAppHostAnnounced('app-1', 0);
+    expect(isAppHostReady('app-1')).toBe(true);
+    const listener = vi.fn();
+    subscribeAppHosts(listener);
+
+    setAppHostGeneration('app-1', 3);
+
+    expect(liveAppHostGeneration('app-1')).toBe(3);
+    expect(isAppHostReady('app-1')).toBe(false);
+    expect(hasLiveAppHost('app-1')).toBe(true);
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it('`markAppHostAnnounced` ignores a STALE generation — an announce from the frame that was just replaced never marks the new one ready', () => {
+    registerAppHost('app-1', vi.fn());
+    setAppHostGeneration('app-1', 2);
+    markAppHostAnnounced('app-1', 1);
+    expect(isAppHostReady('app-1')).toBe(false);
+    markAppHostAnnounced('app-1', 2);
+    expect(isAppHostReady('app-1')).toBe(true);
+  });
+
+  it('`markAppHostAnnounced` for an app that is not registered is a no-op (never registers it)', () => {
+    markAppHostAnnounced('app-1', 0);
+    expect(hasLiveAppHost('app-1')).toBe(false);
+    expect(isAppHostReady('app-1')).toBe(false);
+  });
+
+  it('`awaitAppHostReady` answers true AT ONCE when the host is already ready', async () => {
+    vi.useFakeTimers();
+    registerAppHost('app-1', vi.fn());
+    markAppHostAnnounced('app-1', 0);
+    let settled: boolean | undefined;
+    void awaitAppHostReady('app-1', 10_000).then((ready) => {
+      settled = ready;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toBe(true);
+  });
+
+  it('`awaitAppHostReady` answers true when the host BECOMES ready inside the bound', async () => {
+    vi.useFakeTimers();
+    registerAppHost('app-1', vi.fn());
+    let settled: boolean | undefined;
+    void awaitAppHostReady('app-1', 10_000).then((ready) => {
+      settled = ready;
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(settled).toBeUndefined();
+    markAppHostAnnounced('app-1', 0);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(settled).toBe(true);
+  });
+
+  it('`awaitAppHostReady` is not answered by a remount: a new generation keeps it waiting, and the NEW generation’s announce answers it', async () => {
+    vi.useFakeTimers();
+    registerAppHost('app-1', vi.fn());
+    let settled: boolean | undefined;
+    void awaitAppHostReady('app-1', 10_000).then((ready) => {
+      settled = ready;
+    });
+    setAppHostGeneration('app-1', 1);
+    markAppHostAnnounced('app-1', 0); // the replaced frame's late announce
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(settled).toBeUndefined();
+    markAppHostAnnounced('app-1', 1);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(settled).toBe(true);
+  });
+
+  it('`awaitAppHostReady` answers false on RETRACTION (the app closed before it announced)', async () => {
+    vi.useFakeTimers();
+    const unregister = registerAppHost('app-1', vi.fn());
+    let settled: boolean | undefined;
+    void awaitAppHostReady('app-1', 10_000).then((ready) => {
+      settled = ready;
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(settled).toBeUndefined();
+    unregister();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(settled).toBe(false);
+  });
+
+  it('`awaitAppHostReady` answers false on TIMEOUT (registered, never announced) — and not a moment before', async () => {
+    vi.useFakeTimers();
+    registerAppHost('app-1', vi.fn());
+    let settled: boolean | undefined;
+    void awaitAppHostReady('app-1', 10_000).then((ready) => {
+      settled = ready;
+    });
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(settled).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(false);
+    expect(hasLiveAppHost('app-1')).toBe(true); // the timeout never retracts
+  });
+
+  it('`publishAppEvent(appId, event, data, generation)` carries the generation to every `subscribeAppEvents` listener', () => {
+    const listener = vi.fn();
+    subscribeAppEvents('app-1', listener);
+    publishAppEvent('app-1', 'schedule-result', { runId: 'r1', ok: true }, 4);
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledWith('schedule-result', { runId: 'r1', ok: true }, 4);
+  });
+
+  it('an app-event for one app never reaches another app’s listener, whatever its generation', () => {
+    const mine = vi.fn();
+    const other = vi.fn();
+    subscribeAppEvents('app-1', mine);
+    subscribeAppEvents('app-2', other);
+    publishAppEvent('app-1', 'schedule-result', {}, 0);
+    expect(mine).toHaveBeenCalledTimes(1);
+    expect(other).not.toHaveBeenCalled();
   });
 });

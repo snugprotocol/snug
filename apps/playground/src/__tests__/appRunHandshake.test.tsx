@@ -1,26 +1,32 @@
 // appRunHandshake.test.tsx — TASK-20261009-scheduling-framework A2/A3/A5 (ADR-0074 §3, §5, §6;
-// security F5, F8, F16): the *Run [app]* executor and the kv handshake, over a REAL memory-backed
-// user db with the frame FAKED — the test plays the hidden frame (announce, the lent controls,
-// the app-event) and the live-host registry.
+// security F5, F8, F16) and TASK-20261010-host-broker PR-1 (ADR-0077, one instance per app): the
+// *Run [app]* executor and the kv handshake, over a REAL memory-backed user db with the frames
+// FAKED — the test plays the hidden frame (announce, the lent controls, the app-event, the
+// unmount) and the LIVE frame through the REAL registry (`state/appHosts.ts` — `fakeLive()`
+// delegates to it, so the fake cannot drift from what RunView registers).
 //
 // What is pinned: the host writes EXACTLY `{ taskId, runId, input }` into the app's own kv and
 // rings `schedule-run { taskId, runId }` (ids, never content); the committed CURRENT html runs;
 // a result is accepted only from the frame that received the hint, after the hint, once, for
 // this run, under a length cap and a strict parse — an unsolicited, duplicate, forged or
 // oversized one is DROPPED; no announce → `no-handler`, no result → `failed`; the key is cleared
-// on every exit; an unattended run runs in the hidden frame whether or not the app is open, and opening it mid-run does not interrupt it (owner decision 2026-10-09); the gate follows the trigger
-// and its record outranks the app's answer; the day's ceilings count what the run spent; the
-// live frame gets the hint without a hidden mount; no scheduler seat → blocked by name; the C1
+// on every exit, ONCE; an unattended run of a CLOSED app runs in the hidden frame under the
+// refusing gate, and of an OPEN app is DELEGATED to the live frame (ADR-0077): hinted through the
+// registry once the frame is ready, its mutating calls asked through the run-scoped gate (the
+// REAL `state/net.ts` default — never a remembered or armed grant), its calls counted, the day's
+// ceiling asked BEFORE dispatch, handed over between the frames at most once and never after a
+// change went out, one deadline per step, the access door closed for the run's window; a manual
+// run waits for the live frame to be ready; no scheduler seat → blocked by name; the C1
 // negatives; and the PRODUCTION wire (`executeStep` → the real hidden mount store) — whose
 // runtime composes `attended: false` (TASK-20261010-cross-app-access AC20: the hidden frame's
 // access handler tells an ask that nobody is there, and never notes a reader generation).
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
-import { ACCESS_ERROR_CODES, FRAME_TYPES, PROTOCOL_VERSION } from '@snugprotocol/protocol';
+import { ACCESS_ERROR_CODES, FRAME_TYPES, NET_ERROR_CODES, PROTOCOL_VERSION, type AccessRequestFrame } from '@snugprotocol/protocol';
 import { ERROR_CODES, SCHEDULE_DAILY_CEILINGS, SCHEDULE_STEP_SUMMARY_MAX_CHARS, type ScheduleStep, type ScheduledTask } from '@snugprotocol/protocol';
 import type { AgentTransport, AgentTransportOptions, RunnerHost } from '@snugprotocol/runner';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 
 import type { UserDb } from '@snugprotocol/db';
 
@@ -28,7 +34,9 @@ import type { SnugPlatform } from '../platform/platform.js';
 import {
   APP_CLOSED_SUMMARY,
   NO_HIDDEN_FRAME,
+  SCHEDULE_ANNOUNCE_TIMEOUT_MS,
   SCHEDULE_RESULT_MAX_CHARS,
+  SCHEDULE_RESULT_TIMEOUT_MS,
   appDidNotAnswer,
   blockedAppRunDeps,
   executeAppRun,
@@ -41,16 +49,48 @@ import {
   type HiddenMount,
   type LiveAppHosts,
 } from '../schedule/appRun.js';
-import { appMissing, blockedHere, needsYou, noHandler } from '../schedule/copy.js';
+import {
+  appMissing,
+  blockedHere,
+  capped,
+  closedAfterChange,
+  handedOverTwice,
+  needsYou,
+  needsYouAlreadyAsked,
+  needsYouDeclined,
+  needsYouUnanswered,
+  noHandler,
+} from '../schedule/copy.js';
 import type { StepContext } from '../schedule/engine-types.js';
 import { CANCELLED_SUMMARY, WITHHELD_SUMMARY, createStepExecutor, executeStep } from '../schedule/executors.js';
+import { DEFAULT_RUN_BOUNDS } from '../schedule/queue.js';
 import { SCHEDULE_RESULT_EVENT, SCHEDULE_RUN_EVENT, scheduleKvKey } from '../schedule/scheduleKey.js';
-import type { ScheduledConfirmGate } from '../schedule/scheduledConfirmGate.js';
+import { scheduledRefusalVerb, type ScheduledConfirmGate } from '../schedule/scheduledConfirmGate.js';
 import { SCHEDULED_AI_LIMIT_MESSAGE } from '../schedule/scheduledTransport.js';
-import { readerGeneration } from '../access/grants.js';
-import { __resetAppHostsForTest } from '../state/appHosts.js';
+import { createAccessHandlerFor } from '../access/accessHandler.js';
+import { collectSources } from '../access/consent.js';
+import { ACCESS_APP_MESSAGES } from '../access/copy.js';
+import { __setAccessDepsForTests, createGrantFromDecision, readerGeneration, resetAccessSession, type AnyAccessGrant } from '../access/grants.js';
+import { configureScopedRead, resetScopedReadForTests, type WorkerLike } from '../access/scopedRead.js';
+import { createScopedReadResponder } from '../access/scopedRead.worker.js';
+import { composeAppRuntime } from '../run/appRuntime.js';
+import {
+  __resetAppHostsForTest,
+  awaitAppHostReady,
+  hasLiveAppHost,
+  liveAppHostGeneration,
+  markAppHostAnnounced,
+  notifyAppHost,
+  publishAppEvent,
+  registerAppHost,
+  setAppHostGeneration,
+  subscribeAppEvents,
+  subscribeAppHosts,
+} from '../state/appHosts.js';
+import { modeStore, providerStore } from '../state/mode.js';
+import { __resetNetStateForTests, armStandingApproval, netConfirmStore, resolveNetConfirm } from '../state/net.js';
 import { createStore } from '../state/store.js';
-import { installTestUserDb } from './userdbTestHelper.js';
+import { installTestUserDb, locateWasm } from './userdbTestHelper.js';
 
 const NOW = '2026-10-09T15:00:00.000Z';
 const RUN_ID = 'run-1';
@@ -91,7 +131,10 @@ interface Ctx {
   controller: AbortController;
 }
 
-function ctx(step: ScheduleStep, over: { trigger?: StepContext['run']['trigger']; spent?: () => { ai: number; net: number }; runId?: string } = {}): Ctx {
+function ctx(
+  step: ScheduleStep,
+  over: { trigger?: StepContext['run']['trigger']; spent?: () => { ai: number; net: number }; runId?: string; now?: () => Date } = {},
+): Ctx {
   const interrupt = vi.fn();
   const controller = new AbortController();
   const context: StepContext = {
@@ -99,54 +142,60 @@ function ctx(step: ScheduleStep, over: { trigger?: StepContext['run']['trigger']
     run: { id: over.runId ?? RUN_ID, taskId: 'task-1', dueAt: NOW, trigger: over.trigger ?? 'due' },
     db,
     signal: controller.signal,
-    now: () => new Date(NOW),
+    now: over.now ?? (() => new Date(NOW)),
     interrupt,
     ...(over.spent !== undefined ? { spent: over.spent } : {}),
   };
   return { context, interrupt, controller };
 }
 
+/** The generation RunView's `frameEpoch` gives the open app in these tests (not 0, so a missed `setAppHostGeneration` shows). */
+const LIVE_GENERATION = 1;
+
 interface FakeLive extends LiveAppHosts {
+  /** What the LIVE frame was rung with — recorded by the notify RunView lends the registry. */
   notified: Array<{ appId: string; event: string; data: unknown }>;
-  open(appId: string): void;
+  /** RunView mounting: register on `[id]`, set the generation on `[id, frameEpoch]`, and (by default) the frame's announce. */
+  open(appId: string, options?: { generation?: number; announce?: boolean }): void;
+  /** The open frame's `onAnnounce` (deps gain `frameEpoch`). */
+  announce(appId: string): void;
+  /** RunView unmounting: the token-scoped unregister — a retraction. */
   close(appId: string): void;
-  emit(appId: string, event: string, data: unknown): void;
+  /** The open frame's `onAppEvent` → `publishAppEvent(id, event, data, frameEpoch)`; another generation may be named. */
+  emit(appId: string, event: string, data: unknown, generation?: number): void;
 }
 
+/**
+ * The live frame, played through the REAL `state/appHosts.ts` (ADR-0077 contract: the fake
+ * DELEGATES so it cannot drift). Only what RunView itself holds lives here: its notify (which
+ * records the hint) and its unregister.
+ */
 function fakeLive(): FakeLive {
-  const live = new Set<string>();
-  const hostListeners = new Set<(appId: string, live: boolean) => void>();
-  const eventListeners = new Map<string, Set<(event: string, data: unknown) => void>>();
   const notified: FakeLive['notified'] = [];
+  const views = new Map<string, { unregister: () => void; generation: number }>();
+  const generationOf = (id: string): number => views.get(id)?.generation ?? LIVE_GENERATION;
   return {
     notified,
-    has: (id) => live.has(id),
-    notify: (id, event, data) => {
-      if (!live.has(id)) return false;
-      notified.push({ appId: id, event, data });
-      return true;
+    has: (id) => hasLiveAppHost(id),
+    notify: (id, event, data) => notifyAppHost(id, event, data),
+    subscribe: (listener) => subscribeAppHosts(listener),
+    subscribeEvents: (id, listener) => subscribeAppEvents(id, listener),
+    awaitReady: (id, ms) => awaitAppHostReady(id, ms),
+    generation: (id) => liveAppHostGeneration(id),
+    open: (id, { generation = LIVE_GENERATION, announce = true } = {}) => {
+      const unregister = registerAppHost(id, (event, data) => {
+        notified.push({ appId: id, event, data });
+      });
+      views.set(id, { unregister, generation });
+      setAppHostGeneration(id, generation);
+      if (announce) markAppHostAnnounced(id, generation);
     },
-    subscribe: (listener) => {
-      hostListeners.add(listener);
-      return () => hostListeners.delete(listener);
-    },
-    subscribeEvents: (id, listener) => {
-      const set = eventListeners.get(id) ?? new Set();
-      eventListeners.set(id, set);
-      set.add(listener);
-      return () => set.delete(listener);
-    },
-    open: (id) => {
-      live.add(id);
-      for (const listener of hostListeners) listener(id, true);
-    },
+    announce: (id) => markAppHostAnnounced(id, generationOf(id)),
     close: (id) => {
-      live.delete(id);
-      for (const listener of hostListeners) listener(id, false);
+      views.get(id)?.unregister();
+      views.delete(id);
     },
-    emit: (id, event, data) => {
-      for (const listener of eventListeners.get(id) ?? []) listener(event, data);
-    },
+    emit: (id, event, data, generation = generationOf(id)) => publishAppEvent(id, event, data, generation),
   };
 }
 
@@ -210,6 +259,99 @@ const kvValue = async (id = appId, runId = RUN_ID): Promise<unknown> => {
   return read.ok ? read.value : read;
 };
 const send = (transport: AgentTransport) => transport.send('[SNUG_APP_REQUEST] {"v":1}', { signal: new AbortController().signal });
+
+// ---------------------------------------------------------------- the delegated-run harness (ADR-0077)
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Every hidden mount the executor ever set on this composition — "never mounted" means this stays empty. */
+function watchMounts(deps: AppRunDeps): HiddenMount[] {
+  const seen: HiddenMount[] = [];
+  deps.mounts.subscribe(() => {
+    const mount = deps.mounts.get();
+    if (mount !== undefined) seen.push(mount);
+  });
+  return seen;
+}
+
+type KvSpy = MockInstance<UserDb['driver']['kvSet']>;
+/** The executor's kv calls for THIS run's key (it calls the file's driver directly, never the frame's binding). */
+const spyKv = (): KvSpy => vi.spyOn(db.driver, 'kvSet');
+const runKeyCalls = (spy: KvSpy, runId = RUN_ID) => spy.mock.calls.filter(([id, key]) => id === appId && key === scheduleKvKey(runId));
+const writesOf = (spy: KvSpy, runId = RUN_ID) => runKeyCalls(spy, runId).filter(([, , value]) => value !== null);
+const clearsOf = (spy: KvSpy, runId = RUN_ID) => runKeyCalls(spy, runId).filter(([, , value]) => value === null);
+
+/** The delegated run's hint reached the LIVE frame (through the registry's notify). */
+async function delegatedHint(deps: Fake): Promise<void> {
+  await vi.waitFor(() => expect(deps.live.notified).toHaveLength(1));
+  expect(deps.live.notified[0]).toEqual({ appId, event: SCHEDULE_RUN_EVENT, data: { taskId: 'task-1', runId: RUN_ID } });
+}
+
+const SLOT = 'example';
+const API_HOST = 'api.example.com';
+const requirement = {
+  slot: SLOT,
+  kind: 'api_key' as const,
+  provider: { name: 'Example' },
+  fields: [{ key: 'api_key', label: 'API key', type: 'secret' as const }],
+  request: { headerTemplate: { 'X-Api-Key': '{{api_key}}' } },
+  declaredApiHosts: [API_HOST],
+};
+
+/** Weather gets an approved connection to the example host (the `scheduledGate.test.ts` seed). */
+function connectWeather(): void {
+  db.setSecret(`auth:${appId}:${SLOT}:api_key`, 'stored-key-abc123');
+  db.putDeclaredConnection(appId, SLOT, requirement, 'inference');
+  db.approveConnection(appId, SLOT);
+}
+
+const THREAD_JID = 'thread-1';
+const netFrame = (method: 'GET' | 'POST', url = `https://${API_HOST}/v1/items`, body = '{}') => ({
+  v: 1 as const,
+  type: 'snug:net-request' as const,
+  requestId: `r-${method}-${Math.random().toString(36).slice(2)}`,
+  instanceId: 'live-1',
+  url,
+  method,
+  ...(method === 'POST' ? { body } : {}),
+});
+/**
+ * A send into the armed thread — what an ARMED standing grant answers yes to on the ordinary gate.
+ * Symbolic (`snug-connection://<slot>/…`): only that path hands the gate a `slot`, and a standing
+ * grant never answers a request without one (`standing-approval.ts`).
+ */
+const threadPost = () => netFrame('POST', `snug-connection://${SLOT}/chats/${THREAD_JID}/messages`, JSON.stringify({ jid: THREAD_JID, text: 'hi' }));
+const POST_VERB = scheduledRefusalVerb({ host: API_HOST, method: 'POST' }); // "post to api.example.com"
+
+function recordingFetch(): { fetched: string[]; fetchImpl: (url: string, init?: RequestInit) => Promise<Response> } {
+  const fetched: string[] = [];
+  return {
+    fetched,
+    fetchImpl: async (url) => {
+      fetched.push(url);
+      return new Response('{"ok":true}', { status: 200, headers: { 'content-type': 'application/json' } });
+    },
+  };
+}
+
+/**
+ * The LIVE frame's runtime exactly as RunView composes it — `attended: true` at its generation, NO
+ * confirm gate passed (so the net handler carries `state/net.ts`'s DEFAULT, the run-scoped gate),
+ * no counting seam passed (so the composition's own default counts into the delegated run).
+ */
+function liveRuntime(fetchImpl: (url: string, init?: RequestInit) => Promise<Response>, generation = LIVE_GENERATION) {
+  const runtime = composeAppRuntime({ appId, attended: true, generation, mode: modeStore.get(), provider: providerStore.get(), driver: db.driver, fetchImpl });
+  const { net } = runtime.frameProps;
+  if (net === undefined) throw new Error('an owned app on this platform reaches the network');
+  return { ...runtime, net };
+}
+
+/** Fake timers for the minute-long bounds: timers and `Date` only (sql.js and promises keep running). */
+function fakeClock(): void {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
+  vi.setSystemTime(new Date(NOW));
+}
+const clockNow = (): Date => new Date(Date.now());
 
 beforeEach(async () => {
   __resetAppHostsForTest();
@@ -396,18 +538,27 @@ describe('the result is bound to the frame and the run, once, capped (F8)', () =
 });
 
 describe('opening the app does not stop its scheduled run (owner decision 2026-10-09, TASK-20261009-scheduled-run-open-app)', () => {
-  it('a RunView mounting the same app mid-run does NOT interrupt it: no `interrupt`, the hidden frame stays, the result lands, the key is cleared', async () => {
-    const deps = fakeDeps();
+  it('a RunView mounting the same app mid-run HANDS THE RUN OVER (ADR-0077 §5): no `interrupt`; the hidden attempt is cut and its frame cleared; the SAME runId is hinted to the live frame only AFTER the hidden frame reports unmounted; the live result lands; the key is written per dispatch and cleared once', async () => {
+    const deps = fakeDeps({ resultTimeoutMs: 5_000 });
+    const kvSet = spyKv();
     const step: AppRunStep = { kind: 'app-run', appId };
     const { context, interrupt } = ctx(step);
     const pending = executeAppRun(step, context, deps);
     const { mount } = await hinted(deps);
     deps.live.open(appId);
     expect(interrupt).not.toHaveBeenCalled();
-    expect(deps.mounts.get()).toBe(mount);
-    mount.onAppEvent(SCHEDULE_RESULT_EVENT, { ok: true, summary: 'ran while you looked' });
+    await vi.waitFor(() => expect(deps.mounts.get()).toBeUndefined());
+    await sleep(30);
+    expect(deps.live.notified, 'no live hint while the hidden instance may still be running').toEqual([]);
+    mount.onUnmounted();
+    await vi.waitFor(() => expect(deps.live.notified).toHaveLength(1));
+    expect(deps.live.notified[0]).toEqual({ appId, event: SCHEDULE_RUN_EVENT, data: { taskId: 'task-1', runId: RUN_ID } });
+    mount.onAppEvent(SCHEDULE_RESULT_EVENT, { ok: true, summary: 'from the cut hidden attempt' }); // its closure no longer settles anything
+    deps.live.emit(appId, SCHEDULE_RESULT_EVENT, { ok: true, summary: 'ran while you looked' });
     expect(await pending).toMatchObject({ status: 'ok', summary: 'ran while you looked' });
     expect(deps.mounts.get()).toBeUndefined();
+    expect(writesOf(kvSet)).toHaveLength(2);
+    expect(clearsOf(kvSet)).toHaveLength(1);
     expect('value' in (await kv())).toBe(false);
   });
 
@@ -438,7 +589,7 @@ describe('opening the app does not stop its scheduled run (owner decision 2026-1
 });
 
 describe('the gate follows the trigger, and its record outranks the app’s answer (A5)', () => {
-  it('every unattended trigger (due, late, catch-up) composes the hidden frame with the refusing gate', async () => {
+  it('every unattended trigger (due, late, catch-up) composes the hidden frame with the refusing gate WHEN THE APP IS CLOSED', async () => {
     for (const trigger of ['due', 'late', 'catch-up'] as const) {
       const deps = fakeDeps();
       const step: AppRunStep = { kind: 'app-run', appId };
@@ -529,39 +680,9 @@ describe('what the run spends is counted and capped (A4, A5)', () => {
   });
 });
 
-describe('an unattended run of an OPEN app still runs — in the hidden frame, never the live one (owner decision 2026-10-09)', () => {
-  it('due / late / catch-up with the app LIVE → the hidden frame mounts under the scheduled gate, the live frame is never hinted, and the app’s result is recorded', async () => {
-    for (const trigger of ['due', 'late', 'catch-up'] as const) {
-      hiddenMountStore.set(undefined);
-      const deps = fakeDeps();
-      deps.live.open(appId);
-      const step: AppRunStep = { kind: 'app-run', appId, input: { city: 'Oslo' } };
-      const pending = executeAppRun(step, ctx(step, { trigger }).context, deps);
-      const { mount, host } = await hinted(deps);
-      expect(deps.runtimeCalls, trigger).toHaveLength(1);
-      expect(deps.runtimeCalls[0]!.confirmGate, trigger).toBeDefined();
-      expect(host.notifyEvent, trigger).toHaveBeenCalledWith(SCHEDULE_RUN_EVENT, { taskId: 'task-1', runId: RUN_ID });
-      expect(deps.live.notified, trigger).toEqual([]); // the open app is never driven by a timer
-      mount.onAppEvent(SCHEDULE_RESULT_EVENT, { ok: true, summary: 'Oslo: dry until noon' });
-      expect(await pending, trigger).toMatchObject({ status: 'ok', summary: 'Oslo: dry until noon' });
-    }
-  });
-
-  it('a mutating call in that run is still refused by the scheduled gate → `refused` with the needs-you sentence, app open or not', async () => {
-    const deps = fakeDeps();
-    deps.live.open(appId);
-    const step: AppRunStep = { kind: 'app-run', appId };
-    const pending = executeAppRun(step, ctx(step, { trigger: 'due' }).context, deps);
-    const { mount } = await hinted(deps);
-    const gate = deps.runtimeCalls[0]!.confirmGate as ScheduledConfirmGate;
-    expect(gate.confirm({ appId, host: 'api.github.com', method: 'POST', url: 'https://api.github.com/repos/x/issues' })).toBe(false);
-    mount.onAppEvent(SCHEDULE_RESULT_EVENT, { ok: true, summary: 'posted' });
-    expect(await pending).toEqual({ status: 'refused', summary: needsYou('Weather', 'post to api.github.com').text, calls: { ai: 0, net: 0 } });
-  });
-
-  it('a result the VISIBLE copy posts is never taken for the hidden run — only the hidden frame’s own answer settles it', async () => {
+describe('the app CLOSED — the hidden frame alone, the one instance (ADR-0077 §1, §7)', () => {
+  it('a result published through the live registry is never taken for the hidden run — only the hidden frame’s own answer settles it', async () => {
     const deps = fakeDeps({ resultTimeoutMs: 5_000 }); // long enough that only an answer can settle it
-    deps.live.open(appId);
     const step: AppRunStep = { kind: 'app-run', appId };
     let settled = false;
     const pending = executeAppRun(step, ctx(step, { trigger: 'due' }).context, deps).then((o) => {
@@ -569,7 +690,7 @@ describe('an unattended run of an OPEN app still runs — in the hidden frame, n
       return o;
     });
     const { mount } = await hinted(deps);
-    deps.live.emit(appId, SCHEDULE_RESULT_EVENT, { ok: true, summary: 'from the open copy', runId: RUN_ID });
+    deps.live.emit(appId, SCHEDULE_RESULT_EVENT, { ok: true, summary: 'through the registry', runId: RUN_ID });
     await new Promise((r) => setTimeout(r, 10));
     expect(settled).toBe(false);
     mount.onAppEvent(SCHEDULE_RESULT_EVENT, { ok: true, summary: 'from the hidden copy' });
@@ -578,7 +699,6 @@ describe('an unattended run of an OPEN app still runs — in the hidden frame, n
 
   it('the hidden run’s db binding is the scheduled guard: a BEGIN is refused by name, a plain read passes', async () => {
     const deps = fakeDeps();
-    deps.live.open(appId);
     const step: AppRunStep = { kind: 'app-run', appId };
     const pending = executeAppRun(step, ctx(step, { trigger: 'due' }).context, deps);
     const { mount } = await hinted(deps);
@@ -590,12 +710,467 @@ describe('an unattended run of an OPEN app still runs — in the hidden frame, n
     mount.onAppEvent(SCHEDULE_RESULT_EVENT, { ok: true });
     await pending;
   });
+});
+
+describe('an unattended run of an OPEN app is DELEGATED to the live frame — no second copy (ADR-0077, amending the owner decision 2026-10-09)', () => {
+  it('due / late / catch-up with the app LIVE → DELEGATED: the live frame is hinted through the registry, no hidden mount ever, no runtime of ours composed, the app’s result recorded, the key written and cleared once', async () => {
+    for (const trigger of ['due', 'late', 'catch-up'] as const) {
+      const deps = fakeDeps({ resultTimeoutMs: 5_000 });
+      const mounts = watchMounts(deps);
+      const kvSet = spyKv();
+      deps.live.open(appId);
+      const step: AppRunStep = { kind: 'app-run', appId, input: { city: 'Oslo' } };
+      const pending = executeAppRun(step, ctx(step, { trigger }).context, deps);
+      await vi.waitFor(() => expect(deps.live.notified, trigger).toHaveLength(1));
+      expect(deps.live.notified[0], trigger).toEqual({ appId, event: SCHEDULE_RUN_EVENT, data: { taskId: 'task-1', runId: RUN_ID } });
+      expect(await kvValue(), trigger).toEqual({ taskId: 'task-1', runId: RUN_ID, input: { city: 'Oslo' } });
+      deps.live.emit(appId, SCHEDULE_RESULT_EVENT, { ok: true, summary: 'Oslo: dry until noon' });
+      expect(await pending, trigger).toMatchObject({ status: 'ok', summary: 'Oslo: dry until noon', calls: { ai: 0, net: 0 } });
+      expect(mounts, trigger).toEqual([]);
+      expect(deps.runtimeCalls, trigger).toEqual([]); // the open app's own runtime, not one of ours
+      expect(writesOf(kvSet), trigger).toHaveLength(1);
+      expect(clearsOf(kvSet), trigger).toHaveLength(1);
+      expect('value' in (await kv()), trigger).toBe(false);
+      kvSet.mockRestore();
+      deps.live.close(appId);
+    }
+  });
+
+  it('a mutating call in that run reaches the ASK gate (the real `state/net.ts` default): a confirm parks tagged with the schedule; “don’t send” → `refused` with the declined sentence — even when the app then reports ok', async () => {
+    connectWeather();
+    const deps = fakeDeps({ resultTimeoutMs: 5_000 });
+    deps.live.open(appId);
+    const { fetched, fetchImpl } = recordingFetch();
+    const live = liveRuntime(fetchImpl);
+    const step: AppRunStep = { kind: 'app-run', appId };
+    const pending = executeAppRun(step, ctx(step, { trigger: 'due' }).context, deps);
+    await delegatedHint(deps);
+    const post = live.net.handle(appId, netFrame('POST', `https://${API_HOST}/repos/x/issues`));
+    await vi.waitFor(() => expect(netConfirmStore.get()).not.toBeNull());
+    expect(netConfirmStore.get()!.scheduled).toEqual({ title: 'morning weather', appName: 'Weather', runId: RUN_ID });
+    resolveNetConfirm({ granted: false });
+    expect(await post).toMatchObject({ ok: false, code: NET_ERROR_CODES.NET_CONFIRM_DENIED });
+    expect(fetched).toEqual([]);
+    deps.live.emit(appId, SCHEDULE_RESULT_EVENT, { ok: true, summary: 'posted' });
+    const outcome = await pending;
+    expect(outcome.status).toBe('refused');
+    expect(outcome.summary).toBe(needsYouDeclined('Weather', POST_VERB).text);
+  });
 
   it('the old open-app refusal is gone from the executor’s exports', async () => {
     const mod = await import('../schedule/appRun.js');
     expect('APP_OPEN_REFUSAL' in mod).toBe(false);
   });
 });
+
+// ADR-0077 / TASK-20261010-host-broker PR-1 (Gate-2 contract v2): what a DELEGATED run promises
+// beyond the inverted pins above. The live frame is played through the REAL registry and, where a
+// call leaves the app, through the runtime RunView composes — so the gate under test is the page's
+// own default (`state/net.ts`), never a stand-in.
+describe('a delegated run — the app is OPEN (ADR-0077)', () => {
+  beforeEach(() => {
+    __resetNetStateForTests();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    __resetNetStateForTests();
+    resetAccessSession();
+    resetScopedReadForTests();
+    __setAccessDepsForTests();
+    vi.restoreAllMocks();
+  });
+
+  describe('AC2 — a mutating call asks the person at the app, never a remembered or armed grant', () => {
+    it('nobody answers within 60 s → the parked confirm is WITHDRAWN, the app is told no, nothing is sent, and the step is `refused` with the unanswered sentence', async () => {
+      fakeClock();
+      connectWeather();
+      const deps = fakeDeps({ resultTimeoutMs: SCHEDULE_RESULT_TIMEOUT_MS });
+      deps.live.open(appId);
+      const { fetched, fetchImpl } = recordingFetch();
+      const live = liveRuntime(fetchImpl);
+      const step: AppRunStep = { kind: 'app-run', appId };
+      const pending = executeAppRun(step, ctx(step, { trigger: 'due', now: clockNow }).context, deps);
+      await delegatedHint(deps);
+      let answered = false;
+      const post = live.net.handle(appId, netFrame('POST')).then((result) => {
+        answered = true;
+        return result;
+      });
+      await vi.waitFor(() => expect(netConfirmStore.get()?.scheduled).toEqual({ title: 'morning weather', appName: 'Weather', runId: RUN_ID }));
+      await vi.advanceTimersByTimeAsync(55_000);
+      expect(answered, 'still asking inside the minute').toBe(false);
+      expect(netConfirmStore.get()).not.toBeNull();
+      await vi.advanceTimersByTimeAsync(6_000);
+      expect(answered, 'the minute is up').toBe(true);
+      expect(await post).toMatchObject({ ok: false, code: NET_ERROR_CODES.NET_CONFIRM_DENIED });
+      expect(netConfirmStore.get(), 'the timed-out ask no longer blocks the dialog queue').toBeNull();
+      expect(fetched).toEqual([]);
+      deps.live.emit(appId, SCHEDULE_RESULT_EVENT, { ok: true, summary: 'posted' });
+      const outcome = await pending;
+      expect(outcome.status).toBe('refused');
+      expect(outcome.summary).toBe(needsYouUnanswered('Weather', POST_VERB).text);
+    });
+
+    it('NEGATIVE: a REMEMBERED session grant for the same host and method is not consulted — the open app’s POST passes unasked before the run, and still parks a scheduled confirm during it', async () => {
+      connectWeather();
+      const deps = fakeDeps({ resultTimeoutMs: 5_000 });
+      deps.live.open(appId);
+      const { fetched, fetchImpl } = recordingFetch();
+      const live = liveRuntime(fetchImpl);
+      // The user, present, remembers a POST to the host for the session (the real dialog's act).
+      const first = live.net.handle(appId, netFrame('POST'));
+      await vi.waitFor(() => expect(netConfirmStore.get()).not.toBeNull());
+      expect(netConfirmStore.get()!.scheduled).toBeUndefined();
+      resolveNetConfirm({ granted: true, rememberSession: true });
+      expect((await first).ok).toBe(true);
+      expect((await live.net.handle(appId, netFrame('POST'))).ok, 'the remembered grant answers the open app').toBe(true);
+      expect(netConfirmStore.get()).toBeNull();
+      const sentBefore = fetched.length;
+
+      const step: AppRunStep = { kind: 'app-run', appId };
+      const pending = executeAppRun(step, ctx(step, { trigger: 'due' }).context, deps);
+      await delegatedHint(deps);
+      const during = live.net.handle(appId, netFrame('POST')); // the SAME handler: the gate consults the run store per request
+      await vi.waitFor(() => expect(netConfirmStore.get()?.scheduled).toEqual({ title: 'morning weather', appName: 'Weather', runId: RUN_ID }));
+      resolveNetConfirm({ granted: false });
+      expect(await during).toMatchObject({ ok: false, code: NET_ERROR_CODES.NET_CONFIRM_DENIED });
+      expect(fetched).toHaveLength(sentBefore);
+      deps.live.emit(appId, SCHEDULE_RESULT_EVENT, { ok: true });
+      expect((await pending).summary).toBe(needsYouDeclined('Weather', POST_VERB).text);
+    });
+
+    it('NEGATIVE: an ARMED standing grant for the thread is not consulted — it answers the open app’s POST before the run, and the scheduled confirm still parks during it', async () => {
+      connectWeather();
+      armStandingApproval({ appId, slot: SLOT, threadJid: THREAD_JID, trigger: 'all', maxPerWindow: 10, windowMs: 60_000, armedAt: Date.now(), sends: [] });
+      const deps = fakeDeps({ resultTimeoutMs: 5_000 });
+      deps.live.open(appId);
+      const { fetched, fetchImpl } = recordingFetch();
+      const live = liveRuntime(fetchImpl);
+      expect((await live.net.handle(appId, threadPost())).ok, 'the armed grant answers the open app').toBe(true);
+      expect(netConfirmStore.get()).toBeNull();
+      const sentBefore = fetched.length;
+
+      const step: AppRunStep = { kind: 'app-run', appId };
+      const pending = executeAppRun(step, ctx(step, { trigger: 'due' }).context, deps);
+      await delegatedHint(deps);
+      const during = live.net.handle(appId, threadPost());
+      await vi.waitFor(() => expect(netConfirmStore.get()?.scheduled).toEqual({ title: 'morning weather', appName: 'Weather', runId: RUN_ID }));
+      resolveNetConfirm({ granted: false });
+      expect(await during).toMatchObject({ ok: false, code: NET_ERROR_CODES.NET_CONFIRM_DENIED });
+      expect(fetched).toHaveLength(sentBefore);
+      deps.live.emit(appId, SCHEDULE_RESULT_EVENT, { ok: true });
+      expect((await pending).status).toBe('refused');
+    });
+
+    it('D-PR1-9: a second mutating call while the first is parked is refused AT ONCE and recorded `already-asked` — no second dialog queues behind the first', async () => {
+      connectWeather();
+      const deps = fakeDeps({ resultTimeoutMs: 5_000 });
+      deps.live.open(appId);
+      const { fetched, fetchImpl } = recordingFetch();
+      const live = liveRuntime(fetchImpl);
+      const step: AppRunStep = { kind: 'app-run', appId };
+      const pending = executeAppRun(step, ctx(step, { trigger: 'due' }).context, deps);
+      await delegatedHint(deps);
+      const first = live.net.handle(appId, netFrame('POST'));
+      await vi.waitFor(() => expect(netConfirmStore.get()?.scheduled).toBeDefined());
+      const head = netConfirmStore.get();
+      const second = await Promise.race([live.net.handle(appId, netFrame('POST', `https://${API_HOST}/v1/other`)), sleep(500).then(() => 'still parked' as const)]);
+      expect(second, 'refused at once, never parked').toMatchObject({ ok: false, code: NET_ERROR_CODES.NET_CONFIRM_DENIED });
+      expect(netConfirmStore.get()).toBe(head);
+      resolveNetConfirm({ granted: true });
+      expect((await first).ok).toBe(true);
+      expect(netConfirmStore.get(), 'nothing was queued behind the first ask').toBeNull();
+      expect(fetched).toEqual([`https://${API_HOST}/v1/items`]);
+      deps.live.emit(appId, SCHEDULE_RESULT_EVENT, { ok: true });
+      const outcome = await pending;
+      expect(outcome.status).toBe('refused');
+      expect(outcome.summary).toBe(needsYouAlreadyAsked('Weather', POST_VERB).text);
+    });
+  });
+
+  describe('AC4 — the run follows the app: once, and never after a change went out', () => {
+    it('live → hidden: the app CLOSING mid-run (nothing granted) re-dispatches the SAME runId to the hidden frame under the refusing gate; its result lands; the key is written per dispatch and cleared once', async () => {
+      const deps = fakeDeps({ resultTimeoutMs: 5_000 });
+      const kvSet = spyKv();
+      deps.live.open(appId);
+      const step: AppRunStep = { kind: 'app-run', appId };
+      const pending = executeAppRun(step, ctx(step, { trigger: 'due' }).context, deps);
+      await delegatedHint(deps);
+      deps.live.close(appId);
+      const { mount, host } = await hinted(deps);
+      expect(host.notifyEvent).toHaveBeenCalledWith(SCHEDULE_RUN_EVENT, { taskId: 'task-1', runId: RUN_ID });
+      expect(deps.runtimeCalls).toHaveLength(1);
+      expect((deps.runtimeCalls[0]!.confirmGate as ScheduledConfirmGate).refused).toEqual([]);
+      mount.onAppEvent(SCHEDULE_RESULT_EVENT, { ok: true, summary: 'finished out of sight' });
+      expect(await pending).toMatchObject({ status: 'ok', summary: 'finished out of sight' });
+      expect(writesOf(kvSet)).toHaveLength(2);
+      expect(clearsOf(kvSet)).toHaveLength(1);
+      expect('value' in (await kv())).toBe(false);
+    });
+
+    it('a GRANTED mutating call, then the app closing → `failed` (closed after a change was sent) — never re-run hidden', async () => {
+      connectWeather();
+      const deps = fakeDeps({ resultTimeoutMs: 5_000 });
+      const mounts = watchMounts(deps);
+      deps.live.open(appId);
+      const { fetched, fetchImpl } = recordingFetch();
+      const live = liveRuntime(fetchImpl);
+      const step: AppRunStep = { kind: 'app-run', appId };
+      const pending = executeAppRun(step, ctx(step, { trigger: 'due' }).context, deps);
+      await delegatedHint(deps);
+      const post = live.net.handle(appId, netFrame('POST'));
+      await vi.waitFor(() => expect(netConfirmStore.get()?.scheduled).toBeDefined());
+      resolveNetConfirm({ granted: true });
+      expect((await post).ok).toBe(true);
+      expect(fetched).toHaveLength(1);
+      deps.live.close(appId);
+      const outcome = await pending;
+      expect(outcome.status).toBe('failed');
+      expect(outcome.summary).toBe(closedAfterChange('Weather', API_HOST));
+      expect(mounts, 'the handler whose POST went out is never run again').toEqual([]);
+      expect(deps.runtimeCalls).toEqual([]);
+    });
+
+    it('a SECOND handover (hidden → live → hidden) ends the step `failed` by name; no second hidden frame', async () => {
+      const deps = fakeDeps({ resultTimeoutMs: 5_000 });
+      const mounts = watchMounts(deps);
+      const step: AppRunStep = { kind: 'app-run', appId };
+      const pending = executeAppRun(step, ctx(step, { trigger: 'due' }).context, deps);
+      const { mount } = await hinted(deps);
+      deps.live.open(appId);
+      await vi.waitFor(() => expect(deps.mounts.get()).toBeUndefined());
+      mount.onUnmounted();
+      await delegatedHint(deps);
+      deps.live.close(appId);
+      const outcome = await pending;
+      expect(outcome.status).toBe('failed');
+      expect(outcome.summary).toBe(handedOverTwice('Weather'));
+      expect(mounts).toHaveLength(1);
+      expect(deps.runtimeCalls).toHaveLength(1);
+      expect(deps.mounts.get()).toBeUndefined();
+    });
+
+    it('tallies are SUMMED across attempts: an AI call in the hidden attempt and a network call in the live one both ride the outcome', async () => {
+      connectWeather();
+      const deps = fakeDeps({ resultTimeoutMs: 5_000 });
+      const step: AppRunStep = { kind: 'app-run', appId };
+      const pending = executeAppRun(step, ctx(step, { trigger: 'due' }).context, deps);
+      const { mount } = await hinted(deps);
+      expect((await send(mount.transport)).ok).toBe(true); // counted by the hidden attempt
+      deps.live.open(appId);
+      await vi.waitFor(() => expect(deps.mounts.get()).toBeUndefined());
+      mount.onUnmounted();
+      await delegatedHint(deps);
+      const { fetchImpl } = recordingFetch();
+      expect((await liveRuntime(fetchImpl).net.handle(appId, netFrame('GET'))).ok).toBe(true); // counted into the delegated run
+      deps.live.emit(appId, SCHEDULE_RESULT_EVENT, { ok: true, summary: 'both halves' });
+      expect(await pending).toMatchObject({ status: 'ok', summary: 'both halves', calls: { ai: 1, net: 1 } });
+    });
+
+    it('D-PR1-10 one deadline per step: a handover at 80 s re-dispatches inside what is left of it — the step settles by the 90 s deadline, inside the queue’s 120 s bound', async () => {
+      fakeClock();
+      const deps = fakeDeps({ announceTimeoutMs: SCHEDULE_ANNOUNCE_TIMEOUT_MS, resultTimeoutMs: SCHEDULE_RESULT_TIMEOUT_MS });
+      const step: AppRunStep = { kind: 'app-run', appId };
+      const startedAt = Date.now();
+      let settledAt: number | undefined;
+      const pending = executeAppRun(step, ctx(step, { trigger: 'due', now: clockNow }).context, deps).then((outcome) => {
+        settledAt = Date.now();
+        return outcome;
+      });
+      const { mount } = await hinted(deps);
+      await vi.advanceTimersByTimeAsync(80_000 - (Date.now() - startedAt));
+      expect(settledAt).toBeUndefined();
+      deps.live.open(appId);
+      await vi.waitFor(() => expect(deps.mounts.get()).toBeUndefined());
+      mount.onUnmounted();
+      await delegatedHint(deps);
+      await vi.advanceTimersByTimeAsync(SCHEDULE_RESULT_TIMEOUT_MS + 1_000 - (Date.now() - startedAt));
+      expect(settledAt, 'the live attempt waited only what the first dispatch left').toBeDefined();
+      expect(settledAt! - startedAt).toBeLessThan(DEFAULT_RUN_BOUNDS.runMs);
+      expect((await pending).status).toBe('failed');
+    });
+  });
+
+  describe('AC5 — readiness: the hint waits for the frame to announce', () => {
+    it('registered but NOT announced → placed live (no hidden mount) and the hint WAITS; the announce → the hint; the result lands', async () => {
+      const deps = fakeDeps({ announceTimeoutMs: 2_000, resultTimeoutMs: 5_000 });
+      const mounts = watchMounts(deps);
+      deps.live.open(appId, { announce: false });
+      const step: AppRunStep = { kind: 'app-run', appId };
+      const pending = executeAppRun(step, ctx(step, { trigger: 'due' }).context, deps);
+      await sleep(40);
+      expect(deps.live.notified, 'no hint before the listener exists').toEqual([]);
+      expect(mounts).toEqual([]);
+      deps.live.announce(appId);
+      await delegatedHint(deps);
+      deps.live.emit(appId, SCHEDULE_RESULT_EVENT, { ok: true, summary: 'ready, then ran' });
+      expect(await pending).toMatchObject({ status: 'ok', summary: 'ready, then ran' });
+      expect(mounts).toEqual([]);
+    });
+
+    it('registered and NEVER announced within the bound → `no-handler` with the copy’s sentence; no hint, no hidden mount, nothing left in the kv', async () => {
+      const deps = fakeDeps();
+      const mounts = watchMounts(deps);
+      deps.live.open(appId, { announce: false });
+      const step: AppRunStep = { kind: 'app-run', appId };
+      const outcome = await executeAppRun(step, ctx(step, { trigger: 'due' }).context, deps);
+      expect(outcome).toMatchObject({ status: 'no-handler', summary: noHandler('Weather').text, calls: { ai: 0, net: 0 } });
+      expect(deps.live.notified).toEqual([]);
+      expect(mounts).toEqual([]);
+      expect('value' in (await kv())).toBe(false);
+    });
+  });
+
+  describe('AC6 — counted, never refused mid-window; the ceiling is asked BEFORE dispatch', () => {
+    it('a day with no headroom for one more AI or network call → `refused`, `capped: true`, the limit named — nothing dispatched; `capped` survives `createStepExecutor`', async () => {
+      for (const [counter, what] of [
+        ['ai', 'AI call'],
+        ['net', 'network call'],
+      ] as const) {
+        db.setSchedulerState({
+          watermark: NOW,
+          globalPause: false,
+          daily: { date: NOW.slice(0, 10), ai: counter === 'ai' ? SCHEDULE_DAILY_CEILINGS.ai : 0, net: counter === 'net' ? SCHEDULE_DAILY_CEILINGS.net : 0 },
+        });
+        const deps = fakeDeps({ resultTimeoutMs: 5_000 });
+        const mounts = watchMounts(deps);
+        const kvSet = spyKv();
+        deps.live.open(appId);
+        const execute = createStepExecutor({ transportFor: () => undefined, appRun: deps });
+        const step: AppRunStep = { kind: 'app-run', appId };
+        const outcome = await execute(step, ctx(step, { trigger: 'due' }).context);
+        expect(outcome.status, counter).toBe('refused');
+        expect(outcome.capped, counter).toBe(true);
+        expect(outcome.summary, counter).toBe(capped(what));
+        expect(deps.live.notified, counter).toEqual([]);
+        expect(mounts, counter).toEqual([]);
+        expect(deps.runtimeCalls, counter).toEqual([]);
+        expect(writesOf(kvSet), counter).toEqual([]);
+        kvSet.mockRestore();
+        deps.live.close(appId);
+      }
+    });
+
+    it('a tally that CROSSES the ceiling inside the window is not refused — every call goes through, and the outcome is marked `capped: true`', async () => {
+      connectWeather();
+      db.setSchedulerState({ watermark: NOW, globalPause: false, daily: { date: NOW.slice(0, 10), ai: 0, net: SCHEDULE_DAILY_CEILINGS.net - 1 } });
+      const deps = fakeDeps({ resultTimeoutMs: 5_000 });
+      deps.live.open(appId);
+      const { fetched, fetchImpl } = recordingFetch();
+      const live = liveRuntime(fetchImpl);
+      const execute = createStepExecutor({ transportFor: () => undefined, appRun: deps });
+      const step: AppRunStep = { kind: 'app-run', appId };
+      const pending = execute(step, ctx(step, { trigger: 'due' }).context);
+      await delegatedHint(deps);
+      expect((await live.net.handle(appId, netFrame('GET'))).ok).toBe(true);
+      expect((await live.net.handle(appId, netFrame('GET'))).ok, 'past the ceiling, still not refused mid-window').toBe(true);
+      expect(fetched).toHaveLength(2);
+      deps.live.emit(appId, SCHEDULE_RESULT_EVENT, { ok: true, summary: 'fetched twice' });
+      expect(await pending).toMatchObject({ status: 'ok', summary: 'fetched twice', calls: { ai: 0, net: 2 }, capped: true });
+    });
+  });
+
+  it('D-PR1-8: while the run is in flight the app’s ATTENDED access handler takes the hidden frame’s posture — an ask is told nobody is there, a session grant is not readable (a `refused` line, attended: false), a grant allowed *also while I’m away* reads with `attended: false`; after the run the door reopens', async () => {
+    const at = Date.parse(NOW);
+    __setAccessDepsForTests({ getDb: () => Promise.resolve(db), now: () => at });
+    configureScopedRead({ createWorker: inlineWorkers(), wasm: { wasmUrl: locateWasm() }, now: () => at });
+    const ledger = db.installApp({ displayName: 'Ledger', html: '<!doctype html><title>l</title>' }).appId;
+    const pantry = db.installApp({ displayName: 'Pantry', html: '<!doctype html><title>p</title>' }).appId;
+    await seedTable(ledger, 'CREATE TABLE transactions (id INTEGER PRIMARY KEY, amount INTEGER NOT NULL, category TEXT)', "INSERT INTO transactions (amount, category) VALUES (450, 'food')");
+    await seedTable(pantry, 'CREATE TABLE items (name TEXT, qty INTEGER)', "INSERT INTO items VALUES ('rice', 2)");
+    const deps = fakeDeps({ resultTimeoutMs: 5_000 });
+    deps.live.open(appId);
+    const access = createAccessHandlerFor(appId, { attended: true, generation: LIVE_GENERATION });
+    const session = await grantFrom(ledger, 'transactions', { duration: 'session', unattended: false, at });
+    const away = await grantFrom(pantry, 'items', { duration: 'day', unattended: true, at });
+    const lastLine = (source: string) => db.listAccessLog(source)[0]; // the history is newest-first
+
+    // Before the run: the open app reads its session grant, attended.
+    expect((await access.handle(appId, accessQuery(session.id, 'SELECT amount FROM transactions'))).ok).toBe(true);
+    expect(lastLine(ledger)).toMatchObject({ kind: 'read', attended: true });
+
+    const step: AppRunStep = { kind: 'app-run', appId };
+    const pending = executeAppRun(step, ctx(step, { trigger: 'due' }).context, deps);
+    await delegatedHint(deps);
+    const ask = await Promise.race([access.handle(appId, accessAsk()), sleep(500).then(() => 'held — a consent strip was parked' as const)]);
+    expect(ask).toEqual({ ok: false, code: ACCESS_ERROR_CODES.ACCESS_UNATTENDED, message: ACCESS_APP_MESSAGES.unattended, retryable: true });
+    expect(await access.handle(appId, accessQuery(session.id, 'SELECT amount FROM transactions'))).toMatchObject({ ok: false, code: ACCESS_ERROR_CODES.ACCESS_NOT_GRANTED });
+    expect(lastLine(ledger)).toMatchObject({ kind: 'refused', grantId: session.id, attended: false });
+    expect((await access.handle(appId, accessQuery(away.id, 'SELECT name FROM items'))).ok).toBe(true);
+    expect(lastLine(pantry)).toMatchObject({ kind: 'read', grantId: away.id, attended: false });
+
+    deps.live.emit(appId, SCHEDULE_RESULT_EVENT, { ok: true });
+    expect((await pending).status).toBe('ok');
+    // After the run: the user's own session grant reads again, attended.
+    expect((await access.handle(appId, accessQuery(session.id, 'SELECT amount FROM transactions'))).ok).toBe(true);
+    expect(lastLine(ledger)).toMatchObject({ kind: 'read', attended: true });
+  });
+
+  it('S5: a `schedule-result` published from ANOTHER generation than the hinted one never settles the run — the hinted generation’s does (the live twin of the closed-app pin)', async () => {
+    const deps = fakeDeps({ resultTimeoutMs: 5_000 });
+    deps.live.open(appId);
+    const step: AppRunStep = { kind: 'app-run', appId };
+    let settled = false;
+    const pending = executeAppRun(step, ctx(step, { trigger: 'due' }).context, deps).then((o) => {
+      settled = true;
+      return o;
+    });
+    await delegatedHint(deps);
+    deps.live.emit(appId, SCHEDULE_RESULT_EVENT, { ok: true, summary: 'from another generation', runId: RUN_ID }, LIVE_GENERATION + 1);
+    await sleep(20);
+    expect(settled).toBe(false);
+    deps.live.emit(appId, SCHEDULE_RESULT_EVENT, { ok: true, summary: 'from the hinted generation', runId: RUN_ID });
+    expect(await pending).toMatchObject({ status: 'ok', summary: 'from the hinted generation' });
+  });
+});
+
+// ------------------------------------------------------------------ the access-door harness (D-PR1-8)
+
+function inlineWorkers(): () => WorkerLike {
+  return () => {
+    const respond = createScopedReadResponder();
+    const worker: WorkerLike = {
+      onmessage: null,
+      onerror: null,
+      postMessage(msg) {
+        void respond(msg).then((answer) => {
+          if (answer !== undefined) worker.onmessage?.({ data: answer });
+        });
+      },
+      terminate() {},
+    };
+    return worker;
+  };
+}
+
+async function seedTable(id: string, ddl: string, insert: string): Promise<void> {
+  await db.applyAppDdl(id, [ddl]);
+  await db.driver.handle(id, { v: PROTOCOL_VERSION, type: FRAME_TYPES.dbRequest, requestId: `seed-${id}`, instanceId: 'seed', op: 'exec', sql: insert });
+}
+
+/** A grant to Weather (the reader) on `source`, through the real candidate collection and grant factory. */
+async function grantFrom(source: string, table: string, over: { duration: 'session' | 'day'; unattended: boolean; at: number }): Promise<AnyAccessGrant> {
+  const ranked = await collectSources(db, appId);
+  const candidate = [...ranked.matched, ...ranked.rest].find((entry) => entry.appId === source);
+  if (candidate === undefined) throw new Error('no such source');
+  return createGrantFromDecision(db, {
+    readerAppId: appId,
+    source: candidate,
+    tables: [table],
+    duration: over.duration,
+    unattended: over.unattended,
+    purpose: 'to show spending by category',
+    provenance: 'app',
+    generation: LIVE_GENERATION,
+    now: over.at,
+  });
+}
+
+let accessSeq = 0;
+const accessBase = () => ({ v: PROTOCOL_VERSION, type: FRAME_TYPES.accessRequest, requestId: `acc-${++accessSeq}`, instanceId: 'live-1' }) as const;
+const accessAsk = (): AccessRequestFrame => ({ ...accessBase(), op: 'request', purpose: 'to show spending by category', hints: { tables: ['transactions'] } });
+const accessQuery = (grantId: string, sql: string): AccessRequestFrame => ({ ...accessBase(), op: 'query', grantId, sql });
 
 describe('the live frame — a MANUAL run with the app on screen', () => {
   it('delivers to the LIVE frame under the page’s own gate: no hidden mount, no runtime of ours, the key written, the hint rung through the registry, the result read from the forwarded events', async () => {
@@ -645,6 +1220,21 @@ describe('the live frame — a MANUAL run with the app on screen', () => {
     deps.live.close(other);
     deps.live.emit(appId, SCHEDULE_RESULT_EVENT, { ok: true, summary: 'still here' });
     expect((await pending).summary).toBe('still here');
+  });
+
+  it('the hint WAITS for the live frame to be ready (ADR-0077 §6, the *run now* race): registered but not announced → no hint yet; the announce → the hint; the result lands', async () => {
+    const deps = fakeDeps({ announceTimeoutMs: 2_000, resultTimeoutMs: 5_000 });
+    deps.live.open(appId, { announce: false });
+    const step: AppRunStep = { kind: 'app-run', appId };
+    const pending = executeAppRun(step, ctx(step, { trigger: 'manual' }).context, deps);
+    await new Promise((r) => setTimeout(r, 40));
+    expect(deps.live.notified, 'no hint before the app’s listener exists').toEqual([]);
+    expect(deps.mounts.get()).toBeUndefined();
+    deps.live.announce(appId);
+    await vi.waitFor(() => expect(deps.live.notified).toHaveLength(1));
+    expect(deps.live.notified[0]).toEqual({ appId, event: SCHEDULE_RUN_EVENT, data: { taskId: 'task-1', runId: RUN_ID } });
+    deps.live.emit(appId, SCHEDULE_RESULT_EVENT, { ok: true, summary: 'ran once it was ready' });
+    expect(await pending).toEqual({ status: 'ok', summary: 'ran once it was ready', calls: { ai: 0, net: 0 } });
   });
 });
 

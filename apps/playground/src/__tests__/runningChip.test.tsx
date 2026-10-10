@@ -19,6 +19,7 @@ import type { SnugPlatform } from '../platform/platform.js';
 import { RUNNING_CHIP } from '../schedule/copy.js';
 import type { StepExecutor, StepOutcome } from '../schedule/engine-types.js';
 import { RunningChip } from '../schedule/RunningChip.js';
+import { beginDelegatedRun, clearTouchedGeneration, endDelegatedRun } from '../schedule/runPlacement.js';
 import { __resetSchedulerForTests, initScheduler, runNow, schedulerStore, type SchedulerDeps } from '../schedule/scheduler.js';
 import { installTestUserDb } from './userdbTestHelper.js';
 
@@ -175,6 +176,80 @@ describe('RunningChip (U10)', () => {
     });
     expect(el.querySelector('[data-testid="schedule-running-chip"]')).toBeNull();
     expect(db.listScheduleRuns('t1')[0]?.status).toBe('ok');
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// TASK-20261010-host-broker PR-1 (ADR-0077 §2; contract v2 RunningChip) — a run on the OPEN app
+// says where it is running. With a delegated run in flight for the running schedule's app, the
+// label reads *running in <app>* (`RUNNING_CHIP.inApp`) and the accessible name says the whole
+// sentence: "<title> is running in <app>". Without one, the chip is exactly as above.
+// ---------------------------------------------------------------------------------------------
+
+describe('RunningChip — a run delegated to the open app (TASK-20261010-host-broker PR-1)', () => {
+  const ended: Array<() => void> = [];
+  afterEach(() => {
+    for (const end of ended.splice(0)) end();
+  });
+
+  async function startRun(): Promise<HTMLDivElement> {
+    db.installApp({ appId: 'ledger', displayName: 'Ledger', html: '<p>ledger</p>' });
+    db.putScheduledTask({ ...task(), steps: [{ kind: 'app-run', appId: 'ledger' }] });
+    await initScheduler(deps());
+    const el = await mount();
+    await act(async () => {
+      await runNow('t1');
+    });
+    await vi.waitFor(() => expect(schedulerStore.get().running?.taskId).toBe('t1'));
+    return el;
+  }
+
+  function delegate(appId: string, taskId: string, appName: string): void {
+    const begun = beginDelegatedRun({ appId, appName, runId: 'run-x', taskId, title: 'Hourly ledger digest', generation: 1 });
+    expect(begun.ok).toBe(true);
+    ended.push(() => {
+      endDelegatedRun(appId, 'run-x');
+      clearTouchedGeneration(appId, 1);
+    });
+  }
+
+  it('with a delegated run for the running schedule’s app: the label is `RUNNING_CHIP.inApp(appName)`, the aria-label "<title> is running in <app>"', async () => {
+    const el = await startRun();
+    await act(async () => {
+      delegate('ledger', 't1', 'Ledger');
+    });
+    await vi.waitFor(() =>
+      expect(el.querySelector('.schedule-running-label')?.textContent).toBe(RUNNING_CHIP.inApp('Ledger')),
+    );
+    const chip = el.querySelector('[data-testid="schedule-running-chip"]');
+    expect(chip?.getAttribute('aria-label')).toBe('Hourly ledger digest is running in Ledger');
+    expect(chip?.getAttribute('role')).toBe('status');
+    expect(chip?.querySelector('button')?.textContent).toBe(RUNNING_CHIP.cancel); // the one act is unchanged
+  });
+
+  it('the label follows the store: when the delegated run ends, the chip reads as before', async () => {
+    const el = await startRun();
+    await act(async () => {
+      delegate('ledger', 't1', 'Ledger');
+    });
+    await vi.waitFor(() => expect(el.querySelector('.schedule-running-label')?.textContent).toBe(RUNNING_CHIP.inApp('Ledger')));
+    await act(async () => {
+      endDelegatedRun('ledger', 'run-x');
+    });
+    await vi.waitFor(() => expect(el.querySelector('.schedule-running-label')?.textContent).toBe(RUNNING_CHIP.label));
+    expect(el.querySelector('[data-testid="schedule-running-chip"]')?.getAttribute('aria-label')).toBe(`${RUNNING_CHIP.label}: Hourly ledger digest`);
+  });
+
+  it('NEGATIVE: a delegated run for ANOTHER app (another schedule) leaves the label unchanged', async () => {
+    const el = await startRun();
+    await act(async () => {
+      delegate('weather', 't-other', 'Weather');
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(el.querySelector('.schedule-running-label')?.textContent).toBe(RUNNING_CHIP.label);
+    expect(el.querySelector('[data-testid="schedule-running-chip"]')?.getAttribute('aria-label')).toBe(`${RUNNING_CHIP.label}: Hourly ledger digest`);
   });
 });
 

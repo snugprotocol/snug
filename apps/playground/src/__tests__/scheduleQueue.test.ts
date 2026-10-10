@@ -724,3 +724,86 @@ describe('*Run [app]* rows (PR-B A2/A4/A5): what the hidden frame spends and say
     ]);
   });
 });
+
+// ---------------------------------------------------------------------------------------------
+// TASK-20261010-host-broker PR-1 — `StepOutcome.capped` (contract v2 D-PR1-6; ADR-0077 §4).
+//
+// A delegated run's ceiling is asked BEFORE dispatch, by the executor — not by the queue's own
+// *Ask the AI* pre-check — so the executor must be able to say "this step was refused AT THE
+// CEILING" and have the run fold `capped`, with the step's own sentence as the reason so the
+// card can say WHICH limit (`copy.capped('AI call')` vs `('network call')`). The flag is an
+// in-memory outcome field only (D-PR1-1): the persisted step result keeps its shape.
+// ---------------------------------------------------------------------------------------------
+
+describe('a step outcome that says `capped` (TASK-20261010-host-broker PR-1)', () => {
+  const APP_RUN: ScheduleStep = { kind: 'app-run', appId: 'ledger' };
+
+  it('a `{ status: refused, capped: true, summary }` outcome folds the run `capped` with THAT summary as the reason', async () => {
+    const t = seed({ steps: [APP_RUN, NOTIFY] });
+    const q = queue(
+      recorder((step) =>
+        step.kind === 'app-run'
+          ? { status: 'refused', capped: true, summary: 'daily network call limit reached — resumes tomorrow', calls: { ai: 0, net: 0 } }
+          : ok('reminded'),
+      ).execute,
+    );
+    q.enqueue(item(t));
+    await q.idle();
+    expect(rows()[0]).toMatchObject({
+      status: 'capped',
+      reason: 'daily network call limit reached — resumes tomorrow',
+      steps: [{ status: 'refused', summary: 'daily network call limit reached — resumes tomorrow' }, { status: 'ok', summary: 'reminded' }],
+    });
+  });
+
+  it('the `x` case: any capped step’s summary is the reason, verbatim', async () => {
+    const t = seed({ steps: [APP_RUN] });
+    const q = queue(recorder(() => ({ status: 'refused', capped: true, summary: 'x', calls: { ai: 0, net: 0 } })).execute);
+    q.enqueue(item(t));
+    await q.idle();
+    expect(rows()[0]).toMatchObject({ status: 'capped', reason: 'x' });
+  });
+
+  it('a capped outcome with no summary still folds `capped` (the reason falls back to the word)', async () => {
+    const t = seed({ steps: [APP_RUN] });
+    const q = queue(recorder(() => ({ status: 'refused', capped: true, calls: { ai: 0, net: 0 } })).execute);
+    q.enqueue(item(t));
+    await q.idle();
+    expect(rows()[0]).toMatchObject({ status: 'capped', reason: 'capped' });
+  });
+
+  it('a capped flag on an `ok` outcome (the tally crossed a ceiling inside the window — app code was not stopped) still folds `capped`', async () => {
+    const t = seed({ steps: [APP_RUN] });
+    const q = queue(recorder(() => ({ status: 'ok', capped: true, summary: 'refreshed', calls: { ai: 0, net: 4 } })).execute);
+    q.enqueue(item(t));
+    await q.idle();
+    expect(rows()[0]).toMatchObject({ status: 'capped', calls: { ai: 0, net: 4 }, steps: [{ status: 'ok', summary: 'refreshed' }] });
+  });
+
+  it('NEGATIVE (D-PR1-1): the persisted step result keeps its shape — no `capped` field rides the row', async () => {
+    const t = seed({ steps: [APP_RUN] });
+    const q = queue(recorder(() => ({ status: 'refused', capped: true, summary: 'x', calls: { ai: 0, net: 0 } })).execute);
+    q.enqueue(item(t));
+    await q.idle();
+    expect(rows()[0]?.steps[0]).not.toHaveProperty('capped');
+    expect(rows()[0]).not.toHaveProperty('capped');
+  });
+
+  it('a refused step WITHOUT `capped` is still needs-you (the existing fold, unchanged)', async () => {
+    const t = seed({ steps: [APP_RUN] });
+    const q = queue(recorder(() => ({ status: 'refused', summary: 'Ledger needs your OK', calls: { ai: 0, net: 0 } })).execute);
+    q.enqueue(item(t));
+    await q.idle();
+    expect(rows()[0]).toMatchObject({ status: 'needs-you', reason: 'Ledger needs your OK' });
+  });
+
+  it('`finalizeOutcome` (the executor’s last word, through `createStepExecutor`) copies `capped` — and scrubs the summary as before', async () => {
+    // Loaded here, not at the top: this suite deliberately loads without the executors'
+    // composition root (see the header); only this case needs it.
+    const { finalizeOutcome } = await import('../schedule/executors.js');
+    const out = finalizeOutcome({ status: 'refused', capped: true, summary: 'daily AI call limit reached — resumes tomorrow', calls: { ai: 0, net: 0 } });
+    expect(out).toMatchObject({ status: 'refused', capped: true, summary: 'daily AI call limit reached — resumes tomorrow', calls: { ai: 0, net: 0 } });
+    const plain = finalizeOutcome({ status: 'ok', summary: 'done', calls: { ai: 0, net: 0 } });
+    expect(plain).not.toHaveProperty('capped');
+  });
+});
