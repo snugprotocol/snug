@@ -30,6 +30,15 @@ export const FRAME_TYPES = {
    */
   openUrlRequest: 'snug:open-url-request',
   openUrlResult: 'snug:open-url-result',
+  /**
+   * Access between apps (ADR-0075, TASK-20261010-cross-app-access; spec 1.1 Part VI): a
+   * reader app asks for, queries, lists and releases a user-granted, read-only access grant
+   * on another app's tables. The REQUEST is strict (it carries SQL and a release act); the
+   * RESPONSE is tolerant (the db-response shape). Host-ready's `access` flag advertises it.
+   * Every other ACCESS_* constant lives in `access.ts`.
+   */
+  accessRequest: 'snug:access-request',
+  accessResponse: 'snug:access-response',
 } as const;
 
 export type FrameType = (typeof FRAME_TYPES)[keyof typeof FRAME_TYPES];

@@ -34,6 +34,18 @@ const KEY_NAME = /(authorization|passw(or)?d|secret|api[_-]?key|(access|refresh|
 const BARE_TOKEN_KEY = /^tokens?$/i;
 
 /**
+ * Whether a KEY NAME (a JSON key, a column name) is credential-ish — the ONE definition the
+ * value scan below uses for its key-context rule, exported so other surfaces judge a name
+ * the same way (TASK-20261010-cross-app-access AC7/AC12/D14: `describeAppData` flags such a
+ * column `sensitive`, a grant's scope never names one, and the scoped read masks every cell
+ * under one). Unanchored on purpose, like the scan: `secretary` reads as sensitive — the
+ * cost of a false positive is one column withheld from sharing, the cost of a miss is a key.
+ */
+export function isCredentialKeyName(name: string): boolean {
+  return KEY_NAME.test(name) || BARE_TOKEN_KEY.test(name);
+}
+
+/**
  * C1 value-shape scan for app payload/state bound for an LLM or external party.
  * Defense-in-depth only — C1 load-bearing enforcement is stripCredentialHeaders at the
  * envelope boundary plus the token-boundary design (credentials never enter the iframe).
@@ -49,7 +61,7 @@ export function scanForCredentialValues(input: unknown): CredentialScan {
 
   const visit = (value: unknown, path: string, keyName?: string): void => {
     if (typeof value === 'string') {
-      const credentialishKey = keyName !== undefined && (KEY_NAME.test(keyName) || BARE_TOKEN_KEY.test(keyName));
+      const credentialishKey = keyName !== undefined && isCredentialKeyName(keyName);
       if (BEARER_PREFIX.test(value)) rejects.push({ path, reason: 'bearer-prefix' });
       else if (JWT_SHAPE.test(value)) rejects.push({ path, reason: 'jwt-shape' });
       else if (KNOWN_KEY_PREFIX.test(value)) rejects.push({ path, reason: 'known-key-prefix' });

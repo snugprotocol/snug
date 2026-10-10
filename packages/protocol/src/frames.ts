@@ -1,4 +1,11 @@
 import { z } from 'zod';
+import {
+  accessGrantViewSchema,
+  accessHintsSchema,
+  accessParamsSchema,
+  accessPurposeSchema,
+  accessSqlSchema,
+} from './access.js';
 import { ERROR_CODES, FRAME_TYPES, LIMITS, NET_METHODS, PROTOCOL_VERSION, STRIP_HEADERS } from './constants.js';
 
 const version = z.literal(PROTOCOL_VERSION);
@@ -32,6 +39,14 @@ export const hostReadySchema = z.object({
      * knows to render its copy-the-link fallback instead of a dead button.
      */
     openUrl: z.boolean().optional(),
+    /**
+     * Access between apps (ADR-0075, spec 1.1 Part VI): the host routes
+     * `snug:access-request` to an access handler with a consent surface the iframe cannot
+     * draw over. Optional for the same R2 reason — a 1.0 ready frame has no such key, and
+     * absence (or `false`, e.g. a host that cannot construct the bounded read Worker) is how
+     * an app knows to render its honest fallback instead of asking.
+     */
+    access: z.boolean().optional(),
   }),
   theme: z.enum(['light', 'dark']),
   locale: z.string().max(32).optional(),
@@ -224,6 +239,67 @@ export const openUrlResultSchema = z.strictObject({
   reason: z.string().max(300).optional(),
 });
 
+const accessRequestBase = { v: version, type: z.literal(FRAME_TYPES.accessRequest), requestId: id, instanceId: id } as const;
+
+/**
+ * Access between apps — the REQUEST (ADR-0075 §1; spec 1.1 §23). STRICT at every level: it
+ * carries app-authored SQL and a release act, so an unknown key is MALFORMED (R2's strict
+ * exception, the net pair's posture). Like the net pair it has NO app id: the runner's
+ * access binding (`accessAppId`) is HOST-assigned exactly like `dbNamespace`, so a reader can
+ * never name itself, another reader or a source.
+ *
+ *  - `request` — ask the user for access: a purpose (one line, shown quoted, never trusted)
+ *    and optional relevance hints; `renew` names a grant being asked for again.
+ *  - `query`   — ONE read-only SELECT on a granted source (the host refuses anything else
+ *    with `ACCESS_QUERY_REFUSED`; the parser bounds only its size).
+ *  - `list`    — this reader's live grants.
+ *  - `release` — the reader gives a grant back.
+ *
+ * The superRefine-level rules (purpose/hint display safety, credential refusal, shareable
+ * table names) are NOT expressible in JSON Schema — the spec prose carries them.
+ */
+export const accessRequestSchema = z.discriminatedUnion('op', [
+  z.strictObject({
+    ...accessRequestBase,
+    op: z.literal('request'),
+    purpose: accessPurposeSchema,
+    hints: accessHintsSchema.optional(),
+    renew: id.optional(),
+  }),
+  z.strictObject({ ...accessRequestBase, op: z.literal('query'), grantId: id, sql: accessSqlSchema, params: accessParamsSchema.optional() }),
+  z.strictObject({ ...accessRequestBase, op: z.literal('list') }),
+  z.strictObject({ ...accessRequestBase, op: z.literal('release'), grantId: id }),
+]);
+
+const accessResponseBase = { v: version, type: z.literal(FRAME_TYPES.accessResponse), requestId: id } as const;
+
+/**
+ * Access between apps — the RESPONSE (ADR-0075 §1; spec 1.1 §23). TOLERANT (`z.object`, the
+ * db-response shape) by decision D2/D16: nothing in a host→app answer becomes a real-world
+ * effect, and a strict answer would turn every reserved growth seat into a MAJOR bump —
+ * the SDK drops what `parseFrame` rejects, so a 1.1 app would lose a whole `list` answer the
+ * day a host lists a grant with `access: 'write'`. An unknown key still parses; the seats a
+ * 1.1 parser knows are still validated. Errors as data (`responseErrorSchema`, R5 open codes —
+ * known ones in `ACCESS_ERROR_CODES`).
+ */
+export const accessResponseSchema = z.union([
+  z.object({ ...accessResponseBase, ok: z.literal(true), op: z.literal('request'), grant: accessGrantViewSchema }),
+  z.object({
+    ...accessResponseBase,
+    ok: z.literal(true),
+    op: z.literal('query'),
+    columns: z.array(z.string()),
+    rows: z.array(z.array(z.unknown())),
+    /** The engine cut the answer at `ACCESS_MAX_ROWS` or `ACCESS_MAX_RESULT_BYTES`. */
+    truncated: z.boolean().optional(),
+    /** The statement's full row count when `truncated`. */
+    totalRows: z.int().min(0).optional(),
+  }),
+  z.object({ ...accessResponseBase, ok: z.literal(true), op: z.literal('list'), grants: z.array(accessGrantViewSchema) }),
+  z.object({ ...accessResponseBase, ok: z.literal(true), op: z.literal('release') }),
+  z.object({ ...accessResponseBase, ok: z.literal(false), error: responseErrorSchema }),
+]);
+
 export const hostEventSchema = z.object({
   v: version,
   type: z.literal(FRAME_TYPES.hostEvent),
@@ -251,6 +327,8 @@ export type NetRequestFrame = z.infer<typeof netRequestSchema>;
 export type NetResponseFrame = z.infer<typeof netResponseSchema>;
 export type OpenUrlRequestFrame = z.infer<typeof openUrlRequestSchema>;
 export type OpenUrlResultFrame = z.infer<typeof openUrlResultSchema>;
+export type AccessRequestFrame = z.infer<typeof accessRequestSchema>;
+export type AccessResponseFrame = z.infer<typeof accessResponseSchema>;
 export type HostEventFrame = z.infer<typeof hostEventSchema>;
 export type AppEventFrame = z.infer<typeof appEventSchema>;
 
@@ -266,6 +344,8 @@ export type Frame =
   | NetResponseFrame
   | OpenUrlRequestFrame
   | OpenUrlResultFrame
+  | AccessRequestFrame
+  | AccessResponseFrame
   | HostEventFrame
   | AppEventFrame;
 
@@ -281,6 +361,8 @@ const FRAME_SCHEMAS: Record<string, z.ZodType<Frame>> = {
   [FRAME_TYPES.netResponse]: netResponseSchema,
   [FRAME_TYPES.openUrlRequest]: openUrlRequestSchema,
   [FRAME_TYPES.openUrlResult]: openUrlResultSchema,
+  [FRAME_TYPES.accessRequest]: accessRequestSchema,
+  [FRAME_TYPES.accessResponse]: accessResponseSchema,
   [FRAME_TYPES.hostEvent]: hostEventSchema,
   [FRAME_TYPES.appEvent]: appEventSchema,
 };
@@ -352,7 +434,8 @@ export function parseFrame(input: unknown): FrameParseResult {
  * import/export can round-trip; net-request/net-response use the net class (B1: 1 MiB
  * response cap + envelope margin — a cap-sized body passes, so an over-cap response can
  * only ever become a terminal error frame, never a silent drop); every other frame
- * keeps the 256 KiB cap.
+ * keeps the 256 KiB cap — the access pair included (ADR-0075 §1: the engine truncates a
+ * query answer in band at `ACCESS_MAX_RESULT_BYTES`, under this class).
  */
 export function frameWithinLimits(frame: Frame): boolean {
   const limit =

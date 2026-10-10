@@ -231,6 +231,9 @@ describe('AC1 — auth schemas stay OUT of the published export set (plan D1; li
   it('buildJsonSchemas() exports exactly the v0.3 wire set — no auth-* entry', () => {
     expect(Object.keys(buildJsonSchemas()).sort()).toEqual(
       [
+        // + the access pair, deliberately (TASK-20261010-cross-app-access, spec 1.1).
+        'access-request.json',
+        'access-response.json',
         'app-announce.json',
         'app-cancel.json',
         'app-event.json',

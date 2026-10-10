@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import { appRequestEnvelopeSchema } from './envelope.js';
 import {
+  accessRequestSchema,
+  accessResponseSchema,
   appAnnounceSchema,
   appCancelSchema,
   appEventSchema,
@@ -36,6 +38,17 @@ const SOURCES: Record<string, z.ZodType> = {
   'net-response.json': netResponseSchema,
   'open-url-request.json': openUrlRequestSchema,
   'open-url-result.json': openUrlResultSchema,
+  // Spec 1.1 (TASK-20261010-cross-app-access, ADR-0075 §1): the access pair joins the
+  // published set — sixteen files. The REQUEST is strict (strictObject at every level, so
+  // io: 'input' still stamps additionalProperties: false on each op variant and on hints —
+  // it carries app-authored SQL and a release act); the RESPONSE is TOLERANT (z.object, the
+  // db-response shape — no additionalProperties: false anywhere, so a reserved growth seat
+  // such as a future access: 'write' grant is never a MAJOR bump; D2/D16). Their refinements
+  // (purpose/hint display safety, credential refusal, shareable table names, the host's
+  // read-only-SELECT and §24 obligations) are NOT expressible in JSON Schema — the spec
+  // prose carries them; the exported schemas are complete for the frames' shapes only.
+  'access-request.json': accessRequestSchema,
+  'access-response.json': accessResponseSchema,
   'app-request-envelope.json': appRequestEnvelopeSchema,
 };
 

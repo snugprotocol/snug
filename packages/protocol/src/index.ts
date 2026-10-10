@@ -91,6 +91,8 @@ export {
 } from './auth-schema.js';
 
 export {
+  accessRequestSchema,
+  accessResponseSchema,
   appAnnounceSchema,
   appCancelSchema,
   appEventSchema,
@@ -109,6 +111,8 @@ export {
   parseFrame,
   respondTo,
   responseErrorSchema,
+  type AccessRequestFrame,
+  type AccessResponseFrame,
   type AppAnnounceFrame,
   type AppCancelFrame,
   type AppEventFrame,
@@ -249,6 +253,7 @@ export {
 } from './chat-intent.js';
 
 export {
+  isCredentialKeyName,
   scanForCredentialValues,
   stripCredentialHeaders,
   type CredentialFinding,
@@ -365,6 +370,98 @@ export {
   type TaskProvenance,
   type Weekday,
 } from './schedule.js';
+
+// The guards every persisted record shares (TASK-20261010-cross-app-access D8): the SQL
+// statement rules, the ONE credential walk, and the record-identity helpers. `isReadOnlySelect`
+// is exported above through schedule.ts's re-export (the same function).
+export {
+  CTE_WRITE_RULE,
+  DML_PREFIX_RULE,
+  FORBIDDEN_TOKEN_RULE,
+  SELECT_PREFIX_RULE,
+  SINGLE_STATEMENT_RULE,
+  canonicalJson,
+  findRecordCredential,
+  fnv1a64Hex,
+  utf8ByteLength,
+  type RecordCredentialIssue,
+} from './record-guards.js';
+
+// Access between apps (TASK-20261010-cross-app-access, ADR-0075; spec 1.1 Part VI). The
+// frames (`accessRequestSchema`/`accessResponseSchema`) are PUBLISHED and exported above from
+// frames.ts; these are their field-level pieces, Appendix A/B, and the two records (normative
+// prose in spec §22 — no JSON Schema, the Part III–V rule).
+export {
+  ACCESS_APP_ID_MAX_CHARS,
+  ACCESS_CHANGED_EVENT,
+  ACCESS_COLUMN_NAME_MAX_CHARS,
+  ACCESS_DURATIONS,
+  ACCESS_ENDED_RETENTION_MS,
+  ACCESS_ERROR_CODES,
+  ACCESS_GRANT_MAX_BYTES,
+  ACCESS_GRANT_STATUSES,
+  ACCESS_HINT_TABLES_MAX,
+  ACCESS_HINT_WORDS_MAX,
+  ACCESS_HINT_WORD_MAX_CHARS,
+  ACCESS_LOG_COALESCE_MS,
+  ACCESS_LOG_KINDS,
+  ACCESS_LOG_MAX_BYTES,
+  ACCESS_LOG_MAX_ENTRIES,
+  ACCESS_LOG_REASON_MAX_CHARS,
+  ACCESS_LOG_SQL_MAX_CHARS,
+  ACCESS_LOG_TOTAL_MAX_BYTES,
+  ACCESS_MAX_COLUMNS,
+  ACCESS_MAX_GRANTS,
+  ACCESS_MAX_PARAMS,
+  ACCESS_MAX_RESULT_BYTES,
+  ACCESS_MAX_ROWS,
+  ACCESS_MAX_TABLES,
+  ACCESS_OPS,
+  ACCESS_PARAM_STRING_MAX_CHARS,
+  ACCESS_PROVENANCES,
+  ACCESS_PURPOSE_MAX_CHARS,
+  ACCESS_QUERY_RATE_PER_MINUTE,
+  ACCESS_QUERY_TIMEOUT_MS,
+  ACCESS_REQUEST_MIN_GAP_MS,
+  ACCESS_SCOPED_CACHE_MS,
+  ACCESS_SOURCE_MAX_BYTES,
+  ACCESS_SQL_MAX_CHARS,
+  ACCESS_SUSPEND_REASONS,
+  ACCESS_TIMEOUT_STRIKES,
+  accessGrantDurationSchema,
+  accessGrantSchema,
+  accessGrantViewSchema,
+  accessHintWordSchema,
+  accessHintsSchema,
+  accessLogEntrySchema,
+  accessParamSchema,
+  accessParamsSchema,
+  accessPurposeSchema,
+  accessRequestHash,
+  accessScopeSchema,
+  accessSqlSchema,
+  accessTableNameSchema,
+  canonicalAccessGrantIntent,
+  durationToExpiry,
+  isAccessErrorCode,
+  parseAccessGrant,
+  parseAccessLogEntry,
+  type AccessDuration,
+  type AccessErrorCode,
+  type AccessGrant,
+  type AccessGrantDuration,
+  type AccessGrantStatus,
+  type AccessGrantView,
+  type AccessHints,
+  type AccessLogEntry,
+  type AccessLogKind,
+  type AccessOp,
+  type AccessParam,
+  type AccessProvenance,
+  type AccessRequestSemantics,
+  type AccessScope,
+  type AccessSuspendReason,
+} from './access.js';
 
 export { buildJsonSchemas } from './json-schemas.js';
 export { CONNECTION_URL_SCHEME, parseConnectionUrl, type ConnectionUrlParse } from './connection-url.js';

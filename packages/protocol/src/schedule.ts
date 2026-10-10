@@ -29,8 +29,24 @@
  */
 
 import { z } from 'zod';
-import { STRIP_HEADERS } from './constants.js';
-import { scanForCredentialValues, type CredentialFinding } from './security.js';
+import {
+  DML_PREFIX_RULE,
+  FORBIDDEN_TOKEN_RULE,
+  SINGLE_STATEMENT_RULE,
+  canonicalJson,
+  findRecordCredential,
+  fnv1a64Hex,
+  isReadOnlySelect,
+  utf8ByteLength,
+} from './record-guards.js';
+
+/**
+ * The guards moved to `record-guards.ts` (TASK-20261010-cross-app-access D8) so the access
+ * records refuse with the SAME walk and the SAME read-only rule. These re-exports keep this
+ * module's public surface — and every scheduling test row — exactly as it was.
+ */
+export { findRecordCredential as findScheduleCredential, isReadOnlySelect } from './record-guards.js';
+export type { RecordCredentialIssue as ScheduleCredentialIssue } from './record-guards.js';
 
 // ------------------------------------------------------------------ constants
 
@@ -134,8 +150,6 @@ export const SCHEDULE_STALE_AFTER_MS = { min: 60_000, max: 604_800_000 } as cons
 
 // ------------------------------------------------------------- building blocks
 
-const utf8Bytes = (text: string): number => new TextEncoder().encode(text).length;
-
 /** `HH:MM`, 24-hour, zero-padded — what the editor writes and the cron compiler reads. */
 const TIME_RULE = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
 
@@ -167,29 +181,6 @@ const tzSchema = z.union([
   z.string().min(1).max(SCHEDULE_TZ_MAX_CHARS).refine(isIanaTimeZone, 'tz must be "device" or an IANA zone this runtime knows'),
 ]);
 
-const SINGLE_STATEMENT_RULE = /^[^;]*;?\s*$/;
-const SELECT_PREFIX_RULE = /^\s*(?:SELECT|WITH)\b/i;
-const DML_PREFIX_RULE = /^\s*(?:INSERT|UPDATE|DELETE)\b/i;
-/** Never in a scheduled statement, read or write: these reach outside the app's own data. */
-const FORBIDDEN_TOKEN_RULE = /\b(?:ATTACH|DETACH|PRAGMA)\b/i;
-/** A `WITH … INSERT|UPDATE|DELETE|REPLACE` is the one write a SELECT-prefix rule would let through. */
-const CTE_WRITE_RULE = /\b(?:INSERT|UPDATE|DELETE|REPLACE)\b/i;
-
-/**
- * An `app-think` context query: ONE statement that starts with `SELECT` or `WITH`, no
- * `;` before an optional trailing one, no ATTACH/DETACH/PRAGMA anywhere, and no DML
- * keyword after a `WITH` prefix (the CTE-prefixed write forms). A regex cannot parse
- * SQL, so this is deliberately narrow; `db.scratchRun` on the receiving side is
- * read-only by construction (ADR-0019) — this is the boundary's half, not the only half.
- */
-export function isReadOnlySelect(sql: string): boolean {
-  if (!SELECT_PREFIX_RULE.test(sql)) return false;
-  if (!SINGLE_STATEMENT_RULE.test(sql)) return false;
-  if (FORBIDDEN_TOKEN_RULE.test(sql)) return false;
-  if (/^\s*WITH\b/i.test(sql) && CTE_WRITE_RULE.test(sql)) return false;
-  return true;
-}
-
 /** String literals and quoted identifiers, so a keyword INSIDE one (`'select from the menu'`, a column named `"from"`) is data, not a read. */
 const QUOTED_RULE = /'(?:[^']|'')*'|"(?:[^"]|"")*"|`(?:[^`]|``)*`|\[[^\]]*\]/g;
 const DELETE_FROM_HEAD_RULE = /^\s*DELETE\s+FROM\b/i;
@@ -219,88 +210,13 @@ export function isSingleDmlStatement(sql: string): boolean {
 
 // ------------------------------------------------------- credential refusal
 
-/** `authorization`, `cookie`, `set-cookie`, `x-api-key`, `proxy-authorization` — the C1 strip set, as key names. */
-const AUTH_LIKE_KEYS = new Set<string>(STRIP_HEADERS);
-
-/**
- * `scheme://` followed by an authority that carries `@` before its first `/`, `?` or `#`
- * — RFC 3986 userinfo, wherever the URL sits in a string. The same refusal the open-url
- * frame makes on a URL seat, extended to prose because a prompt or a body is free text.
- */
-const URL_USERINFO_RULE = /[a-z][a-z0-9+.-]*:\/\/[^/?#\s"'<>`]*@/i;
-
-/** Punctuation a prose token drags along (`sk-….` at a sentence's end) — stripped before the token is scanned. */
-const TRAILING_PUNCTUATION_RULE = /[.,;:!?)\]}'"`]+$/;
-
-export interface ScheduleCredentialIssue {
-  path: string;
-  reason: 'auth-like-key' | 'url-userinfo' | CredentialFinding['reason'];
-}
-
-/**
- * One string through the security module's VALUE scan — under its key, so the scanner's
- * key-context rule (high entropy under a credential-ish key rejects; under a neutral key
- * it only warns) holds exactly as it does on an envelope. The scanner's shapes are
- * anchored to the start of a value, and a prompt or a reply summary is PROSE, so each
- * whitespace-separated token is scanned as well: `Use sk-… to fetch.` carries a key.
- */
-function credentialValueReason(text: string, keyName: string | undefined): CredentialFinding['reason'] | undefined {
-  const whole = scanForCredentialValues(keyName === undefined ? text : { [keyName]: text }).rejects[0];
-  if (whole) return whole.reason;
-  if (!/\s/.test(text)) return undefined;
-  for (const raw of text.split(/\s+/)) {
-    const token = raw.replace(TRAILING_PUNCTUATION_RULE, '');
-    if (token === '') continue;
-    const hit = scanForCredentialValues(token).rejects[0];
-    if (hit) return hit.reason;
-  }
-  return undefined;
-}
-
-/**
- * The ONE credential walk for everything the scheduler persists. Three refusals:
- * an authorization-like KEY at any depth (case-insensitive — `app-run.input` is free
- * JSON, and a header map is exactly what an app would try to smuggle), a URL with
- * userinfo in any string, and the security module's high-confidence VALUE shapes
- * (Bearer, JWT, known provider prefixes, high entropy under a credential-ish key),
- * whole or embedded in prose. The scanner's warnings (`token: 'rook'`) never refuse —
- * a task is strict, not paranoid.
- */
-export function findScheduleCredential(value: unknown): ScheduleCredentialIssue | undefined {
-  const seen = new Set<object>();
-  const walk = (node: unknown, path: string, keyName: string | undefined): ScheduleCredentialIssue | undefined => {
-    if (typeof node === 'string') {
-      if (URL_USERINFO_RULE.test(node)) return { path, reason: 'url-userinfo' };
-      const reason = credentialValueReason(node, keyName);
-      return reason ? { path, reason } : undefined;
-    }
-    if (typeof node !== 'object' || node === null || seen.has(node)) return undefined;
-    seen.add(node);
-    if (Array.isArray(node)) {
-      for (let index = 0; index < node.length; index += 1) {
-        const hit = walk(node[index], `${path}[${index}]`, undefined);
-        if (hit) return hit;
-      }
-      return undefined;
-    }
-    for (const [key, child] of Object.entries(node)) {
-      const childPath = path ? `${path}.${key}` : key;
-      if (AUTH_LIKE_KEYS.has(key.toLowerCase())) return { path: childPath, reason: 'auth-like-key' };
-      const hit = walk(child, childPath, key);
-      if (hit) return hit;
-    }
-    return undefined;
-  };
-  return walk(value, '', undefined);
-}
-
 /** Shared tail refinement: the whole-object byte cap, then the credential walk over the PARSED value. */
 function refuseOversizeOrCredential(what: string, maxBytes: number) {
   return (value: unknown, ctx: z.RefinementCtx): void => {
-    if (utf8Bytes(JSON.stringify(value)) > maxBytes) {
+    if (utf8ByteLength(JSON.stringify(value)) > maxBytes) {
       ctx.addIssue({ code: 'custom', message: `the serialized ${what} must be at most ${maxBytes} bytes` });
     }
-    const credential = findScheduleCredential(value);
+    const credential = findRecordCredential(value);
     if (credential) {
       ctx.addIssue({
         code: 'custom',
@@ -378,7 +294,7 @@ export type ScheduleSpec = z.infer<typeof scheduleSpecSchema>;
 /** Any JSON value, bounded by its serialized UTF-8 size — the kv handshake carries these bytes verbatim. */
 const appInputSchema = z
   .json()
-  .refine((input) => utf8Bytes(JSON.stringify(input)) <= SCHEDULE_APP_INPUT_MAX_BYTES, `input must serialize to at most ${SCHEDULE_APP_INPUT_MAX_BYTES} bytes`);
+  .refine((input) => utf8ByteLength(JSON.stringify(input)) <= SCHEDULE_APP_INPUT_MAX_BYTES, `input must serialize to at most ${SCHEDULE_APP_INPUT_MAX_BYTES} bytes`);
 
 const thinkContextSchema = z.strictObject({
   /** User-typed read-only queries, run on the scratch copy and delimited as data in the prompt. */
@@ -563,19 +479,6 @@ export const scheduleProposalSchema = z
   .superRefine(refuseOversizeOrCredential('proposal', SCHEDULED_TASK_MAX_BYTES));
 export type ScheduleProposal = z.infer<typeof scheduleProposalSchema>;
 
-function sortKeysDeep(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(sortKeysDeep);
-  if (typeof value === 'object' && value !== null) {
-    const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-    return Object.fromEntries(entries.map(([key, entry]) => [key, sortKeysDeep(entry)]));
-  }
-  return value;
-}
-
-const FNV64_OFFSET = 0xcbf29ce484222325n;
-const FNV64_PRIME = 0x100000001b3n;
-const U64 = 0xffffffffffffffffn;
-
 /**
  * The proposal's identity over its SEMANTIC fields only — `steps` and `spec`, key-sorted;
  * the title never enters the bytes, so a reworded suggestion for the same schedule is the
@@ -589,13 +492,7 @@ const U64 = 0xffffffffffffffffn;
  * the fields themselves, not the hash. Hash the PARSED proposal so defaults are in the bytes.
  */
 export function proposalHash(proposal: ScheduleProposal): string {
-  const bytes = new TextEncoder().encode(JSON.stringify(sortKeysDeep({ steps: proposal.steps, spec: proposal.spec })));
-  let hash = FNV64_OFFSET;
-  for (const byte of bytes) {
-    hash ^= BigInt(byte);
-    hash = (hash * FNV64_PRIME) & U64;
-  }
-  return hash.toString(16).padStart(16, '0');
+  return fnv1a64Hex(canonicalJson({ steps: proposal.steps, spec: proposal.spec }));
 }
 
 /**
@@ -605,7 +502,7 @@ export function proposalHash(proposal: ScheduleProposal): string {
  * async crypto, and has no collision surface (the `canonicalRuntimeContract` reasoning).
  */
 export function canonicalScheduledTask(task: ScheduledTask): string {
-  return JSON.stringify(sortKeysDeep(task));
+  return canonicalJson(task);
 }
 
 /**
@@ -619,7 +516,7 @@ export function canonicalScheduledTask(task: ScheduledTask): string {
  */
 export function canonicalScheduleIntent(task: ScheduledTask): string {
   const { steps, spec, cron, startsAt, endsAt, missedPolicy, alert, ownerAppId, provenance, title } = task;
-  return JSON.stringify(sortKeysDeep({ steps, spec, cron, startsAt, endsAt, missedPolicy, alert, ownerAppId, provenance, title }));
+  return canonicalJson({ steps, spec, cron, startsAt, endsAt, missedPolicy, alert, ownerAppId, provenance, title });
 }
 
 // ---------------------------------------------------------------- read path

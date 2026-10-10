@@ -1,7 +1,8 @@
 // AL-03 (TASK-20260806-connected-fetch) — the envelope net capability's protocol surface.
 // Published at spec v0.3 (owner ask 2026-08-20, TASK-20260820-spec-v03-whitepaper):
 // `snug:net-request` / `snug:net-response` are IN the json-schemas SOURCES; the pin below
-// locks the 14-file publication line. Key amendments under test: B1 (own frame size class — an
+// locks the publication line — 16 files since spec 1.1 (TASK-20261010-cross-app-access added
+// the access pair; it was the 14-file v0.3 line before). Key amendments under test: B1 (own frame size class — an
 // oversized net-response can never be silently dropped), R2 (GET/HEAD body strict-reject),
 // R5 (no appId field — the runner's net binding is host-assigned), C1 (the schema rejects
 // a headers object carrying credential headers), open-Q2 (`link` + `x-ratelimit-*` in the
@@ -210,10 +211,14 @@ describe('net error codes (D1)', () => {
 });
 
 describe('publication line — the v0.3 set (extends the AL-02 guard; superseded D1 on the 2026-08-20 owner ask)', () => {
-  it('buildJsonSchemas() exports exactly the 13 frames + envelope — nothing more, nothing less', () => {
+  // Moved DELIBERATELY 13 → 15 frames / 14 → 16 files by TASK-20261010-cross-app-access
+  // (spec 1.1, ADR-0075 §1): the access pair joins the published set.
+  it('buildJsonSchemas() exports exactly the 15 frames + envelope — nothing more, nothing less', () => {
     const names = Object.keys(buildJsonSchemas());
     expect(names.sort()).toEqual(
       [
+        'access-request.json',
+        'access-response.json',
         'app-announce.json',
         'app-cancel.json',
         'app-event.json',
