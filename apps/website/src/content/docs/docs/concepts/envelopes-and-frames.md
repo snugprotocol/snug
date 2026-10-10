@@ -1,12 +1,12 @@
 ---
 title: Envelopes & frames
-description: The wire protocol in one page — thirteen frame types over postMessage, and the rules that keep them safe.
+description: The wire protocol in one page — fifteen frame types over postMessage, and the rules that keep them safe.
 sidebar:
   order: 1
 ---
 
 Everything between an app and its host crosses **one boundary** — `postMessage` between the
-sandboxed iframe and the host page — as versioned JSON frames. Thirteen frame types exist,
+sandboxed iframe and the host page — as versioned JSON frames. Fifteen frame types exist,
 all published as [JSON Schemas](/docs/spec/schemas/).
 
 ## The conversation shape
@@ -14,7 +14,7 @@ all published as [JSON Schemas](/docs/spec/schemas/).
 A mount is a handshake, then requests:
 
 1. The host sends `snug:host-ready` — instance id, protocol versions, **capabilities**
-   (`streaming`, `db`, `auth`, and optional `net`, `openUrl`).
+   (`streaming`, `db`, `auth`, and optional `net`, `openUrl`, `access`).
 2. The app announces itself: `snug:app-announce` (id, display name, icon hints).
 3. The app asks its mind for things: `snug:app-message` (a request id, an action name, a
    structured payload, optionally a response schema) — answered by `snug:app-response`,
@@ -29,6 +29,7 @@ A mount is a handshake, then requests:
 | Storage | `snug:db-request` · `snug:db-response` | Host-brokered SQL against the app's own isolated tables |
 | Network | `snug:net-request` · `snug:net-response` | The **only** path to the network — governed by an approved host ceiling; the iframe itself has none |
 | Navigation | `snug:open-url-request` · `snug:open-url-result` | The host opens the user's real browser, after its own confirm, on a user gesture |
+| Access | `snug:access-request` · `snug:access-response` | An app reads another app's tables only under a user-granted, logged, revocable access grant — the user picks the source on host chrome, the read runs on a scoped copy in a bounded worker, and the app learns only what it was granted |
 | Events | `snug:host-event` · `snug:app-event` | Open additive channel (theme, visibility, resize, connection doorbells); unknown events are ignored |
 
 ## Why apps don't break

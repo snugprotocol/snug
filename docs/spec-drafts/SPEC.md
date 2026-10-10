@@ -1,27 +1,28 @@
-# Snug Protocol — Specification 1.0
+# Snug Protocol — Specification 1.1
 
-- **Version:** 1.0 · **Date:** 2026-08-22 · **Task:** TASK-20260822-spec-10-final
-  (consolidated at v0.3 by TASK-20260820-spec-v03-whitepaper)
+- **Version:** 1.1 · **Date:** 2026-10-10 · **Task:** TASK-20261010-cross-app-access
+  (1.0 finalised by TASK-20260822-spec-10-final; consolidated at v0.3 by TASK-20260820-spec-v03-whitepaper)
 - **Status: NORMATIVE.** This is the complete specification of the protocol — wire,
-  storage, connected apps, runtime contracts, and linked-device connections. One section
-  is explicitly **provisional** and so marked: §17 (standing approvals); everything else
-  is stable at 1.0. The version stays 1.0 through pre-launch editorial corrections; every
-  published change is recorded in the spec changelog.
-- **Supersedes as documents:** the v0.1 `SPEC.md` wire-protocol core, `SPEC-v0.2-draft.md`
-  (content carried forward into Part II), and the v0.3 consolidated draft this document
-  finalises. In the published spec repository, this document IS `SPEC.md`; the historical
-  filenames remain as pointer stubs.
+  storage, connected apps, runtime contracts, linked-device connections, and access between
+  apps. One section is explicitly **provisional** and so marked: §17 (standing approvals);
+  everything else is stable at 1.1. Every published change is recorded in the spec changelog.
+- **Supersedes as documents:** Specification 1.0 (this document, as published 2026-08-22 and
+  last corrected 2026-08-27; the 1.1 revision is additive — a 1.0 host ignores the new keys and advertises no `access`
+  capability, so a 1.1 app renders its honest fallback), the v0.1 `SPEC.md` wire-protocol
+  core, `SPEC-v0.2-draft.md` and the v0.3 consolidated draft. In the published spec
+  repository, this document IS `SPEC.md`; the historical filenames remain as pointer stubs.
 - **Versioning:** spec versions are independent of implementation package versions.
-  Post-1.0, additive changes bump the minor (1.x); a change that breaks a conforming
-  implementation bumps the major. Every published change is a single commit referencing
-  its origin task.
+  Post-1.0, additive changes bump the minor (1.x — 1.1 is the first, adding Part VI); a
+  change that breaks a conforming implementation bumps the major. Every published change is
+  a single commit referencing its origin task.
 - **Normative schemas:** JSON Schema for every published message type, exported
   byte-identical from the reference implementation (`packages/protocol`). Schemas are
-  `io: 'input'` shapes: validators MUST accept unknown fields (rule R2), with the four
-  strict net/open-url schemas as R2's stated exception (§2, Appendix C).
+  `io: 'input'` shapes: validators MUST accept unknown fields (rule R2), with the STRICT
+  schemas as R2's stated exception — the four net/open-url schemas and the access request
+  (§2, §23, Appendix C). The access response is tolerant.
 - **Source of truth:** where this prose and the reference implementation disagree, the
   implementation's contract files win and this document is the bug. The load-bearing files:
-  `packages/protocol/src/{constants,frames,envelope,reply,userdb-schema,auth-schema,connection-requirement,connection-url,render-directive,runtime-contract,chat-intent,sidecar-contract,security}.ts`
+  `packages/protocol/src/{constants,frames,access,record-guards,envelope,reply,userdb-schema,auth-schema,connection-requirement,connection-url,render-directive,runtime-contract,chat-intent,sidecar-contract,security}.ts`
   and `packages/db/src/crypto/container.ts` (all locked by tests, several by snapshot).
 
 ## Stability at a glance
@@ -33,10 +34,13 @@
 | III | Connected apps: requirements, grants, custody, the executor | **Normative at 1.0** |
 | IV | Runtime contracts and the app chat surface | **Normative at 1.0** |
 | V | Linked-device connections (the sidecar surface) | **Normative at 1.0** |
+| VI | Access between apps — the access grant, the two frames, the host obligations | **Normative at 1.1** (additive; a 1.0 host is still conforming) |
 
 The net and open-url frame pairs, `capabilities.net`/`openUrl`, and rule R7 joined Part I
 with the v0.3 consolidation and are normative at 1.0 (Appendix C records the publication
 line). One section is explicitly **provisional** and so marked: §17 (standing approvals).
+The access frame pair, `capabilities.access` and Part VI joined with the 1.1 revision
+(ADR-0075) and are normative at 1.1; Conformance is Part VII.
 
 **Revisions, v0.3-draft → 1.0** (2026-08-22): (1) §11.1's `SNUGENC1` slot-table layout
 corrected to the shipping container — 61-byte slot stride (kind + IV + 48 reserved
@@ -59,6 +63,14 @@ its state are independent of the LLM provider, while a conforming host supplies 
 intelligence — in place of a one-line comparison to another protocol. **Prose only.** No
 normative requirement, constant, schema byte, conformance rule or protocol mechanic
 changed; the version stays 1.0 per the versioning note above.
+
+**Revision 1.1 (2026-10-10, TASK-20261010-cross-app-access, ADR-0075):** access between
+apps, additive. §2 gains the `snug:access-request` / `snug:access-response` pair and
+`capabilities.access`; R2 and R5 name the access request and the `ACCESS_*` codes; §8.1
+gains the access keys; Part VI (§21–§25) is new and Conformance becomes Part VII;
+Appendices A, B and C gain the access codes, the access constants and the two schema files
+(`host-ready.json` gains `access`). Promoted with this revision: §12.14 (no longer labelled
+an internal draft), the `shared` provenance and §8.1's scheduling keys.
 
 ## Conventions
 
@@ -87,10 +99,10 @@ version 1 and has been additively extended, never broken, since v0.1.
 
 ## 2. Frames
 
-Thirteen frame types are defined, and all thirteen are published as JSON Schemas — the
-nine core frames since v0.1, the net pair and the open-url pair with v0.3 (Appendix C).
-The strict pairs' refinement rules are carried by this prose, not by the schemas, which
-JSON Schema cannot express (§3).
+Fifteen frame types are defined, and all fifteen are published as JSON Schemas — the
+nine core frames since v0.1, the net pair and the open-url pair with v0.3, the access pair
+with 1.1 (Appendix C). The strict frames' refinement rules are carried by this prose, not by
+the schemas, which JSON Schema cannot express (§3, §23).
 
 | Type | Direction | Purpose |
 |---|---|---|
@@ -102,12 +114,15 @@ JSON Schema cannot express (§3).
 | `snug:db-request` / `snug:db-response` | app ↔ host | Host-brokered per-app storage: `op ∈ exec, export, import, kvGet, kvSet`. |
 | `snug:net-request` / `snug:net-response` | app ↔ host | The governed network capability (§3). The iframe still has **zero** network of its own (C2); this pair is the app's only path to the network, and the host is the only caller. |
 | `snug:open-url-request` / `snug:open-url-result` | app ↔ host | Host-mediated navigation (§4). The **host** opens the user's real browser after its own confirm dialog, on a user gesture; the sandbox gains no capability. |
+| `snug:access-request` / `snug:access-response` | app ↔ host | Access between apps (Part VI). A reader app asks for, queries, lists and releases a user-granted, read-only **access grant** on another app's tables: `op ∈ request, query, list, release`. The request is **strict** (it carries app-authored SQL and a release act); the response is **tolerant**. The reader never names a source — the user picks it on host chrome — and the runner's binding is host-assigned (§23). |
 | `snug:host-event` / `snug:app-event` | either | Open additive channel (`theme-change`, `visibility`, `connection-event`, `resize {height}`, …); unknown events ignored. Subject to rule R7. |
 
 **Capability advertisement.** `snug:host-ready.capabilities` requires `streaming`, `db`,
-and `auth` booleans; `net?: boolean` and `openUrl?: boolean` are optional additive flags
-(R2-safe — pre-feature frames still parse). Absence of a flag is how an app knows to render
-a fallback rather than a broken control.
+and `auth` booleans; `net?: boolean`, `openUrl?: boolean` and `access?: boolean` are
+optional additive flags (R2-safe — pre-feature frames still parse). Absence of a flag is how
+an app knows to render a fallback rather than a broken control; a host advertises `access`
+only where it can actually run a scoped read (§24 — a host that cannot construct a Worker
+composes `false`).
 
 ## 3. The net frames
 
@@ -152,9 +167,10 @@ that advertises `capabilities.openUrl: true` is promising exactly this mediated 
   hosts answer `UNSUPPORTED_VERSION`/`MALFORMED` on the wire only in that case (never
   otherwise). `snug:host-ready.protocolVersions` advertises support.
 - **R2 Additivity.** A frame with a valid `v` but unrecognized `snug:*` type MUST be
-  silently ignored. Unknown fields on known frames MUST be ignored (the strict net and
-  open-url frames are the stated exceptions: their fields become real-world effects, so
-  unknown keys reject). The `snug:` type prefix and the event namespaces are reserved.
+  silently ignored. Unknown fields on known frames MUST be ignored (the strict frames — the
+  net pair, the open-url pair and the access REQUEST (§23) — are the stated exceptions: their
+  fields become real-world effects, so unknown keys reject). The `snug:` type prefix and the
+  event namespaces are reserved.
 - **R3 Terminal frame.** Every accepted `requestId` receives exactly one terminal
   `snug:app-response` (`ok:true, streaming:false` or `ok:false`). `streaming:true` frames
   are cumulative prose, display-provisional; the terminal frame is authoritative. Hosts MAY
@@ -167,11 +183,12 @@ that advertises `capabilities.openUrl: true` is promising exactly this mediated 
 - **R5 Error codes.** `error.code` is an open string; known codes:
   `PARSE_FAILED`, `THREAD_CONFLICT`, `NETWORK_ERROR`, `RESET_FAILED`, `CANCELLED`,
   `SUPERSEDED`, `UNSUPPORTED_VERSION`, `CONSENT_REQUIRED` (reserved), `AUTH_REQUIRED`
-  (reserved), `HOST_ERROR`. The net capability adds its own registry (Appendix A):
-  `NET_INVALID_REQUEST`, `NET_NOT_APPROVED`, `NET_IMPORTED_UNAPPROVED`,
+  (reserved), `HOST_ERROR`. The net and access capabilities add their own registries
+  (Appendix A): `NET_INVALID_REQUEST`, `NET_NOT_APPROVED`, `NET_IMPORTED_UNAPPROVED`,
   `NET_AMBIGUOUS_CONNECTION`, `NET_SCHEME_BLOCKED`, `NET_HOST_BLOCKED`,
   `NET_SSRF_BLOCKED`, `NET_CONFIRM_DENIED`, `NET_REDIRECT_BLOCKED`, `NET_SIZE_EXCEEDED`,
-  `NET_FETCH_FAILED`, `NET_AUTH_FAILED` (+ `NET_SCRUBBED_HEADER_STRIPPED`, reserved).
+  `NET_FETCH_FAILED`, `NET_AUTH_FAILED` (+ `NET_SCRUBBED_HEADER_STRIPPED`, reserved), and
+  `ACCESS_*` (Part VI).
   Receivers treat unknown codes per `retryable` and render as `HOST_ERROR`.
 - **R6 Limits.** Frames ≤ 256 KiB, except two larger size classes: `db-request`/
   `db-response` ≤ 8 MiB (so a base64-encoded 5 MiB artifact round-trips through the db
@@ -298,6 +315,16 @@ are host-local and are stripped on every import, pull and export) and `scheduler
 host's reconcile watermark, its global pause and the day's call counters) — plus two per-app
 rows, `scheduleDeclined:<appId>:<hash>` and `scheduleMuted:<appId>` (the user's answers to an
 app's schedule suggestions). The per-app keys are cascaded on app delete.
+The access revision (2026-10-10, ADR-0075, Part VI) adds four more — and here the
+"host-internal machinery" rule has its one stated exception: the **access grant** row is
+normative for a hub that implements Part VI, because its import reconciliation IS the security
+property (§22). `accessGrant:<id>` (an access grant — reader, source, the granted tables with
+their frozen columns, purpose, duration, status), `accessLog:<sourceAppId>` (the source's
+bounded history of every read and every lifecycle event, newest first), and the per-reader
+`accessDeclined:<readerAppId>:<hash>` and `accessMuted:<readerAppId>` (the user's answers to a
+reader's asks — dropped on an untrusted import). A hub that does not implement Part VI MAY
+carry these rows untouched and is still conforming. The per-app keys are cascaded on app
+delete (both directions for a grant).
 
 ### 8.2 Per-app data: native namespaced tables
 
@@ -923,7 +950,7 @@ confidence from the ladder rung it resolved; no gating decision reads the claime
 A registry-resolved proposal MAY carry the entry's alternative flows for the user to pick
 between; the pick is reviewed like any declared requirement.
 
-### 12.14 App bundles — the share act (internal draft, revision 2026-09-04)
+### 12.14 App bundles — the share act (revision 2026-09-04)
 
 An **app bundle** (`snug-app-bundle/1`; reference schema `packages/protocol/src/app-bundle.ts`,
 outside the published `schemas/` set) is one app lifted out of a user file so another person
@@ -1382,15 +1409,300 @@ source-parsing test. None of those specifics are normative; §20.1–§20.7 are.
 
 ---
 
-# Part VI — Conformance
+# Part VI — Access between apps
+
+## 21. The model
+
+Every app's data is its own (§8.2): its tables are materialised into its own runtime
+database, and no frame of Parts I–V lets one app see another's rows. Part VI adds the ONE
+sanctioned crossing. A **reader** app reads a **source** app's tables, read-only, under an
+**access grant** — a host record written ONLY by the user's act on host chrome the app
+cannot draw over, scoped to named tables with their columns disclosed and frozen, for a
+duration the user chose, revocable from anywhere, and logged on the source's own row. (The
+spec always says *access grant*; Part III's *connection grant* is a different record.)
+
+The parties and their roles:
+
+- **The reader** asks (`op: 'request'`) with a one-line purpose and optional relevance
+  hints; it learns only what was granted — the source's display name and icon, the granted
+  tables with their columns, the duration and expiry — never the user's inventory, never a
+  library id. It reads with ONE read-only `SELECT` per `query`, may `list` its live grants,
+  and may `release` one. It is told, as data, why a call was refused (Appendix A).
+- **The source** is never told it was read by any frame; its data is copied for the read
+  and the copy discarded. It keeps the history (§22.2).
+- **The host** owns everything in between: it ranks the user's apps for the consent sheet
+  (never the reader), renders the ask as a strip and the review as a sheet, writes the
+  grant, runs the read on a scoped scratch copy in a bounded worker, masks credentials,
+  logs on the source, and revokes, suspends and sweeps (§24).
+- **The user** is the only principal who can create a grant, and can stop one at any
+  moment from the source's side, the reader's side or Settings.
+
+Four durations exist: *while it's open* — a MEMORY grant bound to the reader's visible
+frame and the DEFAULT, never persisted — a day, a week, and *until I stop it*. A separate
+opt-in, `unattended`, lets a hidden (scheduled) run of the reader query under a persisted
+grant; a memory grant is never usable unattended. `access` is read-only at 1.1; the `write`
+seat is reserved (§23.2, §25).
+
+## 22. The access-grant record and the history
+
+### 22.1 The grant (`accessGrant:<id>` — normative for a hub implementing Part VI)
+
+```
+AccessGrant = {
+  id: uuid v4 (lowercase — crypto.randomUUID()'s shape),
+  readerAppId, sourceAppId: string (1..64; never equal),
+  scope: { tables: [{ name: APP_OBJECT_NAME (never snug_kv; 1..32 tables),
+                      columns: string (1..64 chars) [1..64] }] },   // no duplicate table or column
+  access: 'read',                                                   // a one-member enum at 1.1
+  purpose: string (1..200; one line of visible text — §23.1),
+  duration: { kind: 'until', at: ISO instant } | { kind: 'always' }, // 'session' never persists
+  unattended: boolean,
+  status: 'active' | 'revoked' | 'suspended',                       // 'expired' is DERIVED from duration, never stored
+  suspendedReason?: 'imported' | 'reader-updated' | 'source-changed' | 'source-restricted' | 'reader-misbehaved',
+  provenance: 'app' | 'user',                                       // who asked; only the user's act WRITES
+  readerVersion: int ≥ 1, grantedAt, updatedAt: ISO, revokedAt?: ISO,
+  reads: int ≥ 0, lastReadAt?: ISO, timeouts: int ≥ 0
+}
+```
+
+Normative rules (all MUST, for a hub implementing Part VI):
+
+1. The record is strict at every level (an unknown key is a parse refusal), its serialised
+   UTF-8 is at most `ACCESS_GRANT_MAX_BYTES` (16 KiB), and a credential anywhere in it — an
+   authorization-like key at any depth, a URL with userinfo, a Bearer/JWT/provider-key value
+   shape, whole or embedded in text — is a parse refusal. A hub parses BEFORE it writes; a
+   refused write leaves the file byte-identical.
+2. **A credential-named column is never in a scope.** The host's column-name rule (the C1
+   value scan's own key rule: `authorization`, `password`, `secret`, `api_key`, `*_token`,
+   `credential`, `token`, …) decides; the consent sheet shows such a column as *never
+   shared* and leaves it out; a read withholds it on the copy and masks it in the rows
+   (§24.3).
+3. `status` and its seats agree: `suspended` ⇔ `suspendedReason`; `revoked` ⇔ `revokedAt`.
+   A grant that is allowed again clears both.
+4. Only the user's act on host chrome writes a grant. A hub holds at most
+   `ACCESS_MAX_GRANTS` (100) live grants per file; ended grants (revoked, or `until` passed)
+   older than `ACCESS_ENDED_RETENTION_MS` (30 days) are pruned on write. A grant naming an
+   app the file does not hold is refused.
+5. **Import reconciliation.** On an UNTRUSTED import (a file the user picked off disk, however
+   empty the hub — Part II §9's doctrine) every grant whose **canonical intent** — the
+   key-sorted, whitespace-free JSON of `{ id, readerAppId, sourceAppId, scope, access,
+   purpose, duration, unattended, provenance }` and nothing the engine writes on its own —
+   differs from a local grant of the same id lands `suspended / imported`; an intent-identical
+   grant stays as it arrived; a `revoked` grant stays revoked (it is never re-armable); a row
+   that does not parse is removed and reported; every `accessDeclined:*` and `accessMuted:*`
+   row is dropped; every imported history entry is tagged `imported: true`. On a TRUSTED pull
+   (the user's own sync origin, the recovery restore) every row is kept exactly as it is —
+   including a grant row the hub cannot parse, which stays inert.
+6. **Delete.** Deleting an app removes every grant where it is reader OR source, its own
+   history row, its declines and its mute, inside the delete's own transaction.
+7. **Export** carries grants and histories (they are settings rows); a trusted round trip
+   preserves them byte for byte.
+
+### 22.2 The history (`accessLog:<sourceAppId>`)
+
+The SOURCE keeps the history: one bounded row per source holding a JSON array, newest
+first, of entries
+
+```
+AccessLogEntry = { at: ISO, kind: 'granted' | 'read' | 'refused' | 'revoked' | 'expired' | 'released' | 'suspended',
+  grantId: uuid v4, readerAppId, readerName (≤ 80, host-written from the library row),
+  tables?: APP_OBJECT_NAME[≤32], sql?: ≤ 200 chars, rows?: int, count?: int ≥ 1,
+  attended?: boolean, reason?: ≤ 120 chars, imported?: boolean }
+```
+
+Rules: strict and capped per seat; a credential in an app-authored seat (`sql`, `reason`,
+`tables`) is a refusal — a host walks the FULL statement before cutting it to 200 characters
+and omits the `sql` seat on a hit (a key straddling the cut would otherwise persist as a
+prefix). Consecutive `read` entries coalesce ONLY on an identical `(grantId, sql)` pair within
+`ACCESS_LOG_COALESCE_MS` (60 s) into one entry with `count`. Caps: `ACCESS_LOG_MAX_ENTRIES`
+(200) and `ACCESS_LOG_MAX_BYTES` (64 KiB) per source, `ACCESS_LOG_TOTAL_MAX_BYTES` (1 MiB)
+across sources; pruning takes `read` entries (oldest first) before any lifecycle kind and
+NEVER the latest `granted` / `revoked` / `suspended` / `released` entry of a grant the file
+still holds — the history can never be made to lie about when or by whose act access began.
+A `read` line is written BEFORE the rows leave the host: a read the history cannot record
+does not happen. The user may clear the reads; lifecycle entries stay.
+
+### 22.3 Declines and mutes
+
+`accessDeclined:<readerAppId>:<hash>` records a *don't allow* against an ask's semantic
+identity — `accessRequestHash`: FNV-1a 64 (hex) over the key-sorted JSON of `{ tables:
+sorted, words: sorted, renew }` with each hint list trimmed, lower-cased, de-duplicated and
+sorted, and the free-text purpose EXCLUDED, so a reworded ask with the same hints is the same
+ask. `accessMuted:<readerAppId>` is *stop asking*. Both are the user's own answers: dropped
+on an untrusted import, swept on delete. A host MAY also keep a per-browser switch that mutes
+every reader; it is not part of the file.
+
+## 23. The frames
+
+### 23.1 `snug:access-request` — strict
+
+```
+base = { v: 1, type: 'snug:access-request', requestId: id, instanceId: id }
+request = base + { op: 'request', purpose: string (1..200), hints?: { words?: word (1..32) [≤16], tables?: APP_OBJECT_NAME [≤16] }, renew?: id }
+query   = base + { op: 'query', grantId: id, sql: string (1..4096), params?: scalar [≤64] }   // scalar = string (≤ 4096) | number | boolean | null
+list    = base + { op: 'list' }
+release = base + { op: 'release', grantId: id }
+```
+
+Strict at every level (an unknown key is `MALFORMED`) — this frame carries app-authored SQL
+and a release act, R2's stated exception alongside the net pair. Like the net pair it has NO
+app-id seat: the runner's access binding (`accessAppId`) is HOST-assigned exactly like
+`dbNamespace`, so a reader can never name itself, another reader or a source (R4).
+
+Refinements this prose carries (not expressible in JSON Schema): `purpose` and every hint
+word are ONE line of visible text — no control (Cc) or format (Cf) code point (that covers
+every bidi embedding, override, isolate and mark, every zero-width and invisible character
+and the tag block), no line or paragraph separator, no U+034F, no blank-rendering filler
+(U+2800, U+3164, U+115F, U+1160, U+FFA0), no leading or trailing whitespace, not blank, and
+never credential-shaped; a hint table is an app object name outside every reserved prefix
+and never `snug_kv`; `sql` refuses the bidi controls and every C0/C1 control other than tab,
+newline and carriage return. The parser bounds `sql` by size only — the host, not the
+parser, decides that it is one read-only `SELECT` (§24.3), so a non-SELECT is answered
+`ACCESS_QUERY_REFUSED`, never `MALFORMED`.
+
+### 23.2 `snug:access-response` — tolerant
+
+```
+resp = { v: 1, type: 'snug:access-response', requestId: id }
+grantView = { id: id, access: string (1..32 — 'read' at 1.1), source: { displayName (1..80), iconEmoji? (≤8), iconColor? (≤32) },
+              tables: [{ name: APP_OBJECT_NAME, columns: string (1..64) [1..64] }] [1..32],
+              duration: 'session' | 'day' | 'week' | 'always', expiresAt?: ISO, unattended: boolean }
+ok = resp + { ok: true, op: 'request', grant: grantView }
+   | resp + { ok: true, op: 'query', columns: string[], rows: unknown[][], truncated?: boolean, totalRows?: int }
+   | resp + { ok: true, op: 'list', grants: grantView[] }
+   | resp + { ok: true, op: 'release' }
+error = resp + { ok: false, error: { code, message, retryable, … } }   // the shared error shape, R5
+```
+
+Tolerant (`z.object`, the db-response shape): nothing in a host→app answer becomes a
+real-world effect, and a strict answer would make every reserved growth seat — a future
+`access: 'write'` in a `list` answer — a MAJOR bump, because an SDK drops what its parser
+rejects. The seats a 1.1 parser knows are still validated (a malformed `rows` is still
+refused). Exactly one terminal response per `requestId` (R3). Both frames ride the default
+256 KiB class (R6); the host truncates a query answer in band at `ACCESS_MAX_ROWS` (500) /
+`ACCESS_MAX_RESULT_BYTES` (192 KiB, UTF-8) with `truncated` and `totalRows`, and an answer
+that still exceeds the class becomes a SMALL terminal `ACCESS_SIZE_EXCEEDED` — never silence.
+
+### 23.3 The change hint
+
+When a grant the reader holds is stopped or paused, the host posts `snug:host-event` with
+`event: 'access-changed'` and `data: { grantId }` to the reader's LIVE frame — ids only (R7).
+The reader re-`list`s; it learns an expiry from its next `query` (`ACCESS_EXPIRED`) and a
+re-activation from the `request` answer; nothing else is implied.
+
+### 23.4 Error codes
+
+`ACCESS_INVALID_REQUEST` · `ACCESS_NOT_GRANTED` (unknown id, another reader's grant, a memory
+grant of another frame — byte-identical answers) · `ACCESS_DECLINED` (`retryable: true` for
+*not now*; `false` after *don't allow* or a mute) · `ACCESS_PENDING` (retryable) ·
+`ACCESS_UNATTENDED` (retryable — nobody is looking) · `ACCESS_NO_SOURCES` · `ACCESS_REVOKED`
+(stopped or paused) · `ACCESS_EXPIRED` · `ACCESS_QUERY_REFUSED` · `ACCESS_QUERY_FAILED` ·
+`ACCESS_RATE_LIMITED` (retryable) · `ACCESS_SIZE_EXCEEDED`. R5's open-string rule applies.
+
+## 24. Host obligations
+
+A host that advertises `capabilities.access` MUST:
+
+### 24.1 Identity and the ask
+
+1. Bind the access handler to the HOST-assigned app id (`accessAppId` ≡ the `dbNamespace`
+   discipline); route by message source (R4); never read an identity from the announce.
+2. Key every limit and every memory grant on the host-assigned id plus the host's own frame
+   generation — never the app-rolled `instanceId`: one pending ask per (app, generation);
+   at most one `request` per `ACCESS_REQUEST_MIN_GAP_MS` (10 s) per app (a remount or
+   re-announce cannot mint a fresh slot); at most `ACCESS_QUERY_RATE_PER_MINUTE` (60)
+   queries a minute per app, counted FIRST on every `query` (refused and unknown ids too).
+3. Render an app's `request` as a strip the user acts on — never a modal — and open the
+   consent surface only on the user's act on host chrome; name the reader by its library
+   row and a provenance line the host derives, never by the announce; show the purpose
+   quoted and bidi-isolated; arm the primary only after a visible delay and ignore an
+   activation whose press preceded the render; default to the memory grant; yield to any
+   other pending confirm.
+4. Answer `ACCESS_NO_SOURCES` only after a user-gesture `request` when nothing is eligible;
+   never reveal the inventory, a count, or a library id to the reader. Record a decline only
+   for *don't allow* (by semantic hash); record nothing for *not now*, a dismissed ask or an
+   ask whose frame ended while the host was gathering candidates.
+5. Answer a hidden frame's `request` with `ACCESS_UNATTENDED` and record nothing.
+
+### 24.2 The grant
+
+6. Write a grant only from the user's act; write the chosen tables with their non-credential
+   columns exactly as disclosed; write `readerVersion`; persist `day`/`week`/`always`, never
+   `session`.
+7. Derive `expired` at read and write ONE `expired` line however often it is asked.
+8. Suspend the reader's grants `reader-updated` when the reader is replaced by a shared
+   bundle or an agent hand-in (the user's own edit and a starter update change nothing);
+   name what will pause on the update's confirm.
+9. Suspend `source-changed` when a granted table's non-credential columns differ from the
+   recorded set (a credential-named column gained or lost is not drift); suspend
+   `source-restricted` when the source holds a linked-device fact (Part V), checked at every
+   query and at every connection-approve/import seam.
+10. Take a stop effect on the NEXT query, and let a stop that lands during a read win (no
+    rows leave); ring the reader `access-changed`.
+11. Drop every memory grant, limiter, pending ask and cached copy when the reader's frame
+    ends, when either app is deleted, and at every seam where the user file is swapped
+    (import, pull, restore, recovery).
+
+### 24.3 The read
+
+12. Run ONE read-only `SELECT`/`WITH … SELECT` — refuse any PRAGMA, ATTACH, DETACH, a second
+    statement or a CTE write BEFORE any copy is made, and `load_extension` and
+    `writable_schema` on the copy before the statement runs —
+    on a **scoped scratch copy** of the source's live runtime bytes (refused above
+    `ACCESS_SOURCE_MAX_BYTES`, 16 MiB) from which every trigger (first), every view, every
+    table outside the grant, `snug_kv` and the statistics tables have been physically
+    dropped and the drops verified, every credential-named column of a granted table
+    withheld, and `PRAGMA query_only` set; in an execution context the page does not share
+    (a dedicated worker with its own engine) under a wall clock of `ACCESS_QUERY_TIMEOUT_MS`
+    (2 s) that terminates the context when it fires; suspend `reader-misbehaved` after
+    `ACCESS_TIMEOUT_STRIKES` (3) consecutive timeouts.
+13. Mask, by column name, every cell under a credential-named column and every cell the C1
+    value scan rejects (`***`); cap rows and UTF-8 bytes in band with `truncated`/`totalRows`.
+14. Log every read on the SOURCE — `read` with the statement's first 200 characters (walked
+    whole first; omitted on a hit), the row count and whether anyone was looking — BEFORE the
+    rows leave; log `granted`, `refused` (a hidden frame on a grant without `unattended`, at
+    most once per minute per grant), `revoked`, `expired`, `released` and `suspended` with
+    their reason; keep the caps and the pruning order of §22.2.
+15. Answer a memory grant only to the visible frame of its generation; never to a hidden
+    frame, whatever the opt-in says.
+
+### 24.4 Disclosure and capability truth
+
+16. Before the user allows, say where the reader can send what it reads: its brain named
+    exactly as the host would route the reader's next turn, every approved connection by
+    provider and host, every declared one as not yet connected, any linked-device helper by
+    name, ALWAYS the link path when the reader may open links, the unattended condition when
+    ticked, and that the copy is made on this device and the source keeps the history —
+    never "stays on this device" under a list of places it can go.
+17. Advertise `capabilities.access` only where a scoped read can actually run (a host that
+    cannot construct the bounded execution context composes `false`); show the user, on both
+    apps and in a cross-app list, every grant with its words and ONE act, the source's
+    history in words, and a stop that works from every one of those places.
+
+A host that does not implement Part VI advertises no `access` capability and is conforming;
+it MAY carry Part VI's rows untouched.
+
+## 25. Deferred by name
+
+Write access (`access: 'write'` — the seat is reserved); user-chosen column scope (columns
+are frozen as disclosed, not filtered); sharing `snug_kv`; a source→reader change hint; a
+builder-time access declaration; grants inside shared bundles; linked-device sources; a
+count-only discovery answer; a source-initiated grant; a hint to the source that it was read;
+cross-app content in the chat data lane and the scheduler's think step; two-device history
+appends as a sync divergence; an app-level "arrived with an imported file" marker for the
+provenance line.
+
+---
+
+# Part VII — Conformance
 
 An implementation may claim conformance with the parts it implements; Part I is the
 minimum. Each item below is asserted by the reference implementation's test suite.
 
 **Hosts (wire):**
 - Validate every inbound frame against the published schemas, accepting unknown fields
-  (R2) and rejecting unsupported versions (R1); strict net/open-url frames refuse unknown
-  keys.
+  (R2) and rejecting unsupported versions (R1); the strict frames (the net and open-url
+  pairs and the access request) refuse unknown keys.
 - Mint `instanceId`, deliver it in `snug:host-ready`, route by message source, never by
   `appId` (R4).
 - Emit exactly one terminal `snug:app-response` per accepted `requestId` (R3).
@@ -1402,12 +1714,17 @@ minimum. Each item below is asserted by the reference implementation's test suit
 - Parse agent replies with graduated tolerance; convert failure to `PARSE_FAILED` with
   `rawExcerpt` and `attemptsRemaining`.
 - Execute app code with no configured model for apps that request none.
+- Advertise `access` only with a handler bound to the host-assigned id; route the access
+  pair through the same value-blind ladder as db and net; answer an over-cap access
+  response with `ACCESS_SIZE_EXCEEDED`, a malformed access request with a recoverable
+  `requestId` with `MALFORMED`.
 
 **Apps and SDKs:**
 - Announce on mount; wait for `snug:host-ready`; echo `instanceId`; unique `requestId`
   per instance; ignore unknown frames and fields; treat streaming frames as provisional;
-  never assume storage or network APIs — use the frames; feature-detect `net`/`openUrl`
-  from capabilities and render honest fallbacks.
+  never assume storage or network APIs — use the frames; feature-detect
+  `net`/`openUrl`/`access` from capabilities and render honest fallbacks; ask for access only
+  after a user act, never on load; treat `access-changed` as a hint and re-list.
 
 **Hubs (Part II):**
 - Carry the schema version in `PRAGMA user_version`, migrate forward-only, refuse
@@ -1445,6 +1762,18 @@ minimum. Each item below is asserted by the reference implementation's test suit
   caps, single-writer lifecycle, graceful-first termination, and the pseudonymisation
   backstop with its honest class statement and disclosures.
 
+**Hubs and hosts (access between apps, Part VI):**
+- Persist access grants under `accessGrant:<id>`, strict and byte-capped, written only by
+  the user's act; refuse a credential-named column in a scope and a credential anywhere.
+- Reconcile imported grants per §22.1 (suspend unless intent-identical; keep on a trusted
+  pull; drop declines and mutes; tag imported history); sweep both directions on app delete.
+- Keep the source's history per §22.2 (coalescing, caps, the pruning order, the line before
+  the rows).
+- Read only on a scoped scratch copy in a bounded execution context with the drops verified
+  and credential columns withheld (§24.3); mask by column name; key every limit on the
+  host-assigned id and frame generation; take a stop effect on the next query.
+- Disclose egress before consent (§24.4); advertise `access` only where a read can run.
+
 ---
 
 # Appendix A — Error code registry
@@ -1459,6 +1788,11 @@ unparseable frame, not a member of this list.)
 `NET_HOST_BLOCKED` · `NET_SSRF_BLOCKED` · `NET_CONFIRM_DENIED` · `NET_REDIRECT_BLOCKED` ·
 `NET_SIZE_EXCEEDED` · `NET_FETCH_FAILED` · `NET_AUTH_FAILED` ·
 `NET_SCRUBBED_HEADER_STRIPPED` (reserved).
+
+**Access capability (Part VI):** `ACCESS_INVALID_REQUEST` · `ACCESS_NOT_GRANTED` ·
+`ACCESS_DECLINED` · `ACCESS_PENDING` · `ACCESS_UNATTENDED` · `ACCESS_NO_SOURCES` ·
+`ACCESS_REVOKED` · `ACCESS_EXPIRED` · `ACCESS_QUERY_REFUSED` · `ACCESS_QUERY_FAILED` ·
+`ACCESS_RATE_LIMITED` · `ACCESS_SIZE_EXCEEDED`.
 
 # Appendix B — Normative constants
 
@@ -1491,28 +1825,48 @@ unparseable frame, not a member of this list.)
 | `RUNTIME_CONTRACT_MAX_BYTES` | 2560 |
 | data-lane result bounds | 200 rows / 32 KiB |
 | helper token entropy | ≥256 bits |
+| `ACCESS_PURPOSE_MAX_CHARS` / hint words / hint tables | 200 / 16 words × 32 chars / 16 tables |
+| `ACCESS_MAX_TABLES` / `ACCESS_MAX_COLUMNS` / column name | 32 per grant / 64 per table / 64 chars |
+| `ACCESS_SQL_MAX_CHARS` / `ACCESS_MAX_PARAMS` | 4 096 / 64 scalars (a string ≤ 4 096) |
+| `ACCESS_MAX_ROWS` / `ACCESS_MAX_RESULT_BYTES` | 500 / 192 KiB (196 608) UTF-8 bytes — under `MAX_FRAME_BYTES`. (The chat data lane's `scratchRun` caps, 200 rows / 32 KiB of characters, are a different surface: rows re-entering a model's context, not a frame.) |
+| `ACCESS_QUERY_TIMEOUT_MS` / `ACCESS_TIMEOUT_STRIKES` | 2 000 / 3 |
+| `ACCESS_SOURCE_MAX_BYTES` / `ACCESS_SCOPED_CACHE_MS` | 16 MiB / 10 000 |
+| `ACCESS_GRANT_MAX_BYTES` / `ACCESS_MAX_GRANTS` / `ACCESS_ENDED_RETENTION_MS` | 16 KiB / 100 live / 30 days |
+| `ACCESS_LOG_MAX_ENTRIES` / `ACCESS_LOG_MAX_BYTES` / `ACCESS_LOG_TOTAL_MAX_BYTES` / `ACCESS_LOG_SQL_MAX_CHARS` / `ACCESS_LOG_COALESCE_MS` | 200 / 64 KiB / 1 MiB / 200 / 60 000 |
+| `ACCESS_REQUEST_MIN_GAP_MS` / `ACCESS_QUERY_RATE_PER_MINUTE` | 10 000 / 60 (per reader app) |
+| `ACCESS_DURATIONS` / `ACCESS_GRANT_STATUSES` / `ACCESS_SUSPEND_REASONS` | session · day · week · always / active · revoked · suspended / imported · reader-updated · source-changed · source-restricted · reader-misbehaved |
+| `ACCESS_CHANGED_EVENT` | `access-changed` (host-event; `{ grantId }`) |
 
 # Appendix C — Published schemas and publication lines
 
-**Fourteen schema files** are published, byte-identical from `packages/protocol`
+**Sixteen schema files** are published, byte-identical from `packages/protocol`
 (`io: 'input'` for the tolerant set):
-`app-announce` · `app-cancel` · `app-event` · `app-message` · `app-request-envelope` ·
-`app-response` · `db-request` · `db-response` · `host-event` · `host-ready` ·
-`net-request` · `net-response` · `open-url-request` · `open-url-result`.
+`access-request` · `access-response` · `app-announce` · `app-cancel` · `app-event` ·
+`app-message` · `app-request-envelope` · `app-response` · `db-request` · `db-response` ·
+`host-event` · `host-ready` · `net-request` · `net-response` · `open-url-request` ·
+`open-url-result`.
 
-Two publication-line facts, decided at v0.3 (owner ask 2026-08-20):
+Three publication-line facts — two decided at v0.3 (owner ask 2026-08-20), the third at 1.1:
 
-1. **The strict pairs publish strict.** `net-*` and `open-url-*` schemas carry
-   `additionalProperties: false` — that IS their contract (§2, R2's stated exception).
-   Their superRefine rules (body-on-GET refusal, credential-header refusal, https-only +
-   userinfo-free URLs) are not expressible in JSON Schema; this prose is normative for
+1. **The strict frames publish strict.** `net-*`, `open-url-*` and `access-request` schemas
+   carry `additionalProperties: false` — that IS their contract (§2, R2's stated exception).
+   Their refinement rules (body-on-GET refusal, credential-header refusal, https-only +
+   userinfo-free URLs; the access purpose's visible-text rule, the credential refusal, the
+   shareable-table rule) are not expressible in JSON Schema; this prose is normative for
    them, and the exported schema is deliberately the weaker envelope, never the full
    contract. A validator passing the schema has not yet validated the frame.
-2. **The Part III–V contracts publish as prose, not as JSON Schemas.** The
+   **The access pair's precise exception:** `access-response` publishes TOLERANT (no
+   `additionalProperties: false` anywhere) by decision — the exported schemas are complete
+   for both frames' SHAPES; §24's obligations bind the host, not the parser.
+2. **The Part III–VI contracts publish as prose, not as JSON Schemas.** The
    connection-requirement, connection-url, chat-intent, runtime-contract and
    sidecar-contract shapes carry refinements JSON Schema cannot express (the host XOR,
    the per-kind coherence arms, canonicalization, derived route subsets). Exporting a
    schema weaker than the real contract would invite implementations that validate
    against the export and admit what the contract refuses — so none is offered. This
    specification's prose is normative for those surfaces, the reference implementation's
-   contract files are the machine-readable authority, and in-package tests lock them.
+   contract files are the machine-readable authority, and in-package tests lock them. The
+   access-grant and access-log records of §22 likewise — their refinements (the
+   credential walk, the column-name rule, the status invariants, the canonical intent) are
+   prose, the reference implementation's `access.ts`/`record-guards.ts` are the
+   machine-readable authority, and in-package tests lock them.

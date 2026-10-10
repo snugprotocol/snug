@@ -1,16 +1,17 @@
 #!/usr/bin/env node
-// check-whitepaper.mjs — conformance checks for the Snug Protocol whitepaper, edition 3
-// (TASK-20260822-spec-10-final; edition 2 was TASK-20260820, edition 1 TASK-20260807).
+// check-whitepaper.mjs — conformance checks for the Snug Protocol whitepaper, edition 4
+// (TASK-20261010-cross-app-access; edition 3 was TASK-20260822-spec-10-final, edition 2
+// TASK-20260820, edition 1 TASK-20260807).
 //
 // The whitepaper is a DERIVATIVE publication: the spec is normative, the paper only
 // explains it. So the paper must never be the place a constant, a frame name, or a rule
 // drifts. This checker treats the spec as a FIXTURE and fails when the two disagree.
 //
-// Edition-3 fixture: the promoted Specification 1.0 (docs/spec-drafts/SPEC-1.0.md)
+// Edition-4 fixture: Specification 1.1 (docs/spec-drafts/SPEC.md — TASK-20261010 renamed it)
 // plus the published schemas exported from packages/protocol — the monorepo is the master
 // (SPEC_SYNC), so pre-publication the paper is checked against the staged spec. After the
-// 1.0 push, point --spec at a spec-repo clone and the same checks run against its SPEC.md
-// (the 1.0 document; the old draft filenames there are pointer stubs, never fixtures).
+// 1.1 push, point --spec at a spec-repo clone and the same checks run against its SPEC.md
+// (the 1.1 document; the old draft filenames there are pointer stubs, never fixtures).
 //
 // Dependency-free on purpose (node: builtins + regexes). Run via
 // `pnpm run check-whitepaper`, or directly:
@@ -20,8 +21,8 @@
 //   AC1  the PDF exists, is a real PDF, and is non-trivial in size
 //   AC2  embedded PDF metadata carries the exact title and Author "Jeetu Maker"
 //   AC3  every protocol constant quoted in the paper matches the spec draft
-//   AC4  the frame inventory matches schemas + the draft (13 frames); R5/NET codes listed
-//   AC5  1.0 surfaces are COVERED; stale draft/RC self-description absent; superseded facts absent
+//   AC4  the frame inventory matches schemas + the draft (15 frames); R5/NET codes listed
+//   AC5  1.1 surfaces are COVERED; stale draft/RC self-description absent; superseded facts absent
 //   AC6  claim discipline: forbidden framings absent; bounded claims stay bounded
 //   AC7  figures are inline vector, numbered, and each cited in prose
 //   AC8  structural completeness; section numbering cannot drift
@@ -88,11 +89,11 @@ function assembleForCheck() {
 
 function loadSpecFixtures() {
   // Draft prose: the staged consolidated spec (or the same file in a --spec clone).
-  // In a --spec clone, SPEC.md IS the 1.0 document; the historical draft filenames
+  // In a --spec clone, SPEC.md IS the 1.1 document; the historical draft filenames
   // there are pointer stubs and must never be picked up as fixtures.
   const draftCandidates = SPEC_OVERRIDE
     ? [join(SPEC_OVERRIDE, 'SPEC.md')]
-    : [join(REPO, 'docs', 'spec-drafts', 'SPEC-1.0.md')];
+    : [join(REPO, 'docs', 'spec-drafts', 'SPEC.md')];
   const draftPath = draftCandidates.find(existsSync);
   // Schemas: byte-authoritative from packages/protocol unless a spec clone is given.
   const schemaDir = SPEC_OVERRIDE
@@ -226,14 +227,19 @@ function checkConstants(html, fx) {
 
 // ---------------------------------------------------------------- AC4 — frame inventory
 
-const POST_CORE_FRAMES = ['snug:net-request', 'snug:net-response', 'snug:open-url-request', 'snug:open-url-result'];
+// TASK-20261010-cross-app-access: the access pair joined with spec 1.1 (Part VI).
+const POST_CORE_FRAMES = [
+  'snug:net-request', 'snug:net-response', 'snug:open-url-request', 'snug:open-url-result',
+  'snug:access-request', 'snug:access-response',
+];
 
 function checkFrames(html, fx) {
   const text = stripTags(html);
   const specTypes = new Set();
   for (const s of Object.values(fx.schemas)) for (const t of collectTypeConsts(s)) specTypes.add(t);
 
-  check('AC4', 'published schemas expose all thirteen frame types', specTypes.size === 13,
+  // TASK-20261010-cross-app-access: 13 → 15 (the access pair, spec 1.1).
+  check('AC4', 'published schemas expose all fifteen frame types', specTypes.size === 15,
     `found ${specTypes.size} snug:* type consts in schemas: ${[...specTypes].join(', ')}`);
 
   for (const t of [...specTypes].sort()) {
@@ -248,7 +254,8 @@ function checkFrames(html, fx) {
       `"${t}" must appear in the paper and the spec`);
   }
 
-  check('AC4', 'paper states the thirteen-frame inventory', /[Tt]hirteen frame types/.test(text),
+  // TASK-20261010-cross-app-access: the stated count moves with the inventory.
+  check('AC4', 'paper states the fifteen-frame inventory', /[Ff]ifteen frame types/.test(text),
     'the frame table intro must state the current count');
 
   // Chat envelope required fields + detection rule.
@@ -287,7 +294,7 @@ function checkFrames(html, fx) {
 
 // ---------------------------------------------------------------- AC5 — coverage + drift
 
-/** 1.0 surfaces the paper MUST cover (the inverse of edition 1's exclusions). */
+/** 1.1 surfaces the paper MUST cover (the inverse of edition 1's exclusions). */
 const REQUIRED_SURFACES = [
   { label: 'connected applications section', re: /Connected applications/i },
   { label: 'frozen host ceiling', re: /frozen (host )?ceiling/i },
@@ -302,34 +309,42 @@ const REQUIRED_SURFACES = [
   { label: 'unrecoverable-loss disclosure', re: /unrecoverable/i },
   { label: 'pseudonymisation backstop', re: /pseudonymisation/i },
   { label: 'the doctrine (proposes/approves)', re: /model proposes.*human approves|human approves.*host (enforces|freezes)/i },
+  // TASK-20261010-cross-app-access: spec 1.1 Part VI must be covered.
+  { label: 'access between apps', re: /access grant/i },
 ];
 
 /** Facts that would mark the paper as stale — superseded by the current draft. */
 const SUPERSEDED = [
   { re: /snug_auth_specs/, why: 'table dropped at storage v5 — must not be described' },
   { re: /user_version\s*=\s*[234]\b/, why: 'storage schema is 6' },
-  { re: /\bnine frame types are defined\b/i, why: 'the inventory is thirteen' },
+  { re: /\bnine frame types are defined\b/i, why: 'the inventory is fifteen' },
+  // TASK-20261010-cross-app-access: the 1.0 count is now stale.
+  { re: /\bthirteen frame types are defined\b/i, why: 'the inventory is fifteen' },
   { re: /kind set is closed at six|[Ss]ix kinds/, why: 'seven kinds since linked_device' },
   { re: /credential broker/i, why: 'broker/subscription custody is unbuilt — never described as existing' },
 ];
 
 function checkCoverage(html) {
   const text = stripTags(html);
-  // Edition 3 describes the NORMATIVE Specification 1.0 — the inverse of edition 2's
-  // draft-marking requirement. The paper must claim 1.0 and must NOT self-describe as a
+  // Edition 4 describes the NORMATIVE Specification 1.1 — the inverse of edition 2's
+  // draft-marking requirement. The paper must claim 1.1 and must NOT self-describe as a
   // draft, a release candidate, or not-yet-normative. (§17 stays provisional and its own
   // check below still requires that word FOR that feature — "provisional" is a per-surface
   // maturity marker, not a document-level draft claim.)
-  check('AC5', 'edition 3 names specification 1.0',
-    /spec(?:ification)?\s*1\.0/i.test(text),
+  // TASK-20261010-cross-app-access: edition 4 documents Specification 1.1.
+  check('AC5', 'edition 4 names specification 1.1',
+    /spec(?:ification)?\s*1\.1/i.test(text),
     'the paper must state the spec version it documents');
   check('AC5', 'no stale draft self-description',
-    !/v0\.3/i.test(text) && !/release\s+candidate/i.test(text) && !/not\s+yet\s+normative/i.test(text),
-    'a 1.0 paper must not carry v0.3 / release-candidate / not-yet-normative claims');
+    // TASK-20261010-cross-app-access: the frame history ("the net and open-url pairs with
+    // v0.3") is the one permitted mention — it dates the frames, not this document.
+    !/v0\.3/i.test(text.replace(/open-url\s+pairs\s+with\s+v0\.3/gi, ' ')) &&
+      !/release\s+candidate/i.test(text) && !/not\s+yet\s+normative/i.test(text),
+    'a 1.1 paper must not carry v0.3 / release-candidate / not-yet-normative claims (beyond the frame-history clause)');
 
   for (const s of REQUIRED_SURFACES) {
-    check('AC5', `1.0 surface covered: ${s.label}`, s.re.test(text),
-      'the 1.0 spec surface must be covered by this edition');
+    check('AC5', `1.1 surface covered: ${s.label}`, s.re.test(text),
+      'the 1.1 spec surface must be covered by this edition');
   }
   for (const s of SUPERSEDED) {
     check('AC5', `superseded fact absent: ${s.re.source}`, !s.re.test(text), s.why);
@@ -411,7 +426,8 @@ function checkClaims(html) {
 
 // ---------------------------------------------------------------- AC7 — figures
 
-const MIN_FIGURES = 10;
+// TASK-20261010-cross-app-access: Figure 11 (access between apps).
+const MIN_FIGURES = 11;
 
 function checkFigures(html) {
   if (!check('AC7', 'figures directory exists', existsSync(FIG_DIR), `expected ${FIG_DIR}`)) return;
@@ -480,9 +496,10 @@ function checkStructure(html) {
       'margin boxes are what put running heads and folios on every page');
     check('AC8', 'section + figure counters declared',
       /counter-reset/.test(css) && /counter-increment/.test(css));
+    // TASK-20261010-cross-app-access: the running head moves to 1.1.
     check('AC8', 'running head names the current spec version',
-      /content:\s*"[^"]*\b1\.0\b[^"]*"/.test(css) && !/v0\.3/.test(css),
-      'a content: "…1.0…" margin-box string must carry the label (an incidental 1.0 elsewhere in the CSS must not satisfy this), and no stale v0.3');
+      /content:\s*"[^"]*\b1\.1\b[^"]*"/.test(css) && !/v0\.3/.test(css),
+      'a content: "…1.1…" margin-box string must carry the label (an incidental 1.1 elsewhere in the CSS must not satisfy this), and no stale v0.3');
   }
 }
 

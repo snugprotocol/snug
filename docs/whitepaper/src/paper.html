@@ -1,9 +1,10 @@
 <!--
-  paper.html — The Snug Protocol whitepaper, edition 3 — the 1.0 edition
-  (TASK-20260822-spec-10-final; edition 2 was TASK-20260820, edition 1 TASK-20260807).
+  paper.html — The Snug Protocol whitepaper, edition 4 — the 1.1 edition
+  (TASK-20261010-cross-app-access; edition 3 was TASK-20260822-spec-10-final, edition 2
+  TASK-20260820, edition 1 TASK-20260807).
 
   Source of truth for every normative claim below is the specification:
-  docs/spec-drafts/SPEC-1.0.md, plus the published schemas exported from
+  docs/spec-drafts/SPEC.md, plus the published schemas exported from
   packages/protocol. scripts/check-whitepaper.mjs verifies the frame inventory and every
   constant against those files — if you change a number here, the checker fails until the
   spec says the same thing.
@@ -45,11 +46,11 @@
     </div>
     <div>
       <div class="k">Specification · Edition</div>
-      <div class="v">1.0 · edition 3</div>
+      <div class="v">1.1 · edition 4</div>
     </div>
     <div>
       <div class="k">Date</div>
-      <div class="v">August 2026</div>
+      <div class="v">October 2026</div>
     </div>
   </div>
 
@@ -88,18 +89,19 @@
     <li><span class="num">1</span><span class="ttl">Introduction<span class="sub">The market of one, and what it still lacks</span></span><span class="pg">3</span></li>
     <li><span class="num">2</span><span class="ttl">Design goals and non-goals<span class="sub">What the protocol commits to, and what it deliberately refuses</span></span><span class="pg">4</span></li>
     <li><span class="num">3</span><span class="ttl">Architecture: the three actors<span class="sub">Model provider, host provider, and the user who owns the file</span></span><span class="pg">5</span></li>
-    <li><span class="num">4</span><span class="ttl">The wire protocol<span class="sub">Thirteen frames, seven rules, and the chat envelope</span></span><span class="pg">7</span></li>
+    <li><span class="num">4</span><span class="ttl">The wire protocol<span class="sub">Fifteen frames, seven rules, and the chat envelope</span></span><span class="pg">7</span></li>
     <li><span class="num">5</span><span class="ttl">Security model<span class="sub">Threat model, hard constraints, and residual risk</span></span><span class="pg">12</span></li>
-    <li><span class="num">6</span><span class="ttl">The portable user database<span class="sub">One file: hub tables, native per-app data, naming, encryption</span></span><span class="pg">15</span></li>
-    <li><span class="num">7</span><span class="ttl">Connected applications<span class="sub">Requirements, grants, frozen ceilings, and the executor</span></span><span class="pg">20</span></li>
-    <li><span class="num">8</span><span class="ttl">Linked-device connections<span class="sub">Governing a provider that has no API: the helper surface</span></span><span class="pg">24</span></li>
-    <li><span class="num">9</span><span class="ttl">Runtime contracts and the data surface<span class="sub">Turns cheap enough for any brain; data that answers to its owner</span></span><span class="pg">26</span></li>
-    <li><span class="num">10</span><span class="ttl">Conformance<span class="sub">What an implementation must do to claim the name</span></span><span class="pg">27</span></li>
-    <li><span class="num">11</span><span class="ttl">Related work<span class="sub">MCP, vendor application platforms, local-first software</span></span><span class="pg">29</span></li>
-    <li><span class="num">12</span><span class="ttl">Limitations and future work<span class="sub">What is unsolved, stated plainly</span></span><span class="pg">30</span></li>
-    <li><span class="num">13</span><span class="ttl">Conclusion</span><span class="pg">31</span></li>
-    <li><span class="num">—</span><span class="ttl">Normative references</span><span class="pg">32</span></li>
-    <li><span class="num">A</span><span class="ttl">Appendix: message schema summary</span><span class="pg">32</span></li>
+    <li><span class="num">6</span><span class="ttl">The portable user database<span class="sub">One file: hub tables, native per-app data, naming, encryption</span></span><span class="pg">16</span></li>
+    <li><span class="num">7</span><span class="ttl">Connected applications<span class="sub">Requirements, grants, frozen ceilings, and the executor</span></span><span class="pg">21</span></li>
+    <li><span class="num">8</span><span class="ttl">Linked-device connections<span class="sub">Governing a provider that has no API: the helper surface</span></span><span class="pg">25</span></li>
+    <li><span class="num">9</span><span class="ttl">Runtime contracts and the data surface<span class="sub">Turns cheap enough for any brain; data that answers to its owner</span></span><span class="pg">27</span></li>
+    <li><span class="num">10</span><span class="ttl">Access between apps<span class="sub">The one sanctioned crossing, under an access grant the user gives</span></span><span class="pg">28</span></li>
+    <li><span class="num">11</span><span class="ttl">Conformance<span class="sub">What an implementation must do to claim the name</span></span><span class="pg">29</span></li>
+    <li><span class="num">12</span><span class="ttl">Related work<span class="sub">MCP, vendor application platforms, local-first software</span></span><span class="pg">31</span></li>
+    <li><span class="num">13</span><span class="ttl">Limitations and future work<span class="sub">What is unsolved, stated plainly</span></span><span class="pg">32</span></li>
+    <li><span class="num">14</span><span class="ttl">Conclusion</span><span class="pg">33</span></li>
+    <li><span class="num">—</span><span class="ttl">Normative references</span><span class="pg">34</span></li>
+    <li><span class="num">A</span><span class="ttl">Appendix: message schema summary</span><span class="pg">34</span></li>
   </ol>
 </section>
 
@@ -128,7 +130,8 @@ none of them is a modelling question:</p>
 
 <ul>
   <li><strong>Isolation.</strong> The code was written by a language model, possibly under
-  the influence of text the user did not author. On what terms may it run?</li>
+  the influence of text the user did not author. On what terms may it run — and on what terms
+  may it read what another application keeps?</li>
   <li><strong>Custody.</strong> Where does its data live, who can read it, and what happens
   to it when the user leaves?</li>
   <li><strong>Continuity.</strong> If the application is genuinely the user's, it must
@@ -161,13 +164,14 @@ separately, then the application and its data can be written into a single porta
 that the user carries between hosts.</p>
 
 <p>The protocol has three layers, specified in this paper. Section 4 covers the wire
-protocol: thirteen versioned postMessage frames and a tagged chat envelope. Section 6
+protocol: fifteen versioned postMessage frames and a tagged chat envelope. Section 6
 covers the portable user database, a storage and host-behaviour layer that leaves the wire
 protocol untouched — including the file's naming rules and its optional passphrase
 protection. Sections 7 through 9 cover the connected-application surface: how an
 application declares what it needs, how a human grant freezes what it may reach, how the
 one host-side executor enforces that wall on every request, and how the same governance
-extends to a provider that has no API at all. Section 5, which sits before them, is in our
+extends to a provider that has no API at all. Section 10 covers the one sanctioned crossing
+between applications, the access grant. Section 5, which sits before them, is in our
 view the load-bearing part: the threat model and the hard constraints that every other
 layer exists to preserve.</p>
 
@@ -177,7 +181,8 @@ layer exists to preserve.</p>
   and <strong>MAY</strong> are used in the sense of RFC 2119. The wire protocol's core is
   normative and published since spec v0.1; the storage layer, the connected-application
   surface, runtime contracts, and linked-device connections are normative as of
-  specification 1.0. One surface — standing approvals — is explicitly
+  specification 1.0, and access between applications (§10) as of specification 1.1. One
+  surface — standing approvals — is explicitly
   <span class="badge draft">Provisional</span> and so marked where it appears. Where this
   paper and the specification differ, the specification governs.</p>
 </div>
@@ -219,7 +224,7 @@ both here so that later sections can be read as consequences rather than choices
   <dt><span class="rid">G5</span> Additive evolution</dt>
   <dd>Unknown message types and unknown fields are ignored rather than rejected, so that a
   newer participant can talk to an older one without negotiation beyond a version check. The
-  protocol grew from nine frames to thirteen without breaking a single deployed
+  protocol grew from nine frames to fifteen without breaking a single deployed
   application, which is this rule doing its job.</dd>
 
   <dt><span class="rid">G6</span> Implementable by more than its author</dt>
@@ -245,7 +250,7 @@ both here so that later sections can be read as consequences rather than choices
   <em>do</em> — tools, resources, external systems — is well served by the Model Context
   Protocol, and Snug does not duplicate it. Snug addresses the inverse direction: giving a
   user-authored application access to the model, and governing what that application may
-  reach. Section 11 develops the distinction.</li>
+  reach. Section 12 develops the distinction.</li>
   <li><strong>A rendering or component standard.</strong> An application is an ordinary
   self-contained HTML document. The protocol constrains what crosses the boundary, not what
   the application draws.</li>
@@ -319,13 +324,13 @@ application, together with the reply contract the agent must satisfy.</p>
 
 <h3>Frames</h3>
 
-<p>Thirteen frame types are defined. Each carries <code>v: 1</code>: the wire protocol has
-been additively extended, never broken, since v0.1. All thirteen are published as JSON
-Schemas exported byte-identically from the reference implementation — the nine core frames
-since v0.1, the net and open-url pairs since spec 1.0's consolidation.</p>
+<p>Fifteen frame types are defined. Each carries <code>v: 1</code>: the wire protocol has
+been additively extended, never broken, since v0.1 — nine core frames, the net and open-url
+pairs with v0.3, the access pair with 1.1. All fifteen are published as JSON Schemas
+exported byte-identically from the reference implementation.</p>
 
 <table>
-  <caption>The thirteen frame types of specification 1.0. Published schemas are input shapes:
+  <caption>The fifteen frame types of specification 1.1. Published schemas are input shapes:
   validators MUST accept unknown fields (R2). The net and open-url frames are the stated
   exception — strict, because their fields become real-world effects.</caption>
   <thead>
@@ -345,7 +350,7 @@ since v0.1, the net and open-url pairs since spec 1.0's consolidation.</p>
       <td>Sent on frame load and again as an announce acknowledgement (idempotent):
       <code>instanceId</code>, <code>protocolVersions</code>, <code>capabilities</code>
       (<code>streaming</code>, <code>db</code>, <code>auth</code>; optional additive
-      <code>net</code> and <code>openUrl</code>), <code>theme</code>, optional
+      <code>net</code>, <code>openUrl</code> and <code>access</code>), <code>theme</code>, optional
       <code>locale</code>.</td>
     </tr>
     <tr>
@@ -406,6 +411,13 @@ since v0.1, the net and open-url pairs since spec 1.0's consolidation.</p>
       optional reason).</td>
     </tr>
     <tr>
+      <td class="mono-cell">snug:access-request&nbsp;/<br>snug:access-response</td>
+      <td><span class="dir">app ↔ host</span></td>
+      <td>Access between apps (Part VI): a reader asks for, queries, lists and releases a
+      user-granted, read-only access grant on another application's tables. The request is
+      strict; the response is tolerant; the runner's binding is host-assigned.</td>
+    </tr>
+    <tr>
       <td class="mono-cell">snug:host-event</td>
       <td><span class="dir">host → app</span></td>
       <td>Open additive channel: <code>theme-change</code>, <code>visibility</code>,
@@ -460,7 +472,8 @@ approximately.</p>
   type prefix and the event namespaces are reserved. This is what allows a host and an SDK to
   be upgraded independently. The strict net and open-url frames are the deliberate
   exception: their fields become network requests and browser navigations, so an unknown
-  key there is a rejection rather than a passthrough.</dd>
+  key there is a rejection rather than a passthrough. The access request (§10) is strict
+  too; its response is tolerant.</dd>
 
   <dt><span class="rid">R3</span> Terminal frame</dt>
   <dd>Every accepted <code>requestId</code> receives exactly one terminal
@@ -491,7 +504,9 @@ approximately.</p>
   not part of this list. The network capability carries its own registry of
   <code>NET_</code>-prefixed codes — approval, ceiling, SSRF, confirmation, redirect, and
   size refusals each have a distinct name, because an application that cannot tell "the
-  user said no" from "the host is broken" will retry the wrong one. Receivers treat unknown
+  user said no" from "the host is broken" will retry the wrong one. Access between
+  applications (§10) carries <code>ACCESS_</code>-prefixed codes in the same way. Receivers
+  treat unknown
   codes according to the <code>retryable</code> flag and render them as
   <code>HOST_ERROR</code>.</dd>
 
@@ -610,8 +625,13 @@ hostile <em>connection requirement</em> authored by a steered model, and a hosti
     <tr>
       <td>Application reads another application's data</td>
       <td>Runtime isolation is physical: an application executes against a materialised
-      database containing only its own objects (§6.3)</td>
-      <td>Host implementation defect</td>
+      database containing only its own objects (§6.3). The one sanctioned crossing is an
+      <strong>access grant</strong> the user gives on host chrome (§10): read-only, scoped to named
+      tables with their columns frozen, timed, revocable from anywhere, logged on the source —
+      and executed on a scoped scratch copy in a bounded worker from which every other object has
+      been physically dropped</td>
+      <td>What the reader reads is visible to its own model and may travel through the reader's
+      own approved paths — both named to the user before consent</td>
     </tr>
     <tr>
       <td>Application reads host-namespace tables</td>
@@ -667,7 +687,6 @@ hostile <em>connection requirement</em> authored by a steered model, and a hosti
   </tbody>
 </table>
 
-<!--FIGURE:fig4-trust-boundary|Figure 4|<span class="fignum">Figure 4.</span> The trust boundary. Structured, size-capped JSON crosses in both directions and is validated before it can have any effect. Credentials, raw tokens, direct network access, host storage, and other applications' data never cross at all.-->
 
 <h3>C1 — the token boundary</h3>
 
@@ -680,6 +699,8 @@ application-originated request at the envelope boundary — and the net frame sc
 those header names outright, so a credential-carrying request is malformed before any
 handler runs. Where the host injects a credential on an application's behalf (§7), injection
 is host-bound and <strong>always strict — never a configurable flag</strong>.</p>
+
+<!--FIGURE:fig4-trust-boundary|Figure 4|<span class="fignum">Figure 4.</span> The trust boundary. Structured, size-capped JSON crosses in both directions and is validated before it can have any effect. Credentials, raw tokens, direct network access, and host storage never cross at all; other applications' data crosses only as rows under an access grant the user gave (§10).-->
 
 <p>The emphasis is earned. An audit of the two production systems this protocol generalises
 from found a strictness control that defaulted to off, which is to say a documented feature
@@ -742,7 +763,8 @@ intended use.</p>
 
 <p><strong>The model can be manipulated in what it says.</strong> C1 and C2 bound what an
 injected instruction can <em>do</em>: it cannot reach a credential, open a socket, or touch
-another application's data — and on the connected surface it cannot widen a ceiling or
+another application's data without a
+user-granted, logged access grant — and on the connected surface it cannot widen a ceiling or
 bypass a confirmation. It can still influence the <em>content</em> of an answer the
 application then renders, and it can propose actions in the hope a hurried user approves
 them. Applications that act on model output should treat that output as untrusted input;
@@ -773,7 +795,7 @@ charset guard as more than it is.</p>
 depend on the host implementing them correctly: name validation, materialisation, header
 stripping, gate ordering. The protocol can specify these and the schemas can constrain the
 wire, but neither can compel a host to be correct. This is the ordinary condition of
-protocols, and it is why §10 states conformance in terms that are testable — and why the
+protocols, and it is why §11 states conformance in terms that are testable — and why the
 reference implementation's threat model pins every claim to a named test.</p>
 
 <p><strong>Availability is not addressed.</strong> A misbehaving application can make many
@@ -787,7 +809,7 @@ their own cost model.</p>
 
 <div class="callout">
   <div class="callout-title">Scope</div>
-  <p>This section describes the storage and host-behaviour layer of specification 1.0;
+  <p>This section describes the storage and host-behaviour layer of specification 1.1;
   the wire protocol of §4 is unchanged by it. Storage schema version 6 is described; the
   source of truth for constants and DDL is the reference implementation, locked by a
   snapshot test.</p>
@@ -1296,7 +1318,9 @@ default lane, and in particular never the lane that writes code.</p>
 <p>Reads are isolated by construction: generated SQL executes against a throwaway copy of
 the application's own materialised database — never live storage, and never behind a
 "read-only" flag, because isolation is a property of what the copy <em>contains</em>:
-other applications' tables and every host table are physically absent. Results are bounded
+other applications' tables and every host table are physically absent — the same construction
+an access grant reuses, in its own worker, when the user lets one application read another's
+tables (§10). Results are bounded
 (200 rows / 32 KiB) before re-entering the model's context, and truncation says so
 in-band. Writes are proposed, previewed, approved, then re-validated: the user sees the
 verbatim statements and an affected-row preview; execution happens only on explicit
@@ -1314,6 +1338,46 @@ delimiter spellings defanged in the data.</p>
 </section>
 
 <!-- ============================================================ 10 -->
+<!-- Access between apps — specification 1.1 Part VI (ADR-0075, TASK-20261010-cross-app-access). -->
+<section>
+<h2>Access between apps</h2>
+
+<p>Every application's data is its own. That isolation is the guarantee the threat table
+rests on, and it is also a limit a user feels the first time two of their own applications
+should cooperate: a budget that cannot see the ledger, a planner that cannot see the pantry.
+Specification 1.1 adds the one sanctioned crossing, and it is shaped by the same doctrine
+as every other capability here — the model proposes, the human approves, the host enforces
+and freezes. Figure 11 traces the crossing from the ask to the rows.</p>
+
+
+<p>A reader application asks, after a user act, with one plain sentence of purpose. The
+host renders the ask as a strip, never a modal; the user reviews on host chrome the
+application cannot draw over, and sees the user's own applications ranked by relevance — the
+reader never sees that list. The user picks the source and its tables, each table with its
+columns shown (credential-named columns are marked <em>never shared</em> and are never in a
+grant), chooses how long — while the reader is open, a day, a week, until stopped — and reads,
+before allowing, exactly where the reader can send what it reads: its brain by name, each
+approved connection by provider and host, any link it may ask to open. The result is an
+<strong>access grant</strong>: a host record the user alone can write, strict and
+byte-capped, carrying the granted tables with their columns frozen, suspended the moment the
+reader's code is replaced by a shared bundle or an agent hand-in, or the source's shape
+changes under it, revocable from the source's side, the reader's side or Settings, and swept with either
+application.</p>
+
+<p>A read is one read-only <code>SELECT</code> on a <em>scoped scratch copy</em> of the
+source's live database, executed in a dedicated worker that owns its own engine under a
+two-second wall clock: every trigger, every view, every table outside the grant and the
+application's key-value store are physically dropped from the copy and the drops verified,
+credential-named columns are withheld on the copy and masked in the rows, and a query that
+outruns the clock is terminated with the worker — the page never waits, and the live user
+database is never the thing being queried. Every read is logged on the source's own row —
+what was read, how many rows, whether anyone was looking — in a bounded history that
+never loses the latest lifecycle line of any grant it still holds. The record travels with the user's file, and an
+imported file disarms every grant it carries that the user did not give here.</p>
+<!--FIGURE:fig11-access-grant|Figure 11|<span class="fignum">Figure 11.</span> Access between apps. The reader asks; the user reviews on host chrome and picks the source and tables; the host writes the grant, copies the source into a scoped scratch database in its own worker, drops everything outside the grant, runs the one read under a wall clock, masks credential columns, logs the read on the source and hands the rows to the reader. The reader never sees the user's inventory; the source's live database is never queried.-->
+</section>
+
+<!-- ============================================================ 11 -->
 <section>
 <h2>Conformance</h2>
 
@@ -1325,7 +1389,7 @@ reference implementation's suite.</p>
 <ul>
   <li>Validate every inbound frame against the published schemas, accepting unknown fields
   (R2) and rejecting unsupported versions with <code>UNSUPPORTED_VERSION</code> (R1); the
-  strict net and open-url frames refuse unknown keys.</li>
+  strict net and open-url frames and the access request refuse unknown keys.</li>
   <li>Mint <code>instanceId</code>, deliver it in <code>snug:host-ready</code>, and route
   by message source, never by <code>appId</code> (R4).</li>
   <li>Emit exactly one terminal <code>snug:app-response</code> per accepted
@@ -1393,7 +1457,7 @@ reference implementation's suite.</p>
 </ul>
 </section>
 
-<!-- ============================================================ 11 -->
+<!-- ============================================================ 12 -->
 <section>
 <h2>Related work</h2>
 
@@ -1443,7 +1507,8 @@ for themselves, which no directory would list and no reviewer should need to app
 whose value to its owner is precisely that it is theirs. Snug is the open, user-owned
 counterpart — not a competing store, but the layer that lets such software exist without one.
 The sandbox, not a submission queue, is the reviewer: a Snug application cannot phone home,
-cannot read another application's tables, and cannot touch a credential, whether or not
+cannot read another application's tables except under an access grant the user gave, can see
+and can stop, and cannot touch a credential, whether or not
 anyone ever looked at its code.</p>
 
 <h3>Local-first software</h3>
@@ -1463,7 +1528,7 @@ custody, portability — and now connection. Snug's contribution is to answer th
 protocol layer, so that the answer is not one vendor's implementation detail.</p>
 </section>
 
-<!-- ============================================================ 12 -->
+<!-- ============================================================ 13 -->
 <section>
 <h2>Limitations and future work</h2>
 
@@ -1494,7 +1559,7 @@ implementation lets the user set a reminder, or a question for an application's 
 to a time; the task and its run history are rows in the user's file, under the namespaced
 <code>snug_settings</code> keys that the specification's §8.1 reserves for host-side state
 that is neither application data nor a grant. Nothing is added to the wire, the envelope,
-the runtime contract, or the conformance clauses of §10, and a conforming host need not
+the runtime contract, or the conformance clauses of §11, and a conforming host need not
 schedule anything. Because the schedule is in the file it travels with the file: the same
 morning question is put on whichever host opens the file next, no scheduler service holds
 it apart from the file, and — like the endpoint settings of §6.4 — it arrives disabled on
@@ -1518,7 +1583,8 @@ it interacts with synchronisation cost, since the present model transfers whole 
 
 <p><strong>No formal verification.</strong> The security properties are argued from structure
 and tested by suite, not proved. The isolation claim in particular — that materialisation
-makes cross-application reads impossible rather than merely difficult — would benefit from
+makes a cross-application read impossible outside an access grant the user gave (§10), rather
+than merely difficult — would benefit from
 formal treatment, as would the executor's gate ordering.</p>
 
 <p><strong>The agent reply contract is prose-shaped.</strong> Tolerant parsing is a pragmatic
@@ -1527,7 +1593,7 @@ the fallbacks in §4.5 should become dead code, and a later revision may make sc
 replies mandatory rather than optional.</p>
 </section>
 
-<!-- ============================================================ 13 -->
+<!-- ============================================================ 14 -->
 <section>
 <h2>Conclusion</h2>
 
@@ -1549,8 +1615,8 @@ absolutely; give it the model as a capability it calls rather than an engine it 
 let it reach the world only through a wall a human froze and a gate a human answers; and
 put everything the user accumulates into one file they can carry away — and seal, if they
 choose, with a passphrase only they hold. The whole surface — wire, storage, connected
-applications, runtime contracts, linked-device connections — is normative as of
-specification 1.0. All of it is MIT licensed, all of it is specified by schemas and contracts exported
+applications, runtime contracts, linked-device connections, access between applications — is
+normative as of specification 1.1. All of it is MIT licensed, all of it is specified by schemas and contracts exported
 from a working implementation, and all of it is offered in the expectation that other
 implementations will find it wanting in specific, correctable ways.</p>
 
@@ -1565,9 +1631,9 @@ later, on a device and a provider nobody has chosen yet.</p>
 <h2 class="nonum">Normative references</h2>
 
 <ol>
-  <li><strong>Snug Protocol Specification, 1.0.</strong> The complete specification:
+  <li><strong>Snug Protocol Specification, 1.1.</strong> The complete specification:
   wire protocol, portable user database, connected applications, runtime contracts,
-  linked-device connections. <span class="src">snugprotocol/spec —
+  linked-device connections, access between apps. <span class="src">snugprotocol/spec —
   <code>SPEC.md</code></span></li>
   <li><strong>Snug Protocol JSON Schemas.</strong> Normative message shapes, published
   byte-identically from the reference implementation. <span class="src">snugprotocol/spec —
@@ -1602,9 +1668,9 @@ later, on a device and a provider nobody has chosen yet.</p>
     <div class="k">Security contact</div>
     <p>security@snugprotocol.org</p>
     <div class="k" style="margin-top:4mm">Status</div>
-    <p>Specification 1.0 is normative: the wire protocol (published since v0.1), the
-    storage layer at schema 6, the connected-application surface, runtime contracts, and
-    linked-device connections. One surface — standing approvals — is explicitly
+    <p>Specification 1.1 is normative: the wire protocol (published since v0.1), the
+    storage layer at schema 6, the connected-application surface, runtime contracts,
+    linked-device connections, and access between applications. One surface — standing approvals — is explicitly
     provisional and so marked.</p>
   </div>
 </div>
@@ -1616,7 +1682,7 @@ later, on a device and a provider nobody has chosen yet.</p>
 
 <p>Required fields for every message, from the normative schemas. All frames additionally
 require <code>v: 1</code> and <code>type</code>; validators MUST accept unknown fields on
-the tolerant frames (R2); the net and open-url frames are strict.</p>
+the tolerant frames (R2); the net and open-url frames and the access request are strict.</p>
 
 <table>
   <caption>Required fields by message type. Optional fields are described in §4.</caption>
@@ -1637,6 +1703,8 @@ the tolerant frames (R2); the net and open-url frames are strict.</p>
     <tr><td class="mono-cell">snug:net-response</td><td><code>requestId</code>, <code>ok</code> — with <code>status</code>, <code>headers</code>, <code>body</code> when <code>ok: true</code>, <code>error</code> otherwise</td></tr>
     <tr><td class="mono-cell">snug:open-url-request</td><td><code>requestId</code>, <code>instanceId</code>, <code>url</code> <span class="dir">strict; https-only, no userinfo</span></td></tr>
     <tr><td class="mono-cell">snug:open-url-result</td><td><code>requestId</code>, <code>status</code></td></tr>
+    <tr><td class="mono-cell">snug:access-request</td><td><code>requestId</code>, <code>instanceId</code>, <code>op</code> — with <code>purpose</code> for <code>request</code>, <code>grantId</code> and <code>sql</code> for <code>query</code>, <code>grantId</code> for <code>release</code> <span class="dir">strict; no appId seat</span></td></tr>
+    <tr><td class="mono-cell">snug:access-response</td><td><code>requestId</code>, <code>ok</code> — with <code>op</code> and its answer (<code>grant</code>; <code>columns</code> and <code>rows</code>; <code>grants</code>) when <code>ok: true</code>, <code>error</code> otherwise</td></tr>
     <tr><td class="mono-cell">snug:host-event</td><td><code>event</code></td></tr>
     <tr><td class="mono-cell">snug:app-event</td><td><code>event</code></td></tr>
     <tr><td class="mono-cell">chat envelope</td><td><code>snug: 1</code>, <code>appId</code>, <code>instanceId</code>, <code>requestId</code>, <code>action</code></td></tr>

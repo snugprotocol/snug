@@ -38,7 +38,7 @@ transport to its existing assistant, and stores per-user files with **db**. The 
 
 A conformant host implements, in rough order of effort:
 
-1. **The wire protocol** ([Part I](/docs/spec/part-1-the-wire-protocol/)) — thirteen frames
+1. **The wire protocol** ([Part I](/docs/spec/part-1-the-wire-protocol/)) — fifteen frames
    over `postMessage`, versioned, validated at the boundary. The
    [schemas](/docs/spec/schemas/) are published byte-identical from the reference.
 2. **The sandbox contract** — apps run with `allow-scripts` only and no network of their own.
@@ -52,7 +52,7 @@ A conformant host implements, in rough order of effort:
 5. **Runtime contracts** ([Part IV](/docs/spec/part-4-runtime-contracts-and-the-app-chat-surface/))
    — the compact per-app turn assembly that makes runtime thinking cheap.
 
-[Part VI — Conformance](/docs/spec/part-6-conformance/) states what a host must, should, and
+[Part VII — Conformance](/docs/spec/part-7-conformance/) states what a host must, should, and
 may do; the [appendices](/docs/spec/appendices/) carry the error-code registry and the
 normative constants.
 
