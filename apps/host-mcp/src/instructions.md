@@ -39,6 +39,9 @@ second copy of it.
   what you can see.
 - Connections are made by the user in the runner's own wizard. A bundle that asks for one
   is refused, by design: the user grants access, not the agent.
+- Apps can read each other's data only under an access the user allows in the runner, and
+  the user can stop it at any moment. You never allow it on the user's behalf: an app you
+  build asks for it itself, at runtime, after the user has done something that needs it.
 
 ## Talking about it
 

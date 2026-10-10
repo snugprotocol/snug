@@ -747,10 +747,11 @@ describe('the swap seams (E1)', () => {
   });
 });
 
-describe('noteAppVersion is a thin delegate to appDrift.ts (the E8 rule has ONE home, at the db altitude)', () => {
-  it('acts.ts calls `pauseSchedulesForAppVersion` and no longer walks the tasks itself', () => {
+describe('noteAppVersion is a thin delegate to the ONE app-version fan-out (the E8 rule has ONE home, at the db altitude; TASK-20261010-cross-app-access D18 — the fan-out also suspends the access the app holds)', () => {
+  it('acts.ts calls `onAppVersionChanged` (never `pauseSchedulesForAppVersion` directly) and no longer walks the tasks itself', () => {
     const acts = readFileSync(path.resolve(__dirname, '..', 'schedule', 'acts.ts'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:'"`\\])\/\/[^\n]*/g, '$1');
-    expect(acts).toMatch(/pauseSchedulesForAppVersion\(await deps\.db\(\), appId, version, source, deps\.now\(\)\.toISOString\(\)\)/);
+    expect(acts).toMatch(/onAppVersionChanged\(await deps\.db\(\), appId, version, source, deps\.now\(\)\.toISOString\(\)\)\.schedulesPaused/);
+    expect(acts).not.toMatch(/\bpauseSchedulesForAppVersion\s*\(/);
     expect(acts).not.toMatch(/\bpauseForAppUpdate\b/);
     expect(acts).toMatch(/export type \{ AppVersionSource \} from '\.\/appDrift\.js'/);
   });

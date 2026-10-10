@@ -88,6 +88,7 @@ Then, when they apply:
 - `references/95-runtime-contract.md` — when the app thinks: the contract that shapes every
   runtime turn.
 - `references/85-scheduled-runs.md` — when the app should run on a schedule, or suggest one.
+- `references/87-cross-app-access.md` — when the app should read another app's data.
 
 Write the ENTIRE file, every time. An edit is a new whole document handed in over the same
 lineage, never a patch.
@@ -127,6 +128,18 @@ Say it once, plainly, the first time you hand an app in:
   uploaded."
 - Artifact runner: "Your apps and their data are in this artifact, which Anthropic hosts;
   you can export them any time from the *your file* chip."
+
+## Access between apps
+
+The user allows access between apps; an app never takes it, and neither do you. One app may
+read another app's tables — a budget reading the ledger — only after the user allows it in
+the runner, for as long as the user chose, and the user can stop it at any moment. An app
+you build asks through the helper in `references/87-cross-app-access.md`, at runtime, only
+after the user has done something that needs the other app's data — never on load — and the
+runner shows the ask as a strip the user reviews or declines. The app learns only what the
+user allowed and reads it with one read-only query. Never promise the user that an app
+already reads another, and never put another app's data into the bundle: the runner holds
+the access, not the app.
 
 ## Schedules
 

@@ -193,7 +193,9 @@ export function defaultAppRunDeps(): AppRunDeps {
   return {
     platform: getPlatform,
     runtimeFor: ({ appId, driver, confirmGate, onNetCall }) => {
-      const runtime = composeAppRuntime({ appId, mode: modeStore.get(), provider: providerStore.get(), driver, confirmGate, onNetCall });
+      // Nobody is looking (TASK-20261010-cross-app-access AC20): an access ask is refused
+      // `ACCESS_UNATTENDED`, and a read needs the grant's *also while I'm away*.
+      const runtime = composeAppRuntime({ appId, attended: false, mode: modeStore.get(), provider: providerStore.get(), driver, confirmGate, onNetCall });
       return { transport: runtime.transport, frameProps: runtime.frameProps };
     },
     mounts: hiddenMountStore,

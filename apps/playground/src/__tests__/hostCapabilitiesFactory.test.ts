@@ -9,7 +9,7 @@ import { hostCapabilities } from '../platform/hostCapabilities.js';
 import { HOST_OFF_CAPABILITIES, hostPlatform } from './fixtures/hostPlatform.js';
 
 describe('hostCapabilities — the kit’s posture, stated once', () => {
-  it('every launch boolean explicit, every host surface off, the app export ON, the scheduler ON', () => {
+  it('every launch boolean explicit, every host surface off, the app export ON, the scheduler ON, access between apps ON', () => {
     expect(hostCapabilities()).toEqual({
       subscriptionMode: false,
       hubSyncOrigin: false,
@@ -23,7 +23,14 @@ describe('hostCapabilities — the kit’s posture, stated once', () => {
       appExport: true,
       // TASK-20261009 C7 (ADR-0074 §7): the kit binding runs the scheduler while its page is open.
       schedule: true,
+      // TASK-20261010-cross-app-access AC20 (ADR-0075): ON by default; a kit page whose boot probe
+      // cannot construct a blob Worker composes `{ access: false }` (capability truth, ADR-0072 §4).
+      access: true,
     });
+  });
+
+  it('the access flag is an override like any other: a host that cannot run the read says false, and only that moves', () => {
+    expect(hostCapabilities({ access: false })).toEqual({ ...hostCapabilities(), access: false });
   });
 
   it('a binding states only what it does differently — and nothing else moves', () => {

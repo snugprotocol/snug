@@ -35,6 +35,7 @@ import { createRoot, type Root } from 'react-dom/client';
 
 import type { UserDb } from '@snugprotocol/db';
 
+import { canConstructWorker } from '@playground/access/scopedRead';
 import { App } from '@playground/App';
 import { OAuthCallbackPage } from '@playground/connections/OAuthCallbackPage';
 import { setPlatform, type SnugPlatform } from '@playground/platform/platform';
@@ -174,6 +175,8 @@ export interface BootDeps {
   createClient?: typeof createLocalClient;
   /** The `/status` ask's timing (a test shrinks it; the page uses the constants). */
   ask?: AskRunnerOptions;
+  /** The blob-Worker probe (TASK-20261010-cross-app-access AC20/AC23). A test injects its answer. */
+  canConstructWorker?: () => boolean;
 }
 
 /** The decision (see the header). Reads the document ONLY on the hosted path. */
@@ -186,13 +189,18 @@ export async function planBoot(win: BootWindow, doc: ComposeDocument, deps: Boot
   // The runner's page with no runner to hear it: said, and nothing composed — no platform,
   // no db, so nothing the user does here can land in this browser's storage instead.
   if (runner.kind === 'not-answering') return { kind: 'refusal', refusal: { kind: 'not-answering' } };
+  // ONE Worker probe for the page, before either composition (TASK-20261010-cross-app-access
+  // AC20/AC23): access between apps reads in a blob Worker under a wall clock, so a page that
+  // cannot construct one is composed `access: false` — capability truth (ADR-0072 §4), never a
+  // control that would fail when used. Asked here, once, not by each reader of the flag.
+  const access = (deps.canConstructWorker ?? canConstructWorker)();
   if (runner.kind === 'runner') {
     // UNDER THE RUNNER THE PAGE'S OWN BLOCKS ARE NOT READ (K6): no embedded bundle, no
     // `snug-db`. The file is the runner's, and apps arrive as its events. The page it
     // serves is the same file the artifact route hands in to, so a copy that carried
     // blocks would otherwise install them here — from a document, into a real file.
     const client = (deps.createClient ?? createLocalClient)(runner.token);
-    const composition = composeLocalPlatform(client, runner.status, wasm(), undefined, runner.token);
+    const composition = composeLocalPlatform(client, runner.status, wasm(), undefined, runner.token, undefined, access);
     // The file is held by Snug for Mac. We do NOT open read-only: the db swallows failed
     // saves, so the user would work for an hour and lose it.
     if (composition.refusal !== undefined) return { kind: 'refusal', refusal: { kind: 'held', heldBy: composition.refusal.heldBy }, platform: composition.platform };
@@ -210,6 +218,7 @@ export async function planBoot(win: BootWindow, doc: ComposeDocument, deps: Boot
     },
     doc,
     wasm(),
+    access,
   );
   return { kind: 'hosted', probe, composition };
 }

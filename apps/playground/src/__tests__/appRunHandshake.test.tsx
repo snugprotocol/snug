@@ -11,7 +11,13 @@
 // on every exit; an unattended run runs in the hidden frame whether or not the app is open, and opening it mid-run does not interrupt it (owner decision 2026-10-09); the gate follows the trigger
 // and its record outranks the app's answer; the day's ceilings count what the run spent; the
 // live frame gets the hint without a hidden mount; no scheduler seat → blocked by name; the C1
-// negatives; and the PRODUCTION wire (`executeStep` → the real hidden mount store).
+// negatives; and the PRODUCTION wire (`executeStep` → the real hidden mount store) — whose
+// runtime composes `attended: false` (TASK-20261010-cross-app-access AC20: the hidden frame's
+// access handler tells an ask that nobody is there, and never notes a reader generation).
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+
+import { ACCESS_ERROR_CODES, FRAME_TYPES, PROTOCOL_VERSION } from '@snugprotocol/protocol';
 import { ERROR_CODES, SCHEDULE_DAILY_CEILINGS, SCHEDULE_STEP_SUMMARY_MAX_CHARS, type ScheduleStep, type ScheduledTask } from '@snugprotocol/protocol';
 import type { AgentTransport, AgentTransportOptions, RunnerHost } from '@snugprotocol/runner';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -41,6 +47,7 @@ import { CANCELLED_SUMMARY, WITHHELD_SUMMARY, createStepExecutor, executeStep } 
 import { SCHEDULE_RESULT_EVENT, SCHEDULE_RUN_EVENT, scheduleKvKey } from '../schedule/scheduleKey.js';
 import type { ScheduledConfirmGate } from '../schedule/scheduledConfirmGate.js';
 import { SCHEDULED_AI_LIMIT_MESSAGE } from '../schedule/scheduledTransport.js';
+import { readerGeneration } from '../access/grants.js';
 import { __resetAppHostsForTest } from '../state/appHosts.js';
 import { createStore } from '../state/store.js';
 import { installTestUserDb } from './userdbTestHelper.js';
@@ -712,5 +719,36 @@ describe('the production wire', () => {
     controller.abort();
     expect((await pending).status).toBe('failed');
     expect(hiddenMountStore.get()).toBeUndefined();
+  });
+
+  it('the hidden frame composes `attended: false` (AC20): its access handler is bound to the app’s own id, an ask is told nobody is there, and no reader generation is noted', async () => {
+    const step: AppRunStep = { kind: 'app-run', appId };
+    const { context, controller } = ctx(step);
+    const pending = executeStep(step, context);
+    await vi.waitFor(() => expect(hiddenMountStore.get()).toBeDefined());
+    const mount = hiddenMountStore.get()!;
+    expect(mount.frameProps.accessAppId).toBe(appId);
+    const access = mount.frameProps.access;
+    expect(access).toBeDefined();
+    const answer = await access!.handle(appId, {
+      v: PROTOCOL_VERSION,
+      type: FRAME_TYPES.accessRequest,
+      requestId: 'a1',
+      instanceId: 'hidden-1',
+      op: 'request',
+      purpose: 'to show spending by category',
+    });
+    expect(answer).toMatchObject({ ok: false, code: ACCESS_ERROR_CODES.ACCESS_UNATTENDED, retryable: true });
+    expect(readerGeneration(appId)).toBeUndefined();
+    controller.abort();
+    await pending;
+  });
+
+  it('`defaultAppRunDeps` says it in the source: the composition is `attended: false` — never left to a default', () => {
+    const code = readFileSync(path.resolve(__dirname, '..', 'schedule', 'appRun.ts'), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/^\s*\/\/.*$/gm, '');
+    expect(code).toMatch(/composeAppRuntime\(\{[^}]*\battended: false\b/);
+    expect(code).not.toMatch(/\battended: true\b/);
   });
 });

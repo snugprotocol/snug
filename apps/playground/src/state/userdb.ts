@@ -14,6 +14,7 @@ import { admitConnectionRequirement, type AdmissionChannel } from '@snugprotocol
 import { USERDB_FILE } from '@snugprotocol/protocol';
 import { getPlatform } from '../platform/platform.js';
 import { sqlJsEngineOptions } from '../run/sqlJsEngine.js';
+import { resetAccessSession } from '../access/grants.js';
 import { resetThreadSessions } from '../agent/threadSessions.js';
 import { initScheduler } from '../schedule/scheduler.js';
 import { resetSidecarIdentitySession } from './sidecarIdentity.js';
@@ -210,6 +211,7 @@ export async function restoreUserDbFromBytes(bytes: Uint8Array): Promise<void> {
   // sidecar identity harvest is scoped to one user-file identity (TASK-20260820).
   resetSidecarIdentitySession();
   resetThreadSessions(); // ADR-0062 swap seam: the sessions mirror the file being replaced
+  resetAccessSession(); // the same seam for access between apps (TASK-20261010-cross-app-access AC14)
   await backend.save(USERDB_FILE, bytes);
   corruptResult = undefined;
   userDbStatusStore.set({ state: 'opening' });
@@ -237,6 +239,7 @@ export function getUserDb(): Promise<UserDb> {
 export async function recoverFresh(): Promise<UserDb> {
   if (corruptResult === undefined) throw new Error('recoverFresh: user DB is not in the corrupt state');
   resetThreadSessions(); // ADR-0062 swap seam
+  resetAccessSession(); // TASK-20261010-cross-app-access AC14: session access mirrors the file being replaced
   const fresh = await corruptResult.openFresh();
   corruptResult = undefined;
   userDbStatusStore.set({ state: 'ready' });
@@ -261,6 +264,7 @@ export function setUserDbForTests(db: UserDb): void {
 export function resetUserDbForTests(): void {
   resetSidecarIdentitySession();
   resetThreadSessions();
+  resetAccessSession();
   opened = false;
   corruptResult = undefined;
   readyPromise = undefined;

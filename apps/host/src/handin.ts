@@ -45,7 +45,7 @@ import {
 import { appBundleId, parseAppBundle, type AppBundle } from '@snugprotocol/protocol';
 
 import { CONNECTIONS_UNAVAILABLE } from '@playground/platform/availability';
-import { pauseSchedulesForAppVersion } from '@playground/schedule/appDrift';
+import { onAppVersionChanged } from '@playground/state/appVersionChanged';
 import type { AgentHandInSeat, PendingAgentUpdate } from '@playground/platform/platform';
 
 import { BUNDLE_BLOCK_TYPE, LINEAGE_RULE, type BundleBlockRead } from '../../../scripts/lib/page-blocks.mjs';
@@ -159,7 +159,8 @@ export async function applyAgentBundles(db: UserDb, blocks: readonly HandInBlock
       const result = await updateAppFromBundle(db, target.appId, bundle, { bundleId, provenance: 'agent' });
       if (result.status === 'updated') {
         outcome.updated.push({ appId: target.appId, displayName: target.displayName, version: result.version });
-        pauseSchedulesForAppVersion(db, target.appId, result.version, 'agent', new Date().toISOString()); // E8: the app changed under its schedules
+        // E8 (and ADR-0075 §9): the app changed under its schedules and the access it holds — ONE fan-out.
+        onAppVersionChanged(db, target.appId, result.version, 'agent', new Date().toISOString());
       }
       else outcome.skipped.push({ lineage, reason: 'current' });
     } catch (error) {
@@ -173,7 +174,7 @@ export async function applyAgentBundles(db: UserDb, blocks: readonly HandInBlock
 export async function applyPendingHandIn(db: UserDb, pending: PendingHandIn): Promise<{ version: number }> {
   const result = await updateAppFromBundle(db, pending.appId, pending.bundle, { bundleId: pending.bundleId, provenance: 'agent' });
   if (result.status !== 'updated') throw new Error('this copy already reflects the handed-in version');
-  pauseSchedulesForAppVersion(db, pending.appId, result.version, 'agent', new Date().toISOString()); // E8
+  onAppVersionChanged(db, pending.appId, result.version, 'agent', new Date().toISOString()); // E8 + ADR-0075 §9: schedules and access
   return { version: result.version };
 }
 

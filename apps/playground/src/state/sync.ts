@@ -20,6 +20,7 @@ import { USERDB_OPFS_DIR } from '@snugprotocol/protocol';
 import { allows, getPlatform, secretsUsable } from '../platform/platform.js';
 import { refreshAppMeta } from './appMeta.js';
 import { hydrateSettings, markEndpointsNeedConfirm } from './mode.js';
+import { resetAccessSession } from '../access/grants.js';
 import { resetThreadSessions } from '../agent/threadSessions.js';
 import { hydrateSharedInbox, resetSharedInbox } from '../share/sharedInbox.js';
 import { resetSidecarIdentitySession } from './sidecarIdentity.js';
@@ -65,6 +66,9 @@ async function afterForeignBytes(): Promise<void> {
   // Same seam for the per-thread build sessions (ADR-0062): they mirror rows of the
   // file that was just replaced, and any in-flight turn would write into the new one.
   resetThreadSessions();
+  // …and access between apps (TASK-20261010-cross-app-access AC14): session access, the
+  // limiters, pending asks and the cached bytes belong to the file that was just replaced.
+  resetAccessSession();
   markEndpointsNeedConfirm();
   const db = await getUserDb();
   hydrateSettings(db);
@@ -297,6 +301,7 @@ export async function importUserFile(file: { arrayBuffer(): Promise<ArrayBuffer>
   // land a row inside the freshly imported file during the import's own awaits.
   // `afterForeignBytes` resets again afterwards — that call also serves the pull path.
   resetThreadSessions();
+  resetAccessSession(); // the same seam (TASK-20261010-cross-app-access AC14)
   // The shelf mirrors rows of the file being replaced (ADR-0063 §4); drop it before the
   // swap so a memory entry cannot be "kept" into the wrong file mid-import, then
   // `afterForeignBytes` re-hydrates from the file that is now local.

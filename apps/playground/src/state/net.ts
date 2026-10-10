@@ -24,6 +24,7 @@ import type { NetHandler, NetHandlerResult } from '@snugprotocol/runner';
 import { NET_ERROR_CODES, type NetRequestFrame } from '@snugprotocol/protocol';
 import type { UserDb } from '@snugprotocol/db';
 
+import { suspendIfSourceRestricted } from '../access/grants.js';
 import { getUserDb, userDbStatusStore } from './userdb.js';
 import { createStore } from './store.js';
 import { harvestSidecarBody, persistIdentityDirectory } from './sidecarIdentity.js';
@@ -237,6 +238,24 @@ export function armedStandingApproval(appId: string): StandingGrant | undefined 
 export function invalidateNetGrants(appId: string): void {
   confirmGate.invalidate(appId);
   standingGate.invalidate(appId);
+  recheckAccessSource(appId);
+}
+
+/**
+ * The same seam re-checks the app as a SOURCE of access between apps (TASK-20261010-cross-app-access
+ * AC14, D6): a connection change can give it a WhatsApp fact, and an app holding messages from
+ * others is never read — every live access to it pauses `source-restricted`. Fire-and-forget off
+ * the connection act (the query re-checks it anyway, so this only makes the pause visible
+ * sooner); a failure is reported and swallowed — it must never fail the connection change. Only
+ * against an OPEN file: with none there is nothing to pause, and asking would start an open.
+ */
+function recheckAccessSource(appId: string): void {
+  if (userDbStatusStore.get().state !== 'ready') return;
+  void getUserDb()
+    .then((db) => suspendIfSourceRestricted(db, appId, new Date().toISOString()))
+    .catch((err: unknown) => {
+      console.warn('access between apps: the re-check after a connection change failed', err);
+    });
 }
 
 

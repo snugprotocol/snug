@@ -6,6 +6,7 @@
 
 import type { UserDb } from '@snugprotocol/db';
 
+import { resetAccessSession } from '../access/grants.js';
 import { resetThreadSessions } from '../agent/threadSessions.js';
 import { revokeShareLinksForApp } from '../share/shareLinks.js';
 import { markAppRenamed } from './appMeta.js';
@@ -106,6 +107,10 @@ export function createUserDbLibrary(getDb: () => Promise<UserDb> = getUserDb): L
       // The cascade also deleted the app's chat threads — drop their in-memory sessions
       // (aborting any turn still editing the app) on the same seam (ADR-0062).
       resetThreadSessions({ appId: id });
+      // …and the access engine's memory for it, as the app that reads or the one read: session
+      // access, its limiters, a pending ask and the cached bytes (the cascade swept the rows —
+      // TASK-20261010-cross-app-access AC9/AC14).
+      resetAccessSession(id);
       // AFTER the committed cascade, so a dead helper can never fail the delete: logout
       // the linked device and erase the helper's on-disk session store.
       if (unlinkDevice) await forgetSidecarSession();

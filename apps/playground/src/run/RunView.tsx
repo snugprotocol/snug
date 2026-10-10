@@ -19,6 +19,7 @@ import { ReportErrorLink } from '../feedback/ReportErrorLink.js';
 import { useBuilderChat, type DataWriteCardState } from '../agent/useBuilderChat.js';
 import type { ChatCardState } from '../agent/cards.js';
 import { createOpenUrlHandlerFor } from '../state/openUrl.js';
+import { dismissPendingAccess } from '../access/consent.js';
 import { composeAppRuntime } from './appRuntime.js';
 import { UpdatePausesNote } from './UpdatePausesNote.js';
 import { startSidecarLiveForApp, type SidecarSyncState } from '../state/sidecarLive.js';
@@ -390,13 +391,18 @@ export default function RunView(): ReactElement {
   // `onLlmEvent`/`onTurnStart` are stable callbacks, which is what makes an app's own LLM turn
   // visible in the inspector beside the builder's. `mode`/`provider` rebuild the net handler
   // along with the transport — harmless: the frame key carries both, so the frame remounts
-  // onto the new runtime anyway (M5).
+  // onto the new runtime anyway (M5). `frameEpoch` likewise (TASK-20261010-cross-app-access
+  // AC20): it is the generation the access handler keys on, and the key carries it.
   const runtime = useMemo(
     () =>
       db === null
         ? undefined
         : composeAppRuntime({
             appId: id,
+            // Someone is looking (AC20): an app's ask becomes the strip; the access handler keys
+            // its pending ask and its session grants on THIS frame generation.
+            attended: true,
+            generation: frameEpoch,
             mode,
             provider,
             onLlmEvent,
@@ -406,7 +412,7 @@ export default function RunView(): ReactElement {
               if (isConnectionRepairableNetError(code)) setNetAuthError({ appId, code });
             },
           }),
-    [db, id, mode, provider, onLlmEvent, onTurnStart],
+    [db, id, mode, provider, onLlmEvent, onTurnStart, frameEpoch],
   );
   const frameRuntime = runtime === undefined ? undefined : { ...runtime, transport: isSharedId(id) && !aiArmed ? consentGate : runtime.transport };
 
@@ -701,6 +707,9 @@ export default function RunView(): ReactElement {
   const onAnnounce = useCallback(
     (frame: Parameters<typeof revealReduce>[1]): void => {
       dispatchReveal(frame);
+      // A (re-)announce is a fresh app instance in this frame: an ask the previous instance
+      // left on the strip has nobody to answer it — dismissed, nothing recorded (AC11).
+      dismissPendingAccess(id, { onlyApp: true });
       recordAppMeta(id, {
         displayName: frame.displayName,
         announcedAppId: frame.appId,

@@ -42,7 +42,7 @@ import { fileURLToPath } from 'node:url';
  * resolve (verified: with `packages/protocol/dist` deleted, `turbo run test
  * --filter=examples` rebuilds protocol BEFORE this file runs).
  */
-import { connectionRequirementSchema, isRfc1918Ipv4Literal, runtimeContractSchema } from '@snugprotocol/protocol';
+import { connectionRequirementSchema, FRAME_TYPES, isRfc1918Ipv4Literal, PROTOCOL_VERSION, runtimeContractSchema } from '@snugprotocol/protocol';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..');
@@ -450,6 +450,81 @@ test('the mutant: the same listener INSIDE the hooks block (before the banner) i
   const html = secondListenerFixture({ inside: true });
   assert.equal((html.match(/addEventListener\('message'/g) ?? []).length, 2);
   assert.notEqual(normalize(hookBlock(html, 'second-listener-inside')), expectedHooks);
+});
+
+/**
+ * TASK-20261010-cross-app-access AC5 (moved to W3c by the journal's correction (b)): the
+ * access helper the KB teaches (`87-cross-app-access.md`, "The Cross-App Helper (copy beside
+ * the hooks block)") is the second schedule-listener twin — a `snugAccessRequest` helper plus
+ * a second `message` listener, copied AFTER the banner while the embedded block stays
+ * unchanged (Q9). The snippet is READ from the knowledge package's source, never retyped, and
+ * rendered here the way `packages/knowledge/src/render.ts` renders it: `{{frameType:<key>}}`
+ * from FRAME_TYPES and `{{protocolVersion}}` from PROTOCOL_VERSION — any other placeholder is
+ * a failure, so a snippet that grows one cannot slip through half-rendered. (`examples`
+ * depends on `@snugprotocol/protocol` only; importing the built knowledge package would make
+ * this suite's pass depend on a build its turbo chain does not order.)
+ */
+const ACCESS_KB_FILE = path.join(REPO_ROOT, 'packages', 'knowledge', 'prompts', 'knowledge-base', 'app-authoring', '87-cross-app-access.md');
+
+function renderedAccessHelper() {
+  const source = readFileSync(ACCESS_KB_FILE, 'utf8');
+  const section = source.split('## The Cross-App Helper (copy beside the hooks block)')[1];
+  assert.ok(section, '87-cross-app-access.md still has its copy-beside-the-block section');
+  const snippet = /```javascript\n([\s\S]*?)\n```/.exec(section)?.[1];
+  assert.ok(snippet, 'the section opens with a ```javascript helper');
+  return snippet.replace(/\{\{([A-Za-z0-9_:-]+)\}\}/g, (_match, name) => {
+    if (name === 'protocolVersion') return String(PROTOCOL_VERSION);
+    const key = name.startsWith('frameType:') ? name.slice('frameType:'.length) : undefined;
+    assert.ok(key !== undefined && Object.hasOwn(FRAME_TYPES, key), `the helper carries an unknown placeholder {{${name}}}`);
+    return FRAME_TYPES[key];
+  });
+}
+
+function accessListenerFixture({ inside }) {
+  const helper = renderedAccessHelper();
+  const hooks = readFileSync(EMBEDDED_HOOKS, 'utf8');
+  const banner = '    // ============================================================\n    // 5. RESPONSE SCHEMA\n    // ============================================================';
+  const appAuthored = `const RESPONSE_SCHEMA = { message: 'string' };
+    function App() {
+      const { isReady } = useSnugApp({ appId: 'access-listener', displayName: 'Access Listener', description: 'fixture', iconEmoji: '⋈', iconColor: '#333' });
+      return isReady ? <button onClick={() => snugAccessRequest('list')}>read</button> : null;
+    }
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);`;
+  return `<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8" /><title>fixture</title>
+<script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
+</head><body><div id="root"></div>
+<script type="text/babel">
+${hooks}${inside ? `\n${helper}\n` : '\n'}${banner}
+    ${appAuthored}
+${inside ? '' : helper}
+</script>
+</body></html>`;
+}
+
+test('an app.html may add the KB access helper AFTER the hooks block (a second `message` listener) and still pass every per-app rule', () => {
+  const helper = renderedAccessHelper();
+  // The rendered helper is the real exchange: the request type posted, the response type and the host-event heard.
+  assert.ok(helper.includes(`type: '${FRAME_TYPES.accessRequest}'`), 'the helper posts the access request frame type');
+  assert.ok(helper.includes(`data.type === '${FRAME_TYPES.accessResponse}'`), 'the helper hears the access response frame type');
+  assert.ok(helper.includes(`data.type === '${FRAME_TYPES.hostEvent}' && data.event === 'access-changed'`), 'the helper hears access-changed');
+  assert.doesNotMatch(helper, /\{\{|\}\}/, 'no placeholder survives the render');
+  const html = accessListenerFixture({ inside: false });
+  assert.equal((html.match(/addEventListener\('message'/g) ?? []).length, 2, 'the fixture carries exactly two message listeners');
+  // The rule: the hooks block is still byte-identical to the SDK reference …
+  assert.equal(normalize(hookBlock(html, 'access-listener')), expectedHooks);
+  // … and the app-authored region (the helper included) passes the storage and network rules.
+  const appAuthored = html.replace(hookBlock(html, 'access-listener'), '');
+  assert.ok(appAuthored.includes('function snugAccessRequest(op, fields)'), 'the helper is in the app-authored region');
+  assert.doesNotMatch(appAuthored, DIRECT_NETWORK_API);
+  assert.doesNotMatch(appAuthored, QUALIFIED_NETWORK_API);
+  for (const banned of ['localStorage', 'sessionStorage', 'indexedDB', 'document.cookie']) assert.ok(!html.includes(banned));
+});
+
+test('the access mutant: the same helper INSIDE the hooks block (before the banner) is a hooks edit and fails the byte-compare', () => {
+  const html = accessListenerFixture({ inside: true });
+  assert.equal((html.match(/addEventListener\('message'/g) ?? []).length, 2);
+  assert.notEqual(normalize(hookBlock(html, 'access-listener-inside')), expectedHooks);
 });
 
 test('chess sends its board state ONCE, not in both payload and state', () => {

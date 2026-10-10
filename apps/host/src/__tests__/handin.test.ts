@@ -11,6 +11,8 @@ import { appBundleId, type AppBundle } from '@snugprotocol/protocol';
 import { createRequire } from 'node:module';
 import { beforeEach, describe, expect, it } from 'vitest';
 
+import { collectSources } from '@playground/access/consent';
+import { createGrantFromDecision, resetAccessSession, type AnyAccessGrant } from '@playground/access/grants';
 import { CONNECTIONS_UNAVAILABLE } from '@playground/platform/availability';
 
 import { readBundleBlocks, upsertBundleBlock, type BundleBlockRead } from '../../../../scripts/lib/page-blocks.mjs';
@@ -415,5 +417,60 @@ describe('the app-drift pause (TASK-20261009 E8, ADR-0074 §6)', () => {
     const applied = await applyPendingHandIn(db, outcome.pending[0]!);
     expect(db.getScheduledTask(`names-${appId}-2`)).toMatchObject({ enabled: false, pausedReason: 'app-updated', appVersions: { [appId]: 2 } });
     expect(applied.version).toBe(3);
+  });
+});
+
+// ------------------------------------------------- the access the updated app reads (AC21)
+
+/** A source app with a table, and a DAY of access from `readerAppId` to it — the user's allow. */
+async function readsLedger(readerAppId: string): Promise<{ ledger: string; grant: AnyAccessGrant }> {
+  const ledger = db.installApp({ displayName: 'Ledger', html: '<!doctype html><title>l</title>' }).appId;
+  await db.applyAppDdl(ledger, ['CREATE TABLE transactions (id INTEGER PRIMARY KEY, amount INTEGER)']);
+  const ranked = await collectSources(db, readerAppId);
+  const source = [...ranked.matched, ...ranked.rest].find((candidate) => candidate.appId === ledger);
+  if (source === undefined) throw new Error('the source is not a candidate');
+  const grant = await createGrantFromDecision(db, {
+    readerAppId,
+    source,
+    tables: ['transactions'],
+    duration: 'day',
+    unattended: false,
+    purpose: 'to time what I spend',
+    provenance: 'app',
+    now: Date.now(),
+  });
+  return { ledger, grant };
+}
+
+describe('an agent update suspends the access the app reads (TASK-20261010-cross-app-access AC21, D18)', () => {
+  beforeEach(() => resetAccessSession());
+
+  it('a silent agent update of an UNEDITED copy suspends its access `reader-updated`, with the line on the source’s history (newest first)', async () => {
+    const { installed } = await applyAgentBundles(db, blocksOf(bundle(LINEAGE_A, HTML_V1)));
+    const appId = installed[0]!.appId;
+    const { ledger, grant } = await readsLedger(appId);
+    const outcome = await applyAgentBundles(db, blocksOf(bundle(LINEAGE_A, HTML_V2)));
+    expect(outcome.updated).toEqual([{ appId, displayName: 'Pomodoro', version: 2 }]);
+    expect(db.getAccessGrant(grant.id)).toMatchObject({ status: 'suspended', suspendedReason: 'reader-updated' });
+    expect(db.listAccessLog(ledger)[0]).toMatchObject({ kind: 'suspended', grantId: grant.id, reason: 'reader-updated' });
+  });
+
+  it('an offered update TAKEN for an edited copy (applyPendingHandIn) suspends it the same way — and not before it is taken', async () => {
+    const { installed } = await applyAgentBundles(db, blocksOf(bundle(LINEAGE_A, HTML_V1)));
+    const appId = installed[0]!.appId;
+    const { grant } = await readsLedger(appId);
+    db.saveAppVersion(appId, USER_EDIT, 'user edit');
+    const outcome = await applyAgentBundles(db, blocksOf(bundle(LINEAGE_A, HTML_V2)));
+    expect(outcome.pending).toHaveLength(1);
+    expect(db.getAccessGrant(grant.id)).toMatchObject({ status: 'active' }); // the offer is pending; the user's own edit is not drift
+    await applyPendingHandIn(db, outcome.pending[0]!);
+    expect(db.getAccessGrant(grant.id)).toMatchObject({ status: 'suspended', suspendedReason: 'reader-updated' });
+  });
+
+  it('a hand-in that is already current suspends nothing', async () => {
+    const { installed } = await applyAgentBundles(db, blocksOf(bundle(LINEAGE_A, HTML_V1)));
+    const { grant } = await readsLedger(installed[0]!.appId);
+    await applyAgentBundles(db, blocksOf(bundle(LINEAGE_A, HTML_V1)));
+    expect(db.getAccessGrant(grant.id)).toMatchObject({ status: 'active' });
   });
 });

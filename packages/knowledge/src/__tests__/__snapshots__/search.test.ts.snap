@@ -123,6 +123,21 @@ exports[`KB retrieval structure stability > heading tree per file is locked (edi
     ],
   },
   {
+    "file": "knowledge-base/app-authoring/87-cross-app-access.md",
+    "headingTree": [
+      "# Access Between Apps",
+      "## Read Another App's Data Only With the User's Say",
+      "## Ask After a User Act, Never on Load",
+      "## The Two Frames and Their Four Ops",
+      "## What Your App Learns",
+      "## Query: One Read-Only SELECT",
+      "## When It Stops, Pauses or Ends",
+      "## What Each Refusal Means",
+      "## The Cross-App Helper (copy beside the hooks block)",
+      "## Rules for Reading Another App",
+    ],
+  },
+  {
     "file": "knowledge-base/app-authoring/90-auth-and-connected-apis.md",
     "headingTree": [
       "## Connected APIs: calling an external API with auth, login, and credentials",
@@ -160,9 +175,10 @@ exports[`KB retrieval structure stability > knowledge summary is locked 1`] = `
 "You can build interactive single-file HTML apps ("Snug apps") that run in a sandboxed
 iframe inside the conversation and talk to you at runtime: apps send structured actions and
 you reply with JSON, enabling board games with an AI opponent, tutors, trackers, data
-tools, and simulations. Apps use React 18 via CDN, persist through host-brokered storage,
-and must follow a mandatory template with copy-exactly bridge hooks. When the user asks for
-an interactive app, game, or tool that needs AI at runtime, call the \`snug_app_builder\`
+tools, and simulations. Apps use React 18 via CDN, persist through host-brokered storage
+(and may read another app's data only under an access the user allows), and must follow a
+mandatory template with copy-exactly bridge hooks. When the user asks for an interactive
+app, game, or tool that needs AI at runtime, call the \`snug_app_builder\`
 tool for the full template and protocol BEFORE writing any code. Apps can also call real
 external APIs (weather, music, market data) through the host with user-approved
 credentials — never with keys in app code; if the app will call any external API, query
