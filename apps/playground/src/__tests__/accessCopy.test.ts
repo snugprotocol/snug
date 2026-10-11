@@ -25,6 +25,15 @@
 // too, every template literal is seen (nested ones included) by its LITERAL parts — a `${grant.id}`
 // substitution is code, not copy — and a module specifier (`'./grants.js'`) is a file name, not a
 // sentence.
+//
+// TASK-20261010-host-broker PR-2 (D-PR2-11/12/15; DS-7, DS-11): the doors' sentences —
+// `CHAT_DOOR`, `ACCESS_CARD`, `CONSENT_SHEET.askedInChat`, the amended `CONSENT_SHEET.awayHint`,
+// `EGRESS.chat` and `EGRESS.away` (now a function of the reader's name) — are pinned with the
+// contract's literals; the two amended pins (awayHint, away) MOVED here with it. The planted-
+// sentence proof is re-run over each module PR-2 adds under `access/` (`policy.ts`, `service.ts`,
+// `materialise.ts`, `limits.ts`, `grantFacts.ts`, `AccessCard.tsx`): the sentence is appended to
+// the REAL file, the scan must name that file, and the original bytes are written back — an
+// absent module is red here and is never created by this file. RED until those land.
 import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
@@ -35,7 +44,9 @@ import { describe, expect, it } from 'vitest';
 
 import {
   ACCESS_APP_MESSAGES,
+  ACCESS_CARD,
   ACCESS_SHEET,
+  CHAT_DOOR,
   CONSENT_SHEET,
   CONSENT_UI,
   EGRESS,
@@ -268,7 +279,8 @@ describe('the consent sheet', () => {
     expect(CONSENT_SHEET.notNow).toBe('not now');
     expect(CONSENT_SHEET.dontAllow).toBe("don't allow");
     expect(CONSENT_SHEET.away).toBe("also while I'm away");
-    expect(CONSENT_SHEET.awayHint('Budget')).toBe('if Budget ever runs on a schedule');
+    // PR-2 (DS-7): the hint says the AI is asked on a schedule too — the contract's literal.
+    expect(CONSENT_SHEET.awayHint('Budget')).toBe('if Budget ever runs on a schedule — or its AI is asked on one');
     expect(CONSENT_SHEET.pickATable).toBe('choose at least one table');
     // W6 keys, added after the freeze (findings 35, 41).
     expect(CONSENT_SHEET.pickAnApp).toBe('choose an app');
@@ -495,8 +507,71 @@ describe('the egress words (AC15)', () => {
     expect(EGRESS.helperDeclared).toBe('the WhatsApp helper on this Mac — declared, not connected yet');
     expect(EGRESS.noConnections).toBe('no connections of its own');
     expect(EGRESS.openUrl).toBe('any link it asks you to open — you see the address first');
-    expect(EGRESS.away).toBe('also while you’re away — on a schedule it can read and send with no one watching');
+    // PR-2 (D-PR2-12, DS-7): the away line is a function of the reader's name and names its scheduled AI.
+    expect(EGRESS.away('Budget')).toBe('also while you’re away — on a schedule it can read and send with no one watching, and so can a scheduled *ask Budget’s AI*');
     expect(EGRESS.closing('Ledger')).toBe('the copy is made here, on this device; Ledger keeps a history of its reads');
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// TASK-20261010-host-broker PR-2 — the doors' sentences (the contract's literals)
+// ---------------------------------------------------------------------------------------------
+
+describe('the chat and scheduler doors — CHAT_DOOR (D-PR2-10/13/17; DS-11)', () => {
+  it('the heading per source: the three duration forms, the date in copy.ts’s own words', () => {
+    expect(CHAT_DOOR.heading('Ledger', 'session', undefined, NOW)).toBe("### From Ledger (read-only · access while it's open)");
+    expect(CHAT_DOOR.heading('Ledger', 'session', at(9, 17), NOW)).toBe("### From Ledger (read-only · access while it's open)");
+    expect(CHAT_DOOR.heading('Ledger', 'day', at(9, 13), NOW)).toBe('### From Ledger (read-only · access until Oct 13)');
+    expect(CHAT_DOOR.heading('Ledger', 'week', at(9, 17), NOW)).toBe('### From Ledger (read-only · access until Oct 17)');
+    expect(CHAT_DOOR.heading('Ledger', 'always', undefined, NOW)).toBe('### From Ledger (read-only · access until you stop it)');
+    expect(CHAT_DOOR.heading('Ledger', 'week', new Date(2027, 0, 3, 12).toISOString(), NOW)).toBe('### From Ledger (read-only · access until Jan 3, 2027)');
+  });
+
+  it('the table line: the full name, columns with their types, the row count — or the cut', () => {
+    expect(CHAT_DOOR.tableLine('ledger__transactions', ['id', 'amount', 'note'], ['INTEGER', 'REAL', 'TEXT'], 412, false)).toBe(
+      'ledger__transactions(id INTEGER, amount REAL, note TEXT) — 412 rows',
+    );
+    expect(CHAT_DOOR.tableLine('ledger__transactions', ['id', 'amount', 'note'], ['INTEGER', 'REAL', 'TEXT'], 5000, true, 9120)).toBe(
+      'ledger__transactions(id INTEGER, amount REAL, note TEXT) — showing 5000 of 9120 rows',
+    );
+  });
+
+  it('the rule, said once after the last source', () => {
+    expect(CHAT_DOOR.rule).toBe(
+      'the tables under *From …* above are copies of other apps’ data the user allowed this chat to read — query them with data_query by their full names as written (ledger__transactions); never propose a change to them',
+    );
+  });
+
+  it('the unreadable note, the ended answer and the read-only refusal name the source', () => {
+    expect(CHAT_DOOR.unreadable('Ledger')).toBe('Ledger’s data could not be read this time');
+    expect(CHAT_DOOR.ended('Ledger')).toBe('Ledger’s access ended — ask the user to allow it again');
+    expect(CHAT_DOOR.readOnly('Ledger')).toBe('Ledger’s data can’t be part of a change here — read it with data_query and propose the change with the values');
+  });
+});
+
+describe('the brain’s ask — ACCESS_CARD and the consent sheet’s chat ask (D-PR2-11; DS-2, DS-5, DS-15)', () => {
+  it('the card’s lead line, acts and outcome lines', () => {
+    expect(ACCESS_CARD.lead).toBe('the agent asks:');
+    expect(ACCESS_CARD.review).toBe('review');
+    expect(ACCESS_CARD.notNow).toBe('not now');
+    expect(ACCESS_CARD.notNowLine).toBe('not now — the agent may ask again');
+    expect(ACCESS_CARD.declined).toBe('you said don’t allow — the agent won’t ask this again');
+    expect(ACCESS_CARD.waiting).toBe('waiting for your review');
+  });
+
+  it('the sheet says where a chat ask came from', () => {
+    expect(CONSENT_SHEET.askedInChat('Budget')).toBe('asked in Budget’s chat:');
+  });
+});
+
+describe('the disclosure — the chat line and the amended away words (D-PR2-12; DS-7)', () => {
+  it('EGRESS.chat names the chat beside the reader, the same AI', () => {
+    expect(EGRESS.chat('Budget')).toBe('the chat beside Budget — the same AI — whenever you ask it about Budget’s data');
+  });
+
+  it('EGRESS.away and the away hint name the reader', () => {
+    expect(EGRESS.away('Pantry')).toBe('also while you’re away — on a schedule it can read and send with no one watching, and so can a scheduled *ask Pantry’s AI*');
+    expect(CONSENT_SHEET.awayHint('Pantry')).toBe('if Pantry ever runs on a schedule — or its AI is asked on one');
   });
 });
 
@@ -658,6 +733,9 @@ function accessFiles(dir: string = ACCESS_DIR): string[] {
 
 const COPY_FILE = path.join(ACCESS_DIR, 'copy.ts');
 
+/** The modules PR-2 adds under access/ (contract v2 D-PR2-15) — each is scanned like every other. */
+const PR2_ACCESS_MODULES = ['policy.ts', 'service.ts', 'materialise.ts', 'limits.ts', 'grantFacts.ts', 'AccessCard.tsx'] as const;
+
 function scanOffenders(): string[] {
   const offenders: string[] = [];
   for (const file of accessFiles()) {
@@ -732,6 +810,30 @@ describe('vocabulary scan — no file under access/ but copy.ts spells grant, re
   it('the walk sees the access modules this stage ships', () => {
     const files = accessFiles().map((file) => path.relative(ACCESS_DIR, file));
     for (const name of ['copy.ts', 'egress.ts', 'provenance.ts', 'relevance.ts']) expect(files).toContain(name);
+  });
+
+  it('the walk sees the modules PR-2 adds under access/ (D-PR2-15)', () => {
+    const files = accessFiles().map((file) => path.relative(ACCESS_DIR, file));
+    for (const name of PR2_ACCESS_MODULES) expect(files).toContain(name);
+  });
+
+  it.each(PR2_ACCESS_MODULES)('the scan BITES on %s: a sentence planted in the REAL file turns it red, and the original bytes turn it green', (name) => {
+    const file = path.join(ACCESS_DIR, name);
+    // Never CREATE the module here: an absent one is red, not stubbed.
+    expect(existsSync(file)).toBe(true);
+    const original = readFileSync(file, 'utf8');
+    expect(scanOffenders()).toEqual([]);
+    const plant = name.endsWith('.tsx')
+      ? '\nexport const VocabularyProbe = () => <p>the reader keeps a log of every grant</p>;\n'
+      : "\nexport const VOCABULARY_PROBE = 'the reader keeps a log of every grant';\n";
+    writeFileSync(file, `${original}${plant}`);
+    try {
+      expect(scanOffenders()).toEqual([`${name}: 'the reader keeps a log of every grant'`]);
+    } finally {
+      writeFileSync(file, original);
+    }
+    expect(readFileSync(file, 'utf8')).toBe(original);
+    expect(scanOffenders()).toEqual([]);
   });
 
   it('every scanned file outside copy.ts is clean', () => {

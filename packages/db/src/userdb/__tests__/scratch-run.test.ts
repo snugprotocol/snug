@@ -25,7 +25,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { nonDataStatementReason } from '../../driver.js';
 import { execFrame, exportFrame, kvSetFrame, locateWasm } from '../../__tests__/helpers.js';
 import { createMemoryBackend, type MemoryBackend } from '../../persistence.js';
-import { openUserDb, type UserDb } from '../userdb.js';
+import { USERDB_ERROR_CODES, UserDbError, openUserDb, type ScratchRunResult, type ScratchStatement, type UserDb } from '../userdb.js';
 
 let backend: MemoryBackend;
 let db: UserDb;
@@ -402,5 +402,130 @@ describe('nonDataStatementReason — the data lane is DML-only (R-B1)', () => {
   it('names the statement so the refusal tells the model what to do instead', () => {
     expect(nonDataStatementReason('DROP TABLE expenses')).toMatch(/DROP/i);
     expect(nonDataStatementReason('DROP TABLE expenses')).toMatch(/schema/i);
+  });
+});
+
+// =========================================================================================
+// TASK-20261010-host-broker PR-2 (contract v2 D-PR2-9) — `scratchRun(appId, statements, { attach })`.
+//
+// The chat door hands the data lane another app's rows MATERIALISED through the scoped Worker; they
+// enter the SAME throwaway copy as plain tables, created after the copy opens and before any
+// statement: `CREATE TABLE "<name>" ("c1", "c2", …)` — UNTYPED, always (no app-authored type text
+// ever reaches a CREATE; the rows keep their storage class) — and the rows through one prepared
+// INSERT per table. A name that already exists in the opened copy throws SCRATCH_UNAVAILABLE naming
+// it, and nothing runs (the belt behind the alias de-collision). The copy stays throwaway: the real
+// file never sees an attached table.
+//
+// RED UNTIL D1 LANDS: today the third argument is ignored, so every JOIN below fails "no such table"
+// and a colliding name does not throw. The option is typed here from the contract (`run`), so this
+// file type-checks today.
+// =========================================================================================
+
+interface ScratchAttachTable {
+  name: string;
+  columns: readonly string[];
+  rows: ReadonlyArray<readonly unknown[]>;
+}
+type ScratchRunWithAttach = (appId: string, statements: readonly ScratchStatement[], options?: { attach?: readonly ScratchAttachTable[] }) => Promise<ScratchRunResult>;
+const run = (statements: readonly ScratchStatement[], attach: readonly ScratchAttachTable[]): Promise<ScratchRunResult> =>
+  (db as unknown as { scratchRun: ScratchRunWithAttach }).scratchRun(appId, statements, { attach });
+
+const LEDGER_TRANSACTIONS: ScratchAttachTable = {
+  name: 'ledger__transactions',
+  columns: ['id', 'amount', 'note'],
+  rows: [
+    [1, 450, 'coffee'],
+    [2, 120000, 'rent'],
+    [3, 1.5, null],
+  ],
+};
+
+describe('D-PR2-9 attach — another app’s materialised rows as plain tables in the throwaway copy', () => {
+  it('a statement JOINs the app’s own table with an attached one', async () => {
+    const result = await run([{ sql: 'SELECT e.label, l.amount FROM expenses e JOIN ledger__transactions l ON l.id = e.id ORDER BY e.id' }], [LEDGER_TRANSACTIONS]);
+    expect(result.statements[0]?.error).toBeUndefined();
+    expect(result.statements[0]?.rows).toEqual([
+      ['coffee', 450],
+      ['rent', 120000],
+      ['coffee', 1.5],
+    ]);
+  });
+
+  it('every attached table is created UNTYPED — no declared type on any column — and its rows keep their storage class', async () => {
+    const result = await run(
+      [
+        { sql: "SELECT name, type FROM pragma_table_info('ledger__transactions') ORDER BY cid" },
+        { sql: 'SELECT typeof(id), typeof(amount), typeof(note) FROM ledger__transactions ORDER BY rowid' },
+      ],
+      [LEDGER_TRANSACTIONS],
+    );
+    expect(result.statements[0]?.rows).toEqual([
+      ['id', ''],
+      ['amount', ''],
+      ['note', ''],
+    ]);
+    expect(result.statements[1]?.rows).toEqual([
+      ['integer', 'integer', 'text'],
+      ['integer', 'integer', 'text'],
+      ['integer', 'real', 'null'],
+    ]);
+  });
+
+  it('several tables attach at once, each queryable by its full name; an empty one is a real, empty table', async () => {
+    const result = await run(
+      [{ sql: 'SELECT (SELECT count(*) FROM ledger__transactions), (SELECT count(*) FROM ledger__accounts)' }],
+      [LEDGER_TRANSACTIONS, { name: 'ledger__accounts', columns: ['name', 'balance'], rows: [] }],
+    );
+    expect(result.statements[0]?.rows).toEqual([[3, 0]]);
+  });
+
+  it('a column name an app chose — quotes, spaces, a statement — is only ever a quoted identifier: nothing it says runs', async () => {
+    const hostile = 'x"); DROP TABLE expenses; --';
+    const result = await run(
+      [{ sql: 'SELECT count(*) FROM expenses' }, { sql: `SELECT "${hostile.replace(/"/g, '""')}", "amount ($)" FROM odd` }],
+      [{ name: 'odd', columns: [hostile, 'amount ($)'], rows: [['v', 7]] }],
+    );
+    expect(result.statements[0]?.rows).toEqual([[3]]);
+    expect(result.statements[1]?.error).toBeUndefined();
+    expect(result.statements[1]?.rows).toEqual([['v', 7]]);
+  });
+
+  it('a name that collides in the opened copy — the app’s own table, any case — throws SCRATCH_UNAVAILABLE naming it, and nothing runs', async () => {
+    for (const name of ['expenses', 'Expenses']) {
+      const attempt = run([{ sql: "INSERT INTO expenses (id, label, cents) VALUES (99, 'ghost', 1)" }], [{ name, columns: ['id'], rows: [[1]] }]);
+      await expect(attempt, name).rejects.toBeInstanceOf(UserDbError);
+      await attempt.catch((err: unknown) => {
+        expect((err as UserDbError).code).toBe(USERDB_ERROR_CODES.SCRATCH_UNAVAILABLE);
+        expect((err as UserDbError).message).toContain(name);
+      });
+    }
+  });
+
+  it('two attached tables of the same name collide too', async () => {
+    const attempt = run([{ sql: 'SELECT 1' }], [LEDGER_TRANSACTIONS, { ...LEDGER_TRANSACTIONS, rows: [] }]);
+    await expect(attempt).rejects.toMatchObject({ code: USERDB_ERROR_CODES.SCRATCH_UNAVAILABLE });
+  });
+
+  it('the real database is untouched: writes into and from an attached table die with the copy, and the next run has no such table', async () => {
+    const before = await appBytes(appId);
+    const result = await run(
+      [
+        { sql: "INSERT INTO ledger__transactions (id, amount, note) VALUES (4, 9, 'x')" },
+        { sql: "INSERT INTO expenses (id, label, cents) SELECT id + 100, 'copied', amount FROM ledger__transactions" },
+        { sql: 'SELECT count(*) FROM expenses' },
+      ],
+      [LEDGER_TRANSACTIONS],
+    );
+    expect(result.statements.map((statement) => statement.error)).toEqual([undefined, undefined, undefined]);
+    expect(result.statements[2]?.rows).toEqual([[7]]);
+    expect(await appBytes(appId)).toBe(before);
+    const after = await db.scratchRun(appId, [{ sql: 'SELECT count(*) FROM ledger__transactions' }]);
+    expect(after.statements[0]?.error).toMatch(/no such table/i);
+  });
+
+  it('no attach (absent, or an empty list) is exactly today’s run', async () => {
+    const plain = await db.scratchRun(appId, [{ sql: 'SELECT count(*) FROM expenses' }]);
+    const empty = await run([{ sql: 'SELECT count(*) FROM expenses' }], []);
+    expect(empty).toEqual(plain);
   });
 });

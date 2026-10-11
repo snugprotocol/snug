@@ -14,7 +14,9 @@
 // Mutation checks (run by hand — remove the rule, see the named row red, restore):
 //  - the live-grant cap → "admits 100 LIVE grants …" reds;
 //  - the ended-row prune → "ended rows older than 30 days are pruned …" reds;
-//  - coalescing on anything wider than identical (grantId, sql) → the coalescing rows red;
+//  - coalescing on anything wider than identical (grantId, sql) — or, for two reads WITHOUT a statement
+//    (TASK-20261010-host-broker PR-2 D-PR2-7), wider than (grantId, readerAppId, attended, tables) →
+//    the coalescing rows red;
 //  - pruning lifecycle entries in the same tier as reads → "reads are pruned before …" reds;
 //  - not protecting the latest granted/revoked/suspended/released per grant → "NEVER prunes …" reds;
 //  - protecting it for a grant the file no longer holds → "… NO LONGER HOLDS goes last …" reds;
@@ -359,7 +361,9 @@ describe('the access log — appendAccessLog / listAccessLog (the source keeps t
     db.appendAccessLog(LEDGER, entry('read', G, sec(62), { sql: 'SELECT amount FROM transactions' })); // another statement
     db.appendAccessLog(LEDGER, entry('read', H, sec(63), { sql: 'SELECT amount FROM transactions' })); // another grant
     db.appendAccessLog(LEDGER, entry('read', H, sec(64), { sql: undefined })); // statement withheld …
-    db.appendAccessLog(LEDGER, entry('read', H, sec(65), { sql: undefined })); // … is never "identical"
+    // … never coalesces with one that has a statement (PR-2 D-PR2-7 moved this pin: two sql-less reads
+    // of the same grant, reader, posture and tables now DO coalesce — see the D-PR2-7 rows below).
+    db.appendAccessLog(LEDGER, entry('read', H, sec(65)));
     db.appendAccessLog(LEDGER, entry('refused', H, sec(66), { reason: 'while you were away' }));
     db.appendAccessLog(LEDGER, entry('read', H, sec(67), { sql: undefined })); // not consecutive with the read before the refusal
     const log = db.listAccessLog(LEDGER);
@@ -371,6 +375,76 @@ describe('the access log — appendAccessLog / listAccessLog (the source keeps t
     db.appendAccessLog(LEDGER, entry('read', G, sec(0), { attended: true }));
     db.appendAccessLog(LEDGER, entry('read', G, sec(10), { attended: false }));
     expect(db.listAccessLog(LEDGER)).toHaveLength(2);
+  });
+
+  // TASK-20261010-host-broker PR-2, contract v2 D-PR2-7 (S2/F3): the chat and scheduler doors write
+  // `read` lines WITHOUT a statement (the scheduler always; a frame whose statement was withheld too).
+  // Two such lines coalesce ONLY when everything that identifies the read matches — the same
+  // grantId, readerAppId, attended and tables — within ACCESS_LOG_COALESCE_MS of the group's first:
+  // `count` summed, the newest `rows`. A line with `sql` still coalesces only with an identical one;
+  // an imported line never. (Red until D1: today a line without `sql` never coalesces.)
+  describe('D-PR2-7 — reads WITHOUT a statement', () => {
+    const away = (at: string, over: Record<string, unknown> = {}): AccessLogEntry =>
+      entry('read', G, at, { sql: undefined, tables: ['transactions'], rows: 4, attended: false, ...over });
+
+    it(`two sql-less reads of the same grant, reader, posture and tables within ${ACCESS_LOG_COALESCE_MS / 1000} s → ONE line, count 2, the newest rows`, () => {
+      db.appendAccessLog(LEDGER, away(sec(0)));
+      db.appendAccessLog(LEDGER, away(sec(40), { rows: 7 }));
+      const log = db.listAccessLog(LEDGER);
+      expect(log).toHaveLength(1);
+      expect(log[0]).toMatchObject({ kind: 'read', grantId: G, tables: ['transactions'], attended: false, count: 2, rows: 7, at: sec(0) });
+      expect(log[0]?.sql).toBeUndefined();
+    });
+
+    it('a third inside the window of the FIRST joins the group; one past it starts a new line', () => {
+      db.appendAccessLog(LEDGER, away(sec(0)));
+      db.appendAccessLog(LEDGER, away(sec(30)));
+      db.appendAccessLog(LEDGER, away(sec(60)));
+      db.appendAccessLog(LEDGER, away(sec(61)));
+      expect(db.listAccessLog(LEDGER).map((e) => e.count ?? 1)).toEqual([1, 3]);
+    });
+
+    it('one with sql and one without → two lines (either order)', () => {
+      db.appendAccessLog(LEDGER, entry('read', G, sec(0), { tables: ['transactions'], attended: false }));
+      db.appendAccessLog(LEDGER, away(sec(10)));
+      db.appendAccessLog(LEDGER, entry('read', G, sec(20), { tables: ['transactions'], attended: false }));
+      const log = db.listAccessLog(LEDGER);
+      expect(log).toHaveLength(3);
+      expect(log.every((e) => e.count === undefined)).toBe(true);
+    });
+
+    it('attended true then false → two lines', () => {
+      db.appendAccessLog(LEDGER, away(sec(0), { attended: true }));
+      db.appendAccessLog(LEDGER, away(sec(10), { attended: false }));
+      expect(db.listAccessLog(LEDGER)).toHaveLength(2);
+    });
+
+    it('different tables → two lines', () => {
+      db.appendAccessLog(LEDGER, away(sec(0), { tables: ['transactions'] }));
+      db.appendAccessLog(LEDGER, away(sec(10), { tables: ['transactions', 'accounts'] }));
+      expect(db.listAccessLog(LEDGER)).toHaveLength(2);
+    });
+
+    it('another grant, or another reader → two lines', () => {
+      db.appendAccessLog(LEDGER, away(sec(0)));
+      db.appendAccessLog(LEDGER, away(sec(10), { grantId: H }));
+      db.appendAccessLog(LEDGER, away(sec(20), { grantId: H, readerAppId: PANTRY, readerName: 'Pantry' }));
+      expect(db.listAccessLog(LEDGER)).toHaveLength(3);
+    });
+
+    it('an imported line never coalesces, sql or not', () => {
+      db.appendAccessLog(LEDGER, away(sec(0), { imported: true }));
+      db.appendAccessLog(LEDGER, away(sec(10)));
+      db.appendAccessLog(LEDGER, away(sec(20), { imported: true }));
+      expect(db.listAccessLog(LEDGER)).toHaveLength(3);
+    });
+
+    it('a line with sql still coalesces only with an identical one (the pin above, unchanged)', () => {
+      db.appendAccessLog(LEDGER, entry('read', G, sec(0)));
+      db.appendAccessLog(LEDGER, entry('read', G, sec(5)));
+      db.appendAccessLog(LEDGER, entry('read', G, sec(10), { sql: 'SELECT 1' }));
+      expect(db.listAccessLog(LEDGER).map((e) => e.count ?? 1)).toEqual([1, 2]);
+    });
   });
 
   it(`keeps at most ${ACCESS_LOG_MAX_ENTRIES} entries per source: the OLDEST read goes first`, () => {
