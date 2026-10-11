@@ -966,6 +966,63 @@ const accessDonor = (plant: (donor: UserDb) => void): Promise<Uint8Array> =>
 const declineHash = accessRequestHash({ hints: { tables: ['transactions'] } });
 const decline = { purpose: 'to show spending by category', hints: { tables: ['transactions'] }, at: ACCESS_AT };
 
+// TASK-20261010-host-broker PR-2 Gate-5 SEC-3: `listAppObjectNames` — every name in the app's
+// RUNTIME sqlite_master (tables, views, indexes, triggers, whatever the app's own code created at
+// runtime, not only what the registry holds), as stored, from the same flushed runtime snapshot
+// `describeAppData` reads. The chat door de-collides its aliases against these, so the scratch
+// attach never has to refuse a name.
+describe('listAppObjectNames — every runtime object name, any type, as stored (PR-2 SEC-3)', () => {
+  it('holds the registry table AND the runtime-created table, view, index and trigger — names as stored (case kept)', async () => {
+    const db = await open(backend);
+    const app = db.installApp({ displayName: 'Budget', html: '<html></html>' });
+    await db.applyAppDdl(app.appId, ['CREATE TABLE envelopes (id INTEGER PRIMARY KEY, name TEXT)']);
+    for (const sql of [
+      'CREATE TABLE Ledger__Accounts (id INTEGER)',
+      'CREATE VIEW ledger__transactions AS SELECT id FROM envelopes',
+      'CREATE INDEX ledger__items ON envelopes (name)',
+      "CREATE TRIGGER ledger__audit AFTER INSERT ON envelopes BEGIN SELECT 1; END",
+    ]) {
+      const result = await db.driver.handle(app.appId, execFrame(sql));
+      expect(result.ok, sql).toBe(true);
+    }
+    const names = await db.listAppObjectNames(app.appId);
+    expect(names).toEqual(expect.arrayContaining(['envelopes', 'Ledger__Accounts', 'ledger__transactions', 'ledger__items', 'ledger__audit']));
+    expect(names).not.toContain('ledger__accounts');
+    expect(names.every((name) => typeof name === 'string')).toBe(true);
+    await db.close();
+  });
+
+  it('includes an object created a moment ago and not yet persisted (it flushes first, like describeAppData)', async () => {
+    const db = await open(backend, { persistDebounceMs: 60_000 });
+    const app = db.installApp({ displayName: 'Budget', html: '<html></html>' });
+    await db.driver.handle(app.appId, execFrame('CREATE TABLE own (id INTEGER)'));
+    await db.driver.handle(app.appId, execFrame('CREATE VIEW fresh_view AS SELECT id FROM own'));
+    expect(await db.listAppObjectNames(app.appId)).toEqual(expect.arrayContaining(['own', 'fresh_view']));
+    await db.close();
+  });
+
+  it('an unknown app is NOT_FOUND; a deleted app is NOT_FOUND', async () => {
+    const db = await open(backend);
+    expect(await codeOfAsync(db.listAppObjectNames(GHOST_APP))).toBe(USERDB_ERROR_CODES.NOT_FOUND);
+    const app = db.installApp({ displayName: 'Ledger', html: '<html></html>' });
+    await db.applyAppDdl(app.appId, ['CREATE TABLE transactions (id INTEGER PRIMARY KEY)']);
+    await db.deleteApp(app.appId);
+    expect(await codeOfAsync(db.listAppObjectNames(app.appId))).toBe(USERDB_ERROR_CODES.NOT_FOUND);
+    await db.close();
+  });
+
+  it('reads a throwaway copy — the app’s bytes are unchanged by the call', async () => {
+    const db = await open(backend);
+    const app = db.installApp({ displayName: 'Ledger', html: '<html></html>' });
+    await db.applyAppDdl(app.appId, ['CREATE TABLE transactions (id INTEGER PRIMARY KEY, amount INTEGER NOT NULL)']);
+    await db.driver.handle(app.appId, execFrame('INSERT INTO transactions (amount) VALUES (450)'));
+    const before = Buffer.from(await db.exportAppRuntime(app.appId)).toString('base64');
+    await db.listAppObjectNames(app.appId);
+    expect(Buffer.from(await db.exportAppRuntime(app.appId)).toString('base64')).toBe(before);
+    await db.close();
+  });
+});
+
 describe('importUserDb — access grants are disarmed unless intent-identical (TASK-20261010 AC10)', () => {
   it('an UNTRUSTED file: a grant the hub has never seen lands suspended / imported, the rest of it intact, and is reported', async () => {
     const theirs = accessGrant({ reads: 4 });

@@ -177,7 +177,9 @@ export type ToolPromptName =
   /** TASK-20260811 (ADR-0019 D10): targeted edits as a cheaper route to a new version. */
   | 'artifact-edit'
   /** TASK-20261009 (ADR-0074 §4): the propose-only schedule tool — the builder's and the schedule lane's. */
-  | 'schedule-propose';
+  | 'schedule-propose'
+  /** TASK-20261010-host-broker PR-2 (ADR-0076 §2): the brain's ask to read another app's data — the builder's, and the data and answer lanes'. */
+  | 'access-propose';
 
 export function getToolPrompt(name: ToolPromptName): string {
   return renderedFile(`tools/${name}.md`);

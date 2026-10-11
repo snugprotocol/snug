@@ -21,13 +21,18 @@ import { FRAME_TYPES, PROTOCOL_VERSION } from '@snugprotocol/protocol';
 
 import { ACCESS_MAX_RESULT_BYTES, ACCESS_MAX_ROWS, ACCESS_QUERY_TIMEOUT_MS, ACCESS_SCOPED_CACHE_MS } from '@snugprotocol/protocol';
 
+import type { ScopedDumpCaps } from '@snugprotocol/db';
+
+import { ACCESS_MATERIALISE_TIMEOUT_MS } from '../access/limits.js';
 import {
   __scopedReadCachedGrantsForTests,
   canConstructWorker,
   clearScopedReadCache,
   configureScopedRead,
   resetScopedReadForTests,
+  scopedDump,
   scopedRead,
+  type ScopedDumpOutcome,
   type WorkerLike,
 } from '../access/scopedRead.js';
 import { createScopedReadResponder, loadEngine } from '../access/scopedRead.worker.js';
@@ -414,5 +419,257 @@ describe('no Worker — the honest refusal', () => {
     expect(canConstructWorker()).toBe(true);
     expect(terminated).toBe(1);
     expect(revoked).toContain('blob:probe');
+  });
+});
+
+// =========================================================================================
+// TASK-20261010-host-broker PR-2 (contract v2 D-PR2-6, F10) — the DUMP job.
+//
+// `scopedDump({ grantId, bytes, scope, caps, stillLive?, timeoutMs? })` rides the SAME queue, the
+// same worker and the same per-grant bytes cache as a read; the worker answers a
+// `{ id, kind: 'dump', bytes, scope, caps }` job with the real `scopedScratchDump` (checked FIRST —
+// a job without `statement` would otherwise be IGNORED by the read guard: silence, the clock, the
+// worker retired), and a dump job that fails its guard is answered `failed` FOR ITS ID, never
+// silence. The dump RESULT is cached per grant AND caps for ACCESS_SCOPED_CACHE_MS, and cleared
+// with the bytes. A dump has its own clock (the caller's `timeoutMs` — ACCESS_MATERIALISE_TIMEOUT_MS
+// from the service), never the read's.
+//
+// Written before the module existed (Gate 3) — `scopedDump` and `access/limits.ts` were reached
+// through dynamic imports and the shapes written out here; now imported directly, the real exports
+// are the types (PR-2 Gate-5 M-10). `bytes` is the read's thunk (`ScopedDumpInput`).
+// =========================================================================================
+
+const DUMP_CAPS: ScopedDumpCaps = { maxRows: 5_000, maxBytes: 2 * 1024 * 1024, maxTotalBytes: 8 * 1024 * 1024 };
+
+const dumpJobsOf = (recorder: Recorder) => recorder.posted.filter((entry) => typeof entry.msg === 'object' && entry.msg !== null && (entry.msg as { kind?: unknown }).kind === 'dump');
+const readJobsOf = (recorder: Recorder) => jobsOf(recorder).filter((entry) => (entry.msg as { kind?: unknown }).kind !== 'dump');
+
+describe('PR-2 the dump job — the real scopedScratchDump through the inline responder', () => {
+  it('answers the granted table’s recorded columns, declared types and rows; the job is posted as kind dump with the bytes TRANSFERRED as a copy', async () => {
+    const recorder = newRecorder();
+    configureScopedRead({ createWorker: inlineWorkers(recorder), wasm: { wasmUrl: locateWasm() }, now: () => clock.now });
+    const held = sourceBytes.slice();
+    const outcome = await scopedDump({ grantId: 'g1', bytes: () => Promise.resolve(held), scope: SCOPE, caps: DUMP_CAPS });
+    expect(outcome).toMatchObject({ ok: true, tables: [{ name: 'transactions', columns: ['id', 'amount'], types: ['INTEGER', 'INTEGER'] }] });
+    expect(outcome.ok ? [...outcome.tables[0]!.rows].sort((a, b) => Number(a[0]) - Number(b[0])) : []).toEqual([
+      [1, 450],
+      [2, 500],
+    ]);
+    expect(JSON.stringify(outcome)).not.toMatch(/accounts|9000/);
+    const [job] = dumpJobsOf(recorder);
+    expect(job?.msg).toMatchObject({ kind: 'dump', scope: SCOPE, caps: DUMP_CAPS });
+    expect('statement' in (job?.msg as object)).toBe(false);
+    const posted = (job?.msg as { bytes: Uint8Array }).bytes;
+    expect(posted).not.toBe(held);
+    expect(job?.transfer).toEqual([posted.buffer]);
+    expect(recorder.created).toBe(1);
+  });
+
+  it('a dump and a read share ONE worker and ONE queue; a read job (no kind) is answered exactly as before', async () => {
+    const recorder = newRecorder();
+    configureScopedRead({ createWorker: inlineWorkers(recorder), wasm: { wasmUrl: locateWasm() }, now: () => clock.now });
+    const [dumped, read1] = await Promise.all([scopedDump({ grantId: 'g1', bytes: () => Promise.resolve(sourceBytes), scope: SCOPE, caps: DUMP_CAPS }), read('g2', 'SELECT count(*) AS n FROM transactions')]);
+    expect(dumped).toMatchObject({ ok: true });
+    expect(read1).toEqual({ ok: true, columns: ['n'], rows: [[2]] });
+    expect(recorder.created).toBe(1);
+    expect(initsOf(recorder)).toHaveLength(1);
+  });
+});
+
+describe('PR-2 the dump job — the worker’s guard order (F10: never silence)', () => {
+  it('a dump job that fails its guard is answered failed FOR ITS ID — bytes not bytes, caps without maxTotalBytes, a scope that is not a record', async () => {
+    const respond = createScopedReadResponder();
+    await respond({ init: { wasmUrl: locateWasm() } });
+    const bad: Array<Record<string, unknown>> = [
+      { id: 7, kind: 'dump', bytes: 'not bytes', scope: SCOPE, caps: DUMP_CAPS },
+      { id: 8, kind: 'dump', bytes: sourceBytes.slice(), scope: SCOPE, caps: { maxRows: 10, maxBytes: 10 } },
+      { id: 9, kind: 'dump', bytes: sourceBytes.slice(), scope: 'transactions', caps: DUMP_CAPS },
+      { id: 10, kind: 'dump', bytes: sourceBytes.slice(), scope: SCOPE },
+    ];
+    for (const message of bad) {
+      const answer = await respond(message);
+      expect(answer, JSON.stringify(message.id)).toMatchObject({ id: message.id, result: { ok: false, reason: 'failed' } });
+    }
+  });
+
+  it('a well-formed dump job is answered with the dump; a read job WITHOUT kind is still answered as a read', async () => {
+    const respond = createScopedReadResponder();
+    await respond({ init: { wasmUrl: locateWasm() } });
+    expect(await respond({ id: 1, kind: 'dump', bytes: sourceBytes.slice(), scope: SCOPE, caps: DUMP_CAPS })).toMatchObject({
+      id: 1,
+      result: { ok: true, tables: [{ name: 'transactions', columns: ['id', 'amount'] }] },
+    });
+    expect(await respond({ id: 2, bytes: sourceBytes.slice(), scope: SCOPE, statement: { sql: 'SELECT count(*) FROM transactions' }, caps: CAPS })).toEqual({
+      id: 2,
+      result: { ok: true, columns: ['count(*)'], rows: [[2]] },
+    });
+  });
+});
+
+// M-6 (PR-2 Gate-5): `kind` is the discriminant, not its presence. A read job carrying any `kind`
+// fails the read guard like any malformed read job — silence, today's rule — and is never run as a
+// dump with a read's caps; a read job whose `kind` is undefined is still a read.
+describe('PR-2 the worker’s discriminant — kind, never the key’s presence', () => {
+  it('a job { id, kind: "read", bytes, scope, statement, caps } is answered undefined (silence)', async () => {
+    const respond = createScopedReadResponder();
+    await respond({ init: { wasmUrl: locateWasm() } });
+    expect(await respond({ id: 11, kind: 'read', bytes: sourceBytes.slice(), scope: SCOPE, statement: { sql: 'SELECT 1' }, caps: CAPS })).toBeUndefined();
+    expect(await respond({ id: 12, kind: 'other', bytes: sourceBytes.slice(), scope: SCOPE, statement: { sql: 'SELECT 1' }, caps: DUMP_CAPS })).toBeUndefined();
+  });
+
+  it('a read job whose kind is present but undefined is answered as a READ', async () => {
+    const respond = createScopedReadResponder();
+    await respond({ init: { wasmUrl: locateWasm() } });
+    expect(await respond({ id: 13, kind: undefined, bytes: sourceBytes.slice(), scope: SCOPE, statement: { sql: 'SELECT count(*) AS n FROM transactions' }, caps: CAPS })).toEqual({
+      id: 13,
+      result: { ok: true, columns: ['n'], rows: [[2]] },
+    });
+  });
+});
+
+describe('PR-2 the dump RESULT cache — per grant AND caps, cleared with the bytes', () => {
+  it('within the window a grant’s dump is answered from the cache (no job, no fetch); another grant, other caps, or the window’s end are misses', async () => {
+    const recorder = newRecorder();
+    configureScopedRead({ createWorker: inlineWorkers(recorder), wasm: { wasmUrl: locateWasm() }, now: () => clock.now });
+    let fetches = 0;
+    const bytes = () => {
+      fetches += 1;
+      return Promise.resolve(sourceBytes);
+    };
+    const dump = (grantId: string, caps: ScopedDumpCaps = DUMP_CAPS) => scopedDump({ grantId, bytes, scope: SCOPE, caps });
+    const first = await dump('g1');
+    expect(await dump('g1')).toEqual(first);
+    expect(dumpJobsOf(recorder)).toHaveLength(1);
+    expect(fetches).toBe(1);
+    await dump('g2');
+    expect(dumpJobsOf(recorder), 'grants never share an entry').toHaveLength(2);
+    await dump('g1', { ...DUMP_CAPS, maxTotalBytes: 1024 });
+    expect(dumpJobsOf(recorder), 'a different maxTotalBytes is a miss').toHaveLength(3);
+    clock.now += ACCESS_SCOPED_CACHE_MS;
+    await dump('g1');
+    expect(dumpJobsOf(recorder), 'past the window').toHaveLength(4);
+  });
+
+  // M-5 (PR-2 Gate-5): a dump served from bytes a READ cached is stamped with the BYTES' instant, so
+  // a dump is never served past the bytes' 10 s window (not 10 s from whenever the dump ran).
+  it('a read at t0, a dump at t0+9 s (bytes from the cache), a dump at t0+11 s → the third posts a NEW dump job and fetches the bytes again', async () => {
+    const recorder = newRecorder();
+    configureScopedRead({ createWorker: inlineWorkers(recorder), wasm: { wasmUrl: locateWasm() }, now: () => clock.now });
+    let fetches = 0;
+    const bytes = () => {
+      fetches += 1;
+      return Promise.resolve(sourceBytes);
+    };
+    expect(await scopedRead({ grantId: 'g1', bytes, scope: SCOPE, statement: { sql: 'SELECT 1' }, caps: CAPS })).toMatchObject({ ok: true });
+    expect(fetches).toBe(1);
+    clock.now += ACCESS_SCOPED_CACHE_MS - 1_000;
+    expect(await scopedDump({ grantId: 'g1', bytes, scope: SCOPE, caps: DUMP_CAPS })).toMatchObject({ ok: true });
+    expect(fetches, 'the dump at t0+9 s used the read’s cached bytes').toBe(1);
+    expect(dumpJobsOf(recorder)).toHaveLength(1);
+    clock.now += 2_000;
+    expect(await scopedDump({ grantId: 'g1', bytes, scope: SCOPE, caps: DUMP_CAPS })).toMatchObject({ ok: true });
+    expect(dumpJobsOf(recorder), 'past the bytes’ window the dump is not served from the cache').toHaveLength(2);
+    expect(fetches).toBe(2);
+  });
+
+  it('clearScopedReadCache(grantId) drops that grant’s dump with its bytes; clearScopedReadCache() drops every one', async () => {
+    const recorder = newRecorder();
+    configureScopedRead({ createWorker: inlineWorkers(recorder), wasm: { wasmUrl: locateWasm() }, now: () => clock.now });
+    const dump = (grantId: string) => scopedDump({ grantId, bytes: () => Promise.resolve(sourceBytes), scope: SCOPE, caps: DUMP_CAPS });
+    await dump('g1');
+    await dump('g2');
+    clearScopedReadCache('g1');
+    await dump('g1');
+    await dump('g2');
+    expect(dumpJobsOf(recorder)).toHaveLength(3);
+    clearScopedReadCache();
+    await dump('g2');
+    expect(dumpJobsOf(recorder)).toHaveLength(4);
+  });
+
+  it('resetScopedReadForTests drops the dump cache too', async () => {
+    let recorder = newRecorder();
+    configureScopedRead({ createWorker: inlineWorkers(recorder), wasm: { wasmUrl: locateWasm() }, now: () => clock.now });
+    await scopedDump({ grantId: 'g1', bytes: () => Promise.resolve(sourceBytes), scope: SCOPE, caps: DUMP_CAPS });
+    resetScopedReadForTests();
+    recorder = newRecorder();
+    configureScopedRead({ createWorker: inlineWorkers(recorder), wasm: { wasmUrl: locateWasm() }, now: () => clock.now });
+    await scopedDump({ grantId: 'g1', bytes: () => Promise.resolve(sourceBytes), scope: SCOPE, caps: DUMP_CAPS });
+    expect(dumpJobsOf(recorder)).toHaveLength(1);
+  });
+
+  it('a cached dump never answers a READ: a read of the same grant still runs its statement in the worker', async () => {
+    const recorder = newRecorder();
+    configureScopedRead({ createWorker: inlineWorkers(recorder), wasm: { wasmUrl: locateWasm() }, now: () => clock.now });
+    await scopedDump({ grantId: 'g1', bytes: () => Promise.resolve(sourceBytes), scope: SCOPE, caps: DUMP_CAPS });
+    expect(await read('g1', 'SELECT max(amount) AS m FROM transactions')).toEqual({ ok: true, columns: ['m'], rows: [[500]] });
+    expect(readJobsOf(recorder)).toHaveLength(1);
+  });
+});
+
+describe('PR-2 the dump’s own clock, and the host side’s own outcomes', () => {
+  it('a dump runs under ITS timeoutMs, not the read’s: not cut at ACCESS_QUERY_TIMEOUT_MS, cut at ACCESS_MATERIALISE_TIMEOUT_MS — the worker terminated', async () => {
+    expect(ACCESS_MATERIALISE_TIMEOUT_MS).toBe(5_000);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const recorder = newRecorder();
+      configureScopedRead({ createWorker: silentWorkers(recorder), wasm: { wasmUrl: locateWasm() }, now: () => clock.now });
+      let settled: ScopedDumpOutcome | undefined;
+      void scopedDump({ grantId: 'g1', bytes: () => Promise.resolve(sourceBytes), scope: SCOPE, caps: DUMP_CAPS, timeoutMs: ACCESS_MATERIALISE_TIMEOUT_MS }).then((outcome) => {
+        settled = outcome;
+      });
+      await vi.waitFor(() => expect(dumpJobsOf(recorder)).toHaveLength(1));
+      await vi.advanceTimersByTimeAsync(ACCESS_QUERY_TIMEOUT_MS + 1);
+      expect(settled, 'the read’s 2 s clock does not cut a dump').toBeUndefined();
+      expect(recorder.terminated).toBe(0);
+      await vi.advanceTimersByTimeAsync(ACCESS_MATERIALISE_TIMEOUT_MS);
+      expect(settled).toMatchObject({ ok: false, reason: 'timeout' });
+      expect(recorder.terminated).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a dump whose grant ended while it was queued answers ended — nothing fetched, nothing posted', async () => {
+    const recorder = newRecorder();
+    configureScopedRead({ createWorker: inlineWorkers(recorder), wasm: { wasmUrl: locateWasm() }, now: () => clock.now });
+    let fetched = false;
+    const outcome = await scopedDump({
+      grantId: 'g1',
+      bytes: () => {
+        fetched = true;
+        return Promise.resolve(sourceBytes);
+      },
+      scope: SCOPE,
+      caps: DUMP_CAPS,
+      stillLive: () => false,
+    });
+    expect(outcome).toMatchObject({ ok: false, reason: 'ended' });
+    expect(fetched).toBe(false);
+    expect(dumpJobsOf(recorder)).toHaveLength(0);
+  });
+
+  it('where no Worker can be constructed a dump answers unavailable, and nothing is fetched', async () => {
+    vi.stubGlobal('Worker', undefined);
+    configureScopedRead({ wasm: { wasmUrl: locateWasm() }, now: () => clock.now });
+    let fetched = false;
+    const outcome = await scopedDump({
+      grantId: 'g1',
+      bytes: () => {
+        fetched = true;
+        return Promise.resolve(sourceBytes);
+      },
+      scope: SCOPE,
+      caps: DUMP_CAPS,
+    });
+    expect(outcome).toMatchObject({ ok: false, reason: 'unavailable' });
+    expect(fetched).toBe(false);
+  });
+
+  it('drift passes through as the engine reports it', async () => {
+    const recorder = newRecorder();
+    configureScopedRead({ createWorker: inlineWorkers(recorder), wasm: { wasmUrl: locateWasm() }, now: () => clock.now });
+    const outcome = await scopedDump({ grantId: 'g1', bytes: () => Promise.resolve(sourceBytes), scope: { tables: [{ name: 'transactions', columns: ['id', 'amount', 'note'] }] }, caps: DUMP_CAPS });
+    expect(outcome).toMatchObject({ ok: false, reason: 'drift' });
   });
 });

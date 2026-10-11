@@ -11,6 +11,9 @@ Proposes changes to THIS app's data. It does NOT apply them: the host shows the 
 exact statements and how many rows each would affect, and only the user's approval runs
 them. Say what you are proposing, then propose it — do not claim it is done.
 
+Never propose a change to a table listed under *From <Source>* — those are read-only copies of
+another app's data; tell the user they can change it in that app.
+
 Write the smallest set of statements that achieves what the user asked:
 
 - Bind values with `?` and pass them in `params`; never paste user text into SQL.

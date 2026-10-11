@@ -37,7 +37,6 @@ import {
   ACCESS_CHANGED_EVENT,
   ACCESS_QUERY_RATE_PER_MINUTE,
   accessGrantSchema,
-  durationFromExpiry,
   durationToExpiry,
   type AccessDuration,
   type AccessGrant,
@@ -54,14 +53,16 @@ import { appHasSidecarFact } from '../state/sidecarLive.js';
 import { createStore, useStore, type Store } from '../state/store.js';
 import { getUserDb } from '../state/userdb.js';
 import { dismissPendingAccess, resetConsentSession } from './consent.js';
+import { durationOf, expiresAtOf, isExpired, type AnyAccessGrant, type SessionAccessGrant } from './grantFacts.js';
 import type { SourceApp } from './relevance.js';
 import { clearScopedReadCache } from './scopedRead.js';
 
 // ---------------------------------------------------------------------------------------- types
 
-/** A memory grant: the persisted record's shape with the one duration that never persists. */
-export type SessionAccessGrant = Omit<AccessGrant, 'duration'> & { duration: { kind: 'session' } };
-export type AnyAccessGrant = AccessGrant | SessionAccessGrant;
+// The derived facts and the grant shapes live in the leaf `grantFacts.ts` (the pure policy reads
+// them there, PR-2 D-PR2-1); re-exported here so every caller keeps its import.
+export { durationOf, expiresAtOf, isExpired } from './grantFacts.js';
+export type { AnyAccessGrant, SessionAccessGrant } from './grantFacts.js';
 
 /** A grant as the engine finds it: persisted, or in memory with the generation it is bound to. */
 export interface FoundAccessGrant {
@@ -233,22 +234,6 @@ export function queryRateLimited(appId: string, at: number): boolean {
 }
 
 // ------------------------------------------------------------------------------ derived facts
-
-/** The duration the user chose. A persisted `until` reads `day` or `week` by the protocol's own inverse of `durationToExpiry`. */
-export function durationOf(grant: AnyAccessGrant): AccessDuration {
-  if (grant.duration.kind === 'session') return 'session';
-  if (grant.duration.kind === 'always') return 'always';
-  return durationFromExpiry(grant.grantedAt, grant.duration.at);
-}
-
-export function expiresAtOf(grant: AnyAccessGrant): string | undefined {
-  return grant.duration.kind === 'until' ? grant.duration.at : undefined;
-}
-
-export function isExpired(grant: AnyAccessGrant, now: number): boolean {
-  const at = expiresAtOf(grant);
-  return at !== undefined && Date.parse(at) <= now;
-}
 
 /** Usable right now: active, not expired, and its source holds no WhatsApp fact (D6 — checked at every read). */
 export function isLive(grant: AnyAccessGrant, now: number, db: UserDb): boolean {

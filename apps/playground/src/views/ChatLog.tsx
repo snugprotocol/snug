@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { ReactElement } from 'react';
 import { Link } from 'react-router';
 
+import { AccessCard, type ResolveAccessCard } from '../access/AccessCard.js';
 import { sanitizeCardText, type ChatCardState } from '../agent/cards.js';
 import type { BuildStepView, ChatMessage, DataWriteCardState } from '../agent/useBuilderChat.js';
 import { CONNECTIONS_UNAVAILABLE } from '../platform/availability.js';
@@ -77,6 +78,13 @@ export interface ChatLogProps {
    * path to persist an answer must not create anything — the choice card's rule).
    */
   onResolveSchedule?: ResolveScheduleCard;
+  /**
+   * Resolve the brain's ASK card (TASK-20261010-host-broker PR-2; D-PR2-11) —
+   * `(card: AccessCardState, messageId, resolution)`. The card never writes the chat row itself:
+   * the hook that staged it persists the answer on the row and patches its message. Absent ⇒ the
+   * card's acts render disabled (the schedule card's rule: an answer with nowhere to go asks nobody).
+   */
+  onResolveAccess?: ResolveAccessCard;
 }
 
 /**
@@ -102,6 +110,7 @@ export function ChatLog({
   onDeclineDataWrite,
   onSelectCardOption,
   onResolveSchedule,
+  onResolveAccess,
 }: ChatLogProps): ReactElement {
   // Under a platform-pinned HOST brain the chat has no classifier and no `schedule` lane
   // (TASK-20261009 P2): the deterministic offer is the route, and its line says so.
@@ -290,6 +299,16 @@ export function ChatLog({
           */}
           {message.schedule !== undefined && allows('schedule') ? (
             <ScheduleCard card={message.schedule} messageId={message.id} busy={busy} onResolve={onResolveSchedule} />
+          ) : null}
+          {/*
+            The brain's ASK CARD (TASK-20261010-host-broker PR-2, D-PR2-11; `access/AccessCard.tsx`):
+            what `access_propose` staged, with *review* (the host's own sheet) and *not now*. Its
+            answer travels back through `onResolveAccess` with this message's id — the card is UI,
+            never a gate, and never writes the row itself. Only where the host allows access
+            between apps (the schedule card's rule).
+          */}
+          {message.access !== undefined && allows('access') ? (
+            <AccessCard card={message.access} messageId={message.id} busy={busy} onResolve={onResolveAccess} />
           ) : null}
           {message.artifact !== undefined ? (
             <Card className="artifact-card" data-testid="artifact-card">

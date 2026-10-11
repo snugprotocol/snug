@@ -96,6 +96,12 @@ export interface BuildHandlers {
    * mode only; `false` tells the tool the surface declined to stage it (one card per turn).
    */
   onScheduleProposal?: ByokToolHooks['onScheduleProposal'];
+  /**
+   * An `access_propose` call staged an ask to read another app's data (TASK-20261010-host-broker
+   * PR-2, D-PR2-11). Direct mode only; `false` tells the tool the surface declined to stage it
+   * (one card per turn).
+   */
+  onAccessProposal?: ByokToolHooks['onAccessProposal'];
 }
 
 export type BuildResult =
@@ -312,6 +318,7 @@ export function createDirectBuilder(options: DirectBuilderOptions): BuilderAgent
             onSchemaApplied: () => handlers.onKnowledge?.(),
             onDocWritten: () => handlers.onKnowledge?.(),
             ...(handlers.onScheduleProposal !== undefined ? { onScheduleProposal: handlers.onScheduleProposal } : {}),
+            ...(handlers.onAccessProposal !== undefined ? { onAccessProposal: handlers.onAccessProposal } : {}),
           });
       const activityLabels: Record<string, string> = {
         artifact_write: 'writing the app file…',

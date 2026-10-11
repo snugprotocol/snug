@@ -139,8 +139,17 @@ describe('AC24 — the page is in the store, out of the inline core, with its he
       '## When It Stops, Pauses or Ends',
       '## What Each Refusal Means',
       '## The Cross-App Helper (copy beside the hooks block)',
+      '## Your App Need Not Read Another App Itself',
       '## Rules for Reading Another App',
     ]);
+  });
+
+  it('TASK-20261010-host-broker PR-2 (ADR-0076 §1–§3): the page says the chat beside the app and a scheduled question to its AI read what the user allowed, with no code in the app, and that the other app’s history shows it as the app’s read', () => {
+    const text = rendered(KB_FILE);
+    expect(text).toContain("The runner's own AI beside your app");
+    expect(text).toContain('none of it reaches your app\'s frame');
+    expect(text).toContain('A scheduled *ask <app>\'s AI* question sees the same');
+    expect(text).toContain("history shows every such read as YOUR app's read");
   });
 
   it('says *access* and *history* in its prose — never grant, reader, scope or log outside a code span (AC17’s vocabulary)', () => {
