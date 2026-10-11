@@ -25,9 +25,10 @@
   and kit specs use), #write sends ONE literal-valued UPDATE of `transactions` whose WHERE names a
   granted column (`op: 'write'` → #result "changes: N"), #refresh asks the source to fetch first
   (`op: 'refresh'` → #result "fresh: true" / "fresh: false · recent"), and #peek / #fetches READ
-  (a query) what the write and the fetch changed into #peeked. The helper block is the 1.1 one —
-  its `snugAccessRequest(op, fields)` already carries any op; re-render it from KB 87 v2 per the
-  SYNC RULE once that page lands.
+  (a query) what the write and the fetch changed into #peeked. The helper block IS KB 87 v2's
+  render — `snugAccessRequest(op, fields)` carries every op, and the three listener arms
+  (`access-source-changed`, `data-changed`, `access-read`) are its; re-render it from that page
+  per the SYNC RULE whenever the page changes.
 -->
 <html lang="en">
 <head>

@@ -6,7 +6,11 @@
 // notes E1-Q1/Q2/Q9/Q12, D-Q8/Q10/Q19/Q20; spec 1.2 §24.5 MUSTs 18–24).
 //
 // STRICT MODE — `brokeredWrite` (another app's data, authority `permission` from a frame's `write`
-// the policy admitted). The order is the contract's and every step of it is observable:
+// the policy admitted). FIRST, before any queue or export, the driver's transaction record is READ
+// (`db.driver.inTransaction`, code-fix D-FIX-1): a target mid-change answers `ACCESS_BUSY` here,
+// because the plan's fresh export below reopens the connection and discards that very transaction
+// (D-PR3-11's named residual) — the seat's own `busy` from its `BEGIN IMMEDIATE`, kept as the belt,
+// could never see it. Then the order is the contract's and every step of it is observable:
 //  (1) the plan job's DEQUEUE re-check — `stillWritable` (the policy's one spelling ∧ the table's
 //      `write`), so a stop that landed while the job waited ends it before any export (S8);
 //  (2) the plan in the Worker on a FRESH export (`scopedPlanWrite`: the grant's cached bytes are
@@ -40,22 +44,23 @@
 //
 // OWN MODE — `applyApprovedWrite` (the app's OWN data the user approved on a card, D-PR3-8):
 // the DML class only (`nonDataStatementReason`, today's guard), the dry run through `scratchRun`
-// for the previewed-count drift halt (F-Sm1, unchanged), then the SAME seat with `requireUndo:
-// false, capture: false, expectChanges: proposal.previewed` — atomic and counted, NO journal, NO
-// history line, NO undo id — and `data-changed { table }` to the app's own live frame after the
-// commit, so the open app re-reads what its chat changed. The outcome keeps PR-2's three shapes;
-// `executeApprovedWrite` is a thin caller. The seat's apply reads each plan's `op`, `table`, its
-// GRANTED columns and the SET / INSERT lists (D-Q1) before the transaction even when nothing is
-// captured, so own mode builds those from the live `table_xinfo` and the statement's own text —
-// the SET columns before each `=`, the INSERT list, or every non-generated column when the
-// statement lists none — reading no value and never parsing the rest; a statement the text
-// cannot shape is answered `failed`, and nothing is applied (D-IE1-3).
+// for the previewed-count drift halt (F-Sm1, unchanged), then the SAME seat's `{ own }` variant
+// (E1-Q12) — the belts, `BEGIN IMMEDIATE`, each statement counted, `expectChanges: proposal.
+// previewed` as the halt at the apply too; NO table rules, NO capture, NO journal, NO history
+// line, NO undo id. An approved change therefore applies to the app's own table whatever its
+// shape — a trigger, WITHOUT ROWID, a REPLACE resolution, a foreign-key action, a generated or
+// credential-named column, a `main.t` name: the strict rules decide what ANOTHER app may do to
+// a table, not what the user may approve on their own data. After the commit, `data-changed
+// { table }` to the app's own live frame (once per table the statements name; `table` omitted
+// when the text cannot say), so the open app re-reads what its chat changed. The outcome keeps
+// PR-2's three shapes; `executeApprovedWrite` is a thin caller.
 //
 // UNDO — `undoBrokeredWrite` (the USER's act from the target's history, `via: 'user'`): the live
 // entry (an unknown, undone or expired id is `gone`) → every step's table and columns re-validated
 // against the live `table_xinfo` through the driver's read seat — the table exists, every named
-// column exists, none is generated — a mismatch is `gone` and the entry is marked undone-failed
-// (S3; D-Q10) → the seat with the steps in REVERSE order (`{ undo }`: the apply re-validates the
+// column exists, none is generated — a mismatch is `gone` and the entry is marked undone (S3;
+// D-Q10: `markAccessUndone(target, id, at)`, three arguments — a done and a failed undo both stop
+// being live) → the seat with the steps in REVERSE order (`{ undo }`: the apply re-validates the
 // shape, BUILDS every inverse from the structure with every value a bound parameter, runs the
 // belt over each, and rolls the WHOLE undo back unless every inverse put back exactly one row —
 // S18) → `markAccessUndone` → the `undone` line (`via: 'user'`, `changes` summed over the steps,
@@ -90,7 +95,7 @@ import {
   type AccessLogVia,
   type AccessWriteAuthority,
 } from '@snugprotocol/protocol';
-import { dmlTargetTable, nonDataStatementReason, type BrokeredCaps, type BrokeredOp, type BrokeredPlan, type BrokeredWriteResult, type ColumnFact, type ScopedReadStatement, type UndoStep, type UserDb } from '@snugprotocol/db';
+import { dmlTargetTable, nonDataStatementReason, type BrokeredCaps, type BrokeredWriteResult, type ColumnFact, type ScopedReadStatement, type UndoStep, type UserDb } from '@snugprotocol/db';
 import type { AccessHandlerResult } from '@snugprotocol/runner';
 
 import type { ExecuteApprovedWriteOutcome, PendingWriteProposal } from '../agent/dataTools.js';
@@ -294,6 +299,9 @@ export async function brokeredWrite(db: UserDb, input: BrokeredWriteRequest): Pr
   const { grant } = input.grant;
   const table = dmlTargetTable(input.statement.sql);
   if (table === undefined) return writeRefused('statement');
+  // FIRST — the driver's record, before any queue or export (D-FIX-1): the plan's fresh export
+  // discards the target's open transaction, so only a read of the record can answer busy for it.
+  if (await db.driver.inTransaction(input.targetAppId)) return busy();
   const find = (id: string): FoundAccessGrant | undefined => findAccessGrant(db, id);
   const writable = (): boolean => stillWritable(find, input.caller, grant.id, table, now()) !== undefined;
 
@@ -358,167 +366,10 @@ export async function brokeredWrite(db: UserDb, input: BrokeredWriteRequest): Pr
 
 const failed = (message: string): ExecuteApprovedWriteOutcome => ({ ok: false, reason: 'failed', message });
 
-const stripComments = (sql: string): string =>
-  sql
-    .replace(/\/\*[\s\S]*?\*\//g, ' ')
-    .replace(/--[^\n]*/g, ' ')
-    .trim();
-
-/** The verb's op of a comment-stripped statement — the class guard admits only these three verbs, so the text always says. */
-function opOf(sql: string): BrokeredOp | undefined {
-  const verb = /^(INSERT|UPDATE|DELETE)\b/i.exec(sql)?.[1]?.toUpperCase();
-  switch (verb) {
-    case 'INSERT':
-      return 'insert';
-    case 'UPDATE':
-      return 'update';
-    case 'DELETE':
-      return 'delete';
-    default:
-      return undefined;
-  }
-}
-
-/** One identifier as the statement spells it — bare, "quoted", `quoted` or [bracketed] — unquoted; `undefined` for anything else. */
-function identifierOf(text: string): string | undefined {
-  const trimmed = text.trim();
-  const quoted = /^"((?:[^"]|"")*)"$/.exec(trimmed);
-  if (quoted !== null) return quoted[1]!.replace(/""/g, '"');
-  const ticked = /^`((?:[^`]|``)*)`$/.exec(trimmed);
-  if (ticked !== null) return ticked[1]!.replace(/``/g, '`');
-  const bracketed = /^\[([^\]]*)\]$/.exec(trimmed);
-  if (bracketed !== null) return bracketed[1];
-  return /^[A-Za-z_][\w$]*$/.test(trimmed) ? trimmed : undefined;
-}
-
-/**
- * Walk `text` outside its quoted spans ('…', "…", `…`, […] — a doubled quote stays inside), handing
- * `visit` each unquoted character with the parenthesis depth BEFORE it; `visit` answers true to stop
- * there. The index stopped at, or -1 when the walk ran out. Reads structure only, never a value.
- */
-function scanUnquoted(text: string, visit: (index: number, char: string, depth: number) => boolean): number {
-  let depth = 0;
-  let quote: string | undefined;
-  for (let index = 0; index < text.length; index += 1) {
-    const char = text[index]!;
-    if (quote !== undefined) {
-      if (char !== quote) continue;
-      if (quote !== ']' && text[index + 1] === quote) index += 1;
-      else quote = undefined;
-      continue;
-    }
-    if (char === "'" || char === '"' || char === '`') {
-      quote = char;
-      continue;
-    }
-    if (char === '[') {
-      quote = ']';
-      continue;
-    }
-    if (visit(index, char, depth)) return index;
-    if (char === '(') depth += 1;
-    else if (char === ')') depth -= 1;
-  }
-  return -1;
-}
-
-/** `text` split at its top-level commas, each part trimmed. */
-function topLevelTerms(text: string): string[] {
-  const terms: string[] = [];
-  let start = 0;
-  scanUnquoted(text, (index, char, depth) => {
-    if (char === ',' && depth === 0) {
-      terms.push(text.slice(start, index).trim());
-      start = index + 1;
-    }
-    return false;
-  });
-  terms.push(text.slice(start).trim());
-  return terms;
-}
-
-/** Where the first top-level keyword of `keywords` begins in `text`, or the text's end. */
-function clauseEnd(text: string, keywords: readonly string[]): number {
-  const upper = text.toUpperCase();
-  const at = scanUnquoted(
-    text,
-    (index, char, depth) =>
-      depth === 0 &&
-      /[A-Za-z]/.test(char) &&
-      (index === 0 || !/[\w$]/.test(text[index - 1]!)) &&
-      keywords.some((keyword) => upper.startsWith(keyword, index) && !/[\w$]/.test(text[index + keyword.length] ?? ' ')),
-  );
-  return at === -1 ? text.length : at;
-}
-
-/** The index of the parenthesis that closes the one `text` opens with, or -1. */
-const closingParen = (text: string): number => scanUnquoted(text, (_index, char, depth) => char === ')' && depth === 1);
-
-const IDENTIFIER = '(?:"(?:[^"]|"")*"|`(?:[^`]|``)*`|\\[[^\\]]*\\]|[A-Za-z_][\\w$]*)';
-/** SQLite's qualified-table-name tail after the table: an alias and an index hint, each optional. */
-const TABLE_TAIL = `(?:\\s+AS\\s+${IDENTIFIER})?(?:\\s+(?:NOT\\s+INDEXED|INDEXED\\s+BY\\s+${IDENTIFIER}))?`;
-
-/** An UPDATE's SET columns, in SET order, from the text alone — `undefined` when the text cannot say. */
-function setColumnsOf(sql: string): string[] | undefined {
-  const head = new RegExp(`^UPDATE\\s+(?:OR\\s+[A-Za-z]+\\s+)?${IDENTIFIER}${TABLE_TAIL}\\s+SET\\s+`, 'i').exec(sql);
-  if (head === null) return undefined;
-  const rest = sql.slice(head[0].length);
-  const clause = rest.slice(0, clauseEnd(rest, ['WHERE', 'FROM', 'RETURNING', 'ORDER', 'LIMIT']));
-  const columns: string[] = [];
-  for (const term of topLevelTerms(clause)) {
-    const equals = scanUnquoted(term, (_index, char, depth) => char === '=' && depth === 0);
-    const column = equals === -1 ? undefined : identifierOf(term.slice(0, equals));
-    if (column === undefined) return undefined;
-    columns.push(column);
-  }
-  return columns.length > 0 ? columns : undefined;
-}
-
-/** An INSERT's column list from the text alone — `undefined` when it lists none (every non-generated column, then), `null` when the text cannot say. */
-function insertColumnsOf(sql: string): string[] | undefined | null {
-  const head = new RegExp(`^INSERT\\s+(?:OR\\s+[A-Za-z]+\\s+)?INTO\\s+${IDENTIFIER}(?:\\s+AS\\s+${IDENTIFIER})?\\s*`, 'i').exec(sql);
-  if (head === null) return null;
-  const rest = sql.slice(head[0].length);
-  if (!rest.startsWith('(')) return undefined;
-  const close = closingParen(rest);
-  if (close === -1) return null;
-  const columns: string[] = [];
-  for (const term of topLevelTerms(rest.slice(1, close))) {
-    const column = identifierOf(term);
-    if (column === undefined) return null;
-    columns.push(column);
-  }
-  return columns.length > 0 ? columns : null;
-}
-
-/** One approved statement as the seat's plan (own mode, D-IE1-3): its op, its table, the live columns, the SET / INSERT list it names, the approved count. */
-async function ownPlanOf(db: UserDb, appId: string, statement: { sql: string; params: unknown[] }, previewChanges: number): Promise<BrokeredPlan | string> {
-  const sql = stripComments(statement.sql);
-  const op = opOf(sql);
-  const table = dmlTargetTable(sql);
-  if (op === undefined || table === undefined) return 'the change could not be read';
-  const live = await liveColumnsOf(db, appId, table);
-  if (live === undefined) return `no such table: ${table}`;
-  const base: BrokeredPlan = { sql: statement.sql, params: statement.params, op, table, columns: live.map((column) => column.name), previewChanges };
-  switch (op) {
-    case 'update': {
-      const setColumns = setColumnsOf(sql);
-      return setColumns === undefined ? 'the change could not be read' : { ...base, setColumns };
-    }
-    case 'insert': {
-      const listed = insertColumnsOf(sql);
-      if (listed === null) return 'the change could not be read';
-      return { ...base, insertColumns: listed ?? live.filter((column) => !column.generated).map((column) => column.name) };
-    }
-    case 'delete':
-      return base;
-  }
-}
-
 /**
  * Own mode: the approved write of an app's OWN data — the class guard, the dry run's drift halt,
- * the seat with no capture and no journal, `data-changed` to the app's own frame — see the header.
- * Never throws: every outcome is one of PR-2's three.
+ * the seat's `{ own }` variant (no table rules, no capture, no journal), `data-changed` to the
+ * app's own frame — see the header. Never throws: every outcome is one of PR-2's three.
  */
 export async function applyApprovedWrite(db: UserDb, proposal: PendingWriteProposal): Promise<ExecuteApprovedWriteOutcome> {
   // The class guard again, at the gate that touches data (R-B1): a DDL here means the proposal was changed after approval.
@@ -534,25 +385,21 @@ export async function applyApprovedWrite(db: UserDb, proposal: PendingWritePropo
     if (current.length !== proposal.previewed.length || current.some((count, index) => count !== proposal.previewed[index])) {
       return { ok: false, reason: 'drifted', previewed: proposal.previewed, current };
     }
-    const plans: BrokeredPlan[] = [];
-    for (const [index, entry] of entries.entries()) {
-      const plan = await ownPlanOf(db, proposal.appId, entry, proposal.previewed[index] ?? 0);
-      if (typeof plan === 'string') return failed(plan);
-      plans.push(plan);
-    }
-    // ALL OR NOTHING (R-M4), through the one seat: the previewed counts are the drift halt at the apply too.
+    // ALL OR NOTHING (R-M4), through the one seat's OWN variant (D-PR3-8, E1-Q12): the belts, `BEGIN
+    // IMMEDIATE`, each statement counted, the previewed counts as the drift halt at the apply too.
+    // Own mode's count rule IS the approved counts; the caps ride for the seat's one shape, spelled
+    // as those counts so they never say more than the user approved.
     const applied = await db.driver.brokeredWrite(proposal.appId, {
-      plans,
+      own: entries,
       caps: { maxChanges: Math.max(0, ...proposal.previewed), maxUndoBytes: ACCESS_UNDO_MAX_BYTES },
       expectChanges: proposal.previewed,
-      requireUndo: false,
-      capture: false,
     });
     if (!applied.ok) {
       if ('reason' in applied && applied.reason === 'drifted') return { ok: false, reason: 'drifted', previewed: applied.previewed ?? proposal.previewed, current: applied.current ?? [] };
       return failed(applied.message);
     }
-    for (const table of new Set(plans.map((plan) => plan.table))) ringDataChanged(proposal.appId, table);
+    // The open app re-reads what its chat changed: once per table the statements name (`table` omitted when the text cannot say).
+    for (const table of new Set(entries.map((entry) => dmlTargetTable(entry.sql)))) ringDataChanged(proposal.appId, table);
     // `executed` is the count the seat made — equal to the preview by the drift halt, never a number the user did not approve (AC-F2-4).
     return { ok: true, executed: applied.changes };
   } catch (err) {
@@ -562,9 +409,6 @@ export async function applyApprovedWrite(db: UserDb, proposal: PendingWritePropo
 
 // ------------------------------------------------------------------------------------------- undo
 
-/** `markAccessUndone` with the contract's fourth seat (D-Q10): a failed undo is marked like a done one; the db ignores the flag. */
-type MarkAccessUndone = (targetAppId: string, id: string, at: string, failed?: boolean) => void;
-
 /**
  * The user's undo of one journaled change (D-PR3-15; §24.5 MUST 23) — see the header. Never
  * throws: every outcome is data, and nothing changes unless every row still holds what the write left.
@@ -572,7 +416,6 @@ type MarkAccessUndone = (targetAppId: string, id: string, at: string, failed?: b
 export async function undoBrokeredWrite(db: UserDb, targetAppId: string, undoId: string, options: { via: 'user' }): Promise<UndoOutcome> {
   const sourceName = db.getApp(targetAppId)?.displayName ?? targetAppId;
   const fail = (reason: UndoFailureReason): UndoOutcome => ({ ok: false, reason, message: ACCESS_SHEET.undoFailed(reason, sourceName) });
-  const markUndone = db.markAccessUndone.bind(db) as MarkAccessUndone;
   const entry = db.listAccessUndo(targetAppId).find((candidate) => candidate.id === undoId);
   if (entry === undefined) return fail('gone');
   // The live schema (S3): every step's table and columns as `table_xinfo` has them now — a mismatch can no longer be undone.
@@ -580,7 +423,7 @@ export async function undoBrokeredWrite(db: UserDb, targetAppId: string, undoId:
     const columns = await liveColumnsOf(db, targetAppId, step.table);
     const present = columns !== undefined && step.columns.every((name) => columns.some((column) => column.name.toLowerCase() === name.toLowerCase() && !column.generated));
     if (!present) {
-      markUndone(targetAppId, undoId, iso(now()), true);
+      db.markAccessUndone(targetAppId, undoId, iso(now()));
       return fail('gone');
     }
   }
@@ -594,7 +437,7 @@ export async function undoBrokeredWrite(db: UserDb, targetAppId: string, undoId:
       case 'drifted':
         return fail('changed');
       case 'refused':
-        markUndone(targetAppId, undoId, iso(now()), true);
+        db.markAccessUndone(targetAppId, undoId, iso(now()));
         return fail('gone');
       case 'too-many':
       case 'too-large':
@@ -604,7 +447,7 @@ export async function undoBrokeredWrite(db: UserDb, targetAppId: string, undoId:
     }
   }
   const at = iso(now());
-  markUndone(targetAppId, undoId, at);
+  db.markAccessUndone(targetAppId, undoId, at);
   const tables = [...new Set(entry.steps.map((step) => step.table))];
   try {
     db.appendAccessLog(targetAppId, {

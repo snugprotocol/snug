@@ -2410,6 +2410,10 @@ function construct(
       noteNamespace(namespace);
       return inner.brokeredWrite(namespace, input);
     },
+    // The busy read (code-fix D-FIX-1) is a read seat like `subscribeWrites`: a deleted or unheld
+    // app (the same `hostKvRefusal` reasoning) holds no transaction — plain false, never a refusal
+    // object — and nothing is opened or noted for it.
+    inTransaction: (namespace) => (hostKvRefusal(namespace) !== undefined ? Promise.resolve(false) : inner.inTransaction(namespace)),
     subscribeWrites: (listener) => {
       writeListeners.add(listener);
       return () => {

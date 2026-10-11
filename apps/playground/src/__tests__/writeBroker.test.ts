@@ -522,7 +522,7 @@ describe('undoBrokeredWrite — the user’s act from the source’s history, re
     for (const entry of planted) {
       expect(undoJournal().putAccessUndo(journal, entry)).toBe('ok');
       expect(await undoBrokeredWrite(db, journal, entry.id, { via: 'user' }), entry.steps[0]!.table).toEqual({ ok: false, reason: 'gone', message: undoFailed('gone', 'Journal') });
-      expect(markSpy).toHaveBeenLastCalledWith(journal, entry.id, expect.any(String), true);
+      expect(markSpy).toHaveBeenLastCalledWith(journal, entry.id, expect.any(String));
     }
     expect(seatSpy, 'refused before the seat').not.toHaveBeenCalled();
     expect(undoJournal().listAccessUndo(journal), 'none of them is live any more').toEqual([]);

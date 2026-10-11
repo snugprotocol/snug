@@ -54,10 +54,13 @@
 //     transaction the app holds → `busy`, and the app's transaction is left exactly as it was
 //     — D-Q3) → per plan: the capture objects, the statement, `sqlite3_changes()`, the caps
 //     (`too-many`), the drift halt (`expectChanges` — `drifted`, with both counts), the
-//     captured rows read and each cell judged UNDER ITS COLUMN — a BLOB or a value the
-//     journal's `accessParamSchema` refuses, or a credential-shaped text (`findRecordCredential
-//     ({ [column]: value })`, S12) — a hit is `unsafe` (or `too-large` for an over-long text)
-//     when an undo is REQUIRED, else the write commits with NO undo (D-Q15) → the journal
+//     captured rows read and each cell judged UNDER ITS COLUMN — a cell the journal cannot
+//     hold (`journalableCell`: the protocol's `accessParamSchema` as a PURE predicate — a text
+//     of at most `JOURNAL_TEXT_MAX_CHARS`, a finite number, a boolean or NULL; a BLOB,
+//     NaN or anything else is not — see THE WORKER'S BUNDLE below), or a credential-shaped
+//     text (`findRecordCredential({ [column]: value })`, S12) — a hit is `unsafe` (or
+//     `too-large` for an over-long text) when an undo is REQUIRED, else the write commits
+//     with NO undo (D-Q15) → the journal
 //     bytes ≤ `maxUndoBytes` → the capture objects dropped → `COMMIT`. A `committed` flag;
 //     `finally` runs ROLLBACK (errors swallowed) whenever this apply's OWN BEGIN succeeded and
 //     the commit did not, THEN drops any capture object still standing; a throw anywhere is
@@ -91,6 +94,30 @@
 // back `drifted` (S18); a SQL error (a rowid reused since — D-Q19) is `failed`. An undo never
 // captures and is never undoable.
 //
+// OWN MODE — THE SAME SEAT WITHOUT THE TABLE RULES (D-PR3-8, E1-Q12). The `{ own }` variant is
+// the app's OWN change the user approved on a card (`applyApprovedWrite`'s two callers): the
+// DML class only, ANY statement shape — a triggered table, WITHOUT ROWID, `ON CONFLICT REPLACE`,
+// a foreign-key action, a generated or credential-named column, a `main.t` name, no WHERE —
+// because the table rules above decide what ANOTHER app may do to a table, and here the user
+// approved this change to the app's own table and reads the result in the app. So: the belts
+// only (`forbiddenStatementReason`, the class guard `nonDataStatementReason`, ONE statement per
+// entry — judged by the engine as each is compiled, since a `;` inside a literal is no statement
+// end, and the whole batch rolls back on a second one), `BEGIN IMMEDIATE` (`busy`), each
+// statement in order, `sqlite3_changes()`, the drift halt against `expectChanges` (`drifted` with
+// both counts — the counts the user approved are own mode's count rule; `caps` ride for the
+// seat's one shape and are not read here), `COMMIT`. No facts, no capture, `undoable: false` —
+// an own-app undo surface is PR-4's (AC31).
+//
+// THE WORKER'S BUNDLE CARRIES NO SCHEMA (D-PR3-28). The kit's inline Worker reaches this module
+// (`planBrokeredWrite`), and the protocol's `access.ts` constructs every access schema at its
+// top level — one import from that module, even of a bare number, keeps every construction and
+// zod in the bundle (Rollup cannot prove a schema call pure; measured: the schema swapped for
+// the predicate but the constant still imported left the kit page 2,896,555 B against a
+// 2,742,366 B baseline). So the journal's cell rule is the predicate above, its text bound is
+// spelled here as `JOURNAL_TEXT_MAX_CHARS` (= the protocol's `ACCESS_PARAM_STRING_MAX_CHARS`,
+// which must stay equal to it), and nothing this module imports from the protocol is a schema
+// or lives beside one.
+//
 // `dmlTargetTable` is the driver's write signal's table (D-PR3-20 a): the first identifier
 // after `INSERT [OR …] INTO`, `REPLACE INTO`, `UPDATE [OR …]` or `DELETE FROM`, comment-
 // stripped and unquoted; `undefined` when the text cannot say.
@@ -102,10 +129,10 @@
 // offending token or column (D-Q6) and never a value.
 
 import type { BindParams, Database, SqlJsStatic } from 'sql.js';
-import { accessParamSchema, findRecordCredential, isCredentialKeyName, utf8ByteLength } from '@snugprotocol/protocol';
+import { findRecordCredential, isCredentialKeyName, utf8ByteLength } from '@snugprotocol/protocol';
 import { scopeCopy, type ScopedReadDrift, type ScopedReadScope, type ScopedReadStatement } from './scoped-read.js';
 import { quoteIdent, selectRows } from './sqlite-helpers.js';
-import { forbiddenStatementReason, isSqlTailEmpty } from './statement-rules.js';
+import { forbiddenStatementReason, isSqlTailEmpty, nonDataStatementReason } from './statement-rules.js';
 
 // ------------------------------------------------------------------------------- the shapes
 
@@ -202,9 +229,16 @@ export type ApplyRefusal =
       current?: number[];
     };
 
-/** The Worker's plans to apply, or an undo's structured steps to reverse (D-Q2). */
+/** One statement of an app's OWN approved change (the `{ own }` variant, D-PR3-8): the text and its bound values. */
+export interface OwnStatement {
+  sql: string;
+  params?: readonly unknown[];
+}
+
+/** The Worker's plans to apply (strict), the app's own approved statements (own mode), or an undo's structured steps to reverse (D-Q2). */
 export type BrokeredApplyInput =
   | { plans: readonly BrokeredPlan[]; caps: BrokeredCaps; expectChanges?: readonly number[]; requireUndo: boolean; capture: boolean }
+  | { own: readonly OwnStatement[]; caps: BrokeredCaps; expectChanges?: readonly number[] }
   | { undo: readonly UndoStep[]; caps: BrokeredCaps };
 
 export type BrokeredApplyResult = { ok: true; steps: UndoStep[]; changes: number[]; undoable: boolean } | ApplyRefusal;
@@ -876,10 +910,19 @@ function dropCreated(db: Database, created: readonly string[]): void {
   }
 }
 
-/** Run one statement to completion with its params bound; the rows it answers (none for plain DML) are discarded. */
+/**
+ * Run ONE statement to completion with its params bound; the rows it answers (none for plain
+ * DML) are discarded. A second statement after it is refused by name — the engine is the judge
+ * of where a statement ends (a `;` inside a literal is not one), so the tail is read from the
+ * compiled statement, as the driver's `exec` reads it.
+ */
 function runToEnd(db: Database, sql: string, params: readonly unknown[] | undefined): void {
-  const statement = db.prepare(sql);
+  const iterator = db.iterateStatements(sql);
+  const first = iterator.next();
+  if (first.done === true) refuse('statement', 'no SQL statement to execute');
+  const statement = first.value;
   try {
+    if (!isSqlTailEmpty(iterator.getRemainingSQL())) refuse('statement', 'one statement at a time — a second statement follows the first');
     if (params !== undefined && params.length > 0) statement.bind(params.map((param) => (param === undefined ? null : param)) as BindParams);
     while (statement.step()) {
       /* a plain DML statement answers no rows */
@@ -911,18 +954,34 @@ function runPlan(
 
 // ------------------------------------------------------------------------------- the cell rule
 
+/**
+ * The journal's text bound: the protocol's `ACCESS_PARAM_STRING_MAX_CHARS` (4096), spelled here
+ * and not imported — see THE WORKER'S BUNDLE in the header. The two numbers must stay equal.
+ */
+const JOURNAL_TEXT_MAX_CHARS = 4096;
+
 type CellRefusal = { reason: 'unsafe' | 'too-large'; message: string };
 
 const UNSAFE_CELL: CellRefusal = { reason: 'unsafe', message: "a value in the rows it changes can't be kept for an undo" };
 const LONG_CELL: CellRefusal = { reason: 'too-large', message: 'a value in the rows it changes is too large to undo' };
 
 /**
- * One captured cell judged UNDER ITS COLUMN (D-Q15, S12): a BLOB or anything the journal's
- * `accessParamSchema` refuses, and a credential-shaped text by the ONE walk. Never names the value.
+ * Whether the journal can hold `cell` — the protocol's `accessParamSchema` (a string of at most
+ * `ACCESS_PARAM_STRING_MAX_CHARS` characters, a finite number, a boolean, null) as a PURE
+ * predicate, so the Worker's bundle carries no schema (see the header). The caller judges length
+ * first: an over-long text is `too-large`; anything else outside is `unsafe`.
+ */
+const journalableCell = (cell: unknown): boolean =>
+  cell === null || typeof cell === 'boolean' || (typeof cell === 'number' && Number.isFinite(cell)) || (typeof cell === 'string' && cell.length <= JOURNAL_TEXT_MAX_CHARS);
+
+/**
+ * One captured cell judged UNDER ITS COLUMN (D-Q15, S12): an over-long text, a BLOB, NaN or
+ * anything else the journal cannot hold, and a credential-shaped text by the ONE walk. Never
+ * names the value.
  */
 function cellRefusal(column: string, cell: unknown): CellRefusal | undefined {
-  if (cell instanceof Uint8Array) return UNSAFE_CELL;
-  if (!accessParamSchema.safeParse(cell).success) return typeof cell === 'string' ? LONG_CELL : UNSAFE_CELL;
+  if (typeof cell === 'string' && cell.length > JOURNAL_TEXT_MAX_CHARS) return LONG_CELL;
+  if (!journalableCell(cell)) return UNSAFE_CELL;
   if (typeof cell === 'string' && findRecordCredential({ [column]: cell }) !== undefined) return UNSAFE_CELL;
   return undefined;
 }
@@ -1069,6 +1128,19 @@ export function buildUndoStatement(step: UndoStep, row: UndoRow): { sql: string;
 
 const WITHIN_TRANSACTION = /within a transaction/i;
 const BUSY: ApplyRefusal = { ok: false, reason: 'busy', message: 'the app is in the middle of a change' };
+const DRIFTED = 'the rows changed since the change was planned';
+
+/** A throw inside an apply, answered as data: a refusal thrown by name keeps its rule; anything else is `failed` (S11). */
+const thrown = (err: unknown): BrokeredApplyResult => (err instanceof Refusal ? refused(err.rule, err.message) : { ok: false, reason: 'failed', message: errorMessage(err) });
+
+/** This apply's own transaction rolled back, errors swallowed — nothing of this apply's can be left open. */
+function rollBack(db: Database): void {
+  try {
+    db.run('ROLLBACK');
+  } catch {
+    /* nothing of this apply's can be left open */
+  }
+}
 
 /**
  * Open this apply's own transaction. `busy` when the app holds one — nothing of the app's is
@@ -1120,7 +1192,7 @@ function applyPlans(db: Database, input: Extract<BrokeredApplyInput, { plans: un
       if (outcome.changes > caps.maxChanges) return { ok: false, reason: 'too-many', message: TOO_MANY(caps.maxChanges) };
       const expected = expectChanges?.[index];
       if (expected !== undefined && expected !== outcome.changes) {
-        return { ok: false, reason: 'drifted', message: 'the rows changed since the change was planned', previewed: [...(expectChanges ?? [])], current: [...changes] };
+        return { ok: false, reason: 'drifted', message: DRIFTED, previewed: [...(expectChanges ?? [])], current: [...changes] };
       }
       if (outcome.step === undefined || !undoable) continue;
       const cell = stepRefusal(outcome.step);
@@ -1139,16 +1211,49 @@ function applyPlans(db: Database, input: Extract<BrokeredApplyInput, { plans: un
     committed = true;
     return { ok: true, steps: undoable ? steps : [], changes, undoable };
   } catch (err) {
-    return { ok: false, reason: 'failed', message: errorMessage(err) };
+    return thrown(err);
   } finally {
-    if (began && !committed) {
-      try {
-        db.run('ROLLBACK');
-      } catch {
-        /* nothing of this apply's can be left open */
-      }
-    }
+    if (began && !committed) rollBack(db);
     dropCreated(db, created);
+  }
+}
+
+/**
+ * Own mode (D-PR3-8): the app's own approved statements — the text belts, then each statement
+ * counted under this apply's own transaction with the approved counts as the halt; see OWN MODE
+ * in the header. No facts, no capture, never undoable.
+ */
+function applyOwn(db: Database, input: Extract<BrokeredApplyInput, { own: unknown }>): BrokeredApplyResult {
+  const { own, expectChanges } = input;
+  // Phase 1 — before any transaction: the belts on every statement's text (S3; R-B1's class guard at the gate that touches data).
+  for (const statement of own) {
+    const forbidden = forbiddenStatementReason(statement.sql);
+    if (forbidden !== undefined) return refused('statement', `forbidden statement: ${forbidden}`);
+    const outOfClass = nonDataStatementReason(statement.sql);
+    if (outOfClass !== undefined) return refused('statement', outOfClass);
+  }
+  // Phase 2 — the transaction: each statement in order and counted; a count the user did not approve halts the whole batch.
+  const changes: number[] = [];
+  let began = false;
+  let committed = false;
+  try {
+    const refusal = beginImmediate(db);
+    if (refusal !== undefined) return refusal;
+    began = true;
+    for (const [index, statement] of own.entries()) {
+      runToEnd(db, statement.sql, statement.params);
+      const count = db.getRowsModified();
+      changes.push(count);
+      const expected = expectChanges?.[index];
+      if (expected !== undefined && expected !== count) return { ok: false, reason: 'drifted', message: DRIFTED, previewed: [...(expectChanges ?? [])], current: [...changes] };
+    }
+    db.run('COMMIT');
+    committed = true;
+    return { ok: true, steps: [], changes, undoable: false };
+  } catch (err) {
+    return thrown(err);
+  } finally {
+    if (began && !committed) rollBack(db);
   }
 }
 
@@ -1201,22 +1306,19 @@ function applyUndo(db: Database, steps: readonly UndoStep[]): BrokeredApplyResul
     committed = true;
     return { ok: true, steps: [], changes, undoable: false };
   } catch (err) {
-    return { ok: false, reason: 'failed', message: errorMessage(err) };
+    return thrown(err);
   } finally {
-    if (began && !committed) {
-      try {
-        db.run('ROLLBACK');
-      } catch {
-        /* nothing of this apply's can be left open */
-      }
-    }
+    if (began && !committed) rollBack(db);
   }
 }
 
 /**
- * Apply the Worker's plans — or reverse an undo's steps — atomically and SYNCHRONOUSLY on
- * the live handle; see the header. Never throws: every outcome is data.
+ * Apply the Worker's plans — or the app's own approved statements, or reverse an undo's steps —
+ * atomically and SYNCHRONOUSLY on the live handle; see the header. Never throws: every outcome
+ * is data.
  */
 export function applyBrokeredBatch(db: Database, input: BrokeredApplyInput): BrokeredApplyResult {
-  return 'plans' in input ? applyPlans(db, input) : applyUndo(db, input.undo);
+  if ('plans' in input) return applyPlans(db, input);
+  if ('own' in input) return applyOwn(db, input);
+  return applyUndo(db, input.undo);
 }

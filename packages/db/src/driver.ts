@@ -27,7 +27,11 @@
 //    is reopened — sql.js's `export()` frees every statement, closes and reopens the
 //    connection, discarding an open transaction (`persist`, the `export` frame, an `import`)
 //    — and on a `COMMIT`/`END`/`ROLLBACK` that fails "no transaction is active" (E1-Q8), so a
-//    stale frame can never strand a namespace as busy.
+//    stale frame can never strand a namespace as busy. `inTransaction(namespace)` READS that
+//    record for the engine (code-fix D-FIX-1): the plan's own fresh export reopens the
+//    connection and discards the app's open transaction with the record, so a `busy` the seat
+//    would have answered is gone by the time the seat is reached — the engine asks BEFORE the
+//    export, and this read never touches a handle and never opens a namespace.
 import initSqlJs from 'sql.js';
 import type { BindParams, Database, SqlJsStatic } from 'sql.js';
 import { LIMITS, SCHEDULE_APP_INPUT_MAX_BYTES, utf8ByteLength, type DbRequestFrame } from '@snugprotocol/protocol';
@@ -74,7 +78,7 @@ export interface NamespaceWriteEvent {
   changes?: number;
 }
 
-/** What `brokeredWrite` applies: the Worker's plans, or an undo's structured steps (D-Q2 — the same union the apply takes). */
+/** What `brokeredWrite` applies: the Worker's plans, the app's own approved statements (own mode, D-PR3-8), or an undo's structured steps (D-Q2 — the same union the apply takes). */
 export type BrokeredWriteInput = BrokeredApplyInput;
 
 /**
@@ -161,6 +165,15 @@ export interface SnugDbDriver {
    * seat never throws.
    */
   brokeredWrite(namespace: string, input: BrokeredWriteInput): Promise<BrokeredWriteResult>;
+  /**
+   * Whether the app holds a transaction open on this namespace — the driver's own record, READ
+   * (TASK-20261010-host-broker PR-3 code-fix D-FIX-1). The engine asks BEFORE a plan's fresh
+   * export: sql.js's `export()` closes and reopens the connection and discards the app's open
+   * transaction, so a `busy` the seat would have answered is gone by the time the seat is
+   * reached. This read never touches a handle and never opens a namespace — one never opened,
+   * and the closed driver, answer false. Never throws.
+   */
+  inTransaction(namespace: string): Promise<boolean>;
   /** Hear every write signal (D-PR3-20 a) — what `onNamespaceWrite` hears. Answers the unsubscribe. */
   subscribeWrites(listener: (event: NamespaceWriteEvent) => void): () => void;
 }
@@ -284,12 +297,13 @@ function endsTransaction(sql: string): boolean {
   return /^(COMMIT|END|ROLLBACK)\b/i.test(cleaned);
 }
 
-/** The one table a batch names, when every plan or step names the same one — else `undefined`. */
+/** The one table a batch names — every plan, step or own statement (`dmlTargetTable`) the same one — else `undefined`. */
 function batchTable(input: BrokeredWriteInput): string | undefined {
-  const tables = 'plans' in input ? input.plans.map((plan) => plan.table) : input.undo.map((step) => step.table);
+  const tables: ReadonlyArray<string | undefined> =
+    'plans' in input ? input.plans.map((plan) => plan.table) : 'own' in input ? input.own.map((statement) => dmlTargetTable(statement.sql)) : input.undo.map((step) => step.table);
   const first = tables[0];
   if (first === undefined) return undefined;
-  return tables.every((table) => table.toLowerCase() === first.toLowerCase()) ? first : undefined;
+  return tables.every((table) => table !== undefined && table.toLowerCase() === first.toLowerCase()) ? first : undefined;
 }
 
 const fail = (code: string, message: string, retryable: boolean): DbDriverResult => ({
@@ -705,6 +719,17 @@ export function createDbDriver(options: CreateDbDriverOptions = {}): SnugDbDrive
         changes: applied.changes.reduce((sum, count) => sum + count, 0),
       });
       return applied;
+    },
+
+    async inTransaction(namespace: string): Promise<boolean> {
+      if (closed) return false;
+      const pending = namespaces.get(namespace);
+      if (pending === undefined) return false; // never opened: nothing can be mid-transaction on it, and asking must not open it
+      try {
+        return (await pending).transaction.length > 0;
+      } catch {
+        return false; // a failed open cached nothing
+      }
     },
 
     subscribeWrites(listener: (event: NamespaceWriteEvent) => void): () => void {

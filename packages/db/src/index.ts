@@ -215,6 +215,7 @@ export {
   type BrokeredRefusalRule,
   type BrokeredRefused,
   type ColumnFact,
+  type OwnStatement,
   type ParsedDml,
   type PlanRefusal,
   type UndoRow,

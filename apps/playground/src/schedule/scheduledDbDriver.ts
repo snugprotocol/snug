@@ -20,7 +20,8 @@
 // CARRIES the seat — it is the driver's interface — but never opens it: the same
 // `FORBIDDEN_STATEMENT`, not retryable, answered as data and never forwarded to the driver it
 // wraps. `subscribeWrites` is the host's ear on the driver (the doorbell's), not a frame op — it
-// passes through like `persistence`.
+// passes through like `persistence`; so does `inTransaction`, the engine's READ of the driver's
+// transaction record before a plan's export (code-fix D-FIX-1) — a read seat, never a write.
 
 import { DB_ERROR_CODES, type BrokeredWriteResult, type DbDriverResult, type SnugDbDriver } from '@snugprotocol/db';
 
@@ -60,6 +61,7 @@ export function scheduledDbDriver(driver: SnugDbDriver): SnugDbDriver {
     kvSet: (namespace, key, value) => driver.kvSet(namespace, key, value),
     kvGet: (namespace, key) => driver.kvGet(namespace, key),
     brokeredWrite: () => Promise.resolve(refusedSeat(SCHEDULED_DB_REFUSAL.brokered)),
+    inTransaction: (namespace) => driver.inTransaction(namespace),
     subscribeWrites: (listener) => driver.subscribeWrites(listener),
   };
 }
