@@ -471,8 +471,8 @@ value — so a refusal tells the reader nothing it could not learn from a read; 
 of item 20 are checked on the live database at the apply as well as at the dry run, and the
 apply's check is the rule. A write of an app's OWN data that the user approved one change at
 a time (the chat beside the app, a run's result page) goes through the same atomic path with
-the same counting and the same `data-changed` hint, under `authority: 'approval'`, and keeps
-no journal and writes no line at 1.2 — its undo surface is deferred (§25).
+the same counting and the same `data-changed` hint; it keeps no journal and writes no line
+at 1.2 — when §25's own-app undo lands, its entry and line carry `authority: 'approval'`.
 
 ### 24.6 Refresh
 

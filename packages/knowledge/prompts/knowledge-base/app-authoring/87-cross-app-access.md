@@ -156,11 +156,13 @@ line.
 **Refresh — only when the view says `refresh: true`.** `refresh` asks the other app to fetch
 new data through its own connections before you read — the host runs that app's scheduled
 handler with `input.kind === 'refresh'`, at most once every five minutes, counted on the
-user's daily schedule limits, and only when the user is present. It answers `fresh: true`
-when the other app ran, or `fresh: false` with `reason: 'recent'` when it fetched within the
-last five minutes (read what is there). `ACCESS_REFRESH_FAILED` means it could not run — the
-other app has no such handler, schedules are off, the day's limit is reached, or it failed;
-read what is there and say so. Call it from a user act ("fetch the latest"), never on load.
+user's daily schedule limits, under the same presence rule as a read (an access the user
+ticked *also while I'm away* may ask it from a scheduled run; a write, unlike a refresh,
+always needs a person present). It answers `fresh: true` when the other app ran, or
+`fresh: false` with `reason: 'recent'` when it fetched within the last five minutes (read
+what is there). `ACCESS_REFRESH_FAILED` means it could not run — the other app has no such
+handler, schedules are off, the day's limit is reached, or it failed; read what is there and
+say so. Call it from a user act ("fetch the latest"), never on load.
 
 ## When It Stops, Pauses or Ends
 
