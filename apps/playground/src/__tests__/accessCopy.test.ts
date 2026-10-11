@@ -31,9 +31,9 @@
 // `EGRESS.chat` and `EGRESS.away` (now a function of the reader's name) — are pinned with the
 // contract's literals; the two amended pins (awayHint, away) MOVED here with it. The planted-
 // sentence proof is re-run over each module PR-2 adds under `access/` (`policy.ts`, `service.ts`,
-// `materialise.ts`, `limits.ts`, `grantFacts.ts`, `AccessCard.tsx`): the sentence is appended to
-// the REAL file, the scan must name that file, and the original bytes are written back — an
-// absent module is red here and is never created by this file. RED until those land.
+// `materialise.ts`, `limits.ts`, `grantFacts.ts`, `AccessCard.tsx`) IN MEMORY: the scan is clean on
+// the REAL file's bytes and bites on those bytes with a sentence appended — no module is ever
+// written by this file (PR-2 Gate-5 DOORS-4), and an absent module is red here, never created.
 import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
@@ -557,6 +557,7 @@ describe('the brain’s ask — ACCESS_CARD and the consent sheet’s chat ask (
     expect(ACCESS_CARD.notNowLine).toBe('not now — the agent may ask again');
     expect(ACCESS_CARD.declined).toBe('you said don’t allow — the agent won’t ask this again');
     expect(ACCESS_CARD.waiting).toBe('waiting for your review');
+    expect(ACCESS_CARD.stale).toBe('this app is gone — nothing to ask for');
   });
 
   it('the sheet says where a chat ask came from', () => {
@@ -817,23 +818,18 @@ describe('vocabulary scan — no file under access/ but copy.ts spells grant, re
     for (const name of PR2_ACCESS_MODULES) expect(files).toContain(name);
   });
 
-  it.each(PR2_ACCESS_MODULES)('the scan BITES on %s: a sentence planted in the REAL file turns it red, and the original bytes turn it green', (name) => {
+  it.each(PR2_ACCESS_MODULES)('the scan BITES on %s’s bytes: clean as shipped, red with a sentence planted in memory — the file is never written', (name) => {
     const file = path.join(ACCESS_DIR, name);
     // Never CREATE the module here: an absent one is red, not stubbed.
     expect(existsSync(file)).toBe(true);
     const original = readFileSync(file, 'utf8');
-    expect(scanOffenders()).toEqual([]);
+    const kind = scriptKindOf(file);
     const plant = name.endsWith('.tsx')
       ? '\nexport const VocabularyProbe = () => <p>the reader keeps a log of every grant</p>;\n'
       : "\nexport const VOCABULARY_PROBE = 'the reader keeps a log of every grant';\n";
-    writeFileSync(file, `${original}${plant}`);
-    try {
-      expect(scanOffenders()).toEqual([`${name}: 'the reader keeps a log of every grant'`]);
-    } finally {
-      writeFileSync(file, original);
-    }
-    expect(readFileSync(file, 'utf8')).toBe(original);
-    expect(scanOffenders()).toEqual([]);
+    expect(internalWordsIn(original, kind)).toEqual([]);
+    expect(internalWordsIn(`${original}${plant}`, kind)).toEqual(['the reader keeps a log of every grant']);
+    expect(readFileSync(file, 'utf8'), 'the proof reads the file and never writes it').toBe(original);
   });
 
   it('every scanned file outside copy.ts is clean', () => {

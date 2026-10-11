@@ -23,7 +23,7 @@ import {
   resealContainer,
   type Secrets as ContainerSecrets,
 } from '../crypto/container.js';
-import type { Database, SqlJsStatic } from 'sql.js';
+import type { BindParams, Database, SqlJsStatic } from 'sql.js';
 import {
   APP_KV_TABLE,
   AUTH_MAX_SLOTS_PER_APP,
@@ -207,40 +207,6 @@ export class UserDbError extends Error {
   ) {
     super(message);
     this.name = 'UserDbError';
-  }
-}
-
-/**
- * Create every attached table in an opened scratch copy and fill it (D-PR2-9): UNTYPED columns
- * (the rows keep their storage class), one prepared INSERT per table. Names are checked against
- * sqlite_master (any object, any case) and against the tables attached before — a collision, or
- * any failure to create or fill, throws SCRATCH_UNAVAILABLE naming the table BEFORE a statement
- * runs. Every name and column is a quoted identifier: nothing an app chose is ever SQL here.
- */
-function attachScratchTables(scratch: Database, attach: readonly ScratchAttachTable[]): void {
-  const attached = new Set<string>();
-  for (const table of attach) {
-    const lower = table.name.toLowerCase();
-    const held = selectRows(scratch, 'SELECT 1 FROM sqlite_master WHERE lower(name) = ? LIMIT 1', [lower]).length > 0;
-    if (held || attached.has(lower)) {
-      throw new UserDbError(USERDB_ERROR_CODES.SCRATCH_UNAVAILABLE, `cannot attach "${table.name}": the name already exists in the copy`);
-    }
-    const columnList = table.columns.map(quoteIdent).join(', ');
-    try {
-      scratch.run(`CREATE TABLE ${quoteIdent(table.name)} (${columnList})`);
-      if (table.rows.length > 0) {
-        const insert = scratch.prepare(`INSERT INTO ${quoteIdent(table.name)} (${columnList}) VALUES (${table.columns.map(() => '?').join(', ')})`);
-        try {
-          for (const row of table.rows) insert.run(row.map((cell) => (cell === undefined ? null : cell)) as never);
-        } finally {
-          insert.free();
-        }
-      }
-    } catch (err) {
-      const detail = err instanceof Error ? err.message : String(err);
-      throw new UserDbError(USERDB_ERROR_CODES.SCRATCH_UNAVAILABLE, `cannot attach "${table.name}": ${detail}`);
-    }
-    attached.add(lower);
   }
 }
 
@@ -798,6 +764,16 @@ export interface UserDb {
    * answers `{ tables: [] }`. Throws NOT_FOUND like `exportAppRuntime`.
    */
   describeAppData(appId: string): Promise<DescribeAppDataResult>;
+  /**
+   * EVERY object name in the app's runtime bytes — tables, views, indexes and triggers, the
+   * registered ones and the ones the app's code created at runtime, `snug_kv` and SQLite's own
+   * `sqlite_*` rows included — as `sqlite_master` holds them (case kept), on a throwaway copy of
+   * the same exported bytes (TASK-20261010-host-broker PR-2, D-PR2-8; Gate-5 SEC-3). The names a
+   * materialised table's full name must NOT collide with, since `scratchRun`'s attach refuses
+   * ANY same-named object: the alias belt reads this, so the attach never has to refuse. Flushes
+   * first like `describeAppData`. Throws NOT_FOUND like `exportAppRuntime`.
+   */
+  listAppObjectNames(appId: string): Promise<string[]>;
 
   /** The app's registered schema (verbatim natural DDL), or undefined when it has none. */
   getAppSchema(appId: string): AppSchemaJson | undefined;
@@ -2518,6 +2494,41 @@ function construct(
   }
 
   /**
+   * Create every attached table in an opened scratch copy and fill it (D-PR2-9): UNTYPED columns
+   * (the rows keep their storage class), one prepared INSERT per table. Names are checked against
+   * sqlite_master (any object, any case) and against the tables attached before — a collision, or
+   * any failure to create or fill, throws SCRATCH_UNAVAILABLE naming the table BEFORE a statement
+   * runs. Every name and column is a quoted identifier: nothing an app chose is ever SQL here.
+   * Lives beside `runtimeSnapshot`, whose copy it fills, for `scratchRun` below.
+   */
+  function attachScratchTables(scratch: Database, attach: readonly ScratchAttachTable[]): void {
+    const attached = new Set<string>();
+    for (const table of attach) {
+      const lower = table.name.toLowerCase();
+      const held = selectRows(scratch, 'SELECT 1 FROM sqlite_master WHERE lower(name) = ? LIMIT 1', [lower]).length > 0;
+      if (held || attached.has(lower)) {
+        throw new UserDbError(USERDB_ERROR_CODES.SCRATCH_UNAVAILABLE, `cannot attach "${table.name}": the name already exists in the copy`);
+      }
+      const columnList = table.columns.map(quoteIdent).join(', ');
+      try {
+        scratch.run(`CREATE TABLE ${quoteIdent(table.name)} (${columnList})`);
+        if (table.rows.length > 0) {
+          const insert = scratch.prepare(`INSERT INTO ${quoteIdent(table.name)} (${columnList}) VALUES (${table.columns.map(() => '?').join(', ')})`);
+          try {
+            for (const row of table.rows) insert.run(row.map((cell) => (cell === undefined ? null : cell)) as BindParams);
+          } finally {
+            insert.free();
+          }
+        }
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        throw new UserDbError(USERDB_ERROR_CODES.SCRATCH_UNAVAILABLE, `cannot attach "${table.name}": ${detail}`);
+      }
+      attached.add(lower);
+    }
+  }
+
+  /**
    * The access guard: an app the file holds and that was not deleted this session. Checked
    * BEFORE the driver is touched — the driver's export would otherwise register (and the next
    * flush materialise) a namespace for an id no app owns.
@@ -3031,6 +3042,19 @@ function construct(
           return { name, columns, rowCount };
         });
         return { tables };
+      } finally {
+        copy.close(); // the throwaway copy — nothing here writes back
+      }
+    },
+
+    async listAppObjectNames(appId) {
+      assertOpen();
+      assertLiveApp(appId);
+      // Flush first, so the names and the file agree — the same copy the attach would open.
+      await inner.flush();
+      const copy = new SQL.Database(await runtimeSnapshot(appId));
+      try {
+        return selectRows(copy, 'SELECT name FROM sqlite_master').map((row) => String(row[0]));
       } finally {
         copy.close(); // the throwaway copy — nothing here writes back
       }

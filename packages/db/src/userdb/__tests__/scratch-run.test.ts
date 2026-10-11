@@ -25,7 +25,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { nonDataStatementReason } from '../../driver.js';
 import { execFrame, exportFrame, kvSetFrame, locateWasm } from '../../__tests__/helpers.js';
 import { createMemoryBackend, type MemoryBackend } from '../../persistence.js';
-import { USERDB_ERROR_CODES, UserDbError, openUserDb, type ScratchRunResult, type ScratchStatement, type UserDb } from '../userdb.js';
+import { USERDB_ERROR_CODES, UserDbError, openUserDb, type ScratchAttachTable, type ScratchRunResult, type ScratchStatement, type UserDb } from '../userdb.js';
 
 let backend: MemoryBackend;
 let db: UserDb;
@@ -416,19 +416,12 @@ describe('nonDataStatementReason — the data lane is DML-only (R-B1)', () => {
 // it, and nothing runs (the belt behind the alias de-collision). The copy stays throwaway: the real
 // file never sees an attached table.
 //
-// RED UNTIL D1 LANDS: today the third argument is ignored, so every JOIN below fails "no such table"
-// and a colliding name does not throw. The option is typed here from the contract (`run`), so this
-// file type-checks today.
+// Written before the module existed (Gate 3) — the option and `ScratchAttachTable` were typed here
+// from the contract and `scratchRun` reached through a cast; now imported directly from the package
+// (PR-2 Gate-5 M-10).
 // =========================================================================================
 
-interface ScratchAttachTable {
-  name: string;
-  columns: readonly string[];
-  rows: ReadonlyArray<readonly unknown[]>;
-}
-type ScratchRunWithAttach = (appId: string, statements: readonly ScratchStatement[], options?: { attach?: readonly ScratchAttachTable[] }) => Promise<ScratchRunResult>;
-const run = (statements: readonly ScratchStatement[], attach: readonly ScratchAttachTable[]): Promise<ScratchRunResult> =>
-  (db as unknown as { scratchRun: ScratchRunWithAttach }).scratchRun(appId, statements, { attach });
+const run = (statements: readonly ScratchStatement[], attach: readonly ScratchAttachTable[]): Promise<ScratchRunResult> => db.scratchRun(appId, statements, { attach });
 
 const LEDGER_TRANSACTIONS: ScratchAttachTable = {
   name: 'ledger__transactions',

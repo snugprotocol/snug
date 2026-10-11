@@ -267,6 +267,28 @@ describe('review → the host’s own sheet, parked anew as a chat ask', () => {
     expect(reviewStore.get()).toBe(budget);
   });
 
+  // SEC-5 / DOORS-2 (PR-2 Gate-5): the just-parked ask's dismissal reaches the card through
+  // `settle` AFTER review has said answer-other-first whenever the engine's getDb is genuinely
+  // async — the dismissal returns the acts only from the sheet-up phase and never erases the note.
+  it('under the yield rule with a getDb that resolves on a MACROTASK, the dismissal’s settle never erases the note; both acts stay live', async () => {
+    __setAccessDepsForTests({ getDb: () => new Promise<UserDb>((resolve) => setTimeout(() => resolve(db), 0)) });
+    netConfirmStore.set({ request: {} as PendingNetConfirm['request'], resolve: () => undefined });
+    await render(stagedCard());
+    await act(async () => {
+      mustButton(ACCESS_CARD.review).click();
+    });
+    // Let the dismissal's carry-out (its getDb on a macrotask) land and settle the card.
+    await settle(10);
+    expect(spy()).toHaveBeenCalledTimes(1);
+    expect(await spy().mock.results[0]!.value).toBe('answer-other-first');
+    expect(container!.textContent).toContain(CONSENT_UI.answerOtherFirst);
+    expect(buttonNamed(ACCESS_CARD.review)?.disabled).toBe(false);
+    expect(buttonNamed(ACCESS_CARD.notNow)?.disabled).toBe(false);
+    expect(outcome()).toBeNull();
+    expect(parked(), 'the just-parked ask was dismissed').toBeUndefined();
+    expect(resolved, 'a dismissal is not an answer').toEqual([]);
+  });
+
   it('S10: review resolves the app from the THREAD row, never from the card — a card naming another app never asks for it', async () => {
     const forged = stageAccessCard({ purpose: PURPOSE, hints: HINTS }, { appId: ledger, threadId: THREAD });
     await render({ ...forged, messageRowId: db.appendChatMessage(THREAD, 'assistant', 'x', { meta: accessCardToMeta(forged) }).id });
@@ -411,6 +433,8 @@ describe('the persisted shape — re-validated on every read', () => {
     // an unknown resolution
     expect(metaToAccessCard({ access: { ...good.access, resolution: { kind: 'applied' } } })).toBeUndefined();
     expect(metaToAccessCard({ access: { ...good.access, resolution: 'allowed' } })).toBeUndefined();
+    // a dismissal is not a resolution (B-Q3) — the card never writes one, so a stored one is drift (SEC-4)
+    expect(metaToAccessCard({ access: { ...good.access, resolution: { kind: 'dismissed' } } })).toBeUndefined();
   });
 
   it('S10: readAccessCardRow drops a card whose app is not the thread’s app', () => {

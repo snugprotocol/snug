@@ -515,6 +515,41 @@ describe('PR-2 — the data lane materialises ONCE, and only where the chat door
     );
   });
 
+  // DOORS-3 (PR-2 Gate-5; F14): a stop that lands while the Worker dumps ends the turn before any
+  // context is built — the abort re-check after materialise, with the same cleanup as the
+  // classifier's (R-M3): no send, no persisted user row, nothing left spinning.
+  it('a stop that lands DURING materialise ends the turn: the brain is never sent, nothing is persisted, nothing spins', async () => {
+    const { materialise, recordRead } = await spyService();
+    let release: (() => void) | undefined;
+    materialise.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve(SHARED);
+        }),
+    );
+    modeStore.set('local');
+    intent = 'data_read';
+    const { chat } = renderChat();
+    await act(async () => {
+      chat().send('compare this with my ledger');
+    });
+    const deadline = Date.now() + 10_000;
+    while (materialise.mock.calls.length === 0 && Date.now() < deadline) await settle();
+    expect(materialise).toHaveBeenCalledTimes(1);
+    act(() => chat().stop());
+    await act(async () => {
+      release?.();
+    });
+    await settleUntilIdle(chat);
+    expect(sends, 'the brain is never sent a stopped turn').toHaveLength(0);
+    expect(recordRead).not.toHaveBeenCalled();
+    expect(chat().busy).toBe(false);
+    expect(chat().messages.some((m) => m.streaming === true), 'no forever-placeholder').toBe(false);
+    const agent = chat().messages.filter((m) => m.role === 'agent');
+    for (const message of agent) expect(message.streaming).toBe(false);
+    expect(db.listChatMessages(THREAD).filter((m) => m.role === 'user'), 'a stopped turn persists no user row').toEqual([]);
+  });
+
   it('the chat caller carries the reader’s live generation while its view is open (D-PR2-3)', async () => {
     const { materialise } = await spyService();
     noteReaderGeneration(appId, 4);

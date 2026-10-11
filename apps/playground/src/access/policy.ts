@@ -42,6 +42,12 @@
 // owner and nothing more; the service's own body may still answer not-granted for a grant already
 // stopped (nothing left to give back).
 //
+// THE TYPE CARRIES THE FACT (Gate-5 M-1): an act that names a grant — `read`, `materialise`,
+// `release` — is answered `Admitted | Refusal`, and `Admitted` always carries the grant, so the
+// service never has to guard a can't-happen absence. `stillReadable` (M-2) is the ONE spelling
+// of "still this caller's, active and unexpired" — the re-check the service and the loop ask
+// after time has passed (a read dequeues, a dump answers, a line is about to be written).
+//
 // PURITY, PINNED. The module imports the protocol, the leaf `grantFacts.ts`, `copy.ts`, and
 // grants.ts for TYPES only (accessPolicy.test.ts reads the import lines) — so it loads anywhere
 // without reaching the engine, its stores or the host registry. No string here spells the engine's
@@ -86,9 +92,18 @@ export interface Refusal {
   grant?: FoundAccessGrant;
 }
 
+/** An act on a named grant, admitted: the grant is always carried. */
+export interface Admitted {
+  ok: true;
+  grant: FoundAccessGrant;
+  attended: boolean;
+}
+
 export type Verdict = { ok: true; grant?: FoundAccessGrant; attended: boolean } | Refusal;
 
 type ReadAct = Extract<AccessAct, { kind: 'read' | 'materialise' }>;
+/** The acts that name a grant — their admission carries it. */
+type GrantAct = Extract<AccessAct, { grantId: string }>;
 
 const C = ACCESS_ERROR_CODES;
 const M = ACCESS_APP_MESSAGES;
@@ -136,7 +151,17 @@ export function ownsGrant(caller: AccessCaller, found: FoundAccessGrant): boolea
   return callerGen !== undefined && found.generation !== undefined && found.generation === callerGen;
 }
 
-function authoriseRead(ctx: PolicyContext, caller: AccessCaller, act: ReadAct, attended: boolean): Verdict {
+/**
+ * The grant as it is NOW, when it is still this caller's, active and unexpired — else nothing.
+ * The one re-check for time that passed: asked when a read dequeues, when a dump answers, and
+ * before a line is written (the service's post-outcome status check keeps its own, narrower rule).
+ */
+export function stillReadable(find: PolicyContext['find'], caller: AccessCaller, grantId: string, now: number): FoundAccessGrant | undefined {
+  const found = find(grantId);
+  return found !== undefined && ownsGrant(caller, found) && found.grant.status === 'active' && !isExpired(found.grant, now) ? found : undefined;
+}
+
+function authoriseRead(ctx: PolicyContext, caller: AccessCaller, act: ReadAct, attended: boolean): Admitted | Refusal {
   // 1. Owned — else nothing is said about what was found, or whether anything was.
   const found = ctx.find(act.grantId);
   if (found === undefined || !ownsGrant(caller, found)) return notGranted();
@@ -160,6 +185,8 @@ function authoriseRead(ctx: PolicyContext, caller: AccessCaller, act: ReadAct, a
 }
 
 /** The verdict for one act by one caller — pure: it names an effect, the service performs it. */
+export function authorise(ctx: PolicyContext, caller: AccessCaller, act: GrantAct): Admitted | Refusal;
+export function authorise(ctx: PolicyContext, caller: AccessCaller, act: AccessAct): Verdict;
 export function authorise(ctx: PolicyContext, caller: AccessCaller, act: AccessAct): Verdict {
   const attended = attendedFor(caller);
   switch (act.kind) {

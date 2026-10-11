@@ -38,7 +38,15 @@ import {
   type Frame,
 } from '@snugprotocol/protocol';
 
-import { scopedScratchRead, type ScopedReadResult } from '../scoped-read.js';
+import {
+  DUMP_TYPE_ALLOW,
+  scopedScratchDump,
+  scopedScratchRead,
+  type ScopedDumpCaps,
+  type ScopedDumpResult,
+  type ScopedDumpTable,
+  type ScopedReadResult,
+} from '../scoped-read.js';
 import { locateWasm } from './helpers.js';
 
 let SQL: SqlJsStatic;
@@ -596,37 +604,18 @@ describe('one per-statement runner (scratchRun and scopedScratchRead share it)',
 // `types[i]` is the declared type text only when it matches `DUMP_TYPE_ALLOW`, else '' — app-authored
 // type text never reaches a prompt or a CREATE.
 //
-// RED UNTIL D1 LANDS: the rows reach the export through `dumpModule()` (a dynamic import of THIS
-// module, which exists), so every row above keeps running and each row below is red on its own.
-// The types are written out here from the contract (the module does not declare them yet).
+// Written before the module existed (Gate 3) — the rows reached the export through a dynamic import
+// and the contract's types were written out here; now imported directly, the module's own
+// `ScopedDump*` types are the shapes (PR-2 Gate-5 M-10).
 //
 // Mutation checks (to run by hand once D1 lands): select `*` instead of the scope's columns → the
 // columns row reds; skip the value mask on the dump's copy → the masked row reds; per-table caps only
 // (no set budget) → the crossing row reds; pass the declared type through → the allow-list row reds.
 // =========================================================================================
 
-interface DumpCaps { maxRows: number; maxBytes: number; maxTotalBytes: number }
-interface DumpTable { name: string; columns: string[]; types: string[]; rows: unknown[][]; truncated?: boolean; totalRows?: number }
-type DumpResult =
-  | { ok: true; tables: DumpTable[] }
-  | { ok: false; reason: 'drift' | 'failed'; drift?: { added: string[]; removed: string[] }; message: string }
-  | { ok: false; reason: 'copy-failed'; message: string };
-interface DumpModule {
-  scopedScratchDump(SQL: SqlJsStatic, bytes: Uint8Array, scope: Parameters<typeof scopedScratchRead>[2], caps: DumpCaps): DumpResult;
-  DUMP_TYPE_ALLOW: RegExp;
-}
+const DUMP_CAPS: ScopedDumpCaps = { maxRows: 5_000, maxBytes: 2 * 1024 * 1024, maxTotalBytes: 8 * 1024 * 1024 };
 
-async function dumpModule(): Promise<DumpModule> {
-  const mod = (await import('../scoped-read.js')) as unknown as Partial<DumpModule>;
-  if (typeof mod.scopedScratchDump !== 'function' || !(mod.DUMP_TYPE_ALLOW instanceof RegExp)) {
-    throw new Error('scoped-read.ts does not export scopedScratchDump / DUMP_TYPE_ALLOW yet (PR-2 D1)');
-  }
-  return mod as DumpModule;
-}
-
-const DUMP_CAPS: DumpCaps = { maxRows: 5_000, maxBytes: 2 * 1024 * 1024, maxTotalBytes: 8 * 1024 * 1024 };
-
-function tablesOf(result: DumpResult): DumpTable[] {
+function tablesOf(result: ScopedDumpResult): ScopedDumpTable[] {
   if (!result.ok) throw new Error(`expected tables, got ${result.reason}: ${result.message}`);
   return result.tables;
 }
@@ -636,7 +625,6 @@ const rowBytes = (row: readonly unknown[]): number => utf8ByteLength(JSON.string
 
 describe('scopedScratchDump — only the scope’s recorded columns of the granted tables (D-PR2-6)', () => {
   it('dumps the granted table’s recorded columns, in the scope’s order, with their rows', async () => {
-    const { scopedScratchDump } = await dumpModule();
     const tables = tablesOf(scopedScratchDump(SQL, sourceBytes(LEDGER), { tables: [{ name: 'transactions', columns: ['amount', 'category', 'id', 'note'] }] }, DUMP_CAPS));
     expect(tables).toHaveLength(1);
     expect(tables[0]).toMatchObject({ name: 'transactions', columns: ['amount', 'category', 'id', 'note'] });
@@ -649,14 +637,12 @@ describe('scopedScratchDump — only the scope’s recorded columns of the grant
   });
 
   it('a credential-named column is ABSENT from the dump though present in the table — neither its name nor its value crosses', async () => {
-    const { scopedScratchDump } = await dumpModule();
     const result = scopedScratchDump(SQL, sourceBytes(LEDGER), { tables: [{ name: 'accounts', columns: ['name', 'balance'] }] }, DUMP_CAPS);
     expect(tablesOf(result)).toEqual([expect.objectContaining({ name: 'accounts', columns: ['name', 'balance'], rows: [['checking', 100]] })]);
     expect(JSON.stringify(result)).not.toMatch(/api_key|hunter2/);
   });
 
   it('a credential-shaped VALUE under a neutral column arrives masked (the value mask ran on the copy)', async () => {
-    const { scopedScratchDump } = await dumpModule();
     const KEY = 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJ';
     const bytes = sourceBytes(['CREATE TABLE settings (name TEXT, value TEXT)', `INSERT INTO settings (name, value) VALUES ('anthropic', '${KEY}'), ('theme', 'dark')`]);
     const result = scopedScratchDump(SQL, bytes, { tables: [{ name: 'settings', columns: ['name', 'value'] }] }, DUMP_CAPS);
@@ -667,14 +653,12 @@ describe('scopedScratchDump — only the scope’s recorded columns of the grant
   });
 
   it('a table outside the grant — and snug_kv, every view — is ABSENT from the dump', async () => {
-    const { scopedScratchDump } = await dumpModule();
     const result = scopedScratchDump(SQL, sourceBytes(LEDGER), GRANT_TRANSACTIONS, DUMP_CAPS);
     expect(tablesOf(result).map((table) => table.name)).toEqual(['transactions']);
     expect(JSON.stringify(result)).not.toMatch(/the diary|hunter2|1234|all_secrets|snug_kv/);
   });
 
   it('drift is refused BEFORE any row: { ok: false, reason: drift } with the drift, and no tables', async () => {
-    const { scopedScratchDump } = await dumpModule();
     const result = scopedScratchDump(SQL, sourceBytes(LEDGER), { tables: [{ name: 'transactions', columns: ['id', 'amount', 'category', 'note', 'memo'] }] }, DUMP_CAPS);
     expect(result).toMatchObject({ ok: false, reason: 'drift', drift: { added: [], removed: ['transactions.memo'] } });
     expect('tables' in result).toBe(false);
@@ -682,7 +666,6 @@ describe('scopedScratchDump — only the scope’s recorded columns of the grant
   });
 
   it('a generated column that still BUILDS a credential fails the dump closed (copy-failed), as the read does', async () => {
-    const { scopedScratchDump } = await dumpModule();
     const bytes = sourceBytes([
       "CREATE TABLE s (name TEXT, tail TEXT, built TEXT GENERATED ALWAYS AS ('sk-ant-api03-' || tail) VIRTUAL)",
       "INSERT INTO s (name, tail) VALUES ('k', 'abcdefghijklmnopqrstuvwxyz0123')",
@@ -705,7 +688,6 @@ describe('scopedScratchDump — per-table caps and ONE set budget (D-PR2-6 / F11
   const W = rowBytes(['aaaa']);
 
   it('a table over maxRows is cut and says so, with the honest total', async () => {
-    const { scopedScratchDump } = await dumpModule();
     const [a, b] = tablesOf(scopedScratchDump(SQL, sourceBytes(EVEN), GRANT_AB, { ...DUMP_CAPS, maxRows: 2 }));
     expect(a).toMatchObject({ name: 'a', truncated: true, totalRows: 3 });
     expect(a!.rows).toHaveLength(2);
@@ -715,14 +697,12 @@ describe('scopedScratchDump — per-table caps and ONE set budget (D-PR2-6 / F11
   });
 
   it('a table over maxBytes (UTF-8 JSON per row) is cut at the cap, with the honest total', async () => {
-    const { scopedScratchDump } = await dumpModule();
     const [a] = tablesOf(scopedScratchDump(SQL, sourceBytes(EVEN), GRANT_AB, { ...DUMP_CAPS, maxBytes: 2 * W }));
     expect(a!.rows).toHaveLength(2);
     expect(a).toMatchObject({ truncated: true, totalRows: 3 });
   });
 
   it('under maxTotalBytes the CROSSING table is cut and every LATER table is zeroed — rows [], truncated, totalRows', async () => {
-    const { scopedScratchDump } = await dumpModule();
     const [a, b] = tablesOf(scopedScratchDump(SQL, sourceBytes(EVEN), GRANT_AB, { ...DUMP_CAPS, maxTotalBytes: 2 * W }));
     expect(a!.rows).toHaveLength(2);
     expect(a).toMatchObject({ name: 'a', truncated: true, totalRows: 3 });
@@ -730,7 +710,6 @@ describe('scopedScratchDump — per-table caps and ONE set budget (D-PR2-6 / F11
   });
 
   it('a set budget that fits everything cuts nothing', async () => {
-    const { scopedScratchDump } = await dumpModule();
     const tables = tablesOf(scopedScratchDump(SQL, sourceBytes(EVEN), GRANT_AB, { ...DUMP_CAPS, maxTotalBytes: 5 * W }));
     expect(tables.map((table) => [table.name, table.rows.length, table.truncated ?? false])).toEqual([
       ['a', 3, false],
@@ -739,7 +718,6 @@ describe('scopedScratchDump — per-table caps and ONE set budget (D-PR2-6 / F11
   });
 
   it('maxTotalBytes 0 zeroes every table', async () => {
-    const { scopedScratchDump } = await dumpModule();
     const tables = tablesOf(scopedScratchDump(SQL, sourceBytes(EVEN), GRANT_AB, { ...DUMP_CAPS, maxTotalBytes: 0 }));
     expect(tables).toEqual([
       expect.objectContaining({ name: 'a', rows: [], truncated: true, totalRows: 3 }),
@@ -756,14 +734,12 @@ describe('scopedScratchDump — types only from the allow-list (D-PR2-6, S5: app
   const GRANT_NOTES = { tables: [{ name: 'notes', columns: ['id', 'body', 'tag', 'price', 'raw', 'flag'] }] };
 
   it('a declared type on the allow-list survives as declared; anything else — an instruction, no type — dumps as ""', async () => {
-    const { scopedScratchDump } = await dumpModule();
     const [notes] = tablesOf(scopedScratchDump(SQL, sourceBytes(NOTES), GRANT_NOTES, DUMP_CAPS));
     expect(notes!.types).toEqual(['INTEGER', '', 'VARCHAR(32)', 'DECIMAL(10, 2)', '', 'boolean']);
     expect(JSON.stringify(notes!.types)).not.toMatch(/ignore/);
   });
 
   it('DUMP_TYPE_ALLOW is the one home of the rule: the SQL type words with an optional (n) or (n,m), case-insensitive, whole text only', async () => {
-    const { DUMP_TYPE_ALLOW } = await dumpModule();
     for (const ok of ['INT', 'INTEGER', 'REAL', 'TEXT', 'BLOB', 'NUMERIC', 'BOOLEAN', 'DATE', 'DATETIME', 'VARCHAR(32)', 'CHAR(1)', 'DOUBLE', 'FLOAT', 'DECIMAL(10,2)', 'DECIMAL(10, 2)', 'integer', 'varchar(255)']) {
       expect(DUMP_TYPE_ALLOW.test(ok), ok).toBe(true);
     }
@@ -775,7 +751,6 @@ describe('scopedScratchDump — types only from the allow-list (D-PR2-6, S5: app
 
 describe('scopedScratchDump — the copy is throwaway', () => {
   it('opens ONE fresh scratch per call and closes it on every path — dump, drift, failure — and the input bytes are untouched', async () => {
-    const { scopedScratchDump } = await dumpModule();
     const cases: Array<[Uint8Array, Parameters<typeof scopedScratchRead>[2]]> = [
       [sourceBytes(LEDGER), GRANT_TRANSACTIONS],
       [sourceBytes(LEDGER), { tables: [{ name: 'transactions', columns: ['id'] }] }],

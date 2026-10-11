@@ -14,9 +14,9 @@
 //     the ids it answers `recorded`);
 //   - a grant-level failure is a SKIP with a reason, never a throw, never a strike.
 //
-// RED UNTIL D2b: `access/service.ts`, `access/materialise.ts` and `access/limits.ts` are reached through
-// dynamic imports with variable specifiers (Vite resolves a literal one at transform time), so every
-// row is red on its own and the count is exact. The shapes are written out from the contract.
+// Written before the module existed (Gate 3): `access/service.ts`, `access/materialise.ts` and
+// `access/limits.ts` were reached through variable-specifier imports and the contract's shapes were
+// written out here; now imported directly — the real exports are the types (PR-2 Gate-5 M-10).
 //
 // Mutation checks (to run by hand once D2b lands, each red then restored):
 //  - write the read line after `recordRead` answers (a deferred append) → the "BEFORE it answers" row reds;
@@ -46,81 +46,13 @@ import {
 } from '../access/grants.js';
 import { configureScopedRead, resetScopedReadForTests, type WorkerLike } from '../access/scopedRead.js';
 import { createScopedReadResponder } from '../access/scopedRead.worker.js';
+import * as limits from '../access/limits.js';
+import { ACCESS_MATERIALISE_MAX_BYTES, ACCESS_MATERIALISE_TIMEOUT_MS } from '../access/limits.js';
+import { aliasFor, namesTable, takenNamesFor, toAttach } from '../access/materialise.js';
+import { stillReadable, type AccessCaller } from '../access/policy.js';
+import { EMPTY_MATERIALISED_SET, accessService, type MaterialisedSet } from '../access/service.js';
 import { startUserAsk } from '../access/userAsk.js';
 import { installTestUserDb, locateWasm } from './userdbTestHelper.js';
-
-// =========================================================================================
-// The contract's shapes (access/service.ts, access/materialise.ts, access/limits.ts)
-// =========================================================================================
-
-type Caller =
-  | { kind: 'frame'; appId: string; generation?: number; present: boolean }
-  | { kind: 'chat'; appId: string; threadId: string; liveGeneration?: number }
-  | { kind: 'schedule'; appId: string; taskId: string; runId: string };
-interface MaterialisedTable {
-  grantId: string;
-  sourceAppId: string;
-  sourceName: string;
-  alias: string;
-  name: string;
-  table: string;
-  columns: string[];
-  types: string[];
-  rows: unknown[][];
-  truncated: boolean;
-  totalRows?: number;
-  duration: string;
-  expiresAt?: string;
-}
-type SkipReason = 'drift' | 'timeout' | 'unavailable' | 'failed' | 'too-large' | 'copy-failed' | 'ended';
-interface MaterialiseSkip {
-  grantId: string;
-  sourceAppId: string;
-  sourceName: string;
-  reason: SkipReason;
-}
-interface MaterialisedSet {
-  tables: MaterialisedTable[];
-  skipped: MaterialiseSkip[];
-  readOnlyTables: string[];
-}
-interface RecordReadOutcome {
-  recorded: string[];
-  refused: MaterialiseSkip[];
-}
-interface AccessService {
-  materialise(caller: Caller): Promise<MaterialisedSet>;
-  recordRead(caller: Caller, set: MaterialisedSet, input: { grantIds: readonly string[]; sql?: string }): Promise<RecordReadOutcome>;
-}
-interface ServiceModule {
-  accessService(): AccessService;
-  EMPTY_MATERIALISED_SET: MaterialisedSet;
-}
-interface ScratchAttachTable {
-  name: string;
-  columns: readonly string[];
-  rows: ReadonlyArray<readonly unknown[]>;
-}
-interface MaterialiseModule {
-  aliasFor(sourceName: string, grantedTables: readonly string[], taken: ReadonlySet<string>): string;
-  takenNamesFor(db: UserDb, readerAppId: string): Promise<Set<string>>;
-  toAttach(set: MaterialisedSet, grantIds?: readonly string[]): ScratchAttachTable[];
-  namesTable(sql: string, name: string): boolean;
-}
-interface LimitsModule {
-  ACCESS_MATERIALISE_MAX_ROWS: number;
-  ACCESS_MATERIALISE_MAX_BYTES: number;
-  ACCESS_MATERIALISE_MAX_SET_BYTES: number;
-  ACCESS_MATERIALISE_TIMEOUT_MS: number;
-}
-
-const SERVICE_MODULE = '../access/service.js';
-const MATERIALISE_MODULE = '../access/materialise.js';
-const LIMITS_MODULE = '../access/limits.js';
-const service = async (): Promise<AccessService> => ((await import(/* @vite-ignore */ SERVICE_MODULE)) as ServiceModule).accessService();
-const serviceModule = async (): Promise<ServiceModule> => (await import(/* @vite-ignore */ SERVICE_MODULE)) as ServiceModule;
-const materialiseModule = async (): Promise<MaterialiseModule> => (await import(/* @vite-ignore */ MATERIALISE_MODULE)) as MaterialiseModule;
-const limitsModule = async (): Promise<LimitsModule> => (await import(/* @vite-ignore */ LIMITS_MODULE)) as LimitsModule;
 
 // =========================================================================================
 // The world
@@ -138,14 +70,14 @@ let clock: { now: number };
 let posted: unknown[];
 let seq = 0;
 
-const chatClosed = (): Caller => ({ kind: 'chat', appId: budget, threadId: 'thread-1' });
-const chatAt = (liveGeneration: number): Caller => ({ kind: 'chat', appId: budget, threadId: 'thread-1', liveGeneration });
+const chatClosed = (): AccessCaller => ({ kind: 'chat', appId: budget, threadId: 'thread-1' });
+const chatAt = (liveGeneration: number): AccessCaller => ({ kind: 'chat', appId: budget, threadId: 'thread-1', liveGeneration });
 /** The chat as the door builds it: the reader's live generation at the call. */
-const chatNow = (): Caller => {
+const chatNow = (): AccessCaller => {
   const liveGeneration = readerGeneration(budget);
   return { kind: 'chat', appId: budget, threadId: 'thread-1', ...(liveGeneration !== undefined ? { liveGeneration } : {}) };
 };
-const scheduled = (): Caller => ({ kind: 'schedule', appId: budget, taskId: 'task-1', runId: 'run-1' });
+const scheduled = (): AccessCaller => ({ kind: 'schedule', appId: budget, taskId: 'task-1', runId: 'run-1' });
 
 /** The inline worker — the real responder — recording every message it is posted; `before` runs before a dump job is answered. */
 function inlineWorkers(before?: (msg: unknown) => Promise<void>): () => WorkerLike {
@@ -263,7 +195,7 @@ afterEach(() => {
 
 describe('access/limits.ts — the in-host caps (PR-3 moves them to protocol Appendix B)', () => {
   it('5,000 rows and 2 MiB per table, 8 MiB per set, a 5 s clock per dump', async () => {
-    expect(await limitsModule()).toMatchObject({
+    expect({ ...limits }).toMatchObject({
       ACCESS_MATERIALISE_MAX_ROWS: 5_000,
       ACCESS_MATERIALISE_MAX_BYTES: 2 * 1024 * 1024,
       ACCESS_MATERIALISE_MAX_SET_BYTES: 8 * 1024 * 1024,
@@ -280,7 +212,7 @@ describe('materialise(chat) — every live grant the chat owns, aliased, through
   it('the chat gets each live grant’s tables as <alias>__<table>: the scope’s columns, the allow-listed types, the masked rows, the duration', async () => {
     const day = await grantFor({ duration: 'day' });
     const always = await grantFor({ source: pantry, tables: ['items'], duration: 'always', unattended: true });
-    const set = await (await service()).materialise(chatClosed());
+    const set = await accessService().materialise(chatClosed());
 
     expect(set.skipped).toEqual([]);
     const byName = new Map(set.tables.map((table) => [table.name, table]));
@@ -311,7 +243,7 @@ describe('materialise(chat) — every live grant the chat owns, aliased, through
   it('the rows come THROUGH the Worker (one dump job per grant) — and nothing is written: no line on any source, no read counted', async () => {
     const day = await grantFor({ duration: 'day' });
     await grantFor({ source: pantry, tables: ['items'], duration: 'week' });
-    await (await service()).materialise(chatClosed());
+    await accessService().materialise(chatClosed());
     expect(dumpJobs()).toHaveLength(2);
     expect(kindsOf(ledger)).toEqual(['granted']);
     expect(kindsOf(pantry)).toEqual(['granted']);
@@ -322,7 +254,7 @@ describe('materialise(chat) — every live grant the chat owns, aliased, through
   it('readOnlyTables is every materialised name, sorted', async () => {
     await grantFor({ source: pantry, tables: ['items'] });
     await grantFor({ tables: ['transactions', 'accounts'] });
-    const set = await (await service()).materialise(chatClosed());
+    const set = await accessService().materialise(chatClosed());
     expect(set.readOnlyTables).toEqual(['ledger__accounts', 'ledger__transactions', 'pantry__items']);
   });
 
@@ -334,7 +266,7 @@ describe('materialise(chat) — every live grant the chat owns, aliased, through
     await suspendAccess(db, paused.id, 'imported', iso(clock.now));
     await grantFor({ duration: 'day', tables: ['accounts'] });
     clock.now += DAY;
-    const set = await (await service()).materialise(chatClosed());
+    const set = await accessService().materialise(chatClosed());
     expect(set).toEqual({ tables: [], skipped: [], readOnlyTables: [] });
     expect(kindsOf(ledger).filter((kind) => kind === 'refused' || kind === 'read')).toEqual([]);
   });
@@ -343,7 +275,7 @@ describe('materialise(chat) — every live grant the chat owns, aliased, through
 describe('D-PR2-3 materialise — session grants per door', () => {
   it('an UNBOUND session grant is materialised by NO chat caller — closed, or claiming any generation — and IS once the frame binds it and the chat passes that generation', async () => {
     const id = await unboundSessionGrant();
-    const svc = await service();
+    const svc = accessService();
     for (const caller of [chatClosed(), chatAt(0), chatAt(3)]) {
       const set = await svc.materialise(caller);
       expect(set.tables, JSON.stringify(caller)).toEqual([]);
@@ -358,7 +290,7 @@ describe('D-PR2-3 materialise — session grants per door', () => {
   it('a session grant whose generation is not the chat’s live one is absent; at its own generation it is there', async () => {
     createAccessHandlerFor(budget, { attended: true, generation: 0 });
     const session = await grantFor({ duration: 'session', generation: 0 });
-    const svc = await service();
+    const svc = accessService();
     expect((await svc.materialise(chatAt(1))).tables).toEqual([]);
     expect((await svc.materialise(chatClosed())).tables).toEqual([]);
     expect((await svc.materialise(chatAt(0))).tables.map((table) => table.grantId)).toEqual([session.id]);
@@ -371,7 +303,7 @@ describe('D-PR2-4 materialise(schedule) — only persisted grants allowed *also 
     await grantFor({ duration: 'day', unattended: false });
     await grantFor({ duration: 'session', generation: 0, unattended: true, tables: ['accounts'] });
     const away = await grantFor({ source: pantry, tables: ['items'], duration: 'always', unattended: true });
-    const set = await (await service()).materialise(scheduled());
+    const set = await accessService().materialise(scheduled());
     expect(set.tables.map((table) => [table.grantId, table.name])).toEqual([[away.id, 'pantry__items']]);
     expect(set.skipped).toEqual([]);
     expect(kindsOf(ledger), 'a schedule skip writes no line').toEqual(['granted', 'granted']);
@@ -379,7 +311,7 @@ describe('D-PR2-4 materialise(schedule) — only persisted grants allowed *also 
 
   it('its read line says attended: false and carries no statement', async () => {
     const away = await grantFor({ source: pantry, tables: ['items'], duration: 'always', unattended: true });
-    const svc = await service();
+    const svc = accessService();
     const set = await svc.materialise(scheduled());
     expect(await svc.recordRead(scheduled(), set, { grantIds: [away.id] })).toEqual({ recorded: [away.id], refused: [] });
     const line = db.listAccessLog(pantry)[0];
@@ -396,7 +328,7 @@ describe('D-PR2-7 recordRead — ONE read line per named grant, written before i
   it('writes the line at once — attended true for the chat, EVERY granted table, the rows handed over, the statement — and counts the read', async () => {
     const both = await grantFor({ tables: ['transactions', 'accounts'] });
     await grantFor({ source: pantry, tables: ['items'] });
-    const svc = await service();
+    const svc = accessService();
     const set = await svc.materialise(chatClosed());
     clock.now += 5_000;
     const sql = 'SELECT t.amount, a.balance FROM ledger__transactions t, ledger__accounts a';
@@ -412,7 +344,7 @@ describe('D-PR2-7 recordRead — ONE read line per named grant, written before i
 
   it('the statement is kept as the history keeps it: cut at ACCESS_LOG_SQL_MAX_CHARS; a credential-shaped one leaves the seat out', async () => {
     const grant = await grantFor();
-    const svc = await service();
+    const svc = accessService();
     const set = await svc.materialise(chatClosed());
     const long = `SELECT * FROM ledger__transactions WHERE category IN (${Array.from({ length: 80 }, (_, i) => `'c${i}'`).join(', ')})`;
     await svc.recordRead(chatClosed(), set, { grantIds: [grant.id], sql: long });
@@ -427,7 +359,7 @@ describe('D-PR2-7 recordRead — ONE read line per named grant, written before i
   it('a line the history refuses → that grant is refused `failed`, its read is not counted, and toAttach of the recorded ids holds none of its tables', async () => {
     const refusedGrant = await grantFor();
     const fine = await grantFor({ source: pantry, tables: ['items'] });
-    const svc = await service();
+    const svc = accessService();
     const set = await svc.materialise(chatClosed());
     const real = db.appendAccessLog.bind(db);
     vi.spyOn(db, 'appendAccessLog').mockImplementation((sourceAppId, entry) => {
@@ -438,7 +370,6 @@ describe('D-PR2-7 recordRead — ONE read line per named grant, written before i
     expect(outcome.recorded).toEqual([fine.id]);
     expect(outcome.refused).toEqual([{ grantId: refusedGrant.id, sourceAppId: ledger, sourceName: 'Ledger', reason: 'failed' }]);
     expect(db.getAccessGrant(refusedGrant.id)).toMatchObject({ reads: 0 });
-    const { toAttach } = await materialiseModule();
     expect(toAttach(set, outcome.recorded).map((table) => table.name)).toEqual(['pantry__items']);
   });
 
@@ -446,7 +377,7 @@ describe('D-PR2-7 recordRead — ONE read line per named grant, written before i
     const stopped = await grantFor({ duration: 'always' });
     const paused = await grantFor({ duration: 'always', source: pantry, tables: ['items'] });
     const expiring = await grantFor({ duration: 'day', tables: ['accounts'] });
-    const svc = await service();
+    const svc = accessService();
     const set = await svc.materialise(chatClosed());
     expect(set.tables).toHaveLength(3);
     await revokeAccess(stopped.id);
@@ -476,7 +407,7 @@ describe('D-PR2-6 / D-PR2-18 materialise — every grant-level failure is a skip
       wasm: { wasmUrl: locateWasm() },
       now: () => clock.now,
     });
-    const set = await (await service()).materialise(chatClosed());
+    const set = await accessService().materialise(chatClosed());
     expect(set.tables.map((table) => table.grantId)).toEqual([kept.id]);
     expect(set.skipped).toEqual([{ grantId: stopped.id, sourceAppId: ledger, sourceName: 'Ledger', reason: 'ended' }]);
     expect(kindsOf(ledger)).toEqual(['revoked', 'granted']);
@@ -492,7 +423,7 @@ describe('D-PR2-6 / D-PR2-18 materialise — every grant-level failure is a skip
       wasm: { wasmUrl: locateWasm() },
       now: () => clock.now,
     });
-    const set = await (await service()).materialise(chatClosed());
+    const set = await accessService().materialise(chatClosed());
     expect(set.tables).toEqual([]);
     expect(set.skipped).toEqual([{ grantId: paused.id, sourceAppId: ledger, sourceName: 'Ledger', reason: 'ended' }]);
   });
@@ -500,7 +431,7 @@ describe('D-PR2-6 / D-PR2-18 materialise — every grant-level failure is a skip
   it('drift pauses the grant `source-changed` (one suspended line) and skips it `drift`', async () => {
     const grant = await grantFor();
     await db.applyAppDdl(ledger, ['ALTER TABLE transactions ADD COLUMN note TEXT']);
-    const set = await (await service()).materialise(chatClosed());
+    const set = await accessService().materialise(chatClosed());
     expect(set.tables).toEqual([]);
     expect(set.skipped).toEqual([{ grantId: grant.id, sourceAppId: ledger, sourceName: 'Ledger', reason: 'drift' }]);
     expect(db.getAccessGrant(grant.id)).toMatchObject({ status: 'suspended', suspendedReason: 'source-changed' });
@@ -508,9 +439,8 @@ describe('D-PR2-6 / D-PR2-18 materialise — every grant-level failure is a skip
   });
 
   it('a dump that outruns its clock skips the grant `timeout` with NO strike — the SQL is the host’s', async () => {
-    const { ACCESS_MATERIALISE_TIMEOUT_MS } = await limitsModule();
     const grant = await grantFor({ duration: 'always' });
-    const svc = await service();
+    const svc = accessService();
     configureScopedRead({ createWorker: silentWorkers(), wasm: { wasmUrl: locateWasm() }, now: () => clock.now });
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     let set: MaterialisedSet | undefined;
@@ -528,7 +458,7 @@ describe('D-PR2-6 / D-PR2-18 materialise — every grant-level failure is a skip
     const two = await grantFor({ source: pantry, tables: ['items'] });
     vi.stubGlobal('Worker', undefined);
     configureScopedRead({ createWorker: undefined, wasm: { wasmUrl: locateWasm() }, now: () => clock.now });
-    const set = await (await service()).materialise(chatClosed());
+    const set = await accessService().materialise(chatClosed());
     expect(set.tables).toEqual([]);
     expect([...set.skipped].sort((a, b) => a.grantId.localeCompare(b.grantId))).toEqual(
       [
@@ -541,7 +471,6 @@ describe('D-PR2-6 / D-PR2-18 materialise — every grant-level failure is a skip
   it(
     'three grants of 4 MiB each → the first two fill the 8 MiB set, the third (in grant order) is skipped `too-large`',
     async () => {
-      const { ACCESS_MATERIALISE_MAX_BYTES } = await limitsModule();
       // Each table: 2,048 rows whose JSON is exactly 1,024 UTF-8 bytes — 2 MiB, at the per-table cap. The
       // cell is 170 U+0001 characters: 1 byte each in the file (an app's runtime exports at most 5 MiB),
       // 6 each in JSON (`\u0001`), so ["…"] weighs 2 + 2 + 170 × 6 = 1,024.
@@ -557,7 +486,7 @@ describe('D-PR2-6 / D-PR2-18 materialise — every grant-level failure is a skip
       const order = grantsForApp(db, budget, clock.now).reads.filter((row) => row.live).map((row) => row.grant.id);
       expect(order).toHaveLength(3);
 
-      const set = await (await service()).materialise(chatClosed());
+      const set = await accessService().materialise(chatClosed());
       expect(set.skipped).toEqual([expect.objectContaining({ grantId: order[2], reason: 'too-large' })]);
       expect([...new Set(set.tables.map((table) => table.grantId))]).toEqual([order[0], order[1]]);
       for (const table of set.tables) {
@@ -573,21 +502,93 @@ describe('D-PR2-6 / D-PR2-18 materialise — every grant-level failure is a skip
     vi.spyOn(db, 'listAccessGrants').mockImplementation(() => {
       throw new Error('the file is unreadable');
     });
-    const set = await (await service()).materialise(chatClosed());
+    const set = await accessService().materialise(chatClosed());
     expect(set.tables).toEqual([]);
     expect(set.readOnlyTables).toEqual([]);
     expect(set.skipped).toEqual([expect.objectContaining({ sourceName: 'Budget', reason: 'failed' })]);
   });
 
   it('EMPTY_MATERIALISED_SET is the set with nothing in it', async () => {
-    expect((await serviceModule()).EMPTY_MATERIALISED_SET).toEqual({ tables: [], skipped: [], readOnlyTables: [] });
+    expect(EMPTY_MATERIALISED_SET).toEqual({ tables: [], skipped: [], readOnlyTables: [] });
+  });
+});
+
+// M-4 (PR-2 Gate-5): with nothing to materialise, the reader's names are never read — no flush, no
+// runtime export, no registry read on a data-lane turn whose reader holds no live grant.
+describe('materialise with no live grants reads nothing of the reader', () => {
+  it('a chat caller with no live grants never calls listAppObjectNames, describeAppData or getAppSchema — and answers the empty set', async () => {
+    const stopped = await grantFor({ duration: 'week' });
+    await revokeAccess(stopped.id);
+    const methods = (['listAppObjectNames', 'describeAppData', 'getAppSchema'] as const).filter((name) => typeof (db as unknown as Record<string, unknown>)[name] === 'function');
+    expect(methods).toEqual(expect.arrayContaining(['describeAppData', 'getAppSchema']));
+    const spies = methods.map((name) => [name, vi.spyOn(db as unknown as Record<string, (...args: unknown[]) => unknown>, name)] as const);
+    const set = await accessService().materialise(chatClosed());
+    expect(set).toEqual({ tables: [], skipped: [], readOnlyTables: [] });
+    for (const [name, spy] of spies) expect(spy, name).not.toHaveBeenCalled();
+    expect(dumpJobs()).toEqual([]);
+  });
+
+  it('the schedule caller too: no away grant → no read of the reader’s names', async () => {
+    await grantFor({ duration: 'day', unattended: false });
+    const methods = (['listAppObjectNames', 'describeAppData', 'getAppSchema'] as const).filter((name) => typeof (db as unknown as Record<string, unknown>)[name] === 'function');
+    const spies = methods.map((name) => [name, vi.spyOn(db as unknown as Record<string, (...args: unknown[]) => unknown>, name)] as const);
+    const set = await accessService().materialise(scheduled());
+    expect(set.tables).toEqual([]);
+    for (const [name, spy] of spies) expect(spy, name).not.toHaveBeenCalled();
+  });
+});
+
+// M-2 (PR-2 Gate-5): `stillReadable` — the ONE spelling of "still this caller's, active and
+// unexpired" the read's dequeue re-check, recordRead and the post-dump re-check share.
+describe('policy.stillReadable — find → owned → active → unexpired, or undefined', () => {
+  const find = (id: string) => findAccessGrant(db, id);
+
+  it('a live grant of this caller → the found grant itself', async () => {
+    const grant = await grantFor({ duration: 'day' });
+    const found = findAccessGrant(db, grant.id);
+    expect(found).toBeDefined();
+    expect(stillReadable(() => found, chatClosed(), grant.id, clock.now)).toBe(found);
+    expect(stillReadable(find, chatClosed(), grant.id, clock.now)).toEqual(found);
+    expect(stillReadable(find, scheduled(), grant.id, clock.now), 'ownership is the caller’s, attendance is not this rule’s').toEqual(found);
+  });
+
+  it('an absent grant → undefined', () => {
+    expect(stillReadable(find, chatClosed(), 'no-such-grant', clock.now)).toBeUndefined();
+  });
+
+  it('another reader’s grant → undefined (not owned)', async () => {
+    const theirs = await grantFor({ reader: pantry, tables: ['transactions'] });
+    expect(stillReadable(find, chatClosed(), theirs.id, clock.now)).toBeUndefined();
+  });
+
+  it('an UNBOUND session grant → undefined for every chat (not owned)', async () => {
+    const id = await unboundSessionGrant();
+    for (const caller of [chatClosed(), chatAt(0), chatAt(3)]) expect(stillReadable(find, caller, id, clock.now), JSON.stringify(caller)).toBeUndefined();
+  });
+
+  it('a revoked grant → undefined', async () => {
+    const grant = await grantFor({ duration: 'always' });
+    await revokeAccess(grant.id);
+    expect(stillReadable(find, chatClosed(), grant.id, clock.now)).toBeUndefined();
+  });
+
+  it('a suspended grant → undefined', async () => {
+    const grant = await grantFor({ duration: 'always' });
+    await suspendAccess(db, grant.id, 'imported', iso(clock.now));
+    expect(stillReadable(find, chatClosed(), grant.id, clock.now)).toBeUndefined();
+  });
+
+  it('an expired grant → undefined at its expiry; the instant before, the found', async () => {
+    const grant = await grantFor({ duration: 'day' });
+    expect(stillReadable(find, chatClosed(), grant.id, T0 + DAY - 1)).toEqual(findAccessGrant(db, grant.id));
+    expect(stillReadable(find, chatClosed(), grant.id, T0 + DAY)).toBeUndefined();
   });
 });
 
 describe('the 10 s cache — the rows of a grant are dumped once per window', () => {
   it('a second materialise inside ACCESS_SCOPED_CACHE_MS posts no dump and serves the same rows; after the window it dumps again', async () => {
     await grantFor({ duration: 'always' });
-    const svc = await service();
+    const svc = accessService();
     const first = await svc.materialise(chatClosed());
     expect(dumpJobs()).toHaveLength(1);
     clock.now += ACCESS_SCOPED_CACHE_MS - 1;
@@ -606,7 +607,6 @@ describe('the 10 s cache — the rows of a grant are dumped once per window', ()
 
 describe('D-PR2-8 aliasFor — the slug', () => {
   it('lower-case; every run of anything but [a-z0-9] becomes one _; trimmed', async () => {
-    const { aliasFor } = await materialiseModule();
     expect(aliasFor('Ledger', ['transactions'], new Set())).toBe('ledger');
     expect(aliasFor('My Budget — 2026!', ['t'], new Set())).toBe('my_budget_2026');
     expect(aliasFor('  Meal--Plan  ', ['t'], new Set())).toBe('meal_plan');
@@ -614,17 +614,14 @@ describe('D-PR2-8 aliasFor — the slug', () => {
   });
 
   it('at most 32 characters', async () => {
-    const { aliasFor } = await materialiseModule();
     expect(aliasFor('A'.repeat(40), ['t'], new Set())).toBe('a'.repeat(32));
   });
 
   it('prefixed app_ when it does not start with a letter', async () => {
-    const { aliasFor } = await materialiseModule();
     expect(aliasFor('2026 Plans', ['t'], new Set())).toBe('app_2026_plans');
   });
 
   it('2, 3, … appended when ANY <slug>__<table> of the granted tables is taken — and only then', async () => {
-    const { aliasFor } = await materialiseModule();
     expect(aliasFor('Ledger', ['transactions'], new Set(['ledger__transactions']))).toBe('ledger2');
     expect(aliasFor('Ledger', ['transactions'], new Set(['ledger__transactions', 'ledger2__transactions']))).toBe('ledger3');
     expect(aliasFor('Ledger', ['transactions', 'accounts'], new Set(['ledger__accounts']))).toBe('ledger2');
@@ -636,7 +633,7 @@ describe('D-PR2-8 takenNamesFor + materialise — the reader’s own names are n
   it('the reader’s own registry TABLE named ledger__transactions → the alias moves to ledger2', async () => {
     await db.applyAppDdl(budget, ['CREATE TABLE ledger__transactions (id INTEGER)']);
     await grantFor();
-    const set = await (await service()).materialise(chatClosed());
+    const set = await accessService().materialise(chatClosed());
     expect(namesOf(set)).toEqual(['ledger2__transactions']);
     expect(set.tables[0]?.alias).toBe('ledger2');
   });
@@ -644,22 +641,53 @@ describe('D-PR2-8 takenNamesFor + materialise — the reader’s own names are n
   it('a VIEW of that name → ledger2', async () => {
     await db.applyAppDdl(budget, ['CREATE TABLE own (id INTEGER)', 'CREATE VIEW ledger__transactions AS SELECT id FROM own']);
     await grantFor();
-    expect(namesOf(await (await service()).materialise(chatClosed()))).toEqual(['ledger2__transactions']);
+    expect(namesOf(await accessService().materialise(chatClosed()))).toEqual(['ledger2__transactions']);
   });
 
   it('a table the app’s CODE created at runtime (in the runtime bytes, not the registry) → ledger2', async () => {
     await exec(budget, 'CREATE TABLE ledger__transactions (id INTEGER)');
     expect(JSON.stringify(db.getAppSchema(budget) ?? {})).not.toContain('ledger__transactions');
-    const { takenNamesFor } = await materialiseModule();
     expect(await takenNamesFor(db, budget)).toContain('ledger__transactions');
     await grantFor();
-    expect(namesOf(await (await service()).materialise(chatClosed()))).toEqual(['ledger2__transactions']);
+    expect(namesOf(await accessService().materialise(chatClosed()))).toEqual(['ledger2__transactions']);
+  });
+
+  // SEC-3 (PR-2 Gate-5): the reader's own CODE may create a view, an index or a trigger of the alias
+  // name at runtime — not in the registry, not a table. takenNamesFor reads every runtime object
+  // name (`listAppObjectNames`), so the alias moves and the scratch attach never has to refuse it.
+  for (const [kind, ddl] of [
+    ['VIEW', 'CREATE VIEW ledger__transactions AS SELECT id FROM own'],
+    ['INDEX', 'CREATE INDEX ledger__transactions ON own (id)'],
+    ['TRIGGER', 'CREATE TRIGGER ledger__transactions AFTER INSERT ON own BEGIN SELECT 1; END'],
+  ] as const) {
+    it(`a runtime-created ${kind} named ledger__transactions → ledger2, and the attach takes the set without refusing`, async () => {
+      await exec(budget, 'CREATE TABLE own (id INTEGER)');
+      await exec(budget, ddl);
+      expect(JSON.stringify(db.getAppSchema(budget) ?? {})).not.toContain('ledger__transactions');
+      expect(await takenNamesFor(db, budget)).toContain('ledger__transactions');
+      await grantFor();
+      const set = await accessService().materialise(chatClosed());
+      expect(namesOf(set)).toEqual(['ledger2__transactions']);
+      expect(set.tables[0]?.alias).toBe('ledger2');
+      const run = await db.scratchRun(budget, [{ sql: 'SELECT count(*) FROM ledger2__transactions' }], { attach: toAttach(set) });
+      expect(run.statements[0]?.error).toBeUndefined();
+      expect(run.statements[0]?.rows).toEqual([[2]]);
+    });
+  }
+
+  it('takenNamesFor answers every runtime object name lower-cased — a runtime Ledger__Transactions VIEW is taken as ledger__transactions', async () => {
+    await exec(budget, 'CREATE TABLE own (id INTEGER)');
+    await exec(budget, 'CREATE VIEW Ledger__Transactions AS SELECT id FROM own');
+    const taken = await takenNamesFor(db, budget);
+    expect(taken).toContain('ledger__transactions');
+    expect(taken).toContain('own');
+    expect(taken).not.toContain('Ledger__Transactions');
   });
 
   it('a case-only collision (Ledger__Transactions) → ledger2', async () => {
     await db.applyAppDdl(budget, ['CREATE TABLE Ledger__Transactions (id INTEGER)']);
     await grantFor();
-    expect(namesOf(await (await service()).materialise(chatClosed()))).toEqual(['ledger2__transactions']);
+    expect(namesOf(await accessService().materialise(chatClosed()))).toEqual(['ledger2__transactions']);
   });
 
   it('a second source of the same name → ledger and ledger2 (every earlier alias’s full names are taken)', async () => {
@@ -667,18 +695,17 @@ describe('D-PR2-8 takenNamesFor + materialise — the reader’s own names are n
     await seed(twin, ['CREATE TABLE transactions (id INTEGER PRIMARY KEY, amount INTEGER)'], ['INSERT INTO transactions (amount) VALUES (7)']);
     await grantFor();
     await grantFor({ source: twin });
-    const set = await (await service()).materialise(chatClosed());
+    const set = await accessService().materialise(chatClosed());
     expect(namesOf(set).sort()).toEqual(['ledger2__transactions', 'ledger__transactions']);
     expect(new Set(set.tables.map((table) => table.alias)).size).toBe(2);
   });
 
   it('snug_kv is taken; a source called SQLite never yields a sqlite_* name (SQLite reserves them)', async () => {
-    const { takenNamesFor } = await materialiseModule();
     expect(await takenNamesFor(db, budget)).toContain('snug_kv');
     const reserved = db.installApp({ displayName: 'SQLite', html: '<!doctype html><title>s</title>' }).appId;
     await seed(reserved, ['CREATE TABLE notes (body TEXT)'], ["INSERT INTO notes VALUES ('hi')"]);
     await grantFor({ source: reserved, tables: ['notes'] });
-    const set = await (await service()).materialise(chatClosed());
+    const set = await accessService().materialise(chatClosed());
     expect(set.tables).toHaveLength(1);
     expect(set.tables[0]!.name.toLowerCase().startsWith('sqlite_')).toBe(false);
   });
@@ -692,8 +719,7 @@ describe('toAttach — what the scratch copy is handed', () => {
   it('every table as { name, columns, rows } — or only the named grants’ tables', async () => {
     const mine = await grantFor({ tables: ['transactions', 'accounts'] });
     await grantFor({ source: pantry, tables: ['items'] });
-    const set = await (await service()).materialise(chatClosed());
-    const { toAttach } = await materialiseModule();
+    const set = await accessService().materialise(chatClosed());
     expect(toAttach(set).map((table) => table.name).sort()).toEqual(['ledger__accounts', 'ledger__transactions', 'pantry__items']);
     const only = toAttach(set, [mine.id]);
     expect(only.map((table) => table.name).sort()).toEqual(['ledger__accounts', 'ledger__transactions']);
@@ -705,7 +731,6 @@ describe('toAttach — what the scratch copy is handed', () => {
 describe('D-PR2-10 namesTable — the whole-identifier match', () => {
   const NAME = 'ledger__transactions';
   it('true for the name bare, "quoted", `quoted`, [bracketed], in any case, qualified by a column, and — conservatively — inside a string literal', async () => {
-    const { namesTable } = await materialiseModule();
     for (const sql of [
       'SELECT * FROM ledger__transactions',
       'SELECT * FROM "ledger__transactions"',
@@ -722,7 +747,6 @@ describe('D-PR2-10 namesTable — the whole-identifier match', () => {
   });
 
   it('false for a longer identifier that merely contains it, and for a query that names it nowhere', async () => {
-    const { namesTable } = await materialiseModule();
     for (const sql of [
       'SELECT * FROM ledger__transactions_archive',
       'SELECT * FROM my_ledger__transactions',

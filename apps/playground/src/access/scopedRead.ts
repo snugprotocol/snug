@@ -20,8 +20,10 @@
 // gets a COPY, transferred — the cached buffer is never detached. A dump's RESULT is cached the
 // same way in a second map, keyed by the grant AND its caps (a different set budget is a miss),
 // so one chat turn after another inside the window dumps once; `clearScopedReadCache` and the
-// test reset drop both maps together. A cached dump never answers a read: a read's statement
-// always runs in the worker.
+// test reset drop both maps together. A dump made from CACHED bytes is stamped with the bytes'
+// own instant, so it is never served past the bytes' window — the window is one, not two end to
+// end (Gate-5 M-5). A cached dump never answers a read: a read's statement always runs in the
+// worker.
 //
 // A QUEUED JOB IS RE-CHECKED when it dequeues (`stillLive`, the caller's grant check): one that
 // waited behind others while its grant was stopped or paused answers `ended` before any export,
@@ -69,9 +71,10 @@ export interface ScopedReadInit {
   init: ScopedReadEngineSource;
 }
 
-/** host → worker, one per read; `bytes` is a transferred copy. */
+/** host → worker, one per read; `bytes` is a transferred copy. Never carries `kind` — that key is the dump's discriminant (M-6). */
 export interface ScopedReadJob {
   id: number;
+  kind?: undefined;
   bytes: Uint8Array;
   scope: ScopedReadScope;
   statement: ScopedReadStatement;
@@ -411,10 +414,12 @@ export function scopedDump(input: ScopedDumpInput): Promise<ScopedDumpOutcome> {
     if (hit !== undefined && hit.value.caps === key) return hit.value.result;
     const ready = await prepare(input);
     if ('ok' in ready) return ready;
+    // The bytes' own instant (M-5): a dump over cached bytes shares their window, never extends it.
+    const at = cache.get(input.grantId)?.at ?? now;
     const answer = asDumpOutcome(await runOnWorker(ready.worker, { kind: 'dump', bytes: ready.bytes.slice(), scope: input.scope, caps: input.caps }, input.timeoutMs ?? ACCESS_MATERIALISE_TIMEOUT_MS));
     if (!answer.ok) return answer;
     evictFrom(dumps, input.grantId);
-    dumps.set(input.grantId, { value: { caps: key, result: answer }, at: now, timer: evictionTimer(dumps, input.grantId) });
+    dumps.set(input.grantId, { value: { caps: key, result: answer }, at, timer: evictionTimer(dumps, input.grantId) });
     return answer;
   };
   const result = queue.then(run, run);

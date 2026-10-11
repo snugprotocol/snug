@@ -13,7 +13,9 @@
 // `settle` and becomes ONE outcome line (`role="status"`, focus taken only when it had fallen
 // to the page — the strip's rule), handed to `onResolve`; a dismissal (the yield rule: a network
 // or link confirm is up — `'answer-other-first'`) is NOT an answer: the card says so and keeps
-// its acts. *Not now* answers without asking anyone. The CARD NEVER WRITES THE CHAT ROW: the hook
+// its acts — and the dismissal's own `settle` only returns the acts from the sheet-up phase, so
+// whenever it lands it never erases that note (Gate-5 SEC-5). *Not now* answers without asking
+// anyone. The CARD NEVER WRITES THE CHAT ROW: the hook
 // that staged it persists the answer and patches its message (the schedule card's path); with no
 // `onResolve`, or while the turn is in flight, the acts wait.
 //
@@ -93,8 +95,6 @@ function OutcomeLine({ resolution, readerName }: { resolution: AccessCardResolut
         return ACCESS_CARD.declined;
       case 'failed':
         return CONSENT_UI.nothingAllowed;
-      case 'dismissed':
-        return ACCESS_CARD.stale;
       default: {
         const never: never = resolution;
         return never;
@@ -161,7 +161,9 @@ export function AccessCard({ card, messageId, busy, onResolve }: AccessCardProps
   const settle = (outcome: ConsentOutcome): void => {
     const resolution = resolutionOf(outcome);
     if (resolution === undefined) {
-      setPhase('idle');
+      // No answer: the acts come back only from the sheet-up phase — a dismissal under the
+      // yield rule may land after `review` wrote 'answer-other-first', and that note stands.
+      setPhase((current) => (current === 'waiting' ? 'idle' : current));
       return;
     }
     answer(resolution);

@@ -8,20 +8,23 @@
 // mark, the `source-restricted` pause — exactly where the handler performed it before PR-2 and
 // nowhere else: `list` writes nothing, `release` performs no effect.
 //
-// `read` is the handler's former `query` body, byte-identical for a frame: the per-app minute
+// `read` is the handler's former `query` body, byte-identical for a frame but for policy rule 4's
+// one named invert (a session grant is never read with nobody present, whatever *also while I'm
+// away* says): the per-app minute
 // FIRST — every op counts, refused, unknown or not, so no frame can write history lines (or spend
 // the host's work) faster than the limit; a frame-only effect, the chat being bounded by the
 // user's turns and the schedule by its run ceilings (D-PR2-5) — then the verdict and its effect,
 // then ONE read-only SELECT through the Worker under its wall clock (three consecutive timeouts
 // pause the grant `reader-misbehaved`; a column change pauses it `source-changed`), the grant
-// re-checked when the read dequeues and again when it answers (a stop or a pause that landed
-// meanwhile wins — no rows leave), the cells MASKED by column name, the `read` line on the
-// SOURCE's history — written BEFORE the rows leave, so a read the history could not record never
-// happens — and the counters. `list` is `read`'s admission row by row (`authorise(materialise)`,
-// nothing performed); `release` gives back the caller's own grant.
+// re-checked when the read dequeues (`stillReadable`, the policy's one spelling) and again when
+// it answers (a stop or a pause that landed meanwhile wins — no rows leave), the cells MASKED by
+// column name, the `read` line on the SOURCE's history — written BEFORE the rows leave, so a read
+// the history could not record never happens — and the counters. `list` and `materialise` share
+// ONE admission (`admitted`: the caller's rows the policy admits for `materialise`, nothing
+// performed — the policy is the only rule); `release` gives back the caller's own grant.
 //
-// `materialise` is the chat's and the schedule's door (D-PR2-6, D-PR2-7): every LIVE grant the
-// caller owns and may read — `read`'s own admission, rule by rule, performing nothing — is DUMPED
+// `materialise` is the chat's and the schedule's door (D-PR2-6, D-PR2-7): every grant the caller
+// owns and may read — `read`'s own admission, rule by rule, performing nothing — is DUMPED
 // through the Worker (`materialise.ts`: the recorded columns of each granted table under the
 // caps, aliased `<alias>__<table>`, re-checked when the dump answers) and NO history line is
 // written: the DDL block a brain then sees carries names, types and counts, the `list`-class
@@ -32,7 +35,8 @@
 // owned, active and unexpired (else `ended`), and `noteRead`; a line the history refuses answers
 // `failed`, and the caller hands out only the tables of the ids answered `recorded`. Neither
 // throws (D-PR2-18): a grant-level failure is a skip with its reason; a failure of the whole call
-// answers the empty set with one skip naming the reader, and the turn proceeds without shared tables.
+// answers the empty set with one skip naming the reader (its name folded to one line, as every
+// name a brain reads is — `oneLine`), and the turn proceeds without shared tables.
 //
 // ONE INSTANCE over `accessDeps()` — the engine's file and clock, read at every call — behind a
 // test seam in the `__setAccessDepsForTests` pattern: `__setAccessServiceForTests({ materialise })`
@@ -61,6 +65,7 @@ import {
 import type { UserDb } from '@snugprotocol/db';
 import type { AccessHandlerResult } from '@snugprotocol/runner';
 
+import { oneLine } from '../agent/sharedDdl.js';
 import { appHasSidecarFact } from '../state/sidecarLive.js';
 import { ACCESS_APP_MESSAGES } from './copy.js';
 import { isExpired } from './grantFacts.js';
@@ -76,9 +81,10 @@ import {
   releaseAccess,
   suspendAccess,
   type FoundAccessGrant,
+  type LiveGrantRow,
 } from './grants.js';
 import { materialiseGrants } from './materialise.js';
-import { attendedFor, authorise, ownsGrant, type AccessCaller, type PolicyContext, type Refusal } from './policy.js';
+import { attendedFor, authorise, ownsGrant, stillReadable, type AccessCaller, type PolicyContext, type Refusal } from './policy.js';
 import { scopedDump, scopedRead } from './scopedRead.js';
 
 // ---------------------------------------------------------------------------------------- shapes
@@ -138,7 +144,7 @@ export interface RecordReadOutcome {
 }
 
 export interface AccessService {
-  /** The handler's former `query` body, byte-identical for a frame. */
+  /** The handler's former `query` body, byte-identical for a frame but for policy rule 4's one named invert. */
   read(caller: AccessCaller, input: AccessReadInput): Promise<AccessHandlerResult>;
   /** Dumps the caller's live grants through the Worker, aliased; writes no line; never throws. */
   materialise(caller: AccessCaller): Promise<MaterialisedSet>;
@@ -233,6 +239,15 @@ function createAccessService(): AccessService {
     return found !== undefined && ownsGrant(caller, found) ? found : undefined;
   };
 
+  /**
+   * The ONE admission `list` and `materialise` share: this caller's rows, in grant order, that
+   * the policy admits for `materialise` — read once, performing nothing. A refusal is simply
+   * absent (not owned, stopped, expired, nobody present for a grant that needs someone, the
+   * source restricted) — never a skip, never a line. The policy is the only rule here.
+   */
+  const admitted = (db: UserDb, caller: AccessCaller, ctx: PolicyContext): LiveGrantRow[] =>
+    grantsForApp(db, caller.appId, ctx.now).reads.filter((row) => authorise(ctx, caller, { kind: 'materialise', grantId: row.grant.id }).ok);
+
   /** Perform the ONE effect a `read` refusal names, on the grant it carried — where the handler did it. */
   async function perform(db: UserDb, caller: AccessCaller, verdict: Refusal, at: number): Promise<void> {
     const found = verdict.grant;
@@ -258,13 +273,13 @@ function createAccessService(): AccessService {
     if (caller.kind === 'frame' && queryRateLimited(caller.appId, at)) {
       return refuse(ACCESS_ERROR_CODES.ACCESS_RATE_LIMITED, ACCESS_APP_MESSAGES.queryRateLimited, true);
     }
-    const verdict = authorise(policyContextFor(db, at), caller, { kind: 'read', grantId: input.grantId, sql: input.sql });
+    const ctx = policyContextFor(db, at);
+    const verdict = authorise(ctx, caller, { kind: 'read', grantId: input.grantId, sql: input.sql });
     if (!verdict.ok) {
       await perform(db, caller, verdict, at);
       return refused(verdict);
     }
-    const found = verdict.grant;
-    if (found === undefined) throw new Error('an admitted read carries what it admitted');
+    const { grant: found } = verdict;
     const { grant } = found;
     const tables = grant.scope.tables.map((table) => table.name);
     // Read once per op: the posture the whole read is logged under (a run ending mid-read must not split it).
@@ -282,10 +297,7 @@ function createAccessService(): AccessService {
         scope: grant.scope,
         // Re-checked when the read DEQUEUES: a stop or a pause that landed while it waited behind
         // other reads ends it before any export, slice or worker (W6 finding 7).
-        stillLive: () => {
-          const current = owned(db, caller, grant.id);
-          return current !== undefined && current.grant.status === 'active' && !isExpired(current.grant, now());
-        },
+        stillLive: () => stillReadable(ctx.find, caller, grant.id, now()) !== undefined,
         statement: { sql: input.sql, ...(input.params !== undefined ? { params: input.params } : {}) },
         caps: { maxRows: ACCESS_MAX_ROWS, maxBytes: ACCESS_MAX_RESULT_BYTES },
       });
@@ -358,9 +370,7 @@ function createAccessService(): AccessService {
     const ctx = policyContextFor(db, now());
     // Exactly `read`'s admission, read once for the whole list, performing nothing: this caller's,
     // its own session grants, and — with nobody present — only those usable while away.
-    const grants = grantsForApp(db, caller.appId, ctx.now)
-      .reads.filter((row) => authorise(ctx, caller, { kind: 'materialise', grantId: row.grant.id }).ok)
-      .map((row) => grantView(db, row.grant));
+    const grants = admitted(db, caller, ctx).map((row) => grantView(db, row.grant));
     return { ok: true, op: 'list', grants };
   }
 
@@ -386,15 +396,12 @@ function createAccessService(): AccessService {
       db = await accessDeps().getDb();
       const at = now();
       const ctx = policyContextFor(db, at);
-      // `read`'s admission, row by row, performing nothing: a refusal is simply absent — not owned,
-      // or nobody present for a grant that needs someone — never a skip, never a line.
-      const admitted = grantsForApp(db, caller.appId, at).reads.filter((row) => row.live && authorise(ctx, caller, { kind: 'materialise', grantId: row.grant.id }).ok);
-      const set = await materialiseGrants(db, caller, admitted, { dump: scopedDump, now, find: ctx.find });
+      const set = await materialiseGrants(db, caller, admitted(db, caller, ctx), { dump: scopedDump, now, find: ctx.find });
       // The one effect a dump names, performed as a read performs it: a source whose columns changed is paused.
       for (const skip of set.skipped) if (skip.reason === 'drift') await suspendAccess(db, skip.grantId, 'source-changed', iso(now()));
       return set;
     } catch {
-      return { tables: [], skipped: [{ grantId: '', sourceAppId: caller.appId, sourceName: readerNameQuietly(db, caller.appId), reason: 'failed' }], readOnlyTables: [] };
+      return { tables: [], skipped: [{ grantId: '', sourceAppId: caller.appId, sourceName: oneLine(readerNameQuietly(db, caller.appId)), reason: 'failed' }], readOnlyTables: [] };
     }
   }
 
@@ -420,8 +427,8 @@ function createAccessService(): AccessService {
     const sql = input.sql === undefined ? undefined : loggedSql(input.sql);
     for (const id of ids) {
       try {
-        const current = findAccessGrant(db, id);
-        if (current === undefined || !ownsGrant(caller, current) || current.grant.status !== 'active' || isExpired(current.grant, now())) {
+        const current = stillReadable((grantId) => findAccessGrant(db, grantId), caller, id, now());
+        if (current === undefined) {
           refuse(id, 'ended');
           continue;
         }

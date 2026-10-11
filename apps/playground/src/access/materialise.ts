@@ -12,16 +12,19 @@
 // — `drift` (the service pauses the source), `timeout` (no strike: the SQL is the host's),
 // `unavailable`, `failed`, `copy-failed`, `ended` — never a throw. A grant is re-checked when its
 // dump DEQUEUES (`stillLive`) and again when it ANSWERS (S3: a stop or a pause that landed while
-// the worker ran wins — none of its rows leave).
+// the worker ran wins — none of its rows leave) — `stillReadable`, the policy's one spelling. With
+// nothing admitted the loop answers the empty set before it touches the reader's runtime at all
+// (Gate-5 M-4: the common data-lane turn pays no flush and no export for a name set never used).
 //
 // THE ALIAS is the source's name as an identifier — lower-case, runs of anything but `[a-z0-9]`
 // folded to `_`, trimmed, at most 32 characters, `app_` in front when it does not start with a
 // letter — and it is accepted only when NONE of its full names `${alias}__${table}` (every granted
-// table) is taken: by the reader's registry objects, by a table the reader's code created at
-// runtime (in the runtime bytes, not the registry), by `snug_kv`, by SQLite's own `sqlite_` family
-// (a prefix rule — A-Q6), or by an earlier alias of this set. Else `2`, `3`, … are appended. So
-// the brain's `ledger__transactions` is never the reader's own table in disguise, and the attach
-// (`scratchRun`'s belt, D-PR2-9) never has to refuse a name.
+// table) is taken: by ANY object in the reader's runtime — its registry tables and views, and every
+// table, view, index or trigger its code created at runtime (`listAppObjectNames`: the same
+// `sqlite_master` the attach checks, whatever the object's type) — by `snug_kv`, by SQLite's own
+// `sqlite_` family (a prefix rule — A-Q6), or by an earlier alias of this set. Else `2`, `3`, … are
+// appended. So the brain's `ledger__transactions` is never the reader's own object in disguise,
+// and the attach (`scratchRun`'s belt, D-PR2-9) never has to refuse a name.
 //
 // `namesTable` is the lazy door's test (D-PR2-10): does this statement name this table, as a whole
 // identifier — bare, "quoted", `quoted`, [bracketed], in any case, and conservatively inside a
@@ -31,17 +34,16 @@
 // `recordRead`, before rows reach a brain.
 //
 // This module reaches the engine through `deps` and the db it is handed — it imports the pure
-// policy (ownership), the leaf facts, the limits and types only — so the data tools can import
+// policy (the still-readable re-check), the limits and types only — so the data tools can import
 // `namesTable` and `toAttach` without loading the engine (F13). No string here spells the engine's
 // internal words (copy.ts's vocabulary scan reads this file).
 
 import { ACCESS_SOURCE_MAX_BYTES, utf8ByteLength } from '@snugprotocol/protocol';
 import type { ScratchAttachTable, UserDb } from '@snugprotocol/db';
 
-import { isExpired } from './grantFacts.js';
 import type { FoundAccessGrant, LiveGrantRow } from './grants.js';
 import { ACCESS_MATERIALISE_MAX_BYTES, ACCESS_MATERIALISE_MAX_ROWS, ACCESS_MATERIALISE_MAX_SET_BYTES, ACCESS_MATERIALISE_TIMEOUT_MS } from './limits.js';
-import { ownsGrant, type AccessCaller } from './policy.js';
+import { stillReadable, type AccessCaller } from './policy.js';
 import type { scopedDump } from './scopedRead.js';
 import type { MaterialiseSkip, MaterialiseSkipReason, MaterialisedSet, MaterialisedTable } from './service.js';
 
@@ -81,14 +83,15 @@ export function aliasFor(sourceName: string, grantedTables: readonly string[], t
 }
 
 /**
- * Every name a full name must not be, lower-cased: the reader's registry objects (tables and
- * views — and its indexes and triggers too, since the attach refuses ANY same-named object), the
- * tables its code created at runtime, and `snug_kv`. The `sqlite_` family is `aliasFor`'s prefix rule.
+ * Every name a full name must not be, lower-cased: the reader's registry objects, EVERY object in
+ * its runtime bytes whatever its type (`listAppObjectNames` — a table, view, index or trigger the
+ * app's code created at runtime included, since the attach refuses ANY same-named object), and
+ * `snug_kv`. The `sqlite_` family is `aliasFor`'s prefix rule.
  */
 export async function takenNamesFor(db: UserDb, readerAppId: string): Promise<Set<string>> {
   const taken = new Set<string>([KV_TABLE]);
   for (const object of db.getAppSchema(readerAppId)?.objects ?? []) taken.add(object.name.toLowerCase());
-  for (const table of (await db.describeAppData(readerAppId)).tables) taken.add(table.name.toLowerCase());
+  for (const name of await db.listAppObjectNames(readerAppId)) taken.add(name.toLowerCase());
   return taken;
 }
 
@@ -101,6 +104,8 @@ const rowBytes = (row: readonly unknown[]): number => utf8ByteLength(JSON.string
  * whole call for anything else.
  */
 export async function materialiseGrants(db: UserDb, caller: AccessCaller, rows: readonly LiveGrantRow[], deps: MaterialiseDeps): Promise<MaterialisedSet> {
+  // Nothing admitted: nothing to alias against — the reader's runtime is not flushed or exported (M-4).
+  if (rows.length === 0) return { tables: [], skipped: [], readOnlyTables: [] };
   const taken = await takenNamesFor(db, caller.appId);
   const tables: MaterialisedTable[] = [];
   const skipped: MaterialiseSkip[] = [];
@@ -116,10 +121,7 @@ export async function materialiseGrants(db: UserDb, caller: AccessCaller, rows: 
       continue;
     }
     /** Still this caller's, active and unexpired — asked when the dump dequeues and again when it answers. */
-    const stillOwned = (): boolean => {
-      const current = deps.find(grant.id);
-      return current !== undefined && ownsGrant(caller, current) && current.grant.status === 'active' && !isExpired(current.grant, deps.now());
-    };
+    const stillOwned = (): boolean => stillReadable(deps.find, caller, grant.id, deps.now()) !== undefined;
     let outcome: Awaited<ReturnType<typeof scopedDump>>;
     try {
       outcome = await deps.dump({

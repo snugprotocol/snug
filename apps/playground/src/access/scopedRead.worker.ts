@@ -17,9 +17,12 @@
 //     guards and the caps all live there, in one tested function;
 //   - `{ id, kind: 'dump', bytes, scope, caps }` — a DUMP, answered with the PURE `scopedScratchDump`'s
 //     outcome: the same copy, then only the recorded columns of each granted table under the caps.
-// The dump's guard runs FIRST: a read guard keys on `statement`, and a dump carries none, so a dump
-// checked second would be IGNORED — silence, the host's clock, the worker retired for nothing. A
-// dump job that fails its own guard is answered `failed` for its id, never silence (F10).
+// `kind` is THE discriminant (Gate-5 M-6): a read job carries none — a read guard that admitted a
+// stray `kind` would let a statement-shaped job reach the dump with the read's caps — so a job with
+// any `kind` but 'dump' is no read job and is ignored like any malformed read (silence, the read's
+// rule). The dump's guard runs FIRST: a read guard keys on `statement`, and a dump carries none, so
+// a dump checked second would be IGNORED — silence, the host's clock, the worker retired for
+// nothing. A dump job that fails its own guard is answered `failed` for its id, never silence (F10).
 //
 // The responder is exported so the unit suites run THIS code path inline (vitest has no
 // Worker); the message listener is installed only inside a real worker scope.
@@ -73,6 +76,7 @@ function isJob(message: unknown): message is ScopedReadJob {
   return (
     isRecord(message) &&
     typeof message.id === 'number' &&
+    message.kind === undefined &&
     message.bytes instanceof Uint8Array &&
     isRecord(message.scope) &&
     isRecord(message.statement) &&
@@ -127,7 +131,7 @@ export function createScopedReadResponder(load: EngineLoader = loadEngine): (mes
       return { id: job.id, result: failed(ENGINE_FAILED_MESSAGE), engineFailed: true };
     }
     try {
-      if ('kind' in job) return { id: job.id, result: scopedScratchDump(SQL, job.bytes, job.scope, job.caps) };
+      if (job.kind === 'dump') return { id: job.id, result: scopedScratchDump(SQL, job.bytes, job.scope, job.caps) };
       return { id: job.id, result: scopedScratchRead(SQL, job.bytes, job.scope, job.statement, job.caps) };
     } catch (err) {
       return { id: job.id, result: failed(err instanceof Error ? err.message : String(err)) };

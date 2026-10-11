@@ -40,7 +40,9 @@
  * table by name (`CHAT_DOOR.readOnly(source)`), BEFORE the DML class check and before any dry
  * run — the copy of another app's data is read-only here — and its dry run never attaches, nor
  * does `executeApprovedWrite`'s: a shared name that slipped past is "no such table" on a copy
- * of the real database, which holds no alias table.
+ * of the real database, which holds no alias table. A source's name in either answer is folded
+ * to ONE line first (`oneLine`, the renderer's own rule — Gate-5 SEC-1): another app's name is
+ * its author's text and never adds a line to what the brain reads.
  */
 
 import type { AgentTool } from '@snugprotocol/adapters';
@@ -51,6 +53,7 @@ import { FRAME_TYPES, PROTOCOL_VERSION } from '@snugprotocol/protocol';
 import { CHAT_DOOR } from '../access/copy.js';
 import { namesTable, toAttach } from '../access/materialise.js';
 import type { MaterialisedSet, MaterialisedTable, RecordReadOutcome } from '../access/service.js';
+import { oneLine } from './sharedDdl.js';
 
 /** Instance id for host-issued approved writes — never an app's own instance. */
 const APPROVED_WRITE_INSTANCE = 'host-approved-write';
@@ -185,7 +188,7 @@ export function buildDataTools(options: BuildDataToolsOptions): AgentTool[] {
           const grantIds = [...new Set(named.map((table) => table.grantId))];
           const outcome = await shared.recordRead(grantIds, input.sql);
           if (outcome.refused.length > 0) {
-            return `Error: ${[...new Set(outcome.refused.map((skip) => CHAT_DOOR.ended(skip.sourceName)))].join('\n')}`;
+            return `Error: ${[...new Set(outcome.refused.map((skip) => CHAT_DOOR.ended(oneLine(skip.sourceName))))].join('\n')}`;
           }
           attach = toAttach(shared.set, outcome.recorded);
         }
@@ -227,7 +230,7 @@ export function buildDataTools(options: BuildDataToolsOptions): AgentTool[] {
        * the approved SQL exactly the SQL the model proposed.
        */
       const sharedNamed = statements.map(namedBy).find((named) => named.length > 0)?.[0];
-      if (sharedNamed !== undefined) return `Error: ${CHAT_DOOR.readOnly(sharedNamed.sourceName)}`;
+      if (sharedNamed !== undefined) return `Error: ${CHAT_DOOR.readOnly(oneLine(sharedNamed.sourceName))}`;
       /**
        * DML ONLY, checked BEFORE the dry run (R-B1).
        *

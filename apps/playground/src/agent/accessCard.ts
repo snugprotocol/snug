@@ -12,10 +12,11 @@
  * the one writer. What the card stores is therefore the AI's ask — its purpose and hints,
  * re-parsed through the protocol's display rule and hints schema on EVERY read — and how the
  * user answered it: `allowed` (with the source, tables and duration the strip's line names),
- * `not-now`, `declined`, or a card that cannot be acted on (`dismissed`, `failed`). A row that
- * drifted — a control character or a credential in the purpose, a hint the schema refuses, a
- * missing address, an unknown resolution — renders NO card rather than a card that misstates
- * what the user would be reviewing.
+ * `not-now`, `declined`, or `failed` (the sheet could not act). A dismissal is NOT a resolution
+ * (B-Q3: the yield rule closes the sheet, the card keeps its acts and writes nothing), so a stored
+ * `dismissed` is a drifted row like any other. A row that drifted — a control character or a
+ * credential in the purpose, a hint the schema refuses, a missing address, an unknown resolution
+ * — renders NO card rather than a card that misstates what the user would be reviewing.
  *
  * THE THREAD'S APP IS THE ADDRESS (S10). The card carries the app it was staged for, but the
  * review always asks for the THREAD's pinned app; `readAccessCardRow` drops a card whose
@@ -33,7 +34,6 @@ export type AccessCardResolution =
   | { kind: 'allowed'; sourceName: string; tables: string[]; duration: AccessDuration }
   | { kind: 'not-now' }
   | { kind: 'declined' }
-  | { kind: 'dismissed' }
   | { kind: 'failed' };
 
 export interface AccessCardState {
@@ -53,7 +53,7 @@ export interface AccessCardState {
 /** The persisted shape — the row's `meta.access`; the row id is the row's own address and is never written into it. */
 export type PersistedAccessCard = Omit<AccessCardState, 'messageRowId'>;
 
-const RESOLUTION_KINDS: ReadonlySet<string> = new Set<AccessCardResolution['kind']>(['allowed', 'not-now', 'declined', 'dismissed', 'failed']);
+const RESOLUTION_KINDS: ReadonlySet<string> = new Set<AccessCardResolution['kind']>(['allowed', 'not-now', 'declined', 'failed']);
 const DURATIONS: ReadonlySet<string> = new Set<string>(ACCESS_DURATIONS);
 
 /** A fresh staged card for a proposal the hook accepted — for the THREAD's app. */

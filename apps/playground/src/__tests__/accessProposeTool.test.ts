@@ -220,6 +220,26 @@ describe('nowhere to stage, no app', () => {
     expect(staged).toEqual([]);
   });
 
+  // SEC-2 / DOORS-1 (PR-2 Gate-5 fold): the builder set offers the tool without knowing the
+  // target, so ownership is the tool's own rung at the CALL — an unowned reader (a starter or a
+  // shared preview) may not read in chat what its frame may not (S8), even when it IS installed.
+  for (const [label, unownedId] of [
+    ['a starter', 'starter--budget'],
+    ['a shared preview', `shared--${'ab'.repeat(32)}`],
+  ] as const) {
+    it(`${label} id that IS installed answers NOT staged (a preview cannot read other apps) and onProposal is never called`, async () => {
+      db.installApp({ appId: unownedId, displayName: 'Preview', html: HTML });
+      expect(db.getApp(unownedId)).toBeDefined();
+      let called = 0;
+      const out = await ask(tool({ target: unownedId, onProposal: () => { called += 1; return true; } }), { purpose: PURPOSE, hints: HINTS });
+      expect(out).toMatch(/^NOT staged: this app is a preview/);
+      expect(out).not.toMatch(/^Suggested/);
+      expect(called).toBe(0);
+      expect(staged).toEqual([]);
+      expect(pendingAccessStore.get()[unownedId]).toBeUndefined();
+    });
+  }
+
   it('the tool never parks an ask or writes a grant itself — staging is the hook’s; the user decides on the card', async () => {
     await ask(tool(), { purpose: PURPOSE, hints: HINTS });
     expect(pendingAccessStore.get()[appId]).toBeUndefined();
