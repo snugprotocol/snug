@@ -853,6 +853,27 @@ describe('the undo journal — putAccessUndo / listAccessUndo / listAllAccessUnd
     expect(utf8Bytes(JSON.stringify(rawUndoRow(LEDGER)))).toBeLessThanOrEqual(UNDO_MAX_ROW_BYTES);
   });
 
+  // Gate-5 SEC-2: the put rebuilds the row from the STRICT read — a loosely-valid element (an id, a
+  // reader, two instants) that the strict parse refuses can neither hold a reader's seat nor stay in the row.
+  it('a planted LOOSE entry (readable ids and instants, strictly unreadable) is dropped by the next put — never kept, never counted toward the reader’s twenty', () => {
+    const loose = (): Record<string, unknown> => ({ ...undoEntry(), steps: [] }); // no step: the strict parse refuses it
+    const looseOne = loose();
+    const strict = Array.from({ length: UNDO_MAX_ENTRIES - 1 }, () => undoEntry());
+    db.setSetting(undoKey(LEDGER), [looseOne, ...strict]); // planted: 19 strict + 1 loose for Budget
+    expect(undo().listAccessUndo(LEDGER, BUDGET)).toHaveLength(UNDO_MAX_ENTRIES - 1);
+    const next = undoEntry();
+    expect(undo().putAccessUndo(LEDGER, next), 'the loose element holds no seat: 19 + this one = 20').toBe('ok');
+    expect(idsIn(rawUndoRow(LEDGER))).not.toContain(looseOne.id);
+    expect(idsIn(rawUndoRow(LEDGER))).toEqual([next.id, ...strict.map((e) => e.id)]);
+    expect(undo().listAccessUndo(LEDGER, BUDGET)).toHaveLength(UNDO_MAX_ENTRIES);
+
+    const twenty = Array.from({ length: UNDO_MAX_ENTRIES }, loose);
+    db.setSetting(undoKey(PANTRY), twenty); // planted: 20 loose for Budget on another target
+    const only = undoEntry();
+    expect(undo().putAccessUndo(PANTRY, only), 'twenty loose elements count for nothing').toBe('ok');
+    expect(idsIn(rawUndoRow(PANTRY))).toEqual([only.id]);
+  });
+
   it('a row or an entry that does not parse is skipped on read — never a throw', () => {
     const good = undoEntry();
     db.setSetting(undoKey(LEDGER), [good, { id: 'junk' }, { ...undoEntry(), sql: 'DELETE FROM t' }, 'nonsense']);

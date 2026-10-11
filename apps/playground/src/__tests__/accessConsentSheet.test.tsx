@@ -946,6 +946,24 @@ describe('PR-3 — *more options…*: the write toggle and the options row, CLOS
     expect(shownBy('access-refresh')).toBe(false);
   });
 
+  // Gate-5 UI-2: a screen reader hears what opening the disclosure does before it opens it.
+  it('the *more options…* summary is described (aria-describedby) by a visually-hidden span whose text is CONSENT_SHEET.moreOptionsHint — outside the closed disclosure', () => {
+    openSheet();
+    expect(CONSENT_SHEET.moreOptionsHint).toBe('also shows a change toggle on each ticked table');
+    const more = q('access-options-more')!;
+    const summary = more.querySelector('summary')!;
+    expect(summary.textContent).toBe(SHEET3.moreOptions);
+    const describedBy = summary.getAttribute('aria-describedby');
+    expect(describedBy).toBeTruthy();
+    const hint = document.getElementById(describedBy!);
+    expect(hint, 'the id names a real element').not.toBeNull();
+    expect(hint!.tagName).toBe('SPAN');
+    expect(hint!.classList.contains('visually-hidden')).toBe(true);
+    expect(hint!.textContent).toBe(CONSENT_SHEET.moreOptionsHint);
+    expect(more.contains(hint), 'not hidden inside the closed details').toBe(false);
+    expect(document.querySelectorAll(`[id="${describedBy}"]`), 'the id is unique').toHaveLength(1);
+  });
+
   it('opened: the write toggle on the table row (OFF, *can also change rows*), and the options row naming the source with its hints', async () => {
     openSheet();
     await openDisclosure('access-options-more');

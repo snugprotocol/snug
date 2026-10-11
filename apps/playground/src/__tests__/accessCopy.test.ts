@@ -826,8 +826,9 @@ describe('PR-3 — the access sheet: the write badge, what it changed, the undo 
     expect(V3.ACCESS_SHEET.undoArm('transactions', 3, 'Ledger')).toBe(
       'put 3 rows in transactions back as they were before this change? (if Ledger changed them since, nothing happens)',
     );
+    // Gate-5 UI-1: the question agrees in number with its count — one row is put back "as it was" and "changed it".
     expect(V3.ACCESS_SHEET.undoArm('transactions', 1, 'Ledger')).toBe(
-      'put 1 row in transactions back as they were before this change? (if Ledger changed them since, nothing happens)',
+      'put 1 row in transactions back as it was before this change? (if Ledger changed it since, nothing happens)',
     );
     expect(V3.ACCESS_SHEET.undoYes).toBe('yes, undo');
     expect(V3.ACCESS_SHEET.undoKeep).toBe('keep');

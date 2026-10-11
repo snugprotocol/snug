@@ -38,7 +38,7 @@
 //  - key the discover cache on the app set instead of the reader → the cache row reds;
 //  - count writes in their own minute → the shared-minute row reds.
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
 
 import type { UserDb } from '@snugprotocol/db';
 import type { AccessHandlerResult } from '@snugprotocol/runner';
@@ -66,7 +66,11 @@ import {
 
 import { createAccessHandlerFor } from '../access/accessHandler.js';
 import { NO_ACCESS_ASKS_KEY, pendingAccessStore, type ConsentDecision, type PendingAccessRequest } from '../access/consent.js';
-import { startUserAsk } from '../access/userAsk.js';
+import { renewalSeedOf, sheetSeedOf, startUserAsk } from '../access/userAsk.js';
+// Gate-5 pins: the module namespaces, so a spy sees the service's own calls (SEC-3's gather, ENG-2's verdict).
+import * as consent from '../access/consent.js';
+import * as policy from '../access/policy.js';
+import type { AccessAct } from '../access/policy.js';
 import { ACCESS_APP_MESSAGES, ACCESS_SHEET, type WriteRefusalRule } from '../access/copy.js';
 import { __setAccessDepsForTests, accessRevisionStore, createGrantFromDecision, grantsForApp, resetAccessSession, type AnyAccessGrant } from '../access/grants.js';
 import { revokeAccess, type CreateGrantInput, type TableChoice } from '../access/grants.js';
@@ -1531,5 +1535,116 @@ describe('PR-3 discover — a class, never a list; nothing recorded; cached per 
       clearTouchedGeneration(budget, 0);
     }
     expect(gather).not.toHaveBeenCalled();
+  });
+});
+
+// =========================================================================================
+// The Gate-5 folds' pins (SEC-3, ENG-1, ENG-2)
+// =========================================================================================
+
+describe('Gate-5 SEC-3 — discover parks its in-flight gather: a burst from one reader is ONE walk of the library', () => {
+  const BURST = 8;
+  const burst = (handler: ReturnType<typeof createAccessHandlerFor>): Promise<AccessHandlerResult[]> =>
+    Promise.all(Array.from({ length: BURST }, () => handler.handle(budget, discoverFrame())));
+  const classOf = (candidates: 'none' | 'one' | 'several'): AccessHandlerResult[] => Array.from({ length: BURST }, () => ({ ok: true, op: 'discover', candidates }));
+
+  it('eight concurrent discovers on an EMPTY cache run ONE collectSources — and all eight answer the same class', async () => {
+    const gather = vi.spyOn(consent, 'collectSources');
+    const handler = createAccessHandlerFor(budget, { attended: true, generation: 0 });
+    expect(await burst(handler)).toEqual(classOf('several'));
+    expect(gather).toHaveBeenCalledTimes(1);
+    expect(gather).toHaveBeenCalledWith(db, budget, { tables: ['transactions'], words: ['spending'] });
+  });
+
+  it('with a STALE entry (the minute is over) eight concurrent discovers again run ONE gather — every caller joins the one parked after the stale hit (64fcc55) — and answer its fresh class', async () => {
+    const gather = vi.spyOn(consent, 'collectSources');
+    const handler = createAccessHandlerFor(budget, { attended: true, generation: 0 });
+    expect(await handler.handle(budget, discoverFrame())).toEqual({ ok: true, op: 'discover', candidates: 'several' });
+    expect(gather).toHaveBeenCalledTimes(1);
+    clock.now += ACCESS_DISCOVER_CACHE_MS;
+    await db.deleteApp(pantry); // the fresh class differs from the stale one
+    expect(await burst(handler)).toEqual(classOf('one'));
+    expect(gather, 'one gather for the stale burst').toHaveBeenCalledTimes(2);
+    // …and the fresh entry serves the next ask within its minute.
+    clock.now += ACCESS_DISCOVER_CACHE_MS - 1;
+    expect(await handler.handle(budget, discoverFrame())).toEqual({ ok: true, op: 'discover', candidates: 'one' });
+    expect(gather).toHaveBeenCalledTimes(2);
+  });
+
+  it('a gather that rejects leaves NO entry: every caller parked on it fails with it, and the next call gathers again', async () => {
+    const gather = vi.spyOn(consent, 'collectSources').mockRejectedValueOnce(new Error('the library could not be read'));
+    const handler = createAccessHandlerFor(budget, { attended: true, generation: 0 });
+    const failed = await burst(handler);
+    for (const answer of failed) expect(answer).toMatchObject({ ok: false, code: 'HOST_ERROR' });
+    expect(gather, 'the failed gather was shared, not repeated').toHaveBeenCalledTimes(1);
+    expect(await handler.handle(budget, discoverFrame())).toEqual({ ok: true, op: 'discover', candidates: 'several' });
+    expect(gather, 'nothing cached the failure — the next call gathered').toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('Gate-5 ENG-1 — an APP’s renewal ask seeds the sheet with the renewed scope (renewalSeedOf, the one rule for both doors)', () => {
+  it('a WIDENED grant: its tables (columns, withheld, write), kv and refresh travel to the sheet — the duration stays session and the away box off (an app never chooses them)', async () => {
+    const ranked = await collectSources(db, budget);
+    const source = [...ranked.matched, ...ranked.rest].find((candidate) => candidate.appId === ledger)!;
+    const old = await createGrantFromDecision(db, {
+      readerAppId: budget,
+      source,
+      tables: [{ name: 'transactions', withheld: ['category'], write: true }, 'accounts'],
+      duration: 'week',
+      unattended: true,
+      kv: true,
+      refresh: true,
+      purpose: 'to show spending by category',
+      provenance: 'app',
+      generation: 0,
+      now: clock.now,
+    });
+    const handler = createAccessHandlerFor(budget, { attended: true, generation: 0 });
+    const answer = handler.handle(budget, askFrame({ renew: old.id }));
+    const pending = await pendingFor(budget);
+    expect(pending.renew).toBe(old.id);
+    const seed = sheetSeedOf(pending);
+    expect(seed).toEqual({ duration: 'session', unattended: false, tables: old.scope.tables, kv: true, refresh: true });
+    expect(seed?.tables?.find((table) => table.name === 'transactions')).toMatchObject({ withheld: ['category'], write: true });
+    expect(seed, 'the same rule the user’s allow-again runs').toEqual(renewalSeedOf(old, 'session', false));
+    void pending.resolve({ kind: 'not-now' });
+    await answer;
+  });
+
+  it('a plain-read grant seeds NO tables and only the session/away defaults — the sheet starts exactly where it would have without a seed', async () => {
+    const old = await grantFor({ duration: 'week' });
+    const handler = createAccessHandlerFor(budget, { attended: true, generation: 0 });
+    const answer = handler.handle(budget, askFrame({ renew: old.id }));
+    const pending = await pendingFor(budget);
+    expect(sheetSeedOf(pending)).toEqual({ duration: 'session', unattended: false });
+    for (const seat of ['tables', 'kv', 'refresh']) expect(sheetSeedOf(pending), seat).not.toHaveProperty(seat);
+    void pending.resolve({ kind: 'not-now' });
+    await answer;
+  });
+});
+
+describe('Gate-5 ENG-2 — a write whose table cannot be named is refused `statement` BEFORE the verdict', () => {
+  it('a statement naming no table answers writeRefused(statement) — the policy is never asked (even for a grant id the reader does not hold); the passing twin is judged', async () => {
+    const grant = await writeGrantFor({ tables: [WRITE_TRANSACTIONS] });
+    const verdicts = vi.spyOn(policy, 'authorise');
+    const handler = createAccessHandlerFor(budget, { attended: true, generation: 0 });
+    const writeVerdicts = () => verdicts.mock.calls.filter((call) => call[2].kind === 'write');
+    for (const sql of ['SELECT * FROM transactions', "WITH t AS (SELECT 1) UPDATE transactions SET category = 'a' WHERE id = 1", 'PRAGMA foreign_keys = 0', 'DROP TABLE transactions']) {
+      for (const grantId of [grant.id, UNKNOWN_ID]) {
+        expect(await handler.handle(budget, writeFrame(grantId, sql)), `${sql} · ${grantId}`).toEqual(refusal('ACCESS_WRITE_REFUSED', ACCESS_APP_MESSAGES.writeRefused('statement'), false));
+      }
+    }
+    expect(writeVerdicts(), 'no write verdict was asked').toEqual([]);
+    expect(wroteLines(ledger)).toEqual([]);
+    // The passing twin: a statement that names its table is judged — an unknown grant is the policy's not-granted.
+    expect(await handler.handle(budget, writeFrame(UNKNOWN_ID, "UPDATE transactions SET category = 'a' WHERE id = 1"))).toMatchObject({ ok: false, code: 'ACCESS_NOT_GRANTED' });
+    expect(writeVerdicts().map((call) => call[2])).toEqual([{ kind: 'write', grantId: UNKNOWN_ID, table: 'transactions' }]);
+  });
+
+  it('the policy’s write act REQUIRES its table (a type-level pin)', () => {
+    expectTypeOf<Extract<AccessAct, { kind: 'write' }>>().toEqualTypeOf<{ kind: 'write'; grantId: string; table: string }>();
+    // @ts-expect-error a write act without its table does not type-check
+    const missing: Extract<AccessAct, { kind: 'write' }> = { kind: 'write', grantId: UNKNOWN_ID };
+    expect(missing.kind).toBe('write');
   });
 });

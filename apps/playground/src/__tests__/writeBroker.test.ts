@@ -15,7 +15,7 @@
 // dequeue and again after the plan answers; the reader's live-entry cap; the seat
 // (`db.driver.brokeredWrite`); the journal entry; the `wrote` line; the source's read caches
 // cleared; the doorbells; the answer. OWN MODE is `applyApprovedWrite` (the approved write of an
-// app's OWN data): the seat's `{ own, caps, expectChanges }` variant (no capture), no journal, no line,
+// app's OWN data): the seat's `{ own, expectChanges }` variant (no caps — Gate-5 W-2 — no capture), no journal, no line,
 // `data-changed` to its own frame, today's outcome shapes. UNDO is the user's act from the source's
 // history: rebuilt from the journal's ROWS (never statement text), reversed, guarded by the values
 // the write left, every live reader rung — the writer too.
@@ -29,14 +29,17 @@
 //  - clear the read caches after the doorbells → the order row's cache assertion reds;
 //  - ring with `except: readerAppId` on an undo → the undo's every-reader row reds;
 //  - apply the undo steps in forward order → the reverse-order row reds;
-//  - splice a step's value into the statement text → the bound-parameter row reds.
+//  - splice a step's value into the statement text → the bound-parameter row reds (its builder half lives in
+//    packages/db's brokered-write.test.ts since the Gate-5 W-5 fold).
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { buildUndoStatement, type UserDb } from '@snugprotocol/db';
+import type { UserDb } from '@snugprotocol/db';
 import type { AccessHandlerResult } from '@snugprotocol/runner';
 import {
   ACCESS_SOURCE_CHANGED_EVENT,
+  ACCESS_UNDO_MAX_BYTES,
+  ACCESS_WRITE_MAX_ROWS,
   DATA_CHANGED_EVENT,
   FRAME_TYPES,
   PROTOCOL_VERSION,
@@ -48,7 +51,7 @@ import {
 import { createAccessHandlerFor } from '../access/accessHandler.js';
 import { NO_ACCESS_ASKS_KEY, collectSources } from '../access/consent.js';
 import { ACCESS_APP_MESSAGES, ACCESS_SHEET, type UndoFailureReason } from '../access/copy.js';
-import { __setAccessDepsForTests, createGrantFromDecision, resetAccessSession, revokeAccess, type AnyAccessGrant, type CreateGrantInput } from '../access/grants.js';
+import { __setAccessDepsForTests, accessRevisionStore, createGrantFromDecision, resetAccessSession, revokeAccess, type AnyAccessGrant, type CreateGrantInput } from '../access/grants.js';
 import { __scopedReadCachedGrantsForTests, configureScopedRead, resetScopedReadForTests, type WorkerLike } from '../access/scopedRead.js';
 import { createScopedReadResponder } from '../access/scopedRead.worker.js';
 import { executeApprovedWrite, type ExecuteApprovedWriteOutcome, type PendingWriteProposal } from '../agent/dataTools.js';
@@ -73,6 +76,8 @@ const writeBroker = (): Promise<WriteBrokerModule> => import(/* @vite-ignore */ 
 // =========================================================================================
 
 const T0 = Date.parse('2026-10-11T09:00:00.000Z');
+/** writeBroker.ts's module-private ACCESS_UNDO_ENTRY_RESERVE_BYTES (Gate-5 SEC-1): the entry's host-written seats around `steps`. */
+const UNDO_ENTRY_RESERVE_BYTES = 1024;
 const DAY = 86_400_000;
 const iso = (at: number): string => new Date(at).toISOString();
 
@@ -310,7 +315,13 @@ describe('the strict path — stillWritable twice, the cap, the seat, the entry,
     const wroteCall = lineSpy.mock.calls.findIndex((call) => (call[1] as { kind?: string }).kind === 'wrote');
     expect(seatSpy).toHaveBeenCalledTimes(1);
     expect(seatSpy.mock.calls[0]![0]).toBe(journal);
-    expect(seatSpy.mock.calls[0]![1], 'the plan, the caps, the previewed count; undo required, captured').toMatchObject({ caps: { maxChanges: 200, maxUndoBytes: 64 * 1024 }, expectChanges: [1], requireUndo: true, capture: true });
+    // Gate-5 SEC-1: the undo bytes are the entry's cap LESS the 1 KiB reserve for the entry's host-written seats around `steps`.
+    expect(seatSpy.mock.calls[0]![1], 'the plan, the caps, the previewed count; undo required, captured').toMatchObject({
+      caps: { maxChanges: ACCESS_WRITE_MAX_ROWS, maxUndoBytes: ACCESS_UNDO_MAX_BYTES - UNDO_ENTRY_RESERVE_BYTES },
+      expectChanges: [1],
+      requireUndo: true,
+      capture: true,
+    });
     expect(entrySpy).toHaveBeenCalledTimes(1);
     expect(wroteCall).toBeGreaterThanOrEqual(0);
     expect(ring).toHaveBeenCalled();
@@ -349,7 +360,7 @@ describe('the strict path — stillWritable twice, the cap, the seat, the entry,
 describe('own mode — applyApprovedWrite: the app’s own approved write through the same seat, never journaled (D-PR3-8; AC20)', () => {
   const proposal = (statements: string[], previewed: number[]): PendingWriteProposal => ({ appId: journal, statements, params: statements.map(() => []), summary: 'a change the user approved', previewed });
 
-  it('applies atomically through the seat’s OWN variant ({ own, caps, expectChanges: the previewed counts } — no capture) — no BEGIN through the frame seat, no journal entry, no line — answers today’s executed counts and rings data-changed to its own frame', async () => {
+  it('applies atomically through the seat’s OWN variant ({ own, expectChanges: the previewed counts } — no caps, no capture) — no BEGIN through the frame seat, no journal entry, no line — answers today’s executed counts and rings data-changed to its own frame', async () => {
     const { applyApprovedWrite } = await writeBroker();
     listen(journal);
     const seatSpy = vi.spyOn(seat(), 'brokeredWrite');
@@ -358,14 +369,14 @@ describe('own mode — applyApprovedWrite: the app’s own approved write throug
     expect(outcome).toEqual({ ok: true, executed: [1] });
     expect(seatSpy).toHaveBeenCalledTimes(1);
     expect(seatSpy.mock.calls[0]![0]).toBe(journal);
-    // The seat's OWN variant (D-PR3-8, E1-Q12): the approved statements with their params, the caps, the previewed counts as the halt — no plans, no capture, no undo asked.
+    // The seat's OWN variant (D-PR3-8, E1-Q12): the approved statements with their params, the previewed counts as the halt — no plans, no capture, no undo asked,
+    // and no caps (Gate-5 W-2: the approved counts are own mode's only bound).
     const input = seatSpy.mock.calls[0]![1];
-    expect(input).toMatchObject({
+    expect(input).toEqual({
       own: [{ sql: "UPDATE entries SET amount = 9 WHERE title = 'tea'", params: [] }],
-      caps: { maxChanges: expect.any(Number), maxUndoBytes: expect.any(Number) },
       expectChanges: [1],
     });
-    for (const strictSeat of ['plans', 'undo', 'requireUndo', 'capture']) expect(input, strictSeat).not.toHaveProperty(strictSeat);
+    for (const strictSeat of ['plans', 'undo', 'requireUndo', 'capture', 'caps']) expect(input, strictSeat).not.toHaveProperty(strictSeat);
     const transactionControl = handleSpy.mock.calls.filter((call) => /^\s*(BEGIN|COMMIT|ROLLBACK|END)\b/i.test(String((call[1] as { sql?: unknown }).sql ?? '')));
     expect(transactionControl, 'no awaited BEGIN/COMMIT through the frame seat any more').toEqual([]);
     expect(await rowsOf(journal, "SELECT amount FROM entries WHERE title = 'tea'")).toEqual([[9]]);
@@ -389,8 +400,9 @@ describe('own mode — applyApprovedWrite: the app’s own approved write throug
     const seatSpy = vi.spyOn(seat(), 'brokeredWrite');
     expect(await executeApprovedWrite(db, proposal(["UPDATE entries SET amount = 9 WHERE title = 'tea'"], [1]))).toEqual({ ok: true, executed: [1] });
     expect(seatSpy).toHaveBeenCalledTimes(1);
-    expect(seatSpy.mock.calls[0]![1]).toMatchObject({ own: [{ sql: "UPDATE entries SET amount = 9 WHERE title = 'tea'", params: [] }], caps: expect.any(Object), expectChanges: [1] });
+    expect(seatSpy.mock.calls[0]![1]).toEqual({ own: [{ sql: "UPDATE entries SET amount = 9 WHERE title = 'tea'", params: [] }], expectChanges: [1] });
     expect(seatSpy.mock.calls[0]![1]).not.toHaveProperty('plans');
+    expect(seatSpy.mock.calls[0]![1], 'Gate-5 W-2: own mode carries no caps').not.toHaveProperty('caps');
   });
 });
 
@@ -493,18 +505,19 @@ describe('undoBrokeredWrite — the user’s act from the source’s history, re
     expect(undoJournal().listAccessUndo(journal), 'none of them is live any more').toEqual([]);
   });
 
-  it('a planted entry’s values ride ONLY as bound parameters: the inverse is built from the structure, its text carries no value — a value shaped like SQL is matched as data, and nothing else runs', async () => {
+  // The builder half of this pin (the built text carries no value, the params carry it) moved to
+  // packages/db's brokered-write.test.ts with the Gate-5 W-5 fold: `buildUndoStatement` is reachable
+  // only through the driver's seat now. Here the seat is handed the STRUCTURE — the value as data.
+  it('a planted entry’s values ride ONLY as bound parameters: the seat is handed the structure, never statement text — a value shaped like SQL is matched as data, and nothing else runs', async () => {
     const { undoBrokeredWrite } = await writeBroker();
     const mine = await grantOn(budget, journal, ['entries'], true);
     const evil = "x'; DROP TABLE entries; --";
     const step: AccessUndoStep = { table: 'entries', op: 'insert', columns: ['title'], rows: [{ rowid: 1, after: [evil] }] };
-    const built = buildUndoStatement(step, step.rows[0]!);
-    expect(built.sql).not.toContain(evil);
-    expect(built.sql).not.toMatch(/DROP/i);
-    expect(built.params).toContain(evil);
     const entry = plantedEntry(mine.id, [step]);
     expect(undoJournal().putAccessUndo(journal, entry)).toBe('ok');
+    const seatSpy = vi.spyOn(seat(), 'brokeredWrite');
     expect(await undoBrokeredWrite(db, journal, entry.id, { via: 'user' })).toMatchObject({ ok: false, reason: 'changed' });
+    expect(seatSpy.mock.calls[0]![1], 'the undo variant carries the rows as data — no sql seat, no caps (W-2)').toEqual({ undo: [step] });
     expect(await rowsOf(journal, ENTRIES), 'the table and its rows are intact').toEqual([
       [1, 'tea', 3],
       [2, 'cake', 5],
@@ -535,5 +548,153 @@ describe('clearSourceReadCaches — every grant whose source is the target, and 
     expect([...__scopedReadCachedGrantsForTests()].sort()).toEqual([mine.id, theirs.id, other.id].sort());
     clearSourceReadCaches(db, journal);
     expect(__scopedReadCachedGrantsForTests()).toEqual([other.id]);
+  });
+});
+
+// =========================================================================================
+// The Gate-5 folds' pins (SEC-1, SEC-4, W-1, ENG-4)
+// =========================================================================================
+
+describe('Gate-5 SEC-1 — the undo cap is measured on the WHOLE entry: the steps run under the cap less the entry’s reserve', () => {
+  /** A DELETE of `notes (id, body)` captures every column of every row — its journal bytes are the JSON of this step (the apply's own measure). */
+  const ROWS = 16;
+  const PROSE = 'note '.repeat(1000);
+  const bodyOf = (length: number): string => PROSE.slice(0, length);
+  const deleteStepOf = (length: number): AccessUndoStep => ({
+    table: 'notes',
+    op: 'delete',
+    columns: ['id', 'body'],
+    rows: Array.from({ length: ROWS }, (_, i) => ({ rowid: i + 1, before: [i + 1, bodyOf(length)] })),
+  });
+  const bytesOf = (value: unknown): number => new TextEncoder().encode(JSON.stringify(value)).length;
+  /** The longest body (each ≤ the journal's 4096-character cell) whose step's journal bytes stay at or under `maxBytes`. */
+  function bodyLengthUnder(maxBytes: number): number {
+    for (let length = 4096; length > 0; length -= 1) if (bytesOf([deleteStepOf(length)]) <= maxBytes) return length;
+    throw new Error('no body fits');
+  }
+  async function seedNotes(length: number): Promise<void> {
+    await db.applyAppDdl(journal, ['CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT)']);
+    const values = Array.from({ length: ROWS }, (_, i) => `(${i + 1}, '${bodyOf(length)}')`).join(', ');
+    await exec(journal, `INSERT INTO notes (id, body) VALUES ${values}`);
+  }
+  const DELETE_ALL = `DELETE FROM notes WHERE id <= ${ROWS}`;
+
+  it('steps that fit ACCESS_UNDO_MAX_BYTES but not the entry around them (inside the 1 KiB reserve) are refused too-large at the DRY RUN — the seat never reached, nothing changed, no entry, no line', async () => {
+    const length = bodyLengthUnder(ACCESS_UNDO_MAX_BYTES);
+    const bytes = bytesOf([deleteStepOf(length)]);
+    expect(bytes, 'the steps alone fit the schema’s cap').toBeLessThanOrEqual(ACCESS_UNDO_MAX_BYTES);
+    expect(bytes, 'and sit inside the reserve the entry’s seats need').toBeGreaterThan(ACCESS_UNDO_MAX_BYTES - UNDO_ENTRY_RESERVE_BYTES);
+    await seedNotes(length);
+    const mine = await grantOn(budget, journal, ['notes'], true);
+    const seatSpy = vi.spyOn(seat(), 'brokeredWrite');
+    const entrySpy = vi.spyOn(undoJournal(), 'putAccessUndo');
+    const { answer, undoId } = await writeAsBudget(mine.id, DELETE_ALL);
+    expect(answer).toEqual(refusal('ACCESS_WRITE_REFUSED', ACCESS_APP_MESSAGES.writeRefused('too-large'), false));
+    expect(posted.map(kindOf), 'the plan ran — and answered').toEqual(['plan-write']);
+    expect(seatSpy, 'refused before any live handle').not.toHaveBeenCalled();
+    expect(entrySpy).not.toHaveBeenCalled();
+    expect(undoId).toBeUndefined();
+    expect(linesOf(journal).filter((entry) => entry.kind === 'wrote')).toEqual([]);
+    expect(await rowsOf(journal, 'SELECT count(*) FROM notes')).toEqual([[ROWS]]);
+  });
+
+  it('a write just under STRICT_CAPS.maxUndoBytes lands: the journal never refuses it — the wrote line carries its undoId, the entry fits the schema’s cap whole', async () => {
+    const length = bodyLengthUnder(ACCESS_UNDO_MAX_BYTES - UNDO_ENTRY_RESERVE_BYTES);
+    const bytes = bytesOf([deleteStepOf(length)]);
+    expect(bytes).toBeLessThanOrEqual(ACCESS_UNDO_MAX_BYTES - UNDO_ENTRY_RESERVE_BYTES);
+    expect(bytes, 'within a step of the steps’ cap').toBeGreaterThan(ACCESS_UNDO_MAX_BYTES - UNDO_ENTRY_RESERVE_BYTES - 2 * ROWS);
+    await seedNotes(length);
+    const mine = await grantOn(budget, journal, ['notes'], true);
+    const warn = vi.spyOn(console, 'warn');
+    const { answer, undoId } = await writeAsBudget(mine.id, DELETE_ALL);
+    expect(answer).toEqual({ ok: true, op: 'write', changes: ROWS });
+    expect(undoId, 'the wrote line carries the undo').toEqual(expect.any(String));
+    const [entry] = undoJournal().listAccessUndo(journal);
+    expect(entry?.id).toBe(undoId);
+    expect(bytesOf(entry!.steps), 'the model of the measure is the apply’s own').toBe(bytes);
+    expect(bytesOf(entry), 'the whole entry fits').toBeLessThanOrEqual(ACCESS_UNDO_MAX_BYTES);
+    expect(warn.mock.calls.filter((call) => String(call[0]).startsWith('access:')), 'the schema’s refusal is unreachable').toEqual([]);
+    expect(await rowsOf(journal, 'SELECT count(*) FROM notes')).toEqual([[0]]);
+  });
+});
+
+describe('Gate-5 SEC-4 — a planted undo step naming a credential column is refused at the seat’s phase 1', () => {
+  it('a step naming api_key on an otherwise shared table: the seat refuses it, the user hears gone, the entry is marked — nothing written', async () => {
+    const { undoBrokeredWrite } = await writeBroker();
+    await db.applyAppDdl(journal, ['CREATE TABLE vault (id INTEGER PRIMARY KEY, label TEXT, api_key TEXT)']);
+    await exec(journal, "INSERT INTO vault (id, label, api_key) VALUES (1, 'home', 'kept')");
+    const mine = await grantOn(budget, journal, ['entries'], true);
+    const entry = plantedEntry(mine.id, [{ table: 'vault', op: 'update', columns: ['label', 'api_key'], rows: [{ rowid: 1, before: ['home', 'planted'], after: ['home', 'kept'] }] }]);
+    expect(undoJournal().putAccessUndo(journal, entry)).toBe('ok');
+    const seatSpy = vi.spyOn(seat(), 'brokeredWrite');
+    const markSpy = vi.spyOn(undoJournal(), 'markAccessUndone');
+    expect(await undoBrokeredWrite(db, journal, entry.id, { via: 'user' })).toEqual({ ok: false, reason: 'gone', message: undoFailed('gone', 'Journal') });
+    expect(seatSpy, 'the live schema has the column — the seat’s phase 1 is what refuses it').toHaveBeenCalledTimes(1);
+    expect(markSpy).toHaveBeenCalledWith(journal, entry.id, expect.any(String));
+    expect(await rowsOf(journal, 'SELECT id, label, api_key FROM vault')).toEqual([[1, 'home', 'kept']]);
+    expect(undoJournal().listAccessUndo(journal)).toEqual([]);
+    expect(linesOf(journal).filter((line) => line.kind === 'undone')).toEqual([]);
+  });
+});
+
+describe('Gate-5 W-1 — a brokered write matching NO row is not undoable', () => {
+  for (const sql of ["UPDATE entries SET amount = 9 WHERE title = 'nothing'", 'DELETE FROM entries WHERE id = 99']) {
+    it(`${sql.split(' ')[0]} matching no row: { changes: 0 }, NO undo entry written, the wrote line carries no undoId`, async () => {
+      const mine = await grantOn(budget, journal, ['entries'], true);
+      const seatSpy = vi.spyOn(seat(), 'brokeredWrite');
+      const entrySpy = vi.spyOn(undoJournal(), 'putAccessUndo');
+      const { answer, undoId } = await writeAsBudget(mine.id, sql);
+      expect(answer).toEqual({ ok: true, op: 'write', changes: 0 });
+      const applied = await seatSpy.mock.results[0]!.value;
+      expect(applied).toEqual({ ok: true, steps: [], changes: [0], undoable: false });
+      expect(entrySpy, 'nothing to put back — no entry').not.toHaveBeenCalled();
+      expect(undoJournal().listAllAccessUndo(journal)).toEqual([]);
+      expect(undoId).toBeUndefined();
+      const wrote = linesOf(journal).filter((line) => line.kind === 'wrote');
+      expect(wrote).toHaveLength(1);
+      expect(wrote[0]).toMatchObject({ changes: 0, tables: ['entries'] });
+      expect(wrote[0]).not.toHaveProperty('undoId');
+    });
+  }
+});
+
+describe('Gate-5 ENG-4 — EVERY undo outcome bumps the access revision exactly once', () => {
+  async function bumpsOf(run: () => Promise<unknown>): Promise<{ outcome: unknown; bumps: number }> {
+    const before = accessRevisionStore.get();
+    const outcome = await run();
+    return { outcome, bumps: accessRevisionStore.get() - before };
+  }
+
+  it('ok · gone · busy · changed · failed — one bump each', async () => {
+    const { undoBrokeredWrite } = await writeBroker();
+    const mine = await grantOn(budget, journal, ['entries'], true);
+    const undo = (undoId: string) => () => undoBrokeredWrite(db, journal, undoId, { via: 'user' });
+
+    // ok
+    const done = await writeAsBudget(mine.id, "UPDATE entries SET amount = 0 WHERE title = 'tea'");
+    expect(await bumpsOf(undo(done.undoId!))).toEqual({ outcome: { ok: true }, bumps: 1 });
+
+    // gone — an id the journal does not hold
+    expect(await bumpsOf(undo(crypto.randomUUID()))).toEqual({ outcome: { ok: false, reason: 'gone', message: undoFailed('gone', 'Journal') }, bumps: 1 });
+
+    // changed — the source changed the row since
+    const changedEntry = plantedEntry(mine.id, [{ table: 'entries', op: 'update', columns: ['amount'], rows: [{ rowid: 2, before: [1], after: [77] }] }]);
+    expect(undoJournal().putAccessUndo(journal, changedEntry)).toBe('ok');
+    expect(await bumpsOf(undo(changedEntry.id))).toEqual({ outcome: { ok: false, reason: 'changed', message: undoFailed('changed', 'Journal') }, bumps: 1 });
+
+    // failed — a DELETE-undo whose rowid is held by a row again (a SQL error, D-Q19)
+    const failedEntry = plantedEntry(mine.id, [{ table: 'entries', op: 'delete', columns: ['id', 'title', 'amount'], rows: [{ rowid: 3, before: [3, 'bread', 2] }] }]);
+    expect(undoJournal().putAccessUndo(journal, failedEntry)).toBe('ok');
+    expect(await bumpsOf(undo(failedEntry.id))).toEqual({ outcome: { ok: false, reason: 'failed', message: undoFailed('failed', 'Journal') }, bumps: 1 });
+
+    // busy — the source in the middle of a change
+    const busyEntry = plantedEntry(mine.id, [{ table: 'entries', op: 'update', columns: ['amount'], rows: [{ rowid: 2, before: [1], after: [5] }] }]);
+    expect(undoJournal().putAccessUndo(journal, busyEntry)).toBe('ok');
+    await exec(journal, 'BEGIN');
+    try {
+      expect(await bumpsOf(undo(busyEntry.id))).toEqual({ outcome: { ok: false, reason: 'busy', message: undoFailed('busy', 'Journal') }, bumps: 1 });
+    } finally {
+      await exec(journal, 'ROLLBACK');
+    }
   });
 });

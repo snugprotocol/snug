@@ -82,6 +82,7 @@ import {
   accessRequestSchema,
   accessResponseSchema,
   accessUndoEntrySchema,
+  accessUndoStepSchema,
   accessWantsSchema,
   buildJsonSchemas,
   canonicalAccessGrantIntent,
@@ -1538,6 +1539,17 @@ describe('PR-3 — the undo journal entry: ROWS, never SQL (D-PR3-7; spec §22.4
     expect(parses(accessUndoEntrySchema, withSteps(undoStep({ columns: ['category', 'note'], rows: [{ rowid: 7, before: ['rent', 'march'], after: ['food', 'march', 'x'] }] })))).toBe(false);
     expect(parses(accessUndoEntrySchema, withSteps(undoStep({ op: 'insert', columns: ['a', 'b', 'c'], rows: [{ rowid: 7, after: [1, 2] }] })))).toBe(false);
     expect(parses(accessUndoEntrySchema, withSteps(undoStep({ op: 'delete', columns: ['a', 'b'], rows: [{ rowid: 7, before: [1, 2] }, { rowid: 8, before: [1] }] })))).toBe(false);
+  });
+
+  // Gate-5 W-1 — the belt: a step that captured no row has nothing to put back; the apply drops it
+  // (and a write that captured none is not undoable), and the schema refuses one that reaches it.
+  it('a step holds at least ONE row: rows: [] is refused by the step and by the entry around it; one row is the passing twin', () => {
+    expect(parses(accessUndoStepSchema, undoStep({ rows: [] }))).toBe(false);
+    expect(parses(accessUndoStepSchema, undoStep({ op: 'insert', columns: ['a'], rows: [] }))).toBe(false);
+    expect(parses(accessUndoStepSchema, undoStep({ op: 'delete', columns: ['a'], rows: [] }))).toBe(false);
+    expect(parses(accessUndoEntrySchema, withSteps(undoStep({ rows: [] })))).toBe(false);
+    expect(parses(accessUndoEntrySchema, withSteps(undoStep(), undoStep({ rows: [] }))), 'one empty step spoils the entry').toBe(false);
+    expect(parses(accessUndoStepSchema, undoStep())).toBe(true);
   });
 
   it('steps 1..64; rows ≤ ACCESS_WRITE_MAX_ROWS per step; columns 1..64; a table is a shareable app table name', () => {

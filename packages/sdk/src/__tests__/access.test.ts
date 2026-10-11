@@ -694,7 +694,9 @@ describe('useSnugAccess — reading another app’s data through a user-granted 
         hostEvent(event, [value]);
         hostEvent(event, { [seat]: 7 });
         hostEvent(event, { [seat]: '' });
-        hostEvent(event, { other: value });
+        // A record with no seat at all stays refused for the { grantId } hints; for data-changed it is
+        // the host saying "re-read" without a table — its own pin below (Gate-5 SEC-5).
+        if (method !== 'onDataChanged') hostEvent(event, { other: value });
         for (const other of [ACCESS_CHANGED_EVENT, ACCESS_SOURCE_CHANGED_EVENT, DATA_CHANGED_EVENT, ACCESS_READ_EVENT, 'schedule-run']) {
           if (other !== event) hostEvent(other, { grantId: GRANT_ID, table: 'transactions' });
         }
@@ -716,6 +718,28 @@ describe('useSnugAccess — reading another app’s data through a user-granted 
         expect(seen).toEqual([{ [seat]: value }]);
       });
     }
+
+    it('{} reaches onDataChanged when the host omits table (Gate-5 SEC-5) — extra keys dropped; the { grantId } hints still refuse a record with no grantId', async () => {
+      const probe = await mount(() => useSnugAccess());
+      const data: unknown[] = [];
+      const grants: unknown[] = [];
+      probe.result.current.onDataChanged((change) => data.push(change));
+      probe.result.current.onSourceChanged((change) => grants.push(change));
+      probe.result.current.onRead((change) => grants.push(change));
+      hostEvent(DATA_CHANGED_EVENT, {});
+      hostEvent(DATA_CHANGED_EVENT, { other: 'transactions' });
+      hostEvent(DATA_CHANGED_EVENT, { rows: [[1]], changes: 3, sourceName: 'Ledger' });
+      expect(data).toEqual([{}, {}, {}]);
+      for (const change of data) expect(change).not.toHaveProperty('table');
+      hostEvent(DATA_CHANGED_EVENT, { table: 7 });
+      hostEvent(DATA_CHANGED_EVENT, { table: '' });
+      expect(data, 'a table seat that is not a non-empty string is still dropped').toHaveLength(3);
+      for (const event of [ACCESS_SOURCE_CHANGED_EVENT, ACCESS_READ_EVENT]) {
+        hostEvent(event, {});
+        hostEvent(event, { other: GRANT_ID });
+      }
+      expect(grants).toEqual([]);
+    });
 
     it('onChange still hears only access-changed — the three new hints never reach it', async () => {
       const probe = await mount(() => useSnugAccess());
@@ -789,7 +813,8 @@ describe('the public surface — @snugprotocol/sdk index and types (AC5)', () =>
     expectTypeOf<SnugAccess['discover']>().parameters.toEqualTypeOf<[hints?: AccessRequestHints]>();
     expectTypeOf<SnugAccess['discover']>().returns.toEqualTypeOf<Promise<AccessDiscoverResult>>();
     expectTypeOf<SnugAccess['onSourceChanged']>().parameters.toEqualTypeOf<[listener: (data: { grantId: string }) => void]>();
-    expectTypeOf<SnugAccess['onDataChanged']>().parameters.toEqualTypeOf<[listener: (data: { table: string }) => void]>();
+    // Gate-5 SEC-5: `table` is absent when the host could not name it.
+    expectTypeOf<SnugAccess['onDataChanged']>().parameters.toEqualTypeOf<[listener: (data: { table?: string }) => void]>();
     expectTypeOf<SnugAccess['onRead']>().parameters.toEqualTypeOf<[listener: (data: { grantId: string }) => void]>();
     expectTypeOf<SnugAccess['onSourceChanged']>().returns.toEqualTypeOf<() => void>();
     expectTypeOf<SnugAccess['onDataChanged']>().returns.toEqualTypeOf<() => void>();

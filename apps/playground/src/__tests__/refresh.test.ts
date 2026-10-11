@@ -33,6 +33,8 @@ import { oneLine } from '../agent/sharedDdl.js';
 import type { SnugPlatform } from '../platform/platform.js';
 import { composeAppRuntime } from '../run/appRuntime.js';
 import { SCHEDULE_RESULT_TIMEOUT_MS, hiddenMountStore, type AppRunDeps, type AppRunRuntimeInput, type HiddenMount, type LiveAppHosts } from '../schedule/appRun.js';
+// Gate-5 ENG-3: the namespace, so a spy sees the engine's own dispatches.
+import * as appRun from '../schedule/appRun.js';
 import { REFRESH_RUN } from '../schedule/copy.js';
 import { beginDelegatedRun, delegatedRunFor, endDelegatedRun, type DelegatedRun } from '../schedule/runPlacement.js';
 import { SCHEDULE_RESULT_EVENT, SCHEDULE_RUN_EVENT, scheduleKvKey } from '../schedule/scheduleKey.js';
@@ -627,6 +629,24 @@ describe('the handover — the run follows the source (ADR-0077 §5 applies to a
     expect(writesOf(kvSet, runId)).toHaveLength(2);
     expect(clearsOf(kvSet, runId)).toHaveLength(1);
     expect(await kvHolds(source, runId)).toBe(false);
+  });
+});
+
+describe('Gate-5 ENG-3 — each attempt is handed what the earlier ones SPENT (the ceiling after a handover counts the live attempt’s calls)', () => {
+  it('live → hidden: the second attempt’s Dispatch carries spent = the live attempt’s counters, not a fresh zero — and the day is folded with both', async () => {
+    const grant = refreshGrant();
+    schedulesOn({ ai: 1, net: 1 });
+    const deps = fakeDeps();
+    deps.live.open(source);
+    const live = vi.spyOn(appRun, 'dispatchLive').mockResolvedValueOnce({ end: { kind: 'handover', to: 'hidden' }, calls: { ai: 2, net: 3 }, refused: [] });
+    const hidden = vi.spyOn(appRun, 'dispatchHidden').mockResolvedValueOnce({ end: { kind: 'result', result: { ok: true } }, calls: { ai: 1, net: 0 }, refused: [] });
+    expect(await refresh.refreshSource(db, deps, { grant, requestedBy: 'Budget', via: 'app' })).toEqual({ ok: true, op: 'refresh', fresh: true });
+    expect(live).toHaveBeenCalledTimes(1);
+    expect(hidden).toHaveBeenCalledTimes(1);
+    expect(live.mock.calls[0]![0]).toMatchObject({ afterHandover: false, spent: { ai: 0, net: 0 } });
+    expect(hidden.mock.calls[0]![0], 'the ceiling is asked with the calls already made').toMatchObject({ afterHandover: true, spent: { ai: 2, net: 3 } });
+    expect(live.mock.calls[0]![0].runId, 'one run, followed').toBe(hidden.mock.calls[0]![0].runId);
+    expect(db.getSchedulerState()?.daily).toMatchObject({ ai: 1 + 2 + 1, net: 1 + 3 });
   });
 });
 

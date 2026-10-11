@@ -195,8 +195,10 @@ describe('AC24 content sync — the exchange the KB teaches is the one the proto
     expect(helper).toContain(`data.v !== ${PROTOCOL_VERSION}`);
     expect(helper).toContain(`data.type === '${FRAME_TYPES.accessResponse}'`);
     expect(helper).toContain(`data.type === '${FRAME_TYPES.hostEvent}' && data.event === '${ACCESS_CHANGED_EVENT}'`);
-    // The SDK's onChange subscribes with the same constant — so the snippet and the hook hear the same event.
-    expect(SDK_ACCESS_SOURCE).toContain('onHostEvent(ACCESS_CHANGED_EVENT,');
+    // The SDK's onChange subscribes with the same constant — through grantHint — so the snippet and the hook hear the same event.
+    expect(SDK_ACCESS_SOURCE).toContain('onChange: grantHint(ACCESS_CHANGED_EVENT)');
+    // …and grantHint subscribes through the bridge's onHostEvent with the event it was handed (the one place).
+    expect(SDK_ACCESS_SOURCE).toContain('onHostEvent(event,');
     // ids only: the hint carries a grantId and the helper reads nothing else from it.
     expect(helper).toContain("typeof change.grantId === 'string'");
     expect(helper).toContain('onAccessChanged(change.grantId)');
@@ -362,10 +364,17 @@ describe('PR-3 — KB 87 v2: write, refresh, discover, the three hints, the fall
       expect(helper, `the helper's ${event} arm`).toContain(`data.event === '${event}'`);
       expect(usage, `${event} belongs to the helper, not the usage`).not.toContain(`'${event}'`);
     }
-    // The 1.1 arm stays (pinned verbatim above), and the SDK subscribes to the same three constants.
+    // The 1.1 arm stays (pinned verbatim above), and the SDK subscribes to the same three constants:
+    // the two { grantId } hints through grantHint (which calls onHostEvent(event, …), pinned above);
+    // data-changed directly, since its listener reads the data shape, not a grantId (SEC-5).
     expect(helper).toContain(`data.event === '${ACCESS_CHANGED_EVENT}'`);
-    for (const constant of ['ACCESS_SOURCE_CHANGED_EVENT', 'DATA_CHANGED_EVENT', 'ACCESS_READ_EVENT']) {
-      expect(SDK_ACCESS_SOURCE, constant).toContain(`onHostEvent(${constant},`);
+    const sdkSubscriptions: ReadonlyArray<readonly [string, string]> = [
+      ['ACCESS_SOURCE_CHANGED_EVENT', 'onSourceChanged: grantHint(ACCESS_SOURCE_CHANGED_EVENT)'],
+      ['DATA_CHANGED_EVENT', 'onHostEvent(DATA_CHANGED_EVENT,'],
+      ['ACCESS_READ_EVENT', 'onRead: grantHint(ACCESS_READ_EVENT)'],
+    ];
+    for (const [constant, subscription] of sdkSubscriptions) {
+      expect(SDK_ACCESS_SOURCE, constant).toContain(subscription);
     }
   });
 });

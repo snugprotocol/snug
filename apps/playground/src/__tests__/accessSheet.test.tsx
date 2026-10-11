@@ -840,6 +840,36 @@ describe('PR-3 — *undo* on a change, behind the armed confirm (D-PR3-24; DS12,
     expect(outcomes[0]!.textContent).toBe(SHEET3.undone);
   });
 
+  // Gate-5 UI-2: the confirm *yes, undo* answered is gone with the arm, so focus would fall to the
+  // page — the one outcome line is focusable (tabIndex -1) and catches it.
+  it('after *yes*, focus lands on the one outcome line (tabIndex -1) — the button that held it is gone', async () => {
+    const onUndo = vi.fn(async (): Promise<UndoAnswer> => ({ ok: true }));
+    await renderHistory({ entries: entriesWith(), now: T0, undoable: new Set([UNDO_ID]), onUndo, sourceName: 'Ledger' });
+    await click(one('access-history-undo'));
+    const yes = one('access-undo-yes')!;
+    act(() => yes.focus());
+    expect(document.activeElement).toBe(yes);
+    await click(yes);
+    expect(one('access-undo-yes')).toBeNull();
+    const line = one('access-history-undo-outcome')!;
+    expect(line.textContent).toBe(SHEET3.undone);
+    expect(line.tabIndex).toBe(-1);
+    expect(line.getAttribute('tabindex')).toBe('-1');
+    expect(document.activeElement, 'focus is on the outcome line, not lost to the page').toBe(line);
+  });
+
+  it('a failed undo’s line catches focus the same way', async () => {
+    const onUndo = vi.fn(async (): Promise<UndoAnswer> => ({ ok: false, reason: 'try again in a moment', message: 'try again in a moment' }));
+    await renderHistory({ entries: entriesWith(), now: T0, undoable: new Set([UNDO_ID]), onUndo, sourceName: 'Ledger' });
+    await click(one('access-history-undo'));
+    const yes = one('access-undo-yes')!;
+    act(() => yes.focus());
+    await click(yes);
+    const line = one('access-history-undo-outcome')!;
+    expect(line.textContent).toBe(SHEET3.undoFailed('try again in a moment'));
+    expect(document.activeElement).toBe(line);
+  });
+
   it('a failed undo says why in the same one line — and offers nothing new', async () => {
     const onUndo = vi.fn(async (): Promise<UndoAnswer> => ({ ok: false, reason: 'try again in a moment', message: 'try again in a moment' }));
     await renderHistory({ entries: entriesWith(), now: T0, undoable: new Set([UNDO_ID]), onUndo, sourceName: 'Ledger' });

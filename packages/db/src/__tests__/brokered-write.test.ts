@@ -473,6 +473,28 @@ describe('tableFacts — the table rules, from the schema and the scope (never f
     plain.close();
   });
 
+  // Gate-5 SEC-6: a CHILD's insert or update fails by the parent key's existence — a one-bit oracle on
+  // a table the reader was not granted — so under foreign_keys = 1 a table holding a foreign key is refused.
+  it('foreign_keys ON: a CHILD table (a non-empty pragma_foreign_key_list — even a plain NO ACTION key) is refused `table`, for every op; foreign_keys OFF, the same table is admitted', async () => {
+    const { tableFacts } = await brokered();
+    const db = handle([
+      'CREATE TABLE owners (id INTEGER PRIMARY KEY, name TEXT)',
+      "INSERT INTO owners (id, name) VALUES (1, 'ada')",
+      'CREATE TABLE pets (id INTEGER PRIMARY KEY, owner INTEGER REFERENCES owners(id))',
+      'INSERT INTO pets (id, owner) VALUES (1, 1)',
+    ]);
+    expect(all(db, "SELECT count(*) FROM pragma_foreign_key_list('pets')")).toEqual([[1]]);
+    db.run('PRAGMA foreign_keys = 1');
+    for (const op of ['insert', 'update', 'delete'] as const) {
+      expect(tableFacts(db, 'pets', { columns: ['id', 'owner'] }, op), op).toMatchObject({ ok: false, reason: 'refused', rule: 'table' });
+    }
+    db.run('PRAGMA foreign_keys = 0');
+    for (const op of ['insert', 'update', 'delete'] as const) {
+      expect(tableFacts(db, 'pets', { columns: ['id', 'owner'] }, op), op).toMatchObject({ ok: true });
+    }
+    db.close();
+  });
+
   it('a DELETE needs EVERY live column in the scope: one withheld, a credential-named or a generated column refuses it — the UPDATE on the same table is admitted', async () => {
     const { tableFacts } = await brokered();
     const db = handle([
@@ -608,6 +630,24 @@ describe('tableFacts at BOTH seats — the plan on the raw copy, the apply on th
     fk.run('PRAGMA foreign_keys = OFF');
     expect(okApply(applyBrokeredBatch(fk, forward([deleteOwner], { expectChanges: [1] }))).changes).toEqual([1]);
     fk.close();
+  });
+
+  it('Gate-5 SEC-6 at the live seat: an INSERT into a foreign-key CHILD is refused `table` under foreign_keys = 1 before any row moves — the passing twin with foreign_keys off applies', async () => {
+    const { applyBrokeredBatch } = await brokered();
+    const child = handle([
+      'CREATE TABLE owners (id INTEGER PRIMARY KEY, name TEXT)',
+      "INSERT INTO owners (id, name) VALUES (1, 'ada')",
+      'CREATE TABLE pets (id INTEGER PRIMARY KEY, owner INTEGER REFERENCES owners(id))',
+    ]);
+    const probe: BrokeredPlan = { sql: 'INSERT INTO pets (id, owner) VALUES (5, 2)', op: 'insert', table: 'pets', columns: ['id', 'owner'], insertColumns: ['id', 'owner'], previewChanges: 1 };
+    child.run('PRAGMA foreign_keys = 1');
+    expect(applyBrokeredBatch(child, forward([probe], { expectChanges: [1] }))).toMatchObject({ ok: false, reason: 'refused', rule: 'table' });
+    expect(dump(child, 'pets')).toEqual([]);
+    expect(openTransaction(child)).toBe(false);
+    expect(tempObjects(child)).toEqual([]);
+    child.run('PRAGMA foreign_keys = 0');
+    expect(okApply(applyBrokeredBatch(child, forward([probe], { expectChanges: [1] }))).changes).toEqual([1]);
+    child.close();
   });
 });
 
@@ -1055,6 +1095,33 @@ describe('applyBrokeredBatch — the capture objects: per-apply names, never IF 
   });
 });
 
+// Gate-5 W-1: a write that captured no row has nothing to put back — not undoable, no step.
+describe('applyBrokeredBatch — a write matching NO row commits a zero count and is NOT undoable (Gate-5 W-1)', () => {
+  it.each([
+    ['an UPDATE', () => txPlan("UPDATE transactions SET note = 'x' WHERE id = 99", 'update', { setColumns: ['note'] })],
+    ['a DELETE', () => txPlan('DELETE FROM transactions WHERE id = 99', 'delete')],
+  ] as const)('%s matching no row: { ok, changes: [0], undoable: false, steps: [] } — nothing changed, nothing left open', async (_label, plan) => {
+    const { applyBrokeredBatch } = await brokered();
+    const db = handle(LEDGER);
+    const before = dump(db, 'transactions');
+    expect(applyBrokeredBatch(db, forward([plan()], { expectChanges: [0] }))).toEqual({ ok: true, steps: [], changes: [0], undoable: false });
+    expect(dump(db, 'transactions')).toEqual(before);
+    expect(openTransaction(db)).toBe(false);
+    expect(tempObjects(db)).toEqual([]);
+    db.close();
+  });
+
+  it('the passing twin: the same UPDATE matching one row is undoable with its one step', async () => {
+    const { applyBrokeredBatch } = await brokered();
+    const db = handle(LEDGER);
+    const result = okApply(applyBrokeredBatch(db, forward([txPlan("UPDATE transactions SET note = 'x' WHERE id = 1", 'update', { setColumns: ['note'], previewChanges: 1 })], { expectChanges: [1] })));
+    expect(result).toMatchObject({ changes: [1], undoable: true });
+    expect(result.steps).toHaveLength(1);
+    expect(result.steps[0]!.rows).toHaveLength(1);
+    db.close();
+  });
+});
+
 // ======================================================================================= the undo
 
 describe('buildUndoStatement — built from the STRUCTURE: identifiers quoted, every value a bound parameter, guarded by AFTER', () => {
@@ -1084,6 +1151,18 @@ describe('buildUndoStatement — built from the STRUCTURE: identifiers quoted, e
     const built = buildUndoStatement({ table: 'transactions', op: 'delete', columns: TX_COLUMNS, rows: [] }, { rowid: 2, before: [2, 120000, 'home', 'rent'] });
     expect(built.sql).toMatch(/^\s*INSERT\s+INTO\s+"transactions"\s*\(\s*"?rowid"?\s*,\s*"id"\s*,\s*"amount"\s*,\s*"category"\s*,\s*"note"\s*\)\s*VALUES\s*\(\s*\?\s*,\s*\?\s*,\s*\?\s*,\s*\?\s*,\s*\?\s*\)/i);
     expect(built.params).toEqual([2, 2, 120000, 'home', 'rent']);
+  });
+
+  // Moved here from apps/playground's writeBroker.test.ts with the Gate-5 W-5 fold (the db index no
+  // longer exports the builder; the host reaches it only through the driver's seat).
+  it('a planted entry’s values ride ONLY as bound parameters: a value shaped like SQL is never in the built text, only in its params', async () => {
+    const { buildUndoStatement } = await brokered();
+    const evil = "x'; DROP TABLE entries; --";
+    const step: UndoStep = { table: 'entries', op: 'insert', columns: ['title'], rows: [{ rowid: 1, after: [evil] }] };
+    const built = buildUndoStatement(step, step.rows[0]!);
+    expect(built.sql).not.toContain(evil);
+    expect(built.sql).not.toMatch(/DROP/i);
+    expect(built.params).toContain(evil);
   });
 
   it('a hostile column or table name is ONLY a quoted identifier — nothing it says runs', async () => {
@@ -1193,6 +1272,36 @@ describe('applyBrokeredBatch({ undo }) — the inverse, applied atomically throu
     const step: UndoStep = { table: 'odd', op: 'update', columns: ['load_extension('], rows: [{ rowid: 1, before: ['a'], after: ['b'] }] };
     expect(applyBrokeredBatch(db, { undo: [step], caps: CAPS }).ok).toBe(false);
     expect(all(db, 'SELECT * FROM odd')).toEqual([[1, 'b']]);
+    db.close();
+  });
+
+  // Gate-5 SEC-4: a genuine entry never NAMES a credential column — a step that does was planted, and
+  // its inverse would write under that column. Refused at phase 1, before any transaction.
+  it('a planted step naming a credential-shaped column (api_key) on an otherwise shared table is refused `column` at phase 1 — nothing written, no transaction, even beside a genuine step', async () => {
+    const { applyBrokeredBatch } = await brokered();
+    const db = handle(LEDGER);
+    const before = dump(db, 'accounts');
+    const txBefore = dump(db, 'transactions');
+    const spy = watch(db);
+    const planted: UndoStep[][] = [
+      [{ table: 'accounts', op: 'update', columns: ['api_key'], rows: [{ rowid: 1, before: ['planted'], after: ['hunter2'] }] }],
+      [{ table: 'accounts', op: 'update', columns: ['balance', 'api_key'], rows: [{ rowid: 1, before: [0, 'planted'], after: [100, 'hunter2'] }] }],
+      [{ table: 'accounts', op: 'insert', columns: ['name', 'API_KEY'], rows: [{ rowid: 1, after: ['checking', 'hunter2'] }] }],
+      [
+        { table: 'transactions', op: 'update', columns: ['note'], rows: [{ rowid: 1, before: ['latte'], after: ['coffee'] }] },
+        { table: 'accounts', op: 'update', columns: ['api_key'], rows: [{ rowid: 1, before: ['planted'], after: ['hunter2'] }] },
+      ],
+    ];
+    for (const steps of planted) {
+      expect(applyBrokeredBatch(db, { undo: steps }), JSON.stringify(steps.map((step) => step.columns))).toMatchObject({ ok: false, reason: 'refused', rule: 'column' });
+    }
+    expect(spy.seen.filter((sql) => /^\s*(BEGIN|UPDATE|INSERT|DELETE)\b/i.test(sql)), 'refused before any transaction or statement').toEqual([]);
+    expect(dump(db, 'accounts')).toEqual(before);
+    expect(dump(db, 'transactions')).toEqual(txBefore);
+    expect(openTransaction(db)).toBe(false);
+    // The passing twin: the same table's shared column undoes.
+    expect(okApply(applyBrokeredBatch(db, { undo: [{ table: 'accounts', op: 'update', columns: ['balance'], rows: [{ rowid: 1, before: [7], after: [100] }] }] })).changes).toEqual([1]);
+    expect(all(db, 'SELECT balance, api_key FROM accounts')).toEqual([[7, 'hunter2']]);
     db.close();
   });
 });
