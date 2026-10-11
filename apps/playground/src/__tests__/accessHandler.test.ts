@@ -51,6 +51,8 @@ import { configureScopedRead, resetScopedReadForTests, type WorkerLike } from '.
 import { createScopedReadResponder } from '../access/scopedRead.worker.js';
 import { collectSources } from '../access/consent.js';
 import { registerAppHost } from '../state/appHosts.js';
+// TASK-20261010-host-broker PR-1, Gate-5 fold F-10 — the delegated run's window.
+import { beginDelegatedRun, clearTouchedGeneration, endDelegatedRun } from '../schedule/runPlacement.js';
 import { installTestUserDb, locateWasm } from './userdbTestHelper.js';
 
 const T0 = Date.parse('2026-10-10T09:00:00.000Z');
@@ -994,6 +996,25 @@ describe('AC13 list and release', () => {
     const hidden = createAccessHandlerFor(budget, { attended: false });
     const answer = await hidden.handle(budget, listFrame());
     expect(answer.ok && answer.op === 'list' ? answer.grants.map((view) => view.id) : []).toEqual([away.id]);
+  });
+
+  // Gate-5 fold F-10 (maintainability MINOR): during a delegated run (D-PR1-8) `query` refuses a session
+  // grant, so `list` must not advertise one — it filters on the same "someone is there" test.
+  it('F-10: while a delegated run is in flight `list` leaves out the SESSION grant (it lists the one allowed *also while I’m away*); after the run the session grant is listed again', async () => {
+    const session = await grantFor({ duration: 'session', generation: 0 });
+    const away = await grantFor({ duration: 'week', unattended: true, source: pantry, tables: ['items'] });
+    const handler = createAccessHandlerFor(budget, { attended: true, generation: 0 });
+    const ids = (answer: AccessHandlerResult): string[] => (answer.ok && answer.op === 'list' ? answer.grants.map((view) => view.id).sort() : ['?']);
+    expect(ids(await handler.handle(budget, listFrame()))).toEqual([session.id, away.id].sort());
+
+    expect(beginDelegatedRun({ appId: budget, appName: 'Budget', runId: 'run-f10', taskId: 't1', title: 'Morning sums', generation: 0 }).ok).toBe(true);
+    try {
+      expect(ids(await handler.handle(budget, listFrame())), 'never advertise a grant `query` would refuse').toEqual([away.id]);
+    } finally {
+      endDelegatedRun(budget, 'run-f10');
+      clearTouchedGeneration(budget, 0);
+    }
+    expect(ids(await handler.handle(budget, listFrame()))).toEqual([session.id, away.id].sort());
   });
 
   it('release gives back the reader’s OWN grant (revoked, a released line on the source, the reader rung); another reader’s or an unknown id → ACCESS_NOT_GRANTED', async () => {

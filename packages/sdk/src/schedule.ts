@@ -2,7 +2,8 @@
 //
 // WHY THIS EXISTS. An app never owns a timer: the host's scheduler is the one clock, and a
 // schedule exists only because the user created or enabled it. When a *Run [app]* step is due
-// the host wakes the app — in a hidden frame, or the live one — over the channels the app
+// the host wakes the app — inside the open page when the app is on screen, in a hidden frame
+// when it is closed, never both (ADR-0077: one instance per app) — over the channels the app
 // already has, as HINTS (R7: ids on the event channel, the content in the kv):
 //
 //   1. the host writes `snug:schedule:<runId>` = `{ taskId, runId, input }` into the app's own
@@ -11,9 +12,12 @@
 //   3. the app answers ONE `app-event 'schedule-result' { ok, summary?, notify? }`.
 //
 // `useSnugSchedule(handler)` is that handshake, typed: the hint arrives, the input is read back
-// through the same db frames `usePersistedState` uses, the handler runs ONCE per runId (a
-// repeated hint — a host that crashed mid-run and asked again — is ignored, so a handler is
-// safe to write naively), and the result is posted exactly once. A result is a SUMMARY a person
+// through the same db frames `usePersistedState` uses, the handler runs ONCE per runId on THIS
+// page (a repeated hint — a host that crashed mid-run and asked again — is ignored), and the
+// result is posted exactly once. The same runId can reach a DIFFERENT instance: if the user
+// opens or closes the app mid-run the host hands the run over, and the new instance's set is
+// empty — a side effect that must not repeat is guarded by the app's own persisted record of
+// the runIds it acted on, never by this in-memory set alone. A result is a SUMMARY a person
 // reads on the Schedule page, never data; `notify` is a SUGGESTION the host may ignore.
 //
 // `proposeSchedule(proposal)` is the app's one way to ASK for a schedule (ADR-0074 §4, the
@@ -131,8 +135,9 @@ async function answerHint(data: unknown, handler: SnugScheduleHandler): Promise<
  * Answers the host's scheduled runs with `handler`. Mount it once, beside `useSnugApp`; the
  * latest render's handler is the one that runs. The handler does the app's work — read its own
  * data, call its approved API through `useConnectedFetch` (a mutating call is REFUSED while
- * nobody is present: the host records the run as *needs you*, so a scheduled handler reads
- * and summarises, and leaves writes for a visible session) — and answers `{ ok, summary?,
+ * nobody is present, and ASKED once in the host's own dialog when the app is open; either way
+ * the host records a refusal as *needs you*, so a scheduled handler reads and summarises, and
+ * treats a refused write as an ordinary outcome) — and answers `{ ok, summary?,
  * notify? }`. A throw becomes `{ ok: false, summary: <message> }`; nothing escapes.
  */
 export function useSnugSchedule(handler: SnugScheduleHandler): void {

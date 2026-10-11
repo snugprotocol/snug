@@ -21,10 +21,18 @@
 //   WHOLE.  `onDelta` is never forwarded: a streamed fragment is unscrubbed by construction, so
 //           a scheduled reply arrives once, whole, after the scrub. The hidden frame declares
 //           `streaming: false` to match (the runner's rule: the flag follows the transport).
+//
+// THE LIVE FRAME'S SIBLING (TASK-20261010-host-broker PR-1; ADR-0077 §4; D-PR1-6, D-PR1-7).
+// `createRunCountingTransport` wraps the OPEN app's own transport so a delegated run's AI calls
+// land on the run's record — and nothing else: no cap (the ceiling is asked BEFORE dispatch;
+// inside the window calls are counted, never refused), no scrub (the attended frame's replies are
+// the open app's own powers), and the send options forwarded WHOLE — the open app streams, so
+// `onDelta` and `signal` must reach the inner transport.
 
 import { ERROR_CODES } from '@snugprotocol/protocol';
 import type { AgentTransport, AgentTransportOptions, TransportResult } from '@snugprotocol/runner';
 
+import type { DelegatedRun } from './runPlacement.js';
 import { countsAsAiCall, scrubOrWithhold } from './scrub.js';
 
 export interface ScheduledTransportOptions {
@@ -67,6 +75,25 @@ export function createScheduledTransport(inner: AgentTransport, options: Schedul
         return { ok: false, code: ERROR_CODES.HOST_ERROR, message: SCHEDULED_REPLY_WITHHELD, retryable: false };
       }
       return { ...reply, text };
+    },
+  };
+}
+
+export interface RunCountingTransportDeps {
+  /** The run in flight on this app's live frame right now, if any — read per send. */
+  delegated(): DelegatedRun | undefined;
+  /** Told of every send that reached the brain while a run was in flight — the run's own tally. */
+  onCounted(run: DelegatedRun): void;
+}
+
+/** The live frame's transport, counting AI calls on a delegated run — options forwarded whole, no cap, no scrub. */
+export function createRunCountingTransport(inner: AgentTransport, deps: RunCountingTransportDeps): AgentTransport {
+  return {
+    async send(wire: string, sendOptions: AgentTransportOptions): Promise<TransportResult> {
+      const reply = await inner.send(wire, sendOptions);
+      const run = deps.delegated();
+      if (run !== undefined && countsAsAiCall(reply)) deps.onCounted(run);
+      return reply;
     },
   };
 }

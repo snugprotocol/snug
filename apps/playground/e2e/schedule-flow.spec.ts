@@ -1,3 +1,5 @@
+// RUN WITH NODE 22 — `better-sqlite3` fails to load under Node 24 (TASK-20261010-host-broker PR-1, Gate-5 fold F-14).
+// When the owner's dev server already holds port 8787, run with `SNUG_SERVER_PORT=8797` (lesson 2026-10-10).
 // schedule-flow.spec.ts — TASK-20261009-scheduling-framework A8: a scheduled *Run [app]* against
 // the net stub, in the real playground app under a faked clock (ADR-0074 §3 the kv handshake,
 // §5 catch-up, §6 the unattended posture).
@@ -13,6 +15,9 @@
 //   3. 48 hourly misses: the system time jumps 48½ hours with no timer fired, a dispatched
 //      `visibilitychange` wakes the reconcile, and the missed card carries ONE pending row that
 //      reads "missed 48 times → runs once".
+//   4. ADR-0077 (TASK-20261010-host-broker PR-1): with the app OPEN at due time the run is
+//      delegated to the visible frame — no hidden copy ever mounts — and reads *done*; a POST in
+//      such a run opens the scheduled dialog, *don’t send* makes it *needs you*.
 //
 // WHAT ARRIVES WITH THE SIBLINGS, ASSERTED NOT SKIPPED. The *run <app>* step kind in the editor
 // (W3: `STEPS.run(appName)` as an enabled option, `STEPS.runInput` as the input field) and the
@@ -39,7 +44,11 @@ import path from 'node:path';
 import { expect, test, type Locator, type Page } from '@playwright/test';
 
 import { CONSENT, MISSED_ACTIONS, RESULT_STATUS_WORD, missedHeadline, missedRow, needsYou, stepLabel } from '../src/schedule/copy';
+// The ADR-0077 sentences arrive with PR-1's copy; read through the namespace so a missing one is a
+// red at its assertion, never a link error that takes the whole file down.
+import * as scheduleCopy from '../src/schedule/copy';
 import { RUN_HEADER_SCHEDULE, STEPS } from '../src/schedule/copy.editor';
+import { scheduledRefusalVerb } from '../src/schedule/scheduledConfirmGate';
 import { AWAITS_INTEGRATION, NET_STUB_PORT, playgroundDir } from './helpers';
 
 const hasApp = process.env.SNUG_E2E_HAS_APP === '1';
@@ -271,5 +280,90 @@ test.describe('A8 — a scheduled Run [app] against the net stub', () => {
     // (the feed lists finished results only), so the feed stays empty until the user acts.
     const results = page.getByTestId('schedule-result');
     await expect(results).toHaveCount(0);
+  });
+});
+
+// ADR-0077 — ONE INSTANCE PER APP. With the app open at due time, the run is DELEGATED to the
+// visible frame: the hidden host never mounts a second copy beside it. "Never" is sampled, not
+// proven: the hidden frame is polled every 100 ms from the clock jump until the open app has
+// answered AND at least 3 s have passed (today's hidden mount appears within milliseconds of the
+// due tick). The app stays on screen until it answered, so no handover is in play.
+const HIDDEN_FRAME = '[data-testid="scheduled-run-host"] iframe';
+const liveFrame = (page: Page) => page.frameLocator('[data-testid="frame-wrap"] iframe[sandbox="allow-scripts"]');
+
+/** Back to the installed app by clicks (never a reload — see THE CLOCK above); answers when it is ready. */
+async function openAppFromHub(page: Page, appId: string): Promise<void> {
+  await page.getByRole('link', { name: 'your apps' }).click();
+  await page.getByTestId('installed-tile').filter({ hasText: APP_NAME }).getByRole('link').first().click();
+  await expect(page).toHaveURL(new RegExp(`/run/${appId}$`), { timeout: 20_000 });
+  await expect(liveFrame(page).locator('#status')).toHaveText('ready', { timeout: 30_000 });
+}
+
+/** Sample the hidden host until `done()` holds and `atLeastMs` passed; any hidden iframe is a red. */
+async function expectNoHiddenCopy(page: Page, done: () => Promise<boolean>, atLeastMs = 3_000, capMs = 60_000): Promise<void> {
+  const started = Date.now();
+  for (;;) {
+    expect(await page.locator(HIDDEN_FRAME).count(), 'one instance per app: no hidden copy beside the open one (ADR-0077)').toBe(0);
+    const elapsed = Date.now() - started;
+    if (elapsed >= atLeastMs && (await done())) return;
+    expect(elapsed, 'the open app answered the delegated run').toBeLessThan(capMs);
+    await page.waitForTimeout(100);
+  }
+}
+
+test.describe('ADR-0077 — a due run with the app OPEN is delegated to it, never a second hidden copy', () => {
+  test.skip(!hasApp, AWAITS_INTEGRATION);
+
+  test('the app open at due time: no hidden frame ever mounts, the open app answers the run, and the result reads done', async ({ page }) => {
+    test.setTimeout(150_000);
+    const appId = await installFixture(page);
+    await connectStub(page);
+    await createHourlyRun(page, { fetch: true }, 'fetch while open');
+    await openAppFromHub(page, appId);
+
+    await page.clock.fastForward(HOUR_MS + MINUTE_MS);
+    const answered = liveFrame(page).locator('#runs li');
+    await expectNoHiddenCopy(page, async () => (await answered.count()) === 1);
+    await expect(answered).toHaveAttribute('data-ok', 'true');
+    await expect(answered).toContainText('GET 200 /data — the stub saw key ***');
+
+    await openSchedulePage(page);
+    const row = page.getByTestId('schedule-result').first();
+    await expect(row).toBeVisible({ timeout: 30_000 });
+    await expect(row).toHaveAttribute('data-status', 'ok', { timeout: 30_000 });
+    await expect(row).toContainText(RESULT_STATUS_WORD.ok);
+    await expect(row).toContainText('GET 200 /data — the stub saw key ***');
+    expect(await page.content(), 'C1').not.toContain(STUB_KEY);
+  });
+
+  test('a POST in a delegated run opens the scheduled dialog (no remember box); “don’t send” → needs you, the declined sentence — and still no hidden copy', async ({ page }) => {
+    test.setTimeout(150_000);
+    const appId = await installFixture(page);
+    await connectStub(page);
+    await createHourlyRun(page, { post: true }, 'post while open');
+    await openAppFromHub(page, appId);
+
+    await page.clock.fastForward(HOUR_MS + MINUTE_MS);
+    const dialog = page.getByRole('dialog', { name: 'confirm network request' });
+    await expectNoHiddenCopy(page, () => dialog.isVisible());
+    const ask = scheduleCopy.DELEGATED_CONFIRM;
+    expect(ask, 'DELEGATED_CONFIRM ships with PR-1’s copy').toBeDefined();
+    await expect(dialog).toContainText(ask.title);
+    await expect(dialog).toContainText('post while open'); // the schedule is named in the body
+    await expect(dialog).toContainText(`https://${API_HOST}:${NET_STUB_PORT}/data`); // the URL, verbatim (R-8)
+    await expect(dialog.getByRole('checkbox'), 'a scheduled ask never remembers').toHaveCount(0);
+    await dialog.getByRole('button', { name: ask.deny }).click();
+    await expect(dialog).toBeHidden();
+
+    const answered = liveFrame(page).locator('#runs li');
+    await expectNoHiddenCopy(page, async () => (await answered.count()) === 1, 1_000);
+    await expect(answered).toHaveAttribute('data-ok', 'false');
+
+    await openSchedulePage(page);
+    const row = page.getByTestId('schedule-result').first();
+    await expect(row).toBeVisible({ timeout: 30_000 });
+    await expect(row).toHaveAttribute('data-status', 'needs-you', { timeout: 30_000 });
+    await expect(row).toContainText(scheduleCopy.needsYouDeclined(APP_NAME, scheduledRefusalVerb({ host: API_HOST, method: 'POST' })).text);
+    expect(await page.content(), 'C1').not.toContain(STUB_KEY);
   });
 });

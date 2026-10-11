@@ -29,10 +29,18 @@
  * scrubbed plain-text extract of the provider's own error reason. No credential, no URL,
  * no raw response bytes can reach this component. The chip does not render `detail` at
  * all; Step 0 does, as TEXT only — never markup, never a link.
+ *
+ * WHO HIT IT (TASK-20261010-host-broker PR-1; ADR-0077 §4; the open-app delta's R-b closed).
+ * A failure tagged `via: 'scheduled-run'` happened inside a scheduled run — the hidden frame's,
+ * or a run delegated to this open app — and the chip says so inline and in its tooltip, so the
+ * user does not read a 401 their schedule hit as something the app did in front of them. The
+ * sentence is hedged on purpose: inside a delegated window the user's own click can carry the
+ * tag too (over-attribution, R-81).
  */
 import { useEffect, useState } from 'react';
 import type { ReactElement } from 'react';
 
+import { AUTH_REPAIR_VIA_SCHEDULE } from '../schedule/copy.js';
 import { authShapedFailureStore } from '../state/net.js';
 import { connectionWizardStore, openConnectionWizardForFailure } from '../state/connectionWizard.js';
 import { getUserDb } from '../state/userdb.js';
@@ -69,6 +77,7 @@ export function AuthRepairChip({ appId }: { appId: string }): ReactElement | nul
   // The row is the naming authority; the slot is the honest fallback while it loads (or
   // if the row has been deleted out from under the failure).
   const provider = providerName ?? active.slot;
+  const via = active.via === 'scheduled-run' ? ` · ${AUTH_REPAIR_VIA_SCHEDULE}` : '';
 
   return (
     <button
@@ -79,7 +88,7 @@ export function AuthRepairChip({ appId }: { appId: string }): ReactElement | nul
       // something the app is still working around. `status` announces it politely at the
       // next opportunity, which matches what the chip is — a standing note, not an event.
       role="status"
-      title={`${provider} refused this app's key — open the connection to sort it out`}
+      title={`${provider} refused this app's key${via} — open the connection to sort it out`}
       onClick={() => {
         // The handoff and the v3 refusal lesson both live in the store seam, so this
         // handler cannot get either wrong: a refused open leaves the failure standing and
@@ -88,7 +97,10 @@ export function AuthRepairChip({ appId }: { appId: string }): ReactElement | nul
       }}
     >
       <span aria-hidden="true">⚠</span>
-      <span>check this connection — {provider}</span>
+      <span>
+        check this connection — {provider}
+        {via}
+      </span>
     </button>
   );
 }

@@ -51,6 +51,7 @@ import {
   DRIFTED,
   EXPIRED,
   NEEDS_YOU_FALLBACK_VERB,
+  needsYouTitle,
   NO_APP_FOR_CHANGES,
   RESULT_LOADING,
   RESULT_MISSING,
@@ -238,7 +239,12 @@ export function ResultDetail(): ReactElement {
 
   const needsYouAt = needsYouStep(task, run);
   const needsYouApp = appOfStep(task, needsYouAt);
-  const needsYouCopy = needsYou(needsYouApp === undefined ? task.title : (appNameOf(needsYouApp, apps) ?? 'this app'), NEEDS_YOU_FALLBACK_VERB);
+  // The card's TITLE is the host's own short sentence ("<app> needs your OK"); the BODY is the run's
+  // reason — which, since ADR-0077, says whether the user declined, nobody answered, or the app asked
+  // again (TASK-20261010-host-broker PR-1). The old fallback tail ("Snug doesn't make changes while
+  // you're away") was wrong for a dialog the user themselves declined. The one act is unchanged.
+  const needsYouName = needsYouApp === undefined ? task.title : (appNameOf(needsYouApp, apps) ?? 'this app');
+  const needsYouCopy = { text: needsYouTitle(needsYouName), action: needsYou(needsYouName, NEEDS_YOU_FALLBACK_VERB).action };
   // The app a *run <app>* step runs — the refused step's when it is one, else the first such step.
   const refusedStep = task.steps[needsYouAt];
   const runApp = refusedStep?.kind === 'app-run' ? refusedStep.appId : appRunAppOf(task.steps);

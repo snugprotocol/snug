@@ -22,9 +22,10 @@ export interface StepContext {
   notify?: SchedulerSeat['notify'] | undefined;
   /**
    * Ask the queue to record THIS run `interrupted` with `reason` and abort it. The executor
-   * still answers its outcome once the signal fires; the queue folds the run. (Its PR-B caller —
-   * aborting a hidden run when the app opened — was retired 2026-10-09: a scheduled run now runs
-   * whether or not the app is open. The seam stays for an executor that must stop its own run.)
+   * still answers its outcome once the signal fires; the queue folds the run. No shipped executor
+   * calls it: an app opening or closing mid-run is a HANDOVER inside the *Run [app]* executor
+   * (ADR-0077 §5 — the same `runId` re-dispatched to where the app now lives, at most once), never
+   * an interruption. The seam stays for an executor that must stop its own run.
    */
   interrupt?: ((reason: string) => void) | undefined;
   /** What the steps before this one already spent on this run — the ceiling counts it (PR-B A4/A5). */
@@ -42,6 +43,14 @@ export interface StepOutcome {
   proposals?: ScheduleProposalItem[] | undefined;
   /** A louder notice the executor suggests; the queue honours it only when the task's `alert` allows. */
   alert?: { title: string; body: string } | undefined;
+  /**
+   * The step met the day's ceiling (TASK-20261010-host-broker PR-1, D-PR1-6): refused BEFORE a
+   * delegated dispatch when a counter had no headroom, or marked after the fact when a run on the
+   * open app crossed a ceiling inside its window (app code is not stopped). The queue folds the run
+   * `capped` with the step's summary as the reason. In-memory only — the persisted step result
+   * keeps its shape (D-PR1-1).
+   */
+  capped?: boolean | undefined;
 }
 
 export type StepExecutor = (step: ScheduleStep, ctx: StepContext) => Promise<StepOutcome>;

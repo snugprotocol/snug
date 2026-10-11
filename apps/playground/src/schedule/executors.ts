@@ -8,10 +8,11 @@
 //                                the §6 rules (plain text, capped, prefixed, rate-limited).
 //   app-think  *Ask [app]'s AI* — `appThink.ts`: the app's own transport, tool-free, the reply's
 //                                data changes dry-run and pending, never executed.
-//   app-run    *Run [app]*     — `appRun.ts` (PR-B, ADR-0074 §3): the kv handshake into the ONE
-//                                hidden frame for an unattended trigger, or the live frame for
-//                                the user's own *run now*; refused by name where the host has
-//                                no scheduler seat.
+//   app-run    *Run [app]*     — `appRun.ts` (PR-B, ADR-0074 §3; ADR-0077): the kv handshake into
+//                                the ONE instance of the app — the open app's live frame under
+//                                the run-scoped ask gate, else the ONE hidden frame; the user's
+//                                own *run now* on the live frame; refused by name where the host
+//                                has no scheduler seat; `capped` before a delegated dispatch.
 //
 // THE DISCIPLINE EVERY ARM SHARES, in `createStepExecutor`:
 //   - an outcome is DATA, never a throw: anything thrown inside an arm is a `failed` outcome
@@ -76,6 +77,7 @@ function safeProposal(item: ScheduleProposalItem): ScheduleProposalItem | undefi
 /** The one place result text is made safe to store (see the module comment). Answers a NEW object. */
 export function finalizeOutcome(outcome: StepOutcome): StepOutcome {
   const out: StepOutcome = { status: outcome.status, calls: { ...outcome.calls } };
+  if (outcome.capped === true) out.capped = true; // the queue's fold reads it (D-PR1-6); never a persisted field
   if (outcome.summary !== undefined) out.summary = safeText(outcome.summary);
   if (outcome.alert !== undefined) out.alert = { title: safeText(outcome.alert.title), body: safeText(outcome.alert.body) };
   if (outcome.proposals !== undefined) {

@@ -167,6 +167,12 @@
   .schedule-running-label {
     display: none;
   }
+
+  /* A run delegated to the open app: "running in <app>" is shorter than the default and is the
+     one thing that says WHERE the run executes (ADR-0077 §2) — it stays. */
+  .schedule-running-chip--in-app .schedule-running-label {
+    display: inline;
+  }
 }
 
 /* ---------------------------------------------------------------- the chat offer (E10)

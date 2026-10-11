@@ -18,10 +18,25 @@
 // refusal) and `registerAppHost`, which stays RunView's — it is the wizard's seam, and the
 // hidden frame must never register as the app's live host (security F5).
 //
-// THE ONE DIFFERENCE A CALLER MAY INJECT is the confirm gate: absent, the page's ordinary gate
-// (the standing gate over the session gate) answers mutating calls; the scheduler hands its
-// STANDALONE refusing gate (`schedule/scheduledConfirmGate.ts`) so no remembered or armed grant
-// can reach an unattended run (ADR-0074 §6). `onNetCall` is the scheduler's counting seam.
+// THE ONE DIFFERENCE A CALLER MAY INJECT is the confirm gate: absent, the frame path's default
+// answers mutating calls — the RUN-SCOPED ask gate over the page's ordinary chain (the standing
+// gate over the session gate; `state/net.ts`, ADR-0077 §3) — so the open app's own calls meet the
+// chain as before, and a run the user did not start, DELEGATED to that frame (ADR-0077 §2), meets
+// the present user and never a remembered or armed grant; the scheduler's hidden frame hands its
+// STANDALONE refusing gate (`schedule/scheduledConfirmGate.ts`) so no grant of any kind reaches a
+// run with nobody there (ADR-0074 §6). `onNetCall` is the counting seam: the hidden path passes
+// its own (asked of the day's ceiling before every request); the attended composition defaults it
+// to COUNTING on the delegated run's record (`noteDelegatedCall`), never refusing — inside the
+// window a call is counted, the ceiling having been asked BEFORE dispatch (D-PR1-6).
+//
+// COUNTING FOLLOWS THE RUN (ADR-0077 §4). The attended composition wraps the app's own transport
+// in `createRunCountingTransport` (`schedule/scheduledTransport.ts`): while a delegated run is in
+// flight for the app, every send that reached the brain is one `calls.ai` on the run's record;
+// otherwise the wrapper is a pass-through — no cap, no scrub, the options forwarded whole (the open
+// app streams). `scheduledRun` tells the net handler whether an auth-shaped failure belongs to a
+// run (the hidden frame: always; the live frame: while a run is in flight) so the reconnect chip
+// can say so. Both edges — `schedule/runPlacement.ts` (a leaf) and `schedule/scheduledTransport.ts`
+// — are dereferenced ONLY inside `composeAppRuntime`, at call time, never while modules load.
 //
 // THE NET RULE IS ONE RULE: an app reaches the network only when it is OWNED (an uninstalled
 // starter has no auth spec; a shared preview is uninstalled by definition) and the host allows
@@ -51,6 +66,9 @@ import type { AccessHandler, AgentTransport, NetHandler } from '@snugprotocol/ru
 import { createAccessHandlerFor } from '../access/accessHandler.js';
 import { createAppTransport } from '../agent/transport.js';
 import { allows } from '../platform/platform.js';
+// Call-time edges (see the header): the placement leaf and the counting decorator.
+import { delegatedRunFor, noteDelegatedCall } from '../schedule/runPlacement.js';
+import { createRunCountingTransport } from '../schedule/scheduledTransport.js';
 import { isUnownedId } from '../share/sharedInbox.js';
 import type { ByokProvider, PlaygroundMode } from '../state/mode.js';
 import { createNetHandlerFor, type CreateNetHandlerOptions } from '../state/net.js';
@@ -119,13 +137,29 @@ export interface AppRuntime {
 
 export function composeAppRuntime(options: ComposeAppRuntimeOptions): AppRuntime {
   const { appId } = options;
-  const transport = createAppTransport(options.mode, options.provider, options.onLlmEvent, appId, options.onTurnStart);
+  const own = createAppTransport(options.mode, options.provider, options.onLlmEvent, appId, options.onTurnStart);
+  // The visible frame counts a delegated run's thinks on the run's record; the hidden frame's
+  // transport is wrapped by the executor itself (the capping, scrubbing sibling).
+  const transport = options.attended
+    ? createRunCountingTransport(own, { delegated: () => delegatedRunFor(appId), onCounted: (run) => noteDelegatedCall(run.appId, 'ai') })
+    : own;
+  // The attended default counts, never refuses (D-PR1-6); the hidden path always passes its own.
+  const onNetCall: CreateNetHandlerOptions['onNetCall'] =
+    options.onNetCall ??
+    (options.attended
+      ? (id) => {
+          noteDelegatedCall(id, 'net');
+          return true;
+        }
+      : undefined);
+  const scheduledRun = options.attended ? (): boolean => delegatedRunFor(appId) !== undefined : (): boolean => true;
   const netHandler = appMayReachNetwork(appId)
     ? createNetHandlerFor({
         ...(options.fetchImpl !== undefined ? { fetchImpl: options.fetchImpl } : {}),
         ...(options.onNetError !== undefined ? { onNetError: options.onNetError } : {}),
-        ...(options.onNetCall !== undefined ? { onNetCall: options.onNetCall } : {}),
+        ...(onNetCall !== undefined ? { onNetCall } : {}),
         ...(options.confirmGate !== undefined ? { confirmGate: options.confirmGate } : {}),
+        scheduledRun,
       })
     : undefined;
   const netPair: NetPair = netHandler !== undefined ? { net: netHandler, netAppId: appId } : {};

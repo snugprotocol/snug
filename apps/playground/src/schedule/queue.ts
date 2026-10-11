@@ -325,6 +325,8 @@ export function createRunQueue(deps: RunQueueDeps): RunQueue {
     /** The first alert any step suggested, with the step that suggested it — the host composes the notification from both. */
     let alert: { step: ScheduleStep; alert: { title: string; body: string } } | undefined;
     let capped = false;
+    /** The capped step's own sentence — the card says WHICH limit (D-PR1-6); the word is the fallback. */
+    let cappedReason: string | undefined;
     const context: StepContext = {
       task,
       run: { id: claim.id, taskId: task.id, dueAt: claim.dueAt, trigger: item.trigger },
@@ -332,8 +334,8 @@ export function createRunQueue(deps: RunQueueDeps): RunQueue {
       signal: controller.signal,
       now: deps.now,
       // PR-B seams: a step may ask for THIS run to be interrupted with a reason (no shipped
-      // executor does since 2026-10-09 — opening the app no longer stops a hidden run), and may
-      // read what the run already spent.
+      // executor does — an app opening or closing mid-run is a handover inside the *Run [app]*
+      // executor, ADR-0077 §5, never an interruption), and may read what the run already spent.
       interrupt: abort,
       spent: () => ({ ...calls }),
     };
@@ -378,6 +380,13 @@ export function createRunQueue(deps: RunQueueDeps): RunQueue {
           outcome = { status: 'failed', summary: messageOf(err), calls: { ...ZERO_CALLS } };
         }
         results.push(toStepResult(outcome));
+        // A step that met the ceiling itself (the *Run [app]* executor asks before a delegated dispatch
+        // and marks a crossed ceiling inside the window — D-PR1-6) folds the run `capped` like the
+        // queue's own pre-check above; the first such step's summary is the reason.
+        if (outcome.capped === true) {
+          capped = true;
+          cappedReason ??= outcome.summary;
+        }
         calls.ai += outcome.calls.ai;
         calls.net += outcome.calls.net;
         if (outcome.proposals !== undefined) proposals.push(...outcome.proposals);
@@ -389,7 +398,8 @@ export function createRunQueue(deps: RunQueueDeps): RunQueue {
     }
 
     const finishedAt = deps.now().toISOString();
-    const fold = foldRunStatus(results, abortReason, capped);
+    const folded = foldRunStatus(results, abortReason, capped);
+    const fold: Fold = folded.status === 'capped' && cappedReason !== undefined ? { status: 'capped', reason: cappedReason } : folded;
     const row = fitRunRow({
       ...claim,
       status: fold.status,

@@ -10,7 +10,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
 import { FRAME_TYPES, PROTOCOL_VERSION } from '@snugprotocol/protocol';
-import { act } from 'react';
+import { StrictMode, act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -43,6 +43,7 @@ function mount(over: Partial<HiddenMount> = {}): HiddenMount {
     onAppEvent: vi.fn(),
     onNavigatedAway: vi.fn(),
     onBudgetExhausted: vi.fn(),
+    onUnmounted: vi.fn(),
     ...over,
   };
 }
@@ -187,6 +188,87 @@ describe('ScheduledRunHost — one hidden frame, the same component', () => {
     const ready = posted.find((frame) => frame.type === FRAME_TYPES.hostReady) as { capabilities?: { streaming?: boolean; openUrl?: boolean } } | undefined;
     expect(ready?.capabilities?.streaming).toBe(false);
     expect(ready?.capabilities?.openUrl).toBe(false); // no user to confirm an open from a hidden frame
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// TASK-20261010-host-broker PR-1 (ADR-0077 §5; contract v2 D-PR1-4) — the hidden frame REPORTS
+// that it is gone. A hidden attempt handed over to the live frame must not overlap it: the
+// executor awaits `HiddenMount.onUnmounted()` before it hints the live frame, so the component
+// calls it from its effect CLEANUP keyed by `runId` — when the store is cleared and when the mount
+// is replaced by another run's. Exactly once per mount, and never while the frame is still up.
+// ---------------------------------------------------------------------------------------------
+
+describe('ScheduledRunHost — reports its unmount (TASK-20261010-host-broker PR-1)', () => {
+  it('`onUnmounted` is NOT called while the frame is up', async () => {
+    await render();
+    const m = mount();
+    await show(m);
+    expect(m.onUnmounted).not.toHaveBeenCalled();
+  });
+
+  it('clearing `hiddenMountStore` calls the mount’s `onUnmounted` once, and the frame is gone', async () => {
+    await render();
+    const m = mount();
+    await show(m);
+    await act(async () => {
+      hiddenMountStore.set(undefined);
+    });
+    await act(flush);
+    expect(m.onUnmounted).toHaveBeenCalledTimes(1);
+    expect(container!.querySelector('iframe')).toBeNull();
+  });
+
+  it('a mount for ANOTHER run (the runId changes) calls the PREVIOUS mount’s `onUnmounted` — and not the new one’s', async () => {
+    await render();
+    const first = mount({ runId: 'run-1' });
+    await show(first);
+    const second = mount({ runId: 'run-2' });
+    await show(second);
+    expect(first.onUnmounted).toHaveBeenCalledTimes(1);
+    expect(second.onUnmounted).not.toHaveBeenCalled();
+  });
+
+  it('a re-render with the SAME runId (a store write of an equal mount) is not an unmount', async () => {
+    await render();
+    const m = mount({ runId: 'run-1' });
+    await show(m);
+    await act(async () => {
+      hiddenMountStore.set({ ...m });
+    });
+    await act(flush);
+    expect(m.onUnmounted).not.toHaveBeenCalled();
+  });
+});
+
+// Gate-5 fold F-9 (maintainability MINOR): React StrictMode (dev) runs every effect's cleanup once
+// more right after the mount and re-runs the effect — a SIMULATED unmount while the store still holds
+// the mount. `onUnmounted` must not fire then (a handover's live hint would go out while the hidden
+// instance is still up); the cleanup reports gone only when the store no longer holds that mount.
+describe('ScheduledRunHost — StrictMode’s simulated cleanup is not an unmount (Gate-5 fold F-9)', () => {
+  it('mounted under <StrictMode> with the run already in the store → `onUnmounted` NOT called while the frame is up; clearing the store → called exactly once', async () => {
+    const m = mount();
+    hiddenMountStore.set(m); // the run is in the store BEFORE the host mounts, so StrictMode's double effect sees it
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    await act(async () => {
+      root!.render(
+        <StrictMode>
+          <ScheduledRunHost />
+        </StrictMode>,
+      );
+    });
+    await act(flush);
+    expect(container.querySelector(`[data-testid="${SCHEDULED_RUN_HOST_TEST_ID}"] iframe`), 'harness: the hidden frame is up').not.toBeNull();
+    expect(m.onUnmounted, 'StrictMode re-ran the cleanup while the store still holds the mount').not.toHaveBeenCalled();
+
+    await act(async () => {
+      hiddenMountStore.set(undefined);
+    });
+    await act(flush);
+    expect(m.onUnmounted).toHaveBeenCalledTimes(1);
+    expect(container.querySelector('iframe')).toBeNull();
   });
 });
 

@@ -13,9 +13,9 @@ An app never owns a clock. The ONE timer in Snug is the host's scheduler, and a 
 exists only because the USER created or enabled it on the host's Schedule page — a
 recurring reminder, a question to an app's AI, or a run of an app: a fetch every hour, a
 brief every morning, a check every Friday. When a run of your app is due the host wakes
-the app itself in a hidden frame — even when your app is also open on screen, so your
-handler may run beside a visible copy of the same app — hands it the run's input, and records what the app answers as a *result* the user
-reads later. Nobody has to be looking.
+the app itself — inside the open page when your app is on screen, in a hidden frame when it is
+closed; never two copies at once — hands it the run's input, and records what the app answers as
+a *result* the user reads later. Nobody has to be looking.
 
 So the rule in "Never Think on a Timer" has exactly one sanctioned exception, and it is
 not yours to arm: the scheduler wakes you; you never wake yourself. An app takes part in
@@ -69,8 +69,9 @@ const SCHEDULE_HANDLED = new Set(); // runIds already answered on this page
 async function onScheduledRun({ runId, taskId, input }) {
   // YOUR WORK: read your own data, call your approved API through snugNetRequest
   // (what useConnectedFetch wraps), then answer a SUMMARY — never rows.
-  // A mutating call (POST/PUT/PATCH/DELETE) is refused while nobody is present:
-  // answer ok:false with what you tried, and the host asks the user to run it visibly.
+  // A mutating call (POST/PUT/PATCH/DELETE) is refused while nobody is present, and asked
+  // ONCE in the host's own dialog when the app is open: on a refusal answer ok:false with what
+  // you tried, and the host asks the user to run it visibly.
   return { ok: true, summary: 'Checked. Nothing new since yesterday.' };
 }
 
@@ -109,12 +110,14 @@ module SDK get the same handshake typed as `useSnugSchedule(handler)` and
   `SCHEDULE_HANDLED` set covers this page, and if your work must not repeat across reloads
   (a message sent, a row appended), remember the `runId` you acted on in your own
   persisted state before acting.
-- **You may not be the only instance.** A scheduled run can land while the user has the app
-  open, so two copies of your app run at once over the same store. Make every change ONE
-  statement — a scheduled run's `BEGIN`/`COMMIT` (and a whole-database import) is refused,
-  because both copies share one connection. In the code the user sees, re-read from the store
-  before you write back state you cached at load (a blind `usePersistedState` write would undo
-  what the handler stored), and make every write safe to repeat.
+- **One instance — and the same `runId` can reach a different one.** When your app is open,
+  a scheduled run executes inside the open page (your UI and the handler share one state —
+  update it the normal way); when it is closed, in a hidden frame. If the user opens or closes
+  the app mid-run, the host hands the SAME `runId` to the new instance, whose in-memory
+  `SCHEDULE_HANDLED` is empty — so before any side effect that must not repeat (a message sent,
+  a row appended), write the `runId` to your own persisted state and check it first. Make every
+  change one statement (a hidden run's `BEGIN`/`COMMIT` and a whole-database import are refused;
+  a handover must never strand half a change).
 - **A result is a summary, not data.** The host shows `summary` to a person and never
   reads anything else from it. Keep what you fetched in your own key-value store or
   database, where the app shows it next time it opens.
@@ -124,12 +127,14 @@ module SDK get the same handshake typed as `useSnugSchedule(handler)` and
 - **Say `ok: false`, never throw past the listener.** A failure with a summary that says
   what went wrong ("the forecast API answered 503") is a readable result; a crash is a
   run the user cannot interpret.
-- **Reads, not writes, while unattended.** A mutating connected call inside a scheduled
-  run is refused by the host (`useConnectedFetch` resolves `{ ok: false, error }` with
-  code `NET_CONFIRM_DENIED`): nothing is sent, and the host records the run as
-  *needs you* with one act — *run now and review* — which opens the app visibly so the
-  user confirms the write themselves. Design the handler so the refusal is an ordinary
-  outcome: answer `ok: false` with a summary naming what it tried ("post the digest to
+- **Reads, not writes, while unattended — and one ask when the app is open.** A mutating
+  connected call inside a scheduled run is refused by the host while nobody is present
+  (`useConnectedFetch` resolves `{ ok: false, error }` with code `NET_CONFIRM_DENIED`); when the
+  app is open the host asks the user ONCE, in its own dialog, and refuses if they say no or do
+  not answer within a minute — and a second mutating call in the same run is refused without
+  asking. Either way nothing is sent until a person says so, and the host records the run as
+  *needs you* with one act — *run now and review*. Design the handler so the refusal is an
+  ordinary outcome: answer `ok: false` with a summary naming what it tried ("post the digest to
   GitHub"), and let the visible session do the write.
 - **Never own timers.** No `setInterval`, no `setTimeout` loop, no thinking or fetching on
   load, no polling the agent. The scheduler is the one timer; this listener is the only

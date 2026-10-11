@@ -24,7 +24,10 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
+  APP_UNREACHABLE_SUMMARY,
+  AUTH_REPAIR_VIA_SCHEDULE,
   CONSENT,
+  DELEGATED_CONFIRM,
   EMPTY,
   MISSED_ACTIONS,
   RESULT_STATUS_WORD,
@@ -37,15 +40,18 @@ import {
   WORDS,
   aiCalls,
   alertLabel,
+  alreadyRunning,
   alertSentence,
   appMissing,
   blockedHere,
   capped,
   ceilingWarning,
+  closedAfterChange,
   chatOffer,
   costLine,
   followerTab,
   globalPaused,
+  handedOverTwice,
   hostHonesty,
   imported,
   missedHeadline,
@@ -53,6 +59,9 @@ import {
   missedPolicySentence,
   missedRow,
   needsYou,
+  needsYouAlreadyAsked,
+  needsYouDeclined,
+  needsYouUnanswered,
   nextLine,
   noHandler,
   paused,
@@ -62,6 +71,7 @@ import {
   suggestionStrip,
 } from '../schedule/copy.js';
 import { ACTIONS } from '../schedule/copy.editor.js';
+import { needsYouTitle } from '../schedule/copy.result.js';
 import { PAUSE_AFTER_FAILURES, PAUSE_AFTER_UNSEEN } from '../schedule/protection.js';
 
 describe('vocabulary (Q8) — the five nouns and the three step kinds', () => {
@@ -370,8 +380,140 @@ describe('empty states and the running chip', () => {
     });
   });
 
-  it('RUNNING_CHIP: the label and its one act (security F15)', () => {
-    expect(RUNNING_CHIP).toEqual({ label: 'a schedule is running', cancel: 'cancel' });
+  it('RUNNING_CHIP: the label and its one act (security F15) — and, since TASK-20261010-host-broker PR-1, where a delegated run is running', () => {
+    expect(RUNNING_CHIP).toEqual({ label: 'a schedule is running', cancel: 'cancel', inApp: expect.any(Function) });
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// TASK-20261010-host-broker PR-1 — the delegated run's sentences (ADR-0077 §3–§5; contract v2
+// "schedule/copy.ts" block). Single-homed here like every other: the dialog's host-composed
+// title and body, the three *needs you* sentences that say WHETHER the user declined, nobody
+// answered, or the app asked again; the two handover failures; the chip's *running in <app>*;
+// the reconnect chip's attribution. "run" stays a verb; "task"/"proposal" never appear (the
+// scan below covers these, as it covers every file under `schedule/`).
+//
+// Two layers: (1) each export exists and its sentence carries every DYNAMIC part it was handed
+// — the property the surfaces rely on; (2) the byte-for-byte pins of the contract's text, so a
+// rewording is a visible decision rather than a drift.
+// ---------------------------------------------------------------------------------------------
+
+describe('the delegated run (TASK-20261010-host-broker PR-1) — exports and their dynamic parts', () => {
+  it('DELEGATED_CONFIRM: a host title, a body that quotes the schedule and names app/method/host, an after-run body, two acts', () => {
+    expect(typeof DELEGATED_CONFIRM.title).toBe('string');
+    const body = DELEGATED_CONFIRM.body('Morning post', 'Notes', 'POST', 'api.example.com');
+    for (const part of ['Morning post', 'Notes', 'POST', 'api.example.com']) expect(body).toContain(part);
+    const after = DELEGATED_CONFIRM.afterRunBody('Notes', 'DELETE', 'api.example.com');
+    for (const part of ['Notes', 'DELETE', 'api.example.com']) expect(after).toContain(part);
+    expect(typeof DELEGATED_CONFIRM.allow).toBe('string');
+    expect(typeof DELEGATED_CONFIRM.deny).toBe('string');
+    expect(DELEGATED_CONFIRM.allow).not.toBe(DELEGATED_CONFIRM.deny);
+  });
+
+  it('the dialog title is the HOST’s sentence — it never carries the schedule’s own title', () => {
+    expect(DELEGATED_CONFIRM.title).not.toContain('Morning post');
+    expect(DELEGATED_CONFIRM.body('Morning post', 'Notes', 'POST', 'api.example.com')).not.toBe(DELEGATED_CONFIRM.title);
+  });
+
+  it('the three *needs you* sentences carry the app and what it tried, and one act: review', () => {
+    for (const sentence of [needsYouDeclined, needsYouUnanswered, needsYouAlreadyAsked]) {
+      const copy = sentence('Ledger', 'post to api.github.com');
+      expect(copy.text).toContain('Ledger');
+      expect(copy.text).toContain('post to api.github.com');
+      expect(copy.action).toBe(needsYou('Ledger', 'post to api.github.com').action);
+    }
+    // Three DIFFERENT sentences — the point is to say which of the three happened.
+    const texts = new Set([needsYouDeclined, needsYouUnanswered, needsYouAlreadyAsked].map((f) => f('Ledger', 'post').text));
+    expect(texts.size).toBe(3);
+  });
+
+  it('the two handover failures name the app (and, after a change was sent, the host to check)', () => {
+    expect(handedOverTwice('Ledger')).toContain('Ledger');
+    const closed = closedAfterChange('Ledger', 'api.github.com');
+    expect(closed).toContain('Ledger');
+    expect(closed).toContain('api.github.com');
+  });
+
+  it('RUNNING_CHIP.inApp names the app; AUTH_REPAIR_VIA_SCHEDULE is a short attribution line', () => {
+    expect(RUNNING_CHIP.inApp('Weather')).toContain('Weather');
+    expect(typeof AUTH_REPAIR_VIA_SCHEDULE).toBe('string');
+    expect(AUTH_REPAIR_VIA_SCHEDULE.length).toBeGreaterThan(0);
+  });
+
+  it('copy.result.ts: the needs-you card title names the app (`needsYouTitle`)', () => {
+    expect(needsYouTitle('Ledger')).toContain('Ledger');
+  });
+
+  it('none of the new sentences spells "task" or "proposal"', () => {
+    const sentences = [
+      DELEGATED_CONFIRM.title,
+      DELEGATED_CONFIRM.body('T', 'A', 'POST', 'h'),
+      DELEGATED_CONFIRM.afterRunBody('A', 'POST', 'h'),
+      DELEGATED_CONFIRM.allow,
+      DELEGATED_CONFIRM.deny,
+      needsYouDeclined('A', 'v').text,
+      needsYouUnanswered('A', 'v').text,
+      needsYouAlreadyAsked('A', 'v').text,
+      handedOverTwice('A'),
+      closedAfterChange('A', 'h'),
+      RUNNING_CHIP.inApp('A'),
+      AUTH_REPAIR_VIA_SCHEDULE,
+      needsYouTitle('A'),
+    ];
+    expect(sentences.filter((text) => /\b(task|proposal)s?\b/i.test(text))).toEqual([]);
+  });
+});
+
+describe('the delegated run — the contract’s text, byte for byte', () => {
+  // Gate-5 fold F-5: the app name is DELIMITED — `“<appName>”`, like the schedule's title — in both bodies.
+  it('DELEGATED_CONFIRM', () => {
+    expect(DELEGATED_CONFIRM.title).toBe('a schedule wants to make a change');
+    expect(DELEGATED_CONFIRM.body('Morning post', 'Notes', 'POST', 'api.example.com')).toBe(
+      '“Morning post” is running “Notes” and wants to send a POST request to api.example.com. You didn’t click this — allow it once, or don’t. Nothing is remembered; no answer in a minute means nothing is sent.',
+    );
+    expect(DELEGATED_CONFIRM.afterRunBody('Notes', 'POST', 'api.example.com')).toBe(
+      '“Notes” ran a schedule here earlier, so Snug asks every time: it wants to send a POST request to api.example.com. Allow it once, or don’t — nothing is remembered until you reopen the app.',
+    );
+    expect(DELEGATED_CONFIRM.allow).toBe('allow once');
+    expect(DELEGATED_CONFIRM.deny).toBe('don’t send');
+  });
+
+  it('the three *needs you* sentences', () => {
+    expect(needsYouDeclined('Ledger', 'post to api.github.com')).toEqual({
+      text: 'you said don’t send — Ledger didn’t post to api.github.com',
+      action: 'run now and review',
+    });
+    expect(needsYouUnanswered('Ledger', 'post to api.github.com')).toEqual({
+      text: 'Ledger asked to post to api.github.com and nobody answered in a minute — nothing was sent',
+      action: 'run now and review',
+    });
+    expect(needsYouAlreadyAsked('Ledger', 'post to api.github.com')).toEqual({
+      text: 'Ledger tried to post to api.github.com again after you answered — nothing more was sent',
+      action: 'run now and review',
+    });
+  });
+
+  it('the handover failures, the chip and the reconnect attribution', () => {
+    expect(handedOverTwice('Ledger')).toBe('Ledger opened and closed twice while this ran — nothing was recorded');
+    expect(closedAfterChange('Ledger', 'api.github.com')).toBe('Ledger was closed after a change was sent to api.github.com — check there before running again');
+    expect(RUNNING_CHIP.inApp('Weather')).toBe('running in Weather');
+    expect(AUTH_REPAIR_VIA_SCHEDULE).toBe('a schedule ran into this');
+    expect(needsYouTitle('Ledger')).toBe('Ledger needs your OK');
+  });
+});
+
+// TASK-20261010-host-broker PR-1, Gate-5 fold F-11: two sentences that were literals in the code
+// move HERE — `runPlacement.ts`'s refusal of a second run and `appRun.ts`'s unreachable live frame.
+// Pinned byte for byte, free of the internal words, and no longer spelled in the two modules.
+describe('the delegated run — the two sentences folded into copy.ts (Gate-5 fold F-11)', () => {
+  it('`alreadyRunning(appName)` and `APP_UNREACHABLE_SUMMARY`: their text, no "task"/"proposal", and single-homed (the old literals are gone from `runPlacement.ts` and `appRun.ts`)', () => {
+    expect(alreadyRunning('Weather')).toBe('Weather is already running another schedule');
+    expect(alreadyRunning('Ledger')).toContain('Ledger');
+    expect(APP_UNREACHABLE_SUMMARY).toBe('the open app could not be reached');
+    expect([alreadyRunning('A'), APP_UNREACHABLE_SUMMARY].filter((text) => /\b(task|proposal)s?\b/i.test(text))).toEqual([]);
+    const code = (file: string): string => stripComments(readFileSync(path.join(PLAYGROUND_SRC, 'schedule', file), 'utf8'));
+    expect(stringLiterals(code('runPlacement.ts')).filter((text) => text.includes('is already running another schedule'))).toEqual([]);
+    expect(stringLiterals(code('appRun.ts')).filter((text) => text.includes('could not be reached'))).toEqual([]);
   });
 });
 
@@ -426,6 +568,13 @@ describe('vocabulary scan — no UI file spells "task" or "proposal" as a user-f
     const files = uiFiles().map((file) => path.relative(PLAYGROUND_SRC, file));
     for (const name of ['copy.ts', 'copy.page.ts', 'copy.editor.ts', 'copy.result.ts', 'routes.ts']) expect(files).toContain(path.join('schedule', name));
     expect(files, 'copy.bits.ts was renamed to copy.result.ts (M22)').not.toContain(path.join('schedule', 'copy.bits.ts'));
+  });
+
+  it('the walk covers the delegated run’s new modules (TASK-20261010-host-broker PR-1) — it globs `schedule/*.ts`, so they are scanned by the same rule', () => {
+    const files = uiFiles().map((file) => path.relative(PLAYGROUND_SRC, file));
+    for (const name of ['runPlacement.ts', 'runScopedGate.ts', 'scheduledTransport.ts', 'RunningChip.tsx']) {
+      expect(files).toContain(path.join('schedule', name));
+    }
   });
 
   it('the surface copy modules compose from copy.ts and never carry a pluraliser or a status word of their own (M5, M12)', () => {

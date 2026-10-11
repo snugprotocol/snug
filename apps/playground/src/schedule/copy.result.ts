@@ -133,6 +133,15 @@ export function interruptedWhy(reason: string | undefined): string {
  */
 export const NEEDS_YOU_FALLBACK_VERB = 'make changes';
 
+/**
+ * The needs-you card's title (TASK-20261010-host-broker PR-1): the app's name and the ask, with
+ * the step's own sentence as the body — a declined dialog on the open app is not "while you’re
+ * away", so the card no longer composes that tail itself.
+ */
+export function needsYouTitle(appName: string): string {
+  return `${appName} needs your OK`;
+}
+
 /** The one ceiling PR-A's queue enforces (an *ask the AI* step counts against the AI ceiling). */
 export const CAPPED_WHAT = 'AI call';
 

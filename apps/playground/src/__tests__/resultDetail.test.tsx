@@ -20,8 +20,8 @@ import type { UserDb } from '@snugprotocol/db';
 import { RUN_STATUSES, SCHEDULE_PROPOSAL_TTL_MS, type ScheduleProposalItem, type ScheduleRun, type ScheduleStep, type ScheduledTask } from '@snugprotocol/protocol';
 
 import type { SnugPlatform } from '../platform/platform.js';
-import { RESULT_STATUS_WORD, capped, needsYou, noHandler } from '../schedule/copy.js';
-import { CAPPED_WHAT, DECLINED, DRIFTED, EXPIRED, NO_APP_FOR_CHANGES, RESULT_MISSING, applied, callsLine, hostWord, interruptedWhy, openingToRun, wouldChange } from '../schedule/copy.result.js';
+import { RESULT_STATUS_WORD, capped, needsYouDeclined, needsYouUnanswered, noHandler } from '../schedule/copy.js';
+import { CAPPED_WHAT, DECLINED, DRIFTED, EXPIRED, NO_APP_FOR_CHANGES, RESULT_MISSING, applied, callsLine, hostWord, interruptedWhy, needsYouTitle, openingToRun, wouldChange } from '../schedule/copy.result.js';
 import type { StepContext, StepExecutor } from '../schedule/engine-types.js';
 import { outcomeWord } from '../schedule/MissedCard.js';
 import type { AppIndex } from '../schedule/pageModel.js';
@@ -431,12 +431,17 @@ describe('changes waiting for your OK (ADR-0074 §6)', () => {
 });
 
 describe('the states with one act', () => {
-  it('needs-you: the sentence names the app; "run now and review" enqueues one manual run through the production queue', async () => {
-    seed(task(), run({ status: 'needs-you', reason: 'refused', steps: [{ status: 'refused' }], calls: { ai: 0, net: 0 } }));
+  it('needs-you: the title names the app, the body is the run’s own reason; "run now and review" enqueues one manual run through the production queue', async () => {
+    // TASK-20261010-host-broker PR-1 (contract v2, `copy.result.ts`): the title is `needsYouTitle`,
+    // the body the run's `reason` verbatim — the old "while you’re away" tail is wrong for a declined dialog.
+    const reason = needsYouUnanswered('Ledger', 'post to api.github.com').text;
+    seed(task(), run({ status: 'needs-you', reason, steps: [{ status: 'refused' }], calls: { ai: 0, net: 0 } }));
     await initScheduler(deps());
     const el = await open();
     const card = el.querySelector('[data-testid="schedule-result-needs-you"]');
-    expect(card?.textContent).toContain(needsYou('Ledger', 'make changes').text);
+    expect(card?.querySelector('.connection-note-title')?.textContent).toBe(needsYouTitle('Ledger'));
+    expect(card?.querySelector('.connection-note-body')?.textContent).toBe(reason);
+    expect(card?.textContent).not.toContain('while you’re away');
     expect(el.querySelector('[data-testid="schedule-status"]')?.textContent).toBe('needs you');
     // A schedule that only ASKS runs in place: no hint about opening an app, no navigation (S2).
     expect(el.querySelector('[data-testid="schedule-result-needs-you-hint"]')).toBeNull();
@@ -452,11 +457,18 @@ describe('the states with one act', () => {
 
   it('needs-you on a schedule that RUNS an app (S2): the act says it will open the app, opens it FIRST, then enqueues the manual run', async () => {
     const RUN: ScheduleStep = { kind: 'app-run', appId: 'ledger' };
-    seed(task({ steps: [NOTIFY, RUN] }), run({ status: 'needs-you', reason: 'refused', steps: [{ status: 'ok' }, { status: 'refused' }], calls: { ai: 0, net: 0 } }));
+    // A declined dialog on the open app (ADR-0077 §3): the card says so in the run's own words.
+    const reason = needsYouDeclined('Ledger', 'post to api.github.com').text;
+    seed(task({ steps: [NOTIFY, RUN] }), run({ status: 'needs-you', reason, steps: [{ status: 'ok' }, { status: 'refused' }], calls: { ai: 0, net: 0 } }));
     await initScheduler(deps());
     const el = await open();
     const card = el.querySelector('[data-testid="schedule-result-needs-you"]');
-    expect(card?.textContent).toContain(needsYou('Ledger', 'make changes').text);
+    expect(card?.querySelector('.connection-note-title')?.textContent).toBe(needsYouTitle('Ledger'));
+    expect(card?.querySelector('.connection-note-body')?.textContent).toBe(reason);
+    expect(card?.textContent).not.toContain('while you’re away');
+    // The one act stays *run now and review*.
+    expect(card?.querySelectorAll('button')).toHaveLength(1);
+    expect(button(el, 'run now and review')).toBeDefined();
     expect(el.querySelector('[data-testid="schedule-result-needs-you-hint"]')?.textContent).toBe(openingToRun('Ledger'));
     await act(async () => {
       button(el, 'run now and review')?.click();

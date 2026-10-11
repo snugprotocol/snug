@@ -172,6 +172,11 @@ describe('P4 content sync — the handshake the KB teaches is the one the SDK im
     expect(text).toMatch(/\*\*`notify` is a suggestion\.\*\*/);
     expect(text).toMatch(/\*\*Suggest ONCE, and only after a user act or a first successful fetch\*\*/);
     expect(text).toMatch(/\*\*Never own timers\.\*\*/);
+    // TASK-20261010-host-broker: one instance per app — the run executes inside the open page, never beside it.
+    expect(text).toMatch(/\*\*One instance — and the same `runId` can reach a different one\.\*\*/);
+    expect(text).not.toContain('You may not be the only instance');
+    expect(text).toContain('never two copies at once');
+    expect(text).not.toContain('beside a visible copy');
     expect(text).toContain('`NET_CONFIRM_DENIED`');
     expect(text).toContain('*needs you*');
     expect(text).toContain('*run now and review*');

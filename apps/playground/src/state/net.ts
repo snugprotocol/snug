@@ -7,6 +7,17 @@
 // invalidated on approve/reapprove/revoke — R3). Its UI is a single pending-confirm
 // store the confirm dialog observes: the gate parks a request, the dialog renders it,
 // and resolveNetConfirm(decision) completes the promise. One confirm at a time (v1).
+//
+// THE FRAME PATH'S DEFAULT GATE IS RUN-SCOPED (TASK-20261010-host-broker PR-1; ADR-0077 §3).
+// `createNetHandlerFor` — the live frame's handler, composed once at mount — defaults to
+// `schedule/runScopedGate.ts` over the standing→session chain: while a run the user did not start
+// is in flight on the open app (a "delegated run", `schedule/runPlacement.ts`), a mutating call is
+// parked on the SAME queue, tagged `scheduled`, under a host-composed title, with no remember box,
+// and never reaches a remembered or armed grant; the frame that hosted such a run stays ask-only
+// until it retracts or remounts (the `afterRun` tag). A parked scheduled confirm listens to its
+// run's signal and is WITHDRAWN (denied by reference) when the run ends or the minute passes.
+// Only the frame path takes it: `connectedFetchDepsFor`'s own default stays the standing gate, so
+// the wizard probe, the provider tools and the sidecar pump are untouched.
 
 import {
   createConnectedFetch,
@@ -25,6 +36,11 @@ import { NET_ERROR_CODES, type NetRequestFrame } from '@snugprotocol/protocol';
 import type { UserDb } from '@snugprotocol/db';
 
 import { suspendIfSourceRestricted } from '../access/grants.js';
+// Both LEAVES (load-time safe): `runPlacement.ts` imports `store.ts`, `appHosts.ts` and the pure
+// `schedule/copy.ts` only; `runScopedGate.ts` imports types only.
+import { delegatedRunFor, touchedAppName, touchedGeneration } from '../schedule/runPlacement.js';
+import { createRunScopedGate } from '../schedule/runScopedGate.js';
+import { liveAppHostGeneration } from './appHosts.js';
 import { getUserDb, userDbStatusStore } from './userdb.js';
 import { createStore } from './store.js';
 import { harvestSidecarBody, persistIdentityDirectory } from './sidecarIdentity.js';
@@ -55,6 +71,13 @@ export interface PendingNetConfirm {
    * reference-identity trick the abort-deny uses, so no field matching, no ambiguity.
    */
   origin?: 'chat';
+  /**
+   * A run the user did not start asked for this (TASK-20261010-host-broker PR-1, ADR-0077 §3):
+   * the dialog speaks for the host — the schedule's title quoted in the body, the app's display
+   * name, no remember box. `afterRun` is the sticky variant: the frame hosted a run earlier and
+   * stays ask-only until the app is reopened. Set by the run-scoped gate's parking path only.
+   */
+  scheduled?: { title: string; appName: string; runId: string } | { afterRun: true; appName: string };
 }
 
 const confirmOrigins = new WeakMap<NetConfirmRequest, 'chat'>();
@@ -102,26 +125,45 @@ function advanceConfirmQueue(): void {
   netConfirmStore.set(confirmQueue[0] ?? null);
 }
 
+/**
+ * Park ONE confirm on the queue and answer the user's decision. One queue, one dialog: the session
+ * gate's prompt path and the run-scoped gate's prompt path both land here — the latter with its
+ * `scheduled` tag and a `signal` that WITHDRAWS the entry (denied, by reference, through
+ * `denyParkedConfirmByRequest`) when the run ends or its minute passes, so a timed-out scheduled
+ * ask never sits at the queue head blocking every other app's confirm, and a late *allow once*
+ * can never send a request for a run already recorded.
+ */
+function parkConfirm(request: NetConfirmRequest, scheduled?: PendingNetConfirm['scheduled'], signal?: AbortSignal): Promise<NetConfirmDecision> {
+  return new Promise<NetConfirmDecision>((resolve) => {
+    if (signal?.aborted === true) {
+      resolve({ granted: false });
+      return;
+    }
+    const origin = confirmOrigins.get(request);
+    const withdraw = (): void => {
+      denyParkedConfirmByRequest(request);
+    };
+    const entry: PendingNetConfirm = {
+      request,
+      resolve: (decision) => {
+        const index = confirmQueue.indexOf(entry);
+        if (index === -1) return; // already resolved (double-click guard) or reset
+        confirmQueue.splice(index, 1);
+        advanceConfirmQueue();
+        signal?.removeEventListener('abort', withdraw);
+        resolve(decision);
+      },
+      ...(origin !== undefined ? { origin } : {}),
+      ...(scheduled !== undefined ? { scheduled } : {}),
+    };
+    confirmQueue.push(entry);
+    signal?.addEventListener('abort', withdraw, { once: true });
+    if (confirmQueue.length === 1) advanceConfirmQueue();
+  });
+}
+
 /** The session-remember gate — its `invalidate` is called by the Connections actions. */
-const confirmGate = createSessionConfirmGate(
-  (request) =>
-    new Promise<NetConfirmDecision>((resolve) => {
-      const origin = confirmOrigins.get(request);
-      const entry: PendingNetConfirm = {
-        request,
-        resolve: (decision) => {
-          const index = confirmQueue.indexOf(entry);
-          if (index === -1) return; // already resolved (double-click guard) or reset
-          confirmQueue.splice(index, 1);
-          advanceConfirmQueue();
-          resolve(decision);
-        },
-        ...(origin !== undefined ? { origin } : {}),
-      };
-      confirmQueue.push(entry);
-      if (confirmQueue.length === 1) advanceConfirmQueue();
-    }),
-);
+const confirmGate = createSessionConfirmGate((request) => parkConfirm(request));
 
 /** The confirm dialog calls this with the user's decision. */
 export function resolveNetConfirm(decision: NetConfirmDecision): void {
@@ -167,6 +209,13 @@ export interface AuthShapedFailure {
   slot: string;
   status: number;
   detail?: string;
+  /**
+   * The failure happened inside a scheduled run (TASK-20261010-host-broker PR-1; ADR-0077 §4; the
+   * open-app delta's R-b closed): the hidden frame's handler always, the live frame's while a
+   * delegated run is in flight. The reconnect chip says so, so a 401 the schedule hit is not read
+   * as something the open app did in front of the user. Absent → exactly today's entry.
+   */
+  via?: 'scheduled-run';
 }
 
 /** null when no credentialed 401/403 is waiting on the user. The RunView banner renders this. */
@@ -210,6 +259,29 @@ const standingGate = createStandingApprovalGate({
   store: standingStore,
   inner: confirmGate,
   now: () => Date.now(),
+});
+
+/**
+ * THE RUN-SCOPED ASK GATE (ADR-0077 §3), composed over the standing gate — the frame path's default
+ * (`createNetHandlerFor` below). Per request it reads the placement store: a delegated run in
+ * flight for the app, or a frame generation such a run touched, means the present user is asked
+ * through `parkConfirm` under the `scheduled` tag and the standing→session chain is never
+ * consulted; otherwise the request falls through to that chain untouched. The after-run tag names
+ * the app by the display name the run recorded (`touchedAppName`), the id as the honest fallback.
+ * The sticky posture's lifetime — the token match and the retraction belt — is `runPlacement.ts`'s
+ * alone (Gate-5 F-12); this module only reads it.
+ */
+const runScopedGate = createRunScopedGate({
+  inner: standingGate,
+  delegated: delegatedRunFor,
+  touched: touchedGeneration,
+  liveGeneration: liveAppHostGeneration,
+  prompt: ({ request, run, signal }) =>
+    parkConfirm(
+      request,
+      run !== undefined ? { title: run.title, appName: run.appName, runId: run.runId } : { afterRun: true, appName: touchedAppName(request.appId) ?? request.appId },
+      signal,
+    ),
 });
 
 /** Arm auto-reply for one thread. The app calls this from an explicit user gesture. */
@@ -349,13 +421,15 @@ export function connectedFetchDepsFor(
    */
   onAuthShapedFailure?: (slot: string, status: number, detail?: string) => void,
   /**
-   * The gate a mutating call must pass (TASK-20261009 A5, ADR-0074 §6). DEFAULTS to the
-   * page's standing gate over the session gate — the wizard's probe and the visible frame
-   * never pass anything here. A scheduled run's hidden frame hands its own STANDALONE
-   * refusing gate (`schedule/scheduledConfirmGate.ts`), which never consults either gate
-   * below, so a grant the user remembered or armed while present cannot answer for a run
-   * they are not watching. This is the ONE seat where that difference enters: the same
-   * executor, the same reader, the same transports — only the decision seat differs.
+   * The gate a mutating call must pass (TASK-20261009 A5, ADR-0074 §6; ADR-0077 §3). DEFAULTS
+   * to the page's standing gate over the session gate — the wizard's probe, the provider tools
+   * and the sidecar pump pass nothing here and keep that chain. The visible frame's handler
+   * (`createNetHandlerFor`) passes the RUN-SCOPED gate composed over it, so a run the user did
+   * not start, delegated to the open app, asks the present user and never a remembered or armed
+   * grant. A scheduled run's hidden frame hands its own STANDALONE refusing gate
+   * (`schedule/scheduledConfirmGate.ts`), which never consults either gate below. This is the
+   * ONE seat where those differences enter: the same executor, the same reader, the same
+   * transports — only the decision seat differs.
    */
   confirmGate: NetConfirmGate = standingGate,
 ): ConnectedFetchDeps {
@@ -432,11 +506,21 @@ export interface CreateNetHandlerOptions {
    */
   onNetError?: (appId: string, code: string) => void;
   /**
-   * The confirm gate for mutating calls (TASK-20261009 A5). Absent → the page's ordinary
-   * gate (standing over session). The scheduler's hidden frame passes its STANDALONE
-   * refusing gate so no remembered or armed grant reaches an unattended run (ADR-0074 §6).
+   * The confirm gate for mutating calls (TASK-20261009 A5; ADR-0077 §3). Absent → the RUN-SCOPED
+   * gate over the page's ordinary chain (standing over session): the open app's own calls meet
+   * the chain as before, and a run the user did not start — delegated to that frame — meets the
+   * present user instead, through the same dialog under a host-composed title. The scheduler's
+   * hidden frame passes its STANDALONE refusing gate so no remembered or armed grant reaches an
+   * unattended run (ADR-0074 §6).
    */
   confirmGate?: NetConfirmGate;
+  /**
+   * Is this handler carrying a scheduled run right now? (TASK-20261010-host-broker PR-1.) The
+   * hidden frame answers `true` always; the live frame's composition answers true while a delegated
+   * run is in flight for its app. Read at the moment an auth-shaped failure is reported, so the
+   * store entry can carry `via: 'scheduled-run'` and the reconnect chip can say which run hit it.
+   */
+  scheduledRun?: () => boolean;
   /**
    * Asked BEFORE every request this handler carries, with the host-assigned app id — the
    * scheduler's counting seam. It answers whether the request may proceed: `true` ADMITS it
@@ -481,8 +565,16 @@ export function createNetHandlerFor(options: CreateNetHandlerOptions = {}): NetH
             // the host-assigned binding this handler was invoked with. Adding it here
             // (not inside the executor) means a wiring bug can never report a foreign
             // app's identity (the deps-level adaptation journaled in the task file).
-            authShapedFailureStore.set({ appId: netAppId, slot, status, ...(detail !== undefined ? { detail } : {}) }),
-          options.confirmGate,
+            authShapedFailureStore.set({
+              appId: netAppId,
+              slot,
+              status,
+              ...(detail !== undefined ? { detail } : {}),
+              ...(options.scheduledRun?.() === true ? { via: 'scheduled-run' } : {}),
+            }),
+          // The frame path's default is the run-scoped gate (ADR-0077 §3) — only here, never in
+          // `connectedFetchDepsFor`'s own default.
+          options.confirmGate ?? runScopedGate,
         ),
       );
       // The runner already validated the frame shape (strict schema); pass the app-facing

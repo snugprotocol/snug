@@ -12,6 +12,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { OpenUrlConfirmDialog } from '../run/OpenUrlConfirmDialog.js';
 import { createOpenUrlHandlerFor, openUrlConfirmStore, resolveOpenUrlConfirm } from '../state/openUrl.js';
+// TASK-20261010-host-broker PR-1 Gate-5 fold F-1 — the seat closes for a delegated run's window.
+import { beginDelegatedRun, clearTouchedGeneration, endDelegatedRun } from '../schedule/runPlacement.js';
 
 declare global {
   // eslint-disable-next-line no-var
@@ -127,5 +129,43 @@ describe('the store contract', () => {
     });
     resolveOpenUrlConfirm('declined');
     expect(stateDuringResolve).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// TASK-20261010-host-broker PR-1, Gate-5 fold F-1 (security MAJOR) — the open-url seat CLOSES for
+// a delegated run's window. A run the user did not start may execute on the VISIBLE frame
+// (`schedule/runPlacement.ts`); the hidden frame composes no open-url at all, so for parity the
+// live frame's seat answers `'declined'` while `delegatedRunFor(appId)` is in flight — at once,
+// with NOTHING parked for the dialog (a timer-fired handler must not put a "open this link?"
+// prompt in front of a user who never asked). After `endDelegatedRun` the ordinary flow resumes.
+// ---------------------------------------------------------------------------------------------
+
+describe('the seat during a delegated run (TASK-20261010-host-broker PR-1, fold F-1)', () => {
+  const settledWithin = async <T,>(promise: Promise<T>, ms = 50): Promise<T | 'still parked'> =>
+    Promise.race([promise, new Promise<'still parked'>((resolve) => setTimeout(() => resolve('still parked'), ms))]);
+
+  it('while a run is in flight for THIS app, `open` answers `declined` at once and parks nothing; after the run the ordinary confirm parks again', async () => {
+    const begun = beginDelegatedRun({ appId: 'app-f1', appName: 'Weather', runId: 'run-1', taskId: 't1', title: 'Morning forecast', generation: 1 });
+    expect(begun.ok).toBe(true);
+    try {
+      const during = createOpenUrlHandlerFor('app-f1').open('https://merchant.example/account/cancel');
+      expect(await settledWithin(during), 'declined at once, never parked for the dialog').toBe('declined');
+      expect(openUrlConfirmStore.get()).toBeNull();
+
+      // Another app's run does not close THIS app's seat (the record is per app).
+      const other = createOpenUrlHandlerFor('app-f1-other').open('https://b.example/');
+      expect(openUrlConfirmStore.get()).toMatchObject({ appId: 'app-f1-other', url: 'https://b.example/' });
+      resolveOpenUrlConfirm('declined');
+      await expect(other).resolves.toBe('declined');
+    } finally {
+      endDelegatedRun('app-f1', 'run-1');
+      clearTouchedGeneration('app-f1', 1);
+    }
+
+    const after = createOpenUrlHandlerFor('app-f1').open('https://merchant.example/account/cancel');
+    expect(openUrlConfirmStore.get(), 'the run ended: the seat is the ordinary one again').toMatchObject({ appId: 'app-f1', url: 'https://merchant.example/account/cancel' });
+    resolveOpenUrlConfirm('opened');
+    await expect(after).resolves.toBe('opened');
   });
 });
