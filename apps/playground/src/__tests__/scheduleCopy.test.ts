@@ -25,11 +25,13 @@ import { describe, expect, it } from 'vitest';
 
 import {
   APP_UNREACHABLE_SUMMARY,
+  AUTH_REPAIR_VIA_REFRESH,
   AUTH_REPAIR_VIA_SCHEDULE,
   CONSENT,
   DELEGATED_CONFIRM,
   EMPTY,
   MISSED_ACTIONS,
+  REFRESH_RUN,
   RESULT_STATUS_WORD,
   RUNNING_CHIP,
   SCHEDULED_NEXT,
@@ -380,8 +382,8 @@ describe('empty states and the running chip', () => {
     });
   });
 
-  it('RUNNING_CHIP: the label and its one act (security F15) — and, since TASK-20261010-host-broker PR-1, where a delegated run is running', () => {
-    expect(RUNNING_CHIP).toEqual({ label: 'a schedule is running', cancel: 'cancel', inApp: expect.any(Function) });
+  it('RUNNING_CHIP: the label and its one act (security F15) — and, since TASK-20261010-host-broker PR-1, where a delegated run is running — and, since PR-3 (D-PR3-19), what a refresh another app asked for is fetching', () => {
+    expect(RUNNING_CHIP).toEqual({ label: 'a schedule is running', cancel: 'cancel', inApp: expect.any(Function), fetching: expect.any(Function) });
   });
 });
 
@@ -518,6 +520,43 @@ describe('the delegated run — the two sentences folded into copy.ts (Gate-5 fo
 });
 
 // ---------------------------------------------------------------------------------------------
+// TASK-20261010-host-broker PR-3 — the refresh's sentences (contract v2 D-PR3-17, D-PR3-19;
+// DS8, DS20). A refresh another app asked for runs the SOURCE's own code: the running chip says
+// what it is fetching and who asked (`RUNNING_CHIP.fetching(sourceName)` as the label,
+// `REFRESH_RUN.title(requestedBy)` as the title — also the delegated record's `title`), and the
+// reconnect chip attributes a 401 the refresh hit (`AUTH_REPAIR_VIA_REFRESH`). Single-homed here
+// like every other sentence; "run" stays a verb; "task"/"proposal" never appear. Two layers, as for
+// the delegated run: the dynamic parts, then the contract's text byte for byte.
+// ---------------------------------------------------------------------------------------------
+
+describe('the refresh another app asked for (TASK-20261010-host-broker PR-3) — exports and their dynamic parts', () => {
+  it('REFRESH_RUN.title names who asked; RUNNING_CHIP.fetching names the app that fetches; AUTH_REPAIR_VIA_REFRESH is a short attribution line', () => {
+    expect(REFRESH_RUN.title('Budget')).toContain('Budget');
+    expect(RUNNING_CHIP.fetching('Ledger')).toContain('Ledger');
+    expect(typeof AUTH_REPAIR_VIA_REFRESH).toBe('string');
+    expect(AUTH_REPAIR_VIA_REFRESH.length).toBeGreaterThan(0);
+  });
+
+  it('the refresh attribution is NOT the schedule one — the chip says which kind of run hit the connection', () => {
+    expect(AUTH_REPAIR_VIA_REFRESH).not.toBe(AUTH_REPAIR_VIA_SCHEDULE);
+    expect(RUNNING_CHIP.fetching('Ledger')).not.toBe(RUNNING_CHIP.inApp('Ledger'));
+  });
+
+  it('none of the new sentences spells "task" or "proposal"', () => {
+    const sentences = [REFRESH_RUN.title('A'), RUNNING_CHIP.fetching('A'), AUTH_REPAIR_VIA_REFRESH];
+    expect(sentences.filter((text) => /\b(task|proposal)s?\b/i.test(text))).toEqual([]);
+  });
+});
+
+describe('the refresh — the contract’s text, byte for byte (D-PR3-19)', () => {
+  it('REFRESH_RUN.title, RUNNING_CHIP.fetching and AUTH_REPAIR_VIA_REFRESH', () => {
+    expect(REFRESH_RUN.title('Budget')).toBe('Budget asked');
+    expect(RUNNING_CHIP.fetching('Ledger')).toBe('fetching new data in Ledger');
+    expect(AUTH_REPAIR_VIA_REFRESH).toBe('a fetch another app asked for ran into this');
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
 // THE VOCABULARY SCAN
 // ---------------------------------------------------------------------------------------------
 
@@ -596,6 +635,12 @@ describe('vocabulary scan — no UI file spells "task" or "proposal" as a user-f
       }
     }
     expect(offenders).toEqual([]);
+  });
+
+  it('the refresh engine (`access/refresh.ts`, TASK-20261010-host-broker PR-3) is held to the same rule — its sentences come from copy.ts, its strings spell neither word', () => {
+    const file = path.join(PLAYGROUND_SRC, 'access', 'refresh.ts');
+    expect(existsSync(file), 'access/refresh.ts exists').toBe(true);
+    expect(internalWordsIn(readFileSync(file, 'utf8'))).toEqual([]);
   });
 
   it('…and copy.ts itself spells neither word in any of its sentences — the exemption is for its comments, not its strings', () => {

@@ -36,9 +36,13 @@ import {
   ACCESS_PURPOSE_MAX_CHARS,
   ACCESS_QUERY_RATE_PER_MINUTE,
   ACCESS_QUERY_TIMEOUT_MS,
+  ACCESS_READ_EVENT,
   ACCESS_REQUEST_MIN_GAP_MS,
+  ACCESS_SOURCE_CHANGED_EVENT,
   ACCESS_SQL_MAX_CHARS,
   ACCESS_TIMEOUT_STRIKES,
+  ACCESS_WRITE_MAX_ROWS,
+  DATA_CHANGED_EVENT,
   FRAME_TYPES,
   PROTOCOL_VERSION,
 } from '@snugprotocol/protocol';
@@ -127,13 +131,13 @@ describe('AC24 — the page is in the store, out of the inline core, with its he
     expect(INLINE_KNOWLEDGE_CORE_FILES).not.toContain(KB_FILE);
   });
 
-  it('the heading tree is pinned — these are the retrieval keys', () => {
+  it('the heading tree is pinned — these are the retrieval keys (PR-3: "Four Ops" → "Seven Ops", moved together with the frames-table section key)', () => {
     const doc = getKnowledgeBase().find((entry) => entry.file === KB_FILE)!;
     expect(doc.headingTree).toEqual([
       '# Access Between Apps',
       "## Read Another App's Data Only With the User's Say",
       '## Ask After a User Act, Never on Load',
-      '## The Two Frames and Their Four Ops',
+      '## The Two Frames and Their Seven Ops',
       '## What Your App Learns',
       '## Query: One Read-Only SELECT',
       '## When It Stops, Pauses or Ends',
@@ -224,8 +228,8 @@ describe('AC24 content sync — the exchange the KB teaches is the one the proto
     expect(usage).not.toMatch(/useEffect|setTimeout|setInterval/);
   });
 
-  it('teaches the four ops of the request — ACCESS_OPS exactly — in the frames table', () => {
-    const table = section(rendered(KB_FILE), '## The Two Frames and Their Four Ops');
+  it('teaches the seven ops of the request — ACCESS_OPS exactly — in the frames table (PR-3: the section is "…Seven Ops", moved with the heading tree)', () => {
+    const table = section(rendered(KB_FILE), '## The Two Frames and Their Seven Ops');
     const body = table.slice(table.indexOf('|---|')); // the rows, below the header row (whose first cell is `op`)
     const ops = [...body.matchAll(/^\| `(\w+)` \|/gm)].map((m) => m[1]);
     expect(ops).toEqual([...ACCESS_OPS]);
@@ -291,7 +295,7 @@ describe('AC24 content sync — the exchange the KB teaches is the one the proto
     expect(query).toContain("Every read is recorded in the other app's history");
   });
 
-  it('teaches the access-changed hint as ids only and the re-list, and names the module SDK by its real exports', () => {
+  it('teaches the access-changed hint as ids only and the re-list, and names the module SDK by its real exports (PR-3: SnugAccess has eleven methods, each named in the helper prose)', () => {
     const changes = prose(section(rendered(KB_FILE), '## When It Stops, Pauses or Ends'));
     expect(changes).toContain(`\`event: '${ACCESS_CHANGED_EVENT}'\``);
     expect(changes).toContain('`data: { grantId }` — ids only');
@@ -306,7 +310,63 @@ describe('AC24 content sync — the exchange the KB teaches is the one the proto
     const helper = prose(section(rendered(KB_FILE), '## The Cross-App Helper (copy beside the hooks block)'));
     expect(helper).toContain("`useSnugAccess()` from `@snugprotocol/sdk`");
     for (const method of SDK_ACCESS_METHODS) expect(helper, `SnugAccess.${method}`).toContain(`\`${method}(`);
-    expect(SDK_ACCESS_METHODS.sort()).toEqual(['list', 'onChange', 'query', 'release', 'request']);
+    expect(SDK_ACCESS_METHODS.sort()).toEqual(
+      ['discover', 'list', 'onChange', 'onDataChanged', 'onRead', 'onSourceChanged', 'query', 'refresh', 'release', 'request', 'write'],
+    );
+  });
+});
+
+// TASK-20261010-host-broker PR-3 (AC27; spec 1.2, ADR-0076 §4–§8; D-PR3-5, DS10/DS11): KB 87 v2
+// teaches the three new ops, the write rule and the 1.1-host fallback, and its helper hears the
+// three new hints. The content-sync pins read the protocol's constants, never retyped values.
+describe('PR-3 — KB 87 v2: write, refresh, discover, the three hints, the fallback', () => {
+  it('the refusal table lists the fifteen codes — ACCESS_WRITE_REFUSED, ACCESS_BUSY and ACCESS_REFRESH_FAILED among them', () => {
+    const table = section(rendered(KB_FILE), '## What Each Refusal Means');
+    const codes = [...table.slice(table.indexOf('|---|')).matchAll(/^\| `([A-Z_]+)` \|/gm)].map((m) => m[1]);
+    expect(codes).toHaveLength(15);
+    for (const code of ['ACCESS_WRITE_REFUSED', 'ACCESS_BUSY', 'ACCESS_REFRESH_FAILED']) expect(codes, code).toContain(code);
+  });
+
+  it('the frames table lists the seven ops in ACCESS_OPS order, write, refresh and discover in their places', () => {
+    const table = section(rendered(KB_FILE), '## The Two Frames and Their Seven Ops');
+    const ops = [...table.slice(table.indexOf('|---|')).matchAll(/^\| `(\w+)` \|/gm)].map((m) => m[1]);
+    expect(ops).toEqual(['request', 'query', 'write', 'refresh', 'list', 'release', 'discover']);
+  });
+
+  it('states the MALFORMED fallback: a 1.1 runner answers the new ops — and an ask carrying access — MALFORMED (D-PR3-5)', () => {
+    expect(prose(rendered(KB_FILE))).toContain(
+      '`MALFORMED` answer to `write`, `refresh` or `discover`, or to an ask that carried `access`, means the runner predates 1.2 — show the honest fallback, and ask again without `access`',
+    );
+  });
+
+  it('states the write rule among the rules, bounded by ACCESS_WRITE_MAX_ROWS — and no longer says "read, never write"', () => {
+    const rules = prose(section(rendered(KB_FILE), '## Rules for Reading Another App'));
+    expect(ACCESS_WRITE_MAX_ROWS).toBe(200);
+    expect(rules).toContain(
+      `**Write only what the user allowed.** A table is writable only when its view says \`write: true\`; one plain INSERT/UPDATE/DELETE with literal values, at most ${ACCESS_WRITE_MAX_ROWS} rows at a time, every change undoable by the user from the other app's access`,
+    );
+    expect(rules).not.toContain('**Read, never write.**');
+  });
+
+  it('the page keeps exactly two javascript fences: the helper first (replaced in place), the usage second', () => {
+    const fences = fencedJs(rendered(KB_FILE));
+    expect(fences).toHaveLength(2);
+    expect(fences[0]).toContain('function snugAccessRequest(op, fields)');
+    expect(fences[1]).toMatch(/^async function on\w+Click\(\)/);
+  });
+
+  it('the RENDERED helper hears the three new hints — an arm for access-source-changed, data-changed and access-read, the event names the SDK subscribes with', () => {
+    const [helper, usage] = fencedJs(rendered(KB_FILE));
+    expect([ACCESS_SOURCE_CHANGED_EVENT, DATA_CHANGED_EVENT, ACCESS_READ_EVENT]).toEqual(['access-source-changed', 'data-changed', 'access-read']);
+    for (const event of [ACCESS_SOURCE_CHANGED_EVENT, DATA_CHANGED_EVENT, ACCESS_READ_EVENT]) {
+      expect(helper, `the helper's ${event} arm`).toContain(`data.event === '${event}'`);
+      expect(usage, `${event} belongs to the helper, not the usage`).not.toContain(`'${event}'`);
+    }
+    // The 1.1 arm stays (pinned verbatim above), and the SDK subscribes to the same three constants.
+    expect(helper).toContain(`data.event === '${ACCESS_CHANGED_EVENT}'`);
+    for (const constant of ['ACCESS_SOURCE_CHANGED_EVENT', 'DATA_CHANGED_EVENT', 'ACCESS_READ_EVENT']) {
+      expect(SDK_ACCESS_SOURCE, constant).toContain(`onHostEvent(${constant},`);
+    }
   });
 });
 
@@ -325,6 +385,13 @@ describe('AC24 — the one row, the one clause, the trigger, the skill section',
     expect(summary.match(/another app's data/g)).toHaveLength(1);
     expect(summary).toContain("may read another app's data only under an access the user allows");
     expect(source(KB_SUMMARY_SOURCE)).not.toContain('{{frameType:access');
+  });
+
+  it('PR-3: 00-summary\'s one clause gains "or change, when you allowed it" — still ONE clause about another app\'s data', () => {
+    const summary = prose(getKnowledgeSummary());
+    expect(summary).toContain('or change, when you allowed it');
+    expect(summary.match(/another app's data/g)).toHaveLength(1);
+    expect(summary.match(/or change, when you allowed it/g)).toHaveLength(1);
   });
 
   it('tools/app-builder.md carries the trigger: when the user wants an app that reads another app’s data', () => {
@@ -349,6 +416,18 @@ describe('AC24 — the one row, the one clause, the trigger, the skill section',
     expect(references).toContain("`references/87-cross-app-access.md` — when the app should read another app's data.");
     expect(promptFilesOnDisk().some((f) => f.rel === KB_FILE)).toBe(true);
   });
+
+  // TASK-20261010-host-broker PR-3 (I-W; D-PR3-4/23): access may now CHANGE the other app's rows when
+  // the user ticks it — the skill's section says so in ONE clause, the contract's words verbatim.
+  it('PR-3: the *Access between apps* section says an app may also change the other app’s data — "— or change it, when the user ticked that" — once', () => {
+    const skill = source(SKILL_FILE);
+    const access = prose(skill.split('## Access between apps')[1]?.split('## Schedules')[0] ?? '');
+    expect(access.split('— or change it, when the user ticked that').length - 1).toBe(1);
+    // The clause rides the user's words: still nothing the user did not allow, still never on load.
+    expect(access).toMatch(/^ ?The user allows access between apps; an app never takes it, and neither do you\./);
+    expect(access).toMatch(/never on load/);
+    expect(access.match(INTERNAL_NOUNS)?.[0]).toBeUndefined();
+  });
 });
 
 describe('AC23 host-mcp line — the launch protocol says who allows access between apps', () => {
@@ -370,6 +449,15 @@ describe('AC23 host-mcp line — the launch protocol says who allows access betw
 
   it('says it in the user’s words — no grant, reader, scope or log', () => {
     expect(paragraphs.join(' ').match(INTERNAL_NOUNS)?.[0]).toBeUndefined();
+  });
+
+  // TASK-20261010-host-broker PR-3 (I-W): the same one paragraph says access may also change the other
+  // app's data when the user ticked that — the contract's clause verbatim, once.
+  it('PR-3: the one paragraph adds "— or change it, when the user ticked that" — and is still the one paragraph', () => {
+    expect(paragraphs).toHaveLength(1);
+    const [paragraph] = paragraphs as [string];
+    expect(paragraph.split('— or change it, when the user ticked that').length - 1).toBe(1);
+    expect(paragraph).toContain("You never allow it on the user's behalf");
   });
 });
 

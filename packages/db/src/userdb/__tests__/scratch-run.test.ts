@@ -516,6 +516,29 @@ describe('D-PR2-9 attach — another app’s materialised rows as plain tables i
     expect(after.statements[0]?.error).toMatch(/no such table/i);
   });
 
+  // TASK-20261010-host-broker PR-3 (contract v2 D-PR3-16/22): under a `kv` grant the chat's
+  // materialised set carries the source's FILTERED kv as `<alias>__snug_kv` (key, value), attached
+  // LAST like any other table. The name never collides with the reading app's OWN `snug_kv` (ADR-0010's
+  // exemption stays the app's own): both are present, each answers its own rows.
+  it('the kv attach name `<alias>__snug_kv` sits beside the app’s OWN snug_kv — no collision, each answers its own rows, the attached one untyped', async () => {
+    await db.driver.handle(appId, kvSetFrame('theme', 'light'));
+    const result = await run(
+      [
+        { sql: 'SELECT key, value FROM snug_kv ORDER BY key' },
+        { sql: 'SELECT key, value FROM ledger__snug_kv ORDER BY key' },
+        { sql: "SELECT name, type FROM pragma_table_info('ledger__snug_kv') ORDER BY cid" },
+      ],
+      [LEDGER_TRANSACTIONS, { name: 'ledger__snug_kv', columns: ['key', 'value'], rows: [['theme', '"dark"']] }],
+    );
+    expect(result.statements.map((statement) => statement.error)).toEqual([undefined, undefined, undefined]);
+    expect(result.statements[0]?.rows).toEqual([['theme', '"light"']]);
+    expect(result.statements[1]?.rows).toEqual([['theme', '"dark"']]);
+    expect(result.statements[2]?.rows).toEqual([
+      ['key', ''],
+      ['value', ''],
+    ]);
+  });
+
   it('no attach (absent, or an empty list) is exactly today’s run', async () => {
     const plain = await db.scratchRun(appId, [{ sql: 'SELECT count(*) FROM expenses' }]);
     const empty = await run([{ sql: 'SELECT count(*) FROM expenses' }], []);

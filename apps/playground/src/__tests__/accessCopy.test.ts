@@ -34,14 +34,29 @@
 // `materialise.ts`, `limits.ts`, `grantFacts.ts`, `AccessCard.tsx`) IN MEMORY: the scan is clean on
 // the REAL file's bytes and bites on those bytes with a sentence appended — no module is ever
 // written by this file (PR-2 Gate-5 DOORS-4), and an absent module is red here, never created.
+//
+// TASK-20261010-host-broker PR-3 (D-PR3-23/24/25; DS2–DS7, DS12, DS13, DS19, DS21–DS23): the
+// write, the undo and the refresh — every new sentence pinned by bytes where the contract gives
+// them (a sentence the contract names without bytes is pinned to the simplest reading and listed
+// as a question in the lane report), the STRAIGHT apostrophe for every new sentence outside
+// `EGRESS.*`/`CHAT_DOOR.*` (DS22), the five amended read sentences (DS21: `iconTitle`, `noHistory`,
+// `SETTINGS_CARD.intro`, `.clearHistoryHint`, `ACCESS_APP_MESSAGES` + seven keys) rewritten in
+// place with the reason in their titles. The copy's new keys and signatures are reached through
+// LOCAL structural types (`CopyV3` below) until copy.ts exports them — the implementation lane
+// swaps the casts for the real exports at Gate 5. The vocabulary scan's PR-2 module list loses
+// `limits.ts` (deleted — its limits moved to the protocol, D-PR3-26) and the planted-sentence proof
+// runs over the three modules PR-3 adds (`writeBroker.ts`, `refresh.ts`, `doorbell.ts`) in memory,
+// SKIPPED with its reason while a module is absent — never created here.
 import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 import ts from 'typescript';
 
 import { ACCESS_SUSPEND_REASONS, accessGrantSchema, type AccessGrantStatus } from '@snugprotocol/protocol';
+import * as protocol from '@snugprotocol/protocol';
 import { describe, expect, it } from 'vitest';
 
+import * as copy from '../access/copy.js';
 import {
   ACCESS_APP_MESSAGES,
   ACCESS_CARD,
@@ -368,9 +383,9 @@ describe('the strip and consent sheet keys W3b added after the freeze (CONSENT_U
 });
 
 describe('the access sheet, history and the Settings card (AC19 copy)', () => {
-  it('the run header icon and the sheet’s sections', () => {
+  it('the run header icon and the sheet’s sections — iconTitle and noHistory amended by PR-3 to say change too (D-PR3-24, DS21)', () => {
     expect(ACCESS_SHEET.iconLabel).toBe('access');
-    expect(ACCESS_SHEET.iconTitle).toBe('what this app can read, and who can read it');
+    expect(ACCESS_SHEET.iconTitle).toBe('what this app can read or change, and who can read or change it');
     expect(ACCESS_SHEET.title('Budget')).toBe("Budget's access");
     expect(ACCESS_SHEET.reads('Budget')).toBe('Budget reads');
     expect(ACCESS_SHEET.readBy('Ledger')).toBe('what reads Ledger');
@@ -379,7 +394,7 @@ describe('the access sheet, history and the Settings card (AC19 copy)', () => {
     expect(ACCESS_SHEET.endedRow('Budget', 'Ledger', ['transactions'])).toBe("Budget's access to Ledger's transactions");
     expect(ACCESS_SHEET.history).toBe('history');
     expect(ACCESS_SHEET.historyImported).toBe('from an imported file');
-    expect(ACCESS_SHEET.noHistory).toBe('no reads on record');
+    expect(ACCESS_SHEET.noHistory).toBe('nothing on record yet');
     expect(ACCESS_SHEET.whatItAsked).toBe('what it asked');
     expect(ACCESS_SHEET.declinedAsks).toBe('declined asks');
     expect(ACCESS_SHEET.allowDeclined).toBe('allow…');
@@ -439,16 +454,18 @@ describe('the access sheet, history and the Settings card (AC19 copy)', () => {
     expect(accessGrantSchema.safeParse(record).success).toBe(true);
   });
 
-  it('the Settings card states the switch’s custody', () => {
+  it('the Settings card states the switch’s custody — intro and clearHistoryHint amended by PR-3 to say change too (D-PR3-24, DS21)', () => {
     expect(SETTINGS_CARD.title).toBe('access between apps');
-    expect(SETTINGS_CARD.intro).toBe("which of your apps can read another app's data — the app that was read keeps a history of its reads");
+    expect(SETTINGS_CARD.intro).toBe(
+      "which of your apps can read — or change, when you allowed it — another app's data; the app that was read keeps a history of its reads and changes",
+    );
     expect(SETTINGS_CARD.empty).toBe("no app can read another app's data yet");
     expect(SETTINGS_CARD.neverAsk).toBe("never let apps ask to read other apps' data");
     expect(SETTINGS_CARD.neverAskHint).toBe('kept in this browser only — it does not travel with your file');
     expect(SETTINGS_CARD.mutedTitle).toBe("apps that won't ask");
     expect(SETTINGS_CARD.unmute('Budget')).toBe('let Budget ask again');
     expect(SETTINGS_CARD.clearHistory).toBe('clear history');
-    expect(SETTINGS_CARD.clearHistoryHint).toBe('when access was allowed, stopped or paused stays on record');
+    expect(SETTINGS_CARD.clearHistoryHint).toBe('when access was allowed, stopped or paused — and every change — stays on record');
   });
 
   it('the Settings card’s clear-history confirm and the creation act’s app picker (W3b keys, added after the freeze)', () => {
@@ -465,7 +482,7 @@ describe('the access sheet, history and the Settings card (AC19 copy)', () => {
     expect(updatePausesAccess('Budget', ['Ledger', 'Pantry'])).toBe("Budget's access to Ledger and Pantry will pause until you allow it again");
   });
 
-  it('the app-facing messages the handler sends, one per refusal', () => {
+  it('the app-facing messages the handler sends, one per refusal — PR-3 adds the seven write/refresh keys (D-PR3-13/15/17/24)', () => {
     expect(ACCESS_APP_MESSAGES).toEqual({
       invalidRequest: 'that ask could not be read',
       notGranted: 'no access — ask first',
@@ -488,6 +505,14 @@ describe('the access sheet, history and the Settings card (AC19 copy)', () => {
       askRateLimited: 'asking too often — wait a few seconds',
       queryRateLimited: 'too many reads — wait a minute',
       hostError: 'access between apps is not available right now',
+      // PR-3 (D-PR3-24): every one reveals no source fact and invites no re-ask (DS19).
+      writeNotGranted: 'this access is read-only for that table',
+      writeRefused: expect.any(Function),
+      busy: 'the other app is in the middle of a change — try again',
+      refreshNotGranted: 'this access does not allow asking for new data',
+      refreshNoHandler: 'the other app does not fetch on request',
+      refreshFailed: expect.any(Function),
+      refreshOff: 'schedules are off for this file',
     });
   });
 });
@@ -657,6 +682,291 @@ describe('provenance — the reader’s line the host derives (D11)', () => {
 });
 
 // ---------------------------------------------------------------------------------------------
+// TASK-20261010-host-broker PR-3 — the write, the undo, the refresh (D-PR3-23/24; DS2–DS7, DS12,
+// DS13, DS19, DS21–DS23). The keys below do not exist yet: they are reached through LOCAL
+// structural types (the implementation lane replaces the casts with the real exports at Gate 5).
+// ---------------------------------------------------------------------------------------------
+
+/** A sentence that is either fixed or a function of the source's name. */
+type SourceWords = string | ((sourceName: string) => string);
+
+/** LOCAL structural type — the PR-3 keys and signatures of copy.ts (D-PR3-23/24), until copy.ts exports them. */
+interface CopyV3 {
+  CONSENT_SHEET: {
+    title(readerName: string, wantsWrite?: boolean): string;
+    canChange: string;
+    chooseColumns: string;
+    showAllColumns(n: number): string;
+    pickAColumn: string;
+    settingsAndNotes(sourceName: string): string;
+    settingsAndNotesHint(sourceName: string): string;
+    fetchFirst(sourceName: string): string;
+    fetchFirstHint(sourceName: string): string;
+    /** Q (lane U): the contract's bytes name the READER, so the reader's name is a third argument. */
+    undoNote(sourceName: string, table: string, readerName: string): string;
+    moreOptions: string;
+  };
+  STRIP: { title(readerName: string, wantsWrite?: boolean): string };
+  STRIP_OUTCOME: { allowed(readerName: string, sourceName: string, tables: readonly string[], duration: 'session' | 'day' | 'week' | 'always', write?: readonly string[]): string };
+  /** Q (lane U): `write` is the written tables (the outcome's `write`); any non-empty value means the access carried write. */
+  CONSENT_UI: { stopped(readerName: string, sourceName: string, tables: readonly string[], write?: readonly string[]): string };
+  EGRESS: { closing(sourceName: string, canChange?: boolean): string };
+  ACCESS_SHEET: {
+    canChange: string;
+    couldChange: string;
+    whatItChanged: string;
+    undo: string;
+    /** Q (lane U): the contract's bytes name the SOURCE ("if Ledger changed them since"), so the source's name is a third argument. */
+    undoArm(table: string, n: number, sourceName: string): string;
+    undoYes: string;
+    undoKeep: string;
+    undone: string;
+    undoFailed(reason: string): string;
+  };
+  ACCESS_APP_MESSAGES: {
+    writeRefused(rule: string): string;
+    refreshFailed(reason: string): string;
+  };
+  REFRESH_HISTORY_WORDS: Readonly<Record<string, SourceWords>>;
+  /** Q (lane U): the refreshed line names the SOURCE ("asked Ledger to fetch new data"), so its name is a fourth argument. */
+  historyLine(entry: Record<string, unknown>, now: number, readerName?: string, sourceName?: string): string;
+}
+const V3 = copy as unknown as CopyV3;
+const sourceWords = (words: SourceWords | undefined, sourceName: string): string | undefined => (typeof words === 'function' ? words(sourceName) : words);
+
+/** The refusal rules a write is answered with (D-PR3-24) — the contract's words, verbatim. */
+const WRITE_RULES = [
+  "that table can't be changed from another app",
+  'names no rows — a change to every row is made in the other app itself',
+  "a column it names isn't shared",
+  "a computed column can't be used in a change",
+  "a value in it can't be matched",
+  'too many rows — at most 200 at a time',
+  'too large to undo',
+  'too many changes are waiting to be undone — undo them or wait',
+] as const;
+
+/** The reasons a `refreshed` line may carry (ACCESS_REFRESH_REASONS, D-PR3-6 / DS13), in the protocol's order. */
+const REFRESH_REASONS = ['no-handler', 'timeout', 'capped', 'refused', 'failed'] as const;
+
+describe('PR-3 — the consent sheet’s new sentences (D-PR3-23; DS2–DS6, DS18, DS22, DS23)', () => {
+  it('the title says change only for an ask that carried access: write — the read ask’s title is today’s', () => {
+    expect(V3.CONSENT_SHEET.title('Budget', true)).toBe("Budget wants to read — and change — another app's data");
+    expect(V3.STRIP.title('Budget', true)).toBe("Budget wants to read — and change — another app's data");
+    expect(V3.CONSENT_SHEET.title('Budget', false)).toBe("Budget wants to read another app's data");
+    expect(V3.STRIP.title('Budget', false)).toBe(STRIP.title('Budget'));
+    expect(STRIP.title('Budget')).toBe("Budget wants to read another app's data");
+  });
+
+  it('the table row: the write toggle, the columns disclosure, its show-all, and the one-column rule', () => {
+    expect(V3.CONSENT_SHEET.canChange).toBe('can also change rows');
+    expect(V3.CONSENT_SHEET.chooseColumns).toBe('choose columns…');
+    expect(V3.CONSENT_SHEET.showAllColumns(10)).toBe('show all 10 columns');
+    // Q (lane U): the contract names the key without bytes; the pickATable twin's shape.
+    expect(V3.CONSENT_SHEET.pickAColumn).toBe('choose at least one column');
+    // Q (lane U): the disclosure's label — the contract calls it *more options…*.
+    expect(V3.CONSENT_SHEET.moreOptions).toBe('more options…');
+  });
+
+  it('the options row: settings & notes and fetch-first, each with its hint naming the source (DS23)', () => {
+    expect(V3.CONSENT_SHEET.settingsAndNotes('Ledger')).toBe("Ledger's settings & notes");
+    expect(V3.CONSENT_SHEET.settingsAndNotesHint('Ledger')).toBe('what Ledger keeps outside its tables — never its connections or keys');
+    expect(V3.CONSENT_SHEET.fetchFirst('Ledger')).toBe('may ask Ledger to fetch new data before reading it');
+    expect(V3.CONSENT_SHEET.fetchFirstHint('Ledger')).toBe("through Ledger's own connections, at most once every five minutes, counted on your daily schedule limits");
+  });
+
+  it('the one breath under a ticked write toggle: up to 200 rows at a time, listed in the source’s access, undoable for seven days (DS3/DS4/DS18)', () => {
+    expect(V3.CONSENT_SHEET.undoNote('Ledger', 'transactions', 'Budget')).toBe(
+      "while you're here, Budget can change up to 200 rows at a time in Ledger's transactions; every change is listed in Ledger's access and can be undone for seven days",
+    );
+  });
+
+  it('the egress closing says changes too when any write is ticked — and is today’s sentence otherwise (DS4)', () => {
+    expect(V3.EGRESS.closing('Ledger', true)).toBe('the copy is made here, on this device; Ledger keeps a history of its reads and changes');
+    expect(V3.EGRESS.closing('Ledger', false)).toBe('the copy is made here, on this device; Ledger keeps a history of its reads');
+    expect(EGRESS.closing('Ledger')).toBe('the copy is made here, on this device; Ledger keeps a history of its reads');
+  });
+});
+
+describe('PR-3 — the strip’s and the card’s outcome lines with write (D-PR3-23; DS2)', () => {
+  it('allowed: read and change every table · or read them all and change some', () => {
+    expect(V3.STRIP_OUTCOME.allowed('Budget', 'Ledger', ['transactions'], 'session', ['transactions'])).toBe(
+      "Budget can now read and change Ledger's transactions · while it's open",
+    );
+    expect(V3.STRIP_OUTCOME.allowed('Budget', 'Ledger', ['transactions', 'accounts'], 'day', ['transactions', 'accounts'])).toBe(
+      "Budget can now read and change Ledger's transactions and accounts · for a day",
+    );
+    expect(V3.STRIP_OUTCOME.allowed('Budget', 'Ledger', ['transactions', 'accounts'], 'session', ['transactions'])).toBe(
+      "Budget can now read Ledger's transactions and accounts, and change transactions · while it's open",
+    );
+  });
+
+  it('allowed with NO written table is today’s line, byte for byte', () => {
+    expect(V3.STRIP_OUTCOME.allowed('Budget', 'Ledger', ['transactions'], 'week', [])).toBe(STRIP_OUTCOME.allowed('Budget', 'Ledger', ['transactions'], 'week'));
+    expect(STRIP_OUTCOME.allowed('Budget', 'Ledger', ['transactions'], 'week')).toBe("Budget can now read Ledger's transactions · for a week");
+  });
+
+  it('stopped says "no longer reads or changes" when the access carried write — and today’s line otherwise', () => {
+    expect(V3.CONSENT_UI.stopped('Budget', 'Ledger', ['transactions'], ['transactions'])).toBe("stopped — Budget no longer reads or changes Ledger's transactions");
+    expect(CONSENT_UI.stopped('Budget', 'Ledger', ['transactions'])).toBe("stopped — Budget no longer reads Ledger's transactions");
+  });
+});
+
+describe('PR-3 — the access sheet: the write badge, what it changed, the undo (D-PR3-24; DS7, DS12, DS14)', () => {
+  it('the badge on a live row and its past tense on an ended one; the disclosure title on a wrote row', () => {
+    expect(V3.ACCESS_SHEET.canChange).toBe('can also change rows');
+    // Q (lane U): the contract says "past tense on an ended row" without bytes.
+    expect(V3.ACCESS_SHEET.couldChange).toBe('could also change rows');
+    expect(V3.ACCESS_SHEET.whatItChanged).toBe('what it changed');
+  });
+
+  it('undo: the act, the armed question naming the table, the count and the source, and its two answers', () => {
+    // Q (lane U): the act's label is not given in bytes — *undo*.
+    expect(V3.ACCESS_SHEET.undo).toBe('undo');
+    expect(V3.ACCESS_SHEET.undoArm('transactions', 3, 'Ledger')).toBe(
+      'put 3 rows in transactions back as they were before this change? (if Ledger changed them since, nothing happens)',
+    );
+    expect(V3.ACCESS_SHEET.undoArm('transactions', 1, 'Ledger')).toBe(
+      'put 1 row in transactions back as they were before this change? (if Ledger changed them since, nothing happens)',
+    );
+    expect(V3.ACCESS_SHEET.undoYes).toBe('yes, undo');
+    expect(V3.ACCESS_SHEET.undoKeep).toBe('keep');
+  });
+
+  it('the undo’s outcome line: a fixed sentence on success, the reason said on a failure (shape only — Q: the contract gives no bytes)', () => {
+    expect(typeof V3.ACCESS_SHEET.undone).toBe('string');
+    expect(V3.ACCESS_SHEET.undone.length).toBeGreaterThan(0);
+    const failed = V3.ACCESS_SHEET.undoFailed('try again in a moment');
+    expect(failed).toContain('try again in a moment');
+    expect(V3.ACCESS_SHEET.undoFailed('this change can no longer be undone')).toContain('this change can no longer be undone');
+  });
+});
+
+describe('PR-3 — history rows for a change, its undo and a fetch (D-PR3-6/24; DS7, DS13)', () => {
+  const base = { grantId: '6f1c1d4e-2b3a-4c5d-8e9f-0a1b2c3d4e5f', readerAppId: 'budget', readerName: 'Budget' };
+  const twoMin = new Date(NOW - 2 * MIN).toISOString();
+  const undoId = '3b2a1c0d-4e5f-4a6b-8c7d-9e0f1a2b3c4d';
+  const wrote = { ...base, at: twoMin, kind: 'wrote', via: 'app', authority: 'permission', changes: 3, undoId, tables: ['transactions'], sql: "UPDATE transactions SET category = 'food' WHERE id = 1" };
+
+  it('wrote: "changed 3 rows in transactions · 2 min ago" — the count is rowsWord’s', () => {
+    expect(V3.historyLine(wrote, NOW, 'Budget')).toBe('changed 3 rows in transactions · 2 min ago');
+    expect(V3.historyLine({ ...wrote, changes: 1 }, NOW, 'Budget')).toBe('changed 1 row in transactions · 2 min ago');
+  });
+
+  it('wrote from the chat or on a schedule says so (Q: the clause’s place in the line is not given — pinned by content)', () => {
+    const chat = V3.historyLine({ ...wrote, via: 'chat' }, NOW, 'Budget');
+    expect(chat.startsWith('changed 3 rows in transactions')).toBe(true);
+    expect(chat).toContain('from its chat');
+    expect(chat).toContain('2 min ago');
+    const scheduled = V3.historyLine({ ...wrote, via: 'schedule' }, NOW, 'Budget');
+    expect(scheduled.startsWith('changed 3 rows in transactions')).toBe(true);
+    expect(scheduled).toContain('on a schedule');
+    expect(scheduled).toContain('2 min ago');
+    // An app's own write says neither.
+    expect(V3.historyLine(wrote, NOW, 'Budget')).not.toMatch(/from its chat|on a schedule/);
+  });
+
+  it('undone: the reader’s name moves INTO the sentence (the who is "you"): "undid Budget\'s change to transactions · 3 rows put back · 2 min ago"', () => {
+    const undone = { ...base, at: twoMin, kind: 'undone', via: 'user', changes: 3, tables: ['transactions'] };
+    expect(V3.historyLine(undone, NOW, 'Budget')).toBe("undid Budget's change to transactions · 3 rows put back · 2 min ago");
+    expect(V3.historyLine({ ...undone, changes: 1 }, NOW, 'Budget')).toBe("undid Budget's change to transactions · 1 row put back · 2 min ago");
+  });
+
+  it('refreshed: "asked Ledger to fetch new data · 2 min ago" — a reason from the fixed set adds its words; anything else adds nothing', () => {
+    const refreshed = { ...base, at: twoMin, kind: 'refreshed', via: 'app' };
+    expect(V3.historyLine(refreshed, NOW, 'Budget', 'Ledger')).toBe('asked Ledger to fetch new data · 2 min ago');
+    for (const reason of REFRESH_REASONS) {
+      const line = V3.historyLine({ ...refreshed, reason }, NOW, 'Budget', 'Ledger');
+      expect(line.startsWith('asked Ledger to fetch new data'), reason).toBe(true);
+      expect(line, reason).toContain(sourceWords(V3.REFRESH_HISTORY_WORDS[reason], 'Ledger'));
+      expect(line, reason).toContain('2 min ago');
+    }
+    // A handler's own text never reaches a line (DS13): an unknown reason is no words at all.
+    expect(V3.historyLine({ ...refreshed, reason: 'the bank said: call 555-0100' }, NOW, 'Budget', 'Ledger')).toBe('asked Ledger to fetch new data · 2 min ago');
+  });
+
+  it('REFRESH_HISTORY_WORDS covers exactly ACCESS_REFRESH_REASONS, worded like SUSPEND_HISTORY_WORDS', () => {
+    const reasons = (protocol as unknown as { ACCESS_REFRESH_REASONS?: readonly string[] }).ACCESS_REFRESH_REASONS;
+    expect(reasons).toEqual([...REFRESH_REASONS]);
+    expect(Object.keys(V3.REFRESH_HISTORY_WORDS ?? {}).sort()).toEqual([...REFRESH_REASONS].sort());
+    const words = (reason: string): string | undefined => sourceWords(V3.REFRESH_HISTORY_WORDS[reason], 'Ledger');
+    expect(words('no-handler')).toBe("Ledger can't fetch on request");
+    expect(words('timeout')).toBe('took too long');
+    expect(words('capped')).toBe('Ledger is at the daily limit');
+    expect(words('refused')).toBe('a change Ledger tried to send was refused');
+    expect(words('failed')).toBe("Ledger's fetch failed");
+  });
+
+  it('the read kinds keep their words under the new signature (the reader’s name changes nothing there)', () => {
+    const read = { ...base, at: twoMin, kind: 'read', tables: ['transactions'], rows: 412, attended: true };
+    expect(V3.historyLine(read, NOW, 'Budget')).toBe(historyLine(read as Parameters<typeof historyLine>[0], NOW));
+    expect(V3.historyLine({ ...base, at: twoMin, kind: 'granted' }, NOW, 'Budget')).toBe('allowed · 2 min ago');
+  });
+});
+
+describe('PR-3 — the app-facing write and refresh messages (D-PR3-13/15/17/24; DS19)', () => {
+  it('writeRefused names the rule — each of the eight in the contract’s words', () => {
+    for (const rule of WRITE_RULES) expect(V3.ACCESS_APP_MESSAGES.writeRefused(rule)).toBe(`the change was refused — ${rule}`);
+  });
+
+  it('refreshFailed says the reason without a source fact (shape only — Q: the contract gives no bytes)', () => {
+    for (const reason of REFRESH_REASONS) {
+      const message = V3.ACCESS_APP_MESSAGES.refreshFailed(reason);
+      expect(typeof message, reason).toBe('string');
+      expect(message.length, reason).toBeGreaterThan(0);
+      expect(message, reason).not.toMatch(INTERNAL_WORD);
+    }
+  });
+});
+
+describe('PR-3 — every new sentence keeps the straight apostrophe and the person’s words (DS22, D-PR3-25)', () => {
+  /** Every sentence PR-3 adds outside EGRESS.* / CHAT_DOOR.* (the two blocks that pin the curly one). */
+  const sentences = (): string[] => [
+    V3.CONSENT_SHEET.title('Budget', true),
+    V3.CONSENT_SHEET.canChange,
+    V3.CONSENT_SHEET.chooseColumns,
+    V3.CONSENT_SHEET.showAllColumns(10),
+    V3.CONSENT_SHEET.pickAColumn,
+    V3.CONSENT_SHEET.settingsAndNotes('Ledger'),
+    V3.CONSENT_SHEET.settingsAndNotesHint('Ledger'),
+    V3.CONSENT_SHEET.fetchFirst('Ledger'),
+    V3.CONSENT_SHEET.fetchFirstHint('Ledger'),
+    V3.CONSENT_SHEET.undoNote('Ledger', 'transactions', 'Budget'),
+    V3.CONSENT_SHEET.moreOptions,
+    V3.STRIP.title('Budget', true),
+    V3.STRIP_OUTCOME.allowed('Budget', 'Ledger', ['transactions', 'accounts'], 'session', ['transactions']),
+    V3.CONSENT_UI.stopped('Budget', 'Ledger', ['transactions'], ['transactions']),
+    V3.ACCESS_SHEET.canChange,
+    V3.ACCESS_SHEET.couldChange,
+    V3.ACCESS_SHEET.whatItChanged,
+    V3.ACCESS_SHEET.undo,
+    V3.ACCESS_SHEET.undoArm('transactions', 3, 'Ledger'),
+    V3.ACCESS_SHEET.undoYes,
+    V3.ACCESS_SHEET.undoKeep,
+    V3.ACCESS_SHEET.undone,
+    V3.ACCESS_SHEET.undoFailed('try again in a moment'),
+    ACCESS_SHEET.iconTitle,
+    ACCESS_SHEET.noHistory,
+    SETTINGS_CARD.intro,
+    SETTINGS_CARD.clearHistoryHint,
+    ...REFRESH_REASONS.map((reason) => sourceWords(V3.REFRESH_HISTORY_WORDS[reason], 'Ledger') ?? ''),
+    ...WRITE_RULES.map((rule) => V3.ACCESS_APP_MESSAGES.writeRefused(rule)),
+    ...REFRESH_REASONS.map((reason) => V3.ACCESS_APP_MESSAGES.refreshFailed(reason)),
+    ...(['writeNotGranted', 'busy', 'refreshNotGranted', 'refreshNoHandler', 'refreshOff'] as const).map(
+      (key) => (ACCESS_APP_MESSAGES as unknown as Record<string, string>)[key] ?? '',
+    ),
+  ];
+
+  it('no curly apostrophe in any of them', () => {
+    for (const sentence of sentences()) expect(sentence, sentence).not.toContain('’');
+  });
+
+  it('none spells grant, reader, scope or log', () => {
+    for (const sentence of sentences()) expect(sentence.match(INTERNAL_WORD)?.[0], sentence).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
 // THE VOCABULARY SCAN
 // ---------------------------------------------------------------------------------------------
 
@@ -734,8 +1044,15 @@ function accessFiles(dir: string = ACCESS_DIR): string[] {
 
 const COPY_FILE = path.join(ACCESS_DIR, 'copy.ts');
 
-/** The modules PR-2 adds under access/ (contract v2 D-PR2-15) — each is scanned like every other. */
-const PR2_ACCESS_MODULES = ['policy.ts', 'service.ts', 'materialise.ts', 'limits.ts', 'grantFacts.ts', 'AccessCard.tsx'] as const;
+/**
+ * The modules PR-2 adds under access/ (contract v2 D-PR2-15) — each is scanned like every other.
+ * PR-3 (D-PR3-26) deletes `limits.ts` (its four limits moved to the protocol), so it left this list;
+ * its absence is pinned below.
+ */
+const PR2_ACCESS_MODULES = ['policy.ts', 'service.ts', 'materialise.ts', 'grantFacts.ts', 'AccessCard.tsx'] as const;
+
+/** The modules PR-3 adds under access/ (D-PR3-15/17/20/25) — the Write Broker, the refresh engine, the doorbell. */
+const PR3_ACCESS_MODULES = ['writeBroker.ts', 'refresh.ts', 'doorbell.ts'] as const;
 
 function scanOffenders(): string[] {
   const offenders: string[] = [];
@@ -813,9 +1130,18 @@ describe('vocabulary scan — no file under access/ but copy.ts spells grant, re
     for (const name of ['copy.ts', 'egress.ts', 'provenance.ts', 'relevance.ts']) expect(files).toContain(name);
   });
 
-  it('the walk sees the modules PR-2 adds under access/ (D-PR2-15)', () => {
+  it('the walk sees the modules PR-2 adds under access/ (D-PR2-15) — limits.ts left the list: PR-3 deletes it (D-PR3-26)', () => {
     const files = accessFiles().map((file) => path.relative(ACCESS_DIR, file));
     for (const name of PR2_ACCESS_MODULES) expect(files).toContain(name);
+  });
+
+  it('limits.ts is gone — its limits moved to the protocol (D-PR3-26)', () => {
+    expect(existsSync(path.join(ACCESS_DIR, 'limits.ts'))).toBe(false);
+  });
+
+  it('the walk sees the modules PR-3 adds under access/: writeBroker.ts, refresh.ts, doorbell.ts (D-PR3-25)', () => {
+    const files = accessFiles().map((file) => path.relative(ACCESS_DIR, file));
+    for (const name of PR3_ACCESS_MODULES) expect(files).toContain(name);
   });
 
   it.each(PR2_ACCESS_MODULES)('the scan BITES on %s’s bytes: clean as shipped, red with a sentence planted in memory — the file is never written', (name) => {
@@ -832,6 +1158,34 @@ describe('vocabulary scan — no file under access/ but copy.ts spells grant, re
     expect(readFileSync(file, 'utf8'), 'the proof reads the file and never writes it').toBe(original);
   });
 
+  // PR-3 (D-PR3-25): the same in-memory proof over each module PR-3 adds — SKIPPED, with its reason in
+  // the title, while the module is absent (it lands with I-E1/I-E2); never created or written here.
+  for (const name of PR3_ACCESS_MODULES) {
+    const file = path.join(ACCESS_DIR, name);
+    const present = existsSync(file);
+    it.skipIf(!present)(
+      present
+        ? `the scan BITES on ${name}’s bytes: clean as shipped, red with a sentence planted in memory — the file is never written (PR-3)`
+        : `the scan BITES on ${name}’s bytes — SKIPPED: ${name} does not exist yet (it lands with the PR-3 engine lanes)`,
+      () => {
+        const original = readFileSync(file, 'utf8');
+        const kind = scriptKindOf(file);
+        expect(internalWordsIn(original, kind)).toEqual([]);
+        expect(internalWordsIn(`${original}\nexport const VOCABULARY_PROBE = 'the reader keeps a log of every grant';\n`, kind)).toEqual([
+          'the reader keeps a log of every grant',
+        ]);
+        expect(readFileSync(file, 'utf8'), 'the proof reads the file and never writes it').toBe(original);
+      },
+    );
+  }
+
+  it('the PR-3 authorities and refusal reasons are machine tokens no scan trips on (D-PR3-25: never `write-grant`)', () => {
+    for (const token of ['permission', 'approval', 'task', 'refused', 'not-granted', 'too-many', 'too-large', 'unsafe', 'busy', 'drifted', 'failed', 'copy-failed', 'drift', 'plan-write']) {
+      expect(internalWordsIn(`const t = '${token}';`), token).toEqual([]);
+    }
+    expect(internalWordsIn(`const t = 'write-grant';`)).toEqual(['write-grant']);
+  });
+
   it('every scanned file outside copy.ts is clean', () => {
     expect(scanOffenders()).toEqual([]);
   });
@@ -840,9 +1194,11 @@ describe('vocabulary scan — no file under access/ but copy.ts spells grant, re
     expect(internalWordsIn(readFileSync(COPY_FILE, 'utf8'), ts.ScriptKind.TS)).toEqual([]);
   });
 
-  it('the copy never calls this feature "share" in a user-facing sentence — except the one app-facing message AC12 pins verbatim', () => {
+  it('the copy never calls this feature "share" in a user-facing sentence — except the one app-facing message AC12 pins verbatim, and PR-3’s write rule about an unshared column (D-PR3-24)', () => {
     const shareWord = /\bshar(e|ed|ing)\b/i;
     const literals = stringLiterals(readFileSync(COPY_FILE, 'utf8'), ts.ScriptKind.TS).filter((text) => shareWord.test(text));
-    expect(literals.sort()).toEqual(["the other app's data is too large to share this way", 'installed from a share link on ${installedOn} · not built by you', 'never shared'].sort());
+    expect(literals.sort()).toEqual(
+      ["the other app's data is too large to share this way", 'installed from a share link on ${installedOn} · not built by you', 'never shared', "a column it names isn't shared"].sort(),
+    );
   });
 });

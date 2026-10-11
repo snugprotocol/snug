@@ -20,6 +20,23 @@
 //  - drop the per-grant dedupe of the `refused` line → the history-survives row reds;
 //  - drop the post-gather "is the frame still there" re-check → both mid-gather rows red;
 //  - let a hidden frame own a session grant again (match on generation alone) → the session rows red.
+//
+// PR-3 (TASK-20261010-host-broker; contract v2 D-PR3-4/13/14/15/20/21; §24.5 MUSTs 18–24): the
+// three new ops end to end through the same handler, inline workers and real in-memory user db —
+// `write` (changes only on the wire; the `wrote` line and the undo entry written BEFORE the answer;
+// the doorbells; every refusal in the reader's words from copy.ts; busy from the driver's flag;
+// attendance required; a stop while the plan runs wins; the per-reader cap; the shared minute),
+// `refresh` (the service's answer passed through; the tick; the engine's first gate) and `discover`
+// (the class, nothing recorded, the per-reader cache, the ask's presence rule). Red by design until
+// the wire (I-W), the db (I-D), the engine (I-E1/I-E2) and the sentences (I-U) land; every module
+// or export that does not exist yet is reached through a namespace or a variable specifier, and
+// every missing TYPE is a local structural one the implementation lane replaces at Gate 5.
+// Mutation checks (to run by hand once I-E1 lands, each red then restored):
+//  - append the `wrote` line after resolving (a deferred append) → the "before the answer" row reds;
+//  - ring `access-source-changed` without `except: readerAppId` → the "never the writer" row reds;
+//  - skip `stillWritable` after the plan → the stop-while-planning row reds;
+//  - key the discover cache on the app set instead of the reader → the cache row reds;
+//  - count writes in their own minute → the shared-minute row reds.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -40,12 +57,16 @@ import {
   accessRequestHash,
   type AccessRequestFrame,
 } from '@snugprotocol/protocol';
+// PR-3: the wire's new names, read through the namespace until I-W exports them (undefined until then).
+import * as protocol from '@snugprotocol/protocol';
 
 import { createAccessHandlerFor } from '../access/accessHandler.js';
 import { NO_ACCESS_ASKS_KEY, pendingAccessStore, type ConsentDecision, type PendingAccessRequest } from '../access/consent.js';
 import { startUserAsk } from '../access/userAsk.js';
 import { ACCESS_APP_MESSAGES, ACCESS_SHEET } from '../access/copy.js';
 import { __setAccessDepsForTests, accessRevisionStore, createGrantFromDecision, grantsForApp, resetAccessSession, type AnyAccessGrant } from '../access/grants.js';
+import { revokeAccess, type CreateGrantInput } from '../access/grants.js';
+import { __setAccessServiceForTests } from '../access/service.js';
 import { provenanceLine } from '../access/provenance.js';
 import { configureScopedRead, resetScopedReadForTests, type WorkerLike } from '../access/scopedRead.js';
 import { createScopedReadResponder } from '../access/scopedRead.worker.js';
@@ -1036,5 +1057,513 @@ describe('AC13 list and release', () => {
     const session = await grantFor({ duration: 'session', generation: 1 });
     const handler = createAccessHandlerFor(budget, { attended: false });
     expect(await handler.handle(budget, releaseFrame(session.id))).toEqual(refusal('ACCESS_NOT_GRANTED', ACCESS_APP_MESSAGES.notGranted, false));
+  });
+});
+
+// =========================================================================================
+// PR-3 — write · refresh · discover (contract v2 D-PR3-13/14/15/20/21; §24.5 MUSTs 18–24)
+// =========================================================================================
+
+/** The wire's PR-3 names (I-W) — a local widening of the namespace; undefined until they land. */
+const P3 = protocol as typeof protocol & {
+  ACCESS_SOURCE_CHANGED_EVENT: string;
+  DATA_CHANGED_EVENT: string;
+  ACCESS_UNDO_MAX_ENTRIES: number;
+  ACCESS_UNDO_TTL_MS: number;
+  ACCESS_DISCOVER_CACHE_MS: number;
+};
+
+/** The refusal rules a write is refused under, worded in copy.ts (D-PR3-24) — the KEYS are this lane's proposal (question E1-Q1). */
+type WriteRule = 'table' | 'no-where' | 'column' | 'computed' | 'value' | 'too-many' | 'too-large' | 'waiting';
+/** copy.ts's PR-3 sentences (I-U) — a local widening until they exist. */
+const M3 = ACCESS_APP_MESSAGES as typeof ACCESS_APP_MESSAGES & {
+  writeNotGranted: string;
+  refreshNotGranted: string;
+  refreshNoHandler: string;
+  refreshOff: string;
+  busy: string;
+  writeRefused(rule: WriteRule): string;
+};
+/** The words every write refusal starts with — read from copy.ts (two rules' sentences share them), never retyped. */
+const writeRefusedPrefix = (): string => {
+  const a = M3.writeRefused('table');
+  const b = M3.writeRefused('column');
+  let n = 0;
+  while (n < a.length && a[n] === b[n]) n += 1;
+  return a.slice(0, n);
+};
+
+/** One table of the v2 decision (D-PR3-23) — a local structural type until `CreateGrantInput.tables` takes it (I-U). */
+interface DecisionTableV2 {
+  name: string;
+  withheld: string[];
+  write: boolean;
+}
+
+/** The log entry v2 (D-PR3-6) — local until the protocol's `AccessLogEntry` carries the new seats. */
+type LogEntryV2 = ReturnType<UserDb['listAccessLog']>[number] & { via?: string; authority?: string; changes?: number; undoId?: string };
+
+/** The undo journal (D-PR3-7) as the db lane exposes it — a local structural type until `UserDb` declares it (I-D). */
+interface UndoEntryV2 {
+  id: string;
+  at: string;
+  expiresAt: string;
+  authority: string;
+  via: string;
+  grantId: string;
+  readerAppId: string;
+  readerName: string;
+  steps: Array<{ table: string; op: 'insert' | 'update' | 'delete'; columns: string[]; rows: Array<{ rowid: number; before?: unknown[]; after?: unknown[] }> }>;
+  undoneAt?: string;
+}
+interface UndoAccessors {
+  listAccessUndo(targetAppId: string, readerAppId?: string): UndoEntryV2[];
+}
+const undoJournal = (): UndoAccessors => db as unknown as UndoAccessors;
+
+/** `access/writeBroker.ts` (I-E1) — loaded through a variable specifier: the module does not exist yet. */
+interface WriteBrokerModule {
+  undoBrokeredWrite(db: UserDb, targetAppId: string, undoId: string, options: { via: 'user' }): Promise<{ ok: boolean; reason?: string }>;
+}
+const WRITE_BROKER_MODULE = '../access/writeBroker.js';
+const writeBroker = (): Promise<WriteBrokerModule> => import(/* @vite-ignore */ WRITE_BROKER_MODULE) as Promise<WriteBrokerModule>;
+
+// The three new frames, cast: the protocol's request union gains them in I-W.
+const writeFrame = (grantId: string, sql: string, params?: Array<string | number | null>): AccessRequestFrame =>
+  ({ ...base(), op: 'write', grantId, sql, ...(params !== undefined ? { params } : {}) }) as unknown as AccessRequestFrame;
+const refreshFrame = (grantId: string): AccessRequestFrame => ({ ...base(), op: 'refresh', grantId }) as unknown as AccessRequestFrame;
+const discoverFrame = (): AccessRequestFrame => ({ ...base(), op: 'discover', hints: { tables: ['transactions'], words: ['spending'] } }) as unknown as AccessRequestFrame;
+
+/** A v2 grant (write / kv / refresh), made through THE writer behind the user's allow. */
+async function writeGrantFor(over: {
+  reader?: string;
+  source?: string;
+  tables: DecisionTableV2[];
+  duration?: 'session' | 'day' | 'week' | 'always';
+  unattended?: boolean;
+  generation?: number;
+  refresh?: boolean;
+}): Promise<AnyAccessGrant> {
+  const reader = over.reader ?? budget;
+  const ranked = await collectSources(db, reader);
+  const source = [...ranked.matched, ...ranked.rest].find((candidate) => candidate.appId === (over.source ?? ledger));
+  if (source === undefined) throw new Error('no such candidate');
+  const input = {
+    readerAppId: reader,
+    source,
+    tables: over.tables,
+    duration: over.duration ?? 'day',
+    unattended: over.unattended ?? false,
+    ...(over.refresh === true ? { refresh: true } : {}),
+    purpose: 'to show spending by category',
+    provenance: 'app' as const,
+    generation: over.generation ?? 0,
+    now: clock.now,
+  };
+  return createGrantFromDecision(db, input as unknown as CreateGrantInput);
+}
+
+const WRITE_TRANSACTIONS: DecisionTableV2 = { name: 'transactions', withheld: [], write: true };
+const READ_ACCOUNTS: DecisionTableV2 = { name: 'accounts', withheld: [], write: false };
+const WRITE_ACCOUNTS: DecisionTableV2 = { name: 'accounts', withheld: [], write: true };
+
+/** A credential-shaped value (a known provider prefix, start-anchored). */
+const SECRET = 'sk-live1234567890abcdefghijklmn';
+
+async function rowsOf(appId: string, sql: string): Promise<unknown> {
+  const result = await db.driver.handle(appId, { v: PROTOCOL_VERSION, type: FRAME_TYPES.dbRequest, requestId: `read-${++seq}`, instanceId: 'check', op: 'exec', sql });
+  return result.ok ? result.rows : result;
+}
+
+async function execOn(appId: string, sql: string): Promise<void> {
+  const result = await db.driver.handle(appId, { v: PROTOCOL_VERSION, type: FRAME_TYPES.dbRequest, requestId: `exec-${++seq}`, instanceId: 'frame', op: 'exec', sql });
+  if (!result.ok) throw new Error(`exec failed: ${JSON.stringify(result)}`);
+}
+
+const wroteLines = (sourceId: string): LogEntryV2[] => (db.listAccessLog(sourceId) as LogEntryV2[]).filter((entry) => (entry.kind as string) === 'wrote');
+
+const isPlanWriteJob = (msg: unknown): boolean => typeof msg === 'object' && msg !== null && (msg as { kind?: unknown }).kind === 'plan-write';
+
+describe('PR-3 write — one plain statement on a table the user let it change, journaled, undoable (D-PR3-14/15; §24.5 MUSTs 18–22)', () => {
+  it('a write under a write grant answers { ok, op: write, changes } and NOTHING else; the source’s history has the wrote line (via app, authority permission, changes, undoId, the table, the statement) and the undo entry its structured rows — both written BEFORE the answer', async () => {
+    const grant = await writeGrantFor({ tables: [WRITE_TRANSACTIONS, READ_ACCOUNTS] });
+    const handler = createAccessHandlerFor(budget, { attended: true, generation: 0 });
+    const sql = "UPDATE transactions SET category = 'groceries' WHERE id = 1";
+    let atSettle: { line: LogEntryV2 | undefined; entries: number } | undefined;
+    const answer = await handler.handle(budget, writeFrame(grant.id, sql)).then((settled) => {
+      // The mutation test: read the file the instant the answer settles.
+      atSettle = { line: wroteLines(ledger)[0], entries: undoJournal().listAccessUndo(ledger).length };
+      return settled;
+    });
+
+    expect(answer, 'changes only — no undo id on the wire (DS16)').toEqual({ ok: true, op: 'write', changes: 1 });
+    expect(atSettle?.line, 'the wrote line exists when the answer settles').toBeDefined();
+    expect(atSettle?.entries, 'the undo entry exists when the answer settles').toBe(1);
+    expect(await rowsOf(ledger, 'SELECT category FROM transactions WHERE id = 1')).toEqual([['groceries']]);
+
+    const [entry] = undoJournal().listAccessUndo(ledger);
+    expect(entry).toMatchObject({
+      authority: 'permission',
+      via: 'app',
+      grantId: grant.id,
+      readerAppId: budget,
+      readerName: 'Budget',
+      steps: [{ table: 'transactions', op: 'update', columns: ['category'], rows: [{ rowid: 1, before: ['food'], after: ['groceries'] }] }],
+    });
+    expect(entry?.undoneAt).toBeUndefined();
+    expect(Date.parse(entry!.expiresAt) - Date.parse(entry!.at), 'kept seven days').toBe(7 * DAY);
+    expect(P3.ACCESS_UNDO_TTL_MS).toBe(7 * DAY);
+    expect(wroteLines(ledger)).toHaveLength(1);
+    expect(db.listAccessLog(ledger)[0]).toMatchObject({
+      kind: 'wrote',
+      grantId: grant.id,
+      readerAppId: budget,
+      readerName: 'Budget',
+      via: 'app',
+      authority: 'permission',
+      changes: 1,
+      undoId: entry!.id,
+      tables: ['transactions'],
+      sql,
+    });
+  });
+
+  it('data-changed rings the target’s live frame with { table }; access-source-changed rings every OTHER live reader with { grantId } — never the writer; no event carries a row, a value, a name or a count (D-PR3-20 (c))', async () => {
+    // A source seeded with ONE row-modifying exec, so the doorbell's coalescing window has no trailing ring to add.
+    const journal = db.installApp({ displayName: 'Journal', html: '<!doctype html><title>j</title>' }).appId;
+    await seed(journal, ['CREATE TABLE entries (id INTEGER PRIMARY KEY, title TEXT, amount INTEGER)'], ["INSERT INTO entries (title, amount) VALUES ('tea', 3), ('cake', 5)"]);
+    const mine = await writeGrantFor({ source: journal, tables: [{ name: 'entries', withheld: [], write: true }] });
+    const theirs = await grantFor({ reader: pantry, source: journal, tables: ['entries'] });
+    for (const appId of [journal, budget, pantry]) unregister.push(registerAppHost(appId, (event, data) => rings.push({ appId, event, data })));
+    const handler = createAccessHandlerFor(budget, { attended: true, generation: 0 });
+
+    expect(await handler.handle(budget, writeFrame(mine.id, "UPDATE entries SET amount = 4 WHERE title = 'tea'"))).toEqual({ ok: true, op: 'write', changes: 1 });
+
+    const doorbells = rings.filter((ring) => ring.event === P3.DATA_CHANGED_EVENT || ring.event === P3.ACCESS_SOURCE_CHANGED_EVENT);
+    expect(P3.DATA_CHANGED_EVENT).toBe('data-changed');
+    expect(P3.ACCESS_SOURCE_CHANGED_EVENT).toBe('access-source-changed');
+    expect(doorbells.filter((ring) => ring.event === P3.DATA_CHANGED_EVENT)).toEqual([{ appId: journal, event: P3.DATA_CHANGED_EVENT, data: { table: 'entries' } }]);
+    expect(doorbells).toContainEqual({ appId: pantry, event: P3.ACCESS_SOURCE_CHANGED_EVENT, data: { grantId: theirs.id } });
+    expect(doorbells.filter((ring) => ring.appId === budget), 'never the writer').toEqual([]);
+    for (const ring of doorbells) {
+      expect(Object.keys(ring.data as object), 'ids only').toEqual([ring.event === P3.DATA_CHANGED_EVENT ? 'table' : 'grantId']);
+    }
+  });
+
+  it('a write to a table the access does not let it change → ACCESS_NOT_GRANTED “read-only for that table” — nothing changes, no line, no entry', async () => {
+    const grant = await writeGrantFor({ tables: [WRITE_TRANSACTIONS, READ_ACCOUNTS] });
+    const readOnly = await grantFor();
+    const handler = createAccessHandlerFor(budget, { attended: true, generation: 0 });
+    expect(await handler.handle(budget, writeFrame(grant.id, "UPDATE accounts SET balance = 1 WHERE name = 'main'"))).toEqual(refusal('ACCESS_NOT_GRANTED', M3.writeNotGranted, false));
+    expect(await handler.handle(budget, writeFrame(readOnly.id, "UPDATE transactions SET category = 'x' WHERE id = 1"))).toEqual(refusal('ACCESS_NOT_GRANTED', M3.writeNotGranted, false));
+    expect(await rowsOf(ledger, 'SELECT balance FROM accounts')).toEqual([[9000]]);
+    expect(await rowsOf(ledger, 'SELECT category FROM transactions WHERE id = 1')).toEqual([['food']]);
+    expect(kindsOf(ledger)).toEqual(['granted', 'granted']);
+    expect(undoJournal().listAccessUndo(ledger)).toEqual([]);
+  });
+
+  it('another reader’s grant and an unknown id answer a write BYTE-IDENTICALLY ACCESS_NOT_GRANTED “ask first”', async () => {
+    const theirs = await writeGrantFor({ reader: pantry, tables: [WRITE_TRANSACTIONS] });
+    const handler = createAccessHandlerFor(budget, { attended: true, generation: 0 });
+    const sql = "UPDATE transactions SET category = 'x' WHERE id = 1";
+    expect(await handler.handle(budget, writeFrame(theirs.id, sql))).toEqual(refusal('ACCESS_NOT_GRANTED', ACCESS_APP_MESSAGES.notGranted, false));
+    expect(await handler.handle(budget, writeFrame(UNKNOWN_ID, sql))).toEqual(refusal('ACCESS_NOT_GRANTED', ACCESS_APP_MESSAGES.notGranted, false));
+    expect(wroteLines(ledger)).toEqual([]);
+  });
+});
+
+describe('PR-3 write — every refusal is ACCESS_WRITE_REFUSED in the reader’s words, decided from the schema and the scope (D-PR3-9/12/24; §24.5 MUSTs 19–21)', () => {
+  beforeEach(async () => {
+    // Ledger grows the tables the rules need: a column holding a credential-shaped value (masked on
+    // the copy), a computed column, a table carrying a trigger; and 200 more accounts (201 in all).
+    await db.applyAppDdl(ledger, [
+      'CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT)',
+      'CREATE TABLE totals (id INTEGER PRIMARY KEY, a INTEGER, b INTEGER, total INTEGER GENERATED ALWAYS AS (a + b))',
+      'CREATE TABLE audited (id INTEGER PRIMARY KEY, v TEXT)',
+    ]);
+    await execOn(ledger, `INSERT INTO notes (id, body) VALUES (1, '${SECRET}'), (2, 'plain')`);
+    await execOn(ledger, 'INSERT INTO totals (id, a, b) VALUES (1, 2, 5)');
+    await execOn(ledger, "INSERT INTO audited (id, v) VALUES (1, 'a')");
+    await execOn(ledger, 'CREATE TRIGGER audited_touch AFTER UPDATE ON audited BEGIN SELECT 1; END');
+    await execOn(ledger, "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < 200) INSERT INTO accounts (name, balance) SELECT 'n' || x, x FROM c");
+  });
+
+  /** Every table the cases touch, as rows — the oracle for "nothing changed". */
+  const snapshot = async (): Promise<string> =>
+    JSON.stringify(await Promise.all(['transactions', 'accounts', 'notes', 'totals', 'audited'].map((table) => rowsOf(ledger, `SELECT * FROM ${table} ORDER BY rowid`))));
+
+  const writeOn = (name: string, withheld: string[] = []): DecisionTableV2[] => [{ name, withheld, write: true }];
+
+  const CASES: ReadonlyArray<{ name: string; tables: DecisionTableV2[]; sql: string; params?: Array<string | number | null>; rule?: WriteRule }> = [
+    { name: 'two statements', tables: writeOn('transactions'), sql: "UPDATE transactions SET category = 'a' WHERE id = 1; UPDATE transactions SET category = 'b' WHERE id = 2" },
+    { name: 'a function in SET', tables: writeOn('transactions'), sql: "UPDATE transactions SET category = upper('a') WHERE id = 1" },
+    { name: 'an UPDATE with no WHERE', tables: writeOn('transactions'), sql: "UPDATE transactions SET category = 'a'", rule: 'no-where' },
+    { name: 'a DELETE with no WHERE (on a fully shared table)', tables: writeOn('accounts'), sql: 'DELETE FROM accounts', rule: 'no-where' },
+    { name: 'a withheld column in WHERE', tables: writeOn('transactions', ['category']), sql: "UPDATE transactions SET amount = 1 WHERE category = 'food'", rule: 'column' },
+    { name: 'a credential-named column in SET (AC19 negative)', tables: writeOn('transactions'), sql: "UPDATE transactions SET api_key = 'x' WHERE id = 1", rule: 'column' },
+    { name: 'a column the copy masked a cell in', tables: writeOn('notes'), sql: "UPDATE notes SET body = 'hello' WHERE id = 2", rule: 'column' },
+    { name: 'a generated column', tables: writeOn('totals'), sql: 'UPDATE totals SET a = 1 WHERE total > 5', rule: 'computed' },
+    { name: 'a credential-shaped literal', tables: writeOn('transactions'), sql: `UPDATE transactions SET category = '${SECRET}' WHERE id = 1`, rule: 'value' },
+    { name: 'a credential-shaped bound value', tables: writeOn('transactions'), sql: 'UPDATE transactions SET category = ? WHERE id = 1', params: [SECRET], rule: 'value' },
+    { name: '201 rows', tables: writeOn('accounts'), sql: 'UPDATE accounts SET balance = 0 WHERE balance >= 0', rule: 'too-many' },
+    { name: 'a table carrying a trigger', tables: writeOn('audited'), sql: "UPDATE audited SET v = 'b' WHERE id = 1", rule: 'table' },
+    { name: 'a DELETE on a partly shared table (a credential-named column is never granted)', tables: writeOn('transactions'), sql: 'DELETE FROM transactions WHERE id = 1', rule: 'table' },
+  ];
+
+  for (const testCase of CASES) {
+    it(`${testCase.name} → ACCESS_WRITE_REFUSED${testCase.rule !== undefined ? ` “${testCase.rule}”` : ' (the statement’s own shape)'} — nothing changes, no line, no entry`, async () => {
+      const grant = await writeGrantFor({ tables: testCase.tables });
+      const handler = createAccessHandlerFor(budget, { attended: true, generation: 0 });
+      const before = await snapshot();
+      const answer = await handler.handle(budget, writeFrame(grant.id, testCase.sql, testCase.params));
+      if (testCase.rule !== undefined) {
+        expect(answer).toEqual(refusal('ACCESS_WRITE_REFUSED', M3.writeRefused(testCase.rule), false));
+      } else {
+        expect(answer).toMatchObject({ ok: false, code: 'ACCESS_WRITE_REFUSED', retryable: false });
+        const prefix = writeRefusedPrefix();
+        expect(prefix.length).toBeGreaterThan(0);
+        expect(answer.ok ? '' : answer.message).toMatch(new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+      }
+      expect(await snapshot(), 'nothing changed').toBe(before);
+      expect(wroteLines(ledger)).toEqual([]);
+      expect(undoJournal().listAccessUndo(ledger)).toEqual([]);
+    });
+  }
+});
+
+describe('PR-3 write — busy, attendance, a stop that lands meanwhile, the per-reader cap, the shared minute (D-PR3-11/13/15; §24.5 MUSTs 18, 21)', () => {
+  it('the target in the middle of a change (its frame’s BEGIN, the driver’s flag) → ACCESS_BUSY “try again” (retryable): no line, no entry', async () => {
+    const grant = await writeGrantFor({ tables: [WRITE_TRANSACTIONS] });
+    const handler = createAccessHandlerFor(budget, { attended: true, generation: 0 });
+    await execOn(ledger, 'BEGIN');
+    expect(await handler.handle(budget, writeFrame(grant.id, "UPDATE transactions SET category = 'groceries' WHERE id = 1"))).toEqual(refusal('ACCESS_BUSY', M3.busy, true));
+    expect(wroteLines(ledger)).toEqual([]);
+    expect(undoJournal().listAccessUndo(ledger)).toEqual([]);
+  });
+
+  it('nobody present → ACCESS_UNATTENDED (retryable) — the hidden frame, and the visible one during a delegated run — even for an access allowed also while I’m away; nothing recorded; after the run the write goes through', async () => {
+    const grant = await writeGrantFor({ tables: [WRITE_TRANSACTIONS], duration: 'always', unattended: true });
+    const sql = "UPDATE transactions SET category = 'groceries' WHERE id = 1";
+    const hidden = createAccessHandlerFor(budget, { attended: false });
+    expect(await hidden.handle(budget, writeFrame(grant.id, sql))).toEqual(refusal('ACCESS_UNATTENDED', ACCESS_APP_MESSAGES.unattended, true));
+    const visible = createAccessHandlerFor(budget, { attended: true, generation: 0 });
+    expect(beginDelegatedRun({ appId: budget, appName: 'Budget', runId: 'run-w', taskId: 't-w', title: 'Morning sums', generation: 0 }).ok).toBe(true);
+    try {
+      expect(await visible.handle(budget, writeFrame(grant.id, sql))).toEqual(refusal('ACCESS_UNATTENDED', ACCESS_APP_MESSAGES.unattended, true));
+    } finally {
+      endDelegatedRun(budget, 'run-w');
+      clearTouchedGeneration(budget, 0);
+    }
+    expect(kindsOf(ledger), 'no refused line, no wrote line').toEqual(['granted']);
+    expect(await rowsOf(ledger, 'SELECT category FROM transactions WHERE id = 1')).toEqual([['food']]);
+    expect(await visible.handle(budget, writeFrame(grant.id, sql))).toEqual({ ok: true, op: 'write', changes: 1 });
+  });
+
+  it('revokeAccess while the plan job is in flight wins: ACCESS_REVOKED, the target unchanged, no wrote line, no entry', async () => {
+    const grant = await writeGrantFor({ tables: [WRITE_TRANSACTIONS] });
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let planJobs = 0;
+    configureScopedRead({
+      createWorker: () => {
+        const respond = createScopedReadResponder();
+        const worker: WorkerLike = {
+          onmessage: null,
+          onerror: null,
+          postMessage(msg) {
+            void (async () => {
+              if (isPlanWriteJob(msg)) {
+                planJobs += 1;
+                await held;
+              }
+              const answer = await respond(msg);
+              if (answer !== undefined) worker.onmessage?.({ data: answer });
+            })();
+          },
+          terminate() {},
+        };
+        return worker;
+      },
+      wasm: { wasmUrl: locateWasm() },
+      now: () => clock.now,
+    });
+    const handler = createAccessHandlerFor(budget, { attended: true, generation: 0 });
+    const pending = handler.handle(budget, writeFrame(grant.id, "UPDATE transactions SET category = 'groceries' WHERE id = 1"));
+    await expect.poll(() => planJobs, { timeout: 3000 }).toBe(1);
+    await revokeAccess(grant.id);
+    release();
+    expect(await pending).toEqual(refusal('ACCESS_REVOKED', ACCESS_APP_MESSAGES.revoked, false));
+    expect(await rowsOf(ledger, 'SELECT category FROM transactions WHERE id = 1')).toEqual([['food']]);
+    expect(kindsOf(ledger)).toEqual(['revoked', 'granted']);
+    expect(undoJournal().listAccessUndo(ledger)).toEqual([]);
+  });
+
+  it('the 21st live change of one reader on one target is refused “too many changes are waiting to be undone” — and the first is still undoable; once undone, the next write goes through', async () => {
+    expect(P3.ACCESS_UNDO_MAX_ENTRIES).toBe(20);
+    const grant = await writeGrantFor({ tables: [WRITE_ACCOUNTS] });
+    const handler = createAccessHandlerFor(budget, { attended: true, generation: 0 });
+    for (let i = 0; i < 20; i += 1) {
+      expect(await handler.handle(budget, writeFrame(grant.id, `INSERT INTO accounts (name, balance) VALUES ('n${i}', ${i})`)), `write ${i + 1}`).toEqual({ ok: true, op: 'write', changes: 1 });
+    }
+    expect(await handler.handle(budget, writeFrame(grant.id, "INSERT INTO accounts (name, balance) VALUES ('n20', 20)"))).toEqual(refusal('ACCESS_WRITE_REFUSED', M3.writeRefused('waiting'), false));
+    expect(await rowsOf(ledger, 'SELECT count(*) FROM accounts')).toEqual([[21]]);
+    expect(undoJournal().listAccessUndo(ledger, budget)).toHaveLength(20);
+
+    const first = wroteLines(ledger).at(-1)!; // newest first: the oldest write is last
+    expect(undoJournal().listAccessUndo(ledger, budget).map((entry) => entry.id)).toContain(first.undoId);
+    const { undoBrokeredWrite } = await writeBroker();
+    expect(await undoBrokeredWrite(db, ledger, first.undoId!, { via: 'user' })).toMatchObject({ ok: true });
+    expect(await rowsOf(ledger, "SELECT count(*) FROM accounts WHERE name = 'n0'")).toEqual([[0]]);
+    expect(await handler.handle(budget, writeFrame(grant.id, "INSERT INTO accounts (name, balance) VALUES ('n20', 20)"))).toEqual({ ok: true, op: 'write', changes: 1 });
+  });
+
+  it('a write counts in the per-app minute it shares with reads — every op, refused or not: after 60 ops the 61st write → ACCESS_RATE_LIMITED (retryable); the next minute writes again', async () => {
+    const grant = await writeGrantFor({ tables: [WRITE_TRANSACTIONS, READ_ACCOUNTS] });
+    const handler = createAccessHandlerFor(budget, { attended: true, generation: 0 });
+    const refusedWrite = writeFrame(grant.id, "UPDATE accounts SET balance = 1 WHERE name = 'main'");
+    const goodWrite = (n: number) => writeFrame(grant.id, `UPDATE transactions SET amount = ${n} WHERE id = 1`);
+    for (let i = 0; i < ACCESS_QUERY_RATE_PER_MINUTE; i += 1) {
+      expect(await handler.handle(budget, refusedWrite)).toEqual(refusal('ACCESS_NOT_GRANTED', M3.writeNotGranted, false));
+    }
+    expect(await handler.handle(budget, goodWrite(1))).toEqual(refusal('ACCESS_RATE_LIMITED', ACCESS_APP_MESSAGES.queryRateLimited, true));
+    expect(await handler.handle(budget, queryFrame(grant.id, 'SELECT 1')), 'the read shares the window').toEqual(refusal('ACCESS_RATE_LIMITED', ACCESS_APP_MESSAGES.queryRateLimited, true));
+    clock.now += 60_000;
+    expect(await handler.handle(budget, goodWrite(2))).toEqual({ ok: true, op: 'write', changes: 1 });
+  });
+
+  it('reads and writes fill ONE window: 30 refused reads and 30 refused writes, then the 61st op — a write — is rate-limited', async () => {
+    const grant = await writeGrantFor({ tables: [WRITE_TRANSACTIONS, READ_ACCOUNTS] });
+    const handler = createAccessHandlerFor(budget, { attended: true, generation: 0 });
+    for (let i = 0; i < ACCESS_QUERY_RATE_PER_MINUTE / 2; i += 1) {
+      expect(await handler.handle(budget, queryFrame(grant.id, 'DELETE FROM transactions'))).toMatchObject({ ok: false, code: 'ACCESS_QUERY_REFUSED' });
+      expect(await handler.handle(budget, writeFrame(grant.id, "UPDATE accounts SET balance = 1 WHERE name = 'main'"))).toMatchObject({ ok: false, code: 'ACCESS_NOT_GRANTED' });
+    }
+    expect(await handler.handle(budget, writeFrame(grant.id, "UPDATE transactions SET amount = 1 WHERE id = 1"))).toEqual(refusal('ACCESS_RATE_LIMITED', ACCESS_APP_MESSAGES.queryRateLimited, true));
+    expect(wroteLines(ledger)).toEqual([]);
+  });
+});
+
+describe('PR-3 request — the ask may say write (D-PR3-4)', () => {
+  it('an ask that carries access: write parks the pending with wantsWrite; one without it does not', async () => {
+    const handler = createAccessHandlerFor(budget, { attended: true, generation: 0 });
+    const asking = handler.handle(budget, askFrame({ access: 'write' } as unknown as Partial<RequestFields>));
+    const pending = (await pendingFor(budget)) as PendingAccessRequest & { wantsWrite?: boolean };
+    expect(pending.wantsWrite).toBe(true);
+    void pending.resolve({ kind: 'not-now' });
+    await asking;
+    clock.now += ACCESS_REQUEST_MIN_GAP_MS;
+    const plain = handler.handle(budget, askFrame());
+    const second = (await pendingFor(budget)) as PendingAccessRequest & { wantsWrite?: boolean };
+    expect(second.wantsWrite ?? false).toBe(false);
+    void second.resolve({ kind: 'not-now' });
+    await plain;
+  });
+
+  it('a declined READ ask does not decline a later WRITE ask with the same purpose and hints — the access is part of the ask’s meaning', async () => {
+    const handler = createAccessHandlerFor(budget, { attended: true, generation: 0 });
+    expect(await askAndDecide(handler, askFrame(), () => ({ kind: 'dont-allow' }))).toMatchObject({ ok: false, code: 'ACCESS_DECLINED', retryable: false });
+    clock.now += ACCESS_REQUEST_MIN_GAP_MS;
+    expect(await handler.handle(budget, askFrame()), 'the same read ask is declined').toEqual(refusal('ACCESS_DECLINED', ACCESS_APP_MESSAGES.declined, false));
+    clock.now += ACCESS_REQUEST_MIN_GAP_MS;
+    const writeAsk = handler.handle(budget, askFrame({ access: 'write' } as unknown as Partial<RequestFields>));
+    const pending = await pendingFor(budget);
+    void pending.resolve({ kind: 'not-now' });
+    await writeAsk;
+  });
+});
+
+describe('PR-3 refresh — the frame’s op reaches the service; the tick decides (D-PR3-13/14/17)', () => {
+  it('refresh → the service’s refresh with the frame as caller and the grant id; its three answers pass through verbatim (fresh · recent · failed)', async () => {
+    const grant = await grantFor(); // the service is overridden: the handler's mapping is under test, not the tick
+    const answers: AccessHandlerResult[] = [
+      { ok: true, op: 'refresh', fresh: true } as unknown as AccessHandlerResult,
+      { ok: true, op: 'refresh', fresh: false, reason: 'recent' } as unknown as AccessHandlerResult,
+      refusal('ACCESS_REFRESH_FAILED', M3.refreshNoHandler, false),
+    ];
+    const calls: unknown[] = [];
+    let next = 0;
+    __setAccessServiceForTests({
+      refresh: async (caller: unknown, input: unknown) => {
+        calls.push([caller, input]);
+        return answers[next++];
+      },
+    } as unknown as Parameters<typeof __setAccessServiceForTests>[0]);
+    try {
+      const handler = createAccessHandlerFor(budget, { attended: true, generation: 0 });
+      for (const expected of answers) expect(await handler.handle(budget, refreshFrame(grant.id))).toEqual(expected);
+    } finally {
+      __setAccessServiceForTests();
+    }
+    expect(calls).toEqual(Array.from({ length: 3 }, () => [{ kind: 'frame', appId: budget, generation: 0, present: true }, { grantId: grant.id }]));
+  });
+
+  it('refresh under an access without *may ask for new data* → ACCESS_NOT_GRANTED “does not allow asking for new data”; nothing run, nothing recorded', async () => {
+    const grant = await grantFor();
+    const handler = createAccessHandlerFor(budget, { attended: true, generation: 0 });
+    expect(await handler.handle(budget, refreshFrame(grant.id))).toEqual(refusal('ACCESS_NOT_GRANTED', M3.refreshNotGranted, false));
+    expect(kindsOf(ledger)).toEqual(['granted']);
+  });
+
+  it('with the tick, the real engine meets its first gate in a file whose scheduler never started → ACCESS_REFRESH_FAILED “schedules are off” (not retryable), nothing run, no line', async () => {
+    const grant = await writeGrantFor({ tables: [{ name: 'transactions', withheld: [], write: false }], refresh: true });
+    const handler = createAccessHandlerFor(budget, { attended: true, generation: 0 });
+    expect(await handler.handle(budget, refreshFrame(grant.id))).toEqual(refusal('ACCESS_REFRESH_FAILED', M3.refreshOff, false));
+    expect(kindsOf(ledger)).toEqual(['granted']);
+  });
+});
+
+describe('PR-3 discover — a class, never a list; nothing recorded; cached per reader for a minute (D-PR3-21; AC23)', () => {
+  it('answers several · one · none from the installed sources, and records NOTHING — no history line, no pending, no ask spent (the user’s click that follows parks)', async () => {
+    expect(P3.ACCESS_DISCOVER_CACHE_MS).toBe(60_000);
+    const handler = createAccessHandlerFor(budget, { attended: true, generation: 0 });
+    expect(await handler.handle(budget, discoverFrame())).toEqual({ ok: true, op: 'discover', candidates: 'several' });
+    expect(db.listAccessLog(ledger)).toEqual([]);
+    expect(db.listAccessLog(pantry)).toEqual([]);
+    expect(pendingAccessStore.get()).toEqual({});
+    const ask = handler.handle(budget, askFrame());
+    void (await pendingFor(budget)).resolve({ kind: 'not-now' });
+    await ask;
+
+    clock.now += 60_000;
+    await db.deleteApp(pantry);
+    expect(await handler.handle(budget, discoverFrame())).toEqual({ ok: true, op: 'discover', candidates: 'one' });
+    clock.now += 60_000;
+    await db.deleteApp(ledger);
+    expect(await handler.handle(budget, discoverFrame())).toEqual({ ok: true, op: 'discover', candidates: 'none' });
+  });
+
+  it('a second discover within the minute is answered from the per-reader cache — no gather (describeAppData is not called again); another reader gathers its own; after the minute it gathers again', async () => {
+    const gather = vi.spyOn(db, 'describeAppData');
+    const handler = createAccessHandlerFor(budget, { attended: true, generation: 0 });
+    expect(await handler.handle(budget, discoverFrame())).toEqual({ ok: true, op: 'discover', candidates: 'several' });
+    const gathered = gather.mock.calls.length;
+    expect(gathered).toBeGreaterThan(0);
+    clock.now += 60_000 - 1;
+    expect(await handler.handle(budget, discoverFrame())).toEqual({ ok: true, op: 'discover', candidates: 'several' });
+    expect(gather.mock.calls.length, 'served from the cache').toBe(gathered);
+    const other = createAccessHandlerFor(pantry, { attended: true, generation: 0 });
+    expect(await other.handle(pantry, discoverFrame())).toMatchObject({ ok: true, op: 'discover' });
+    expect(gather.mock.calls.length, 'another reader gathers its own').toBeGreaterThan(gathered);
+    const afterOther = gather.mock.calls.length;
+    clock.now += 1;
+    expect(await handler.handle(budget, discoverFrame())).toEqual({ ok: true, op: 'discover', candidates: 'several' });
+    expect(gather.mock.calls.length, 'the minute is over').toBeGreaterThan(afterOther);
+  });
+
+  it('nobody present → ACCESS_UNATTENDED (the ask’s presence rule): the hidden frame, and the visible one during a delegated run — nothing gathered', async () => {
+    const gather = vi.spyOn(db, 'describeAppData');
+    const hidden = createAccessHandlerFor(budget, { attended: false });
+    expect(await hidden.handle(budget, discoverFrame())).toEqual(refusal('ACCESS_UNATTENDED', ACCESS_APP_MESSAGES.unattended, true));
+    const visible = createAccessHandlerFor(budget, { attended: true, generation: 0 });
+    expect(beginDelegatedRun({ appId: budget, appName: 'Budget', runId: 'run-d', taskId: 't-d', title: 'Morning sums', generation: 0 }).ok).toBe(true);
+    try {
+      expect(await visible.handle(budget, discoverFrame())).toEqual(refusal('ACCESS_UNATTENDED', ACCESS_APP_MESSAGES.unattended, true));
+    } finally {
+      endDelegatedRun(budget, 'run-d');
+      clearTouchedGeneration(budget, 0);
+    }
+    expect(gather).not.toHaveBeenCalled();
   });
 });

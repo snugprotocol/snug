@@ -6,6 +6,12 @@
 // undo), not-now, declined (won't ask this again), muted. The allowed and undo rows run the REAL
 // engine (a parked ask over a real file, a real grant, a real stop); the rest drive a recorded
 // pending.
+//
+// TASK-20261010-host-broker PR-3 (D-PR3-23; DS2): an ask that carried `access: 'write'` titles the
+// strip "<Reader> wants to read — and change — another app's data"; an allow that ticked a write
+// says "can now read and change …" (every table) or "… and change <t>" (some); and the undo's
+// line says "no longer reads or changes" for such an access. The real-engine rows answer in the
+// decision v2 (a LOCAL structural type until consent.ts exports it).
 
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -393,5 +399,100 @@ describe('AC18 — allowed, with stop as the undo (the real engine)', () => {
     });
     expect(q('access-ask-outcome')!.getAttribute('data-outcome')).toBe('failed');
     expect(q('access-ask-outcome')!.textContent).toBe(CONSENT_UI.failed('choose at least one table'));
+  });
+});
+
+// =========================================================================================
+// TASK-20261010-host-broker PR-3 (D-PR3-23; DS2) — the strip and its lines when the access can change rows
+// =========================================================================================
+
+/** LOCAL structural types (D-PR3-23) — replaced by the real exports at Gate 5. */
+interface TableChoiceV2 {
+  name: string;
+  withheld: string[];
+  write: boolean;
+}
+type AllowV2 = { kind: 'allow'; sourceAppId: string; tables: TableChoiceV2[]; duration: 'session' | 'day' | 'week' | 'always'; unattended: boolean; kv: boolean; refresh: boolean };
+const answerV2 = answerAccess as unknown as (pending: PendingAccessRequest, decision: AllowV2) => Promise<ConsentOutcome>;
+const STRIP3 = STRIP as unknown as { title(readerName: string, wantsWrite?: boolean): string };
+const allowed3 = STRIP_OUTCOME.allowed as unknown as (readerName: string, sourceName: string, tables: readonly string[], duration: AllowV2['duration'], write?: readonly string[]) => string;
+const stopped3 = CONSENT_UI.stopped as unknown as (readerName: string, sourceName: string, tables: readonly string[], write?: readonly string[]) => string;
+
+describe('PR-3 — an ask that carried access: write (D-PR3-4/23; DS2)', () => {
+  it('the strip says "Budget wants to read — and change — another app\'s data"', () => {
+    mount();
+    park(fakePending({ wantsWrite: true } as Partial<PendingAccessRequest>));
+    expect(q('access-ask-title')!.textContent).toBe(STRIP3.title('Budget', true));
+    expect(STRIP3.title('Budget', true)).not.toBe(STRIP.title('Budget'));
+  });
+
+  it('the twin: a read ask keeps today’s title', () => {
+    mount();
+    park();
+    expect(q('access-ask-title')!.textContent).toBe(STRIP.title('Budget'));
+  });
+});
+
+describe('PR-3 — allowed with write, and its stop (the real engine; D-PR3-23)', () => {
+  let db: UserDb;
+  let budget: string;
+  let ledger: string;
+
+  beforeEach(async () => {
+    await act(async () => {
+      resetAccessSession();
+      db = await installTestUserDb();
+    });
+    __setAccessDepsForTests({ getDb: () => Promise.resolve(db) });
+    budget = db.installApp({ displayName: 'Budget', html: '<!doctype html><title>b</title>' }).appId;
+    ledger = db.installApp({ displayName: 'Ledger', html: '<!doctype html><title>l</title>' }).appId;
+    await db.applyAppDdl(ledger, ['CREATE TABLE transactions (amount INTEGER, category TEXT)', 'CREATE TABLE accounts (name TEXT, balance INTEGER)']);
+    await db.driver.handle(ledger, { v: PROTOCOL_VERSION, type: FRAME_TYPES.dbRequest, requestId: 'seed-1', instanceId: 'seed', op: 'exec', sql: "INSERT INTO transactions VALUES (450, 'food')" });
+  });
+
+  afterEach(() => {
+    act(() => resetAccessSession());
+    __setAccessDepsForTests();
+  });
+
+  async function allowVia(tables: TableChoiceV2[], duration: AllowV2['duration'] = 'day'): Promise<void> {
+    const candidates = await collectSources(db, budget, { tables: ['transactions'] });
+    mount(budget);
+    let pending: PendingAccessRequest | undefined;
+    act(() => {
+      pending = parkAccessRequest({ db, reader: db.getApp(budget)!, generation: 0, purpose: 'to tidy the categories', provenance: 'app', candidates, hash: '0123456789abcdef' });
+    });
+    await act(async () => {
+      await answerV2(pending!, { kind: 'allow', sourceAppId: ledger, tables, duration, unattended: false, kv: false, refresh: false });
+    });
+  }
+
+  it('every table writable: "Budget can now read and change Ledger\'s transactions · for a day"', async () => {
+    await allowVia([{ name: 'transactions', withheld: [], write: true }]);
+    expect(q('access-ask-outcome')!.getAttribute('data-outcome')).toBe('allowed');
+    expect(q('access-ask-outcome-words')!.textContent).toBe(allowed3('Budget', 'Ledger', ['transactions'], 'day', ['transactions']));
+    expect(allowed3('Budget', 'Ledger', ['transactions'], 'day', ['transactions'])).toBe("Budget can now read and change Ledger's transactions · for a day");
+  });
+
+  it('some tables writable: "Budget can now read Ledger\'s transactions and accounts, and change transactions · while it\'s open"', async () => {
+    await allowVia([{ name: 'transactions', withheld: [], write: true }, { name: 'accounts', withheld: [], write: false }], 'session');
+    expect(q('access-ask-outcome-words')!.textContent).toBe(allowed3('Budget', 'Ledger', ['transactions', 'accounts'], 'session', ['transactions']));
+    expect(q('access-ask-outcome-words')!.textContent).toContain('and change transactions');
+  });
+
+  it('nothing writable: today’s line, byte for byte', async () => {
+    await allowVia([{ name: 'transactions', withheld: [], write: false }]);
+    expect(q('access-ask-outcome-words')!.textContent).toBe(STRIP_OUTCOME.allowed('Budget', 'Ledger', ['transactions'], 'day'));
+  });
+
+  it('*stop* on a write access says "no longer reads or changes"', async () => {
+    await allowVia([{ name: 'transactions', withheld: [], write: true }]);
+    await act(async () => q<HTMLButtonElement>('access-ask-undo')!.click());
+    await act(async () => {
+      await vi.waitFor(() => expect(grantsForApp(db, budget, Date.now()).reads[0]!.grant.status).toBe('revoked'));
+    });
+    expect(q('access-ask-outcome')!.getAttribute('data-outcome')).toBe('stopped');
+    expect(q('access-ask-outcome')!.textContent).toBe(stopped3('Budget', 'Ledger', ['transactions'], ['transactions']));
+    expect(stopped3('Budget', 'Ledger', ['transactions'], ['transactions'])).toBe("stopped — Budget no longer reads or changes Ledger's transactions");
   });
 });

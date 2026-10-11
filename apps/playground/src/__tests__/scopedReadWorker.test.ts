@@ -14,6 +14,16 @@
 // queued read re-checks its grant when it dequeues (mutation: skip `stillLive` → the queued row
 // reds); an engine that fails to start retires its worker (mutation: settle without retiring →
 // the engine row reds).
+//
+// PR-3 (TASK-20261010-host-broker; contract v2 D-PR3-15 (2), D-PR3-26, "Module contracts (the
+// engine)" scopedRead.ts): the `plan-write` job — `scopedPlanWrite({ grantId, bytes, scope,
+// statement, caps, stillLive? })` on the SAME queue and worker, under the READ's clock, on a FRESH
+// export (the grant's cached bytes evicted before the thunk runs; the plan never cached); the
+// worker answers it with the real `planBrokeredWrite` (counts, never a row) and a plan-write-shaped
+// job that fails its guard `failed` FOR ITS ID. Red until scopedRead.ts exports `scopedPlanWrite`
+// (reached through the module namespace; its shapes are local structural types) and the worker
+// learns the job (the db lane's `planBrokeredWrite` first). The dump's default clock moved to the
+// protocol's Appendix B (D-PR3-26: access/limits.ts is deleted) — read from there, red until I-W.
 
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -23,7 +33,9 @@ import { ACCESS_MAX_RESULT_BYTES, ACCESS_MAX_ROWS, ACCESS_QUERY_TIMEOUT_MS, ACCE
 
 import type { ScopedDumpCaps } from '@snugprotocol/db';
 
-import { ACCESS_MATERIALISE_TIMEOUT_MS } from '../access/limits.js';
+// D-PR3-26: the materialise limits moved to the protocol (Appendix B); access/limits.ts is deleted.
+import * as protocolNamespace from '@snugprotocol/protocol';
+import * as scopedReadModule from '../access/scopedRead.js';
 import {
   __scopedReadCachedGrantsForTests,
   canConstructWorker,
@@ -37,6 +49,9 @@ import {
 } from '../access/scopedRead.js';
 import { createScopedReadResponder, loadEngine } from '../access/scopedRead.worker.js';
 import { installTestUserDb, locateWasm } from './userdbTestHelper.js';
+
+/** Read from the protocol's Appendix B (D-PR3-26) — a local widening until I-W exports it. */
+const { ACCESS_MATERIALISE_TIMEOUT_MS } = protocolNamespace as typeof protocolNamespace & { ACCESS_MATERIALISE_TIMEOUT_MS: number };
 
 const CAPS = { maxRows: ACCESS_MAX_ROWS, maxBytes: ACCESS_MAX_RESULT_BYTES };
 const SCOPE = { tables: [{ name: 'transactions', columns: ['id', 'amount'] }] };
@@ -671,5 +686,141 @@ describe('PR-2 the dump’s own clock, and the host side’s own outcomes', () =
     configureScopedRead({ createWorker: inlineWorkers(recorder), wasm: { wasmUrl: locateWasm() }, now: () => clock.now });
     const outcome = await scopedDump({ grantId: 'g1', bytes: () => Promise.resolve(sourceBytes), scope: { tables: [{ name: 'transactions', columns: ['id', 'amount', 'note'] }] }, caps: DUMP_CAPS });
     expect(outcome).toMatchObject({ ok: false, reason: 'drift' });
+  });
+});
+
+// =========================================================================================
+// TASK-20261010-host-broker PR-3 (contract v2 D-PR3-15 (2); "Module contracts (the engine)") —
+// the PLAN-WRITE job.
+//
+// `scopedPlanWrite({ grantId, bytes, scope, statement, caps, stillLive? })` plans ONE brokered write
+// in the worker: the real `planBrokeredWrite` on a scoped copy of a FRESH export (the grant's cached
+// bytes are evicted before the thunk runs; the plan is never cached), under the READ's clock; it
+// answers the plan's counts and shape — never a row. The worker guards a `plan-write`-shaped job
+// FIRST beside the dump's and answers a malformed one `failed` for its id.
+// =========================================================================================
+
+/** The plan's caps and shapes (D-PR3-9) — local structural types until scopedRead.ts / the db export them. */
+interface PlanCaps {
+  maxChanges: number;
+  maxUndoBytes: number;
+}
+interface PlanWriteInput {
+  grantId: string;
+  bytes: () => Promise<Uint8Array>;
+  scope: { tables: ReadonlyArray<{ name: string; columns: readonly string[]; withheld?: readonly string[]; write?: boolean }>; kv?: boolean };
+  statement: { sql: string; params?: readonly unknown[] };
+  caps: PlanCaps;
+  stillLive?: () => boolean;
+}
+type PlanOutcome =
+  | { ok: true; plan: { sql: string; op: 'insert' | 'update' | 'delete'; table: string; columns: string[]; previewChanges: number } }
+  | { ok: false; reason: string; message: string };
+const scopedPlanWrite = (input: PlanWriteInput): Promise<PlanOutcome> =>
+  (scopedReadModule as unknown as { scopedPlanWrite(input: PlanWriteInput): Promise<PlanOutcome> }).scopedPlanWrite(input);
+
+const PLAN_SCOPE: PlanWriteInput['scope'] = { tables: [{ name: 'transactions', columns: ['id', 'amount'], write: true }] };
+const PLAN_CAPS: PlanCaps = { maxChanges: 200, maxUndoBytes: 64 * 1024 };
+const PLAN_SQL = 'UPDATE transactions SET amount = 1 WHERE amount > 400';
+const planJobsOf = (recorder: Recorder) => recorder.posted.filter((entry) => typeof entry.msg === 'object' && entry.msg !== null && (entry.msg as { kind?: unknown }).kind === 'plan-write');
+const plan = (over: Partial<PlanWriteInput> = {}): Promise<PlanOutcome> =>
+  scopedPlanWrite({ grantId: 'g1', bytes: () => Promise.resolve(sourceBytes), scope: PLAN_SCOPE, statement: { sql: PLAN_SQL }, caps: PLAN_CAPS, ...over });
+
+describe('PR-3 the plan-write job — the real planBrokeredWrite through the inline responder', () => {
+  it('answers the plan — its op, its table, the counted changes — and NO row; posted as kind plan-write with the bytes TRANSFERRED as a copy', async () => {
+    const recorder = newRecorder();
+    configureScopedRead({ createWorker: inlineWorkers(recorder), wasm: { wasmUrl: locateWasm() }, now: () => clock.now });
+    const held = sourceBytes.slice();
+    const outcome = await plan({ bytes: () => Promise.resolve(held) });
+    expect(outcome).toMatchObject({ ok: true, plan: { op: 'update', table: 'transactions', previewChanges: 2 } });
+    expect(JSON.stringify(outcome), 'no value of a row leaves the worker').not.toMatch(/450|500|9000|main/);
+    const [job] = planJobsOf(recorder);
+    expect(job?.msg).toMatchObject({ kind: 'plan-write', scope: PLAN_SCOPE, statement: { sql: PLAN_SQL }, caps: PLAN_CAPS });
+    const posted = (job?.msg as { bytes: Uint8Array }).bytes;
+    expect(posted).not.toBe(held);
+    expect(job?.transfer).toEqual([posted.buffer]);
+  });
+
+  it('a plan and a read share ONE worker and ONE queue', async () => {
+    const recorder = newRecorder();
+    configureScopedRead({ createWorker: inlineWorkers(recorder), wasm: { wasmUrl: locateWasm() }, now: () => clock.now });
+    const [planned, counted] = await Promise.all([plan(), read('g2', 'SELECT count(*) AS n FROM transactions')]);
+    expect(planned).toMatchObject({ ok: true });
+    expect(counted).toEqual({ ok: true, columns: ['n'], rows: [[2]] });
+    expect(recorder.created).toBe(1);
+    expect(initsOf(recorder)).toHaveLength(1);
+  });
+
+  it('a plan-write-shaped job that fails its guard is answered failed FOR ITS ID — never silence: bytes not bytes, no statement, caps without maxChanges, a scope that is not a record', async () => {
+    const respond = createScopedReadResponder();
+    await respond({ init: { wasmUrl: locateWasm() } });
+    const bad: Array<Record<string, unknown>> = [
+      { id: 21, kind: 'plan-write', bytes: 'not bytes', scope: PLAN_SCOPE, statement: { sql: PLAN_SQL }, caps: PLAN_CAPS },
+      { id: 22, kind: 'plan-write', bytes: sourceBytes.slice(), scope: PLAN_SCOPE, caps: PLAN_CAPS },
+      { id: 23, kind: 'plan-write', bytes: sourceBytes.slice(), scope: PLAN_SCOPE, statement: { sql: PLAN_SQL }, caps: { maxUndoBytes: 10 } },
+      { id: 24, kind: 'plan-write', bytes: sourceBytes.slice(), scope: 'transactions', statement: { sql: PLAN_SQL }, caps: PLAN_CAPS },
+    ];
+    for (const message of bad) {
+      expect(await respond(message), JSON.stringify(message.id)).toMatchObject({ id: message.id, result: { ok: false, reason: 'failed' } });
+    }
+  });
+
+  it('a well-formed plan-write job sent straight to the responder is answered with the plan for its id', async () => {
+    const respond = createScopedReadResponder();
+    await respond({ init: { wasmUrl: locateWasm() } });
+    expect(await respond({ id: 25, kind: 'plan-write', bytes: sourceBytes.slice(), scope: PLAN_SCOPE, statement: { sql: PLAN_SQL }, caps: PLAN_CAPS })).toMatchObject({
+      id: 25,
+      result: { ok: true, plan: { previewChanges: 2 } },
+    });
+  });
+});
+
+describe('PR-3 the plan-write job — the read’s clock, a fresh export, the dequeue re-check', () => {
+  it('a plan runs under the READ’s clock: one that never answers is cut at timeoutMs — { reason: timeout }, the worker TERMINATED', async () => {
+    const recorder = newRecorder();
+    configureScopedRead({ createWorker: silentWorkers(recorder), wasm: { wasmUrl: locateWasm() }, timeoutMs: 25, now: () => clock.now });
+    const started = Date.now();
+    expect(await plan()).toMatchObject({ ok: false, reason: 'timeout' });
+    expect(Date.now() - started).toBeLessThan(ACCESS_QUERY_TIMEOUT_MS);
+    expect(recorder.terminated).toBe(1);
+  });
+
+  it('the grant’s cached bytes are evicted BEFORE the thunk runs — the plan exports afresh — and nothing of the plan is cached', async () => {
+    const recorder = newRecorder();
+    configureScopedRead({ createWorker: inlineWorkers(recorder), wasm: { wasmUrl: locateWasm() }, now: () => clock.now });
+    expect(await read('g1', 'SELECT 1')).toMatchObject({ ok: true });
+    expect(__scopedReadCachedGrantsForTests()).toEqual(['g1']);
+    let cachedWhenFetched: string[] | undefined;
+    const outcome = await plan({
+      bytes: () => {
+        cachedWhenFetched = __scopedReadCachedGrantsForTests();
+        return Promise.resolve(sourceBytes);
+      },
+    });
+    expect(outcome).toMatchObject({ ok: true });
+    expect(cachedWhenFetched, 'the thunk ran — a fresh export — after the cached bytes were dropped').toEqual([]);
+    expect(__scopedReadCachedGrantsForTests(), 'the plan is never cached').toEqual([]);
+    let fetched = 0;
+    await read('g1', 'SELECT 1', () => {
+      fetched += 1;
+      return Promise.resolve(sourceBytes);
+    });
+    expect(fetched, 'the next read exports again').toBe(1);
+  });
+
+  it('a plan whose grant ended while it was queued answers ended — nothing fetched, nothing posted', async () => {
+    const recorder = newRecorder();
+    configureScopedRead({ createWorker: inlineWorkers(recorder), wasm: { wasmUrl: locateWasm() }, now: () => clock.now });
+    let fetched = false;
+    const outcome = await plan({
+      bytes: () => {
+        fetched = true;
+        return Promise.resolve(sourceBytes);
+      },
+      stillLive: () => false,
+    });
+    expect(outcome).toMatchObject({ ok: false, reason: 'ended' });
+    expect(fetched).toBe(false);
+    expect(planJobsOf(recorder)).toHaveLength(0);
   });
 });

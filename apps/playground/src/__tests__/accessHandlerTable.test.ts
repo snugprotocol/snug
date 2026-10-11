@@ -19,10 +19,17 @@
 //    cells red;
 //  - drop the `refused` line for an unattended read → the NOT_GRANTED + refused-line cells red;
 //  - move the WhatsApp check above the attendance check → the order rows red.
+//
+// PR-3 (contract v2 D-PR3-13/14): the SECOND table's frame cells — `write`, `refresh`, `discover`
+// over the same frame callers × the ten grants and PR-3's three fixtures — through the same REAL
+// handler, which maps the three new ops to the service. RED BY DESIGN until the handler maps them
+// (today the switch has no case for them: the handler answers nothing). No v2 frame cell needs a
+// skip: the policy is the only rule a v2 op meets, so the one named invert of the first table has
+// no twin here.
 
 import { afterEach, beforeEach, describe, it, vi } from 'vitest';
 
-import { FRAME_CALLERS, INVERT, driveHandlerCell, orderCells, setupWorld, tableCells, teardownWorld } from './accessPolicyTable.js';
+import { FRAME_CALLERS, INVERT, driveHandlerCell, driveHandlerCellV2, orderCells, setupWorld, tableCells, tableCellsV2, teardownWorld } from './accessPolicyTable.js';
 
 beforeEach(async () => {
   await setupWorld();
@@ -55,6 +62,19 @@ describe('AC9 characterisation — the rule order is today’s query order (atte
   for (const cell of orderCells().filter((entry) => FRAME_CALLERS.includes(entry.caller))) {
     it(cell.name, async () => {
       await driveHandlerCell(cell);
+    });
+  }
+});
+
+describe('PR-3 D-PR3-13 — the second table’s frame cells (write · refresh · discover) through the real createAccessHandlerFor', () => {
+  const v2 = tableCellsV2().filter((cell) => FRAME_CALLERS.includes(cell.caller));
+  for (const caller of FRAME_CALLERS) {
+    describe(caller, () => {
+      for (const cell of v2.filter((entry) => entry.caller === caller)) {
+        it(cell.why !== undefined ? `${cell.name} (answered ACCESS_REFRESH_FAILED refreshOff: ${cell.why})` : cell.name, async () => {
+          await driveHandlerCellV2(cell);
+        });
+      }
     });
   }
 });

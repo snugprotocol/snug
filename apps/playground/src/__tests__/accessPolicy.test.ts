@@ -26,6 +26,11 @@
 //  - rule 4 as `!attended && !grant.unattended` (today's handler) → the invert cells red;
 //  - name `refused-line` for every caller → the schedule × persisted cells red;
 //  - check the WhatsApp fact before attendance → the order rows red.
+//
+// PR-3 (contract v2 D-PR3-13): the SECOND table — `write {grantId, table}`, `refresh {grantId}` and
+// `discover` over the same eight callers × the ten grants and PR-3's three fixtures — through
+// `authorise`, each cell pure and carrying the grant it admits; `stillWritable` = `stillReadable` ∧
+// the named table's `write`. Red until the policy gains the three acts.
 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -36,10 +41,13 @@ import { ACCESS_ERROR_CODES } from '@snugprotocol/protocol';
 
 import { ACCESS_APP_MESSAGES } from '../access/copy.js';
 import { createAccessHandlerFor } from '../access/accessHandler.js';
-import { findAccessGrant, type AnyAccessGrant, type FoundAccessGrant } from '../access/grants.js';
+import { findAccessGrant, revokeAccess, type AnyAccessGrant, type FoundAccessGrant } from '../access/grants.js';
 import {
   CALLER_KEYS,
   actOf,
+  actOfV2,
+  tableCellsV2,
+  type CellV2,
   makeGrant,
   observe,
   orderCells,
@@ -245,5 +253,85 @@ describe('D-PR2-1 policy.ts is PURE — protocol, the leaf grantFacts.ts, copy.t
 
   it('grantFacts.ts is a LEAF: protocol imports only', () => {
     for (const { from } of importsOf(source('../access/grantFacts.ts'))) expect(from).toBe('@snugprotocol/protocol');
+  });
+});
+
+// =========================================================================================
+// PR-3 — the second table: write · refresh · discover (contract v2 D-PR3-13)
+// =========================================================================================
+
+/** `authorise` over the v2 acts — the act union gains them in I-E1; widened here until it does. */
+type AuthoriseV2 = (ctx: ReturnType<typeof policyContext>, caller: CallerShape, act: ReturnType<typeof actOfV2>) => Record<string, unknown>;
+/** D-PR3-13 `stillWritable(find, caller, grantId, table, now)` — a local structural type until policy.ts exports it. */
+type StillWritable = (find: ReturnType<typeof policyContext>['find'], caller: CallerShape, grantId: string, table: string, now: number) => FoundAccessGrant | undefined;
+
+async function drivePolicyCellV2(cell: CellV2): Promise<void> {
+  const authorise = (await policy()).authorise as unknown as AuthoriseV2;
+  const { grantId, caller } = await prepare(cell);
+  const before = observe(grantId);
+  const verdict = authorise(policyContext(), caller, actOfV2(cell.act, grantId));
+  expect(pickVerdict(verdict, cell.verdict)).toEqual(cell.verdict.ok ? { ok: true, ...(cell.verdict.attended !== undefined ? { attended: cell.verdict.attended } : {}) } : cell.verdict);
+  if (cell.verdict.ok && cell.act !== 'discover') {
+    expect((verdict.grant as FoundAccessGrant | undefined)?.grant.id, 'the verdict carries the grant it admitted').toBe(grantId);
+  }
+  expect(observe(grantId), 'authorise is pure: it NAMES an effect, the service performs it').toEqual(before);
+}
+
+describe('PR-3 D-PR3-13 — every cell of the second table (write · refresh · discover) through authorise', () => {
+  const cells = tableCellsV2();
+  for (const caller of CALLER_KEYS) {
+    describe(caller, () => {
+      for (const cell of cells.filter((entry) => entry.caller === caller)) {
+        it(cell.why !== undefined ? `${cell.name} (the verdict; the frame then meets the engine: ${cell.why})` : cell.name, async () => {
+          await drivePolicyCellV2(cell);
+        });
+      }
+    });
+  }
+});
+
+describe('PR-3 D-PR3-13 stillWritable — stillReadable ∧ the named table’s write', () => {
+  const stillWritableOf = async (): Promise<StillWritable> => (await policy() as unknown as { stillWritable: StillWritable }).stillWritable;
+
+  it('a write grant is still writable for its ticked table only — not for its read-only table, not for a table outside it', async () => {
+    const stillWritable = await stillWritableOf();
+    const { budget, clock } = world();
+    const id = await makeGrant('persisted-write');
+    const here: CallerShape = { kind: 'frame', appId: budget, generation: 0, present: true };
+    expect(stillWritable(policyContext().find, here, id, 'transactions', clock.now)?.grant.id).toBe(id);
+    expect(stillWritable(policyContext().find, here, id, 'accounts', clock.now)).toBeUndefined();
+    expect(stillWritable(policyContext().find, here, id, 'nope', clock.now)).toBeUndefined();
+  });
+
+  it('whatever stops a read stops a write: stopped, expired by the clock, another reader, an unknown id', async () => {
+    const stillWritable = await stillWritableOf();
+    const { budget, pantry, clock } = world();
+    const id = await makeGrant('persisted-write');
+    const here: CallerShape = { kind: 'frame', appId: budget, generation: 0, present: true };
+    const other: CallerShape = { kind: 'frame', appId: pantry, generation: 0, present: true };
+    expect(stillWritable(policyContext().find, other, id, 'transactions', clock.now), 'another reader').toBeUndefined();
+    expect(stillWritable(policyContext().find, here, '00000000-0000-4000-8000-000000000000', 'transactions', clock.now), 'an unknown id').toBeUndefined();
+    expect(stillWritable(policyContext().find, here, id, 'transactions', clock.now + 86_400_000), 'expired by the clock').toBeUndefined();
+    await revokeAccess(id);
+    expect(stillWritable(policyContext().find, here, id, 'transactions', clock.now), 'stopped').toBeUndefined();
+  });
+
+  it('a read-only grant is never writable, though it is still readable', async () => {
+    const { stillReadable } = await policy();
+    const stillWritable = await stillWritableOf();
+    const { budget, clock } = world();
+    const id = await makeGrant('persisted');
+    const here: CallerShape = { kind: 'frame', appId: budget, generation: 0, present: true };
+    expect(stillReadable(policyContext().find, here, id, clock.now)?.grant.id).toBe(id);
+    expect(stillWritable(policyContext().find, here, id, 'transactions', clock.now)).toBeUndefined();
+  });
+
+  it('a session grant with write is writable by the frame of its generation only', async () => {
+    const stillWritable = await stillWritableOf();
+    const { budget, clock } = world();
+    const id = await makeGrant('session-g0-write');
+    createAccessHandlerFor(budget, { attended: true, generation: 0 });
+    expect(stillWritable(policyContext().find, { kind: 'frame', appId: budget, generation: 0, present: true }, id, 'transactions', clock.now)?.grant.id).toBe(id);
+    expect(stillWritable(policyContext().find, { kind: 'frame', appId: budget, present: false }, id, 'transactions', clock.now), 'the hidden frame').toBeUndefined();
   });
 });

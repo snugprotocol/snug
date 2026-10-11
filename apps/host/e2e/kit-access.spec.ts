@@ -16,15 +16,25 @@
 //      source writes its row, the reader asks after a click, the strip renders, *review* → the
 //      sheet → *allow* → the reader's `query` answers ONE row. The console carries no failed
 //      worker or wasm load.
+//   4. (TASK-20261010-host-broker PR-3, AC28) the same two walks as the playground's clauses 10 and
+//      11, on the single file: the WRITE + UNDO walk (an ask carrying `access: 'write'`, the write
+//      toggle offered at once, ONE UPDATE answered `changes: 1`, the source's ⋈ history shows the
+//      change and *undo* puts the row back) and the REFRESH walk (the playground's
+//      access-source-fetch.html as the fetching source: `fresh: true` and its counter moved, then
+//      `recent`; the handler-less Ledger → ACCESS_REFRESH_FAILED once the 90 s bound is crossed on
+//      the page clock). The kit boots the scheduler with the page (its scheduler seat), so the
+//      refresh engine's gates pass.
 //
 // Scoped run (after `pnpm --filter host build`): `pnpm --filter host exec playwright test e2e/kit-access.spec.ts`
 // — NOT `test:e2e -- <file>`: pnpm forwards the literal `--` and Playwright then runs the whole suite.
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-import { expect, test, type FrameLocator, type Page } from '@playwright/test';
+import { expect, test, type FrameLocator, type Locator, type Page } from '@playwright/test';
 
-import { SETTINGS_CARD, STRIP, STRIP_OUTCOME } from '../../playground/src/access/copy';
+import { ACCESS_REQUEST_MIN_GAP_MS } from '@snugprotocol/protocol';
+
+import { ACCESS_SHEET, CONSENT_SHEET, EGRESS, SETTINGS_CARD, STRIP, STRIP_OUTCOME, historyLine } from '../../playground/src/access/copy';
 import { KIT_URL, capsAppHtml, installRoutePolicy, watchConsole } from './helpers';
 
 const appFrame = (page: Page): FrameLocator => page.frameLocator('[data-testid="frame-wrap"] iframe[sandbox="allow-scripts"]');
@@ -37,6 +47,10 @@ const READER = 'Budget';
 const SOURCE = 'Ledger';
 /** The reader's *show spending* SELECT returns every seeded `transactions` row: the source seeds four (access-source.html TRANSACTIONS). */
 const SEEDED_TRANSACTIONS = 4;
+/** PR-3: the fetching source (access-source-fetch.html's `useSnugApp` meta). */
+const BANK = 'Bank';
+/** The reader fixture's #write statement (access-reader.html WRITE_SQL). */
+const WRITE_SQL = "UPDATE transactions SET note = 'checked' WHERE category = 'music'";
 
 /** The access card, by the heading its Section draws and the card's own testid. */
 const accessSection = (page: Page) => page.getByTestId('settings-section-access-between-apps');
@@ -238,5 +252,172 @@ test.describe('AC23 — access between apps on the built kit page (served over l
     expect(policy.all.filter((url) => /sql-wasm|\.wasm(\?|$)/i.test(url)), 'no engine fetch — the bytes ride inline').toEqual([]);
     expect(raw.filter((line) => WORKER_OR_WASM_FAILURE.test(line)), 'no failed worker or wasm load').toEqual([]);
     expect(errors).toEqual([]);
+  });
+
+  // ------------------------------------------------------------------------------------------
+  // TASK-20261010-host-broker PR-3 (AC28) — the write + undo walk and the refresh walk on the kit
+  // ------------------------------------------------------------------------------------------
+
+  /** A same-document hash write — never a reload (the file lives in this page's storage). */
+  async function openOwned(page: Page, appId: string): Promise<FrameLocator> {
+    await page.evaluate((id) => {
+      location.hash = `#/run/${id}`;
+    }, appId);
+    const app = appFrame(page);
+    await expect(app.locator('main')).toBeVisible({ timeout: 30_000 });
+    return app;
+  }
+
+  /** The strip's *review* → the consent sheet named by `title`. */
+  async function reviewAs(page: Page, title: string): Promise<Locator> {
+    const strip = page.getByTestId('access-ask');
+    await expect(strip).toBeVisible({ timeout: 20_000 });
+    await strip.getByRole('button', { name: STRIP.review }).click();
+    const sheet = page.getByRole('dialog', { name: title });
+    await expect(sheet).toBeVisible();
+    return sheet;
+  }
+
+  async function openMoreOptions(sheet: Locator): Promise<void> {
+    const more = sheet.getByTestId('access-options-more');
+    await expect(more).toBeVisible();
+    const tag = await more.evaluate((el) => el.tagName);
+    if (tag === 'DETAILS') {
+      if ((await more.getAttribute('open')) === null) await more.locator('summary').first().click();
+    } else {
+      await more.click();
+    }
+  }
+
+  test('PR-3 write + undo: an ask with access write, the toggle offered at once, one UPDATE changes one row, and *undo* on the source’s history puts it back', async ({ page }) => {
+    test.setTimeout(180_000);
+    const policy = await installRoutePolicy(page, { allowJsDelivr: true });
+    await page.goto(`${KIT_URL}#/settings`);
+    await expect(accessSection(page)).toBeVisible({ timeout: 20_000 });
+    const sourceId = await installShared(page, 'ledger', bundle(SOURCE, fixture('access-source.html'), '0b6f2a4e-8d3c-4e1f-a2b5-6c7d8e9f0a21', '📒'));
+    await expect(appFrame(page).locator('#status')).toHaveText('ready', { timeout: 30_000 });
+    const readerId = await installShared(page, 'budget', bundle(READER, fixture('access-reader.html'), '0b6f2a4e-8d3c-4e1f-a2b5-6c7d8e9f0a22', '💸'));
+    const reader = appFrame(page);
+    await expect(reader.getByRole('button', { name: 'ask to read and change data' })).toBeVisible({ timeout: 30_000 });
+
+    await reader.getByRole('button', { name: 'ask to read and change data' }).click();
+    await expect(reader.locator('#status')).toHaveText('request: waiting');
+    await expect(page.getByTestId('access-ask').getByTestId('access-ask-title')).toHaveText(STRIP.title(READER, true), { timeout: 20_000 });
+    const sheet = await reviewAs(page, CONSENT_SHEET.title(READER, true));
+    const toggle = sheet.getByTestId(`access-write-${sourceId}-transactions`);
+    await expect(toggle, 'offered without a click for a write ask').toBeVisible();
+    await expect(toggle).not.toBeChecked();
+    await toggle.check();
+    await expect(sheet).toContainText(CONSENT_SHEET.undoNote(SOURCE, 'transactions', READER));
+    await expect(sheet.getByTestId('access-egress').locator('li[data-kind="closing"]')).toHaveText(EGRESS.closing(SOURCE, true));
+    await sheet.getByTestId('access-duration-day').check();
+    const allow = sheet.getByTestId('access-allow');
+    await expect(allow).toBeEnabled({ timeout: 5_000 });
+    await allow.click();
+    await expect(sheet).toBeHidden();
+    await expect(reader.locator('#status')).toHaveText('request: ok', { timeout: 20_000 });
+    await expect(page.getByTestId('access-ask-outcome').getByTestId('access-ask-outcome-words')).toHaveText(
+      STRIP_OUTCOME.allowed(READER, SOURCE, ['transactions'], 'day', ['transactions']),
+    );
+
+    await reader.getByRole('button', { name: 'show the music note' }).click();
+    await expect(reader.locator('#peeked')).toHaveText('note: monthly plan', { timeout: 20_000 });
+    await reader.getByRole('button', { name: 'mark the music row checked' }).click();
+    await expect(reader.locator('#status')).toHaveText('write: ok', { timeout: 20_000 });
+    await expect(reader.locator('#result')).toHaveText('changes: 1');
+    await reader.getByRole('button', { name: 'show the music note' }).click();
+    await expect(reader.locator('#peeked')).toHaveText('note: checked', { timeout: 20_000 });
+
+    // The source's ⋈ history: the change, what it changed, and its undo.
+    await openOwned(page, sourceId);
+    await page.getByRole('button', { name: ACCESS_SHEET.iconLabel, exact: true }).click();
+    const own = page.getByRole('dialog', { name: ACCESS_SHEET.title(SOURCE) });
+    await expect(own).toBeVisible();
+    const wrote = own.getByTestId('access-history').locator('[data-testid="access-history-row"][data-kind="wrote"]');
+    await expect(wrote).toHaveCount(1);
+    await expect(wrote.getByTestId('access-history-who')).toHaveText(READER);
+    const now = await page.evaluate(() => Date.now());
+    const line = historyLine({ at: new Date(now).toISOString(), kind: 'wrote', via: 'app', changes: 1, tables: ['transactions'] } as never, now, READER);
+    await expect(wrote.getByTestId('access-history-words')).toContainText(line.split(' · ')[0] as string);
+    await expect(wrote.getByTestId('access-history-asked').locator('summary')).toHaveText(ACCESS_SHEET.whatItChanged);
+    await expect(wrote.getByTestId('access-history-asked').locator('code')).toHaveText(WRITE_SQL);
+    await wrote.getByTestId('access-history-undo').click();
+    const confirm = own.getByTestId('access-undo-confirm');
+    await expect(confirm).toContainText(ACCESS_SHEET.undoArm('transactions', 1, SOURCE));
+    await confirm.getByTestId('access-undo-yes').click();
+    await expect(own.getByTestId('access-history-undo-outcome')).toHaveText(ACCESS_SHEET.undone, { timeout: 20_000 });
+    await expect(own.getByTestId('access-history').locator('[data-testid="access-history-row"][data-kind="undone"]').getByTestId('access-history-who')).toHaveText('you');
+    await own.getByTestId('access-sheet-close').click();
+
+    const reopened = await openOwned(page, readerId);
+    await reopened.getByRole('button', { name: 'show the music note' }).click();
+    await expect(reopened.locator('#peeked')).toHaveText('note: monthly plan', { timeout: 20_000 });
+    expect(policy.blocked).toEqual([]);
+  });
+
+  test('PR-3 refresh: fetch-first on the fetching source → fresh and its counter moved; again → recent; the handler-less Ledger → ACCESS_REFRESH_FAILED', async ({ page }) => {
+    test.setTimeout(240_000);
+    // The clock BEFORE goto (the schedule.spec pattern): the handler-less run's 90 s bound is crossed on it.
+    await page.clock.install();
+    const policy = await installRoutePolicy(page, { allowJsDelivr: true });
+    await page.goto(`${KIT_URL}#/settings`);
+    await expect(accessSection(page)).toBeVisible({ timeout: 20_000 });
+    const ledgerId = await installShared(page, 'ledger', bundle(SOURCE, fixture('access-source.html'), '0b6f2a4e-8d3c-4e1f-a2b5-6c7d8e9f0a31', '📒'));
+    await expect(appFrame(page).locator('#status')).toHaveText('ready', { timeout: 30_000 });
+    const bankId = await installShared(page, 'bank', bundle(BANK, fixture('access-source-fetch.html'), '0b6f2a4e-8d3c-4e1f-a2b5-6c7d8e9f0a32', '🏦'));
+    await expect(appFrame(page).locator('#status')).toHaveText('ready', { timeout: 30_000 });
+    await expect(appFrame(page).locator('#counts')).toHaveText(`transactions: ${SEEDED_TRANSACTIONS} · accounts: 2 · fetches: 0`);
+    await installShared(page, 'budget', bundle(READER, fixture('access-reader.html'), '0b6f2a4e-8d3c-4e1f-a2b5-6c7d8e9f0a33', '💸'));
+    const reader = appFrame(page);
+    await expect(reader.getByRole('button', { name: "use another app's data" })).toBeVisible({ timeout: 30_000 });
+
+    // A read ask; Bank, its counter table, and *fetch new data before reading it*.
+    await reader.getByRole('button', { name: "use another app's data" }).click();
+    let sheet = await reviewAs(page, STRIP.title(READER));
+    await sheet.getByTestId(`access-source-${bankId}`).check();
+    await sheet.getByTestId(`access-table-${bankId}-fetches`).check();
+    await openMoreOptions(sheet);
+    await expect(sheet).toContainText(CONSENT_SHEET.fetchFirst(BANK));
+    await sheet.getByTestId('access-refresh').check();
+    await sheet.getByTestId('access-duration-day').check();
+    await expect(sheet.getByTestId('access-allow')).toBeEnabled({ timeout: 5_000 });
+    await sheet.getByTestId('access-allow').click();
+    await expect(reader.locator('#status')).toHaveText('request: ok', { timeout: 20_000 });
+
+    await reader.getByRole('button', { name: 'count the fetches' }).click();
+    await expect(reader.locator('#peeked')).toHaveText('fetches: 0 · asked by null', { timeout: 20_000 });
+    await reader.getByRole('button', { name: 'ask for fresh data' }).click();
+    await expect(reader.locator('#status')).toHaveText('refresh: ok', { timeout: 90_000 });
+    await expect(reader.locator('#result')).toHaveText('fresh: true');
+    await reader.getByRole('button', { name: 'count the fetches' }).click();
+    await expect(reader.locator('#peeked')).toHaveText(`fetches: 1 · asked by ${READER}`, { timeout: 20_000 });
+    await reader.getByRole('button', { name: 'ask for fresh data' }).click();
+    await expect(reader.locator('#status')).toHaveText('refresh: ok', { timeout: 20_000 });
+    await expect(reader.locator('#result')).toHaveText('fresh: false · recent');
+
+    // The handler-less Ledger.
+    await page.clock.fastForward(ACCESS_REQUEST_MIN_GAP_MS);
+    await reader.getByRole('button', { name: "use another app's data" }).click();
+    sheet = await reviewAs(page, STRIP.title(READER));
+    await sheet.getByTestId(`access-source-${ledgerId}`).check();
+    await openMoreOptions(sheet);
+    await sheet.getByTestId('access-refresh').check();
+    await sheet.getByTestId('access-duration-day').check();
+    await expect(sheet.getByTestId('access-allow')).toBeEnabled({ timeout: 5_000 });
+    await sheet.getByTestId('access-allow').click();
+    await expect(reader.locator('#status')).toHaveText('request: ok', { timeout: 20_000 });
+    await reader.getByRole('button', { name: 'ask for fresh data' }).click();
+    await expect(reader.locator('#status')).toHaveText('refresh: waiting');
+    await expect
+      .poll(
+        async () => {
+          await page.clock.fastForward(15_000);
+          return reader.locator('#status').textContent();
+        },
+        { timeout: 90_000, intervals: [1_000] },
+      )
+      .toBe('refresh: ACCESS_REFRESH_FAILED');
+    await expect(reader.locator('#result')).toContainText('ACCESS_REFRESH_FAILED · final');
+    expect(policy.blocked).toEqual([]);
   });
 });

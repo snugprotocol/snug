@@ -1,0 +1,1246 @@
+/**
+ * TASK-20261010-host-broker PR-3 (contract v2 D-PR3-9 / D-PR3-10 / D-PR3-12; AC19) — the PURE half of
+ * the Write Broker, `packages/db/src/brokered-write.ts`: parse, facts, plan, apply, undo.
+ *
+ * One plain DML only — `INSERT INTO t (cols) VALUES …`, `UPDATE t SET c = <value> … WHERE <terms>`,
+ * `DELETE FROM t WHERE <terms>` — whose values are literals or placeholders and whose WHERE is
+ * simple comparisons on columns joined by AND/OR/NOT; any other token is refused BY NAME. The table
+ * rules (`tableFacts`) are decided from the SCHEMA, never from a row's value, and run at BOTH seats:
+ * on the raw copy when the Worker plans, and AGAIN on the live handle when the driver applies. The
+ * plan dry-runs on a scoped copy built `forPlan` (no `query_only`, `ignore_check_constraints` reset)
+ * and answers counts only — no row, no value. The apply is SYNCHRONOUS on a real handle:
+ * `BEGIN IMMEDIATE`, a TEMP trigger capture under per-apply names, the statement, the checks,
+ * `COMMIT` — a `committed` flag and a ROLLBACK in `finally`. The undo is BUILT from the captured
+ * rows (never from statement text), guarded by the values the write left, and fails whole.
+ *
+ * Written BEFORE the module exists (Gate 3). The module is loaded through a VARIABLE specifier so a
+ * missing module reds each row on its own (docs/lessons.md 2026-10-11): a literal dynamic import of
+ * a missing module fails the whole file at transform time. The types below are LOCAL STRUCTURAL
+ * copies of the contract's ("Module contracts (the wire) → packages/db") — the implementation lane
+ * replaces them with the module's own exports at Gate 5.
+ *
+ * Mutation checks (to run by hand once the module lands — remove the rule, see the named row red):
+ *  - admit a function call / CASE / arithmetic → the matching "refused BY NAME" rows red;
+ *  - drop the TEMP-trigger check (sqlite_temp_master) → "a TEMP trigger on the table …" reds;
+ *  - run the column rule after the dry run → the "BEFORE any dry run" rows red (the spy sees the statement);
+ *  - keep `ignore_check_constraints = 1` on the plan copy → "a CHECK the write would break fails the dry run" reds;
+ *  - ROLLBACK in `finally` even when BEGIN IMMEDIATE failed → "busy … the outer transaction is left as it was" reds;
+ *  - drop the capture objects only on success → "the per-apply temp names … gone after every path" reds;
+ *  - drop the `after` guard from the undo → "a row changed since → the WHOLE undo rolls back" reds.
+ */
+
+import initSqlJs, { type Database, type SqlJsStatic } from 'sql.js';
+import { beforeAll, describe, expect, it } from 'vitest';
+
+import { scopedScratchRead } from '../scoped-read.js';
+import { locateWasm } from './helpers.js';
+
+// ------------------------------------------------------------------ the contract's shapes (local)
+
+/* Local structural types — replaced by `brokered-write.ts`'s own exports at Gate 5. */
+type BrokeredOp = 'insert' | 'update' | 'delete';
+interface ParsedDml {
+  op: BrokeredOp;
+  table: string;
+  columns: string[];
+  setColumns?: string[];
+  insertColumns?: string[];
+  literals: string[];
+  placeholders: number;
+  sql: string;
+}
+type ParseResult = { ok: true; parsed: ParsedDml } | { ok: false; reason: 'refused'; message: string };
+interface ColumnFact {
+  name: string;
+  generated: boolean;
+}
+type FactsResult = { ok: true; columns: ColumnFact[] } | { ok: false; reason: 'refused'; message: string };
+interface BrokeredCaps {
+  maxChanges: number;
+  maxUndoBytes: number;
+}
+interface BrokeredPlan {
+  sql: string;
+  params?: readonly unknown[];
+  op: BrokeredOp;
+  table: string;
+  columns: string[];
+  setColumns?: string[];
+  insertColumns?: string[];
+  previewChanges: number;
+}
+interface ScopeTable {
+  name: string;
+  columns: readonly string[];
+  withheld?: readonly string[];
+  write?: boolean;
+}
+interface Scope {
+  tables: readonly ScopeTable[];
+  kv?: boolean;
+}
+type PlanResult =
+  | { ok: true; plan: BrokeredPlan }
+  | { ok: false; reason: 'refused' | 'not-granted' | 'too-many' | 'too-large' | 'failed' | 'copy-failed'; message: string }
+  | { ok: false; reason: 'drift'; drift: { added: string[]; removed: string[] }; message: string };
+interface UndoRow {
+  rowid: number;
+  before?: unknown[];
+  after?: unknown[];
+}
+interface UndoStep {
+  table: string;
+  op: BrokeredOp;
+  columns: string[];
+  rows: UndoRow[];
+}
+type ApplyInput =
+  | { plans: readonly BrokeredPlan[]; caps: BrokeredCaps; expectChanges?: readonly number[]; requireUndo: boolean; capture: boolean }
+  | { undo: readonly UndoStep[]; caps: BrokeredCaps };
+type ApplyResult =
+  | { ok: true; steps: UndoStep[]; changes: number[]; undoable: boolean }
+  | {
+      ok: false;
+      reason: 'busy' | 'drifted' | 'too-many' | 'too-large' | 'unsafe' | 'refused' | 'failed';
+      message: string;
+      previewed?: number[];
+      current?: number[];
+    };
+interface BrokeredWriteModule {
+  parseBrokeredStatement(sql: string): ParseResult;
+  tableFacts(db: Database, table: string, scope: { columns: readonly string[] }, op: BrokeredOp): FactsResult;
+  planBrokeredWrite(SQL: SqlJsStatic, bytes: Uint8Array, scope: Scope, statement: { sql: string; params?: readonly unknown[] }, caps: BrokeredCaps): PlanResult;
+  applyBrokeredBatch(db: Database, input: ApplyInput): ApplyResult;
+  buildUndoStatement(step: UndoStep, row: UndoRow): { sql: string; params: unknown[] };
+  dmlTargetTable(sql: string): string | undefined;
+}
+
+/** The module, through a VARIABLE specifier: a missing module reds each row, never the file. */
+const MODULE = '../brokered-write.js';
+let loading: Promise<BrokeredWriteModule> | undefined;
+function brokered(): Promise<BrokeredWriteModule> {
+  loading ??= import(/* @vite-ignore */ MODULE) as Promise<BrokeredWriteModule>;
+  return loading;
+}
+
+// --------------------------------------------------------------------------------- fixtures
+
+let SQL: SqlJsStatic;
+
+beforeAll(async () => {
+  SQL = await initSqlJs({ locateFile: locateWasm });
+});
+
+/** A LIVE handle shaped the way an app's own SQL would have shaped it. */
+function handle(statements: readonly string[]): Database {
+  const db = new SQL.Database();
+  for (const statement of statements) db.run(statement);
+  return db;
+}
+
+/** The same shape as bytes — what the Worker plans on. */
+function bytesOf(statements: readonly string[]): Uint8Array {
+  const db = handle(statements);
+  try {
+    return db.export();
+  } finally {
+    db.close();
+  }
+}
+
+function all(db: Database, sql: string): unknown[][] {
+  return db.exec(sql)[0]?.values ?? [];
+}
+
+/** Every row of a table with its rowid, in rowid order — the "nothing changed" oracle. */
+function dump(db: Database, table: string): unknown[][] {
+  try {
+    return all(db, `SELECT rowid, * FROM "${table}" ORDER BY rowid`);
+  } catch {
+    return all(db, `SELECT * FROM "${table}" ORDER BY 1`); // a WITHOUT ROWID table has no rowid
+  }
+}
+
+/** Every TEMP object on the handle (the capture's table and trigger must never outlive an apply). */
+const tempObjects = (db: Database): string[] => all(db, 'SELECT name FROM sqlite_temp_master').map((row) => String(row[0]));
+
+/** Whether the handle is inside a transaction: a BEGIN fails "within a transaction". */
+function openTransaction(db: Database): boolean {
+  try {
+    db.run('BEGIN');
+  } catch {
+    return true;
+  }
+  db.run('ROLLBACK');
+  return false;
+}
+
+/**
+ * A watch over ONE handle: every SQL text it is asked to run/exec/prepare/iterate, and an injected
+ * failure for the texts a predicate picks (the "a step throws mid-apply" probe).
+ */
+function watch(db: Database): { seen: string[]; failWhen: (test: ((sql: string) => boolean) | undefined) => void } {
+  const seen: string[] = [];
+  let fail: ((sql: string) => boolean) | undefined;
+  const target = db as unknown as Record<string, (...args: unknown[]) => unknown>;
+  for (const method of ['run', 'exec', 'prepare', 'iterateStatements'] as const) {
+    const original = target[method]!.bind(db);
+    target[method] = (sql: unknown, ...rest: unknown[]) => {
+      seen.push(String(sql));
+      if (fail?.(String(sql)) === true) throw new Error('injected failure');
+      return original(sql, ...rest);
+    };
+  }
+  return { seen, failWhen: (test) => (fail = test) };
+}
+
+/**
+ * A spy over the ENGINE the planner is handed: every SQL text any handle it opens is asked to run.
+ * Proves "refused BEFORE any dry run" without reaching into the implementation (the scoped-read
+ * suite's technique).
+ */
+function spyEngine(): { engine: SqlJsStatic; seen: string[] } {
+  const seen: string[] = [];
+  const Real = SQL.Database;
+  class SpyDatabase extends Real {
+    override run(sql: string, params?: Parameters<InstanceType<typeof Real>['run']>[1]) {
+      seen.push(sql);
+      return super.run(sql, params);
+    }
+    override exec(sql: string, params?: Parameters<InstanceType<typeof Real>['exec']>[1]) {
+      seen.push(sql);
+      return super.exec(sql, params);
+    }
+    override prepare(sql: string, params?: Parameters<InstanceType<typeof Real>['prepare']>[1]) {
+      seen.push(sql);
+      return super.prepare(sql, params);
+    }
+    override iterateStatements(sql: string) {
+      seen.push(sql);
+      return super.iterateStatements(sql);
+    }
+  }
+  return { engine: { ...SQL, Database: SpyDatabase } as unknown as SqlJsStatic, seen };
+}
+
+const LEDGER = [
+  'CREATE TABLE transactions (id INTEGER PRIMARY KEY, amount INTEGER NOT NULL, category TEXT, note TEXT)',
+  "INSERT INTO transactions (id, amount, category, note) VALUES (1, 450, 'food', 'coffee'), (2, 120000, 'home', 'rent'), (3, 500, 'food', 'tea')",
+  'CREATE TABLE accounts (name TEXT, balance INTEGER, api_key TEXT)',
+  "INSERT INTO accounts (name, balance, api_key) VALUES ('checking', 100, 'hunter2')",
+];
+const TX_COLUMNS = ['id', 'amount', 'category', 'note'];
+const WRITE_TX: Scope = { tables: [{ name: 'transactions', columns: TX_COLUMNS, write: true }] };
+/** The contract's caps: ACCESS_WRITE_MAX_ROWS (200) and ACCESS_UNDO_MAX_BYTES (64 KiB) — passed in, as the engine passes them. */
+const CAPS: BrokeredCaps = { maxChanges: 200, maxUndoBytes: 64 * 1024 };
+
+const KEY = 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJ';
+const JWT = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U';
+
+/** A plan as the Worker hands it to the seat — `columns` the granted columns of the table. */
+const txPlan = (sql: string, op: BrokeredOp, extra: Partial<BrokeredPlan> = {}): BrokeredPlan => ({
+  sql,
+  op,
+  table: 'transactions',
+  columns: [...TX_COLUMNS],
+  previewChanges: 0,
+  ...extra,
+});
+
+const forward = (plans: readonly BrokeredPlan[], over: Partial<Extract<ApplyInput, { plans: unknown }>> = {}): ApplyInput => ({
+  plans,
+  caps: CAPS,
+  requireUndo: true,
+  capture: true,
+  ...over,
+});
+
+/** The captured rows in rowid order — the capture's own order is the trigger's, not a contract. */
+const byRowid = (steps: readonly UndoStep[]): UndoStep[] => steps.map((step) => ({ ...step, rows: [...step.rows].sort((a, b) => a.rowid - b.rowid) }));
+
+function okApply(result: ApplyResult): Extract<ApplyResult, { ok: true }> {
+  if (!result.ok) throw new Error(`expected an applied batch, got ${result.reason}: ${result.message}`);
+  return result;
+}
+
+function okPlan(result: PlanResult): BrokeredPlan {
+  if (!result.ok) throw new Error(`expected a plan, got ${result.reason}: ${result.message}`);
+  return result.plan;
+}
+
+function okParse(result: ParseResult): ParsedDml {
+  if (!result.ok) throw new Error(`expected a parse, got refused: ${result.message}`);
+  return result.parsed;
+}
+
+const sorted = (values: readonly string[]): string[] => [...values].sort();
+
+// =========================================================================== parseBrokeredStatement
+
+describe('parseBrokeredStatement — the admitted shapes and what they answer', () => {
+  it('an UPDATE with literal values: op, table, every NAMED column, the SET columns in SET order, the literals', async () => {
+    const { parseBrokeredStatement } = await brokered();
+    const sql = "UPDATE transactions SET note = 'lunch', category = 'food' WHERE category = 'cafe'";
+    const parsed = okParse(parseBrokeredStatement(sql));
+    expect(parsed.op).toBe('update');
+    expect(parsed.table).toBe('transactions');
+    expect(parsed.setColumns).toEqual(['note', 'category']);
+    expect(sorted(parsed.columns)).toEqual(['category', 'note']);
+    expect(parsed.literals).toEqual(['lunch', 'food', 'cafe']);
+    expect(parsed.placeholders).toBe(0);
+    expect(parsed.sql).toBe(sql);
+    expect(parsed.insertColumns).toBeUndefined();
+  });
+
+  it('an INSERT with its REQUIRED column list and several rows of values: insertColumns in list order', async () => {
+    const { parseBrokeredStatement } = await brokered();
+    const parsed = okParse(parseBrokeredStatement("INSERT INTO transactions (id, amount, note) VALUES (7, 12, 'gum'), (?, ?, ?)"));
+    expect(parsed.op).toBe('insert');
+    expect(parsed.table).toBe('transactions');
+    expect(parsed.insertColumns).toEqual(['id', 'amount', 'note']);
+    expect(sorted(parsed.columns)).toEqual(['amount', 'id', 'note']);
+    expect(parsed.literals).toContain('gum');
+    expect(parsed.placeholders).toBe(3);
+    expect(parsed.setColumns).toBeUndefined();
+  });
+
+  it('a DELETE whose WHERE uses every admitted term — comparisons, IN (…), IS [NOT] NULL, LIKE — joined by AND/OR/NOT with parentheses', async () => {
+    const { parseBrokeredStatement } = await brokered();
+    const parsed = okParse(
+      parseBrokeredStatement(
+        "DELETE FROM transactions WHERE (category IN ('food', 'cafe', ?) OR note IS NULL) AND NOT (amount >= 100 OR amount < 5) " +
+          "AND id <> 3 AND id != 4 AND note LIKE 'c%' AND category IS NOT NULL AND amount <= 9 AND amount > 1 AND id = 2",
+      ),
+    );
+    expect(parsed.op).toBe('delete');
+    expect(parsed.table).toBe('transactions');
+    expect(sorted(parsed.columns)).toEqual(['amount', 'category', 'id', 'note']);
+    expect(parsed.literals).toEqual(expect.arrayContaining(['food', 'cafe', 'c%']));
+    expect(parsed.placeholders).toBe(1);
+  });
+
+  it.each([['?'], ['?1'], [':note'], ['@note'], ['$note']])('a %s placeholder is a value (counted)', async (placeholder) => {
+    const { parseBrokeredStatement } = await brokered();
+    const parsed = okParse(parseBrokeredStatement(`UPDATE transactions SET note = ${placeholder} WHERE id = 1`));
+    expect(parsed.placeholders).toBe(1);
+    expect(parsed.setColumns).toEqual(['note']);
+  });
+
+  it('three anonymous placeholders count three', async () => {
+    const { parseBrokeredStatement } = await brokered();
+    expect(okParse(parseBrokeredStatement('UPDATE transactions SET note = ?, category = ? WHERE id = ?')).placeholders).toBe(3);
+  });
+
+  it('quoted, bracketed and backtick identifiers are answered UNQUOTED (a doubled quote unescaped)', async () => {
+    const { parseBrokeredStatement } = await brokered();
+    const parsed = okParse(parseBrokeredStatement('UPDATE "transactions" SET [note] = \'x\', `category` = \'y\' WHERE "id" = 1'));
+    expect(parsed.table).toBe('transactions');
+    expect(parsed.setColumns).toEqual(['note', 'category']);
+    expect(sorted(parsed.columns)).toEqual(['category', 'id', 'note']);
+
+    const odd = okParse(parseBrokeredStatement('UPDATE "my""table" SET "a""b" = 1 WHERE id = 2'));
+    expect(odd.table).toBe('my"table');
+    expect(odd.setColumns).toEqual(['a"b']);
+  });
+
+  it('comments, NULL and a trailing semicolon are admitted; a doubled quote inside a string literal unescapes', async () => {
+    const { parseBrokeredStatement } = await brokered();
+    const parsed = okParse(parseBrokeredStatement("/* tidy */ UPDATE transactions SET note = NULL, category = 'it''s' -- a comment\n WHERE id = 1; -- done"));
+    expect(parsed.setColumns).toEqual(['note', 'category']);
+    expect(parsed.literals).toContain("it's");
+  });
+
+  it('SQL words inside a string literal are a literal, never a token', async () => {
+    const { parseBrokeredStatement } = await brokered();
+    const parsed = okParse(parseBrokeredStatement("UPDATE transactions SET note = 'SELECT lower(x) CASE; DROP TABLE t' WHERE id = 1"));
+    expect(parsed.literals).toContain('SELECT lower(x) CASE; DROP TABLE t');
+  });
+});
+
+describe('parseBrokeredStatement — every other shape is REFUSED, by name', () => {
+  // [label, sql, what the message names (when the refusal is a token)]
+  const REFUSED: Array<[string, string, RegExp | undefined]> = [
+    ['a function call in SET', "UPDATE transactions SET note = lower('X') WHERE id = 1", /lower/i],
+    ['a function call in WHERE', 'DELETE FROM transactions WHERE length(note) > 3', /length/i],
+    ['CASE', "UPDATE transactions SET note = CASE WHEN id = 1 THEN 'a' ELSE 'b' END WHERE id = 1", /case/i],
+    ['arithmetic in SET', 'UPDATE transactions SET amount = 1 + 1 WHERE id = 1', /\+/],
+    ['arithmetic in WHERE', 'DELETE FROM transactions WHERE id = 2 * 1', /\*/],
+    ['concatenation', "UPDATE transactions SET note = 'a' || 'b' WHERE id = 1", /\|\|/],
+    ['a column as a value', 'UPDATE transactions SET note = category WHERE id = 1', undefined],
+    ['a column compared to a column', 'DELETE FROM transactions WHERE amount = id', undefined],
+    ['a literal compared to a literal (always true)', 'DELETE FROM transactions WHERE id = 1 OR 1 = 1', undefined],
+    ['a WHERE that is a bare literal', 'DELETE FROM transactions WHERE 1', undefined],
+    ['a t.col qualifier in WHERE', 'DELETE FROM transactions WHERE transactions.id = 1', undefined],
+    ['a t.col qualifier in SET', "UPDATE transactions SET transactions.note = 'x' WHERE id = 1", undefined],
+    ['a schema qualifier', "UPDATE main.transactions SET note = 'x' WHERE id = 1", undefined],
+    ['a subquery', 'DELETE FROM transactions WHERE id IN (SELECT rowid FROM accounts)', /select/i],
+    ['EXISTS', 'DELETE FROM transactions WHERE EXISTS (SELECT 1)', /exists|select/i],
+    ['RETURNING', "UPDATE transactions SET note = 'x' WHERE id = 1 RETURNING note", /returning/i],
+    ['ON CONFLICT', "INSERT INTO transactions (id, amount, note) VALUES (1, 1, 'x') ON CONFLICT DO NOTHING", /\bon\b|conflict/i],
+    ['INSERT OR REPLACE', "INSERT OR REPLACE INTO transactions (id, amount, note) VALUES (1, 1, 'x')", /\bor\b|replace/i],
+    ['INSERT OR IGNORE', "INSERT OR IGNORE INTO transactions (id, amount, note) VALUES (1, 1, 'x')", /\bor\b|ignore/i],
+    ['UPDATE OR REPLACE', "UPDATE OR REPLACE transactions SET note = 'x' WHERE id = 1", /\bor\b|replace/i],
+    ['REPLACE INTO', "REPLACE INTO transactions (id, amount, note) VALUES (1, 1, 'x')", /replace/i],
+    ['an UPDATE without WHERE', "UPDATE transactions SET note = 'x'", /where/i],
+    ['a DELETE without WHERE', 'DELETE FROM transactions', /where/i],
+    ['an INSERT without a column list', "INSERT INTO transactions VALUES (9, 1, 'a', 'b')", undefined],
+    ['DEFAULT VALUES', 'INSERT INTO transactions DEFAULT VALUES', /default/i],
+    ['INSERT … SELECT', 'INSERT INTO transactions (id) SELECT rowid FROM accounts', /select/i],
+    ['UPDATE … FROM', "UPDATE transactions SET note = 'x' FROM accounts WHERE id = 1", /from/i],
+    ['two statements', "UPDATE transactions SET note = 'x' WHERE id = 1; DELETE FROM transactions WHERE id = 2", undefined],
+    ['WITH', "WITH x AS (SELECT 1) UPDATE transactions SET note = 'x' WHERE id = 1", /with/i],
+    ['ORDER BY', 'DELETE FROM transactions WHERE id > 0 ORDER BY id', /order/i],
+    ['LIMIT', 'DELETE FROM transactions WHERE id > 0 LIMIT 1', /limit/i],
+    ['BETWEEN (not an admitted term)', 'DELETE FROM transactions WHERE id BETWEEN 1 AND 2', /between/i],
+    ['GLOB (not an admitted term)', "DELETE FROM transactions WHERE note GLOB 'c*'", /glob/i],
+    ['a SELECT', 'SELECT * FROM transactions', undefined],
+    ['DDL', 'DROP TABLE transactions', undefined],
+    ['a PRAGMA', 'PRAGMA foreign_keys = OFF', undefined],
+    ['an unterminated string', "UPDATE transactions SET note = 'x WHERE id = 1", undefined],
+    ['nothing at all', '   -- only a comment', undefined],
+  ];
+
+  it.each(REFUSED)('%s → refused', async (_label, sql, names) => {
+    const { parseBrokeredStatement } = await brokered();
+    const result = parseBrokeredStatement(sql);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe('refused');
+    expect(typeof result.message).toBe('string');
+    expect(result.message.length).toBeGreaterThan(0);
+    if (names !== undefined) expect(result.message).toMatch(names);
+  });
+});
+
+// ==================================================================================== dmlTargetTable
+
+describe('dmlTargetTable — the first identifier after the DML verb, comment-stripped and unquoted (the write signal’s table)', () => {
+  it.each([
+    ["INSERT INTO scores (name) VALUES ('ada')", 'scores'],
+    ["INSERT OR REPLACE INTO \"scores\" (name) VALUES ('ada')", 'scores'],
+    ["REPLACE INTO [scores] (name) VALUES ('ada')", 'scores'],
+    ["UPDATE scores SET name = 'x' WHERE 1", 'scores'],
+    ["UPDATE OR IGNORE `scores` SET name = 'x'", 'scores'],
+    ['DELETE FROM scores WHERE points < 0', 'scores'],
+    ['/* tidy */ delete from Scores', 'Scores'],
+    ['-- a note\nINSERT INTO scores (name) VALUES (1)', 'scores'],
+    ['UPDATE "my""table" SET a = 1', 'my"table'],
+  ])('%s → %s', async (sql, table) => {
+    const { dmlTargetTable } = await brokered();
+    expect(dmlTargetTable(sql)).toBe(table);
+  });
+
+  it.each([['SELECT * FROM scores'], ['CREATE TABLE scores (name TEXT)'], ['WITH x AS (SELECT 1) DELETE FROM scores'], ['PRAGMA user_version'], ['']])(
+    '%s → undefined (it cannot tell)',
+    async (sql) => {
+      const { dmlTargetTable } = await brokered();
+      expect(dmlTargetTable(sql)).toBeUndefined();
+    },
+  );
+});
+
+// ======================================================================================= tableFacts
+
+describe('tableFacts — the table rules, from the schema and the scope (never from a row)', () => {
+  it('an ordinary table answers its columns with the generated flag (table_xinfo)', async () => {
+    const { tableFacts } = await brokered();
+    const db = handle(['CREATE TABLE g (id INTEGER PRIMARY KEY, note TEXT, shout TEXT GENERATED ALWAYS AS (upper(note)) VIRTUAL)']);
+    expect(tableFacts(db, 'g', { columns: ['id', 'note', 'shout'] }, 'update')).toEqual({
+      ok: true,
+      columns: [
+        { name: 'id', generated: false },
+        { name: 'note', generated: false },
+        { name: 'shout', generated: true },
+      ],
+    });
+    db.close();
+  });
+
+  it('a table that does not exist, or a view, is refused', async () => {
+    const { tableFacts } = await brokered();
+    const db = handle([...LEDGER, "CREATE VIEW food AS SELECT * FROM transactions WHERE category = 'food'"]);
+    expect(tableFacts(db, 'budgets', { columns: ['id'] }, 'update')).toMatchObject({ ok: false, reason: 'refused' });
+    expect(tableFacts(db, 'food', { columns: TX_COLUMNS }, 'update')).toMatchObject({ ok: false, reason: 'refused' });
+    db.close();
+  });
+
+  it('an app trigger ON the table is refused; a trigger on ANOTHER table is not', async () => {
+    const { tableFacts } = await brokered();
+    const onIt = handle([...LEDGER, 'CREATE TRIGGER audit AFTER UPDATE ON transactions BEGIN SELECT 1; END']);
+    expect(tableFacts(onIt, 'transactions', { columns: TX_COLUMNS }, 'update')).toMatchObject({ ok: false, reason: 'refused' });
+    onIt.close();
+    const elsewhere = handle([...LEDGER, 'CREATE TRIGGER audit AFTER UPDATE ON accounts BEGIN SELECT 1; END']);
+    expect(tableFacts(elsewhere, 'transactions', { columns: TX_COLUMNS }, 'update')).toMatchObject({ ok: true });
+    elsewhere.close();
+  });
+
+  it('a TEMP trigger on the table (sqlite_temp_master — it lives only on the live handle) is refused', async () => {
+    const { tableFacts } = await brokered();
+    const db = handle([...LEDGER, 'CREATE TEMP TRIGGER sneaky BEFORE DELETE ON transactions BEGIN SELECT 1; END']);
+    expect(tableFacts(db, 'transactions', { columns: TX_COLUMNS }, 'update')).toMatchObject({ ok: false, reason: 'refused' });
+    db.close();
+  });
+
+  it('a virtual table (fts4 — this build has no fts5) and its shadow table are refused', async () => {
+    const { tableFacts } = await brokered();
+    const db = handle(['CREATE VIRTUAL TABLE docs USING fts4(body)', "INSERT INTO docs (body) VALUES ('hello')"]);
+    expect(tableFacts(db, 'docs', { columns: ['body'] }, 'update')).toMatchObject({ ok: false, reason: 'refused' });
+    expect(tableFacts(db, 'docs_content', { columns: ['docid', 'c0body'] }, 'update')).toMatchObject({ ok: false, reason: 'refused' });
+    db.close();
+  });
+
+  it('a WITHOUT ROWID table is refused (pragma_table_list.wr)', async () => {
+    const { tableFacts } = await brokered();
+    const db = handle(['CREATE TABLE w (k TEXT PRIMARY KEY, v TEXT) WITHOUT ROWID']);
+    expect(tableFacts(db, 'w', { columns: ['k', 'v'] }, 'update')).toMatchObject({ ok: false, reason: 'refused' });
+    db.close();
+  });
+
+  it('ON CONFLICT REPLACE anywhere in the CREATE text is refused (any case, any spacing); ON CONFLICT ABORT is not', async () => {
+    const { tableFacts } = await brokered();
+    for (const ddl of [
+      'CREATE TABLE r (id INTEGER PRIMARY KEY, note TEXT UNIQUE ON CONFLICT REPLACE)',
+      'CREATE TABLE r (id INTEGER PRIMARY KEY on   conflict\n replace, note TEXT)',
+      'CREATE TABLE r (id INTEGER PRIMARY KEY, note TEXT, UNIQUE (note) ON CONFLICT REPLACE)',
+    ]) {
+      const db = handle([ddl]);
+      expect(tableFacts(db, 'r', { columns: ['id', 'note'] }, 'update'), ddl).toMatchObject({ ok: false, reason: 'refused' });
+      db.close();
+    }
+    const abort = handle(['CREATE TABLE r (id INTEGER PRIMARY KEY, note TEXT UNIQUE ON CONFLICT ABORT)']);
+    expect(tableFacts(abort, 'r', { columns: ['id', 'note'] }, 'update')).toMatchObject({ ok: true });
+    abort.close();
+  });
+
+  it('a CHECK is refused when the table has a column outside the scope — and admitted when every column is shared', async () => {
+    const { tableFacts } = await brokered();
+    const db = handle(['CREATE TABLE budget (id INTEGER PRIMARY KEY, amount INTEGER CHECK (amount >= 0), memo TEXT)']);
+    expect(tableFacts(db, 'budget', { columns: ['id', 'amount'] }, 'update')).toMatchObject({ ok: false, reason: 'refused' });
+    expect(tableFacts(db, 'budget', { columns: ['id', 'amount', 'memo'] }, 'update')).toMatchObject({ ok: true });
+    db.close();
+    // A credential-named column is never in a scope, so its table's CHECK is always refused.
+    const keyed = handle(['CREATE TABLE keyed (id INTEGER PRIMARY KEY, amount INTEGER, api_key TEXT, CHECK (amount > 0))']);
+    expect(tableFacts(keyed, 'keyed', { columns: ['id', 'amount'] }, 'update')).toMatchObject({ ok: false, reason: 'refused' });
+    keyed.close();
+  });
+
+  it('foreign_keys ON: a table some child names with a CASCADE / SET NULL action is refused; foreign_keys OFF, or NO ACTION, is admitted', async () => {
+    const { tableFacts } = await brokered();
+    const PARENT = [
+      'CREATE TABLE owners (id INTEGER PRIMARY KEY, name TEXT)',
+      "INSERT INTO owners (id, name) VALUES (1, 'ada')",
+    ];
+    for (const action of ['ON DELETE CASCADE', 'ON UPDATE SET NULL']) {
+      const db = handle([...PARENT, `CREATE TABLE pets (id INTEGER PRIMARY KEY, owner INTEGER REFERENCES owners(id) ${action})`]);
+      db.run('PRAGMA foreign_keys = ON');
+      expect(tableFacts(db, 'owners', { columns: ['id', 'name'] }, 'update'), action).toMatchObject({ ok: false, reason: 'refused' });
+      db.run('PRAGMA foreign_keys = OFF');
+      expect(tableFacts(db, 'owners', { columns: ['id', 'name'] }, 'update'), action).toMatchObject({ ok: true });
+      db.close();
+    }
+    const plain = handle([...PARENT, 'CREATE TABLE pets (id INTEGER PRIMARY KEY, owner INTEGER REFERENCES owners(id))']);
+    plain.run('PRAGMA foreign_keys = ON');
+    expect(tableFacts(plain, 'owners', { columns: ['id', 'name'] }, 'update')).toMatchObject({ ok: true });
+    plain.close();
+  });
+
+  it('a DELETE needs EVERY live column in the scope: one withheld, a credential-named or a generated column refuses it — the UPDATE on the same table is admitted', async () => {
+    const { tableFacts } = await brokered();
+    const db = handle([
+      'CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT, memo TEXT)',
+      'CREATE TABLE keyed (id INTEGER PRIMARY KEY, body TEXT, api_key TEXT)',
+      'CREATE TABLE gen (id INTEGER PRIMARY KEY, body TEXT, shout TEXT GENERATED ALWAYS AS (upper(body)) VIRTUAL)',
+    ]);
+    expect(tableFacts(db, 'notes', { columns: ['id', 'body'] }, 'delete')).toMatchObject({ ok: false, reason: 'refused' });
+    expect(tableFacts(db, 'notes', { columns: ['id', 'body'] }, 'update')).toMatchObject({ ok: true });
+    expect(tableFacts(db, 'keyed', { columns: ['id', 'body'] }, 'delete')).toMatchObject({ ok: false, reason: 'refused' });
+    expect(tableFacts(db, 'keyed', { columns: ['id', 'body'] }, 'update')).toMatchObject({ ok: true });
+    // A generated column may be LISTED for reads (D-PR3-2) — a DELETE is still refused.
+    expect(tableFacts(db, 'gen', { columns: ['id', 'body', 'shout'] }, 'delete')).toMatchObject({ ok: false, reason: 'refused' });
+    expect(tableFacts(db, 'notes', { columns: ['id', 'body', 'memo'] }, 'delete')).toMatchObject({ ok: true });
+    db.close();
+  });
+});
+
+// The SAME refusals at BOTH seats: the Worker's plan (tableFacts on the RAW copy) answers early,
+// the driver's apply (tableFacts AGAIN on the live handle) is the rule (F3/S13).
+describe('tableFacts at BOTH seats — the plan on the raw copy, the apply on the live handle', () => {
+  // [label, the source's statements, the scope's table, the statement, its op]
+  const BOTH: Array<[string, string[], ScopeTable, string, BrokeredOp]> = [
+    [
+      'an app trigger on the table',
+      ["CREATE TABLE t (id INTEGER PRIMARY KEY, note TEXT)", "INSERT INTO t (id, note) VALUES (1, 'a')", 'CREATE TRIGGER t_audit AFTER UPDATE ON t BEGIN SELECT 1; END'],
+      { name: 't', columns: ['id', 'note'], write: true },
+      "UPDATE t SET note = 'x' WHERE id = 1",
+      'update',
+    ],
+    [
+      'a virtual table',
+      ['CREATE VIRTUAL TABLE t USING fts4(note)', "INSERT INTO t (note) VALUES ('a')"],
+      { name: 't', columns: ['note'], write: true },
+      "UPDATE t SET note = 'x' WHERE note = 'a'",
+      'update',
+    ],
+    [
+      'a WITHOUT ROWID table',
+      ['CREATE TABLE t (id INTEGER PRIMARY KEY, note TEXT) WITHOUT ROWID', "INSERT INTO t (id, note) VALUES (1, 'a')"],
+      { name: 't', columns: ['id', 'note'], write: true },
+      "UPDATE t SET note = 'x' WHERE id = 1",
+      'update',
+    ],
+    [
+      'ON CONFLICT REPLACE',
+      ['CREATE TABLE t (id INTEGER PRIMARY KEY, note TEXT UNIQUE ON CONFLICT REPLACE)', "INSERT INTO t (id, note) VALUES (1, 'a')"],
+      { name: 't', columns: ['id', 'note'], write: true },
+      "UPDATE t SET note = 'x' WHERE id = 1",
+      'update',
+    ],
+    [
+      'a CHECK with an unshared column',
+      ['CREATE TABLE t (id INTEGER PRIMARY KEY, note TEXT, memo TEXT, CHECK (length(note) < 100))', "INSERT INTO t (id, note, memo) VALUES (1, 'a', 'm')"],
+      { name: 't', columns: ['id', 'note'], withheld: ['memo'], write: true },
+      "UPDATE t SET note = 'x' WHERE id = 1",
+      'update',
+    ],
+    [
+      'a DELETE on a table with one withheld column',
+      ['CREATE TABLE t (id INTEGER PRIMARY KEY, note TEXT, memo TEXT)', "INSERT INTO t (id, note, memo) VALUES (1, 'a', 'm')"],
+      { name: 't', columns: ['id', 'note'], withheld: ['memo'], write: true },
+      'DELETE FROM t WHERE id = 1',
+      'delete',
+    ],
+    [
+      'a DELETE on a table with a credential-named column',
+      ['CREATE TABLE t (id INTEGER PRIMARY KEY, note TEXT, api_key TEXT)', "INSERT INTO t (id, note, api_key) VALUES (1, 'a', 'k')"],
+      { name: 't', columns: ['id', 'note'], write: true },
+      'DELETE FROM t WHERE id = 1',
+      'delete',
+    ],
+    [
+      'a DELETE on a table with a generated column',
+      ['CREATE TABLE t (id INTEGER PRIMARY KEY, note TEXT, shout TEXT GENERATED ALWAYS AS (upper(note)) VIRTUAL)', "INSERT INTO t (id, note) VALUES (1, 'a')"],
+      { name: 't', columns: ['id', 'note', 'shout'], write: true },
+      'DELETE FROM t WHERE id = 1',
+      'delete',
+    ],
+  ];
+
+  it.each(BOTH)('%s — the PLAN refuses it on the raw copy before the statement runs', async (_label, statements, table, sql) => {
+    const { planBrokeredWrite } = await brokered();
+    const spy = spyEngine();
+    const result = planBrokeredWrite(spy.engine, bytesOf(statements), { tables: [table] }, { sql }, CAPS);
+    expect(result).toMatchObject({ ok: false, reason: 'refused' });
+    expect(spy.seen).not.toContain(sql);
+  });
+
+  it.each(BOTH)('%s — the APPLY refuses it again on the live handle, and nothing changes', async (_label, statements, table, sql, op) => {
+    const { applyBrokeredBatch } = await brokered();
+    const db = handle(statements);
+    const before = dump(db, 't');
+    const result = applyBrokeredBatch(db, forward([{ sql, op, table: 't', columns: [...table.columns], previewChanges: 1 }], { expectChanges: [1] }));
+    expect(result).toMatchObject({ ok: false, reason: 'refused' });
+    expect(dump(db, 't')).toEqual(before);
+    expect(openTransaction(db)).toBe(false);
+    expect(tempObjects(db)).toEqual([]);
+    db.close();
+  });
+
+  it('the passing twin: the same table without the rule plans a count and applies it, at both seats', async () => {
+    const { planBrokeredWrite, applyBrokeredBatch } = await brokered();
+    const statements = ['CREATE TABLE t (id INTEGER PRIMARY KEY, note TEXT)', "INSERT INTO t (id, note) VALUES (1, 'a'), (2, 'b')"];
+    const sql = 'DELETE FROM t WHERE id = 1';
+    const plan = okPlan(planBrokeredWrite(SQL, bytesOf(statements), { tables: [{ name: 't', columns: ['id', 'note'], write: true }] }, { sql }, CAPS));
+    expect(plan.previewChanges).toBe(1);
+    const db = handle(statements);
+    expect(okApply(applyBrokeredBatch(db, forward([plan], { expectChanges: [1] }))).changes).toEqual([1]);
+    expect(dump(db, 't')).toEqual([[2, 2, 'b']]);
+    db.close();
+  });
+
+  it('a TEMP trigger and a foreign-key action exist only on the LIVE handle: the apply refuses them there', async () => {
+    const { applyBrokeredBatch } = await brokered();
+    const temp = handle([...LEDGER, 'CREATE TEMP TRIGGER sneaky AFTER UPDATE ON transactions BEGIN SELECT 1; END']);
+    const before = dump(temp, 'transactions');
+    const plan = txPlan("UPDATE transactions SET note = 'x' WHERE id = 1", 'update', { setColumns: ['note'], previewChanges: 1 });
+    expect(applyBrokeredBatch(temp, forward([plan], { expectChanges: [1] }))).toMatchObject({ ok: false, reason: 'refused' });
+    expect(dump(temp, 'transactions')).toEqual(before);
+    temp.close();
+
+    const fk = handle([
+      'CREATE TABLE owners (id INTEGER PRIMARY KEY, name TEXT)',
+      "INSERT INTO owners (id, name) VALUES (1, 'ada'), (2, 'bo')",
+      'CREATE TABLE pets (id INTEGER PRIMARY KEY, owner INTEGER REFERENCES owners(id) ON DELETE CASCADE)',
+      'INSERT INTO pets (id, owner) VALUES (1, 1)',
+    ]);
+    const deleteOwner: BrokeredPlan = { sql: 'DELETE FROM owners WHERE id = 1', op: 'delete', table: 'owners', columns: ['id', 'name'], previewChanges: 1 };
+    fk.run('PRAGMA foreign_keys = ON');
+    expect(applyBrokeredBatch(fk, forward([deleteOwner], { expectChanges: [1] }))).toMatchObject({ ok: false, reason: 'refused' });
+    expect(dump(fk, 'pets')).toEqual([[1, 1, 1]]);
+    fk.run('PRAGMA foreign_keys = OFF');
+    expect(okApply(applyBrokeredBatch(fk, forward([deleteOwner], { expectChanges: [1] }))).changes).toEqual([1]);
+    fk.close();
+  });
+});
+
+// ================================================================================ planBrokeredWrite
+
+describe('planBrokeredWrite — the grant: the table must be in scope WITH write', () => {
+  it('a table outside the scope, or granted read-only, is not-granted — and nothing runs', async () => {
+    const { planBrokeredWrite } = await brokered();
+    const readOnly: Scope = { tables: [{ name: 'transactions', columns: TX_COLUMNS }] };
+    for (const [scope, sql] of [
+      [readOnly, "UPDATE transactions SET note = 'x' WHERE id = 1"],
+      [WRITE_TX, "UPDATE accounts SET balance = 0 WHERE name = 'checking'"],
+    ] as const) {
+      const spy = spyEngine();
+      expect(planBrokeredWrite(spy.engine, bytesOf(LEDGER), scope, { sql }, CAPS), sql).toMatchObject({ ok: false, reason: 'not-granted' });
+      expect(spy.seen).not.toContain(sql);
+    }
+  });
+
+  it('a statement the parser refuses is refused before any copy is scoped', async () => {
+    const { planBrokeredWrite } = await brokered();
+    const sql = "UPDATE transactions SET note = lower('X') WHERE id = 1";
+    const spy = spyEngine();
+    expect(planBrokeredWrite(spy.engine, bytesOf(LEDGER), WRITE_TX, { sql }, CAPS)).toMatchObject({ ok: false, reason: 'refused' });
+    expect(spy.seen).not.toContain(sql);
+  });
+});
+
+describe('planBrokeredWrite — the column rule: withheld, credential-named, generated, masked — each refused BY NAME, BEFORE any dry run', () => {
+  const WITHHELD = ['CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT, memo TEXT)', "INSERT INTO notes (id, body, memo) VALUES (1, 'a', 'private')"];
+  const NOTES: Scope = { tables: [{ name: 'notes', columns: ['id', 'body'], withheld: ['memo'], write: true }] };
+  const ACCOUNTS: Scope = { tables: [{ name: 'accounts', columns: ['name', 'balance'], write: true }] };
+  const GENERATED = ['CREATE TABLE gen (id INTEGER PRIMARY KEY, body TEXT, shout TEXT GENERATED ALWAYS AS (upper(body)) VIRTUAL)', "INSERT INTO gen (id, body) VALUES (1, 'a')"];
+  const GEN: Scope = { tables: [{ name: 'gen', columns: ['id', 'body', 'shout'], write: true }] };
+  const MASKED = ['CREATE TABLE settings (name TEXT, value TEXT)', `INSERT INTO settings (name, value) VALUES ('anthropic', '${KEY}'), ('theme', 'dark')`];
+  const SETTINGS: Scope = { tables: [{ name: 'settings', columns: ['name', 'value'], write: true }] };
+
+  // [label, source, scope, statement, the column the refusal names]
+  const COLUMN_RULE: Array<[string, string[], Scope, string, string]> = [
+    ['a withheld column in WHERE', WITHHELD, NOTES, "UPDATE notes SET body = 'x' WHERE memo = 'private'", 'memo'],
+    ['a withheld column in SET', WITHHELD, NOTES, "UPDATE notes SET memo = 'x' WHERE id = 1", 'memo'],
+    ['a withheld column in the INSERT list', WITHHELD, NOTES, "INSERT INTO notes (id, body, memo) VALUES (2, 'b', 'x')", 'memo'],
+    // `changes` as the oracle: a LIKE on a credential column would tell the reader its prefix.
+    ['a credential-named column in WHERE', LEDGER, ACCOUNTS, "UPDATE accounts SET balance = 0 WHERE api_key LIKE 'sk-a%'", 'api_key'],
+    ['a credential-named column in SET (AC19 negative)', LEDGER, ACCOUNTS, "UPDATE accounts SET api_key = 'x' WHERE name = 'checking'", 'api_key'],
+    ['a credential-named column in the INSERT list', LEDGER, ACCOUNTS, "INSERT INTO accounts (name, api_key) VALUES ('n', 'k')", 'api_key'],
+    // A generated column recomputes over NULLed inputs on the copy — naming it is an oracle too.
+    ['a generated column in WHERE (listed in columns for reads)', GENERATED, GEN, "UPDATE gen SET body = 'x' WHERE shout = 'A'", 'shout'],
+    ['a generated column in SET', GENERATED, GEN, "UPDATE gen SET shout = 'x' WHERE id = 1", 'shout'],
+    ['a generated column in the INSERT list', GENERATED, GEN, "INSERT INTO gen (id, shout) VALUES (2, 'x')", 'shout'],
+    // A masked value: the copy overwrote a cell under this column — naming it is an oracle on the mask.
+    ['a column the copy MASKED a cell in, in SET', MASKED, SETTINGS, "UPDATE settings SET value = 'light' WHERE name = 'theme'", 'value'],
+    ['a column the copy MASKED a cell in, in WHERE', MASKED, SETTINGS, "DELETE FROM settings WHERE value = 'dark'", 'value'],
+    ['a column the table does not have in the scope at all', LEDGER, WRITE_TX, "UPDATE transactions SET ghost = 'x' WHERE id = 1", 'ghost'],
+  ];
+
+  it.each(COLUMN_RULE)('%s → refused, naming it, and the statement never runs', async (_label, source, scope, sql, column) => {
+    const { planBrokeredWrite } = await brokered();
+    const spy = spyEngine();
+    const result = planBrokeredWrite(spy.engine, bytesOf(source), scope, { sql }, CAPS);
+    expect(result).toMatchObject({ ok: false, reason: 'refused' });
+    if (!result.ok) expect(result.message).toContain(column);
+    expect(spy.seen).not.toContain(sql);
+  });
+
+  it('the masked twin: the same table holding no credential-shaped value plans the write', async () => {
+    const { planBrokeredWrite } = await brokered();
+    const clean = ['CREATE TABLE settings (name TEXT, value TEXT)', "INSERT INTO settings (name, value) VALUES ('font', 'serif'), ('theme', 'dark')"];
+    const plan = okPlan(planBrokeredWrite(SQL, bytesOf(clean), SETTINGS, { sql: "UPDATE settings SET value = 'light' WHERE name = 'theme'" }, CAPS));
+    expect(plan.previewChanges).toBe(1);
+  });
+});
+
+describe('planBrokeredWrite — a credential-shaped VALUE never enters a write', () => {
+  it.each([
+    ['a literal in SET', `UPDATE transactions SET note = '${KEY}' WHERE id = 1`, undefined],
+    ['a literal in WHERE', `DELETE FROM transactions WHERE note = 'Bearer ${JWT}'`, undefined],
+    ['a literal in VALUES', `INSERT INTO transactions (id, amount, note) VALUES (9, 1, '${JWT}')`, undefined],
+    ['a bound parameter', 'UPDATE transactions SET note = ? WHERE id = 1', [KEY]],
+    ['a bound parameter in WHERE', 'DELETE FROM transactions WHERE note = ?', [`Bearer ${JWT}`]],
+  ] as const)('%s → refused, and the statement never runs', async (_label, sql, params) => {
+    const { planBrokeredWrite } = await brokered();
+    const spy = spyEngine();
+    const result = planBrokeredWrite(spy.engine, bytesOf(LEDGER), WRITE_TX, { sql, ...(params !== undefined ? { params } : {}) }, CAPS);
+    expect(result).toMatchObject({ ok: false, reason: 'refused' });
+    expect(spy.seen).not.toContain(sql);
+    expect(JSON.stringify(result)).not.toMatch(/sk-ant-api03|eyJhbGci/);
+  });
+});
+
+describe('planBrokeredWrite — the dry run on a scoped copy built forPlan', () => {
+  it('a READ copy refuses a write; the PLAN copy counts it (no query_only on a plan copy)', async () => {
+    const { planBrokeredWrite } = await brokered();
+    const sql = "UPDATE transactions SET note = 'snack' WHERE category = 'food'";
+    const read = scopedScratchRead(SQL, bytesOf(LEDGER), { tables: [{ name: 'transactions', columns: TX_COLUMNS }] }, { sql }, { maxRows: 500, maxBytes: 196_608 });
+    expect(read).toMatchObject({ ok: false, reason: 'refused' });
+    expect(okPlan(planBrokeredWrite(SQL, bytesOf(LEDGER), WRITE_TX, { sql }, CAPS)).previewChanges).toBe(2);
+  });
+
+  it('ignore_check_constraints is RESET on the plan copy: a CHECK the write would break fails the dry run (the twin counts)', async () => {
+    const { planBrokeredWrite } = await brokered();
+    const source = ['CREATE TABLE chk (id INTEGER PRIMARY KEY, amount INTEGER CHECK (amount < 100))', 'INSERT INTO chk (id, amount) VALUES (1, 5)'];
+    const scope: Scope = { tables: [{ name: 'chk', columns: ['id', 'amount'], write: true }] };
+    expect(planBrokeredWrite(SQL, bytesOf(source), scope, { sql: 'UPDATE chk SET amount = 500 WHERE id = 1' }, CAPS)).toMatchObject({ ok: false, reason: 'failed' });
+    expect(okPlan(planBrokeredWrite(SQL, bytesOf(source), scope, { sql: 'UPDATE chk SET amount = 7 WHERE id = 1' }, CAPS)).previewChanges).toBe(1);
+  });
+
+  it('a SQL error in the dry run is failed (a NOT NULL the INSERT leaves empty)', async () => {
+    const { planBrokeredWrite } = await brokered();
+    expect(planBrokeredWrite(SQL, bytesOf(LEDGER), WRITE_TX, { sql: "INSERT INTO transactions (id, note) VALUES (9, 'x')" }, CAPS)).toMatchObject({
+      ok: false,
+      reason: 'failed',
+    });
+  });
+
+  it('drift — a recorded column the source no longer has — is refused as drift, nothing run', async () => {
+    const { planBrokeredWrite } = await brokered();
+    const sql = "UPDATE transactions SET note = 'x' WHERE id = 1";
+    const spy = spyEngine();
+    const scope: Scope = { tables: [{ name: 'transactions', columns: [...TX_COLUMNS, 'memo'], write: true }] };
+    const result = planBrokeredWrite(spy.engine, bytesOf(LEDGER), scope, { sql }, CAPS);
+    expect(result).toMatchObject({ ok: false, reason: 'drift', drift: { added: [], removed: ['transactions.memo'] } });
+    expect(spy.seen).not.toContain(sql);
+  });
+
+  it(`too-many: ${CAPS.maxChanges + 1} rows is refused; ${CAPS.maxChanges} rows plans`, async () => {
+    const { planBrokeredWrite } = await brokered();
+    const source = (n: number): string[] => [
+      'CREATE TABLE big (id INTEGER PRIMARY KEY, note TEXT)',
+      `INSERT INTO big (id, note) VALUES ${Array.from({ length: n }, (_, i) => `(${i + 1}, 'n')`).join(', ')}`,
+    ];
+    const scope: Scope = { tables: [{ name: 'big', columns: ['id', 'note'], write: true }] };
+    const sql = "UPDATE big SET note = 'x' WHERE id > 0";
+    expect(planBrokeredWrite(SQL, bytesOf(source(CAPS.maxChanges + 1)), scope, { sql }, CAPS)).toMatchObject({ ok: false, reason: 'too-many' });
+    expect(okPlan(planBrokeredWrite(SQL, bytesOf(source(CAPS.maxChanges)), scope, { sql }, CAPS)).previewChanges).toBe(CAPS.maxChanges);
+  });
+
+  it('too-large: captured rows past maxUndoBytes are refused at plan', async () => {
+    const { planBrokeredWrite } = await brokered();
+    const sql = "UPDATE transactions SET note = 'x' WHERE id > 0";
+    expect(planBrokeredWrite(SQL, bytesOf(LEDGER), WRITE_TX, { sql }, { ...CAPS, maxUndoBytes: 16 })).toMatchObject({ ok: false, reason: 'too-large' });
+    expect(okPlan(planBrokeredWrite(SQL, bytesOf(LEDGER), WRITE_TX, { sql }, CAPS)).previewChanges).toBe(3);
+  });
+
+  it('the plan is counts and the statement — NO row and no value leaves; previewChanges is exact per op; the bytes are untouched', async () => {
+    const { planBrokeredWrite } = await brokered();
+    const bytes = bytesOf(LEDGER);
+    const before = bytes.slice();
+    const update = okPlan(planBrokeredWrite(SQL, bytes, WRITE_TX, { sql: "UPDATE transactions SET note = ?, category = 'snacks' WHERE category = 'food'", params: ['treat'] }, CAPS));
+    expect(update).toMatchObject({ op: 'update', table: 'transactions', setColumns: ['note', 'category'], previewChanges: 2, params: ['treat'] });
+    const insert = okPlan(planBrokeredWrite(SQL, bytes, WRITE_TX, { sql: "INSERT INTO transactions (id, amount, note) VALUES (7, 1, 'a'), (8, 2, 'b')" }, CAPS));
+    expect(insert).toMatchObject({ op: 'insert', insertColumns: ['id', 'amount', 'note'], previewChanges: 2 });
+    const del = okPlan(planBrokeredWrite(SQL, bytes, WRITE_TX, { sql: "DELETE FROM transactions WHERE category = 'home'" }, CAPS));
+    expect(del).toMatchObject({ op: 'delete', previewChanges: 1 });
+    for (const plan of [update, insert, del]) {
+      expect(Object.keys(plan).every((key) => ['sql', 'params', 'op', 'table', 'columns', 'setColumns', 'insertColumns', 'previewChanges'].includes(key))).toBe(true);
+      expect(JSON.stringify(plan)).not.toMatch(/coffee|rent|tea|120000/);
+    }
+    expect(bytes).toEqual(before);
+  });
+});
+
+// ============================================================================== applyBrokeredBatch
+
+describe('applyBrokeredBatch — commits on the live handle and captures the statement’s OWN rows exactly', () => {
+  it('an UPDATE: per row the rowid, BEFORE and AFTER over the SET columns in SET order', async () => {
+    const { applyBrokeredBatch } = await brokered();
+    const db = handle(LEDGER);
+    const plan = txPlan("UPDATE transactions SET note = 'snack', category = 'treat' WHERE category = 'food'", 'update', { setColumns: ['note', 'category'], previewChanges: 2 });
+    const result = okApply(applyBrokeredBatch(db, forward([plan], { expectChanges: [2] })));
+    expect(result.changes).toEqual([2]);
+    expect(result.undoable).toBe(true);
+    expect(byRowid(result.steps)).toEqual([
+      {
+        table: 'transactions',
+        op: 'update',
+        columns: ['note', 'category'],
+        rows: [
+          { rowid: 1, before: ['coffee', 'food'], after: ['snack', 'treat'] },
+          { rowid: 3, before: ['tea', 'food'], after: ['snack', 'treat'] },
+        ],
+      },
+    ]);
+    expect(dump(db, 'transactions')).toEqual([
+      [1, 1, 450, 'treat', 'snack'],
+      [2, 2, 120000, 'home', 'rent'],
+      [3, 3, 500, 'treat', 'snack'],
+    ]);
+    expect(openTransaction(db)).toBe(false);
+    expect(tempObjects(db)).toEqual([]);
+    db.close();
+  });
+
+  it('a DELETE: the WHOLE row (every non-generated column, in table order) under its rowid', async () => {
+    const { applyBrokeredBatch } = await brokered();
+    const db = handle(LEDGER);
+    const result = okApply(applyBrokeredBatch(db, forward([txPlan('DELETE FROM transactions WHERE id = 2', 'delete', { previewChanges: 1 })], { expectChanges: [1] })));
+    expect(result.steps).toEqual([{ table: 'transactions', op: 'delete', columns: TX_COLUMNS, rows: [{ rowid: 2, before: [2, 120000, 'home', 'rent'] }] }]);
+    expect(dump(db, 'transactions').map((row) => row[0])).toEqual([1, 3]);
+    db.close();
+  });
+
+  it('an INSERT: the NEW rowids — an explicit INTEGER PRIMARY KEY value included — with AFTER over the INSERT list', async () => {
+    const { applyBrokeredBatch } = await brokered();
+    const db = handle(LEDGER);
+    const plan = txPlan("INSERT INTO transactions (id, amount, note) VALUES (77, 5, 'gum'), (NULL, ?, ?)", 'insert', {
+      params: [6, 'mint'],
+      insertColumns: ['id', 'amount', 'note'],
+      previewChanges: 2,
+    });
+    const result = okApply(applyBrokeredBatch(db, forward([plan], { expectChanges: [2] })));
+    expect(byRowid(result.steps)).toEqual([
+      {
+        table: 'transactions',
+        op: 'insert',
+        columns: ['id', 'amount', 'note'],
+        rows: [
+          { rowid: 77, after: [77, 5, 'gum'] },
+          { rowid: 78, after: [78, 6, 'mint'] },
+        ],
+      },
+    ]);
+    db.close();
+  });
+
+  it('an INSERT into a table without an INTEGER PRIMARY KEY captures the implicit rowid', async () => {
+    const { applyBrokeredBatch } = await brokered();
+    const db = handle(['CREATE TABLE notes (body TEXT)', "INSERT INTO notes (body) VALUES ('a')"]);
+    const plan: BrokeredPlan = { sql: "INSERT INTO notes (body) VALUES ('b')", op: 'insert', table: 'notes', columns: ['body'], insertColumns: ['body'], previewChanges: 1 };
+    expect(okApply(applyBrokeredBatch(db, forward([plan], { expectChanges: [1] }))).steps).toEqual([
+      { table: 'notes', op: 'insert', columns: ['body'], rows: [{ rowid: 2, after: ['b'] }] },
+    ]);
+    db.close();
+  });
+
+  it('a column named rowid or r never collides with the capture (positional capture columns, F18)', async () => {
+    const { applyBrokeredBatch } = await brokered();
+    const db = handle(['CREATE TABLE odd (id INTEGER PRIMARY KEY, r TEXT, snug_rowid TEXT)', "INSERT INTO odd (id, r, snug_rowid) VALUES (1, 'a', 'b')"]);
+    const plan: BrokeredPlan = { sql: "UPDATE odd SET r = 'x', snug_rowid = 'y' WHERE id = 1", op: 'update', table: 'odd', columns: ['id', 'r', 'snug_rowid'], setColumns: ['r', 'snug_rowid'], previewChanges: 1 };
+    expect(okApply(applyBrokeredBatch(db, forward([plan], { expectChanges: [1] }))).steps).toEqual([
+      { table: 'odd', op: 'update', columns: ['r', 'snug_rowid'], rows: [{ rowid: 1, before: ['a', 'b'], after: ['x', 'y'] }] },
+    ]);
+    db.close();
+  });
+
+  it('several plans apply as ONE transaction: changes per plan, one step per plan', async () => {
+    const { applyBrokeredBatch } = await brokered();
+    const db = handle(LEDGER);
+    const plans = [
+      txPlan("UPDATE transactions SET note = 'x' WHERE id = 1", 'update', { setColumns: ['note'], previewChanges: 1 }),
+      txPlan('DELETE FROM transactions WHERE id = 2', 'delete', { previewChanges: 1 }),
+    ];
+    const result = okApply(applyBrokeredBatch(db, forward(plans, { expectChanges: [1, 1] })));
+    expect(result.changes).toEqual([1, 1]);
+    expect(result.steps.map((step) => step.op)).toEqual(['update', 'delete']);
+    db.close();
+  });
+});
+
+describe('applyBrokeredBatch — every refusal ROLLS BACK: nothing changed, no open transaction, no temp object', () => {
+  it('busy: a nested BEGIN — and the outer transaction is left exactly as it was (the apply never rolls back what it did not begin)', async () => {
+    const { applyBrokeredBatch } = await brokered();
+    const db = handle(LEDGER);
+    db.run('BEGIN');
+    db.run("UPDATE transactions SET note = 'outer' WHERE id = 1");
+    const result = applyBrokeredBatch(db, forward([txPlan("UPDATE transactions SET note = 'x' WHERE id = 2", 'update', { setColumns: ['note'], previewChanges: 1 })], { expectChanges: [1] }));
+    expect(result).toMatchObject({ ok: false, reason: 'busy' });
+    expect(() => db.run('COMMIT')).not.toThrow(); // the outer transaction was still open
+    expect(all(db, 'SELECT note FROM transactions ORDER BY id')).toEqual([['outer'], ['rent'], ['tea']]);
+    expect(tempObjects(db)).toEqual([]);
+    db.close();
+  });
+
+  it('drifted: expectChanges ≠ the changes — ROLLBACK, nothing changed', async () => {
+    const { applyBrokeredBatch } = await brokered();
+    const db = handle(LEDGER);
+    const before = dump(db, 'transactions');
+    const plan = txPlan("UPDATE transactions SET note = 'x' WHERE category = 'food'", 'update', { setColumns: ['note'], previewChanges: 5 });
+    expect(applyBrokeredBatch(db, forward([plan], { expectChanges: [5] }))).toMatchObject({ ok: false, reason: 'drifted' });
+    expect(dump(db, 'transactions')).toEqual(before);
+    expect(openTransaction(db)).toBe(false);
+    expect(tempObjects(db)).toEqual([]);
+    db.close();
+  });
+
+  it('drifted in the SECOND plan rolls back the first as well (the batch is atomic)', async () => {
+    const { applyBrokeredBatch } = await brokered();
+    const db = handle(LEDGER);
+    const before = dump(db, 'transactions');
+    const plans = [
+      txPlan("UPDATE transactions SET note = 'x' WHERE id = 1", 'update', { setColumns: ['note'], previewChanges: 1 }),
+      txPlan('DELETE FROM transactions WHERE id = 2', 'delete', { previewChanges: 9 }),
+    ];
+    expect(applyBrokeredBatch(db, forward(plans, { expectChanges: [1, 9] }))).toMatchObject({ ok: false, reason: 'drifted' });
+    expect(dump(db, 'transactions')).toEqual(before);
+    db.close();
+  });
+
+  it('too-many: more rows than maxChanges — ROLLBACK, nothing changed', async () => {
+    const { applyBrokeredBatch } = await brokered();
+    const db = handle(LEDGER);
+    const before = dump(db, 'transactions');
+    const plan = txPlan("UPDATE transactions SET note = 'x' WHERE id > 0", 'update', { setColumns: ['note'], previewChanges: 3 });
+    expect(applyBrokeredBatch(db, forward([plan], { caps: { ...CAPS, maxChanges: 2 } }))).toMatchObject({ ok: false, reason: 'too-many' });
+    expect(dump(db, 'transactions')).toEqual(before);
+    expect(tempObjects(db)).toEqual([]);
+    db.close();
+  });
+
+  it('too-large: requireUndo → ROLLBACK; without requireUndo the write commits with NO undo', async () => {
+    const { applyBrokeredBatch } = await brokered();
+    const db = handle(LEDGER);
+    const before = dump(db, 'transactions');
+    const plan = txPlan("UPDATE transactions SET note = 'x' WHERE id > 0", 'update', { setColumns: ['note'], previewChanges: 3 });
+    const tiny = { ...CAPS, maxUndoBytes: 16 };
+    expect(applyBrokeredBatch(db, forward([plan], { caps: tiny, expectChanges: [3] }))).toMatchObject({ ok: false, reason: 'too-large' });
+    expect(dump(db, 'transactions')).toEqual(before);
+
+    const loose = okApply(applyBrokeredBatch(db, forward([plan], { caps: tiny, expectChanges: [3], requireUndo: false })));
+    expect(loose.undoable).toBe(false);
+    expect(loose.steps.flatMap((step) => step.rows)).toEqual([]);
+    expect(all(db, 'SELECT DISTINCT note FROM transactions')).toEqual([['x']]);
+    expect(tempObjects(db)).toEqual([]);
+    db.close();
+  });
+
+  it('unsafe: a credential-shaped value in a captured cell (judged under its column) → requireUndo ROLLS BACK; without it, no undo and the value never reaches the answer', async () => {
+    const { applyBrokeredBatch } = await brokered();
+    const db = handle([...LEDGER, `UPDATE transactions SET note = '${KEY}' WHERE id = 1`]);
+    const before = dump(db, 'transactions');
+    const plan = txPlan("UPDATE transactions SET note = 'clean' WHERE id = 1", 'update', { setColumns: ['note'], previewChanges: 1 });
+    const strict = applyBrokeredBatch(db, forward([plan], { expectChanges: [1] }));
+    expect(strict).toMatchObject({ ok: false, reason: 'unsafe' });
+    expect(dump(db, 'transactions')).toEqual(before);
+    expect(JSON.stringify(strict)).not.toContain('sk-ant-api03');
+
+    const loose = okApply(applyBrokeredBatch(db, forward([plan], { expectChanges: [1], requireUndo: false })));
+    expect(loose.undoable).toBe(false);
+    expect(JSON.stringify(loose)).not.toContain('sk-ant-api03');
+    expect(all(db, 'SELECT note FROM transactions WHERE id = 1')).toEqual([['clean']]);
+    db.close();
+  });
+
+  it('forbiddenStatementReason is the belt on every plan’s sql: a forbidden statement is refused and never run', async () => {
+    const { applyBrokeredBatch } = await brokered();
+    const db = handle(LEDGER);
+    const spy = watch(db);
+    const sql = "ATTACH DATABASE 'elsewhere.db' AS elsewhere";
+    const result = applyBrokeredBatch(db, forward([txPlan(sql, 'update', { setColumns: ['note'], previewChanges: 0 })], { expectChanges: [0] }));
+    expect(result.ok).toBe(false);
+    expect(spy.seen).not.toContain(sql);
+    expect(all(db, 'PRAGMA database_list').map((row) => row[1])).not.toContain('elsewhere');
+    db.close();
+  });
+});
+
+describe('applyBrokeredBatch — the capture objects: per-apply names, never IF NOT EXISTS, gone after EVERY path', () => {
+  it('snug_undo_rows_<hex8> and snug_undo_trigger_<hex8>, a fresh name per apply, created without IF NOT EXISTS', async () => {
+    const { applyBrokeredBatch } = await brokered();
+    const db = handle(LEDGER);
+    const spy = watch(db);
+    okApply(applyBrokeredBatch(db, forward([txPlan("UPDATE transactions SET note = 'a' WHERE id = 1", 'update', { setColumns: ['note'], previewChanges: 1 })], { expectChanges: [1] })));
+    okApply(applyBrokeredBatch(db, forward([txPlan("UPDATE transactions SET note = 'b' WHERE id = 1", 'update', { setColumns: ['note'], previewChanges: 1 })], { expectChanges: [1] })));
+    const text = spy.seen.join('\n');
+    const tables = [...new Set([...text.matchAll(/snug_undo_rows_([0-9a-f]{8})\b/g)].map((m) => m[1]))];
+    const triggers = [...new Set([...text.matchAll(/snug_undo_trigger_([0-9a-f]{8})\b/g)].map((m) => m[1]))];
+    expect(tables).toHaveLength(2);
+    expect(triggers).toHaveLength(2);
+    for (const create of spy.seen.filter((sql) => /CREATE\s+TEMP/i.test(sql))) expect(create).not.toMatch(/IF\s+NOT\s+EXISTS/i);
+    expect(tempObjects(db)).toEqual([]);
+    db.close();
+  });
+
+  it('an injected throw at the statement answers failed — no open transaction (BEGIN succeeds), no temp object, nothing changed', async () => {
+    const { applyBrokeredBatch } = await brokered();
+    const db = handle(LEDGER);
+    const before = dump(db, 'transactions');
+    const spy = watch(db);
+    spy.failWhen((sql) => sql.includes("SET note = 'boom'"));
+    const result = applyBrokeredBatch(db, forward([txPlan("UPDATE transactions SET note = 'boom' WHERE id = 1", 'update', { setColumns: ['note'], previewChanges: 1 })], { expectChanges: [1] }));
+    spy.failWhen(undefined);
+    expect(result).toMatchObject({ ok: false, reason: 'failed' });
+    expect(() => db.run('BEGIN')).not.toThrow();
+    db.run('ROLLBACK');
+    expect(tempObjects(db)).toEqual([]);
+    expect(dump(db, 'transactions')).toEqual(before);
+    db.close();
+  });
+
+  it('an injected throw AFTER the statement ran (reading the count) rolls the statement back too', async () => {
+    const { applyBrokeredBatch } = await brokered();
+    const db = handle(LEDGER);
+    const before = dump(db, 'transactions');
+    (db as unknown as { getRowsModified: () => number }).getRowsModified = () => {
+      throw new Error('injected failure');
+    };
+    const result = applyBrokeredBatch(db, forward([txPlan("UPDATE transactions SET note = 'boom' WHERE id = 1", 'update', { setColumns: ['note'], previewChanges: 1 })], { expectChanges: [1] }));
+    expect(result).toMatchObject({ ok: false, reason: 'failed' });
+    expect(openTransaction(db)).toBe(false);
+    expect(tempObjects(db)).toEqual([]);
+    expect(dump(db, 'transactions')).toEqual(before);
+    db.close();
+  });
+
+  it('requireUndo false + capture false (own mode): applies, undoable false, and NO capture object is ever created', async () => {
+    const { applyBrokeredBatch } = await brokered();
+    const db = handle(LEDGER);
+    const spy = watch(db);
+    const result = okApply(
+      applyBrokeredBatch(db, forward([txPlan("UPDATE transactions SET note = 'x' WHERE category = 'food'", 'update', { setColumns: ['note'], previewChanges: 2 })], {
+        expectChanges: [2],
+        requireUndo: false,
+        capture: false,
+      })),
+    );
+    expect(result.changes).toEqual([2]);
+    expect(result.undoable).toBe(false);
+    expect(result.steps.flatMap((step) => step.rows)).toEqual([]);
+    expect(spy.seen.filter((sql) => /CREATE\s+TEMP/i.test(sql))).toEqual([]);
+    expect(all(db, "SELECT count(*) FROM transactions WHERE note = 'x'")).toEqual([[2]]);
+    db.close();
+  });
+});
+
+// ======================================================================================= the undo
+
+describe('buildUndoStatement — built from the STRUCTURE: identifiers quoted, every value a bound parameter, guarded by AFTER', () => {
+  it('an UPDATE-undo: SET = before, WHERE rowid and every column IS its after value', async () => {
+    const { buildUndoStatement } = await brokered();
+    const built = buildUndoStatement(
+      { table: 'transactions', op: 'update', columns: ['note', 'category'], rows: [] },
+      { rowid: 1, before: ['coffee', 'food'], after: ['snack', 'treat'] },
+    );
+    expect(built.sql).toMatch(/^\s*UPDATE\s+"transactions"\s+SET\s+"note"\s*=\s*\?\s*,\s*"category"\s*=\s*\?\s+WHERE\s+"?rowid"?\s*=\s*\?/i);
+    expect(built.sql).toMatch(/"note"\s+IS\s+\?/i);
+    expect(built.sql).toMatch(/"category"\s+IS\s+\?/i);
+    expect(built.params).toEqual(['coffee', 'food', 1, 'snack', 'treat']);
+    expect(built.sql).not.toMatch(/coffee|snack|food|treat/);
+  });
+
+  it('an INSERT-undo: DELETE the rowid only while every inserted column still IS its after value', async () => {
+    const { buildUndoStatement } = await brokered();
+    const built = buildUndoStatement({ table: 'transactions', op: 'insert', columns: ['id', 'amount', 'note'], rows: [] }, { rowid: 77, after: [77, 5, 'gum'] });
+    expect(built.sql).toMatch(/^\s*DELETE\s+FROM\s+"transactions"\s+WHERE\s+"?rowid"?\s*=\s*\?/i);
+    expect(built.sql).toMatch(/"note"\s+IS\s+\?/i);
+    expect(built.params).toEqual([77, 77, 5, 'gum']);
+  });
+
+  it('a DELETE-undo: INSERT the whole row back under its rowid', async () => {
+    const { buildUndoStatement } = await brokered();
+    const built = buildUndoStatement({ table: 'transactions', op: 'delete', columns: TX_COLUMNS, rows: [] }, { rowid: 2, before: [2, 120000, 'home', 'rent'] });
+    expect(built.sql).toMatch(/^\s*INSERT\s+INTO\s+"transactions"\s*\(\s*"?rowid"?\s*,\s*"id"\s*,\s*"amount"\s*,\s*"category"\s*,\s*"note"\s*\)\s*VALUES\s*\(\s*\?\s*,\s*\?\s*,\s*\?\s*,\s*\?\s*,\s*\?\s*\)/i);
+    expect(built.params).toEqual([2, 2, 120000, 'home', 'rent']);
+  });
+
+  it('a hostile column or table name is ONLY a quoted identifier — nothing it says runs', async () => {
+    const { buildUndoStatement } = await brokered();
+    const hostile = 'x"; DROP TABLE transactions; --';
+    const db = handle([...LEDGER, `CREATE TABLE odd (id INTEGER PRIMARY KEY, "${hostile.replace(/"/g, '""')}" TEXT)`, `INSERT INTO odd (id, "${hostile.replace(/"/g, '""')}") VALUES (1, 'b')`]);
+    const built = buildUndoStatement({ table: 'odd', op: 'update', columns: [hostile], rows: [] }, { rowid: 1, before: ['a'], after: ['b'] });
+    db.run(built.sql, built.params as never);
+    expect(all(db, 'SELECT count(*) FROM transactions')).toEqual([[3]]);
+    expect(all(db, 'SELECT * FROM odd')).toEqual([[1, 'a']]);
+    db.close();
+  });
+});
+
+describe('applyBrokeredBatch({ undo }) — the inverse, applied atomically through the same seat; it fails WHOLE', () => {
+  it('an UPDATE undone restores the BEFORE values; the undo itself captures nothing (undoable false, no temp object created)', async () => {
+    const { applyBrokeredBatch } = await brokered();
+    const db = handle(LEDGER);
+    const original = dump(db, 'transactions');
+    const written = okApply(
+      applyBrokeredBatch(db, forward([txPlan("UPDATE transactions SET note = 'snack' WHERE category = 'food'", 'update', { setColumns: ['note'], previewChanges: 2 })], { expectChanges: [2] })),
+    );
+    const spy = watch(db);
+    const undone = okApply(applyBrokeredBatch(db, { undo: written.steps, caps: CAPS }));
+    expect(undone.undoable).toBe(false);
+    expect(undone.changes.reduce((sum, n) => sum + n, 0)).toBe(2);
+    expect(spy.seen.filter((sql) => /CREATE\s+TEMP/i.test(sql))).toEqual([]);
+    expect(dump(db, 'transactions')).toEqual(original);
+    expect(tempObjects(db)).toEqual([]);
+    db.close();
+  });
+
+  it('a row changed since the write → the WHOLE undo rolls back (drifted): the untouched row is NOT restored either', async () => {
+    const { applyBrokeredBatch } = await brokered();
+    const db = handle(LEDGER);
+    const written = okApply(
+      applyBrokeredBatch(db, forward([txPlan("UPDATE transactions SET note = 'snack' WHERE category = 'food'", 'update', { setColumns: ['note'], previewChanges: 2 })], { expectChanges: [2] })),
+    );
+    db.run("UPDATE transactions SET note = 'changed by Ledger' WHERE id = 3");
+    const after = dump(db, 'transactions');
+    expect(applyBrokeredBatch(db, { undo: written.steps, caps: CAPS })).toMatchObject({ ok: false, reason: 'drifted' });
+    expect(dump(db, 'transactions')).toEqual(after);
+    expect(openTransaction(db)).toBe(false);
+    db.close();
+  });
+
+  it('a DELETE undone puts the whole rows back under their rowids', async () => {
+    const { applyBrokeredBatch } = await brokered();
+    const db = handle(LEDGER);
+    const original = dump(db, 'transactions');
+    const written = okApply(applyBrokeredBatch(db, forward([txPlan('DELETE FROM transactions WHERE id IN (2, 3)', 'delete', { previewChanges: 2 })], { expectChanges: [2] })));
+    okApply(applyBrokeredBatch(db, { undo: written.steps, caps: CAPS }));
+    expect(dump(db, 'transactions')).toEqual(original);
+    db.close();
+  });
+
+  it('a reused rowid fails the DELETE-undo WHOLE: the other deleted row stays deleted and the new row is intact', async () => {
+    const { applyBrokeredBatch } = await brokered();
+    const db = handle(LEDGER);
+    const written = okApply(applyBrokeredBatch(db, forward([txPlan('DELETE FROM transactions WHERE id IN (2, 3)', 'delete', { previewChanges: 2 })], { expectChanges: [2] })));
+    db.run("INSERT INTO transactions (id, amount, category, note) VALUES (2, 1, 'new', 'reused')");
+    const after = dump(db, 'transactions');
+    const result = applyBrokeredBatch(db, { undo: written.steps, caps: CAPS });
+    expect(result.ok).toBe(false);
+    expect(dump(db, 'transactions')).toEqual(after);
+    expect(openTransaction(db)).toBe(false);
+    db.close();
+  });
+
+  it('an INSERT undone deletes exactly the inserted rows; one changed since fails the undo whole', async () => {
+    const { applyBrokeredBatch } = await brokered();
+    const insert = (): BrokeredPlan =>
+      txPlan("INSERT INTO transactions (id, amount, note) VALUES (7, 1, 'a'), (8, 2, 'b')", 'insert', { insertColumns: ['id', 'amount', 'note'], previewChanges: 2 });
+
+    const clean = handle(LEDGER);
+    const original = dump(clean, 'transactions');
+    const written = okApply(applyBrokeredBatch(clean, forward([insert()], { expectChanges: [2] })));
+    okApply(applyBrokeredBatch(clean, { undo: written.steps, caps: CAPS }));
+    expect(dump(clean, 'transactions')).toEqual(original);
+    clean.close();
+
+    const touched = handle(LEDGER);
+    const again = okApply(applyBrokeredBatch(touched, forward([insert()], { expectChanges: [2] })));
+    touched.run("UPDATE transactions SET note = 'edited' WHERE id = 8");
+    const after = dump(touched, 'transactions');
+    expect(applyBrokeredBatch(touched, { undo: again.steps, caps: CAPS })).toMatchObject({ ok: false });
+    expect(dump(touched, 'transactions')).toEqual(after);
+    touched.close();
+  });
+
+  it('busy: an undo meets a nested BEGIN like a write does', async () => {
+    const { applyBrokeredBatch } = await brokered();
+    const db = handle(LEDGER);
+    const written = okApply(
+      applyBrokeredBatch(db, forward([txPlan("UPDATE transactions SET note = 'snack' WHERE id = 1", 'update', { setColumns: ['note'], previewChanges: 1 })], { expectChanges: [1] })),
+    );
+    db.run('BEGIN');
+    expect(applyBrokeredBatch(db, { undo: written.steps, caps: CAPS })).toMatchObject({ ok: false, reason: 'busy' });
+    expect(() => db.run('COMMIT')).not.toThrow();
+    expect(all(db, 'SELECT note FROM transactions WHERE id = 1')).toEqual([['snack']]);
+    db.close();
+  });
+
+  it('forbiddenStatementReason is the belt on every BUILT undo statement: a column whose name carries load_extension( refuses the undo, nothing changed', async () => {
+    const { applyBrokeredBatch } = await brokered();
+    const db = handle(['CREATE TABLE odd (id INTEGER PRIMARY KEY, "load_extension(" TEXT)', 'INSERT INTO odd (id, "load_extension(") VALUES (1, \'b\')']);
+    const step: UndoStep = { table: 'odd', op: 'update', columns: ['load_extension('], rows: [{ rowid: 1, before: ['a'], after: ['b'] }] };
+    expect(applyBrokeredBatch(db, { undo: [step], caps: CAPS }).ok).toBe(false);
+    expect(all(db, 'SELECT * FROM odd')).toEqual([[1, 'b']]);
+    db.close();
+  });
+});

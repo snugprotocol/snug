@@ -1268,3 +1268,49 @@ describe('importUserDb — access grants are disarmed unless intent-identical (T
     await db.close();
   });
 });
+
+// TASK-20261010-host-broker PR-3 (contract v2 D-PR3-7) — the undo journal `accessUndo:<targetAppId>`
+// and the declared wants `accessWants:<appId>` are the user's own device state: an UNTRUSTED file's
+// rows are DROPPED by the access import pass (a journal names rows to write back; a file must never
+// plant one — and the wants are re-parsed from the app's HTML by PR-5), while a TRUSTED pull (the
+// user's own origin) keeps both exactly. Planted raw through `setSetting`, so the pin does not depend
+// on the accessors the same PR adds (red until the reconcile pass learns both prefixes).
+describe('importUserDb — the undo journal and the wants (TASK-20261010-host-broker PR-3)', () => {
+  const journal = [
+    {
+      id: '8c6f1d2e-3a4b-4c5d-8e6f-7a8b9c0d1e2f',
+      at: ACCESS_AT,
+      expiresAt: '2026-10-17T08:00:00.000Z',
+      authority: 'permission',
+      via: 'app',
+      grantId: '9d8c7b6a-5f4e-4d3c-8b2a-1f0e9d8c7b6a',
+      readerAppId: READER_APP,
+      readerName: 'Budget',
+      steps: [{ table: 'transactions', op: 'update', columns: ['note'], rows: [{ rowid: 1, before: ['coffee'], after: ['snack'] }] }],
+    },
+  ];
+  const wants = [{ purpose: 'to show spending by category', hints: { tables: ['transactions'] } }];
+  const undoKey = `accessUndo:${SOURCE_APP}`;
+  const wantsKey = `accessWants:${READER_APP}`;
+
+  it('an UNTRUSTED file’s accessUndo: and accessWants: rows are dropped; a TRUSTED pull keeps both byte for byte', async () => {
+    const bytes = await accessDonor((donor) => {
+      donor.setSetting(undoKey, journal);
+      donor.setSetting(wantsKey, wants);
+    });
+    expect(await settingFromBytes(bytes, undoKey)).toEqual(journal); // the donor really carries them
+
+    const untrusted = await open(createMemoryBackend());
+    await untrusted.importUserDb(bytes);
+    expect(untrusted.listSettingKeys()).not.toContain(undoKey);
+    expect(untrusted.listSettingKeys()).not.toContain(wantsKey);
+    expect(untrusted.listSettingKeys().filter((key) => key.startsWith('accessUndo:') || key.startsWith('accessWants:'))).toEqual([]);
+    await untrusted.close();
+
+    const trusted = await open(createMemoryBackend());
+    await trusted.importUserDb(bytes, { trustedOrigin: true });
+    expect(trusted.getSetting(undoKey)).toEqual(journal);
+    expect(trusted.getSetting(wantsKey)).toEqual(wants);
+    await trusted.close();
+  });
+});

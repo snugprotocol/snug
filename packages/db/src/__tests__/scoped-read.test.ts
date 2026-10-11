@@ -24,7 +24,7 @@
 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import initSqlJs, { type SqlJsStatic } from 'sql.js';
+import initSqlJs, { type Database, type SqlJsStatic } from 'sql.js';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import {
@@ -47,6 +47,8 @@ import {
   type ScopedDumpTable,
   type ScopedReadResult,
 } from '../scoped-read.js';
+import * as scopedReadModule from '../scoped-read.js';
+import { KV_TABLE_DDL } from '../driver.js';
 import { locateWasm } from './helpers.js';
 
 let SQL: SqlJsStatic;
@@ -764,6 +766,228 @@ describe('scopedScratchDump — the copy is throwaway', () => {
       expect(spy.opened).toBe(1);
       expect(spy.closed()).toBe(1);
       expect(bytes).toEqual(before);
+    }
+  });
+});
+
+// =========================================================================================
+// TASK-20261010-host-broker PR-3 (contract v2 D-PR3-22; AC25, AC26, the R-76 belt) — the copy v2.
+//
+// `ScopedReadScope` gains `tables[].withheld` (the UNTICKED non-credential columns) and `kv`. On the
+// copy: every `withheld` column is overwritten exactly like a credential-named one (the `***` / NULL
+// fallbacks — fail closed), and the drift check compares the live non-credential set against
+// `columns ∪ withheld`, so a withheld column that vanished — or a new column — still drifts. Under
+// `kv: true` the app's `snug_kv` STAYS on the copy and is then FILTERED row by row: a credential-named
+// key, a `snug:` key, a value that does not parse as JSON, or a PARSED value the ONE walk
+// (`findRecordCredential({ [key]: parsed })`) refuses is deleted — the start-anchored value scan over
+// the stored JSON text would miss a quoted `"sk-…"`. The `sqlite_sequence` belt deletes every row
+// that names a table outside the grant. `scopeCopy` is exported for the planner: it answers the set of
+// `table.column` (lower-cased) it MASKED a cell in, and `{ forPlan: true }` skips `query_only` and
+// resets `ignore_check_constraints`. The dump carries `snug_kv` LAST when `kv`.
+//
+// Written before the module changed (Gate 3). `ScopeV2` and `ScopeCopy` are LOCAL structural types
+// — the implementation lane replaces them with the module's own exports at Gate 5; `scopeCopy` is
+// reached through the module namespace so its absence reds only its rows.
+// =========================================================================================
+
+/* Local structural types — replaced by `ScopedReadScope` v2 / `ScopeCopyReport` at Gate 5. */
+interface ScopeV2 {
+  tables: ReadonlyArray<{ name: string; columns: readonly string[]; withheld?: readonly string[]; write?: boolean }>;
+  kv?: boolean;
+}
+type ScopeCopy = (
+  scratch: Database,
+  scope: ScopeV2,
+  options?: { forPlan?: boolean },
+) => { ok: false; reason: string; message: string } | { masked: ReadonlySet<string> };
+
+function scopeCopyExport(): ScopeCopy {
+  const exported = (scopedReadModule as Record<string, unknown>).scopeCopy;
+  if (typeof exported !== 'function') throw new Error('scoped-read.ts does not export scopeCopy (D-PR3-22)');
+  return exported as ScopeCopy;
+}
+
+describe('scopeCopy v2 — a WITHHELD column is overwritten like a credential column (AC26)', () => {
+  const WITHHOLD_NOTE: ScopeV2 = { tables: [{ name: 'transactions', columns: ['id', 'amount', 'category'], withheld: ['note'] }] };
+
+  it('SELECT * still shows the withheld column’s NAME — every cell crosses as ***', () => {
+    const result = read(sourceBytes(LEDGER), 'SELECT * FROM transactions ORDER BY id', WITHHOLD_NOTE);
+    expect(result).toMatchObject({ ok: true, columns: ['id', 'amount', 'category', 'note'] });
+    expect(rowsOf(result)).toEqual([
+      [1, 450, 'food', '***'],
+      [2, 120000, 'home', '***'],
+      [3, 500, 'food', '***'],
+    ]);
+    expect(JSON.stringify(result)).not.toMatch(/coffee|rent|tea/);
+  });
+
+  it('an alias or a transform cannot carry a withheld value out', () => {
+    const result = read(sourceBytes(LEDGER), "SELECT note AS harmless, hex(note), ' ' || note FROM transactions ORDER BY id", WITHHOLD_NOTE);
+    expect(JSON.stringify(rowsOf(result))).not.toMatch(/coffee|rent|tea|636F66666565/i);
+  });
+
+  it('a withheld column that refuses *** falls back to NULL, as a credential column does', () => {
+    const bytes = sourceBytes(['CREATE TABLE s (id INTEGER PRIMARY KEY, label TEXT, memo INTEGER) STRICT', "INSERT INTO s (id, label, memo) VALUES (1, 'a', 42)"]);
+    const scope: ScopeV2 = { tables: [{ name: 's', columns: ['id', 'label'], withheld: ['memo'] }] };
+    expect(rowsOf(read(bytes, 'SELECT id, label, memo FROM s', scope))).toEqual([[1, 'a', null]]);
+  });
+
+  it('the dump never carries a withheld column (it selects the scope’s columns only)', () => {
+    const result = scopedScratchDump(SQL, sourceBytes(LEDGER), WITHHOLD_NOTE, DUMP_CAPS);
+    expect(tablesOf(result)[0]).toMatchObject({ name: 'transactions', columns: ['id', 'amount', 'category'] });
+    expect(JSON.stringify(result)).not.toMatch(/coffee|rent|tea/);
+  });
+});
+
+describe('scopeCopy v2 — driftOf over columns ∪ withheld (AC26)', () => {
+  it('a withheld column the source no longer has is drift.removed — nothing run', () => {
+    const spy = spyEngine();
+    const statement = 'SELECT id FROM transactions';
+    const scope: ScopeV2 = { tables: [{ name: 'transactions', columns: ['id', 'amount', 'category', 'note'], withheld: ['memo'] }] };
+    const result = scopedScratchRead(spy.engine, sourceBytes(LEDGER), scope, { sql: statement }, CAPS);
+    expect(result).toMatchObject({ ok: false, reason: 'drift', drift: { added: [], removed: ['transactions.memo'] } });
+    expect(spy.seen).not.toContain(statement);
+  });
+
+  it('a column the source gained still drifts beside a withheld one — and only it', () => {
+    const bytes = sourceBytes([...LEDGER, 'ALTER TABLE transactions ADD COLUMN tag TEXT']);
+    const scope: ScopeV2 = { tables: [{ name: 'transactions', columns: ['id', 'amount', 'category'], withheld: ['note'] }] };
+    expect(read(bytes, 'SELECT id FROM transactions', scope)).toMatchObject({ ok: false, reason: 'drift', drift: { added: ['transactions.tag'], removed: [] } });
+  });
+});
+
+/** A source whose app kept these kv rows: JSON text the way `kvSet` stores it, or raw bytes/text as planted. */
+function kvSourceBytes(rows: ReadonlyArray<readonly [key: string, stored: string | Uint8Array]>): Uint8Array {
+  const db = new SQL.Database();
+  try {
+    db.run('CREATE TABLE transactions (id INTEGER PRIMARY KEY, amount INTEGER NOT NULL, category TEXT, note TEXT)');
+    db.run("INSERT INTO transactions (id, amount, category, note) VALUES (1, 450, 'food', 'coffee')");
+    db.run(KV_TABLE_DDL);
+    for (const [key, stored] of rows) db.run('INSERT INTO snug_kv (key, value) VALUES (?, ?)', [key, stored]);
+    return db.export();
+  } finally {
+    db.close();
+  }
+}
+
+/** What an app's `kvSet(key, value)` stores: the value's JSON text. */
+const kvSet = (key: string, value: unknown): readonly [string, string] => [key, JSON.stringify(value)];
+
+describe('scopeCopy v2 — snug_kv under kv: true is KEPT and FILTERED through the ONE walk (AC25)', () => {
+  const WITH_KV: ScopeV2 = { tables: [{ name: 'transactions', columns: ['id', 'amount', 'category', 'note'] }], kv: true };
+  const THEME = kvSet('theme', 'dark');
+
+  it('the app’s ordinary settings cross: kvSet("theme", "dark") reads back as its stored JSON text', () => {
+    const result = read(kvSourceBytes([THEME]), 'SELECT key, value FROM snug_kv ORDER BY key', WITH_KV);
+    expect(rowsOf(result)).toEqual([['theme', '"dark"']]);
+  });
+
+  // [label, the planted row] — none of them crosses; the theme beside it still does.
+  const NEVER: Array<[string, readonly [string, string | Uint8Array]]> = [
+    ["kvSet('openai', 'sk-' + 24 chars) — a provider key under a neutral key, quoted in its JSON text", kvSet('openai', 'sk-' + 'abcdefghijklmnopqrstuvwx')],
+    ["kvSet('config', { token: 'eyJ' + 40 chars }) — high entropy under a NESTED credential-ish key", kvSet('config', { token: 'eyJ' + 'hG7kP2qX9mZ4vB8nR1tY6wL3sD5fJ0cA2eU7iO4p' })],
+    ["kvSet('note', 'see Bearer ' + 20 token chars) — a bearer token mid-sentence", kvSet('note', 'see Bearer ' + 'aB3dE6gH9jK2mN5pQ8sT')],
+    ['a credential-NAMED key', kvSet('api_key', 'plain')],
+    ["a 'snug:schedule:x' key — the host's handshake", kvSet('snug:schedule:x', { taskId: 't1', runId: 'r1', input: { city: 'Oslo' } })],
+    ['a non-JSON BLOB value', ['blob', new Uint8Array([0xff, 0x00, 0xfe, 0x01])]],
+    ['a value whose text does not parse as JSON', ['broken', 'not json {']],
+  ];
+
+  it.each(NEVER)('%s never crosses — the theme beside it does', (_label, planted) => {
+    const result = read(kvSourceBytes([THEME, planted]), 'SELECT key, value FROM snug_kv ORDER BY key', WITH_KV);
+    expect(rowsOf(result)).toEqual([['theme', '"dark"']]);
+    expect(rowsOf(read(kvSourceBytes([THEME, planted]), 'SELECT count(*) FROM snug_kv', WITH_KV))).toEqual([[1]]);
+  });
+
+  it('all of them at once: one row crosses and no secret text reaches the answer', () => {
+    const result = read(kvSourceBytes([THEME, ...NEVER.map(([, row]) => row)]), "SELECT group_concat(key || '=' || hex(value)) FROM snug_kv", WITH_KV);
+    const text = JSON.stringify(result);
+    expect(rowsOf(result)).toEqual([[`theme=${Buffer.from('"dark"').toString('hex').toUpperCase()}`]]);
+    expect(text).not.toMatch(/openai|config|api_key|snug:schedule|broken|blob/);
+  });
+
+  it('kv absent: snug_kv stays ABSENT even when its rows are clean (the twin of the pin above)', () => {
+    const result = read(kvSourceBytes([THEME]), 'SELECT value FROM snug_kv', { tables: WITH_KV.tables });
+    expect(result).toMatchObject({ ok: false, reason: 'failed' });
+    if (!result.ok) expect(result.message).toMatch(/no such table: snug_kv/);
+  });
+
+  it('snug_kv is never drift-checked: its key/value columns are not a granted table’s', () => {
+    expect(read(kvSourceBytes([THEME]), 'SELECT id FROM transactions', WITH_KV)).toMatchObject({ ok: true });
+  });
+
+  it('the dump carries snug_kv LAST, as { name: snug_kv, columns: [key, value], types: [TEXT, TEXT] }, filtered', () => {
+    const tables = tablesOf(scopedScratchDump(SQL, kvSourceBytes([THEME, ...NEVER.map(([, row]) => row)]), WITH_KV, DUMP_CAPS));
+    expect(tables.map((table) => table.name)).toEqual(['transactions', 'snug_kv']);
+    expect(tables.at(-1)).toMatchObject({ name: 'snug_kv', columns: ['key', 'value'], types: ['TEXT', 'TEXT'], rows: [['theme', '"dark"']] });
+  });
+
+  it('without kv the dump has no snug_kv table', () => {
+    const tables = tablesOf(scopedScratchDump(SQL, kvSourceBytes([THEME]), { tables: WITH_KV.tables }, DUMP_CAPS));
+    expect(tables.map((table) => table.name)).toEqual(['transactions']);
+  });
+});
+
+describe('scopeCopy v2 — the sqlite_sequence belt (R-76): no row names a table outside the grant', () => {
+  it('an AUTOINCREMENT table outside the grant — and a planted row naming one — are gone from sqlite_sequence on the copy', () => {
+    const bytes = sourceBytes([
+      'CREATE TABLE ledger (id INTEGER PRIMARY KEY AUTOINCREMENT, amount INTEGER)',
+      'INSERT INTO ledger (amount) VALUES (1), (2)',
+      'CREATE TABLE vault (id INTEGER PRIMARY KEY AUTOINCREMENT, v TEXT)',
+      "INSERT INTO vault (v) VALUES ('x')",
+      "INSERT INTO sqlite_sequence (name, seq) VALUES ('payroll_of_the_ceo', 42)",
+    ]);
+    const result = read(bytes, 'SELECT name, seq FROM sqlite_sequence ORDER BY name', { tables: [{ name: 'ledger', columns: ['id', 'amount'] }] });
+    expect(rowsOf(result)).toEqual([['ledger', 2]]);
+  });
+});
+
+describe('scopeCopy — exported for the planner: the masked set, and the forPlan copy', () => {
+  it('answers the (table.column) set it MASKED a cell in, lower-cased', () => {
+    const KEY = 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJ';
+    const scratch = new SQL.Database(sourceBytes(['CREATE TABLE Settings (Name TEXT, Value TEXT)', `INSERT INTO Settings (Name, Value) VALUES ('anthropic', '${KEY}'), ('theme', 'dark')`]));
+    try {
+      const report = scopeCopyExport()(scratch, { tables: [{ name: 'Settings', columns: ['Name', 'Value'] }] });
+      expect('masked' in report).toBe(true);
+      if (!('masked' in report)) return;
+      expect([...report.masked]).toEqual(['settings.value']);
+    } finally {
+      scratch.close();
+    }
+  });
+
+  it('a copy that masked nothing answers an empty set', () => {
+    const scratch = new SQL.Database(sourceBytes(LEDGER));
+    try {
+      const report = scopeCopyExport()(scratch, GRANT_TRANSACTIONS);
+      expect('masked' in report && report.masked.size).toBe(0);
+    } finally {
+      scratch.close();
+    }
+  });
+
+  it('a read copy is query_only; a { forPlan: true } copy is not, and ignore_check_constraints is back to 0', () => {
+    const pragma = (db: Database, name: string): unknown => db.exec(`PRAGMA ${name}`)[0]?.values[0]?.[0];
+    const readCopy = new SQL.Database(sourceBytes(LEDGER));
+    const planCopy = new SQL.Database(sourceBytes(LEDGER));
+    try {
+      expect('masked' in scopeCopyExport()(readCopy, GRANT_TRANSACTIONS)).toBe(true);
+      expect(pragma(readCopy, 'query_only')).toBe(1);
+      expect('masked' in scopeCopyExport()(planCopy, GRANT_TRANSACTIONS, { forPlan: true })).toBe(true);
+      expect(pragma(planCopy, 'query_only')).toBe(0);
+      expect(pragma(planCopy, 'ignore_check_constraints')).toBe(0);
+    } finally {
+      readCopy.close();
+      planCopy.close();
+    }
+  });
+
+  it('a scoping failure is answered, not thrown — drift as before', () => {
+    const scratch = new SQL.Database(sourceBytes(LEDGER));
+    try {
+      expect(scopeCopyExport()(scratch, { tables: [{ name: 'transactions', columns: ['id'] }] })).toMatchObject({ ok: false, reason: 'drift' });
+    } finally {
+      scratch.close();
     }
   });
 });

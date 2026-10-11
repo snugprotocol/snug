@@ -25,6 +25,13 @@
 //  - drop the set budget (per-table caps only) → the too-large row reds;
 //  - de-collide against the registry only → the runtime-table and view rows red;
 //  - count a strike on a dump timeout → the timeout row reds.
+//
+// PR-3 (TASK-20261010-host-broker; contract v2 D-PR3-16/22/26): the in-host caps moved to the
+// protocol's Appendix B and `access/limits.ts` is DELETED — the limits row is rewritten against the
+// protocol (red until I-W) and the two rows that read a cap read it from there; a grant allowed the
+// source's settings & notes (`kv`) brings `snug_kv` into the set, aliased LAST as
+// `<alias>__snug_kv`, filtered through the ONE credential walk (red until I-U's v2 decision and
+// I-D's dump).
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -46,13 +53,23 @@ import {
 } from '../access/grants.js';
 import { configureScopedRead, resetScopedReadForTests, type WorkerLike } from '../access/scopedRead.js';
 import { createScopedReadResponder } from '../access/scopedRead.worker.js';
-import * as limits from '../access/limits.js';
-import { ACCESS_MATERIALISE_MAX_BYTES, ACCESS_MATERIALISE_TIMEOUT_MS } from '../access/limits.js';
+// D-PR3-26: the in-host caps live in the protocol's Appendix B (access/limits.ts is deleted).
+import * as protocolNamespace from '@snugprotocol/protocol';
+import { type CreateGrantInput } from '../access/grants.js';
 import { aliasFor, namesTable, takenNamesFor, toAttach } from '../access/materialise.js';
 import { stillReadable, type AccessCaller } from '../access/policy.js';
 import { EMPTY_MATERIALISED_SET, accessService, type MaterialisedSet } from '../access/service.js';
 import { startUserAsk } from '../access/userAsk.js';
 import { installTestUserDb, locateWasm } from './userdbTestHelper.js';
+
+/** The four caps as the protocol exports them (I-W) — a local widening until they land. */
+const limits = protocolNamespace as typeof protocolNamespace & {
+  ACCESS_MATERIALISE_MAX_ROWS: number;
+  ACCESS_MATERIALISE_MAX_BYTES: number;
+  ACCESS_MATERIALISE_MAX_SET_BYTES: number;
+  ACCESS_MATERIALISE_TIMEOUT_MS: number;
+};
+const { ACCESS_MATERIALISE_MAX_BYTES, ACCESS_MATERIALISE_TIMEOUT_MS } = limits;
 
 // =========================================================================================
 // The world
@@ -190,11 +207,15 @@ afterEach(() => {
 });
 
 // =========================================================================================
-// The limits (contract v2 access/limits.ts)
+// The limits (contract v2 access/limits.ts → PR-3 D-PR3-26: the protocol's Appendix B)
 // =========================================================================================
 
-describe('access/limits.ts — the in-host caps (PR-3 moves them to protocol Appendix B)', () => {
-  it('5,000 rows and 2 MiB per table, 8 MiB per set, a 5 s clock per dump', async () => {
+describe('D-PR3-26 the in-host caps now live in the protocol’s Appendix B — access/limits.ts is gone (was: access/limits.ts, PR-3 moves them)', () => {
+  it('5,000 rows and 2 MiB per table, 8 MiB per set, a 5 s clock per dump — exported by @snugprotocol/protocol, and access/limits.ts no longer exists', async () => {
+    const { existsSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    // vitest runs with cwd = apps/playground; import.meta.url is not a file: URL under jsdom.
+    expect(existsSync(resolve(process.cwd(), 'src/access/limits.ts')), 'the one home moved').toBe(false);
     expect({ ...limits }).toMatchObject({
       ACCESS_MATERIALISE_MAX_ROWS: 5_000,
       ACCESS_MATERIALISE_MAX_BYTES: 2 * 1024 * 1024,
@@ -725,6 +746,58 @@ describe('toAttach — what the scratch copy is handed', () => {
     expect(only.map((table) => table.name).sort()).toEqual(['ledger__accounts', 'ledger__transactions']);
     const accounts = only.find((table) => table.name === 'ledger__accounts')!;
     expect(accounts).toEqual({ name: 'ledger__accounts', columns: ['name', 'balance'], rows: [['main', 9000]] });
+  });
+});
+
+describe('PR-3 D-PR3-16/22 — a grant allowed the source’s settings & notes brings snug_kv, aliased LAST as <alias>__snug_kv, through the ONE credential walk', () => {
+  /** A v2 decision allowing `kv` (D-PR3-23) — a local structural input until `CreateGrantInput` takes it (I-U). */
+  async function kvGrant(): Promise<AnyAccessGrant> {
+    const ranked = await collectSources(db, budget);
+    const source = [...ranked.matched, ...ranked.rest].find((candidate) => candidate.appId === ledger)!;
+    const input = {
+      readerAppId: budget,
+      source,
+      tables: [{ name: 'transactions', withheld: [], write: false }],
+      duration: 'day',
+      unattended: false,
+      kv: true,
+      purpose: 'to compare spending',
+      provenance: 'user',
+      now: clock.now,
+    };
+    return createGrantFromDecision(db, input as unknown as CreateGrantInput);
+  }
+
+  it('the chat’s set holds the granted tables, then <alias>__snug_kv LAST — key and value, the setting only: never a credential-named key, a credential-shaped value or a snug: key; toAttach hands it to the scratch copy, where the brain can read it', async () => {
+    const SECRET = 'sk-live1234567890abcdefghijklmn';
+    for (const [key, value] of [
+      ['theme', 'dark'],
+      ['api_key', 'plain-looking'],
+      ['openai', SECRET],
+      ['config', { nested: { token: SECRET } }],
+    ] as const) {
+      const result = await db.driver.handle(ledger, { v: PROTOCOL_VERSION, type: FRAME_TYPES.dbRequest, requestId: `kv-${++seq}`, instanceId: 'seed', op: 'kvSet', key, value });
+      expect(result.ok, key).toBe(true);
+    }
+    expect((await db.driver.kvSet(ledger, 'snug:schedule:run-1', { kind: 'refresh' })).ok).toBe(true);
+    const grant = await kvGrant();
+    await grantFor({ source: pantry, tables: ['items'] });
+    const set = await accessService().materialise(chatClosed());
+
+    expect(set.skipped).toEqual([]);
+    expect(namesOf(set).filter((name) => name.startsWith('ledger__')), 'the kv table LAST in its grant').toEqual(['ledger__transactions', 'ledger__snug_kv']);
+    expect(namesOf(set), 'a grant without kv brings no kv table').not.toContain('pantry__snug_kv');
+    const kv = set.tables.find((table) => table.name === 'ledger__snug_kv')!;
+    expect(kv).toMatchObject({ grantId: grant.id, sourceAppId: ledger, alias: 'ledger', table: 'snug_kv', columns: ['key', 'value'] });
+    expect(kv.rows.map((row) => row[0])).toEqual(['theme']);
+    expect(JSON.stringify(set)).not.toMatch(/sk-live|api_key|plain-looking|snug:schedule|openai|nested/);
+    expect(set.readOnlyTables).toContain('ledger__snug_kv');
+
+    const attach = toAttach(set, [grant.id]);
+    expect(attach.map((table) => table.name)).toEqual(['ledger__transactions', 'ledger__snug_kv']);
+    const run = await db.scratchRun(budget, [{ sql: 'SELECT key FROM ledger__snug_kv' }], { attach: toAttach(set) });
+    expect(run.statements[0]?.error).toBeUndefined();
+    expect(run.statements[0]?.rows).toEqual([['theme']]);
   });
 });
 

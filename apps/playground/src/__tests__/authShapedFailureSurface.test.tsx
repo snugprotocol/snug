@@ -35,7 +35,7 @@ import {
   testConnection,
 } from '../state/connectionWizard.js';
 import { AuthRepairChip } from '../run/AuthRepairChip.js';
-import { AUTH_REPAIR_VIA_SCHEDULE } from '../schedule/copy.js';
+import { AUTH_REPAIR_VIA_REFRESH, AUTH_REPAIR_VIA_SCHEDULE } from '../schedule/copy.js';
 import { ConnectionWizardSheet } from '../connections/ConnectionWizardSheet.js';
 import { getUserDb } from '../state/userdb.js';
 
@@ -470,5 +470,31 @@ describe('AuthRepairChip — the quiet run-surface trace of the failing (appId, 
     expect(typeof AUTH_REPAIR_VIA_SCHEDULE).toBe('string');
     expect(chip!.textContent).not.toContain(AUTH_REPAIR_VIA_SCHEDULE);
     expect(chip!.getAttribute('title')).not.toContain(AUTH_REPAIR_VIA_SCHEDULE);
+  });
+
+  // TASK-20261010-host-broker PR-3 (contract v2 D-PR3-19; DS20): a refresh another app asked for
+  // runs the source's own code, and a 401 it hits is attributed to THAT — `via: 'refresh'` on the
+  // entry, `AUTH_REPAIR_VIA_REFRESH` inline and in the tooltip, never the schedule's line. `via:
+  // 'refresh'` is what `AuthShapedFailure.via` gains in PR-3; until then a LOCAL structural type
+  // stands in (the implementation lane replaces the cast at Gate 5).
+  it('`via: refresh` on the entry: the chip text and its tooltip carry AUTH_REPAIR_VIA_REFRESH — not the schedule’s attribution — the provider still named', async () => {
+    type RefreshFailure = { appId: string; slot: string; status: number; via: 'refresh' };
+    type StoredFailure = NonNullable<ReturnType<typeof authShapedFailureStore.get>>;
+    const failure: RefreshFailure = { appId: APP, slot: SLOT, status: 401, via: 'refresh' };
+    await seedApprovedApp();
+    await renderChip(APP);
+    await act(async () => {
+      authShapedFailureStore.set(failure as unknown as StoredFailure);
+      await Promise.resolve();
+    });
+    const chip = container.querySelector('[data-testid="auth-repair-chip"]');
+    expect(chip).not.toBeNull();
+    expect(typeof AUTH_REPAIR_VIA_REFRESH, 'the sentence is single-homed in schedule/copy.ts (its bytes are pinned in scheduleCopy.test.ts)').toBe('string');
+    expect(chip!.textContent).toContain(AUTH_REPAIR_VIA_REFRESH);
+    expect(chip!.getAttribute('title')).toContain(AUTH_REPAIR_VIA_REFRESH);
+    expect(chip!.textContent).not.toContain(AUTH_REPAIR_VIA_SCHEDULE);
+    expect(chip!.getAttribute('title')).not.toContain(AUTH_REPAIR_VIA_SCHEDULE);
+    expect(chip!.textContent).toContain('Example');
+    expect(button(/check this connection/i)).toBeDefined();
   });
 });

@@ -14,8 +14,11 @@
 import { describe, expect, it } from 'vitest';
 import type { z } from 'zod';
 import {
+  ACCESS_CANDIDATE_CLASSES,
   ACCESS_CHANGED_EVENT,
   ACCESS_COLUMN_NAME_MAX_CHARS,
+  ACCESS_DISCOVER_CACHE_MS,
+  ACCESS_DOORBELL_COALESCE_MS,
   ACCESS_DURATIONS,
   ACCESS_ENDED_RETENTION_MS,
   ACCESS_ERROR_CODES,
@@ -31,6 +34,11 @@ import {
   ACCESS_LOG_REASON_MAX_CHARS,
   ACCESS_LOG_SQL_MAX_CHARS,
   ACCESS_LOG_TOTAL_MAX_BYTES,
+  ACCESS_LOG_VIAS,
+  ACCESS_MATERIALISE_MAX_BYTES,
+  ACCESS_MATERIALISE_MAX_ROWS,
+  ACCESS_MATERIALISE_MAX_SET_BYTES,
+  ACCESS_MATERIALISE_TIMEOUT_MS,
   ACCESS_MAX_COLUMNS,
   ACCESS_MAX_GRANTS,
   ACCESS_MAX_PARAMS,
@@ -43,12 +51,25 @@ import {
   ACCESS_PURPOSE_MAX_CHARS,
   ACCESS_QUERY_RATE_PER_MINUTE,
   ACCESS_QUERY_TIMEOUT_MS,
+  ACCESS_READ_EVENT,
+  ACCESS_REFRESH_COOLDOWN_MS,
+  ACCESS_REFRESH_REASONS,
   ACCESS_REQUEST_MIN_GAP_MS,
   ACCESS_SCOPED_CACHE_MS,
+  ACCESS_SOURCE_CHANGED_EVENT,
   ACCESS_SOURCE_MAX_BYTES,
   ACCESS_SQL_MAX_CHARS,
   ACCESS_SUSPEND_REASONS,
   ACCESS_TIMEOUT_STRIKES,
+  ACCESS_UNDO_MAX_BYTES,
+  ACCESS_UNDO_MAX_ENTRIES,
+  ACCESS_UNDO_MAX_ROW_BYTES,
+  ACCESS_UNDO_TTL_MS,
+  ACCESS_WANTS_MAX_BYTES,
+  ACCESS_WANTS_MAX_ENTRIES,
+  ACCESS_WRITE_AUTHORITIES,
+  ACCESS_WRITE_MAX_ROWS,
+  DATA_CHANGED_EVENT,
   FORBIDDEN_TOKEN_RULE,
   FRAME_TYPES,
   LIMITS,
@@ -60,6 +81,8 @@ import {
   accessRequestHash,
   accessRequestSchema,
   accessResponseSchema,
+  accessUndoEntrySchema,
+  accessWantsSchema,
   buildJsonSchemas,
   canonicalAccessGrantIntent,
   durationFromExpiry,
@@ -72,6 +95,8 @@ import {
   isReadOnlySelect,
   parseAccessGrant,
   parseAccessLogEntry,
+  parseAccessUndoEntry,
+  parseAccessWants,
   parseFrame,
   type AccessGrant,
   type AccessRequestFrame,
@@ -191,8 +216,8 @@ describe('AC1 — the frame-type literals and the constants table (Appendix B)',
     expect(FRAME_TYPES.accessResponse).toBe('snug:access-response');
   });
 
-  it('every ACCESS_* constant carries the value the task file pins', () => {
-    expect(ACCESS_OPS).toEqual(['request', 'query', 'list', 'release']);
+  it('every ACCESS_* constant carries the value the task file pins (PR-3 moves three: seven ops in frame order, three provenances, ten log kinds — D-PR3-2/6, ADR-0076 §4)', () => {
+    expect(ACCESS_OPS).toEqual(['request', 'query', 'write', 'refresh', 'list', 'release', 'discover']);
     expect(ACCESS_PURPOSE_MAX_CHARS).toBe(200);
     expect([ACCESS_HINT_WORDS_MAX, ACCESS_HINT_WORD_MAX_CHARS, ACCESS_HINT_TABLES_MAX]).toEqual([16, 32, 16]);
     expect([ACCESS_MAX_TABLES, ACCESS_MAX_COLUMNS, ACCESS_COLUMN_NAME_MAX_CHARS]).toEqual([32, 64, 64]);
@@ -215,12 +240,12 @@ describe('AC1 — the frame-type literals and the constants table (Appendix B)',
     expect(ACCESS_DURATIONS).toEqual(['session', 'day', 'week', 'always']);
     expect(ACCESS_GRANT_STATUSES).toEqual(['active', 'revoked', 'suspended']);
     expect(ACCESS_SUSPEND_REASONS).toEqual(['imported', 'reader-updated', 'source-changed', 'source-restricted', 'reader-misbehaved']);
-    expect(ACCESS_PROVENANCES).toEqual(['app', 'user']);
-    expect(ACCESS_LOG_KINDS).toEqual(['granted', 'read', 'refused', 'revoked', 'expired', 'released', 'suspended']);
+    expect(ACCESS_PROVENANCES).toEqual(['app', 'user', 'chat']);
+    expect(ACCESS_LOG_KINDS).toEqual(['granted', 'read', 'refused', 'revoked', 'expired', 'released', 'suspended', 'wrote', 'undone', 'refreshed']);
     expect(ACCESS_CHANGED_EVENT).toBe('access-changed');
   });
 
-  it('ACCESS_ERROR_CODES is exactly the twelve Appendix A codes (open-string wire rule, R5)', () => {
+  it('ACCESS_ERROR_CODES is exactly the fifteen Appendix A codes (open-string wire rule, R5; PR-3 adds ACCESS_WRITE_REFUSED, ACCESS_BUSY and ACCESS_REFRESH_FAILED)', () => {
     expect(Object.keys(ACCESS_ERROR_CODES).sort()).toEqual(
       [
         'ACCESS_INVALID_REQUEST',
@@ -235,6 +260,9 @@ describe('AC1 — the frame-type literals and the constants table (Appendix B)',
         'ACCESS_QUERY_FAILED',
         'ACCESS_RATE_LIMITED',
         'ACCESS_SIZE_EXCEEDED',
+        'ACCESS_WRITE_REFUSED',
+        'ACCESS_BUSY',
+        'ACCESS_REFRESH_FAILED',
       ].sort(),
     );
     for (const [key, value] of Object.entries(ACCESS_ERROR_CODES)) expect(value).toBe(key);
@@ -281,8 +309,8 @@ describe('AC1 — parseFrame admits every access-request op and every access-res
     expect(accessRequestSchema.options.map((option) => option.shape.op.value)).toEqual([...ACCESS_OPS]);
   });
 
-  it('refuses an unknown op and a missing per-op seat (parse, don\'t check)', () => {
-    expect(isMalformed(askFrame({ op: 'discover' }))).toBe(true);
+  it('refuses an unknown op and a missing per-op seat (parse, don\'t check; PR-3: "discover" is an op now, so the unknown op is "forget")', () => {
+    expect(isMalformed(askFrame({ op: 'forget' }))).toBe(true);
     expect(isMalformed(queryFrame({ sql: undefined }))).toBe(true);
     expect(isMalformed(queryFrame({ grantId: undefined }))).toBe(true);
     expect(isMalformed(releaseFrame({ grantId: undefined }))).toBe(true);
@@ -537,17 +565,19 @@ describe('AC1 — buildJsonSchemas() publishes the access pair: request strict, 
     expect(names).toContain('access-response.json');
   });
 
-  it('access-request.json: every object (each op variant and hints) carries additionalProperties: false', () => {
+  it('access-request.json: every object (each op variant and hints) carries additionalProperties: false (PR-3: seven op variants + hints)', () => {
     const exported = JSON.parse(buildJsonSchemas()['access-request.json'] ?? 'null') as unknown;
     const objects = objectNodes(exported);
-    expect(objects.length).toBeGreaterThanOrEqual(5); // four op variants + hints
+    expect(objects.length).toBeGreaterThanOrEqual(8); // seven op variants + hints
+    expect((exported as { oneOf?: unknown[] }).oneOf).toHaveLength(7);
     for (const object of objects) expect(object.additionalProperties).toBe(false);
   });
 
-  it('access-response.json: no object closes additionalProperties (tolerant, the db-response shape)', () => {
+  it('access-response.json: no object closes additionalProperties (tolerant, the db-response shape; PR-3: eight variants)', () => {
     const exported = JSON.parse(buildJsonSchemas()['access-response.json'] ?? 'null') as unknown;
     const objects = objectNodes(exported);
-    expect(objects.length).toBeGreaterThanOrEqual(5);
+    expect(objects.length).toBeGreaterThanOrEqual(8); // seven ok variants + the error
+    expect((exported as { anyOf?: unknown[] }).anyOf).toHaveLength(8);
     for (const object of objects) expect(object.additionalProperties).not.toBe(false);
   });
 });
@@ -573,8 +603,11 @@ describe('AC2 — accessGrantSchema: strict at every level', () => {
     expect(parses(accessGrantSchema, grant())).toBe(true);
   });
 
-  it('access is a one-member enum: "write" is refused in the RECORD (the view is tolerant; the record is not)', () => {
+  it('PR-3 (D-PR3-2) inverts the one-member enum: access is "read" | "write", and "write" is refused in the RECORD unless some table carries write: true (the view is tolerant; the record is not)', () => {
     expect(parses(accessGrantSchema, grant({ access: 'write' }))).toBe(false);
+    const writable = { tables: [{ name: 'transactions', columns: ['amount', 'category', 'date', 'note'], write: true }] };
+    expect(parses(accessGrantSchema, grant({ access: 'write', scope: writable }))).toBe(true);
+    expect(parses(accessGrantSchema, grant({ access: 'admin' }))).toBe(false);
   });
 
   it('a session grant never persists, and "expired" is derived, never a stored status', () => {
@@ -812,8 +845,9 @@ describe('AC2 — canonicalAccessGrantIntent: the nine intent fields, and nothin
     expect(intentOf({ readerVersion: 99 })).toBe(base);
   });
 
-  it('DOES move with every one of the nine intent fields', () => {
+  it('DOES move with every one of the thirteen intent fields (PR-3, D-PR3-2: + withheld, write, kv, refresh — an import of a widened grant is NEVER intent-identical)', () => {
     const base = intentOf();
+    const FOUR = ['amount', 'category', 'date', 'note'];
     for (const over of [
       { id: crypto.randomUUID() },
       { readerAppId: 'planner' },
@@ -823,10 +857,16 @@ describe('AC2 — canonicalAccessGrantIntent: the nine intent fields, and nothin
       { duration: { kind: 'always' } },
       { unattended: true },
       { provenance: 'user' },
+      { provenance: 'chat' },
+      // PR-3's four seats — each one alone (write carries access 'write' with it: the record ties them).
+      { scope: { tables: [{ name: 'transactions', columns: FOUR, withheld: ['memo'] }] } },
+      { scope: { tables: [{ name: 'transactions', columns: FOUR, write: true }] }, access: 'write' },
+      { kv: true },
+      { refresh: true },
     ]) {
       expect(intentOf(over), JSON.stringify(over)).not.toBe(base);
     }
-    // `access` is a one-member enum in the record; pin that it is IN the bytes.
+    // `access` is IN the bytes ('read' for every grant without a writable table).
     expect(JSON.parse(base)).toHaveProperty('access', 'read');
   });
 });
@@ -1000,5 +1040,685 @@ describe('AC2 — the types are inferred from the schemas', () => {
     expect(parsed.access).toBe('read');
     expect(parseAccessGrant(JSON.stringify(grant()))).toEqual(parsed);
     expect(parses(accessResponseSchema, { ...respBase, ok: true, op: 'release' })).toBe(true);
+  });
+});
+
+// ======================================================================== PR-3 (spec 1.2)
+//
+// TASK-20261010-host-broker PR-3 — THE WIRE, spec 1.1 → 1.2 (ADR-0076 §4–§8, §10; Gate-2
+// contract v2: D-PR3-2..7; AC17). Additive: three request ops (`write`, `refresh`, `discover`),
+// `access` on the ask, three answers, the grant RECORD v2 (granted columns, the rest withheld,
+// per-table `write`, `kv`, `refresh` — every new seat absent ≡ default), the VIEW v2, the log
+// entry v2 (`wrote`, `undone`, `refreshed`), the undo journal entry (ROWS, never SQL) and the
+// builder-time declaration `accessWants`. A 1.1 frame of every op still parses, and the record
+// written with every default omitted is byte- and intent-identical to a 1.1 record.
+
+const UNDO_ID = '7c9e6679-7425-40de-944b-e07fc1f90ae7';
+const FOUR_COLUMNS = ['amount', 'category', 'date', 'note'];
+
+const writeFrame = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+  ...reqBase,
+  op: 'write',
+  grantId: GRANT_ID,
+  sql: 'UPDATE transactions SET category = ? WHERE id = ?',
+  params: ['food', 7],
+  ...over,
+});
+const refreshFrame = (over: Record<string, unknown> = {}): Record<string, unknown> => ({ ...reqBase, op: 'refresh', grantId: GRANT_ID, ...over });
+const discoverFrame = (over: Record<string, unknown> = {}): Record<string, unknown> => ({ ...reqBase, op: 'discover', ...over });
+
+/** A grant whose one table is `transactions` with the table seats `tableOver` and the root seats `over`. */
+const widened = (tableOver: Record<string, unknown> = {}, over: Record<string, unknown> = {}): Record<string, unknown> =>
+  grant({ scope: { tables: [{ name: 'transactions', columns: ['amount', 'category', 'date'], ...tableOver }] }, ...over });
+
+/** A journal entry: ONE update step of one row unless overridden. */
+const undoEntry = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+  id: UNDO_ID,
+  at: '2026-10-11T09:00:00.000Z',
+  expiresAt: '2026-10-18T09:00:00.000Z',
+  authority: 'permission',
+  via: 'app',
+  grantId: GRANT_ID,
+  readerAppId: 'budget',
+  readerName: 'Budget',
+  steps: [{ table: 'transactions', op: 'update', columns: ['category', 'note'], rows: [{ rowid: 7, before: ['rent', 'march'], after: ['food', 'march'] }] }],
+  ...over,
+});
+const undoStep = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+  table: 'transactions',
+  op: 'update',
+  columns: ['category', 'note'],
+  rows: [{ rowid: 7, before: ['rent', 'march'], after: ['food', 'march'] }],
+  ...over,
+});
+const withSteps = (...steps: Record<string, unknown>[]): Record<string, unknown> => undoEntry({ steps });
+
+/** A high-entropy, prefix-free string: refused ONLY when the walk sees it under a credential-ish key. */
+const HIGH_ENTROPY = 'Zq8vL2pW9xR4kT7mN1bH6cJ3dF5gS0aY';
+
+describe('PR-3 — the constants spec 1.2 adds (Appendix B; D-PR3-6/7/21/26)', () => {
+  it('the new vocabularies carry exactly the values the contract pins — the authorities never spell the banned word', () => {
+    expect(ACCESS_LOG_VIAS).toEqual(['app', 'chat', 'schedule', 'user']);
+    expect(ACCESS_WRITE_AUTHORITIES).toEqual(['permission', 'approval', 'task']);
+    expect(ACCESS_REFRESH_REASONS).toEqual(['no-handler', 'timeout', 'capped', 'refused', 'failed']);
+    expect(ACCESS_CANDIDATE_CLASSES).toEqual(['none', 'one', 'several']);
+    for (const authority of ACCESS_WRITE_AUTHORITIES) expect(authority, authority).not.toMatch(/grant/i);
+  });
+
+  it('the write, undo, refresh, discover, doorbell, materialise and wants bounds', () => {
+    expect(ACCESS_WRITE_MAX_ROWS).toBe(200);
+    expect([ACCESS_UNDO_MAX_BYTES, ACCESS_UNDO_MAX_ROW_BYTES, ACCESS_UNDO_MAX_ENTRIES, ACCESS_UNDO_TTL_MS]).toEqual([
+      64 * 1024,
+      256 * 1024,
+      20,
+      7 * 86_400_000,
+    ]);
+    // One whole entry always fits the per-target journal row.
+    expect(ACCESS_UNDO_MAX_ROW_BYTES).toBeGreaterThanOrEqual(ACCESS_UNDO_MAX_BYTES);
+    expect([ACCESS_REFRESH_COOLDOWN_MS, ACCESS_DISCOVER_CACHE_MS, ACCESS_DOORBELL_COALESCE_MS]).toEqual([5 * 60_000, 60_000, 2_000]);
+    // D-PR3-26: moved from apps/playground/src/access/limits.ts, values unchanged.
+    expect([ACCESS_MATERIALISE_MAX_ROWS, ACCESS_MATERIALISE_MAX_BYTES, ACCESS_MATERIALISE_MAX_SET_BYTES, ACCESS_MATERIALISE_TIMEOUT_MS]).toEqual([
+      5_000,
+      2 * 1024 * 1024,
+      8 * 1024 * 1024,
+      5_000,
+    ]);
+    expect([ACCESS_WANTS_MAX_BYTES, ACCESS_WANTS_MAX_ENTRIES]).toEqual([2 * 1024, 4]);
+  });
+
+  it('the three new host-event names, each distinct from access-changed (ids only — R7)', () => {
+    expect(ACCESS_SOURCE_CHANGED_EVENT).toBe('access-source-changed');
+    expect(ACCESS_READ_EVENT).toBe('access-read');
+    expect(DATA_CHANGED_EVENT).toBe('data-changed');
+    expect(new Set([ACCESS_CHANGED_EVENT, ACCESS_SOURCE_CHANGED_EVENT, ACCESS_READ_EVENT, DATA_CHANGED_EVENT]).size).toBe(4);
+  });
+
+  it('the three new codes are known codes; the fifteen are open strings equal to their keys', () => {
+    for (const code of ['ACCESS_WRITE_REFUSED', 'ACCESS_BUSY', 'ACCESS_REFRESH_FAILED']) {
+      expect(isAccessErrorCode(code), code).toBe(true);
+      expect((ACCESS_ERROR_CODES as Record<string, string>)[code]).toBe(code);
+    }
+    expect(Object.keys(ACCESS_ERROR_CODES)).toHaveLength(15);
+  });
+});
+
+describe('PR-3 — the three new ops: requests STRICT (D-PR3-4/5; AC17)', () => {
+  it('admits write (with and without params), refresh, and discover (bare and with hints)', () => {
+    expect(frameOk(writeFrame())).toBe(true);
+    expect(frameOk(writeFrame({ params: undefined }))).toBe(true);
+    expect(frameOk(writeFrame({ sql: "INSERT INTO transactions (amount, category) VALUES (12.5, 'food')", params: [] }))).toBe(true);
+    expect(frameOk(writeFrame({ sql: 'DELETE FROM transactions WHERE id = ?', params: [7] }))).toBe(true);
+    expect(frameOk(refreshFrame())).toBe(true);
+    expect(frameOk(discoverFrame())).toBe(true);
+    expect(frameOk(discoverFrame({ hints: { words: ['spending'], tables: ['transactions'] } }))).toBe(true);
+    expect(frameOk(discoverFrame({ hints: {} }))).toBe(true);
+    const parsed = parseFrame(writeFrame());
+    expect(parsed.ok && parsed.frame.type).toBe(FRAME_TYPES.accessRequest);
+  });
+
+  it('the request variants are appended in ACCESS_OPS order — the three new ones between and after the 1.1 four', () => {
+    expect(accessRequestSchema.options.map((option) => option.shape.op.value)).toEqual([
+      'request',
+      'query',
+      'write',
+      'refresh',
+      'list',
+      'release',
+      'discover',
+    ]);
+  });
+
+  it('write: grantId and sql are required; sql and params keep the query bounds; an unknown key is MALFORMED', () => {
+    expect(isMalformed(writeFrame({ grantId: undefined }))).toBe(true);
+    expect(isMalformed(writeFrame({ sql: undefined }))).toBe(true);
+    expect(isMalformed(writeFrame({ sql: '' }))).toBe(true);
+    expect(isMalformed(writeFrame({ sql: `UPDATE t SET a = '${'x'.repeat(ACCESS_SQL_MAX_CHARS)}' WHERE id = 1` }))).toBe(true);
+    expect(isMalformed(writeFrame({ sql: 'UPDATE t SET a = 1 WHERE id = 1 ‮' }))).toBe(true);
+    expect(isMalformed(writeFrame({ params: Array.from({ length: ACCESS_MAX_PARAMS + 1 }, (_, i) => i) }))).toBe(true);
+    expect(isMalformed(writeFrame({ params: [{ a: 1 }] }))).toBe(true);
+    for (const extra of [{ table: 'transactions' }, { access: 'write' }, { undo: true }, { sourceAppId: 'ledger' }]) {
+      expect(isMalformed(writeFrame(extra)), JSON.stringify(extra)).toBe(true);
+    }
+    expect(frameOk(writeFrame({ params: Array.from({ length: ACCESS_MAX_PARAMS }, (_, i) => i) }))).toBe(true); // the passing twin
+  });
+
+  it('a write carrying two statements, a function or no WHERE still PARSES — the host refuses it ACCESS_WRITE_REFUSED, never MALFORMED (spec §24.5 (19))', () => {
+    for (const sql of [
+      'UPDATE transactions SET category = 1 WHERE id = 1; DELETE FROM transactions WHERE id = 2',
+      "UPDATE transactions SET note = upper('x') WHERE id = 1",
+      'DELETE FROM transactions',
+    ]) {
+      expect(frameOk(writeFrame({ sql, params: undefined })), sql).toBe(true);
+    }
+  });
+
+  it('refresh: grantId is required; an unknown key (force, summary, access) is MALFORMED', () => {
+    expect(isMalformed(refreshFrame({ grantId: undefined }))).toBe(true);
+    for (const extra of [{ force: true }, { summary: 'fetch it' }, { access: 'write' }]) {
+      expect(isMalformed(refreshFrame(extra)), JSON.stringify(extra)).toBe(true);
+    }
+  });
+
+  it('discover: no seat but hints — a purpose, a grantId or an unknown hint key is MALFORMED', () => {
+    expect(isMalformed(discoverFrame({ purpose: 'to show spending' }))).toBe(true);
+    expect(isMalformed(discoverFrame({ grantId: GRANT_ID }))).toBe(true);
+    expect(isMalformed(discoverFrame({ hints: { words: ['a'], apps: ['ledger'] } }))).toBe(true);
+    expect(isMalformed(discoverFrame({ hints: { tables: ['snug_kv'] } }))).toBe(true);
+  });
+
+  it('request gains access: "read" | "write", optional — any other value is MALFORMED; no other op carries it', () => {
+    expect(frameOk(askFrame({ access: 'write' }))).toBe(true);
+    expect(frameOk(askFrame({ access: 'read' }))).toBe(true);
+    expect(frameOk(askFrame({ access: 'write', hints: { tables: ['transactions'] }, renew: GRANT_ID }))).toBe(true);
+    for (const access of ['admin', 'WRITE', '', true, ['write']]) {
+      expect(isMalformed(askFrame({ access })), JSON.stringify(access)).toBe(true);
+    }
+    expect(isMalformed(queryFrame({ access: 'write' }))).toBe(true);
+    expect(isMalformed(listFrame({ access: 'write' }))).toBe(true);
+    expect(isMalformed(releaseFrame({ access: 'write' }))).toBe(true);
+    expect(isMalformed(discoverFrame({ access: 'write' }))).toBe(true);
+    const parsed = accessRequestSchema.parse(askFrame({ access: 'write' }));
+    expect(parsed.op === 'request' && (parsed as { access?: string }).access).toBe('write');
+  });
+
+  it('AC17 negative: a 1.1-shaped frame of every 1.1 op still parses — and an ask without access carries no access key', () => {
+    for (const frame of [askFrame(), askFrame({ hints: { words: ['spending'] }, renew: GRANT_ID }), queryFrame(), queryFrame({ params: [1] }), listFrame(), releaseFrame()]) {
+      expect(frameOk(frame), JSON.stringify(frame)).toBe(true);
+    }
+    const parsed = accessRequestSchema.parse(askFrame());
+    expect('access' in parsed).toBe(false);
+  });
+});
+
+describe('PR-3 — the three new answers: TOLERANT (D-PR3-14; AC17)', () => {
+  it('write answers changes — an int ≥ 0', () => {
+    expect(frameOk({ ...respBase, ok: true, op: 'write', changes: 0 })).toBe(true);
+    expect(frameOk({ ...respBase, ok: true, op: 'write', changes: 3 })).toBe(true);
+    for (const changes of [undefined, -1, 1.5, '3', null]) {
+      expect(isMalformed({ ...respBase, ok: true, op: 'write', changes }), String(changes)).toBe(true);
+    }
+  });
+
+  it('refresh answers fresh, and an optional reason of at most 32 characters', () => {
+    expect(frameOk({ ...respBase, ok: true, op: 'refresh', fresh: true })).toBe(true);
+    expect(frameOk({ ...respBase, ok: true, op: 'refresh', fresh: false, reason: 'recent' })).toBe(true);
+    expect(frameOk({ ...respBase, ok: true, op: 'refresh', fresh: false, reason: 'r'.repeat(32) })).toBe(true);
+    expect(isMalformed({ ...respBase, ok: true, op: 'refresh', fresh: false, reason: 'r'.repeat(33) })).toBe(true);
+    expect(isMalformed({ ...respBase, ok: true, op: 'refresh' })).toBe(true);
+    expect(isMalformed({ ...respBase, ok: true, op: 'refresh', fresh: 'yes' })).toBe(true);
+  });
+
+  it('discover answers candidates — one of none | one | several (a class, never a count or a name)', () => {
+    for (const candidates of ACCESS_CANDIDATE_CLASSES) {
+      expect(frameOk({ ...respBase, ok: true, op: 'discover', candidates }), candidates).toBe(true);
+    }
+    for (const candidates of [undefined, 'many', 2, ['ledger']]) {
+      expect(isMalformed({ ...respBase, ok: true, op: 'discover', candidates }), String(candidates)).toBe(true);
+    }
+  });
+
+  it('each new answer stays tolerant of an unknown key (a future seat is never a MAJOR bump)', () => {
+    expect(frameOk({ ...respBase, ok: true, op: 'write', changes: 3, undoId: UNDO_ID })).toBe(true);
+    expect(frameOk({ ...respBase, ok: true, op: 'refresh', fresh: true, summary: 'fetched 3 rows' })).toBe(true);
+    expect(frameOk({ ...respBase, ok: true, op: 'discover', candidates: 'one', ranked: [] })).toBe(true);
+    expect(frameOk({ ...respBase, ok: false, error: { code: ACCESS_ERROR_CODES.ACCESS_BUSY, message: 'try again', retryable: true } })).toBe(true);
+  });
+});
+
+describe('PR-3 — the VIEW v2: tolerant, and the new keys appear only when set (D-PR3-3)', () => {
+  it('a v2 view parses and KEEPS tables[].write, kv, refresh and access "write"', () => {
+    const parsed = accessGrantViewSchema.parse(
+      view({ access: 'write', kv: true, refresh: true, tables: [{ name: 'transactions', columns: ['amount'], write: true }, { name: 'accounts', columns: ['name'] }] }),
+    ) as Record<string, unknown> & { tables: Record<string, unknown>[] };
+    expect(parsed.access).toBe('write');
+    expect(parsed.kv).toBe(true);
+    expect(parsed.refresh).toBe(true);
+    expect(parsed.tables[0]).toEqual({ name: 'transactions', columns: ['amount'], write: true });
+    expect(parsed.tables[1]).toEqual({ name: 'accounts', columns: ['name'] });
+  });
+
+  it('a read-only view carries none of the new keys — byte-identical to a 1.1 view', () => {
+    const parsed = accessGrantViewSchema.parse(view()) as Record<string, unknown> & { tables: Record<string, unknown>[] };
+    expect(Object.keys(parsed).sort()).toEqual(['access', 'duration', 'id', 'source', 'tables', 'unattended']);
+    expect(Object.keys(parsed.tables[0]!).sort()).toEqual(['columns', 'name']);
+  });
+
+  it('withheld is never on the view: a stray one is not part of what the reader learns', () => {
+    const parsed = accessGrantViewSchema.parse(view({ tables: [{ name: 'transactions', columns: ['amount'], withheld: ['note'] }] })) as {
+      tables: Record<string, unknown>[];
+    };
+    expect('withheld' in parsed.tables[0]!).toBe(false);
+  });
+
+  it('tolerant of keys, not of shapes: write, kv and refresh are the literal true when present', () => {
+    const ask = (grantView: Record<string, unknown>) => ({ ...respBase, ok: true, op: 'request', grant: grantView });
+    expect(isMalformed(ask(view({ kv: false })))).toBe(true);
+    expect(isMalformed(ask(view({ refresh: 'yes' })))).toBe(true);
+    expect(isMalformed(ask(view({ tables: [{ name: 'transactions', columns: ['amount'], write: 'yes' }] })))).toBe(true);
+    expect(frameOk(ask(view({ kv: true, refresh: true, futureSeat: 1 })))).toBe(true); // the passing twin
+  });
+});
+
+describe('PR-3 — the grant RECORD v2: columns granted, withheld the rest, defaults OMITTED (D-PR3-2)', () => {
+  it('a 1.1 record still parses; a v2 record with every new seat set parses and keeps each seat', () => {
+    expect(parses(accessGrantSchema, grant())).toBe(true);
+    const parsed = accessGrantSchema.parse(widened({ withheld: ['note'], write: true }, { access: 'write', kv: true, refresh: true, provenance: 'chat' })) as Record<string, unknown> & {
+      scope: { tables: Record<string, unknown>[] };
+    };
+    expect(parsed.scope.tables[0]).toEqual({ name: 'transactions', columns: ['amount', 'category', 'date'], withheld: ['note'], write: true });
+    expect([parsed.access, parsed.kv, parsed.refresh, parsed.provenance]).toEqual(['write', true, true, 'chat']);
+  });
+
+  it('the parse adds no default — a record without the new seats comes back without them (absent stays absent)', () => {
+    const parsed = accessGrantSchema.parse(grant()) as Record<string, unknown> & { scope: { tables: Record<string, unknown>[] } };
+    for (const seat of ['kv', 'refresh']) expect(seat in parsed, seat).toBe(false);
+    for (const seat of ['withheld', 'write']) expect(seat in parsed.scope.tables[0]!, seat).toBe(false);
+  });
+
+  it('write, kv and refresh exist only as the literal true — false or any other value is refused (a default is spelled by omission)', () => {
+    expect(parses(accessGrantSchema, widened({ write: false }))).toBe(false);
+    expect(parses(accessGrantSchema, widened({ write: 'yes' }, { access: 'write' }))).toBe(false);
+    expect(parses(accessGrantSchema, grant({ kv: false }))).toBe(false);
+    expect(parses(accessGrantSchema, grant({ kv: 1 }))).toBe(false);
+    expect(parses(accessGrantSchema, grant({ refresh: false }))).toBe(false);
+    expect(parses(accessGrantSchema, grant({ kv: true }))).toBe(true);
+    expect(parses(accessGrantSchema, grant({ refresh: true }))).toBe(true);
+  });
+
+  it('withheld: the UNTICKED non-credential columns — no duplicates, disjoint from columns, never credential-named, ≤ 64 names of 1..64 characters', () => {
+    expect(parses(accessGrantSchema, widened({ withheld: ['note'] }))).toBe(true);
+    expect(parses(accessGrantSchema, widened({ withheld: ['note', 'note'] }))).toBe(false);
+    expect(parses(accessGrantSchema, widened({ withheld: ['amount'] }))).toBe(false); // granted AND withheld
+    for (const bad of ['api_key', 'password', 'token', 'access_token']) {
+      expect(parses(accessGrantSchema, widened({ withheld: ['note', bad] })), bad).toBe(false);
+    }
+    expect(parses(accessGrantSchema, widened({ withheld: columnsOf(ACCESS_MAX_COLUMNS) }))).toBe(true);
+    expect(parses(accessGrantSchema, widened({ withheld: columnsOf(ACCESS_MAX_COLUMNS + 1) }))).toBe(false);
+    expect(parses(accessGrantSchema, widened({ withheld: ['c'.repeat(ACCESS_COLUMN_NAME_MAX_CHARS)] }))).toBe(true);
+    expect(parses(accessGrantSchema, widened({ withheld: ['c'.repeat(ACCESS_COLUMN_NAME_MAX_CHARS + 1)] }))).toBe(false);
+    expect(parses(accessGrantSchema, widened({ withheld: [''] }))).toBe(false);
+    expect(parses(accessGrantSchema, widened({ withheld: 'note' }))).toBe(false);
+  });
+
+  it('access is "write" EXACTLY when some table carries write: true — both directions refused', () => {
+    expect(parses(accessGrantSchema, widened({ write: true }, { access: 'write' }))).toBe(true);
+    expect(parses(accessGrantSchema, widened({ write: true }))).toBe(false); // a writable table under access 'read'
+    expect(parses(accessGrantSchema, widened({}, { access: 'write' }))).toBe(false); // access 'write' with no writable table
+    const mixed = { tables: [{ name: 'transactions', columns: ['amount'], write: true }, { name: 'accounts', columns: ['name'] }] };
+    expect(parses(accessGrantSchema, grant({ access: 'write', scope: mixed }))).toBe(true);
+    expect(parses(accessGrantSchema, grant({ access: 'read', scope: mixed }))).toBe(false);
+  });
+
+  it('provenance "chat" parses — the chat card asked (R-86); any other value is refused', () => {
+    expect(parses(accessGrantSchema, grant({ provenance: 'chat' }))).toBe(true);
+    expect(parses(accessGrantSchema, grant({ provenance: 'agent' }))).toBe(false);
+  });
+
+  it('still strict at every level: an unknown seat on a v2 table or at the root is refused', () => {
+    expect(parses(accessGrantSchema, widened({ writable: true }))).toBe(false);
+    expect(parses(accessGrantSchema, widened({ write: true, writeColumns: ['amount'] }, { access: 'write' }))).toBe(false);
+    expect(parses(accessGrantSchema, grant({ kvKeys: ['theme'] }))).toBe(false);
+    expect(parses(accessGrantSchema, grant({ refresh: true, refreshEvery: 60 }))).toBe(false);
+  });
+
+  it('the ONE credential walk still covers the whole record — a credential-shaped withheld name is refused', () => {
+    expect(parses(accessGrantSchema, widened({ withheld: [OPENAI_SHAPED_KEY.slice(0, 40)] }))).toBe(false);
+    expect(parseAccessGrant(JSON.stringify(widened({ withheld: ['note'], write: true }, { access: 'write' })))?.access).toBe('write');
+  });
+});
+
+describe('PR-3 — canonicalAccessGrantIntent v2: thirteen fields, absent ≡ default in BOTH directions (D-PR3-2, F10)', () => {
+  const intentOf = (over: Record<string, unknown> = {}): string => canonicalAccessGrantIntent(accessGrantSchema.parse(grant(over)));
+  const ONE_ONE_BYTES = JSON.stringify({
+    access: 'read',
+    duration: { at: '2026-10-17T09:00:00.000Z', kind: 'until' },
+    id: GRANT_ID,
+    provenance: 'app',
+    purpose: 'to show spending by category',
+    readerAppId: 'budget',
+    scope: { tables: [{ columns: FOUR_COLUMNS, name: 'transactions' }] },
+    sourceAppId: 'ledger',
+    unattended: false,
+  });
+
+  it('1.1 → 1.2: a 1.1 record keeps its exact 1.1 intent bytes under the v2 function (a backup taken before the upgrade restores unsuspended)', () => {
+    expect(intentOf()).toBe(ONE_ONE_BYTES);
+    expect(intentOf()).not.toMatch(/"(withheld|write|kv|refresh)"/);
+  });
+
+  it('1.2 → 1.1: a v2 record whose new seats all hold their default (the one the schema can hold: withheld: []) is intent-identical to the 1.1 record', () => {
+    const defaultsOff = { scope: { tables: [{ name: 'transactions', columns: FOUR_COLUMNS, withheld: [] }] } };
+    expect(intentOf(defaultsOff)).toBe(ONE_ONE_BYTES);
+    expect(intentOf(defaultsOff)).toBe(intentOf());
+  });
+
+  it('the thirteen fields of a widened record, exactly — key-sorted at every level, each new seat IN the bytes', () => {
+    const text = canonicalAccessGrantIntent(
+      accessGrantSchema.parse(
+        widened({ withheld: ['note'], write: true }, { access: 'write', kv: true, refresh: true, provenance: 'chat', unattended: true }),
+      ),
+    );
+    expect(text).toBe(
+      JSON.stringify({
+        access: 'write',
+        duration: { at: '2026-10-17T09:00:00.000Z', kind: 'until' },
+        id: GRANT_ID,
+        kv: true,
+        provenance: 'chat',
+        purpose: 'to show spending by category',
+        readerAppId: 'budget',
+        refresh: true,
+        scope: { tables: [{ columns: ['amount', 'category', 'date'], name: 'transactions', withheld: ['note'], write: true }] },
+        sourceAppId: 'ledger',
+        unattended: true,
+      }),
+    );
+  });
+
+  it('still does NOT cover status, counters, timestamps or the reader version of a widened record', () => {
+    const wide = { scope: { tables: [{ name: 'transactions', columns: FOUR_COLUMNS, write: true }] }, access: 'write', kv: true };
+    const base = intentOf(wide);
+    expect(intentOf({ ...wide, status: 'suspended', suspendedReason: 'imported' })).toBe(base);
+    expect(intentOf({ ...wide, reads: 3, timeouts: 1, readerVersion: 40, updatedAt: '2026-10-12T09:00:00.000Z' })).toBe(base);
+  });
+});
+
+describe('PR-3 — the log entry v2: wrote, undone, refreshed (D-PR3-6)', () => {
+  const at = '2026-10-11T09:05:00.000Z';
+  const who = { grantId: GRANT_ID, readerAppId: 'budget', readerName: 'Budget' };
+  const wrote = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+    at,
+    kind: 'wrote',
+    ...who,
+    via: 'app',
+    authority: 'permission',
+    changes: 3,
+    undoId: UNDO_ID,
+    tables: ['transactions'],
+    sql: "UPDATE transactions SET category = 'food' WHERE id = 7",
+    ...over,
+  });
+  const undone = (over: Record<string, unknown> = {}): Record<string, unknown> => ({ at, kind: 'undone', ...who, via: 'user', changes: 3, tables: ['transactions'], ...over });
+  const refreshed = (over: Record<string, unknown> = {}): Record<string, unknown> => ({ at, kind: 'refreshed', ...who, via: 'app', ...over });
+
+  it('parses a wrote line (via, authority, changes, undoId, the one table, the statement), an undone line and a refreshed line', () => {
+    expect(parses(accessLogEntrySchema, wrote())).toBe(true);
+    expect(parses(accessLogEntrySchema, undone())).toBe(true);
+    expect(parses(accessLogEntrySchema, refreshed())).toBe(true);
+    expect(parses(accessLogEntrySchema, refreshed({ reason: 'timeout' }))).toBe(true);
+    expect(parseAccessLogEntry(JSON.stringify(wrote()))).toMatchObject({ kind: 'wrote', via: 'app', authority: 'permission', changes: 3, undoId: UNDO_ID });
+  });
+
+  it('via is one of ACCESS_LOG_VIAS on any kind; authority one of ACCESS_WRITE_AUTHORITIES — never the banned spelling', () => {
+    for (const via of ACCESS_LOG_VIAS) expect(parses(accessLogEntrySchema, wrote({ via })), via).toBe(true);
+    expect(parses(accessLogEntrySchema, logEntry({ via: 'chat' }))).toBe(true);
+    expect(parses(accessLogEntrySchema, wrote({ via: 'robot' }))).toBe(false);
+    for (const authority of ACCESS_WRITE_AUTHORITIES) expect(parses(accessLogEntrySchema, wrote({ authority })), authority).toBe(true);
+    expect(parses(accessLogEntrySchema, wrote({ authority: 'write-grant' }))).toBe(false);
+  });
+
+  it('authority and undoId ride ONLY a wrote line; changes ONLY a wrote or an undone line', () => {
+    expect(parses(accessLogEntrySchema, undone({ authority: 'permission' }))).toBe(false);
+    expect(parses(accessLogEntrySchema, refreshed({ authority: 'permission' }))).toBe(false);
+    expect(parses(accessLogEntrySchema, logEntry({ authority: 'permission' }))).toBe(false);
+    expect(parses(accessLogEntrySchema, undone({ undoId: UNDO_ID }))).toBe(false);
+    expect(parses(accessLogEntrySchema, logEntry({ undoId: UNDO_ID }))).toBe(false);
+    expect(parses(accessLogEntrySchema, logEntry({ changes: 3 }))).toBe(false);
+    expect(parses(accessLogEntrySchema, refreshed({ changes: 3 }))).toBe(false);
+    expect(parses(accessLogEntrySchema, logEntry({ kind: 'granted', rows: undefined, sql: undefined, changes: 1 }))).toBe(false);
+  });
+
+  it('changes is an int ≥ 0; undoId is a uuid v4', () => {
+    expect(parses(accessLogEntrySchema, wrote({ changes: 0 }))).toBe(true);
+    expect(parses(accessLogEntrySchema, wrote({ changes: -1 }))).toBe(false);
+    expect(parses(accessLogEntrySchema, wrote({ changes: 1.5 }))).toBe(false);
+    expect(parses(accessLogEntrySchema, undone({ changes: -1 }))).toBe(false);
+    expect(parses(accessLogEntrySchema, wrote({ undoId: 'u1' }))).toBe(false);
+    expect(parses(accessLogEntrySchema, wrote({ undoId: UNDO_ID.toUpperCase() }))).toBe(false);
+  });
+
+  it('a refreshed line\'s reason is ONE of ACCESS_REFRESH_REASONS — a handler\'s words never reach a line; the other kinds keep the display-line rule', () => {
+    for (const reason of ACCESS_REFRESH_REASONS) expect(parses(accessLogEntrySchema, refreshed({ reason })), reason).toBe(true);
+    for (const reason of ['took too long', 'recent', 'fetched 3 new rows', 'Timeout']) {
+      expect(parses(accessLogEntrySchema, refreshed({ reason })), reason).toBe(false);
+    }
+    expect(parses(accessLogEntrySchema, logEntry({ reason: 'took too long' }))).toBe(true);
+  });
+
+  it('every wrote, undone and refreshed line still names its grant, its reader and the reader\'s name', () => {
+    for (const make of [wrote, undone, refreshed]) {
+      for (const seat of ['grantId', 'readerAppId', 'readerName']) {
+        expect(parses(accessLogEntrySchema, make({ [seat]: undefined })), `${String(make({}).kind)} without ${seat}`).toBe(false);
+      }
+    }
+  });
+
+  it('the wrote statement is walked like a read\'s: a credential literal is refused; the passing twin is a plain UPDATE', () => {
+    expect(parses(accessLogEntrySchema, wrote({ sql: `UPDATE transactions SET note = '${OPENAI_SHAPED_KEY}' WHERE id = 7` }))).toBe(false);
+    expect(parses(accessLogEntrySchema, wrote({ sql: "UPDATE transactions SET note = 'Bearer abcdef1234567890' WHERE id = 7" }))).toBe(false);
+    expect(parses(accessLogEntrySchema, wrote({ sql: 'INSERT INTO transactions (amount, note) VALUES (12.5, \'lunch\')' }))).toBe(true);
+    expect(parses(accessLogEntrySchema, wrote({ tables: ['snug_kv'] }))).toBe(false);
+  });
+});
+
+describe('PR-3 — the undo journal entry: ROWS, never SQL (D-PR3-7; spec §22.4)', () => {
+  it('parses an update, an insert and a delete step, and an entry marked undone', () => {
+    expect(parses(accessUndoEntrySchema, undoEntry())).toBe(true);
+    expect(parses(accessUndoEntrySchema, withSteps(undoStep({ op: 'insert', columns: ['amount', 'category'], rows: [{ rowid: 41, after: [12.5, 'food'] }] })))).toBe(true);
+    expect(parses(accessUndoEntrySchema, withSteps(undoStep({ op: 'delete', columns: ['amount', 'category'], rows: [{ rowid: 7, before: [40, 'rent'] }] })))).toBe(true);
+    expect(parses(accessUndoEntrySchema, undoEntry({ undoneAt: '2026-10-11T10:00:00.000Z' }))).toBe(true);
+    expect(parses(accessUndoEntrySchema, undoEntry({ steps: [undoStep({ rows: [{ rowid: 7, before: [null, 1], after: [true, 2.5] }] })] }))).toBe(true);
+  });
+
+  it('strict at every level — no seat can carry statement text (a planted journal row with SQL has nowhere to put it)', () => {
+    expect(parses(accessUndoEntrySchema, undoEntry({ sql: 'DELETE FROM transactions WHERE 1' }))).toBe(false);
+    expect(parses(accessUndoEntrySchema, withSteps(undoStep({ sql: 'DELETE FROM transactions WHERE 1' })))).toBe(false);
+    expect(parses(accessUndoEntrySchema, withSteps(undoStep({ inverse: 'UPDATE transactions SET a = 1' })))).toBe(false);
+    expect(parses(accessUndoEntrySchema, withSteps(undoStep({ rows: [{ rowid: 7, before: ['a', 'b'], after: ['c', 'd'], where: 'id = 7' }] })))).toBe(false);
+    expect(parses(accessUndoEntrySchema, withSteps(undoStep({ op: 'replace' })))).toBe(false);
+  });
+
+  it('the op decides which values a row holds: insert → after only, update → before AND after, delete → before only', () => {
+    const insert = (row: Record<string, unknown>) => withSteps(undoStep({ op: 'insert', columns: ['amount'], rows: [row] }));
+    const update = (row: Record<string, unknown>) => withSteps(undoStep({ op: 'update', columns: ['amount'], rows: [row] }));
+    const del = (row: Record<string, unknown>) => withSteps(undoStep({ op: 'delete', columns: ['amount'], rows: [row] }));
+    expect(parses(accessUndoEntrySchema, insert({ rowid: 1, after: [1] }))).toBe(true);
+    expect(parses(accessUndoEntrySchema, insert({ rowid: 1, before: [1], after: [1] }))).toBe(false);
+    expect(parses(accessUndoEntrySchema, insert({ rowid: 1 }))).toBe(false);
+    expect(parses(accessUndoEntrySchema, update({ rowid: 1, before: [1], after: [2] }))).toBe(true);
+    expect(parses(accessUndoEntrySchema, update({ rowid: 1, after: [2] }))).toBe(false);
+    expect(parses(accessUndoEntrySchema, update({ rowid: 1, before: [1] }))).toBe(false);
+    expect(parses(accessUndoEntrySchema, del({ rowid: 1, before: [1] }))).toBe(true);
+    expect(parses(accessUndoEntrySchema, del({ rowid: 1, before: [1], after: [1] }))).toBe(false);
+    expect(parses(accessUndoEntrySchema, del({ rowid: 1, after: [1] }))).toBe(false);
+  });
+
+  it('arity: every before/after holds exactly one value per column, in column order', () => {
+    expect(parses(accessUndoEntrySchema, withSteps(undoStep({ columns: ['category', 'note'], rows: [{ rowid: 7, before: ['rent'], after: ['food', 'march'] }] })))).toBe(false);
+    expect(parses(accessUndoEntrySchema, withSteps(undoStep({ columns: ['category', 'note'], rows: [{ rowid: 7, before: ['rent', 'march'], after: ['food', 'march', 'x'] }] })))).toBe(false);
+    expect(parses(accessUndoEntrySchema, withSteps(undoStep({ op: 'insert', columns: ['a', 'b', 'c'], rows: [{ rowid: 7, after: [1, 2] }] })))).toBe(false);
+    expect(parses(accessUndoEntrySchema, withSteps(undoStep({ op: 'delete', columns: ['a', 'b'], rows: [{ rowid: 7, before: [1, 2] }, { rowid: 8, before: [1] }] })))).toBe(false);
+  });
+
+  it('steps 1..64; rows ≤ ACCESS_WRITE_MAX_ROWS per step; columns 1..64; a table is a shareable app table name', () => {
+    expect(parses(accessUndoEntrySchema, undoEntry({ steps: [] }))).toBe(false);
+    const tiny = (i: number) => undoStep({ op: 'insert', columns: ['a'], rows: [{ rowid: i, after: [i] }] });
+    expect(parses(accessUndoEntrySchema, undoEntry({ steps: Array.from({ length: 64 }, (_, i) => tiny(i)) }))).toBe(true);
+    expect(parses(accessUndoEntrySchema, undoEntry({ steps: Array.from({ length: 65 }, (_, i) => tiny(i)) }))).toBe(false);
+    const rows = (n: number) => Array.from({ length: n }, (_, i) => ({ rowid: i + 1, after: [i] }));
+    expect(parses(accessUndoEntrySchema, withSteps(undoStep({ op: 'insert', columns: ['a'], rows: rows(ACCESS_WRITE_MAX_ROWS) })))).toBe(true);
+    expect(parses(accessUndoEntrySchema, withSteps(undoStep({ op: 'insert', columns: ['a'], rows: rows(ACCESS_WRITE_MAX_ROWS + 1) })))).toBe(false);
+    expect(parses(accessUndoEntrySchema, withSteps(undoStep({ op: 'insert', columns: [], rows: [{ rowid: 1, after: [] }] })))).toBe(false);
+    const many = columnsOf(ACCESS_MAX_COLUMNS + 1);
+    expect(parses(accessUndoEntrySchema, withSteps(undoStep({ op: 'insert', columns: many, rows: [{ rowid: 1, after: many.map(() => 1) }] })))).toBe(false);
+    for (const table of ['snug_kv', 'sqlite_master', 'app_x__t', '1t']) {
+      expect(parses(accessUndoEntrySchema, withSteps(undoStep({ table }))), table).toBe(false);
+    }
+  });
+
+  it('the seats around the rows: id and grantId uuid v4, authority and via from their sets, a reader name, ISO instants; rowid an int; cells scalars', () => {
+    expect(parses(accessUndoEntrySchema, undoEntry({ id: 'undo-1' }))).toBe(false);
+    expect(parses(accessUndoEntrySchema, undoEntry({ grantId: 'g1' }))).toBe(false);
+    for (const authority of ACCESS_WRITE_AUTHORITIES) expect(parses(accessUndoEntrySchema, undoEntry({ authority })), authority).toBe(true);
+    expect(parses(accessUndoEntrySchema, undoEntry({ authority: 'write-grant' }))).toBe(false);
+    for (const via of ACCESS_LOG_VIAS) expect(parses(accessUndoEntrySchema, undoEntry({ via })), via).toBe(true);
+    expect(parses(accessUndoEntrySchema, undoEntry({ via: 'robot' }))).toBe(false);
+    expect(parses(accessUndoEntrySchema, undoEntry({ readerName: '' }))).toBe(false);
+    expect(parses(accessUndoEntrySchema, undoEntry({ readerName: undefined }))).toBe(false);
+    expect(parses(accessUndoEntrySchema, undoEntry({ at: 'now' }))).toBe(false);
+    expect(parses(accessUndoEntrySchema, undoEntry({ expiresAt: undefined }))).toBe(false);
+    expect(parses(accessUndoEntrySchema, undoEntry({ undoneAt: 'later' }))).toBe(false);
+    expect(parses(accessUndoEntrySchema, withSteps(undoStep({ rows: [{ rowid: 1.5, before: ['a', 'b'], after: ['c', 'd'] }] })))).toBe(false);
+    expect(parses(accessUndoEntrySchema, withSteps(undoStep({ rows: [{ rowid: '7', before: ['a', 'b'], after: ['c', 'd'] }] })))).toBe(false);
+    expect(parses(accessUndoEntrySchema, withSteps(undoStep({ rows: [{ rowid: 7, before: [{ a: 1 }, 'b'], after: ['c', 'd'] }] })))).toBe(false);
+    expect(parses(accessUndoEntrySchema, withSteps(undoStep({ rows: [{ rowid: 7, before: [['a'], 'b'], after: ['c', 'd'] }] })))).toBe(false);
+  });
+
+  it('the serialised entry is capped at ACCESS_UNDO_MAX_BYTES: exactly 64 KiB passes, one byte more refuses', () => {
+    /** One update step of `note` cells: full rows, then one row whose two cells are tuned to the exact byte. */
+    const undoOfBytes = (target: number): Record<string, unknown> => {
+      const rows: { rowid: number; before: string[]; after: string[] }[] = [];
+      const make = (): Record<string, unknown> => withSteps(undoStep({ columns: ['note'], rows }));
+      const full = 'x'.repeat(ACCESS_PARAM_STRING_MAX_CHARS);
+      while (utf8(make()) + 2 * ACCESS_PARAM_STRING_MAX_CHARS + 80 <= target) rows.push({ rowid: rows.length + 1, before: [full], after: [full] });
+      rows.push({ rowid: rows.length + 1, before: [''], after: [''] });
+      const room = target - utf8(make());
+      expect(room).toBeGreaterThanOrEqual(0);
+      expect(room).toBeLessThanOrEqual(2 * ACCESS_PARAM_STRING_MAX_CHARS);
+      const last = rows[rows.length - 1]!;
+      const first = Math.min(room, ACCESS_PARAM_STRING_MAX_CHARS);
+      last.before = ['y'.repeat(first)];
+      last.after = ['z'.repeat(room - first)];
+      return make();
+    };
+    const atCap = undoOfBytes(ACCESS_UNDO_MAX_BYTES);
+    expect(utf8(atCap)).toBe(ACCESS_UNDO_MAX_BYTES);
+    expect(parses(accessUndoEntrySchema, atCap)).toBe(true);
+    const over = undoOfBytes(ACCESS_UNDO_MAX_BYTES + 1);
+    expect(utf8(over)).toBe(ACCESS_UNDO_MAX_BYTES + 1);
+    expect(parses(accessUndoEntrySchema, over)).toBe(false);
+  });
+
+  it('EVERY captured cell is walked UNDER ITS COLUMN: a Bearer token, a JWT or a provider key in a value under a neutral column is a refusal', () => {
+    const cell = (value: unknown, column = 'note', where: 'before' | 'after' = 'after') =>
+      withSteps(
+        undoStep({
+          columns: ['category', column],
+          rows: [{ rowid: 7, before: ['rent', where === 'before' ? value : 'march'], after: ['food', where === 'after' ? value : 'march'] }],
+        }),
+      );
+    expect(parses(accessUndoEntrySchema, cell('Bearer abcdef1234567890xyz'))).toBe(false);
+    expect(parses(accessUndoEntrySchema, cell('see Bearer abcdef1234567890xyz now'))).toBe(false);
+    expect(parses(accessUndoEntrySchema, cell(JWT, 'note', 'before'))).toBe(false);
+    expect(parses(accessUndoEntrySchema, cell(OPENAI_SHAPED_KEY))).toBe(false);
+    expect(parses(accessUndoEntrySchema, cell('https://alice:hunter2@example.com/x'))).toBe(false);
+    expect(parses(accessUndoEntrySchema, withSteps(undoStep({ op: 'insert', columns: ['note'], rows: [{ rowid: 9, after: [OPENAI_SHAPED_KEY] }] })))).toBe(false);
+    // The passing twins: prose about a bearer, and an ordinary value.
+    expect(parses(accessUndoEntrySchema, cell('pay the bearer'))).toBe(true);
+    expect(parses(accessUndoEntrySchema, cell('lunch with Sam'))).toBe(true);
+  });
+
+  it('…and the column is the key the walk judges by: a high-entropy value is refused under a credential-ish column, admitted under a neutral one', () => {
+    const under = (column: string) =>
+      withSteps(undoStep({ columns: ['category', column], rows: [{ rowid: 7, before: ['rent', 'old'], after: ['food', HIGH_ENTROPY] }] }));
+    expect(findRecordCredential({ session_token: HIGH_ENTROPY })?.reason).toBe('high-entropy');
+    expect(findRecordCredential([HIGH_ENTROPY])).toBeUndefined(); // an array element walked with NO key would miss it
+    expect(parses(accessUndoEntrySchema, under('session_token'))).toBe(false);
+    expect(parses(accessUndoEntrySchema, under('note'))).toBe(true);
+  });
+
+  it('parseAccessUndoEntry reads a good entry and answers undefined on junk, a strict failure or a credential cell', () => {
+    expect(parseAccessUndoEntry(JSON.stringify(undoEntry()))?.id).toBe(UNDO_ID);
+    for (const raw of ['', null, undefined, '{', 'null', '[]', JSON.stringify(undoEntry({ sql: 'x' })), JSON.stringify(undoEntry({ steps: [undoStep({ rows: [{ rowid: 7, before: ['a', 'b'], after: ['c', OPENAI_SHAPED_KEY] }] })] }))]) {
+      expect(parseAccessUndoEntry(raw), String(raw)).toBeUndefined();
+    }
+  });
+});
+
+describe('PR-3 — accessWants: ADR-0076 §11\'s declaration, defined now (D-PR3-7; PR-5 parses it from the HTML)', () => {
+  const want = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+    purpose: 'to show spending by category',
+    hints: { words: ['spending'], tables: ['transactions'] },
+    ...over,
+  });
+
+  it('1..4 entries of { purpose, hints? }', () => {
+    expect(parses(accessWantsSchema, [want()])).toBe(true);
+    expect(parses(accessWantsSchema, [{ purpose: 'to plan meals from the pantry' }])).toBe(true);
+    expect(parses(accessWantsSchema, Array.from({ length: ACCESS_WANTS_MAX_ENTRIES }, () => want()))).toBe(true);
+    expect(parses(accessWantsSchema, Array.from({ length: ACCESS_WANTS_MAX_ENTRIES + 1 }, () => want()))).toBe(false);
+    expect(parses(accessWantsSchema, [])).toBe(false);
+    expect(parses(accessWantsSchema, want())).toBe(false);
+  });
+
+  it('no extra seat: an entry naming an access level, an app, a source or a table list is refused (strict)', () => {
+    for (const extra of [{ access: 'write' }, { appId: 'ledger' }, { source: 'Ledger' }, { tables: ['transactions'] }, { refresh: true }]) {
+      expect(parses(accessWantsSchema, [want(extra)]), JSON.stringify(extra)).toBe(false);
+    }
+    expect(parses(accessWantsSchema, [want({ hints: { words: ['a'], apps: ['ledger'] } })])).toBe(false);
+    expect(parses(accessWantsSchema, [{ hints: { words: ['a'] } }])).toBe(false); // purpose is required
+  });
+
+  it('the purpose and the hints obey the ask\'s own rules (one display-safe line; shareable table names; never a credential)', () => {
+    expect(parses(accessWantsSchema, [want({ purpose: 'to show‮spending' })])).toBe(false);
+    expect(parses(accessWantsSchema, [want({ purpose: `use ${OPENAI_SHAPED_KEY}` })])).toBe(false);
+    expect(parses(accessWantsSchema, [want({ purpose: 'p'.repeat(ACCESS_PURPOSE_MAX_CHARS + 1) })])).toBe(false);
+    expect(parses(accessWantsSchema, [want({ hints: { tables: ['snug_kv'] } })])).toBe(false);
+  });
+
+  it('the serialised declaration is capped at ACCESS_WANTS_MAX_BYTES: exactly 2 KiB passes, one byte more refuses', () => {
+    /** Four entries; hint words added until only entry 0's purpose length is left to tune to the exact byte. */
+    const wantsOfBytes = (target: number): Record<string, unknown>[] => {
+      const words: string[][] = [[], [], [], []];
+      const make = (first: number): Record<string, unknown>[] =>
+        words.map((list, i) => ({ purpose: 'p'.repeat(i === 0 ? first : ACCESS_PURPOSE_MAX_CHARS), hints: { words: list } }));
+      for (let n = 0; utf8(make(1)) + (ACCESS_PURPOSE_MAX_CHARS - 1) < target; n += 1) {
+        words[n % 4]!.push(`w${n}`.padEnd(ACCESS_HINT_WORD_MAX_CHARS, 'w'));
+      }
+      const first = 1 + (target - utf8(make(1)));
+      expect(first).toBeGreaterThanOrEqual(1);
+      expect(first).toBeLessThanOrEqual(ACCESS_PURPOSE_MAX_CHARS);
+      return make(first);
+    };
+    const atCap = wantsOfBytes(ACCESS_WANTS_MAX_BYTES);
+    expect(utf8(atCap)).toBe(ACCESS_WANTS_MAX_BYTES);
+    expect(parses(accessWantsSchema, atCap)).toBe(true);
+    const over = wantsOfBytes(ACCESS_WANTS_MAX_BYTES + 1);
+    expect(utf8(over)).toBe(ACCESS_WANTS_MAX_BYTES + 1);
+    expect(parses(accessWantsSchema, over)).toBe(false);
+  });
+
+  it('parseAccessWants reads a good declaration and answers undefined on junk', () => {
+    expect(parseAccessWants(JSON.stringify([want()]))).toEqual([want()]);
+    for (const raw of ['', null, undefined, '{', 'null', '{}', '[]', JSON.stringify([want({ access: 'write' })])]) {
+      expect(parseAccessWants(raw), String(raw)).toBeUndefined();
+    }
+  });
+});
+
+describe('PR-3 — accessRequestHash with access (D-PR3-4: a declined read ask does not decline a later write ask, nor the reverse)', () => {
+  const hints = { words: ['spending', 'category'], tables: ['transactions', 'accounts'] };
+
+  it('absent and "read" are the SAME ask — the 1.1 bytes, so a decline recorded before the upgrade still matches', () => {
+    expect(accessRequestHash({ hints, access: 'read' })).toBe(accessRequestHash({ hints }));
+    expect(accessRequestHash({ access: 'read' })).toBe(recordGuards.fnv1a64Hex('{"tables":[],"words":[]}'));
+  });
+
+  it('"write" is a DIFFERENT ask from the same hints read — FNV-1a 64 over the key-sorted JSON with access', () => {
+    expect(accessRequestHash({ hints, access: 'write' })).not.toBe(accessRequestHash({ hints }));
+    expect(accessRequestHash({ access: 'write' })).toBe(recordGuards.fnv1a64Hex('{"access":"write","tables":[],"words":[]}'));
+    expect(accessRequestHash({ hints, access: 'write', renew: GRANT_ID })).toBe(
+      recordGuards.fnv1a64Hex(`{"access":"write","renew":"${GRANT_ID}","tables":["accounts","transactions"],"words":["category","spending"]}`),
+    );
+  });
+
+  it('a parsed request frame carrying access hashes with it; the purpose is still excluded', () => {
+    const hashOf = (over: Record<string, unknown>): string => {
+      const parsed = accessRequestSchema.parse(askFrame(over));
+      if (parsed.op !== 'request') throw new Error('fixture must be a request');
+      return accessRequestHash(parsed);
+    };
+    expect(hashOf({ hints, access: 'write' })).not.toBe(hashOf({ hints }));
+    expect(hashOf({ hints, access: 'write', purpose: 'to fix categories' })).toBe(hashOf({ hints, access: 'write' }));
   });
 });

@@ -16,7 +16,7 @@ import type { UserDb } from '@snugprotocol/db';
 import type { ScheduledTask } from '@snugprotocol/protocol';
 
 import type { SnugPlatform } from '../platform/platform.js';
-import { RUNNING_CHIP } from '../schedule/copy.js';
+import { REFRESH_RUN, RUNNING_CHIP } from '../schedule/copy.js';
 import type { StepExecutor, StepOutcome } from '../schedule/engine-types.js';
 import { RunningChip } from '../schedule/RunningChip.js';
 import { beginDelegatedRun, clearTouchedGeneration, endDelegatedRun } from '../schedule/runPlacement.js';
@@ -250,6 +250,106 @@ describe('RunningChip — a run delegated to the open app (TASK-20261010-host-br
     });
     expect(el.querySelector('.schedule-running-label')?.textContent).toBe(RUNNING_CHIP.label);
     expect(el.querySelector('[data-testid="schedule-running-chip"]')?.getAttribute('aria-label')).toBe(`${RUNNING_CHIP.label}: Hourly ledger digest`);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// TASK-20261010-host-broker PR-3 (contract v2 D-PR3-19; DS8, F13) — a REFRESH another app asked
+// for is visible too. It runs the SOURCE's own code on its open frame as a delegated run with
+// `posture: 'refresh'`, and no schedule is running, so the scheduler's view says nothing; the chip
+// renders from the placement store instead: the label `RUNNING_CHIP.fetching(<source>)`, the title
+// the record's own (`REFRESH_RUN.title(<asker>)`), the accessible name "<source> is fetching new
+// data — <asker> asked", and NO act in PR-3 (the run is bounded by 90 s; *cancel* is a rider). A
+// delegated run with the default posture and nothing running stays invisible (today's rule).
+//
+// `posture` is what `beginDelegatedRun`'s input gains in PR-3; until then a LOCAL structural type
+// stands in (the implementation lane replaces it with the real field at Gate 5).
+// ---------------------------------------------------------------------------------------------
+
+describe('RunningChip — a refresh another app asked for (TASK-20261010-host-broker PR-3)', () => {
+  type Posture = 'schedule' | 'refresh';
+  type PosturedBegin = Parameters<typeof beginDelegatedRun>[0] & { posture?: Posture };
+
+  const ended: Array<() => void> = [];
+  afterEach(() => {
+    for (const end of ended.splice(0)) end();
+  });
+
+  function delegate(input: PosturedBegin): void {
+    const begun = beginDelegatedRun(input);
+    expect(begun.ok).toBe(true);
+    ended.push(() => {
+      endDelegatedRun(input.appId, input.runId);
+      clearTouchedGeneration(input.appId, input.generation);
+    });
+  }
+
+  const refreshRun = (): PosturedBegin => ({
+    appId: 'ledger',
+    appName: 'Ledger',
+    runId: 'refresh-run-1',
+    taskId: 'access-refresh',
+    title: REFRESH_RUN.title('Budget'),
+    generation: 1,
+    posture: 'refresh',
+  });
+
+  it('nothing scheduled is running, a refresh is in flight → the chip: label `RUNNING_CHIP.fetching(source)`, the title `REFRESH_RUN.title(asker)`, role=status, the accessible name "<source> is fetching new data — <asker> asked", and NO act', async () => {
+    await initScheduler(deps());
+    const el = await mount();
+    expect(el.querySelector('[data-testid="schedule-running-chip"]')).toBeNull();
+    await act(async () => {
+      delegate(refreshRun());
+    });
+    await vi.waitFor(() => expect(el.querySelector('[data-testid="schedule-running-chip"]')).not.toBeNull());
+    expect(schedulerStore.get().running, 'the scheduler has nothing running').toBeUndefined();
+    const chip = el.querySelector('[data-testid="schedule-running-chip"]')!;
+    expect(chip.getAttribute('role')).toBe('status');
+    expect(chip.querySelector('.schedule-running-label')?.textContent).toBe(RUNNING_CHIP.fetching('Ledger'));
+    expect(chip.querySelector('.schedule-running-title')?.textContent).toBe(REFRESH_RUN.title('Budget'));
+    expect(chip.getAttribute('aria-label')).toBe('Ledger is fetching new data — Budget asked');
+    expect(chip.querySelector('button'), 'no act in PR-3 — the run is bounded').toBeNull();
+    expect(chip.textContent).not.toContain(RUNNING_CHIP.cancel);
+  });
+
+  it('the chip leaves when the refresh ends', async () => {
+    await initScheduler(deps());
+    const el = await mount();
+    const run = refreshRun();
+    await act(async () => {
+      delegate(run);
+    });
+    await vi.waitFor(() => expect(el.querySelector('[data-testid="schedule-running-chip"]')).not.toBeNull());
+    await act(async () => {
+      endDelegatedRun(run.appId, run.runId);
+    });
+    await vi.waitFor(() => expect(el.querySelector('[data-testid="schedule-running-chip"]')).toBeNull());
+    expect(el.innerHTML).toBe('');
+  });
+
+  it('NEGATIVE: a delegated run with the DEFAULT posture and nothing scheduled running → no chip (today’s rule: the schedule chip follows the scheduler)', async () => {
+    await initScheduler(deps());
+    const el = await mount();
+    await act(async () => {
+      delegate({ appId: 'ledger', appName: 'Ledger', runId: 'run-x', taskId: 't-other', title: 'Hourly ledger digest', generation: 1 });
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(el.querySelector('[data-testid="schedule-running-chip"]')).toBeNull();
+    expect(el.innerHTML).toBe('');
+  });
+
+  it('NEGATIVE: an explicit `posture: "schedule"` without a running schedule → no chip either', async () => {
+    await initScheduler(deps());
+    const el = await mount();
+    await act(async () => {
+      delegate({ appId: 'ledger', appName: 'Ledger', runId: 'run-s', taskId: 't-other', title: 'Hourly ledger digest', generation: 1, posture: 'schedule' });
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(el.querySelector('[data-testid="schedule-running-chip"]')).toBeNull();
   });
 });
 

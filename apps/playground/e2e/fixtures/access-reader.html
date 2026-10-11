@@ -20,6 +20,14 @@
   survives a reopen), #changed the last access-changed hint, and #log EVERY access answer and
   access-changed hint this page ever received — the whole of what the reader learned, so the spec
   can prove it never saw the user's other apps.
+  TASK-20261010-host-broker PR-3 (AC28; D-PR3-4/14): five more user acts, each a button — #ask-write
+  asks with `access: 'write'` (the plain #ask stays the read ask every earlier clause and the mobile
+  and kit specs use), #write sends ONE literal-valued UPDATE of `transactions` whose WHERE names a
+  granted column (`op: 'write'` → #result "changes: N"), #refresh asks the source to fetch first
+  (`op: 'refresh'` → #result "fresh: true" / "fresh: false · recent"), and #peek / #fetches READ
+  (a query) what the write and the fetch changed into #peeked. The helper block is the 1.1 one —
+  its `snugAccessRequest(op, fields)` already carries any op; re-render it from KB 87 v2 per the
+  SYNC RULE once that page lands.
 -->
 <html lang="en">
 <head>
@@ -299,6 +307,12 @@
     const ACCOUNTS_SQL = 'SELECT name, balance FROM accounts';
     /** An unbounded read: the host's wall clock must stop it, not this page. */
     const BOMB_SQL = 'WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c) SELECT count(*) FROM c';
+    /** PR-3: ONE plain UPDATE, literal values, a WHERE on a granted column — the change the user can undo. */
+    const WRITE_SQL = "UPDATE transactions SET note = 'checked' WHERE category = 'music'";
+    /** What that change touched, read back with a query. */
+    const NOTE_SQL = "SELECT note FROM transactions WHERE category = 'music'";
+    /** The fetching source's counter (access-source-fetch.html): how many fetches, and who asked last. */
+    const FETCHES_SQL = 'SELECT n, asked_by FROM fetches';
 
     // What this page has heard from the host about access — the module-level store the
     // listeners above write and the component reads.
@@ -330,6 +344,7 @@
       const [held, setHeld] = usePersistedState('access-held', null);
       const [status, setStatus] = useState('ready');
       const [result, setResult] = useState('');
+      const [peeked, setPeeked] = useState('');
       const [, setTick] = useState(0);
       useEffect(() => {
         const rerender = () => setTick((n) => n + 1);
@@ -343,13 +358,14 @@
         if (HEARD.changed) setStatus('access-changed ' + HEARD.changed);
       }, [HEARD.changed]);
 
-      // A user act: ask to read another app's data. Never on load.
-      const ask = async () => {
+      // A user act: ask to read another app's data (PR-3: or to read AND change it). Never on load.
+      const ask = async (wantsWrite) => {
         setStatus('request: waiting');
         setResult('');
         const asked = await snugAccessRequest('request', {
           purpose: 'to show spending by category',
           hints: { tables: ['transactions'], words: ['spending', 'category'] },
+          ...(wantsWrite === true ? { access: 'write' } : {}),
         });
         if (!asked.ok) {
           setStatus('request: ' + asked.error.code);
@@ -378,6 +394,57 @@
         setResult('rows: ' + answer.rows.length + ' · columns: ' + answer.columns.join(', '));
       };
 
+      // PR-3: one change through the host's Write Broker — the answer is a count, never a row.
+      const write = async (grantId) => {
+        if (!grantId) {
+          setStatus('write: nothing held');
+          return;
+        }
+        setStatus('write: waiting');
+        setResult('');
+        const answer = await snugAccessRequest('write', { grantId, sql: WRITE_SQL });
+        if (!answer.ok) {
+          setStatus('write: ' + answer.error.code);
+          setResult(describeError(answer.error));
+          return;
+        }
+        setStatus('write: ok');
+        setResult('changes: ' + answer.changes);
+      };
+
+      // PR-3: ask the source to fetch new data before reading it.
+      const refresh = async (grantId) => {
+        if (!grantId) {
+          setStatus('refresh: nothing held');
+          return;
+        }
+        setStatus('refresh: waiting');
+        setResult('');
+        const answer = await snugAccessRequest('refresh', { grantId });
+        if (!answer.ok) {
+          setStatus('refresh: ' + answer.error.code);
+          setResult(describeError(answer.error));
+          return;
+        }
+        setStatus('refresh: ok');
+        setResult('fresh: ' + answer.fresh + (answer.reason ? ' · ' + answer.reason : ''));
+      };
+
+      // PR-3: read back what a change or a fetch touched (a query, into #peeked).
+      const peek = async (grantId, sql, say) => {
+        if (!grantId) {
+          setPeeked('nothing held');
+          return;
+        }
+        setPeeked('waiting');
+        const answer = await snugAccessRequest('query', { grantId, sql });
+        if (!answer.ok) {
+          setPeeked(answer.error.code);
+          return;
+        }
+        setPeeked(answer.rows.length === 0 ? 'no rows' : say(answer.rows[0]));
+      };
+
       const list = async () => {
         setStatus('list: waiting');
         const answer = await snugAccessRequest('list', {});
@@ -396,17 +463,23 @@
         <main>
           <h1>Budget</h1>
           <div>
-            <button type="button" id="ask" onClick={ask}>use another app's data</button>
+            <button type="button" id="ask" onClick={() => ask(false)}>use another app's data</button>
+            <button type="button" id="ask-write" onClick={() => ask(true)}>ask to read and change data</button>
             <button type="button" id="query" onClick={() => read(heldId, SPENDING_SQL)}>show spending</button>
             <button type="button" id="query-accounts" onClick={() => read(heldId, ACCOUNTS_SQL)}>read accounts</button>
             <button type="button" id="bomb" onClick={() => read(heldId, BOMB_SQL)}>count forever</button>
             <button type="button" id="requery" disabled={!HEARD.changed} onClick={() => read(HEARD.changed, SPENDING_SQL)}>read again after the change</button>
             <button type="button" id="list" onClick={list}>what can I read</button>
+            <button type="button" id="write" onClick={() => write(heldId)}>mark the music row checked</button>
+            <button type="button" id="peek" onClick={() => peek(heldId, NOTE_SQL, (row) => 'note: ' + row[0])}>show the music note</button>
+            <button type="button" id="refresh" onClick={() => refresh(heldId)}>ask for fresh data</button>
+            <button type="button" id="fetches" onClick={() => peek(heldId, FETCHES_SQL, (row) => 'fetches: ' + row[0] + ' · asked by ' + row[1])}>count the fetches</button>
           </div>
           <div id="status">{status}</div>
           <div id="result">{result}</div>
           <div id="held">{heldId || 'none'}</div>
           <div id="changed">{HEARD.changed ? 'access-changed ' + HEARD.changed : ''}</div>
+          <div id="peeked">{peeked}</div>
           <pre id="view">{held ? JSON.stringify(held) : ''}</pre>
           <pre id="log">{HEARD.log.join('\n')}</pre>
         </main>
