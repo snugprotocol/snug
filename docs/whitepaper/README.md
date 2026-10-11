@@ -9,7 +9,7 @@ apps, read or write with an undo).
 | | |
 |---|---|
 | **Source** | [`src/paper.html`](src/paper.html) · [`src/paper.css`](src/paper.css) · [`src/figures/`](src/figures/) |
-| **Output** | [`dist/snug-protocol-whitepaper.pdf`](dist/) — A4, 35 pages, 11 figures |
+| **Output** | [`dist/snug-protocol-whitepaper.pdf`](dist/) — A4, 36 pages, 11 figures |
 | **Spec fixture** | [`../spec-drafts/SPEC.md`](../spec-drafts/SPEC.md) + `packages/protocol/schemas/` |
 | **Tasks** | edition 5: `TASK-20261010-host-broker` (PR-3) · edition 4: `TASK-20261010-cross-app-access` · edition 3: `TASK-20260822-spec-10-final` · edition 2: `TASK-20260820-spec-v03-whitepaper` · edition 1: `TASK-20260807-protocol-whitepaper` |
 
