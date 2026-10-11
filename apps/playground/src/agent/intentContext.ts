@@ -11,13 +11,21 @@
  * holding the app's code plus the rewrite instruction is one tool call away from rewriting
  * the app, so the data lane must not hold them. Context scoping and tool scoping are two
  * locks on the same door — the router owns the other one.
+ *
+ * THE CHAT DOOR (TASK-20261010-host-broker PR-2, D-PR2-10; B-Q5): when the hook materialised
+ * another app's tables for a DATA turn, the data lane's block carries `renderSharedDdl`'s
+ * framing of them — names, types and counts, never a row — after the app's own DDL and before
+ * the doc titles, under its OWN `CONTEXT_CAPS.schema` cap (the app's DDL keeps its own; the
+ * truncation marker applies per block). No other lane ever carries it, whatever it is handed.
  */
 
 import type { UserDb } from '@snugprotocol/db';
 import { isFeatureIntent, laneForIntent, type ChatIntent } from '@snugprotocol/protocol';
 
+import type { MaterialisedSet } from '../access/service.js';
 import { buildAppTurnContext, CONTEXT_CAPS, type AppTurnContext } from './appContext.js';
 import { buildProviderContextBlock } from './providerContext.js';
+import { renderSharedDdl } from './sharedDdl.js';
 
 /** Cap on the DDL shown to a data turn — the same budget the builder context uses. */
 const DATA_SCHEMA_CAP = CONTEXT_CAPS.schema;
@@ -50,6 +58,12 @@ export function tableSummaries(db: UserDb, appId: string): string[] {
     });
 }
 
+/** The chat door's seat (PR-2): the materialised set a DATA turn may be told about, dated on the engine's clock. */
+export interface IntentContextOptions {
+  shared?: MaterialisedSet;
+  now?: number;
+}
+
 /**
  * Build the turn context for an intent.
  *
@@ -61,6 +75,7 @@ export async function buildIntentTurnContext(
   appId: string | undefined,
   intent: ChatIntent,
   threadId: string,
+  options?: IntentContextOptions,
 ): Promise<AppTurnContext> {
   // `schema_change` collapses into the feature lane execution-wise at v1 (owner decision
   // (c)): it routes through the existing `schema_apply` tool, which needs the same code
@@ -100,6 +115,11 @@ export async function buildIntentTurnContext(
         ? capText(schema.objects.map((object) => object.ddl).join(';\n'), DATA_SCHEMA_CAP)
         : '(this app has no data tables yet — none registered)',
     );
+    // The chat door's tables, for the DATA lane only (the header): the host's framing, never a row.
+    if (lane === 'data' && options?.shared !== undefined) {
+      const shared = renderSharedDdl(options.shared, options.now ?? Date.now());
+      if (shared !== '') parts.push(capText(shared, DATA_SCHEMA_CAP));
+    }
   }
 
   const docs = db.listAppDocs(appId);

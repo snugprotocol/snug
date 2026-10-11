@@ -21,6 +21,12 @@
 // reader's view closed, a newer frame generation, a session reset, a newer ask replacing it —
 // records nothing either.
 //
+// AN ASK THE CHAT'S AI MADE (TASK-20261010-host-broker PR-2; D-PR2-11; ADR-0076 §2) is parked by
+// `userAsk.ts` as the USER's ask (`provenance: 'user'` — the log admits no third provenance until
+// PR-3) carrying the AI's purpose, the ask's semantic hash (so *don't allow* records it) and
+// `askedIn: 'chat'`, which is what the sheet reads to say where the words came from. The pending
+// shape is otherwise unchanged; nothing persisted gains a key (D-PR2-16).
+//
 // THE YIELD RULE. The sheet never opens over a network or open-url confirm (`mayOpenReview`):
 // those are the app's own pending asks to the user too, and two host sheets stacked is a sheet
 // the user did not mean to answer.
@@ -74,6 +80,8 @@ export interface PendingAccessRequest {
   /** Shown quoted under "Budget says:", never trusted. */
   purpose: string;
   provenance: 'app' | 'user';
+  /** The user's ask, made by the chat's AI from its card (PR-2): the sheet quotes the purpose as the AI's and offers *don't allow*. */
+  askedIn?: 'chat';
   /** A grant this ask renews (one of THIS reader's). */
   renew?: string;
   candidates: RankedSources;
@@ -179,10 +187,12 @@ export interface ParkAccessRequestInput {
   generation: number;
   purpose: string;
   provenance: 'app' | 'user';
+  /** The chat's AI asked, from its card (PR-2). */
+  askedIn?: 'chat';
   candidates: RankedSources;
   hints?: AccessHints;
   renew?: { grantId: string; sourceAppId: string; tables: string[] };
-  /** The ask's semantic hash — what *don't allow* records (app asks). */
+  /** The ask's semantic hash — what *don't allow* records (app asks, and the chat's asks). */
   hash?: string;
   /** Hears the outcome once, with the grant when one was written. */
   settle?: (outcome: ConsentOutcome, grant?: AnyAccessGrant) => void;
@@ -273,6 +283,7 @@ export function parkAccessRequest(input: ParkAccessRequestInput): PendingAccessR
     generation: input.generation,
     purpose: input.purpose,
     provenance: input.provenance,
+    ...(input.askedIn !== undefined ? { askedIn: input.askedIn } : {}),
     ...(input.renew !== undefined ? { renew: input.renew.grantId } : {}),
     candidates: input.candidates,
     ...(preselect !== undefined ? { preselect } : {}),

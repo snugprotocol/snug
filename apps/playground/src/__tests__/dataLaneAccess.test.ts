@@ -21,7 +21,7 @@
 // The real memory user db and the real `scratchRun`: the attach is proved by the JOIN's
 // answer, and a spy on `scratchRun` only records WHAT it was handed and WHEN.
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 
 import type { RecordReadOutcome, MaterialisedSet, MaterialisedTable } from '../access/service.js';
 import {
@@ -94,7 +94,7 @@ interface Harness {
   /** Every `recordRead` call, in order — and the order it landed in relative to `scratchRun`. */
   records: Array<{ grantIds: readonly string[]; sql: string }>;
   events: string[];
-  scratch: ReturnType<typeof vi.spyOn>;
+  scratch: MockInstance<Db['scratchRun']>;
 }
 
 /** The reader (Budget) with its own `envelopes` table, and a recording `recordRead` seat. */

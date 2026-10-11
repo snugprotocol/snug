@@ -210,6 +210,39 @@ export class UserDbError extends Error {
   }
 }
 
+/**
+ * Create every attached table in an opened scratch copy and fill it (D-PR2-9): UNTYPED columns
+ * (the rows keep their storage class), one prepared INSERT per table. Names are checked against
+ * sqlite_master (any object, any case) and against the tables attached before — a collision, or
+ * any failure to create or fill, throws SCRATCH_UNAVAILABLE naming the table BEFORE a statement
+ * runs. Every name and column is a quoted identifier: nothing an app chose is ever SQL here.
+ */
+function attachScratchTables(scratch: Database, attach: readonly ScratchAttachTable[]): void {
+  const attached = new Set<string>();
+  for (const table of attach) {
+    const lower = table.name.toLowerCase();
+    const held = selectRows(scratch, 'SELECT 1 FROM sqlite_master WHERE lower(name) = ? LIMIT 1', [lower]).length > 0;
+    if (held || attached.has(lower)) {
+      throw new UserDbError(USERDB_ERROR_CODES.SCRATCH_UNAVAILABLE, `cannot attach "${table.name}": the name already exists in the copy`);
+    }
+    const columnList = table.columns.map(quoteIdent).join(', ');
+    try {
+      scratch.run(`CREATE TABLE ${quoteIdent(table.name)} (${columnList})`);
+      if (table.rows.length > 0) {
+        const insert = scratch.prepare(`INSERT INTO ${quoteIdent(table.name)} (${columnList}) VALUES (${table.columns.map(() => '?').join(', ')})`);
+        try {
+          for (const row of table.rows) insert.run(row.map((cell) => (cell === undefined ? null : cell)) as never);
+        } finally {
+          insert.free();
+        }
+      }
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      throw new UserDbError(USERDB_ERROR_CODES.SCRATCH_UNAVAILABLE, `cannot attach "${table.name}": ${detail}`);
+    }
+    attached.add(lower);
+  }
+}
 
 /**
  * Thrown when a connection accessor is aimed at a row whose STATUS forbids that write —
@@ -587,6 +620,19 @@ export interface ScratchStatement {
 }
 
 /**
+ * Another app's rows, materialised through the scoped Worker, to sit in the throwaway copy as a
+ * plain table for one `scratchRun` (TASK-20261010-host-broker PR-2, D-PR2-9): created UNTYPED
+ * (`CREATE TABLE "<name>" ("c1", "c2", …)` — no app-authored type text ever reaches a CREATE;
+ * the rows keep their storage class) and filled through one prepared INSERT. The real file never
+ * sees it.
+ */
+export interface ScratchAttachTable {
+  name: string;
+  columns: readonly string[];
+  rows: ReadonlyArray<readonly unknown[]>;
+}
+
+/**
  * Per-statement outcome of a scratch run. `rows`/`columns` for reads, `changes` for
  * writes (the dry-run preview), `error` instead of both when the statement was refused or
  * failed — errors are DATA here, exactly as they are in the driver.
@@ -726,8 +772,13 @@ export interface UserDb {
    *
    * Throws NOT_FOUND for an unknown app. SQL errors are reported per statement as DATA;
    * a refused statement stops the batch.
+   *
+   * `options.attach` (TASK-20261010-host-broker PR-2, D-PR2-9): tables created in the copy
+   * after it opens and before any statement — the chat door's materialised rows of another
+   * app. A name that already exists in the opened copy (the app's own table, any case; an
+   * earlier attached one) throws SCRATCH_UNAVAILABLE naming it, and nothing runs.
    */
-  scratchRun(appId: string, statements: readonly ScratchStatement[]): Promise<ScratchRunResult>;
+  scratchRun(appId: string, statements: readonly ScratchStatement[], options?: { attach?: readonly ScratchAttachTable[] }): Promise<ScratchRunResult>;
 
   /**
    * The app's LIVE runtime bytes — the `scratchRun` export path (driver export → base64 →
@@ -2908,7 +2959,7 @@ function construct(
 
     // --------------------------------------------------------- scratch execution
 
-    async scratchRun(appId, statements) {
+    async scratchRun(appId, statements, options) {
       assertOpen();
       if (getApp(appId) === undefined) {
         // A typo must not silently query an empty database and answer "you have no
@@ -2924,6 +2975,9 @@ function construct(
       // instance back — the driver's save path only ever runs on ITS own handles.
       const scratch = new SQL.Database(await runtimeSnapshot(appId));
       try {
+        // Another app's materialised rows enter the SAME throwaway copy, before any
+        // statement (D-PR2-9) — they die with it like every mutation below.
+        attachScratchTables(scratch, options?.attach ?? []);
         for (const entry of statements) {
           // The SAME guards as the real executor, from the same function (D7).
           const forbidden = forbiddenStatementReason(entry.sql);

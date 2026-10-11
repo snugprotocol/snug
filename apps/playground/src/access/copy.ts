@@ -15,6 +15,10 @@
 //
 // FROZEN AFTER W3a: later lanes ADD keys, never rename — the engine and the UI import these
 // names, and the handler's app-facing messages are part of the app contract the KB documents.
+// TASK-20261010-host-broker PR-2 (ADR-0076 §1–§3) added the doors' sentences: `CHAT_DOOR` (what
+// a brain reads about a shared table), `ACCESS_CARD` (the brain's ask card), the sheet's
+// `askedInChat`, `EGRESS.chat`, and `EGRESS.away` / `awayHint` now name the reader — a signature
+// change on two keys, which every caller under access/ follows.
 //
 // THE VOICE. Lowercase-leading, plain words, no exclamation marks. Apostrophes are the
 // straight ones the task file pins ("while it's open", "Budget's access"); the typographic
@@ -179,7 +183,8 @@ export const CONSENT_SHEET = {
   neverShared: 'never shared',
   moreColumns: (n: number): string => `+${n} more`,
   away: "also while I'm away",
-  awayHint: (readerName: string): string => `if ${readerName} ever runs on a schedule`,
+  /** PR-2 (DS-7): a scheduled *ask <app>'s AI* reads the away set too, so the hint names it. */
+  awayHint: (readerName: string): string => `if ${readerName} ever runs on a schedule — or its AI is asked on one`,
   notNow: 'not now',
   dontAllow: "don't allow",
   pickATable: 'choose at least one table',
@@ -187,6 +192,11 @@ export const CONSENT_SHEET = {
   userTitle: (readerName: string): string => `let ${readerName} read another app's data`,
   /** The instruction while no app is chosen — there is no table on screen to tick yet (W6 key, added after the freeze). */
   pickAnApp: 'choose an app',
+  /**
+   * The says-line of an ask the chat's AI made (TASK-20261010-host-broker PR-2, DS-15): the
+   * user's ask (D3) in the AI's words, so the sheet says where they came from and quotes them.
+   */
+  askedInChat: (readerName: string): string => `asked in ${readerName}’s chat:`,
 } as const;
 
 /**
@@ -276,7 +286,10 @@ export const EGRESS = {
   /** Never "no network" — the brain line above it may well be a network. */
   noConnections: 'no connections of its own',
   openUrl: 'any link it asks you to open — you see the address first',
-  away: 'also while you’re away — on a schedule it can read and send with no one watching',
+  /** PR-2 (D-PR2-12): the chat beside the app is the same AI, and reads what the app may — said where the door is open. */
+  chat: (readerName: string): string => `the chat beside ${readerName} — the same AI — whenever you ask it about ${readerName}’s data`,
+  /** PR-2 (DS-7): a scheduled *ask <app>'s AI* reads the away set too, so the line names it. */
+  away: (readerName: string): string => `also while you’re away — on a schedule it can read and send with no one watching, and so can a scheduled *ask ${readerName}’s AI*`,
   /** "of its reads", never "every": the history is capped, coalesced and clearable (W6 finding 43). */
   closing: (sourceName: string): string => `the copy is made here, on this device; ${sourceName} keeps a history of its reads`,
 } as const;
@@ -286,6 +299,54 @@ export const BRAIN_NAMES: Readonly<Record<'anthropic' | 'openai', { brain: strin
   anthropic: { brain: 'Claude', provider: 'Anthropic' },
   openai: { brain: 'GPT', provider: 'OpenAI' },
 };
+
+// ---------------------------------------------------------------------------------------------
+// The chat and scheduler doors (TASK-20261010-host-broker PR-2; ADR-0076 §1–§3; D-PR2-10/13/17;
+// DS-11) — what a BRAIN reads about the tables another app let this one read. Composed by
+// `agent/sharedDdl.ts` (the one renderer both doors call) and the data tools; the identifier
+// quoting is the renderer's, the date and duration words are this file's own.
+// ---------------------------------------------------------------------------------------------
+
+/** "id INTEGER" · "note" (the dump allowed no type text for it). */
+const columnWords = (name: string, type: string | undefined): string => (type === undefined || type === '' ? name : `${name} ${type}`);
+
+export const CHAT_DOOR = {
+  /** The heading per source: how long the access lasts, in the sheet's own words. */
+  heading: (sourceName: string, duration: AccessDuration, expiresAt: string | undefined, now: number): string =>
+    `### From ${sourceName} (read-only · access ${duration === 'session' ? "while it's open" : expiresAt !== undefined ? `until ${shortDate(expiresAt, now)}` : 'until you stop it'})`,
+  /** One table: its full name in the copy, its columns with their types, and the row count — or the cut. */
+  tableLine: (name: string, columns: readonly string[], types: readonly string[], rows: number, truncated: boolean, totalRows?: number): string => {
+    const signature = columns.map((column, i) => columnWords(column, types[i])).join(', ');
+    const count = truncated ? (totalRows !== undefined ? `showing ${rows} of ${totalRows} rows` : `showing the first ${rows} rows`) : rowsWord(rows);
+    return `${name}(${signature}) — ${count}`;
+  },
+  /** Said ONCE after the last source. */
+  rule: 'the tables under *From …* above are copies of other apps’ data the user allowed this chat to read — query them with data_query by their full names as written (ledger__transactions); never propose a change to them',
+  /** A source whose copy could not be made this turn — a note, never a refusal of the turn. */
+  unreadable: (sourceName: string): string => `${sourceName}’s data could not be read this time`,
+  /** The data tool's answer when the access ended between the copy and the read. */
+  ended: (sourceName: string): string => `${sourceName}’s access ended — ask the user to allow it again`,
+  /** The propose tool's refusal of a change that names a shared table (D-PR2-17). */
+  readOnly: (sourceName: string): string => `${sourceName}’s data can’t be part of a change here — read it with data_query and propose the change with the values`,
+} as const;
+
+/**
+ * The brain's ASK card (D-PR2-11; DS-2, DS-5, DS-16): `access_propose` staged on the agent's
+ * message. The lead line is the anti-imitation line every model-authored card carries; the
+ * title is the sheet's own (`CONSENT_SHEET.userTitle`); the outcome line after an allow is the
+ * strip's (`STRIP_OUTCOME.allowed`), without its undo.
+ */
+export const ACCESS_CARD = {
+  lead: 'the agent asks:',
+  review: 'review',
+  notNow: 'not now',
+  notNowLine: 'not now — the agent may ask again',
+  declined: 'you said don’t allow — the agent won’t ask this again',
+  /** While the sheet its *review* opened is up. */
+  waiting: 'waiting for your review',
+  /** The thread's app is gone — there is nothing left to ask for (added by the implementation lane; see the task's Gate-4 record). */
+  stale: 'this app is gone — nothing to ask for',
+} as const;
 
 // ---------------------------------------------------------------------------------------------
 // The reader's provenance line (D11) — composed by provenance.ts
