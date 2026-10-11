@@ -24,9 +24,15 @@
 //      be undone" (S9); a live entry is never evicted;
 //  (5) the seat: `db.driver.brokeredWrite(target, { plans: [plan], caps, expectChanges: [plan.
 //      previewChanges], requireUndo: true, capture: true })` — the facts again on the live handle,
-//      `BEGIN IMMEDIATE`, the capture, the statement, the drift halt, the cells walked, `COMMIT`;
-//  (6) after the commit, in this order: the journal entry (`putAccessUndo` — the seat's refusal or
-//      throw after a commit is the one residual, named: the line then carries no `undoId`) → the
+//      `BEGIN IMMEDIATE`, the capture, the statement, the drift halt, the cells walked, `COMMIT`.
+//      The caps are `STRICT_CAPS`, shared by the plan and the apply: `maxUndoBytes` is the entry
+//      cap LESS a reserve for the entry's host-written seats around `steps` (Gate-5 SEC-1), so a
+//      write whose rows would fill the entry past the schema's cap is refused `too-large` at the
+//      dry run — before any live handle is touched — and the journal's own parse can never be
+//      what refuses it after a commit;
+//  (6) after the commit, in this order: the journal entry (`putAccessUndo` — the accessor's refusal
+//      or throw after a commit is the one residual, named: the line then carries no `undoId`; the
+//      schema's own refusal is unreachable by construction and warned, never silent) → the
 //      `wrote` line on the TARGET's history at once (`via`, `authority`, `changes`, `undoId`,
 //      `tables: [table]`, the statement as the history keeps it — walked whole, cut at 200; a
 //      storage throw here is the second named residual) → the read caches of every grant on the
@@ -39,14 +45,15 @@
 // `not-granted` → `ACCESS_NOT_GRANTED`; `drift` → the read's `sourceChanged` after the grant is
 // paused `source-changed`; a SQL failure → `ACCESS_QUERY_FAILED` without the engine's message (a
 // constraint's name is the source's). A statement whose verb names no table is not one plain
-// INSERT, UPDATE or DELETE — refused `statement` before any queue (the policy left rule 7 to this
-// module for it; see policy.ts).
+// INSERT, UPDATE or DELETE — the SERVICE refuses it `statement` before the verdict is asked (Gate-5
+// ENG-2), so every request here carries the `table` the policy judged.
 //
 // OWN MODE — `applyApprovedWrite` (the app's OWN data the user approved on a card, D-PR3-8):
 // the DML class only (`nonDataStatementReason`, today's guard), the dry run through `scratchRun`
 // for the previewed-count drift halt (F-Sm1, unchanged), then the SAME seat's `{ own }` variant
 // (E1-Q12) — the belts, `BEGIN IMMEDIATE`, each statement counted, `expectChanges: proposal.
-// previewed` as the halt at the apply too; NO table rules, NO capture, NO journal, NO history
+// previewed` as the halt at the apply too (the approved counts are own mode's only bound — it
+// carries no caps, Gate-5 W-2); NO table rules, NO capture, NO journal, NO history
 // line, NO undo id. An approved change therefore applies to the app's own table whatever its
 // shape — a trigger, WITHOUT ROWID, a REPLACE resolution, a foreign-key action, a generated or
 // credential-named column, a `main.t` name: the strict rules decide what ANOTHER app may do to
@@ -68,7 +75,9 @@
 // EVERY live reader, the one whose write was reversed included (S19) → `{ ok: true }`. A refusal
 // is `{ ok: false, reason, message }` with the reason's token — `busy` · `changed` (the guard
 // mismatch, nothing changed) · `gone` · `failed` (a SQL error: a rowid reused since, D-Q19) — and
-// `ACCESS_SHEET.undoFailed`'s sentence for it (E1-Q2). An undo is never journaled.
+// `ACCESS_SHEET.undoFailed`'s sentence for it (E1-Q2). An undo is never journaled. EVERY outcome
+// bumps the access revision (Gate-5 ENG-4): a done undo wrote a line, a `gone` marked the entry,
+// and the sheet re-reads on the other three too — it never bumps on its own.
 //
 // `clearSourceReadCaches(db, target)` drops the cached bytes of every grant whose source is the
 // target — the refresh engine calls it after a result too (D-PR3-17 (9)).
@@ -79,7 +88,6 @@
 import {
   ACCESS_ERROR_CODES,
   ACCESS_LOG_SQL_MAX_CHARS,
-  ACCESS_SOURCE_MAX_BYTES,
   ACCESS_TIMEOUT_STRIKES,
   ACCESS_UNDO_MAX_BYTES,
   ACCESS_UNDO_MAX_ENTRIES,
@@ -102,8 +110,8 @@ import type { ExecuteApprovedWriteOutcome, PendingWriteProposal } from '../agent
 import { ACCESS_APP_MESSAGES, ACCESS_SHEET, type UndoFailureReason, type WriteRefusalRule } from './copy.js';
 import { ringDataChanged, ringSourceChanged } from './doorbell.js';
 import { isExpired } from './grantFacts.js';
-import { accessDeps, bumpAccessRevision, findAccessGrant, grantsForApp, markExpiredOnce, noteTimeout, suspendAccess, type FoundAccessGrant } from './grants.js';
-import { readScopeOf } from './materialise.js';
+import { accessDeps, bumpAccessRevision, findAccessGrant, grantsForApp, iso, markExpiredOnce, noteTimeout, readerNameOf, suspendAccess, type FoundAccessGrant } from './grants.js';
+import { SourceTooLarge, readScopeOf, sourceBytesOf } from './materialise.js';
 import { ownsGrant, stillWritable, type AccessCaller } from './policy.js';
 import { clearScopedReadCache, scopedPlanWrite, type PlanOutcome } from './scopedRead.js';
 
@@ -113,6 +121,8 @@ import { clearScopedReadCache, scopedPlanWrite, type PlanOutcome } from './scope
 export interface BrokeredWriteRequest {
   targetAppId: string;
   statement: ScopedReadStatement;
+  /** The table the statement's verb names — read once by the service (`dmlTargetTable`) and judged by the policy's rule 7 (ENG-2). */
+  table: string;
   authority: AccessWriteAuthority;
   via: AccessLogVia;
   /** The grant the policy admitted — re-checked here at the dequeue and after the plan. */
@@ -128,21 +138,25 @@ export type UndoOutcome = { ok: true } | { ok: false; reason: UndoFailureReason;
 const C = ACCESS_ERROR_CODES;
 const M = ACCESS_APP_MESSAGES;
 
-/** The caps every strict write runs under — the protocol's (D-PR3-15 (5), E1-Q12). */
-const STRICT_CAPS: BrokeredCaps = { maxChanges: ACCESS_WRITE_MAX_ROWS, maxUndoBytes: ACCESS_UNDO_MAX_BYTES };
+/**
+ * The entry's host-written seats around `steps` (two uuids, two instants, authority, via,
+ * readerAppId ≤ 64, readerName ≤ 80 chars UTF-8, the keys) — the apply measures the steps, the
+ * schema the whole entry (Gate-5 SEC-1), so the steps' cap is the entry's less this reserve.
+ */
+const ACCESS_UNDO_ENTRY_RESERVE_BYTES = 1024;
+
+/** The caps every strict write runs under — the protocol's (D-PR3-15 (5), E1-Q12), the undo bytes less the entry's reserve (SEC-1). The plan and the apply share them, so the dry run refuses `too-large` before any live handle is touched. */
+const STRICT_CAPS: BrokeredCaps = { maxChanges: ACCESS_WRITE_MAX_ROWS, maxUndoBytes: ACCESS_UNDO_MAX_BYTES - ACCESS_UNDO_ENTRY_RESERVE_BYTES };
 
 const refuse = (code: string, message: string, retryable: boolean): AccessHandlerResult => ({ ok: false, code, message, retryable });
-const writeRefused = (rule: WriteRefusalRule): AccessHandlerResult => refuse(C.ACCESS_WRITE_REFUSED, M.writeRefused(rule), false);
+/** `ACCESS_WRITE_REFUSED` with the rule's sentence — the service's spelling too, for the statement that names no table (ENG-2). */
+export const writeRefused = (rule: WriteRefusalRule): AccessHandlerResult => refuse(C.ACCESS_WRITE_REFUSED, M.writeRefused(rule), false);
 const writeNotGranted = (): AccessHandlerResult => refuse(C.ACCESS_NOT_GRANTED, M.writeNotGranted, false);
 const busy = (): AccessHandlerResult => refuse(C.ACCESS_BUSY, M.busy, true);
 /** A failure of the engine or the seat: the read's sentence, never the engine's message (a constraint's name is the source's). */
 const queryFailed = (message: string = M.queryFailed, retryable = false): AccessHandlerResult => refuse(C.ACCESS_QUERY_FAILED, message, retryable);
 
-class SourceTooLarge extends Error {}
-
-const iso = (at: number): string => new Date(at).toISOString();
 const now = (): number => accessDeps().now();
-const readerName = (db: UserDb, appId: string): string => db.getApp(appId)?.displayName ?? appId;
 const sum = (counts: readonly number[]): number => counts.reduce((total, count) => total + count, 0);
 
 /** The instance a host-issued read on a namespace carries — never an app's own. */
@@ -276,10 +290,14 @@ function journal(db: UserDb, input: BrokeredWriteRequest, at: number, steps: rea
     via: input.via,
     grantId: input.grant.grant.id,
     readerAppId: input.caller.appId,
-    readerName: readerName(db, input.caller.appId),
+    readerName: readerNameOf(db, input.caller.appId),
     steps,
   });
-  if (!entry.success) return undefined;
+  if (!entry.success) {
+    // The steps were measured against `STRICT_CAPS.maxUndoBytes` and every cell walked at the apply; the seats around them fit the reserve (SEC-1).
+    console.warn('access: the undo entry failed its own schema — unreachable by construction; the change is applied and the line carries no undo', entry.error.message);
+    return undefined;
+  }
   try {
     return db.putAccessUndo(input.targetAppId, entry.data) === 'ok' ? entry.data.id : undefined;
   } catch {
@@ -297,8 +315,7 @@ function journalHasRoom(db: UserDb, targetAppId: string, readerAppId: string): b
 /** Strict mode: one plain statement of another app's table, planned afresh, applied through the seat, journaled, logged, rung — see the header. */
 export async function brokeredWrite(db: UserDb, input: BrokeredWriteRequest): Promise<AccessHandlerResult> {
   const { grant } = input.grant;
-  const table = dmlTargetTable(input.statement.sql);
-  if (table === undefined) return writeRefused('statement');
+  const { table } = input;
   // FIRST — the driver's record, before any queue or export (D-FIX-1): the plan's fresh export
   // discards the target's open transaction, so only a read of the record can answer busy for it.
   if (await db.driver.inTransaction(input.targetAppId)) return busy();
@@ -309,11 +326,7 @@ export async function brokeredWrite(db: UserDb, input: BrokeredWriteRequest): Pr
   try {
     planned = await scopedPlanWrite({
       grantId: grant.id,
-      bytes: async () => {
-        const bytes = await db.exportAppRuntime(input.targetAppId);
-        if (bytes.byteLength > ACCESS_SOURCE_MAX_BYTES) throw new SourceTooLarge();
-        return bytes;
-      },
+      bytes: sourceBytesOf(db, input.targetAppId),
       scope: readScopeOf(grant),
       statement: input.statement,
       caps: STRICT_CAPS,
@@ -344,7 +357,7 @@ export async function brokeredWrite(db: UserDb, input: BrokeredWriteRequest): Pr
       kind: 'wrote',
       grantId: grant.id,
       readerAppId: input.caller.appId,
-      readerName: readerName(db, input.caller.appId),
+      readerName: readerNameOf(db, input.caller.appId),
       via: input.via,
       authority: input.authority,
       changes,
@@ -386,14 +399,9 @@ export async function applyApprovedWrite(db: UserDb, proposal: PendingWritePropo
       return { ok: false, reason: 'drifted', previewed: proposal.previewed, current };
     }
     // ALL OR NOTHING (R-M4), through the one seat's OWN variant (D-PR3-8, E1-Q12): the belts, `BEGIN
-    // IMMEDIATE`, each statement counted, the previewed counts as the drift halt at the apply too.
-    // Own mode's count rule IS the approved counts; the caps ride for the seat's one shape, spelled
-    // as those counts so they never say more than the user approved.
-    const applied = await db.driver.brokeredWrite(proposal.appId, {
-      own: entries,
-      caps: { maxChanges: Math.max(0, ...proposal.previewed), maxUndoBytes: ACCESS_UNDO_MAX_BYTES },
-      expectChanges: proposal.previewed,
-    });
+    // IMMEDIATE`, each statement counted, the previewed counts as the drift halt at the apply too —
+    // own mode's count rule IS the approved counts (W-2: no caps).
+    const applied = await db.driver.brokeredWrite(proposal.appId, { own: entries, expectChanges: proposal.previewed });
     if (!applied.ok) {
       if ('reason' in applied && applied.reason === 'drifted') return { ok: false, reason: 'drifted', previewed: applied.previewed ?? proposal.previewed, current: applied.current ?? [] };
       return failed(applied.message);
@@ -411,10 +419,19 @@ export async function applyApprovedWrite(db: UserDb, proposal: PendingWritePropo
 
 /**
  * The user's undo of one journaled change (D-PR3-15; §24.5 MUST 23) — see the header. Never
- * throws: every outcome is data, and nothing changes unless every row still holds what the write left.
+ * throws: every outcome is data, and nothing changes unless every row still holds what the write
+ * left. Every outcome bumps the access revision (ENG-4) — the sheet re-reads, never bumps.
  */
 export async function undoBrokeredWrite(db: UserDb, targetAppId: string, undoId: string, options: { via: 'user' }): Promise<UndoOutcome> {
-  const sourceName = db.getApp(targetAppId)?.displayName ?? targetAppId;
+  try {
+    return await performUndo(db, targetAppId, undoId, options);
+  } finally {
+    bumpAccessRevision();
+  }
+}
+
+async function performUndo(db: UserDb, targetAppId: string, undoId: string, options: { via: 'user' }): Promise<UndoOutcome> {
+  const sourceName = readerNameOf(db, targetAppId);
   const fail = (reason: UndoFailureReason): UndoOutcome => ({ ok: false, reason, message: ACCESS_SHEET.undoFailed(reason, sourceName) });
   const entry = db.listAccessUndo(targetAppId).find((candidate) => candidate.id === undoId);
   if (entry === undefined) return fail('gone');
@@ -428,7 +445,7 @@ export async function undoBrokeredWrite(db: UserDb, targetAppId: string, undoId:
     }
   }
   const steps = [...entry.steps].reverse();
-  const applied = await db.driver.brokeredWrite(targetAppId, { undo: steps, caps: STRICT_CAPS });
+  const applied = await db.driver.brokeredWrite(targetAppId, { undo: steps });
   if (!applied.ok) {
     if (!('reason' in applied)) return fail('failed');
     switch (applied.reason) {
@@ -463,7 +480,6 @@ export async function undoBrokeredWrite(db: UserDb, targetAppId: string, undoId:
   } catch {
     // The rows are back; a history with no room for the line is never a reason to leave them changed.
   }
-  bumpAccessRevision();
   clearSourceReadCaches(db, targetAppId);
   ringDataChanged(targetAppId, tables.length === 1 ? tables[0] : undefined);
   ringSourceChanged(db, targetAppId);

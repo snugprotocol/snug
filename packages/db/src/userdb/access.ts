@@ -35,7 +35,11 @@
 // the structure at undo time. The same two postures: a put parses STRICTLY first (the schema's
 // 64 KiB cap and the per-cell credential walk included — ACCESS_INVALID leaves the file
 // byte-identical) and NOT_FOUND names a target the file does not hold (D-Q9); a read skips
-// what does not parse. Its caps (D-Q7, D-Q8): every put drops EXPIRED entries; an UNDONE entry
+// what does not parse. A put REBUILDS the row from that same strict read (Gate-5 SEC-2): an
+// element the strict parse refuses is worthless bytes and is dropped with the expired ones, so
+// the per-reader count and the row's bytes are measured over exactly what `listAccessUndo`
+// answers — a loosely-valid, strictly-unreadable element can neither hold a reader's seat nor
+// crowd the row. Its caps (D-Q7, D-Q8): every put drops EXPIRED entries; an UNDONE entry
 // is KEPT, marked, until it expires (§22.4) and is the FIRST to go when the row needs room;
 // a LIVE entry is never evicted — the 21st live entry of one (target, reader) answers
 // 'reader-cap' and writes nothing (S9: refuse, never evict), and a row that would still cross
@@ -401,7 +405,7 @@ function coalesced(head: unknown, next: AccessLogEntry): AccessLogEntry | undefi
 
 // ------------------------------------------------------------- the undo journal
 
-/** The LOOSE view of a stored journal element — what the caps, the pruning and the mark read; never trusted further. */
+/** The LOOSE view of a stored journal element — what `markAccessUndone` reads to find the id it marks (it marks what it finds); the put and the caps read the STRICT parse (SEC-2). */
 interface UndoView {
   id: string;
   readerAppId: string;
@@ -686,20 +690,20 @@ export function createAccessAccessors(seams: AccessSeams): AccessAccessors {
       if (!seams.hasApp(targetAppId)) notFound(`no app "${targetAppId}" to keep this journal`);
       const key = accessUndoSettingKey(targetAppId);
       const now = seams.now();
-      // Every put drops the expired and the unreadable (D-Q7); an undone entry stays, marked.
-      const kept = looseEntries(rawValue(seams, key)).flatMap((item) => {
-        const view = undoView(item);
-        return view === undefined || view.expiresAt <= now ? [] : [{ item, view }];
-      });
+      // The row is rebuilt from the STRICT read (SEC-2): the expired and the unreadable are dropped
+      // (D-Q7); an undone entry stays, marked. What the caps count below is what `listAccessUndo` answers.
+      const kept = readUndo(rawValue(seams, key)).filter((entry) => instant(entry.expiresAt) > now);
+      const liveness = (entry: AccessUndoEntry): { undone: boolean; expiresAt: number } => ({ undone: entry.undoneAt !== undefined, expiresAt: instant(entry.expiresAt) });
       // The per-reader cap REFUSES — never evicts a live entry (S9). Nothing is written.
-      const live = kept.filter(({ view }) => view.readerAppId === parsed.data.readerAppId && isLiveUndo(view, now)).length;
+      const live = kept.filter((entry) => entry.readerAppId === parsed.data.readerAppId && isLiveUndo(liveness(entry), now)).length;
       if (live >= ACCESS_UNDO_MAX_ENTRIES) return 'reader-cap';
       // The row cap: the OLDEST undone entry gives way first; when none is left the put is refused whole.
-      const row = (): unknown[] => [parsed.data, ...kept.map(({ item }) => item)];
+      const row = (): unknown[] => [parsed.data, ...kept];
       while (bytesOf(row()) > ACCESS_UNDO_MAX_ROW_BYTES) {
         let victim = -1;
-        for (const [index, { view }] of kept.entries()) {
-          if (view.undone && (victim === -1 || view.at < (kept[victim]?.view.at ?? Number.POSITIVE_INFINITY))) victim = index;
+        for (const [index, entry] of kept.entries()) {
+          const oldest = victim === -1 ? undefined : kept[victim];
+          if (entry.undoneAt !== undefined && (oldest === undefined || instant(entry.at) < instant(oldest.at))) victim = index;
         }
         if (victim === -1) limit(`the undo journal of "${targetAppId}" holds ${ACCESS_UNDO_MAX_ROW_BYTES} bytes of live entries and nothing may be pruned`);
         kept.splice(victim, 1);

@@ -13,7 +13,7 @@
 // `access: 'write'` or a renewal's seed turned a write, kv or refresh on (the sheet decides), so
 // a renewal shows its ticks without a click; otherwise CLOSED — the default path is the 1.1 sheet.
 
-import type { ReactElement } from 'react';
+import { useId, type ReactElement } from 'react';
 
 import { Button } from '../ui/Button.js';
 import { CONSENT_SHEET, CONSENT_UI, excludedFooter } from './copy.js';
@@ -105,6 +105,8 @@ export function SourcePicker({
   groupName,
   labelledBy,
 }: SourcePickerProps): ReactElement {
+  /** The *more options…* summary's description (UI-2): one id per picker, suffixed by the chosen source. */
+  const optionsHintId = useId();
   const shown = showMore ? [...candidates.matched, ...candidates.rest] : candidates.matched;
   const footer = excludedFooter(candidates.excluded);
   return (
@@ -137,13 +139,17 @@ export function SourcePicker({
                     onColumn={(table, column, on) => onColumn(source.appId, table, column, on)}
                     onWrite={(table, on) => onWrite(source.appId, table, on)}
                   />
+                  {/* The summary's description for a screen reader (UI-2): opening it also puts a change toggle on each ticked table above. */}
+                  <span id={`${optionsHintId}-${source.appId}`} className="visually-hidden">
+                    {CONSENT_SHEET.moreOptionsHint}
+                  </span>
                   <details
                     className="access-disclosure access-options-more"
                     data-testid="access-options-more"
                     open={optionsOpen}
                     onToggle={(event) => onOptionsOpen((event.target as HTMLDetailsElement).open)}
                   >
-                    <summary>{CONSENT_SHEET.moreOptions}</summary>
+                    <summary aria-describedby={`${optionsHintId}-${source.appId}`}>{CONSENT_SHEET.moreOptions}</summary>
                     <SourceOptionsRow source={source} options={optionsOf(source.appId)} onOption={(option, on) => onOption(source.appId, option, on)} />
                   </details>
                 </>

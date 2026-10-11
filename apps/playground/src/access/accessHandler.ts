@@ -63,6 +63,12 @@
 // is part of the ask's meaning for the ladder's declines (`accessRequestHash`: a declined read ask
 // does not decline a later write ask, nor the reverse). The chat's ask does not say it in PR-3.
 //
+// A RENEWAL FROM THE APP SEEDS THE OLD SCOPE (Gate-5 ENG-1). An ask that names one of this reader's
+// grants to renew parks its pending with `userAsk.ts`'s `renewalSeedOf` — the old access's tables
+// with their columns, withheld ones and write toggles, its `kv` / `refresh` — over the sheet's
+// own session/away defaults (an app never chooses the duration): the one tap that puts a write
+// access back as it was is the same whether the person or the app asked again.
+//
 // App-facing messages are `copy.ts`'s `ACCESS_APP_MESSAGES` — never a fact about another app the
 // reader was not granted. Errors are data; anything unexpected answers `HOST_ERROR`.
 
@@ -87,6 +93,8 @@ import {
 } from './grants.js';
 import { authorise, ownsGrant, type AccessCaller, type Refusal } from './policy.js';
 import { accessService, policyContextFor } from './service.js';
+// A leaf beside consent.ts (the ladder, the stores, copy.ts, grants.ts, outcome.ts) — no path back here.
+import { renewalSeedOf, seedSheet } from './userAsk.js';
 
 /** Who composed the handler: the visible view at its generation, or the hidden (scheduled) frame, which has none. */
 export type AccessFrame = { attended: true; generation: number } | { attended: false };
@@ -182,7 +190,7 @@ export function createAccessHandlerFor(appId: string, frame: AccessFrame): Acces
     }
 
     return new Promise<AccessHandlerResult>((resolve) => {
-      parkAccessRequest({
+      const pending = parkAccessRequest({
         db,
         reader,
         generation,
@@ -206,6 +214,8 @@ export function createAccessHandlerFor(appId: string, frame: AccessFrame): Acces
           resolve(answer);
         },
       });
+      // The renewed access's scope travels to the sheet (ENG-1); the duration and the away box stay the sheet's defaults.
+      if (renewed !== undefined) seedSheet(pending, renewalSeedOf(renewed.grant, 'session', false));
     });
   }
 

@@ -36,15 +36,16 @@ import initSqlJs from 'sql.js';
 import type { BindParams, Database, SqlJsStatic } from 'sql.js';
 import { LIMITS, SCHEDULE_APP_INPUT_MAX_BYTES, utf8ByteLength, type DbRequestFrame } from '@snugprotocol/protocol';
 import { base64ToBytes, bytesToBase64 } from './base64.js';
-import { applyBrokeredBatch, dmlTargetTable, type BrokeredApplyInput, type BrokeredApplyResult } from './brokered-write.js';
+import { BUSY_REFUSAL, applyBrokeredBatch, dmlTargetTable, type BrokeredApplyInput, type BrokeredApplyResult } from './brokered-write.js';
 import { DB_ERROR_CODES } from './errors.js';
 import { namespaceToFileName } from './namespace.js';
 import { detectPersistenceBackend, type PersistenceBackend } from './persistence.js';
-import { KV_TABLE_DDL, forbiddenStatementReason, isRowModifyingStatement, isSqlTailEmpty, normalizeCell } from './statement-rules.js';
+import { errorMessage } from './sqlite-helpers.js';
+import { KV_TABLE_DDL, forbiddenStatementReason, isRowModifyingStatement, isSqlTailEmpty, normalizeCell, stripSqlComments } from './statement-rules.js';
 
 // The statement-text rules moved to the leaf `statement-rules.ts` (PR-3, see its header); the
 // driver re-exports them verbatim so its public surface — and every importer — is unchanged.
-export { KV_TABLE_DDL, forbiddenStatementReason, isRowModifyingStatement, isSqlTailEmpty, nonDataStatementReason, normalizeCell } from './statement-rules.js';
+export { KV_TABLE_DDL, forbiddenStatementReason, isRowModifyingStatement, isSqlTailEmpty, nonDataStatementReason, normalizeCell, stripSqlComments } from './statement-rules.js';
 
 /**
  * Mirrors the runner's DbDriverResult/DbDriver structurally (no runtime dependency on
@@ -261,10 +262,7 @@ function savepointName(text: string): string | undefined {
  * `COMMIT` or `END` closes every frame. Any other statement leaves the record as it is.
  */
 function transactionAfter(frames: readonly string[], sql: string): string[] {
-  const cleaned = sql
-    .replace(/\/\*[\s\S]*?\*\//g, ' ')
-    .replace(/--[^\n]*/g, ' ')
-    .trim();
+  const cleaned = stripSqlComments(sql).trim();
   if (/^BEGIN\b/i.test(cleaned)) return [''];
   if (/^(COMMIT|END)\b/i.test(cleaned)) return [];
   const savepoint = /^SAVEPOINT\s+([\s\S]*)$/i.exec(cleaned);
@@ -290,10 +288,7 @@ function transactionAfter(frames: readonly string[], sql: string): string[] {
 
 /** Whether `sql` is one of the verbs that END a transaction — the ones whose "no transaction is active" failure clears the record. */
 function endsTransaction(sql: string): boolean {
-  const cleaned = sql
-    .replace(/\/\*[\s\S]*?\*\//g, ' ')
-    .replace(/--[^\n]*/g, ' ')
-    .trim();
+  const cleaned = stripSqlComments(sql).trim();
   return /^(COMMIT|END|ROLLBACK)\b/i.test(cleaned);
 }
 
@@ -315,8 +310,6 @@ const fail = (code: string, message: string, retryable: boolean): DbDriverResult
 
 /** The brokered seat's own typed failure — the same shape `fail` answers a frame with. */
 const seatFailure = (code: string, message: string, retryable: boolean): BrokeredWriteResult => ({ ok: false, code, message, retryable });
-
-const errorMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
 function hasSqliteMagic(bytes: Uint8Array): boolean {
   if (bytes.length < SQLITE_MAGIC.length) return false;
@@ -700,9 +693,7 @@ export function createDbDriver(options: CreateDbDriverOptions = {}): SnugDbDrive
       }
       // The record answers first — before the handle is touched — so the app's open
       // transaction is left exactly as it was (D-Q3); the apply's BEGIN IMMEDIATE is the belt.
-      if (state.transaction.length > 0) {
-        return { ok: false, reason: 'busy', message: 'the app is in the middle of a change', retryable: true };
-      }
+      if (state.transaction.length > 0) return { ...BUSY_REFUSAL, retryable: true };
       let applied: BrokeredApplyResult;
       try {
         applied = applyBrokeredBatch(state.db, input);

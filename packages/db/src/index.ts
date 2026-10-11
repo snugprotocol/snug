@@ -178,8 +178,7 @@ export {
   DUMP_TYPE_ALLOW,
   scopedScratchDump,
   scopedScratchRead,
-  // The copy itself, for the Write Broker's planner (TASK-20261010-host-broker PR-3, D-PR3-22).
-  scopeCopy,
+  // The copy itself (`scopeCopy`) stays inside the package: the Write Broker's planner is its one consumer (Gate-5 W-5).
   type ScopeCopyOptions,
   type ScopeCopyReport,
   type ScopedDumpCaps,
@@ -193,16 +192,13 @@ export {
   type ScopingFailure,
 } from './scoped-read.js';
 
-// The Write Broker's pure half (TASK-20261010-host-broker PR-3, D-PR3-9 / D-PR3-10): the
-// parse + plan the access engine's Worker runs on a fresh export, and the apply + undo builder
-// the driver's `brokeredWrite` seat runs on the live handle.
+// The Write Broker's pure half (TASK-20261010-host-broker PR-3, D-PR3-9 / D-PR3-10): the parse +
+// plan the Worker runs (`planBrokeredWrite`) — the apply is the driver's seat (Gate-5 W-5: the
+// apply, the undo builder, the parser and the facts are reachable only through `brokeredWrite`),
+// and `dmlTargetTable` is the write signal's table rule the host reads too.
 export {
-  applyBrokeredBatch,
-  buildUndoStatement,
   dmlTargetTable,
-  parseBrokeredStatement,
   planBrokeredWrite,
-  tableFacts,
   type ApplyRefusal,
   type BrokeredApplyInput,
   type BrokeredApplyResult,

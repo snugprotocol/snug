@@ -65,7 +65,7 @@ import { scheduleKvKey } from '../schedule/scheduleKey.js';
 import { createScheduledConfirmGate } from '../schedule/scheduledConfirmGate.js';
 import { ACCESS_APP_MESSAGES } from './copy.js';
 import type { AnyAccessGrant } from './grantFacts.js';
-import { accessDeps } from './grants.js';
+import { accessDeps, iso, readerNameOf } from './grants.js';
 import * as writeBroker from './writeBroker.js';
 
 /** The `taskId` a refresh rides the handshake under — the ONE signal beside `input.kind` that this is no schedule (D-PR3-17). */
@@ -145,11 +145,11 @@ function settle(end: DispatchEnd, refused: readonly ScheduledRefusal[]): Settled
 /** The `refreshed` line (D-PR3-6): host-written throughout — the reader's library name, `via` as given, a reason only on failure, no `tables` (E2-Q15). */
 function refreshedLine(db: UserDb, grant: AnyAccessGrant, via: RefreshVia, at: number, reason?: AccessRefreshReason): AccessLogEntry {
   return {
-    at: new Date(at).toISOString(),
+    at: iso(at),
     kind: 'refreshed',
     grantId: grant.id,
     readerAppId: grant.readerAppId,
-    readerName: db.getApp(grant.readerAppId)?.displayName ?? grant.readerAppId,
+    readerName: readerNameOf(db, grant.readerAppId),
     via,
     ...(reason !== undefined ? { reason } : {}),
   };
@@ -164,15 +164,20 @@ function logQuietly(db: UserDb, sourceAppId: string, entry: AccessLogEntry): voi
   }
 }
 
-/** The whole run of one refresh: where the source lives, at most one handover, one deadline; the tally and every refusal summed across attempts. */
-async function runRefresh(base: Omit<Dispatch, 'afterHandover'>): Promise<{ end: DispatchEnd; calls: Calls; refused: ScheduledRefusal[] }> {
+/**
+ * The whole run of one refresh: where the source lives, at most one handover, one deadline; the
+ * tally and every refusal summed across attempts. Each attempt is handed what the earlier ones
+ * SPENT (Gate-5 ENG-3): the ceiling a hidden attempt asks after a handover counts the live
+ * attempt's calls, as the executor's `Dispatch.spent` counts a step's earlier attempts.
+ */
+async function runRefresh(base: Omit<Dispatch, 'afterHandover' | 'spent'>): Promise<{ end: DispatchEnd; calls: Calls; refused: ScheduledRefusal[] }> {
   const source = base.step.appId;
   const calls: Calls = { ai: 0, net: 0 };
   const refused: ScheduledRefusal[] = [];
   let placement = placeRun(base.deps.live, source);
   let handovers = 0;
   for (;;) {
-    const dispatch: Dispatch = { ...base, afterHandover: handovers > 0 };
+    const dispatch: Dispatch = { ...base, afterHandover: handovers > 0, spent: { ...calls } };
     const attempt = placement === 'live' ? await dispatchLive(dispatch) : await dispatchHidden(dispatch, createScheduledConfirmGate());
     calls.ai += attempt.calls.ai;
     calls.net += attempt.calls.net;
@@ -226,7 +231,7 @@ export async function refreshSource(db: UserDb, deps: AppRunDeps, input: Refresh
   const refreshInput = { kind: 'refresh', requestedBy } as const;
   const key = scheduleKvKey(runId);
   // (6) The dispatch — the posture, the ids-only hint, the one deadline on the dispatchers' clock (as the executor's).
-  const base: Omit<Dispatch, 'afterHandover'> = {
+  const base: Omit<Dispatch, 'afterHandover' | 'spent'> = {
     mode: 'unattended',
     posture: 'refresh',
     app,
@@ -241,7 +246,6 @@ export async function refreshSource(db: UserDb, deps: AppRunDeps, input: Refresh
     key,
     payload: { taskId: REFRESH_TASK_ID, runId, input: refreshInput },
     deadline: Date.now() + deps.resultTimeoutMs,
-    spent: NONE,
   };
 
   let ran: Awaited<ReturnType<typeof runRefresh>>;

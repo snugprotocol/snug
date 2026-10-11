@@ -102,7 +102,7 @@ import {
 } from './access.js';
 import { jsonCharWeight, runScratchStatement } from './scratch-statement.js';
 import { selectableColumns } from '../scoped-read.js';
-import { quoteIdent, selectRows } from '../sqlite-helpers.js';
+import { errorMessage, quoteIdent, selectRows } from '../sqlite-helpers.js';
 import { base64ToBytes } from '../base64.js';
 import {
   KV_TABLE_DDL,
@@ -1140,7 +1140,6 @@ export interface OpenUserDbOptions {
 const DEFAULT_PERSIST_DEBOUNCE_MS = 250;
 const SQLITE_MAGIC = 'SQLite format 3' + String.fromCharCode(0);
 
-const errorMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
 function hasSqliteMagic(bytes: Uint8Array): boolean {
   if (bytes.length < SQLITE_MAGIC.length) return false;

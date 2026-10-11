@@ -4,6 +4,7 @@
 // copy, and nothing auto-pushes post-recovery without user confirmation, so the
 // provider's push is simply never invoked here (tests pin that).
 import type { Secrets as ContainerSecrets } from '../crypto/container.js';
+import { errorMessage } from '../sqlite-helpers.js';
 import type { SyncProvider, SyncPullResult } from './provider.js';
 
 /** The subset of UserDb recovery needs — matches what openFresh() hands back. */
@@ -38,7 +39,6 @@ export interface RestoreFromOriginOptions<T extends RestorableUserDb> {
   secrets?: ContainerSecrets;
 }
 
-const errorMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
 export async function restoreFromOrigin<T extends RestorableUserDb>(
   options: RestoreFromOriginOptions<T>,

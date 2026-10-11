@@ -17,8 +17,9 @@
 // never the source handler's words, S10/DS17); a discover answers a class, never a count or a
 // name. The user can stop a grant at any moment, and the host then rings `host-event
 // 'access-changed' { grantId }` (ids only, R7). Three more id-only hints at 1.2: `access-source-
-// changed { grantId }` (the source's data moved — read again), `data-changed { table }` (another
-// app, or the chat, changed one of THIS app's tables — re-read it) and `access-read { grantId }`
+// changed { grantId }` (the source's data moved — read again), `data-changed { table? }` (another
+// app, or the chat, changed one of THIS app's tables — re-read it; `table` absent when the host
+// could not name it) and `access-read { grantId }`
 // (one of this app's tables was read under an access it is the source of).
 //
 // `useSnugAccess()` is that exchange, typed, in the `useConnectedFetch` shape: one memoised
@@ -66,7 +67,7 @@ import type {
  * The host-events the hook subscribes to — the protocol's constants, re-exported: `access-changed`
  * (a grant was stopped or paused: `{ grantId }`), `access-source-changed` (the source of a grant
  * changed its data: `{ grantId }`), `data-changed` (one of THIS app's tables was changed through
- * an access, or an undo: `{ table }`) and `access-read` (one of this app's tables was read under
+ * an access, or an undo: `{ table }`, or `{}` when the host could not name it) and `access-read` (one of this app's tables was read under
  * an access it is the source of: `{ grantId }`).
  */
 export { ACCESS_CHANGED_EVENT, ACCESS_READ_EVENT, ACCESS_SOURCE_CHANGED_EVENT, DATA_CHANGED_EVENT };
@@ -151,13 +152,28 @@ function readChange(data: unknown): AccessChange | undefined {
   return { grantId };
 }
 
-/** The `data-changed` data seat, validated: an object with a non-empty string `table`, reduced to exactly that. */
+/**
+ * The `data-changed` data seat, validated and reduced: `{}` when the host could not name the
+ * table (an own-mode batch over several tables, a statement whose text does not say — the hint
+ * still means "re-read"; Gate-5 SEC-5), `{ table }` when it is a non-empty string; a record whose
+ * `table` is anything else is dropped.
+ */
 function readDataChange(data: unknown): AccessDataChange | undefined {
   if (!isRecord(data)) return undefined;
   const { table } = data;
+  if (table === undefined) return {};
   if (typeof table !== 'string' || table === '') return undefined;
   return { table };
 }
+
+/** One listener recipe for the three `{ grantId }` hints (Gate-5 W-7): the event's data through `readChange`, a malformed one dropped. */
+const grantHint =
+  (event: string) =>
+  (listener: (data: AccessChange) => void): (() => void) =>
+    onHostEvent(event, (data) => {
+      const change = readChange(data);
+      if (change !== undefined) listener(change);
+    });
 
 /**
  * Reads — and, where the user ticked it, changes — ANOTHER app's tables through a user-granted,
@@ -217,30 +233,15 @@ export function useSnugAccess(): SnugAccess {
       discover(hints?: AccessRequestHints) {
         return accessRequest({ op: 'discover', ...(hints !== undefined ? { hints } : {}) }, settleDiscover);
       },
-      onChange(listener) {
-        return onHostEvent(ACCESS_CHANGED_EVENT, (data) => {
-          const change = readChange(data);
-          if (change !== undefined) listener(change);
-        });
-      },
-      onSourceChanged(listener) {
-        return onHostEvent(ACCESS_SOURCE_CHANGED_EVENT, (data) => {
-          const change = readChange(data);
-          if (change !== undefined) listener(change);
-        });
-      },
+      onChange: grantHint(ACCESS_CHANGED_EVENT),
+      onSourceChanged: grantHint(ACCESS_SOURCE_CHANGED_EVENT),
       onDataChanged(listener) {
         return onHostEvent(DATA_CHANGED_EVENT, (data) => {
           const change = readDataChange(data);
           if (change !== undefined) listener(change);
         });
       },
-      onRead(listener) {
-        return onHostEvent(ACCESS_READ_EVENT, (data) => {
-          const change = readChange(data);
-          if (change !== undefined) listener(change);
-        });
-      },
+      onRead: grantHint(ACCESS_READ_EVENT),
     };
   }, []);
 }

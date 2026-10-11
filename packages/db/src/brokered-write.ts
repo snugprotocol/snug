@@ -30,8 +30,11 @@
 //     and — when the table has any column outside the granted `columns` — no `CHECK` (S2's
 //     residual: a CHECK over an unshared column would answer a reader's probe); when
 //     `PRAGMA foreign_keys` is on, no foreign key of ANY table names it with an action other
-//     than NO ACTION (a cascade is a change no count reports; the plan copy opens with
-//     foreign_keys off, so this bites at the live seat — D-Q14); no column named `rowid`,
+//     than NO ACTION (a cascade is a change no count reports) AND it holds no foreign key of its
+//     own (Gate-5 SEC-6: a CHILD table's insert or update fails by the parent key's existence —
+//     a one-bit oracle on a table the reader was not granted; symmetric with the parent-side
+//     rule, and free when the pragma is off; the plan copy opens with foreign_keys off, so both
+//     bite at the live seat — D-Q14); no column named `rowid`,
 //     `oid` or `_rowid_` (such a column shadows the real rowid the capture and the undo key
 //     on); and for a DELETE, EVERY live column is granted — no withheld, credential-named or
 //     generated column (S5: a DELETE journals the whole row). The columns come back with
@@ -61,7 +64,9 @@
 //     text (`findRecordCredential({ [column]: value })`, S12) — a hit is `unsafe` (or
 //     `too-large` for an over-long text) when an undo is REQUIRED, else the write commits
 //     with NO undo (D-Q15) → the journal
-//     bytes ≤ `maxUndoBytes` → the capture objects dropped → `COMMIT`. A `committed` flag;
+//     bytes ≤ `maxUndoBytes` → the capture objects dropped → `COMMIT`. A step that captured no
+//     row is not journaled, and a write that captured none at all is not undoable (Gate-5 W-1:
+//     nothing to put back, and an empty step never parses into the journal). A `committed` flag;
 //     `finally` runs ROLLBACK (errors swallowed) whenever this apply's OWN BEGIN succeeded and
 //     the commit did not, THEN drops any capture object still standing; a throw anywhere is
 //     answered `failed` (S11).
@@ -104,9 +109,8 @@
 // entry — judged by the engine as each is compiled, since a `;` inside a literal is no statement
 // end, and the whole batch rolls back on a second one), `BEGIN IMMEDIATE` (`busy`), each
 // statement in order, `sqlite3_changes()`, the drift halt against `expectChanges` (`drifted` with
-// both counts — the counts the user approved are own mode's count rule; `caps` ride for the
-// seat's one shape and are not read here), `COMMIT`. No facts, no capture, `undoable: false` —
-// an own-app undo surface is PR-4's (AC31).
+// both counts — the counts the user approved are own mode's count rule), `COMMIT`. No facts, no
+// capture, `undoable: false` — an own-app undo surface is PR-4's (AC31).
 //
 // THE WORKER'S BUNDLE CARRIES NO SCHEMA (D-PR3-28). The kit's inline Worker reaches this module
 // (`planBrokeredWrite`), and the protocol's `access.ts` constructs every access schema at its
@@ -131,8 +135,8 @@
 import type { BindParams, Database, SqlJsStatic } from 'sql.js';
 import { findRecordCredential, isCredentialKeyName, utf8ByteLength } from '@snugprotocol/protocol';
 import { scopeCopy, type ScopedReadDrift, type ScopedReadScope, type ScopedReadStatement } from './scoped-read.js';
-import { quoteIdent, selectRows } from './sqlite-helpers.js';
-import { forbiddenStatementReason, isSqlTailEmpty, nonDataStatementReason } from './statement-rules.js';
+import { errorMessage, quoteIdent, selectRows, tableColumns } from './sqlite-helpers.js';
+import { forbiddenStatementReason, isSqlTailEmpty, nonDataStatementReason, stripSqlComments } from './statement-rules.js';
 
 // ------------------------------------------------------------------------------- the shapes
 
@@ -235,11 +239,15 @@ export interface OwnStatement {
   params?: readonly unknown[];
 }
 
-/** The Worker's plans to apply (strict), the app's own approved statements (own mode), or an undo's structured steps to reverse (D-Q2). */
+/**
+ * The Worker's plans to apply (strict, under the caps), the app's own approved statements (own
+ * mode — the approved counts are its only bound) or an undo's structured steps to reverse (D-Q2;
+ * Gate-5 W-2: only the strict variant carries `caps`, because only it reads them).
+ */
 export type BrokeredApplyInput =
   | { plans: readonly BrokeredPlan[]; caps: BrokeredCaps; expectChanges?: readonly number[]; requireUndo: boolean; capture: boolean }
-  | { own: readonly OwnStatement[]; caps: BrokeredCaps; expectChanges?: readonly number[] }
-  | { undo: readonly UndoStep[]; caps: BrokeredCaps };
+  | { own: readonly OwnStatement[]; expectChanges?: readonly number[] }
+  | { undo: readonly UndoStep[] };
 
 export type BrokeredApplyResult = { ok: true; steps: UndoStep[]; changes: number[]; undoable: boolean } | ApplyRefusal;
 
@@ -247,9 +255,7 @@ export type BrokeredApplyResult = { ok: true; steps: UndoStep[]; changes: number
 
 /** The one sentence a table rule answers with (DS19): no why, nothing about the table. */
 const TABLE_REFUSED = "that table can't be changed from another app";
-const errorMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 const refused = (rule: BrokeredRefusalRule, message: string): BrokeredRefused => ({ ok: false, reason: 'refused', rule, message });
-const stripComments = (sql: string): string => sql.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/--[^\n]*/g, ' ');
 
 // ------------------------------------------------------------------------------- the tokenizer
 
@@ -675,7 +681,7 @@ export function parseBrokeredStatement(sql: string): BrokeredParseResult {
   try {
     const { tokens, rest } = tokenize(sql);
     if (!isSqlTailEmpty(rest)) {
-      const next = stripComments(rest).trim().split(/\s+/)[0] ?? '';
+      const next = stripSqlComments(rest).trim().split(/\s+/)[0] ?? '';
       refuse('statement', `"${next}" begins a second statement — only one statement is allowed`);
     }
     const c = cursorOver(tokens);
@@ -711,7 +717,7 @@ const DML_TARGET =
 
 /** The table a DML statement names, unquoted — or `undefined` when the text cannot say (the write signal's table, D-PR3-20 a). */
 export function dmlTargetTable(sql: string): string | undefined {
-  const match = DML_TARGET.exec(stripComments(sql));
+  const match = DML_TARGET.exec(stripSqlComments(sql));
   if (match === null) return undefined;
   return match[1]?.replace(/""/g, '"') ?? match[2]?.replace(/``/g, '`') ?? match[3] ?? match[4];
 }
@@ -725,9 +731,9 @@ const tableRefused = (): BrokeredRefused => refused('table', TABLE_REFUSED);
 
 /** The live columns of a table (`table_xinfo`, a virtual table's hidden columns left out) with the generated flag. */
 function liveColumns(db: Database, table: string): ColumnFact[] {
-  return selectRows(db, `PRAGMA table_xinfo(${quoteIdent(table)})`)
-    .filter((row) => Number(row[6]) !== 1)
-    .map((row) => ({ name: String(row[1]), generated: Number(row[6]) >= 2 }));
+  return tableColumns(db, table)
+    .filter((column) => column.hidden !== 1)
+    .map((column) => ({ name: column.name, generated: column.hidden >= 2 }));
 }
 
 /** Whether any foreign key of any table names `table` as its parent with an action other than NO ACTION. */
@@ -743,11 +749,18 @@ function foreignKeyActionOn(db: Database, table: string): boolean {
   );
 }
 
+/** Whether `table` is a CHILD of any foreign key (Gate-5 SEC-6): its own `foreign_key_list` is non-empty. */
+function foreignKeyChild(db: Database, table: string): boolean {
+  return selectRows(db, 'SELECT 1 FROM pragma_foreign_key_list(?) LIMIT 1', [table]).length > 0;
+}
+
 /**
  * The SHAPE rules of a table — the ones that hold for a write AND for an undo: an ordinary
- * rowid table of `main`, unshadowed, untriggered, without `ON CONFLICT REPLACE`, without a
- * foreign-key action naming it while foreign keys are on, without a rowid-named column.
- * Answers its live columns and its comment-stripped CREATE text for the scope rules.
+ * rowid table of `main`, unshadowed, untriggered, without `ON CONFLICT REPLACE`, neither named
+ * by a foreign-key action nor a foreign key's child while foreign keys are on (the parent side
+ * is a change no count reports; the child side an oracle on the parent key's existence —
+ * Gate-5 SEC-6), without a rowid-named column. Answers its live columns and its comment-stripped
+ * CREATE text for the scope rules.
  */
 function tableShape(db: Database, table: string): { ok: true; columns: ColumnFact[]; ddl: string } | BrokeredRefused {
   const listed = selectRows(db, "SELECT type, wr FROM pragma_table_list WHERE schema = 'main' AND lower(name) = lower(?)", [table]);
@@ -762,12 +775,12 @@ function tableShape(db: Database, table: string): { ok: true; columns: ColumnFac
     [table, table],
   );
   if (triggered.length > 0) return tableRefused();
-  const ddl = stripComments(String(selectRows(db, "SELECT sql FROM sqlite_master WHERE type = 'table' AND lower(name) = lower(?)", [table])[0]?.[0] ?? ''));
+  const ddl = stripSqlComments(String(selectRows(db, "SELECT sql FROM sqlite_master WHERE type = 'table' AND lower(name) = lower(?)", [table])[0]?.[0] ?? ''));
   if (/\bON\s+CONFLICT\s+REPLACE\b/i.test(ddl)) return tableRefused();
   const columns = liveColumns(db, table);
   if (columns.some((column) => ROWID_NAMES.has(column.name.toLowerCase()))) return tableRefused();
   const foreignKeys = Number(selectRows(db, 'PRAGMA foreign_keys')[0]?.[0] ?? 0) === 1;
-  if (foreignKeys && foreignKeyActionOn(db, table)) return tableRefused();
+  if (foreignKeys && (foreignKeyActionOn(db, table) || foreignKeyChild(db, table))) return tableRefused();
   return { ok: true, columns, ddl };
 }
 
@@ -1042,7 +1055,7 @@ export function planBrokeredWrite(
     if (findRecordCredential([...literals, ...params]) !== undefined) return refused('value', "a value in it can't be matched");
 
     const copy = scopeCopy(scratch, scope, { forPlan: true });
-    if (!('masked' in copy)) return copy;
+    if (!copy.ok) return copy;
     const masked = named.find((column) => copy.masked.has(`${granted.name.toLowerCase()}.${column.toLowerCase()}`));
     if (masked !== undefined) return refused('column', `a column it names isn't shared: "${masked}"`);
 
@@ -1127,7 +1140,8 @@ export function buildUndoStatement(step: UndoStep, row: UndoRow): { sql: string;
 // ------------------------------------------------------------------------------- applyBrokeredBatch
 
 const WITHIN_TRANSACTION = /within a transaction/i;
-const BUSY: ApplyRefusal = { ok: false, reason: 'busy', message: 'the app is in the middle of a change' };
+/** The one `busy` answer — the seat's from its `BEGIN IMMEDIATE`, and the driver's from its transaction record (Gate-5 W-6: one spelling). */
+export const BUSY_REFUSAL = { ok: false, reason: 'busy', message: 'the app is in the middle of a change' } as const satisfies ApplyRefusal;
 const DRIFTED = 'the rows changed since the change was planned';
 
 /** A throw inside an apply, answered as data: a refusal thrown by name keeps its rule; anything else is `failed` (S11). */
@@ -1152,7 +1166,7 @@ function beginImmediate(db: Database): ApplyRefusal | undefined {
     return undefined;
   } catch (err) {
     const message = errorMessage(err);
-    return WITHIN_TRANSACTION.test(message) ? BUSY : { ok: false, reason: 'failed', message };
+    return WITHIN_TRANSACTION.test(message) ? BUSY_REFUSAL : { ok: false, reason: 'failed', message };
   }
 }
 
@@ -1209,7 +1223,9 @@ function applyPlans(db: Database, input: Extract<BrokeredApplyInput, { plans: un
     }
     db.run('COMMIT');
     committed = true;
-    return { ok: true, steps: undoable ? steps : [], changes, undoable };
+    // A step that captured no row has nothing to put back, and an empty step never parses into the journal (W-1).
+    const captured = steps.filter((step) => step.rows.length > 0);
+    return { ok: true, steps: undoable ? captured : [], changes, undoable: undoable && captured.length > 0 };
   } catch (err) {
     return thrown(err);
   } finally {
@@ -1276,6 +1292,9 @@ function applyUndo(db: Database, steps: readonly UndoStep[]): BrokeredApplyResul
     if (!shape.ok) return shape;
     const resolved = resolveColumns(shape.columns, shape.columns.map((column) => column.name), step.columns);
     if (!resolved.ok) return resolved;
+    // A genuine entry never NAMES a credential column (the plan refused it by name; a DELETE on a table
+    // holding one was refused whole) — a step that does is planted, and its inverse would write under it (Gate-5 SEC-4).
+    if (resolved.columns.some(isCredentialKeyName)) return refused('column', "a column it names isn't shared");
     const canonical: UndoStep = { ...step, columns: resolved.columns };
     for (const row of step.rows) {
       let statement: { sql: string; params: unknown[] };

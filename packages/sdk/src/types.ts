@@ -190,9 +190,9 @@ export interface AccessChange {
   grantId: string;
 }
 
-/** The `onDataChanged` hint (spec 1.2 §24.5 MUST 24): another app — or the chat — changed one of THIS app's tables; re-read it. */
+/** The `onDataChanged` hint (spec 1.2 §24.5 MUST 24): another app — or the chat — changed one of THIS app's tables; re-read it. `table` absent when the host could not name it (a change over several tables, or a statement whose text does not say): re-read what you show. */
 export interface AccessDataChange {
-  table: string;
+  table?: string;
 }
 
 /**

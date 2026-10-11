@@ -42,9 +42,10 @@
 //
 // THE THREE VERBS OF PR-3 (D-PR3-14). `write` is a frame's one plain statement on a table the user
 // let it change: the per-app minute FIRST — a write counts in the same window as a read, refused
-// or not (E1-Q6) — then the policy's `write` verdict (rules 1–3, attendance REQUIRED, the WhatsApp
-// fact, the named table's `write`; the table read off the statement's verb — `dmlTargetTable`),
-// then the Write Broker (`writeBroker.ts`: the plan on a fresh export, the seat, the journal, the
+// or not (E1-Q6) — then the table read off the statement's verb (`dmlTargetTable`; a statement
+// that names none is not one plain INSERT, UPDATE or DELETE and is refused `statement` HERE,
+// before any verdict — Gate-5 ENG-2), then the policy's `write` verdict (rules 1–3, attendance
+// REQUIRED, the WhatsApp fact, the named table's `write`), then the Write Broker (`writeBroker.ts`: the plan on a fresh export, the seat, the journal, the
 // `wrote` line, the doorbells) whose answer is the wire's. `refresh` is the policy's `refresh`
 // verdict (rules 1–5 as a read, then the grant's `refresh` seat), then the refresh engine
 // (`refresh.ts`: the three gates, the cooldown, the dispatch, the `refreshed` line) reached with
@@ -56,7 +57,9 @@
 // counter it was made at, which every reset moves, so a reset's entry is unreachable without this
 // module holding a hook into grants.ts, D-IE1-2); a miss runs the same gather `request` runs and
 // answers `none` · `one` · `several` — nothing recorded, nothing parked, `request`'s window
-// untouched. A refusal's named effect is performed on a `read` ONLY (E1-Q3): a refused write,
+// untouched. The cache holds the IN-FLIGHT gather too (Gate-5 SEC-3): a miss parks its promise
+// before the first export, concurrent calls await that one promise, and a gather that throws
+// leaves no entry behind — eight asks at once are one walk of the library, not eight. A refusal's named effect is performed on a `read` ONLY (E1-Q3): a refused write,
 // refresh or discover leaves the history and the grant exactly as they were.
 //
 // THE READ'S DOORBELL (D-PR3-20 (d)): after a frame's read is logged, and after each grant a chat
@@ -80,7 +83,6 @@ import {
   ACCESS_LOG_COALESCE_MS,
   ACCESS_MAX_RESULT_BYTES,
   ACCESS_MAX_ROWS,
-  ACCESS_SOURCE_MAX_BYTES,
   ACCESS_TIMEOUT_STRIKES,
   isCredentialKeyName,
   scanForCredentialValues,
@@ -104,20 +106,22 @@ import {
   findAccessGrant,
   grantView,
   grantsForApp,
+  iso,
   markExpiredOnce,
   noteRead,
   noteTimeout,
   queryRateLimited,
   readerFrameEnds,
+  readerNameOf,
   releaseAccess,
   suspendAccess,
   type FoundAccessGrant,
   type LiveGrantRow,
 } from './grants.js';
-import { materialiseGrants, readScopeOf } from './materialise.js';
+import { SourceTooLarge, materialiseGrants, readScopeOf, sourceBytesOf } from './materialise.js';
 import { attendedFor, authorise, ownsGrant, stillReadable, type AccessCaller, type PolicyContext, type Refusal } from './policy.js';
 import { scopedDump, scopedRead } from './scopedRead.js';
-import { appendLine, brokeredWrite, loggedSql } from './writeBroker.js';
+import { appendLine, brokeredWrite, loggedSql, writeRefused } from './writeBroker.js';
 
 // ---------------------------------------------------------------------------------------- shapes
 
@@ -222,10 +226,6 @@ const queryFailed = (message: string = ACCESS_APP_MESSAGES.queryFailed): AccessH
 /** The mask's replacement — the scan's and the scoped copy's own. */
 const MASK = '***';
 
-class SourceTooLarge extends Error {}
-
-const iso = (at: number): string => new Date(at).toISOString();
-
 /** The door a caller came through, as a history line names it (D-PR3-6): the frame is the app's own act. */
 function viaOf(caller: AccessCaller): AccessLogVia {
   switch (caller.kind) {
@@ -268,8 +268,6 @@ function maskRows(columns: readonly string[], rows: readonly unknown[][]): unkno
   );
 }
 
-const readerName = (db: UserDb, appId: string): string => db.getApp(appId)?.displayName ?? appId;
-
 /** One `refused` line per access per coalescing window — the line is the fact, not the count. */
 function logRefused(db: UserDb, readerAppId: string, grantId: string, sourceAppId: string, tables: string[], at: number): void {
   try {
@@ -277,7 +275,7 @@ function logRefused(db: UserDb, readerAppId: string, grantId: string, sourceAppI
       .listAccessLog(sourceAppId)
       .some((entry) => entry.kind === 'refused' && entry.grantId === grantId && at - Date.parse(entry.at) < ACCESS_LOG_COALESCE_MS);
     if (recent) return;
-    db.appendAccessLog(sourceAppId, { at: iso(at), kind: 'refused', grantId, readerAppId, readerName: readerName(db, readerAppId), tables, attended: false });
+    db.appendAccessLog(sourceAppId, { at: iso(at), kind: 'refused', grantId, readerAppId, readerName: readerNameOf(db, readerAppId), tables, attended: false });
   } catch {
     // the refusal stands whether or not the history had room for it
   }
@@ -294,7 +292,8 @@ interface DiscoverEntry {
 
 function createAccessService(): AccessService {
   const now = (): number => accessDeps().now();
-  const discovered = new Map<string, DiscoverEntry>();
+  /** Per reader: the class, or the gather still making it (SEC-3 — a concurrent ask awaits the same promise). */
+  const discovered = new Map<string, DiscoverEntry | Promise<DiscoverEntry>>();
 
   /** This caller's grant by id — found and owned, else nothing (the caller answers not-granted). */
   const owned = (db: UserDb, caller: AccessCaller, grantId: string): FoundAccessGrant | undefined => {
@@ -352,11 +351,7 @@ function createAccessService(): AccessService {
     try {
       outcome = await scopedRead({
         grantId: grant.id,
-        bytes: async () => {
-          const bytes = await db.exportAppRuntime(grant.sourceAppId);
-          if (bytes.byteLength > ACCESS_SOURCE_MAX_BYTES) throw new SourceTooLarge();
-          return bytes;
-        },
+        bytes: sourceBytesOf(db, grant.sourceAppId),
         scope: readScopeOf(grant),
         // Re-checked when the read DEQUEUES: a stop or a pause that landed while it waited behind
         // other reads ends it before any export, slice or worker (W6 finding 7).
@@ -384,7 +379,7 @@ function createAccessService(): AccessService {
           kind: 'read',
           grantId: grant.id,
           readerAppId: caller.appId,
-          readerName: readerName(db, caller.appId),
+          readerName: readerNameOf(db, caller.appId),
           tables,
           ...(sql !== undefined ? { sql } : {}),
           rows: rows.length,
@@ -448,7 +443,7 @@ function createAccessService(): AccessService {
   /** The reader's library name for a skip naming the reader itself — never a throw inside a catch. */
   const readerNameQuietly = (db: UserDb | undefined, appId: string): string => {
     try {
-      return db === undefined ? appId : readerName(db, appId);
+      return db === undefined ? appId : readerNameOf(db, appId);
     } catch {
       return appId;
     }
@@ -504,7 +499,7 @@ function createAccessService(): AccessService {
           kind: 'read',
           grantId: id,
           readerAppId: caller.appId,
-          readerName: readerName(db, caller.appId),
+          readerName: readerNameOf(db, caller.appId),
           tables: grant.scope.tables.map((table) => table.name),
           ...(sql !== undefined ? { sql } : {}),
           rows: handedOf(id).reduce((sum, table) => sum + table.rows.length, 0),
@@ -527,13 +522,15 @@ function createAccessService(): AccessService {
     if (caller.kind === 'frame' && queryRateLimited(caller.appId, at)) {
       return refuse(ACCESS_ERROR_CODES.ACCESS_RATE_LIMITED, ACCESS_APP_MESSAGES.queryRateLimited, true);
     }
-    // The table the statement names, read off its verb; a statement that names none meets rule 7 with nothing to judge and the broker refuses it by name.
+    // The table the statement names, read off its verb — a statement that names none is not one plain INSERT, UPDATE or DELETE: refused by name before any verdict (ENG-2).
     const table = dmlTargetTable(input.sql);
-    const verdict = authorise(policyContextFor(db, at), caller, { kind: 'write', grantId: input.grantId, ...(table !== undefined ? { table } : {}) });
+    if (table === undefined) return writeRefused('statement');
+    const verdict = authorise(policyContextFor(db, at), caller, { kind: 'write', grantId: input.grantId, table });
     if (!verdict.ok) return refused(verdict); // no effect, no line (E1-Q3)
     return brokeredWrite(db, {
       targetAppId: verdict.grant.grant.sourceAppId,
       statement: { sql: input.sql, ...(input.params !== undefined ? { params: input.params } : {}) },
+      table,
       authority: input.authority,
       via: viaOf(caller),
       grant: verdict.grant,
@@ -547,7 +544,7 @@ function createAccessService(): AccessService {
     if (!verdict.ok) return refused(verdict); // no effect, no line (E1-Q3)
     // The ONE lazy edge (F8): the engine and the run path's production seams, loaded at the call so no top-level cycle closes through the service.
     const [{ refreshSource }, { defaultAppRunDeps }] = await Promise.all([import('./refresh.js'), import('../schedule/appRun.js')]);
-    return refreshSource(db, defaultAppRunDeps(), { grant: verdict.grant.grant, requestedBy: readerName(db, caller.appId), via: viaOf(caller) });
+    return refreshSource(db, defaultAppRunDeps(), { grant: verdict.grant.grant, requestedBy: readerNameOf(db, caller.appId), via: viaOf(caller) });
   }
 
   async function discover(caller: AccessCaller, input: AccessDiscoverInput): Promise<AccessHandlerResult> {
@@ -555,14 +552,25 @@ function createAccessService(): AccessService {
     const at = now();
     const verdict = authorise(policyContextFor(db, at), caller, { kind: 'discover' });
     if (!verdict.ok) return refused(verdict);
-    // The per-reader cache (E1-Q10): a hit answers the class and exports nothing; a reset of the session moved `ends`, so its entry misses.
+    // The per-reader cache (E1-Q10): a hit — settled, or the gather still in flight (SEC-3) — answers the class and exports nothing; a reset of the session moved `ends`, so its entry misses.
     const ends = readerFrameEnds(caller.appId);
-    const hit = discovered.get(caller.appId);
-    if (hit !== undefined && hit.ends === ends && at - hit.at < ACCESS_DISCOVER_CACHE_MS) return { ok: true, op: 'discover', candidates: hit.candidates };
-    const ranked = await collectSources(db, caller.appId, input.hints);
-    const candidates = classOf(ranked.matched.length + ranked.rest.length);
-    discovered.set(caller.appId, { at, ends, candidates });
-    return { ok: true, op: 'discover', candidates };
+    const cached = discovered.get(caller.appId);
+    const answer = (entry: DiscoverEntry): AccessHandlerResult => ({ ok: true, op: 'discover', candidates: entry.candidates });
+    if (cached !== undefined) {
+      const hit = await cached;
+      if (hit.ends === ends && at - hit.at < ACCESS_DISCOVER_CACHE_MS) return answer(hit);
+    }
+    // A miss parks its gather BEFORE the first export, so every concurrent ask awaits this one; a gather that throws leaves nothing behind.
+    const gather = collectSources(db, caller.appId, input.hints).then((ranked) => ({ at, ends, candidates: classOf(ranked.matched.length + ranked.rest.length) }));
+    discovered.set(caller.appId, gather);
+    try {
+      const entry = await gather;
+      if (discovered.get(caller.appId) === gather) discovered.set(caller.appId, entry);
+      return answer(entry);
+    } catch (err) {
+      if (discovered.get(caller.appId) === gather) discovered.delete(caller.appId);
+      throw err;
+    }
   }
 
   return { read, materialise, recordRead, list, release, write, refresh, discover };

@@ -23,9 +23,10 @@
 // UNDOABLE set — the ids of the live journal entries the file holds for this app as a target
 // (`listAccessUndo`) — and the sheet carries out *undo* on a `wrote` row (`AccessHistory` shows
 // the act behind its armed confirm): the engine's `undoBrokeredWrite`, an act of host chrome
-// (`via: 'user'`), reached at the call — no module under access/ reaches another at its top level
-// — and followed by this sheet's own re-read, so the row loses its *undo* and the `undone` line
-// appears without a reopen. A write access's row carries its badge through `GrantRow`.
+// (`via: 'user'`), reached at the call — no module under access/ reaches another at its top level.
+// The engine bumps the access revision on EVERY outcome (Gate-5 ENG-4), so this sheet's re-read
+// follows it — the row loses its *undo* and the `undone` line appears without a reopen — and the
+// sheet never bumps on its own. A write access's row carries its badge through `GrantRow`.
 
 import { useEffect, useId, useRef, useState, type ReactElement } from 'react';
 
@@ -41,7 +42,7 @@ import { AccessHistory, type UndoOutcome } from './AccessHistory.js';
 import { pendingAccessStore } from './consent.js';
 import { ACCESS_SHEET, CONSENT_SHEET } from './copy.js';
 import { GrantRow } from './GrantRow.js';
-import { accessDeps, bumpAccessRevision, grantsForApp, useAccessRevision, type LiveGrantRow } from './grants.js';
+import { accessDeps, grantsForApp, useAccessRevision, type LiveGrantRow } from './grants.js';
 import { startUserAsk } from './userAsk.js';
 
 // ------------------------------------------------------------------------------------- data
@@ -148,15 +149,14 @@ export function AccessSheet({ appId, onClose }: AccessSheetProps): ReactElement 
 
   /**
    * *undo* on a `wrote` row: the engine's act for the user (D-PR3-15), loaded at the call (the
-   * load-order rule), then this sheet's own re-read — the row loses its *undo*, the `undone`
-   * line appears. The engine answers errors as data; a throw is the history's to word.
+   * load-order rule); the engine bumps the revision on every outcome, and this sheet's re-read
+   * follows — the row loses its *undo*, the `undone` line appears. The engine answers errors as
+   * data; a throw is the history's to word.
    */
   const undo = async (undoId: string): Promise<UndoOutcome> => {
     const db = await accessDeps().getDb();
     const { undoBrokeredWrite } = await import('./writeBroker.js');
-    const answer = await undoBrokeredWrite(db, appId, undoId, { via: 'user' });
-    bumpAccessRevision();
-    return answer;
+    return undoBrokeredWrite(db, appId, undoId, { via: 'user' });
   };
 
   const nothing = data.reads.length === 0 && data.readBy.length === 0;

@@ -150,7 +150,12 @@ const frameEnds = new Map<string, number>();
 let allEnds = 0;
 
 const QUERY_WINDOW_MS = 60_000;
-const iso = (at: number): string => new Date(at).toISOString();
+
+/** An instant as the records keep it — the ONE spelling under access/ (Gate-5 ENG-4). */
+export const iso = (at: number): string => new Date(at).toISOString();
+
+/** An app's library name for a history line or a journal entry, its id when the row is gone — the ONE spelling under access/ (Gate-5 ENG-4). */
+export const readerNameOf = (db: UserDb, appId: string): string => db.getApp(appId)?.displayName ?? appId;
 
 /** The reader's attended frame generation, when one is open — a session grant made from host chrome binds to it (or, absent, to the next frame). */
 export function readerGeneration(appId: string): number | undefined {

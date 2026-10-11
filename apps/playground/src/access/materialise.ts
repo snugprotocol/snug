@@ -76,8 +76,21 @@ const RESERVED_PREFIX = 'sqlite_';
 const KV_TABLE = 'snug_kv';
 const JOIN = '__';
 
-/** A source too large to export for a read (the protocol's bound on a runtime). */
-class SourceTooLarge extends Error {}
+/** A source too large to export for a read, a dump or a plan (the protocol's bound on a runtime) — thrown by `sourceBytesOf`'s thunk, caught by its caller. */
+export class SourceTooLarge extends Error {}
+
+/**
+ * The bytes thunk every Worker job is handed (Gate-5 ENG-4 — the read, the dump and the plan
+ * share one): the source's live runtime exported at the call, refused `SourceTooLarge` past
+ * `ACCESS_SOURCE_MAX_BYTES` so no over-cap copy is ever sliced or sent.
+ */
+export function sourceBytesOf(db: UserDb, appId: string): () => Promise<Uint8Array> {
+  return async () => {
+    const bytes = await db.exportAppRuntime(appId);
+    if (bytes.byteLength > ACCESS_SOURCE_MAX_BYTES) throw new SourceTooLarge();
+    return bytes;
+  };
+}
 
 /** What a grant lets the Worker copy (D-PR3-22): its tables as the record keeps them, and `snug_kv` when the root `kv` seat is set. */
 export function readScopeOf(grant: AnyAccessGrant): ScopedReadScope {
@@ -149,11 +162,7 @@ export async function materialiseGrants(db: UserDb, caller: AccessCaller, rows: 
     try {
       outcome = await deps.dump({
         grantId: grant.id,
-        bytes: async () => {
-          const bytes = await db.exportAppRuntime(grant.sourceAppId);
-          if (bytes.byteLength > ACCESS_SOURCE_MAX_BYTES) throw new SourceTooLarge();
-          return bytes;
-        },
+        bytes: sourceBytesOf(db, grant.sourceAppId),
         scope: readScopeOf(grant),
         caps: { maxRows: ACCESS_MATERIALISE_MAX_ROWS, maxBytes: ACCESS_MATERIALISE_MAX_BYTES, maxTotalBytes: remaining },
         stillLive: stillOwned,

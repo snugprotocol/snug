@@ -116,7 +116,7 @@
 
 import type { BindParams, Database, SqlJsStatic } from 'sql.js';
 import { findRecordCredential, isCredentialKeyName, isReadOnlySelect, scanForCredentialValues } from '@snugprotocol/protocol';
-import { quoteIdent, selectRows } from './sqlite-helpers.js';
+import { errorMessage, quoteIdent, selectRows, tableColumns } from './sqlite-helpers.js';
 import { KV_TABLE_DDL, forbiddenStatementReason } from './statement-rules.js';
 import { jsonUtf8Weight, runScratchStatement } from './userdb/scratch-statement.js';
 
@@ -194,8 +194,9 @@ export type ScopingFailure =
   | { ok: false; reason: 'drift'; drift: ScopedReadDrift; message: string }
   | { ok: false; reason: 'copy-failed'; message: string };
 
-/** What a scoped copy reports: the `table.column` pairs (lower-cased) the VALUE mask overwrote at least one cell in (D-Q13). */
+/** What a scoped copy reports: the `table.column` pairs (lower-cased) the VALUE mask overwrote at least one cell in (D-Q13); `ok` so a caller narrows as on every other result (Gate-5 W-4). */
 export interface ScopeCopyReport {
+  ok: true;
   masked: ReadonlySet<string>;
 }
 
@@ -211,8 +212,6 @@ const HOST_KV_KEY_PREFIX = 'snug:';
 /** The first guard's refusal — names what IS allowed, so a reader's model can correct itself. */
 const NOT_ONE_READ_MESSAGE =
   'only one read-only SELECT (or WITH … SELECT) is allowed — no PRAGMA, ATTACH, DETACH, writes or multiple statements';
-
-const errorMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
 function namesOf(scratch: Database, type: 'trigger' | 'view'): string[] {
   return selectRows(scratch, 'SELECT name FROM sqlite_master WHERE type = ?', [type]).map((row) => String(row[0]));
@@ -312,9 +311,9 @@ function withholdColumns(scratch: Database, tables: readonly GrantedTable[]): st
   scratch.run('PRAGMA ignore_check_constraints = 1');
   for (const table of tables) {
     // table_xinfo: `hidden` 0 is an ordinary column; 1 a virtual table's hidden column; 2/3 generated.
-    const columns = selectRows(scratch, `PRAGMA table_xinfo(${quoteIdent(table.name)})`)
-      .filter((row) => Number(row[6]) === 0)
-      .map((row) => String(row[1]))
+    const columns = tableColumns(scratch, table.name)
+      .filter((column) => column.hidden === 0)
+      .map((column) => column.name)
       .filter((column) => isCredentialKeyName(column) || table.withheld.has(column.toLowerCase()));
     for (const column of columns) {
       const withheld = WITHHELD_VALUES.some((value) => {
@@ -370,9 +369,9 @@ function credentialValues(scratch: Database, table: string, column: string): unk
 function maskCredentialValues(scratch: Database, tables: readonly GrantedTable[]): { failed?: string; masked: Set<string> } {
   const masked = new Set<string>();
   for (const table of tables) {
-    const info = selectRows(scratch, `PRAGMA table_xinfo(${quoteIdent(table.name)})`)
-      .filter((row) => Number(row[6]) !== 1 && !isCredentialKeyName(String(row[1])) && !table.withheld.has(String(row[1]).toLowerCase()))
-      .map((row) => ({ column: String(row[1]), generated: Number(row[6]) >= 2 }));
+    const info = tableColumns(scratch, table.name)
+      .filter((column) => column.hidden !== 1 && !isCredentialKeyName(column.name) && !table.withheld.has(column.name.toLowerCase()))
+      .map((column) => ({ column: column.name, generated: column.hidden >= 2 }));
     for (const { column } of info.filter((entry) => !entry.generated)) {
       for (const value of credentialValues(scratch, table.name, column)) {
         const done = WITHHELD_VALUES.some((replacement) => {
@@ -403,9 +402,9 @@ function maskCredentialValues(scratch: Database, tables: readonly GrantedTable[]
  * column) stays out, as `table_info` leaves it (review finding 3).
  */
 export function selectableColumns(db: Database, table: string): string[] {
-  return selectRows(db, `PRAGMA table_xinfo(${quoteIdent(table)})`)
-    .filter((row) => Number(row[6]) !== 1)
-    .map((row) => String(row[1]));
+  return tableColumns(db, table)
+    .filter((column) => column.hidden !== 1)
+    .map((column) => column.name);
 }
 
 /** Recorded (`columns ∪ withheld`) vs live NON-credential columns of every granted table, as `table.column` names. */
@@ -454,7 +453,7 @@ export function scopeCopy(scratch: Database, scope: ScopedReadScope, options: Sc
   if (drift.added.length > 0 || drift.removed.length > 0) {
     return { ok: false, reason: 'drift', drift, message: 'the granted tables changed since access was allowed' };
   }
-  return { masked: mask.masked };
+  return { ok: true, masked: mask.masked };
 }
 
 /**
@@ -472,7 +471,7 @@ export function scopedScratchRead(
   try {
     scratch = new SQL.Database(bytes);
     const copy = scopeCopy(scratch, scope);
-    if (!('masked' in copy)) return copy;
+    if (!copy.ok) return copy;
 
     if (!isReadOnlySelect(statement.sql)) return { ok: false, reason: 'refused', message: NOT_ONE_READ_MESSAGE };
     const forbidden = forbiddenStatementReason(statement.sql);
@@ -515,7 +514,7 @@ export function scopedScratchDump(SQL: SqlJsStatic, bytes: Uint8Array, scope: Sc
   try {
     scratch = new SQL.Database(bytes);
     const copy = scopeCopy(scratch, scope);
-    if (!('masked' in copy)) return copy;
+    if (!copy.ok) return copy;
 
     const tables: ScopedDumpTable[] = [];
     let remaining = caps.maxTotalBytes;

@@ -41,7 +41,10 @@
 // its seed carries the old access's tables — each with its allowed columns, its withheld ones and
 // its write toggle — and its `kv` / `refresh` beside the duration and the away box; the sheet
 // starts with those ticked and its *more options…* open. The preselection stays the table
-// NAMES (consent.ts's `renew`); the scope travels here.
+// NAMES (consent.ts's `renew`); the scope travels here, through `renewalSeedOf` — the ONE rule
+// (Gate-5 ENG-1): the app's own renewal ask (`accessHandler.ts`) seeds the same scope over the
+// sheet's session/away defaults, so an app that asks again for the access it had is not shown a
+// narrower one than the person allowed.
 
 import { accessRequestHash, type AccessDuration, type AccessHints, type AccessScope } from '@snugprotocol/protocol';
 import type { AccessDecline, UserDb } from '@snugprotocol/db';
@@ -69,6 +72,24 @@ const seeds = new WeakMap<PendingAccessRequest, SheetSeed>();
 /** The seed of a parked ask (`undefined` for an ask without one — the sheet's own defaults then). */
 export function sheetSeedOf(pending: PendingAccessRequest): SheetSeed | undefined {
   return seeds.get(pending);
+}
+
+/**
+ * The seed a renewal of `grant` starts the sheet on (ENG-1 — one rule for the user's *allow
+ * again* and the app's own renewal ask): the duration and away box the caller chose, and the old
+ * scope with its defaults omitted, as on the record — a plain read access (nothing withheld,
+ * nothing writable) seeds no tables, because the sheet's own defaults over the preselected names
+ * reproduce that scope exactly; a widened one travels whole; `kv` / `refresh` only when true.
+ */
+export function renewalSeedOf(grant: AnyAccessGrant, duration: AccessDuration, unattended: boolean): SheetSeed {
+  const widened = grant.scope.tables.some((table) => table.write === true || (table.withheld !== undefined && table.withheld.length > 0));
+  return {
+    duration,
+    unattended,
+    ...(widened ? { tables: grant.scope.tables } : {}),
+    ...(grant.kv === true ? { kv: true } : {}),
+    ...(grant.refresh === true ? { refresh: true } : {}),
+  };
 }
 
 /** Give a parked ask its seed. A session access is never usable while away (D30), so its seed never ticks the box; the scope seats are kept only when given (`kv` / `refresh` only when true). */
@@ -145,19 +166,7 @@ export async function startUserAsk(readerAppId: string, opts: UserAskOptions = {
         : {}),
       ...(decline !== undefined ? { settle: settleFor(db, readerAppId, decline) } : {}),
     });
-    if (renew !== undefined) {
-      // Defaults omitted, as on the record: a plain read access (nothing withheld, nothing
-      // writable) seeds only its duration and away box — the sheet's own defaults over the
-      // preselected tables reproduce that scope exactly; a widened one travels whole.
-      const widened = renew.grant.scope.tables.some((table) => table.write === true || (table.withheld !== undefined && table.withheld.length > 0));
-      seedSheet(pending, {
-        duration: renew.duration,
-        unattended: renew.grant.unattended,
-        ...(widened ? { tables: renew.grant.scope.tables } : {}),
-        ...(renew.grant.kv === true ? { kv: true } : {}),
-        ...(renew.grant.refresh === true ? { refresh: true } : {}),
-      });
-    }
+    if (renew !== undefined) seedSheet(pending, renewalSeedOf(renew.grant, renew.duration, renew.grant.unattended));
   }
   return openReview(readerAppId) ? 'opened' : 'answer-other-first';
 }

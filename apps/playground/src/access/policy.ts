@@ -35,9 +35,9 @@
 //    always is, a schedule never) → `ACCESS_UNATTENDED`, retryable, no effect, no line (E1-Q4);
 //    rule 5 as `read`; rule 7 — the named table carries `write`, else `ACCESS_NOT_GRANTED` with
 //    `writeNotGranted` ("this access is read-only for that table"). The table is what the
-//    statement names, as the service reads it off the verb; a statement that names none (not one
-//    plain INSERT, UPDATE or DELETE) has nothing for rule 7 to judge — the verdict admits, and the
-//    Write Broker refuses the STATEMENT by name before any work (D-IE1-1).
+//    statement names, as the service reads it off the verb — REQUIRED on the act (Gate-5 ENG-2):
+//    a statement that names none is not one plain INSERT, UPDATE or DELETE, and the service
+//    refuses it by name BEFORE the verdict is asked, so rule 7 always has a table to judge.
 //  - `refresh { grantId }`: rules 1–5 LITERALLY as `read` (rule 4 admits a persisted away grant
 //    with nobody present, never a session grant; a frame's refusal names `refused-line` — still
 //    performed only on a read, E1-Q5), then the grant's `refresh` seat, else `ACCESS_NOT_GRANTED`
@@ -91,8 +91,8 @@ export type AccessAct =
   | { kind: 'materialise'; grantId: string }
   | { kind: 'list' }
   | { kind: 'release'; grantId: string }
-  /** PR-3: one statement on `table` (as the statement names it; absent when the text names none — the broker refuses that statement). */
-  | { kind: 'write'; grantId: string; table?: string }
+  /** PR-3: one statement on `table`, as the statement names it (the service refuses a statement that names none before asking — ENG-2). */
+  | { kind: 'write'; grantId: string; table: string }
   | { kind: 'refresh'; grantId: string }
   | { kind: 'discover' };
 
@@ -249,8 +249,8 @@ function authoriseWrite(ctx: PolicyContext, caller: AccessCaller, act: Extract<A
   // 5. The source's WhatsApp fact.
   const paused = restricted(ctx, found);
   if (paused !== undefined) return paused;
-  // 7. The named table carries `write` (a statement that names no table is the broker's to refuse — see the header).
-  if (act.table !== undefined && !tableWritable(found.grant, act.table)) return refusal(C.ACCESS_NOT_GRANTED, M.writeNotGranted, false, { grant: found });
+  // 7. The named table carries `write`.
+  if (!tableWritable(found.grant, act.table)) return refusal(C.ACCESS_NOT_GRANTED, M.writeNotGranted, false, { grant: found });
   return { ok: true, grant: found, attended };
 }
 

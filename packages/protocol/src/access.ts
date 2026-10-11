@@ -661,7 +661,8 @@ export const accessUndoStepSchema = z
     table: accessTableNameSchema,
     op: z.enum(ACCESS_UNDO_OPS),
     columns: z.array(columnNameSchema).min(1).max(ACCESS_MAX_COLUMNS),
-    rows: z.array(accessUndoRowSchema).max(ACCESS_WRITE_MAX_ROWS),
+    /** At least one row: a step that captured none has nothing to put back and is never journaled (Gate-5 W-1 — the apply drops it; this is the belt). */
+    rows: z.array(accessUndoRowSchema).min(1).max(ACCESS_WRITE_MAX_ROWS),
   })
   .superRefine((step, ctx) => {
     const seats = UNDO_ROW_SEATS[step.op];

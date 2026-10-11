@@ -21,10 +21,13 @@
 //     *keep*) — the first press only arms; *yes* calls `onUndo` ONCE and leaves ONE outcome line
 //     (`access-history-undo-outcome`): *undone*, or the engine's reason worded by copy.ts. A
 //     `wrote` row whose entry is gone, and every other kind, offers nothing — an undo is never
-//     itself undoable. The act is the sheet's (host chrome): this component only shows it.
+//     itself undoable. The act is the sheet's (host chrome): this component only shows it. Focus
+//     fell to the page with the confirm it answered (*yes, undo* is gone): the outcome line is
+//     focusable (`tabIndex=-1`) and catches it once rendered — the `AccessStrip` outcome line's
+//     recipe (Gate-5 UI-2).
 
 import type { ReactElement } from 'react';
-import { useState } from 'react';
+import { useEffect, useRef, useState, type RefObject } from 'react';
 
 import type { AccessLogEntry } from '@snugprotocol/protocol';
 
@@ -47,6 +50,8 @@ interface UndoState {
   busy: boolean;
   confirm: (undoId: string) => void;
   line: UndoLine | undefined;
+  /** The one outcome line's element, so focus can land on it (UI-2). */
+  lineRef: RefObject<HTMLParagraphElement>;
 }
 
 interface HistoryRowsProps {
@@ -96,7 +101,7 @@ function HistoryRows({ entries, now, sourceName, offersUndo, undo }: HistoryRows
               )
             ) : null}
             {undo.line !== undefined && undo.line.undoId === entry.undoId && entry.kind === 'wrote' ? (
-              <p className="hint access-undo-outcome" role="status" data-testid="access-history-undo-outcome">
+              <p ref={undo.lineRef} tabIndex={-1} className="hint access-undo-outcome" role="status" data-testid="access-history-undo-outcome">
                 {undo.line.text}
               </p>
             ) : null}
@@ -126,6 +131,19 @@ export function AccessHistory({ entries, now, sourceName, undoable, onUndo }: Ac
   const [armed, setArmed] = useState<string | undefined>(undefined);
   const [busy, setBusy] = useState(false);
   const [line, setLine] = useState<UndoLine | undefined>(undefined);
+  const lineRef = useRef<HTMLParagraphElement>(null);
+  /** Set by `confirm` once it has answered: the next commit that shows the line unarmed moves focus to it (UI-2). */
+  const focusLine = useRef(false);
+
+  // Focus fell to the page with the confirm it answered (*yes, undo* is gone with the arm): the
+  // outcome line catches it — on the commit that rendered it and unarmed the row, whether React
+  // batched the two updates into one commit or not.
+  useEffect(() => {
+    if (!focusLine.current || line === undefined || armed !== undefined) return;
+    focusLine.current = false;
+    const active = document.activeElement;
+    if (active === null || active === document.body) lineRef.current?.focus();
+  }, [line, armed]);
 
   const here = entries.filter((entry) => entry.imported !== true);
   const imported = entries.filter((entry) => entry.imported === true);
@@ -145,10 +163,11 @@ export function AccessHistory({ entries, now, sourceName, undoable, onUndo }: Ac
     } finally {
       setBusy(false);
       setArmed(undefined);
+      focusLine.current = true;
     }
   };
 
-  const undo: UndoState = { armed, arm: setArmed, busy, confirm: (undoId) => void confirm(undoId), line };
+  const undo: UndoState = { armed, arm: setArmed, busy, confirm: (undoId) => void confirm(undoId), line, lineRef };
 
   return (
     <section className="access-sheet-section access-history" data-testid="access-history">

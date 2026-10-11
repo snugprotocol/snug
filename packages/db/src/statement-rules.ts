@@ -11,15 +11,17 @@
 /** Exported for the userdb materializer: the kv table must be byte-identical on both sides. */
 export const KV_TABLE_DDL = 'CREATE TABLE IF NOT EXISTS snug_kv (key TEXT PRIMARY KEY, value TEXT)';
 
+/**
+ * SQL with its block and line comments blanked — the one rule every statement-text guard reads
+ * through (Gate-5 W-3: the four guards below, the driver's transaction record and the Write
+ * Broker's parser each carried their own copy of the two regexes; one definition cannot drift).
+ */
+export const stripSqlComments = (sql: string): string => sql.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/--[^\n]*/g, ' ');
+
 /** True when the SQL tail is only whitespace, semicolons, and comments — i.e. no second statement. */
 /** Exported alongside `forbiddenStatementReason` so `scratchRun` shares the multi-statement rule. */
 export function isSqlTailEmpty(tail: string): boolean {
-  return (
-    tail
-      .replace(/\/\*[\s\S]*?\*\//g, ' ')
-      .replace(/--[^\n]*/g, ' ')
-      .replace(/[\s;]+/g, '').length === 0
-  );
+  return stripSqlComments(tail).replace(/[\s;]+/g, '').length === 0;
 }
 
 /** BLOB cells become plain number arrays so results stay JSON/structured-clone friendly. */
@@ -42,10 +44,7 @@ export const normalizeCell = (cell: unknown): unknown => (cell instanceof Uint8A
  * false negative is silent schema corruption.
  */
 export function forbiddenStatementReason(sql: string): string | undefined {
-  const cleaned = sql
-    .replace(/\/\*[\s\S]*?\*\//g, ' ')
-    .replace(/--[^\n]*/g, ' ')
-    .trim();
+  const cleaned = stripSqlComments(sql).trim();
   if (/^ATTACH\b/i.test(cleaned)) return 'ATTACH is not allowed';
   if (/^PRAGMA\b/i.test(cleaned) && /\bwritable_schema\b/i.test(cleaned)) {
     return 'PRAGMA writable_schema is not allowed';
@@ -64,10 +63,7 @@ export function forbiddenStatementReason(sql: string): string | undefined {
  * a SELECT after the fact.
  */
 export function isRowModifyingStatement(sql: string): boolean {
-  const cleaned = sql
-    .replace(/\/\*[\s\S]*?\*\//g, ' ')
-    .replace(/--[^\n]*/g, ' ')
-    .trim();
+  const cleaned = stripSqlComments(sql).trim();
   return /^(INSERT|UPDATE|DELETE|REPLACE)\b/i.test(cleaned);
 }
 
@@ -93,10 +89,7 @@ export function isRowModifyingStatement(sql: string): boolean {
  * — and the preview is what the user approved.
  */
 export function nonDataStatementReason(sql: string): string | undefined {
-  const cleaned = sql
-    .replace(/\/\*[\s\S]*?\*\//g, ' ')
-    .replace(/--[^\n]*/g, ' ')
-    .trim();
+  const cleaned = stripSqlComments(sql).trim();
   if (/^(INSERT|UPDATE|DELETE)\b/i.test(cleaned)) return undefined;
   const verb = /^\s*([A-Za-z]+)/.exec(cleaned)?.[1]?.toUpperCase() ?? 'that';
   return `${verb} is not allowed in a data change — only INSERT, UPDATE and DELETE are. Schema changes go through the app's schema tools, not a data write.`;

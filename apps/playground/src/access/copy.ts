@@ -252,6 +252,8 @@ export const CONSENT_SHEET = {
     `while you're here, ${readerName} can change up to ${ACCESS_WRITE_MAX_ROWS} rows at a time in ${sourceName}'s ${table}; every change is listed in ${sourceName}'s access and can be undone for seven days`,
   /** The ONE disclosure the toggles and the options row live under (`access-options-more`) — open at once when they matter (DS6). */
   moreOptions: 'more options…',
+  /** What the disclosure's summary describes for a screen reader (Gate-5 UI-2): opening it also puts a change toggle on each ticked table. */
+  moreOptionsHint: 'also shows a change toggle on each ticked table',
 } as const;
 
 /**
@@ -558,9 +560,9 @@ export const ACCESS_SHEET = {
   whatItChanged: 'what it changed',
   /** The act on a `wrote` row whose journal entry is live (`access-history-undo`); also the confirm group's name (U-Q10). */
   undo: 'undo',
-  /** The armed question (DS12, S18): the count, the table, and that nothing happens when the source changed the rows since (U-Q2 names the source). */
+  /** The armed question (DS12, S18): the count, the table, and that nothing happens when the source changed the rows since (U-Q2 names the source); it agrees in number with the count (Gate-5 UI-1). */
   undoArm: (table: string, n: number, sourceName: string): string =>
-    `put ${rowsWord(n)} in ${table} back as they were before this change? (if ${sourceName} changed them since, nothing happens)`,
+    `put ${rowsWord(n)} in ${table} back as ${n === 1 ? 'it was' : 'they were'} before this change? (if ${sourceName} changed ${n === 1 ? 'it' : 'them'} since, nothing happens)`,
   undoYes: 'yes, undo',
   undoKeep: 'keep',
   /** The one outcome line after a done undo (`access-history-undo-outcome`). */
@@ -644,7 +646,7 @@ export function historyLine(
   const tables = entry.tables !== undefined && entry.tables.length > 0 ? listWords(entry.tables) : undefined;
   switch (entry.kind) {
     case 'read': {
-      const parts = [`read ${entry.tables !== undefined && entry.tables.length > 0 ? listWords(entry.tables) : 'data'}`];
+      const parts = [`read ${tables ?? 'data'}`];
       if (entry.rows !== undefined) parts.push(rowsWord(entry.rows));
       if (entry.count !== undefined && entry.count > 1) parts.push(`${entry.count} times`);
       parts.push(when);
