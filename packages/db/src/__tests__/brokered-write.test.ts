@@ -29,6 +29,7 @@
  *  - drop the `after` guard from the undo → "a row changed since → the WHOLE undo rolls back" reds.
  */
 
+import { ACCESS_PARAM_STRING_MAX_CHARS } from '@snugprotocol/protocol';
 import initSqlJs, { type Database, type SqlJsStatic } from 'sql.js';
 import { beforeAll, describe, expect, it } from 'vitest';
 
@@ -948,6 +949,29 @@ describe('applyBrokeredBatch — every refusal ROLLS BACK: nothing changed, no o
     expect(JSON.stringify(loose)).not.toContain('sk-ant-api03');
     expect(all(db, 'SELECT note FROM transactions WHERE id = 1')).toEqual([['clean']]);
     db.close();
+  });
+
+  it(`the journal's text bound IS the protocol's: a captured text of exactly ACCESS_PARAM_STRING_MAX_CHARS (${ACCESS_PARAM_STRING_MAX_CHARS}) is journalable; one char longer is too-large`, async () => {
+    // The module spells its bound locally (the Worker's bundle carries no schema — D-PR3-28); this
+    // row is the pin that the two numbers stay equal, judged where the bound bites: the strict apply.
+    const { applyBrokeredBatch } = await brokered();
+    const plan = txPlan("UPDATE transactions SET note = 'short' WHERE id = 1", 'update', { setColumns: ['note'], previewChanges: 1 });
+
+    const atBound = 'a'.repeat(ACCESS_PARAM_STRING_MAX_CHARS);
+    const fits = handle([...LEDGER, `UPDATE transactions SET note = '${atBound}' WHERE id = 1`]);
+    const kept = okApply(applyBrokeredBatch(fits, forward([plan], { expectChanges: [1] })));
+    expect(kept.undoable).toBe(true);
+    expect(kept.steps).toEqual([{ table: 'transactions', op: 'update', columns: ['note'], rows: [{ rowid: 1, before: [atBound], after: ['short'] }] }]);
+    fits.close();
+
+    const overBound = 'a'.repeat(ACCESS_PARAM_STRING_MAX_CHARS + 1);
+    const over = handle([...LEDGER, `UPDATE transactions SET note = '${overBound}' WHERE id = 1`]);
+    const before = dump(over, 'transactions');
+    expect(applyBrokeredBatch(over, forward([plan], { expectChanges: [1] }))).toMatchObject({ ok: false, reason: 'too-large' });
+    expect(dump(over, 'transactions')).toEqual(before);
+    expect(openTransaction(over)).toBe(false);
+    expect(tempObjects(over)).toEqual([]);
+    over.close();
   });
 
   it('forbiddenStatementReason is the belt on every plan’s sql: a forbidden statement is refused and never run', async () => {

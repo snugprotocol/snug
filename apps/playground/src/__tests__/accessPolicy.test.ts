@@ -260,16 +260,13 @@ describe('D-PR2-1 policy.ts is PURE — protocol, the leaf grantFacts.ts, copy.t
 // PR-3 — the second table: write · refresh · discover (contract v2 D-PR3-13)
 // =========================================================================================
 
-/** `authorise` over the v2 acts — the act union gains them in I-E1; widened here until it does. */
-type AuthoriseV2 = (ctx: ReturnType<typeof policyContext>, caller: CallerShape, act: ReturnType<typeof actOfV2>) => Record<string, unknown>;
-/** D-PR3-13 `stillWritable(find, caller, grantId, table, now)` — a local structural type until policy.ts exports it. */
-type StillWritable = (find: ReturnType<typeof policyContext>['find'], caller: CallerShape, grantId: string, table: string, now: number) => FoundAccessGrant | undefined;
-
+// `authorise` over the v2 acts and `stillWritable` (D-PR3-13) — the real exports (the pins lane
+// dropped the Gate-3 local widenings); the verdict is read as a record, as the first table's driver reads it.
 async function drivePolicyCellV2(cell: CellV2): Promise<void> {
-  const authorise = (await policy()).authorise as unknown as AuthoriseV2;
+  const { authorise } = await policy();
   const { grantId, caller } = await prepare(cell);
   const before = observe(grantId);
-  const verdict = authorise(policyContext(), caller, actOfV2(cell.act, grantId));
+  const verdict = authorise(policyContext(), caller, actOfV2(cell.act, grantId)) as unknown as Record<string, unknown>;
   expect(pickVerdict(verdict, cell.verdict)).toEqual(cell.verdict.ok ? { ok: true, ...(cell.verdict.attended !== undefined ? { attended: cell.verdict.attended } : {}) } : cell.verdict);
   if (cell.verdict.ok && cell.act !== 'discover') {
     expect((verdict.grant as FoundAccessGrant | undefined)?.grant.id, 'the verdict carries the grant it admitted').toBe(grantId);
@@ -291,7 +288,7 @@ describe('PR-3 D-PR3-13 — every cell of the second table (write · refresh · 
 });
 
 describe('PR-3 D-PR3-13 stillWritable — stillReadable ∧ the named table’s write', () => {
-  const stillWritableOf = async (): Promise<StillWritable> => (await policy() as unknown as { stillWritable: StillWritable }).stillWritable;
+  const stillWritableOf = async (): Promise<PolicyModule['stillWritable']> => (await policy()).stillWritable;
 
   it('a write grant is still writable for its ticked table only — not for its read-only table, not for a table outside it', async () => {
     const stillWritable = await stillWritableOf();

@@ -152,6 +152,7 @@ describe('createRunCountingTransport — the live frame’s transport during a d
       taskId: 't1',
       title: 'Morning forecast',
       generation: 1,
+      posture: 'schedule',
       calls: { ai: 0, net: 0 },
       refused: [],
       granted: 0,

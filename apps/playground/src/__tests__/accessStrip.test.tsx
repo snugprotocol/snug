@@ -51,7 +51,7 @@ let root: Root | undefined;
 let resolve: ReturnType<typeof vi.fn<(decision: ConsentDecision) => Promise<ConsentOutcome>>>;
 
 const OUTCOMES: Record<ConsentDecision['kind'], ConsentOutcome> = {
-  allow: { kind: 'allowed', grantId: 'g-1', sourceAppId: 'app-ledger', sourceName: 'Ledger', tables: ['transactions'], duration: 'session' },
+  allow: { kind: 'allowed', grantId: 'g-1', sourceAppId: 'app-ledger', sourceName: 'Ledger', tables: ['transactions'], duration: 'session', write: [] },
   'not-now': { kind: 'not-now' },
   'dont-allow': { kind: 'declined' },
   'stop-asking': { kind: 'muted' },

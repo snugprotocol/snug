@@ -203,7 +203,16 @@ beforeEach(() => {
     pendingAccessStore.set({});
     reviewStore.set(undefined);
     return decision.kind === 'allow'
-      ? { kind: 'allowed', grantId: 'g-1', sourceAppId: decision.sourceAppId, sourceName: 'Ledger', tables: decision.tables, duration: decision.duration }
+      ? // As the real resolve answers (consent.ts): the outcome names the tables, and the written ones (a bare name is a read, E1-Q7).
+        {
+          kind: 'allowed',
+          grantId: 'g-1',
+          sourceAppId: decision.sourceAppId,
+          sourceName: 'Ledger',
+          tables: decision.tables.map((table) => (typeof table === 'string' ? table : table.name)),
+          duration: decision.duration,
+          write: decision.tables.flatMap((table) => (typeof table !== 'string' && table.write ? [table.name] : [])),
+        }
       : { kind: 'not-now' };
   });
   egress = vi.fn((opts: { unattended: boolean; sourceName: string }): EgressLine[] => [

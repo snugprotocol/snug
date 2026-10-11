@@ -54,18 +54,22 @@ import {
   FRAME_TYPES,
   PROTOCOL_VERSION,
   SIDECAR_SYMBOLIC_HOST,
+  ACCESS_DISCOVER_CACHE_MS,
+  ACCESS_SOURCE_CHANGED_EVENT,
+  ACCESS_UNDO_MAX_ENTRIES,
+  ACCESS_UNDO_TTL_MS,
+  DATA_CHANGED_EVENT,
   accessRequestHash,
+  type AccessLogEntry,
   type AccessRequestFrame,
 } from '@snugprotocol/protocol';
-// PR-3: the wire's new names, read through the namespace until I-W exports them (undefined until then).
-import * as protocol from '@snugprotocol/protocol';
 
 import { createAccessHandlerFor } from '../access/accessHandler.js';
 import { NO_ACCESS_ASKS_KEY, pendingAccessStore, type ConsentDecision, type PendingAccessRequest } from '../access/consent.js';
 import { startUserAsk } from '../access/userAsk.js';
-import { ACCESS_APP_MESSAGES, ACCESS_SHEET } from '../access/copy.js';
+import { ACCESS_APP_MESSAGES, ACCESS_SHEET, type WriteRefusalRule } from '../access/copy.js';
 import { __setAccessDepsForTests, accessRevisionStore, createGrantFromDecision, grantsForApp, resetAccessSession, type AnyAccessGrant } from '../access/grants.js';
-import { revokeAccess, type CreateGrantInput } from '../access/grants.js';
+import { revokeAccess, type CreateGrantInput, type TableChoice } from '../access/grants.js';
 import { __setAccessServiceForTests } from '../access/service.js';
 import { provenanceLine } from '../access/provenance.js';
 import { configureScopedRead, resetScopedReadForTests, type WorkerLike } from '../access/scopedRead.js';
@@ -1064,75 +1068,37 @@ describe('AC13 list and release', () => {
 // PR-3 — write · refresh · discover (contract v2 D-PR3-13/14/15/20/21; §24.5 MUSTs 18–24)
 // =========================================================================================
 
-/** The wire's PR-3 names (I-W) — a local widening of the namespace; undefined until they land. */
-const P3 = protocol as typeof protocol & {
-  ACCESS_SOURCE_CHANGED_EVENT: string;
-  DATA_CHANGED_EVENT: string;
-  ACCESS_UNDO_MAX_ENTRIES: number;
-  ACCESS_UNDO_TTL_MS: number;
-  ACCESS_DISCOVER_CACHE_MS: number;
-};
+// The wire's, copy's, the db's and the engine's PR-3 names — the real exports (the pins lane swapped
+// the Gate-3 local widenings and structural types for them).
 
-/** The refusal rules a write is refused under, worded in copy.ts (D-PR3-24) — the KEYS are this lane's proposal (question E1-Q1). */
-type WriteRule = 'table' | 'no-where' | 'column' | 'computed' | 'value' | 'too-many' | 'too-large' | 'waiting';
-/** copy.ts's PR-3 sentences (I-U) — a local widening until they exist. */
-const M3 = ACCESS_APP_MESSAGES as typeof ACCESS_APP_MESSAGES & {
-  writeNotGranted: string;
-  refreshNotGranted: string;
-  refreshNoHandler: string;
-  refreshOff: string;
-  busy: string;
-  writeRefused(rule: WriteRule): string;
-};
 /** The words every write refusal starts with — read from copy.ts (two rules' sentences share them), never retyped. */
 const writeRefusedPrefix = (): string => {
-  const a = M3.writeRefused('table');
-  const b = M3.writeRefused('column');
+  const a = ACCESS_APP_MESSAGES.writeRefused('table');
+  const b = ACCESS_APP_MESSAGES.writeRefused('column');
   let n = 0;
   while (n < a.length && a[n] === b[n]) n += 1;
   return a.slice(0, n);
 };
 
-/** One table of the v2 decision (D-PR3-23) — a local structural type until `CreateGrantInput.tables` takes it (I-U). */
-interface DecisionTableV2 {
-  name: string;
-  withheld: string[];
-  write: boolean;
-}
+/** One table of the v2 decision (D-PR3-23) — grants.ts's `TableChoice`. */
+type DecisionTableV2 = TableChoice;
 
-/** The log entry v2 (D-PR3-6) — local until the protocol's `AccessLogEntry` carries the new seats. */
-type LogEntryV2 = ReturnType<UserDb['listAccessLog']>[number] & { via?: string; authority?: string; changes?: number; undoId?: string };
+/** The log entry v2 (D-PR3-6) — the protocol's `AccessLogEntry` carries the new seats. */
+type LogEntryV2 = AccessLogEntry;
 
-/** The undo journal (D-PR3-7) as the db lane exposes it — a local structural type until `UserDb` declares it (I-D). */
-interface UndoEntryV2 {
-  id: string;
-  at: string;
-  expiresAt: string;
-  authority: string;
-  via: string;
-  grantId: string;
-  readerAppId: string;
-  readerName: string;
-  steps: Array<{ table: string; op: 'insert' | 'update' | 'delete'; columns: string[]; rows: Array<{ rowid: number; before?: unknown[]; after?: unknown[] }> }>;
-  undoneAt?: string;
-}
-interface UndoAccessors {
-  listAccessUndo(targetAppId: string, readerAppId?: string): UndoEntryV2[];
-}
-const undoJournal = (): UndoAccessors => db as unknown as UndoAccessors;
+/** The undo journal (D-PR3-7) — the UserDb's own accessor. */
+type UndoAccessors = Pick<UserDb, 'listAccessUndo'>;
+const undoJournal = (): UndoAccessors => db;
 
-/** `access/writeBroker.ts` (I-E1) — loaded through a variable specifier: the module does not exist yet. */
-interface WriteBrokerModule {
-  undoBrokeredWrite(db: UserDb, targetAppId: string, undoId: string, options: { via: 'user' }): Promise<{ ok: boolean; reason?: string }>;
-}
+/** `access/writeBroker.ts` (I-E1) — still loaded through a variable specifier (the Gate-3 isolation); its type is the module's own. */
+type WriteBrokerModule = typeof import('../access/writeBroker.js');
 const WRITE_BROKER_MODULE = '../access/writeBroker.js';
 const writeBroker = (): Promise<WriteBrokerModule> => import(/* @vite-ignore */ WRITE_BROKER_MODULE) as Promise<WriteBrokerModule>;
 
-// The three new frames, cast: the protocol's request union gains them in I-W.
-const writeFrame = (grantId: string, sql: string, params?: Array<string | number | null>): AccessRequestFrame =>
-  ({ ...base(), op: 'write', grantId, sql, ...(params !== undefined ? { params } : {}) }) as unknown as AccessRequestFrame;
-const refreshFrame = (grantId: string): AccessRequestFrame => ({ ...base(), op: 'refresh', grantId }) as unknown as AccessRequestFrame;
-const discoverFrame = (): AccessRequestFrame => ({ ...base(), op: 'discover', hints: { tables: ['transactions'], words: ['spending'] } }) as unknown as AccessRequestFrame;
+// The three new frames — members of the protocol's request union since I-W (the Gate-3 casts dropped).
+const writeFrame = (grantId: string, sql: string, params?: Array<string | number | null>): AccessRequestFrame => ({ ...base(), op: 'write', grantId, sql, ...(params !== undefined ? { params } : {}) });
+const refreshFrame = (grantId: string): AccessRequestFrame => ({ ...base(), op: 'refresh', grantId });
+const discoverFrame = (): AccessRequestFrame => ({ ...base(), op: 'discover', hints: { tables: ['transactions'], words: ['spending'] } });
 
 /** A v2 grant (write / kv / refresh), made through THE writer behind the user's allow. */
 async function writeGrantFor(over: {
@@ -1148,7 +1114,7 @@ async function writeGrantFor(over: {
   const ranked = await collectSources(db, reader);
   const source = [...ranked.matched, ...ranked.rest].find((candidate) => candidate.appId === (over.source ?? ledger));
   if (source === undefined) throw new Error('no such candidate');
-  const input = {
+  const input: CreateGrantInput = {
     readerAppId: reader,
     source,
     tables: over.tables,
@@ -1160,7 +1126,7 @@ async function writeGrantFor(over: {
     generation: over.generation ?? 0,
     now: clock.now,
   };
-  return createGrantFromDecision(db, input as unknown as CreateGrantInput);
+  return createGrantFromDecision(db, input);
 }
 
 const WRITE_TRANSACTIONS: DecisionTableV2 = { name: 'transactions', withheld: [], write: true };
@@ -1212,7 +1178,7 @@ describe('PR-3 write — one plain statement on a table the user let it change, 
     });
     expect(entry?.undoneAt).toBeUndefined();
     expect(Date.parse(entry!.expiresAt) - Date.parse(entry!.at), 'kept seven days').toBe(7 * DAY);
-    expect(P3.ACCESS_UNDO_TTL_MS).toBe(7 * DAY);
+    expect(ACCESS_UNDO_TTL_MS).toBe(7 * DAY);
     expect(wroteLines(ledger)).toHaveLength(1);
     expect(db.listAccessLog(ledger)[0]).toMatchObject({
       kind: 'wrote',
@@ -1239,14 +1205,14 @@ describe('PR-3 write — one plain statement on a table the user let it change, 
 
     expect(await handler.handle(budget, writeFrame(mine.id, "UPDATE entries SET amount = 4 WHERE title = 'tea'"))).toEqual({ ok: true, op: 'write', changes: 1 });
 
-    const doorbells = rings.filter((ring) => ring.event === P3.DATA_CHANGED_EVENT || ring.event === P3.ACCESS_SOURCE_CHANGED_EVENT);
-    expect(P3.DATA_CHANGED_EVENT).toBe('data-changed');
-    expect(P3.ACCESS_SOURCE_CHANGED_EVENT).toBe('access-source-changed');
-    expect(doorbells.filter((ring) => ring.event === P3.DATA_CHANGED_EVENT)).toEqual([{ appId: journal, event: P3.DATA_CHANGED_EVENT, data: { table: 'entries' } }]);
-    expect(doorbells).toContainEqual({ appId: pantry, event: P3.ACCESS_SOURCE_CHANGED_EVENT, data: { grantId: theirs.id } });
+    const doorbells = rings.filter((ring) => ring.event === DATA_CHANGED_EVENT || ring.event === ACCESS_SOURCE_CHANGED_EVENT);
+    expect(DATA_CHANGED_EVENT).toBe('data-changed');
+    expect(ACCESS_SOURCE_CHANGED_EVENT).toBe('access-source-changed');
+    expect(doorbells.filter((ring) => ring.event === DATA_CHANGED_EVENT)).toEqual([{ appId: journal, event: DATA_CHANGED_EVENT, data: { table: 'entries' } }]);
+    expect(doorbells).toContainEqual({ appId: pantry, event: ACCESS_SOURCE_CHANGED_EVENT, data: { grantId: theirs.id } });
     expect(doorbells.filter((ring) => ring.appId === budget), 'never the writer').toEqual([]);
     for (const ring of doorbells) {
-      expect(Object.keys(ring.data as object), 'ids only').toEqual([ring.event === P3.DATA_CHANGED_EVENT ? 'table' : 'grantId']);
+      expect(Object.keys(ring.data as object), 'ids only').toEqual([ring.event === DATA_CHANGED_EVENT ? 'table' : 'grantId']);
     }
   });
 
@@ -1254,8 +1220,8 @@ describe('PR-3 write — one plain statement on a table the user let it change, 
     const grant = await writeGrantFor({ tables: [WRITE_TRANSACTIONS, READ_ACCOUNTS] });
     const readOnly = await grantFor();
     const handler = createAccessHandlerFor(budget, { attended: true, generation: 0 });
-    expect(await handler.handle(budget, writeFrame(grant.id, "UPDATE accounts SET balance = 1 WHERE name = 'main'"))).toEqual(refusal('ACCESS_NOT_GRANTED', M3.writeNotGranted, false));
-    expect(await handler.handle(budget, writeFrame(readOnly.id, "UPDATE transactions SET category = 'x' WHERE id = 1"))).toEqual(refusal('ACCESS_NOT_GRANTED', M3.writeNotGranted, false));
+    expect(await handler.handle(budget, writeFrame(grant.id, "UPDATE accounts SET balance = 1 WHERE name = 'main'"))).toEqual(refusal('ACCESS_NOT_GRANTED', ACCESS_APP_MESSAGES.writeNotGranted, false));
+    expect(await handler.handle(budget, writeFrame(readOnly.id, "UPDATE transactions SET category = 'x' WHERE id = 1"))).toEqual(refusal('ACCESS_NOT_GRANTED', ACCESS_APP_MESSAGES.writeNotGranted, false));
     expect(await rowsOf(ledger, 'SELECT balance FROM accounts')).toEqual([[9000]]);
     expect(await rowsOf(ledger, 'SELECT category FROM transactions WHERE id = 1')).toEqual([['food']]);
     expect(kindsOf(ledger)).toEqual(['granted', 'granted']);
@@ -1294,7 +1260,7 @@ describe('PR-3 write — every refusal is ACCESS_WRITE_REFUSED in the reader’s
 
   const writeOn = (name: string, withheld: string[] = []): DecisionTableV2[] => [{ name, withheld, write: true }];
 
-  const CASES: ReadonlyArray<{ name: string; tables: DecisionTableV2[]; sql: string; params?: Array<string | number | null>; rule?: WriteRule }> = [
+  const CASES: ReadonlyArray<{ name: string; tables: DecisionTableV2[]; sql: string; params?: Array<string | number | null>; rule?: WriteRefusalRule }> = [
     { name: 'two statements', tables: writeOn('transactions'), sql: "UPDATE transactions SET category = 'a' WHERE id = 1; UPDATE transactions SET category = 'b' WHERE id = 2" },
     { name: 'a function in SET', tables: writeOn('transactions'), sql: "UPDATE transactions SET category = upper('a') WHERE id = 1" },
     { name: 'an UPDATE with no WHERE', tables: writeOn('transactions'), sql: "UPDATE transactions SET category = 'a'", rule: 'no-where' },
@@ -1317,7 +1283,7 @@ describe('PR-3 write — every refusal is ACCESS_WRITE_REFUSED in the reader’s
       const before = await snapshot();
       const answer = await handler.handle(budget, writeFrame(grant.id, testCase.sql, testCase.params));
       if (testCase.rule !== undefined) {
-        expect(answer).toEqual(refusal('ACCESS_WRITE_REFUSED', M3.writeRefused(testCase.rule), false));
+        expect(answer).toEqual(refusal('ACCESS_WRITE_REFUSED', ACCESS_APP_MESSAGES.writeRefused(testCase.rule), false));
       } else {
         expect(answer).toMatchObject({ ok: false, code: 'ACCESS_WRITE_REFUSED', retryable: false });
         const prefix = writeRefusedPrefix();
@@ -1336,7 +1302,7 @@ describe('PR-3 write — busy, attendance, a stop that lands meanwhile, the per-
     const grant = await writeGrantFor({ tables: [WRITE_TRANSACTIONS] });
     const handler = createAccessHandlerFor(budget, { attended: true, generation: 0 });
     await execOn(ledger, 'BEGIN');
-    expect(await handler.handle(budget, writeFrame(grant.id, "UPDATE transactions SET category = 'groceries' WHERE id = 1"))).toEqual(refusal('ACCESS_BUSY', M3.busy, true));
+    expect(await handler.handle(budget, writeFrame(grant.id, "UPDATE transactions SET category = 'groceries' WHERE id = 1"))).toEqual(refusal('ACCESS_BUSY', ACCESS_APP_MESSAGES.busy, true));
     expect(wroteLines(ledger)).toEqual([]);
     expect(undoJournal().listAccessUndo(ledger)).toEqual([]);
   });
@@ -1401,13 +1367,13 @@ describe('PR-3 write — busy, attendance, a stop that lands meanwhile, the per-
   });
 
   it('the 21st live change of one reader on one target is refused “too many changes are waiting to be undone” — and the first is still undoable; once undone, the next write goes through', async () => {
-    expect(P3.ACCESS_UNDO_MAX_ENTRIES).toBe(20);
+    expect(ACCESS_UNDO_MAX_ENTRIES).toBe(20);
     const grant = await writeGrantFor({ tables: [WRITE_ACCOUNTS] });
     const handler = createAccessHandlerFor(budget, { attended: true, generation: 0 });
     for (let i = 0; i < 20; i += 1) {
       expect(await handler.handle(budget, writeFrame(grant.id, `INSERT INTO accounts (name, balance) VALUES ('n${i}', ${i})`)), `write ${i + 1}`).toEqual({ ok: true, op: 'write', changes: 1 });
     }
-    expect(await handler.handle(budget, writeFrame(grant.id, "INSERT INTO accounts (name, balance) VALUES ('n20', 20)"))).toEqual(refusal('ACCESS_WRITE_REFUSED', M3.writeRefused('waiting'), false));
+    expect(await handler.handle(budget, writeFrame(grant.id, "INSERT INTO accounts (name, balance) VALUES ('n20', 20)"))).toEqual(refusal('ACCESS_WRITE_REFUSED', ACCESS_APP_MESSAGES.writeRefused('waiting'), false));
     expect(await rowsOf(ledger, 'SELECT count(*) FROM accounts')).toEqual([[21]]);
     expect(undoJournal().listAccessUndo(ledger, budget)).toHaveLength(20);
 
@@ -1425,7 +1391,7 @@ describe('PR-3 write — busy, attendance, a stop that lands meanwhile, the per-
     const refusedWrite = writeFrame(grant.id, "UPDATE accounts SET balance = 1 WHERE name = 'main'");
     const goodWrite = (n: number) => writeFrame(grant.id, `UPDATE transactions SET amount = ${n} WHERE id = 1`);
     for (let i = 0; i < ACCESS_QUERY_RATE_PER_MINUTE; i += 1) {
-      expect(await handler.handle(budget, refusedWrite)).toEqual(refusal('ACCESS_NOT_GRANTED', M3.writeNotGranted, false));
+      expect(await handler.handle(budget, refusedWrite)).toEqual(refusal('ACCESS_NOT_GRANTED', ACCESS_APP_MESSAGES.writeNotGranted, false));
     }
     expect(await handler.handle(budget, goodWrite(1))).toEqual(refusal('ACCESS_RATE_LIMITED', ACCESS_APP_MESSAGES.queryRateLimited, true));
     expect(await handler.handle(budget, queryFrame(grant.id, 'SELECT 1')), 'the read shares the window').toEqual(refusal('ACCESS_RATE_LIMITED', ACCESS_APP_MESSAGES.queryRateLimited, true));
@@ -1480,7 +1446,7 @@ describe('PR-3 refresh — the frame’s op reaches the service; the tick decide
     const answers: AccessHandlerResult[] = [
       { ok: true, op: 'refresh', fresh: true } as unknown as AccessHandlerResult,
       { ok: true, op: 'refresh', fresh: false, reason: 'recent' } as unknown as AccessHandlerResult,
-      refusal('ACCESS_REFRESH_FAILED', M3.refreshNoHandler, false),
+      refusal('ACCESS_REFRESH_FAILED', ACCESS_APP_MESSAGES.refreshNoHandler, false),
     ];
     const calls: unknown[] = [];
     let next = 0;
@@ -1502,21 +1468,21 @@ describe('PR-3 refresh — the frame’s op reaches the service; the tick decide
   it('refresh under an access without *may ask for new data* → ACCESS_NOT_GRANTED “does not allow asking for new data”; nothing run, nothing recorded', async () => {
     const grant = await grantFor();
     const handler = createAccessHandlerFor(budget, { attended: true, generation: 0 });
-    expect(await handler.handle(budget, refreshFrame(grant.id))).toEqual(refusal('ACCESS_NOT_GRANTED', M3.refreshNotGranted, false));
+    expect(await handler.handle(budget, refreshFrame(grant.id))).toEqual(refusal('ACCESS_NOT_GRANTED', ACCESS_APP_MESSAGES.refreshNotGranted, false));
     expect(kindsOf(ledger)).toEqual(['granted']);
   });
 
   it('with the tick, the real engine meets its first gate in a file whose scheduler never started → ACCESS_REFRESH_FAILED “schedules are off” (not retryable), nothing run, no line', async () => {
     const grant = await writeGrantFor({ tables: [{ name: 'transactions', withheld: [], write: false }], refresh: true });
     const handler = createAccessHandlerFor(budget, { attended: true, generation: 0 });
-    expect(await handler.handle(budget, refreshFrame(grant.id))).toEqual(refusal('ACCESS_REFRESH_FAILED', M3.refreshOff, false));
+    expect(await handler.handle(budget, refreshFrame(grant.id))).toEqual(refusal('ACCESS_REFRESH_FAILED', ACCESS_APP_MESSAGES.refreshOff, false));
     expect(kindsOf(ledger)).toEqual(['granted']);
   });
 });
 
 describe('PR-3 discover — a class, never a list; nothing recorded; cached per reader for a minute (D-PR3-21; AC23)', () => {
   it('answers several · one · none from the installed sources, and records NOTHING — no history line, no pending, no ask spent (the user’s click that follows parks)', async () => {
-    expect(P3.ACCESS_DISCOVER_CACHE_MS).toBe(60_000);
+    expect(ACCESS_DISCOVER_CACHE_MS).toBe(60_000);
     const handler = createAccessHandlerFor(budget, { attended: true, generation: 0 });
     expect(await handler.handle(budget, discoverFrame())).toEqual({ ok: true, op: 'discover', candidates: 'several' });
     expect(db.listAccessLog(ledger)).toEqual([]);

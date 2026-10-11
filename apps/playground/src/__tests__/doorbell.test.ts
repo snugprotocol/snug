@@ -38,7 +38,7 @@ import {
 } from '@snugprotocol/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { UserDb } from '@snugprotocol/db';
+import type { NamespaceWriteEvent, UserDb } from '@snugprotocol/db';
 
 import { createAccessHandlerFor } from '../access/accessHandler.js';
 import { __setAccessDepsForTests, durationOf, resetAccessSession } from '../access/grants.js';
@@ -48,29 +48,12 @@ import { accessService, type MaterialisedSet } from '../access/service.js';
 import { __resetAppHostsForTest, registerAppHost, setAppHostGeneration } from '../state/appHosts.js';
 import { installTestUserDb, locateWasm } from './userdbTestHelper.js';
 
-// ---------------------------------------------------------------- the module under test (missing)
+// ---------------------------------------------------------------- the module under test
 
-/** What the driver raises (D-PR3-20 (a)). Local structural type — the implementation lane replaces it with `@snugprotocol/db`'s `NamespaceWriteEvent` at Gate 5. */
-interface NamespaceWriteEvent {
-  namespace: string;
-  kind: 'exec' | 'kv' | 'import' | 'brokered';
-  table?: string;
-  changes?: number;
-}
-/** `access/doorbell.ts` (D-PR3-20). Local structural type until the module exists. */
-interface DoorbellModule {
-  /** Once per open file: subscribes the facade's `subscribeWrites`; answers the unsubscribe when it gives one. */
-  armDoorbell(db: UserDb): (() => void) | void;
-  /** The broker's ring to a write's TARGET (D-PR3-20 (c)). */
-  ringDataChanged(targetAppId: string, table: string | undefined): void;
-  /** The broker's ring to the source's live readers: `except` the writing reader after a write; none after an undo. */
-  ringSourceChanged(db: UserDb, sourceAppId: string, options?: { except?: string }): void;
-}
+/** `access/doorbell.ts` (D-PR3-20) — its own type (the pins lane swapped the Gate-3 local types for the real exports); still loaded through the variable specifier. */
+type DoorbellModule = typeof import('../access/doorbell.js');
 const DOORBELL_MODULE = '../access/doorbell.js';
 const loadDoorbell = (): Promise<DoorbellModule> => import(/* @vite-ignore */ DOORBELL_MODULE) as Promise<DoorbellModule>;
-
-/** The facade's write seam (D-PR3-20 (a)). Local structural type until `SnugDbDriver` declares it. */
-type WritesSeam = { subscribeWrites(listener: (event: NamespaceWriteEvent) => void): () => void };
 
 // ------------------------------------------------------------------------------------- fixtures
 
@@ -281,14 +264,39 @@ describe('`access-source-changed` — the driver’s signal rings the source’s
   it('a `brokered` signal is the BROKER’s to ring — the doorbell rings nothing for it', async () => {
     open(budget);
     open(pantry);
-    const seam = db.driver as unknown as WritesSeam;
-    const subscribe = vi.spyOn(seam, 'subscribeWrites');
+    const subscribe = vi.spyOn(db.driver, 'subscribeWrites');
     disarm = doorbell.armDoorbell(db);
     expect(subscribe, 'armed through the facade’s `subscribeWrites`').toHaveBeenCalledTimes(1);
     const listener = subscribe.mock.calls[0]![0];
     listener({ namespace: source, kind: 'brokered', table: 'transactions', changes: 3 });
     await settle();
     expect(rung).toEqual([]);
+  });
+
+  it('a brokered signal rings nothing from the doorbell — the broker rings (a REAL seat write: the signal fires, no `access-source-changed`, and no window is opened)', async () => {
+    open(source);
+    open(budget);
+    open(pantry);
+    disarm = doorbell.armDoorbell(db);
+    const heard: NamespaceWriteEvent[] = [];
+    const off = db.driver.subscribeWrites((event) => heard.push(event));
+    // The app's own approved change through the seat (D-PR3-8's own variant): the driver rings `kind: 'brokered'`.
+    const applied = await db.driver.brokeredWrite(source, {
+      own: [{ sql: 'UPDATE transactions SET amount = 5 WHERE amount = 450' }],
+      caps: { maxChanges: 1, maxUndoBytes: 64 * 1024 },
+      expectChanges: [1],
+    });
+    off();
+    expect(applied).toMatchObject({ ok: true, changes: [1] });
+    expect(heard, 'the signal really fired').toEqual([expect.objectContaining({ namespace: source, kind: 'brokered', table: 'transactions' })]);
+    await settle();
+    expect(rung.filter((entry) => entry.event === ACCESS_SOURCE_CHANGED_EVENT)).toEqual([]);
+    expect(rung, 'the doorbell rang nothing at all — the broker rings data-changed itself').toEqual([]);
+    // No coalescing window was opened by it: the next frame change rings at once.
+    await insertRow();
+    await settle();
+    expect(sourceChanged(budget)).toEqual([{ grantId: budgetGrant.id }]);
+    expect(sourceChanged(pantry)).toEqual([{ grantId: pantryGrant.id }]);
   });
 
   it('coalesced PER SOURCE over 2 s: the first change rings at once; later ones inside the window ring ONCE more at its end; then quiet', async () => {

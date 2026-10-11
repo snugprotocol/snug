@@ -20,10 +20,10 @@
 // statement, caps, stillLive? })` on the SAME queue and worker, under the READ's clock, on a FRESH
 // export (the grant's cached bytes evicted before the thunk runs; the plan never cached); the
 // worker answers it with the real `planBrokeredWrite` (counts, never a row) and a plan-write-shaped
-// job that fails its guard `failed` FOR ITS ID. Red until scopedRead.ts exports `scopedPlanWrite`
-// (reached through the module namespace; its shapes are local structural types) and the worker
-// learns the job (the db lane's `planBrokeredWrite` first). The dump's default clock moved to the
-// protocol's Appendix B (D-PR3-26: access/limits.ts is deleted) — read from there, red until I-W.
+// job that fails its guard `failed` FOR ITS ID. Written red-first (Gate 3) through the module
+// namespace with local structural shapes; the pins lane swapped both for scopedRead.ts's real
+// exports. The dump's default clock moved to the protocol's Appendix B (D-PR3-26: access/limits.ts
+// is deleted) — read from there.
 
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -31,11 +31,10 @@ import { FRAME_TYPES, PROTOCOL_VERSION } from '@snugprotocol/protocol';
 
 import { ACCESS_MAX_RESULT_BYTES, ACCESS_MAX_ROWS, ACCESS_QUERY_TIMEOUT_MS, ACCESS_SCOPED_CACHE_MS } from '@snugprotocol/protocol';
 
-import type { ScopedDumpCaps } from '@snugprotocol/db';
+import type { BrokeredCaps, ScopedDumpCaps } from '@snugprotocol/db';
 
 // D-PR3-26: the materialise limits moved to the protocol (Appendix B); access/limits.ts is deleted.
 import * as protocolNamespace from '@snugprotocol/protocol';
-import * as scopedReadModule from '../access/scopedRead.js';
 import {
   __scopedReadCachedGrantsForTests,
   canConstructWorker,
@@ -43,15 +42,18 @@ import {
   configureScopedRead,
   resetScopedReadForTests,
   scopedDump,
+  scopedPlanWrite,
   scopedRead,
+  type PlanOutcome,
   type ScopedDumpOutcome,
+  type ScopedPlanWriteInput,
   type WorkerLike,
 } from '../access/scopedRead.js';
 import { createScopedReadResponder, loadEngine } from '../access/scopedRead.worker.js';
 import { installTestUserDb, locateWasm } from './userdbTestHelper.js';
 
-/** Read from the protocol's Appendix B (D-PR3-26) — a local widening until I-W exports it. */
-const { ACCESS_MATERIALISE_TIMEOUT_MS } = protocolNamespace as typeof protocolNamespace & { ACCESS_MATERIALISE_TIMEOUT_MS: number };
+/** Read from the protocol's Appendix B (D-PR3-26) — the real export (the Gate-3 local widening dropped). */
+const { ACCESS_MATERIALISE_TIMEOUT_MS } = protocolNamespace;
 
 const CAPS = { maxRows: ACCESS_MAX_ROWS, maxBytes: ACCESS_MAX_RESULT_BYTES };
 const SCOPE = { tables: [{ name: 'transactions', columns: ['id', 'amount'] }] };
@@ -700,24 +702,9 @@ describe('PR-2 the dump’s own clock, and the host side’s own outcomes', () =
 // FIRST beside the dump's and answers a malformed one `failed` for its id.
 // =========================================================================================
 
-/** The plan's caps and shapes (D-PR3-9) — local structural types until scopedRead.ts / the db export them. */
-interface PlanCaps {
-  maxChanges: number;
-  maxUndoBytes: number;
-}
-interface PlanWriteInput {
-  grantId: string;
-  bytes: () => Promise<Uint8Array>;
-  scope: { tables: ReadonlyArray<{ name: string; columns: readonly string[]; withheld?: readonly string[]; write?: boolean }>; kv?: boolean };
-  statement: { sql: string; params?: readonly unknown[] };
-  caps: PlanCaps;
-  stillLive?: () => boolean;
-}
-type PlanOutcome =
-  | { ok: true; plan: { sql: string; op: 'insert' | 'update' | 'delete'; table: string; columns: string[]; previewChanges: number } }
-  | { ok: false; reason: string; message: string };
-const scopedPlanWrite = (input: PlanWriteInput): Promise<PlanOutcome> =>
-  (scopedReadModule as unknown as { scopedPlanWrite(input: PlanWriteInput): Promise<PlanOutcome> }).scopedPlanWrite(input);
+/** The plan's caps and shapes (D-PR3-9) — the real exports (the pins lane swapped the Gate-3 local structural types for them). */
+type PlanCaps = BrokeredCaps;
+type PlanWriteInput = ScopedPlanWriteInput;
 
 const PLAN_SCOPE: PlanWriteInput['scope'] = { tables: [{ name: 'transactions', columns: ['id', 'amount'], write: true }] };
 const PLAN_CAPS: PlanCaps = { maxChanges: 200, maxUndoBytes: 64 * 1024 };

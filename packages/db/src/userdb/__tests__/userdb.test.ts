@@ -1314,3 +1314,38 @@ describe('importUserDb — the undo journal and the wants (TASK-20261010-host-br
     await trusted.close();
   });
 });
+
+// TASK-20261010-host-broker PR-3 code-fix D-FIX-1 — the facade forwards the driver's `inTransaction`
+// read beside `brokeredWrite` (whose facade rows live in driver.test.ts): a deleted or unheld app
+// holds no transaction (plain false, the `hostKvRefusal` reasoning — never a refusal object, and the
+// namespace is not opened for it); a held app answers the inner driver's record.
+describe('the facade’s inTransaction — forwarded for a held app, false for a deleted or unheld one (D-FIX-1)', () => {
+  it('a held app mid-transaction → true; after its COMMIT → false', async () => {
+    // A debounce that cannot fire inside the row: a persist exports, and an export ends the transaction.
+    const db = await open(backend, { persistDebounceMs: 60_000 });
+    const app = db.installApp({ displayName: 'Ledger', html: '<html>ledger</html>' });
+    expect(await db.driver.inTransaction(app.appId)).toBe(false);
+    expect((await db.driver.handle(app.appId, execFrame('CREATE TABLE t (a TEXT)'))).ok).toBe(true);
+    expect((await db.driver.handle(app.appId, execFrame('BEGIN'))).ok).toBe(true);
+    expect(await db.driver.inTransaction(app.appId)).toBe(true);
+    expect((await db.driver.handle(app.appId, execFrame('COMMIT'))).ok).toBe(true);
+    expect(await db.driver.inTransaction(app.appId)).toBe(false);
+    await db.close();
+  });
+
+  it('an app the file never held → false (a boolean, not a refusal)', async () => {
+    const db = await open(backend, { persistDebounceMs: 60_000 });
+    await expect(db.driver.inTransaction('f0f0f0f0-0000-4000-8000-000000000000')).resolves.toBe(false);
+    await db.close();
+  });
+
+  it('a DELETED app → false, even when it was mid-transaction before the delete', async () => {
+    const db = await open(backend, { persistDebounceMs: 60_000 });
+    const app = db.installApp({ displayName: 'Notes', html: '<html>notes</html>' });
+    expect((await db.driver.handle(app.appId, execFrame('BEGIN'))).ok).toBe(true);
+    expect(await db.driver.inTransaction(app.appId)).toBe(true);
+    await db.deleteApp(app.appId);
+    await expect(db.driver.inTransaction(app.appId)).resolves.toBe(false);
+    await db.close();
+  });
+});

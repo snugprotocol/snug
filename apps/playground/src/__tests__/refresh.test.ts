@@ -63,9 +63,7 @@ const REFRESH_MODULE = '../access/refresh.js';
 const loadRefresh = (): Promise<RefreshModule> => import(/* @vite-ignore */ REFRESH_MODULE) as Promise<RefreshModule>;
 
 /** `clearSourceReadCaches(db, sourceAppId)` lives in the Write Broker (D-PR3-15); the refresh engine calls it after a result. */
-interface WriteBrokerModule {
-  clearSourceReadCaches(db: UserDb, sourceAppId: string): void;
-}
+type WriteBrokerModule = typeof import('../access/writeBroker.js');
 const WRITE_BROKER_MODULE = '../access/writeBroker.js';
 const loadWriteBroker = (): Promise<WriteBrokerModule> => import(/* @vite-ignore */ WRITE_BROKER_MODULE) as Promise<WriteBrokerModule>;
 

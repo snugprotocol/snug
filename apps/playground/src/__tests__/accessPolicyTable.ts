@@ -70,6 +70,7 @@ import {
   createGrantFromDecision,
   findAccessGrant,
   type CreateGrantInput,
+  type TableChoice,
   readerGeneration,
   resetAccessSession,
   revokeAccess,
@@ -608,14 +609,10 @@ export async function makeGrant(key: GrantKey): Promise<string> {
 
 /**
  * PR-3 (D-PR3-23): one table of the v2 decision — `withheld` the unticked non-sensitive columns,
- * `write` the per-table toggle. A LOCAL structural type: the implementation lane's
- * `CreateGrantInput.tables` replaces it (the cast below goes with it at Gate 5).
+ * `write` the per-table toggle. The real `TableChoice` (grants.ts) — the pins lane swapped the
+ * Gate-3 local structural type for it; the name stays for the files that import it.
  */
-export interface DecisionTableV2 {
-  name: string;
-  withheld: string[];
-  write: boolean;
-}
+export type DecisionTableV2 = TableChoice;
 
 /** PR-3: a v2 grant Budget holds on Ledger, made through THE writer behind the user's allow. */
 async function grantFromLedgerV2(over: { duration: 'session' | 'day' | 'week' | 'always'; unattended: boolean; generation?: number; tables: DecisionTableV2[]; kv?: boolean; refresh?: boolean }): Promise<string> {
@@ -623,7 +620,7 @@ async function grantFromLedgerV2(over: { duration: 'session' | 'day' | 'week' | 
   const ranked = await collectSources(db, budget);
   const source = [...ranked.matched, ...ranked.rest].find((candidate) => candidate.appId === ledger);
   if (source === undefined) throw new Error('Ledger was not offered');
-  const input = {
+  const input: CreateGrantInput = {
     readerAppId: budget,
     source,
     tables: over.tables,
@@ -636,7 +633,7 @@ async function grantFromLedgerV2(over: { duration: 'session' | 'day' | 'week' | 
     ...(over.generation !== undefined ? { generation: over.generation } : {}),
     now: clock.now,
   };
-  const grant = await createGrantFromDecision(db, input as unknown as CreateGrantInput);
+  const grant = await createGrantFromDecision(db, input);
   return grant.id;
 }
 
@@ -868,13 +865,11 @@ export const WRITE_SQL: Record<'write' | 'write-readonly', string> = {
 export const WRITE_TABLE: Record<'write' | 'write-readonly', string> = { write: 'transactions', 'write-readonly': 'accounts' };
 
 /**
- * The PR-3 codes and sentences — LOCAL widenings until the implementation lanes export them
- * (I-W: the three codes; I-U: the sentences in copy.ts). Read at cell time, never retyped.
+ * The PR-3 codes and sentences — the real exports (the pins lane dropped the Gate-3 local
+ * widenings: I-W exports the three codes, I-U the sentences in copy.ts). Read at cell time, never retyped.
  */
-type PR3Codes = typeof ACCESS_ERROR_CODES & Record<'ACCESS_WRITE_REFUSED' | 'ACCESS_BUSY' | 'ACCESS_REFRESH_FAILED', string>;
-type PR3Messages = typeof ACCESS_APP_MESSAGES & Record<'writeNotGranted' | 'refreshNotGranted' | 'refreshOff' | 'refreshNoHandler' | 'busy', string>;
-const C3 = ACCESS_ERROR_CODES as PR3Codes;
-const M3 = ACCESS_APP_MESSAGES as PR3Messages;
+const C3 = ACCESS_ERROR_CODES;
+const M3 = ACCESS_APP_MESSAGES;
 
 /** A readable name per expectation — the v2 codes/sentences are undefined until they land, so a cell's title never prints them. */
 const LABELS = new Map<Expected, string>();
@@ -1106,10 +1101,10 @@ export function discoverClassFor(grant: GrantKeyV2): 'one' | 'several' {
   return grant === 'source-restricted' ? 'one' : 'several';
 }
 
-// The three new frames, cast: the protocol's request union gains them in I-W.
-const writeFrame = (grantId: string, sql: string): AccessRequestFrame => ({ ...base(), op: 'write', grantId, sql }) as unknown as AccessRequestFrame;
-const refreshFrame = (grantId: string): AccessRequestFrame => ({ ...base(), op: 'refresh', grantId }) as unknown as AccessRequestFrame;
-const discoverFrame = (): AccessRequestFrame => ({ ...base(), op: 'discover', hints: { tables: ['transactions'], words: ['spending'] } }) as unknown as AccessRequestFrame;
+// The three new frames — members of the protocol's request union since I-W (the Gate-3 casts dropped).
+const writeFrame = (grantId: string, sql: string): AccessRequestFrame => ({ ...base(), op: 'write', grantId, sql });
+const refreshFrame = (grantId: string): AccessRequestFrame => ({ ...base(), op: 'refresh', grantId });
+const discoverFrame = (): AccessRequestFrame => ({ ...base(), op: 'discover', hints: { tables: ['transactions'], words: ['spending'] } });
 
 /**
  * Drive ONE frame cell of the second table through the REAL handler: the answer, and — A-Q1 — that

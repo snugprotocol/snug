@@ -62,13 +62,8 @@ import { EMPTY_MATERIALISED_SET, accessService, type MaterialisedSet } from '../
 import { startUserAsk } from '../access/userAsk.js';
 import { installTestUserDb, locateWasm } from './userdbTestHelper.js';
 
-/** The four caps as the protocol exports them (I-W) — a local widening until they land. */
-const limits = protocolNamespace as typeof protocolNamespace & {
-  ACCESS_MATERIALISE_MAX_ROWS: number;
-  ACCESS_MATERIALISE_MAX_BYTES: number;
-  ACCESS_MATERIALISE_MAX_SET_BYTES: number;
-  ACCESS_MATERIALISE_TIMEOUT_MS: number;
-};
+/** The four caps as the protocol exports them (I-W) — the namespace itself (the pins lane dropped the Gate-3 local widening). */
+const limits = protocolNamespace;
 const { ACCESS_MATERIALISE_MAX_BYTES, ACCESS_MATERIALISE_TIMEOUT_MS } = limits;
 
 // =========================================================================================

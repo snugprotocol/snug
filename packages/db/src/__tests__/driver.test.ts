@@ -11,6 +11,7 @@ import {
   createMemoryBackend,
   openUserDb,
   type BrokeredPlan,
+  type BrokeredWriteInput,
   type NamespaceWriteEvent,
   type SnugDbDriver,
 } from '../index.js';
@@ -545,6 +546,9 @@ describe('the per-namespace inTransaction flag — brokeredWrite answers busy fr
   it('an import clears it (the handle it guarded is gone)', async () => {
     const d = driver();
     const donor = driver();
+    // A namespace that never ran a statement exports 0 bytes (sql.js writes no page), which the
+    // import's magic-header guard rightly answers BAD_IMPORT — so the donor runs one frame first.
+    expectOk(await donor.handle('donor', execFrame(SCORES)));
     const exported = await donor.handle('donor', exportFrame());
     expectOk(exported);
     expectOk(await d.handle(NS, execFrame('BEGIN')));
@@ -578,6 +582,222 @@ describe('the per-namespace inTransaction flag — brokeredWrite answers busy fr
     await d.close();
     const result = await seats(d).brokeredWrite(NS, adaTo(50));
     expect(result.ok).toBe(false);
+  });
+});
+
+describe('inTransaction — the driver’s transaction record, READ (code-fix D-FIX-1; E1-Q8 recovery)', () => {
+  /**
+   * A driver whose debounce never fires inside a row, over a memory backend whose `files` map is
+   * the "no export happened" oracle: the driver exports only to persist (or for an export frame).
+   */
+  function quiet(): { driver: SnugDbDriver; files: Map<string, Uint8Array> } {
+    const backend = createMemoryBackend();
+    return { driver: createDbDriver({ backend, locateWasm, persistDebounceMs: 60_000 }), files: backend.files };
+  }
+
+  it('a namespace never opened answers false — and asking does not open it', async () => {
+    const { driver: d, files } = quiet();
+    expect(await d.inTransaction('never-opened')).toBe(false);
+    expect(files.size).toBe(0);
+    await d.close();
+    expect(files.size).toBe(0); // close flushes every OPEN namespace — none was opened by the read
+  });
+
+  it('after a frame’s BEGIN → true, and the handle is untouched: no export happened, the app’s transaction is still open on it', async () => {
+    const { driver: d, files } = quiet();
+    expectOk(await d.handle(NS, execFrame(SCORES)));
+    expectOk(await d.handle(NS, execFrame("INSERT INTO scores (name, points) VALUES ('ada', 1)")));
+    expectOk(await d.handle(NS, execFrame('BEGIN')));
+    expectOk(await d.handle(NS, execFrame("UPDATE scores SET points = 7 WHERE name = 'ada'")));
+    expect(await d.inTransaction(NS)).toBe(true);
+    expect(await d.inTransaction(NS)).toBe(true); // reading twice changes nothing
+    expect(files.size).toBe(0); // nothing was exported to persist
+    // The app's own transaction survived the read: its ROLLBACK still finds it and undoes its UPDATE.
+    expectOk(await d.handle(NS, execFrame('ROLLBACK')));
+    const after = await d.handle(NS, execFrame("SELECT points FROM scores WHERE name = 'ada'"));
+    expectOk(after);
+    expect(after.rows).toEqual([[1]]);
+    expect(await d.inTransaction(NS)).toBe(false);
+  });
+
+  it('after COMMIT → false; after ROLLBACK → false', async () => {
+    const { driver: d } = quiet();
+    expectOk(await d.handle(NS, execFrame(SCORES)));
+    expectOk(await d.handle(NS, execFrame('BEGIN')));
+    expect(await d.inTransaction(NS)).toBe(true);
+    expectOk(await d.handle(NS, execFrame('COMMIT')));
+    expect(await d.inTransaction(NS)).toBe(false);
+    expectOk(await d.handle(NS, execFrame('BEGIN')));
+    expect(await d.inTransaction(NS)).toBe(true);
+    expectOk(await d.handle(NS, execFrame('ROLLBACK')));
+    expect(await d.inTransaction(NS)).toBe(false);
+  });
+
+  it('after an export frame → false: export() reopened the connection, and the record went with the transaction', async () => {
+    const { driver: d } = quiet();
+    expectOk(await d.handle(NS, execFrame(SCORES)));
+    expectOk(await d.handle(NS, execFrame('BEGIN')));
+    expect(await d.inTransaction(NS)).toBe(true);
+    expectOk(await d.handle(NS, exportFrame()));
+    expect(await d.inTransaction(NS)).toBe(false);
+    // The record tells the truth: the handle holds no transaction any more.
+    expectError(await d.handle(NS, execFrame('COMMIT')), DB_ERROR_CODES.SQL_ERROR);
+    expect(await d.inTransaction(NS)).toBe(false);
+  });
+
+  it('after a successful import → false', async () => {
+    const { driver: d } = quiet();
+    const donor = driver();
+    expectOk(await donor.handle('donor', execFrame(SCORES)));
+    const exported = await donor.handle('donor', exportFrame());
+    expectOk(exported);
+    expectOk(await d.handle(NS, execFrame('BEGIN')));
+    expect(await d.inTransaction(NS)).toBe(true);
+    expectOk(await d.handle(NS, importFrame(exported.bytesBase64 as string)));
+    expect(await d.inTransaction(NS)).toBe(false);
+  });
+
+  it('a COMMIT that fails "no transaction is active" clears a stale record (the handle ended the transaction behind the verbs)', async () => {
+    const { driver: d } = quiet();
+    expectOk(await d.handle(NS, execFrame('CREATE TABLE tags (k TEXT UNIQUE)')));
+    expectOk(await d.handle(NS, execFrame("INSERT INTO tags (k) VALUES ('a')")));
+    expectOk(await d.handle(NS, execFrame('BEGIN')));
+    // OR ROLLBACK on a constraint failure rolls the WHOLE transaction back inside a failed
+    // statement — no transaction verb the record reads ran, so the record still says open.
+    expectError(await d.handle(NS, execFrame("INSERT OR ROLLBACK INTO tags (k) VALUES ('a')")), DB_ERROR_CODES.SQL_ERROR);
+    expect(await d.inTransaction(NS)).toBe(true);
+    const commit = await d.handle(NS, execFrame('COMMIT'));
+    expectError(commit, DB_ERROR_CODES.SQL_ERROR);
+    if (!commit.ok) expect(commit.message).toMatch(/no transaction is active/i);
+    expect(await d.inTransaction(NS)).toBe(false);
+    expect(await isBusy(d)).toBe(false); // the seat is not stranded either
+  });
+
+  it('SAVEPOINT/RELEASE nest inside a BEGIN: BEGIN; SAVEPOINT a; RELEASE a → still true; COMMIT → false', async () => {
+    const { driver: d } = quiet();
+    expectOk(await d.handle(NS, execFrame('BEGIN')));
+    expectOk(await d.handle(NS, execFrame('SAVEPOINT a')));
+    expect(await d.inTransaction(NS)).toBe(true);
+    expectOk(await d.handle(NS, execFrame('RELEASE a')));
+    expect(await d.inTransaction(NS)).toBe(true);
+    expectOk(await d.handle(NS, execFrame('COMMIT')));
+    expect(await d.inTransaction(NS)).toBe(false);
+  });
+
+  it('the closed driver answers false, never throws', async () => {
+    const { driver: d } = quiet();
+    expectOk(await d.handle(NS, execFrame('BEGIN')));
+    expect(await d.inTransaction(NS)).toBe(true);
+    await d.close();
+    await expect(d.inTransaction(NS)).resolves.toBe(false);
+  });
+});
+
+describe('brokeredWrite’s OWN variant — { own, caps, expectChanges }: the DML belts only, no facts, no capture, never undoable (D-PR3-8; E1-Q12)', () => {
+  const AUDITED = [
+    SCORES,
+    'CREATE TABLE audit (what TEXT)',
+    "CREATE TRIGGER scores_audit AFTER UPDATE ON scores BEGIN INSERT INTO audit (what) VALUES ('changed ' || new.name); END",
+    "INSERT INTO scores (name, points) VALUES ('ada', 1), ('bo', 2)",
+  ];
+
+  async function seeded(statements: readonly string[] = AUDITED): Promise<{ driver: SnugDbDriver; events: NamespaceWriteEvent[] }> {
+    const made = signalled();
+    for (const sql of statements) expectOk(await made.driver.handle(NS, execFrame(sql)));
+    made.events.length = 0;
+    return made;
+  }
+
+  async function rows(d: SnugDbDriver, sql: string): Promise<unknown[][]> {
+    const result = await d.handle(NS, execFrame(sql));
+    expectOk(result);
+    return result.rows ?? [];
+  }
+
+  const own = (statements: Array<{ sql: string; params?: unknown[] }>, expectChanges?: number[]): BrokeredWriteInput => ({
+    own: statements,
+    caps: BROKER_CAPS,
+    ...(expectChanges === undefined ? {} : { expectChanges }),
+  });
+
+  it('a table WITH an app trigger applies (the strict facts would refuse it): the trigger’s audit row lands, undoable false, no capture object', async () => {
+    const { driver: d } = await seeded();
+    const result = await d.brokeredWrite(NS, own([{ sql: 'UPDATE scores SET points = ? WHERE name = ?', params: [50, 'ada'] }], [1]));
+    expect(result).toEqual({ ok: true, steps: [], changes: [1], undoable: false });
+    expect(await rows(d, "SELECT points FROM scores WHERE name = 'ada'")).toEqual([[50]]);
+    expect(await rows(d, 'SELECT what FROM audit')).toEqual([['changed ada']]);
+    expect(await rows(d, 'SELECT name FROM sqlite_temp_master')).toEqual([]);
+    expect(await d.inTransaction(NS)).toBe(false);
+  });
+
+  it('a drifted count → ROLLBACK, answered with previewed and current; nothing changed, no signal', async () => {
+    const { driver: d, events } = await seeded();
+    const result = await d.brokeredWrite(NS, own([{ sql: 'UPDATE scores SET points = 9' }], [1]));
+    expect(result).toMatchObject({ ok: false, reason: 'drifted', previewed: [1], current: [2], retryable: false });
+    expect(await rows(d, 'SELECT name, points FROM scores ORDER BY rowid')).toEqual([
+      ['ada', 1],
+      ['bo', 2],
+    ]);
+    expect(await rows(d, 'SELECT what FROM audit')).toEqual([]);
+    expect(events).toEqual([]);
+  });
+
+  it('two statements in one entry → refused (rule statement), and neither ran', async () => {
+    const { driver: d, events } = await seeded();
+    const result = await d.brokeredWrite(NS, own([{ sql: "UPDATE scores SET points = 5 WHERE name = 'ada'; UPDATE scores SET points = 6 WHERE name = 'bo'" }]));
+    expect(result).toMatchObject({ ok: false, reason: 'refused', rule: 'statement', retryable: false });
+    expect(await rows(d, 'SELECT name, points FROM scores ORDER BY rowid')).toEqual([
+      ['ada', 1],
+      ['bo', 2],
+    ]);
+    expect(events).toEqual([]);
+  });
+
+  it('a DDL is refused by the class belt (nonDataStatementReason) and never runs', async () => {
+    const { driver: d, events } = await seeded();
+    for (const sql of ['DROP TABLE scores', 'CREATE TABLE extra (a TEXT)', 'ALTER TABLE scores ADD COLUMN x TEXT']) {
+      const result = await d.brokeredWrite(NS, own([{ sql }]));
+      expect(result).toMatchObject({ ok: false, reason: 'refused', rule: 'statement', retryable: false });
+    }
+    expect(await rows(d, "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")).toEqual([['audit'], ['scores']]);
+    expect(await rows(d, 'SELECT count(*) FROM pragma_table_info(\'scores\')')).toEqual([[2]]);
+    expect(events).toEqual([]);
+  });
+
+  it('busy under the app’s open BEGIN (retryable), and the app’s transaction is left as it was', async () => {
+    const { driver: d, events } = await seeded();
+    expectOk(await d.handle(NS, execFrame('BEGIN')));
+    expectOk(await d.handle(NS, execFrame("UPDATE scores SET points = 7 WHERE name = 'ada'")));
+    events.length = 0;
+    const result = await d.brokeredWrite(NS, own([{ sql: "UPDATE scores SET points = 50 WHERE name = 'bo'" }], [1]));
+    expect(result).toMatchObject({ ok: false, reason: 'busy', retryable: true });
+    expect(events).toEqual([]);
+    expectOk(await d.handle(NS, execFrame('COMMIT')));
+    expect(await rows(d, 'SELECT name, points FROM scores ORDER BY rowid')).toEqual([
+      ['ada', 7],
+      ['bo', 2],
+    ]);
+  });
+
+  it('the brokered signal: the table from dmlTargetTable when every statement names the same one, changes the SUM; none when they differ', async () => {
+    const { driver: d, events } = await seeded();
+    const same = await d.brokeredWrite(
+      NS,
+      own(
+        [
+          { sql: "UPDATE scores SET points = 10 WHERE name = 'ada'" },
+          { sql: 'INSERT INTO "scores" (name, points) VALUES (?, ?), (?, ?)', params: ['cy', 3, 'di', 4] },
+        ],
+        [1, 2],
+      ),
+    );
+    expect(same).toMatchObject({ ok: true, changes: [1, 2], undoable: false });
+    expect(events).toEqual([{ namespace: NS, kind: 'brokered', table: 'scores', changes: 3 }]);
+
+    events.length = 0;
+    const mixed = await d.brokeredWrite(NS, own([{ sql: "DELETE FROM scores WHERE name = 'di'" }, { sql: "INSERT INTO audit (what) VALUES ('by hand')" }]));
+    expect(mixed).toMatchObject({ ok: true, changes: [1, 1] });
+    expect(events).toEqual([{ namespace: NS, kind: 'brokered', changes: 2 }]);
   });
 });
 

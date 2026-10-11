@@ -4,7 +4,7 @@
 // swallowing the scheduled write, or the scheduled BEGIN failing inside the visible one's). The
 // scheduled run's db binding refuses transaction control and a whole-database import by name;
 // everything else passes through untouched.
-import { DB_ERROR_CODES, type SnugDbDriver, type UserDb } from '@snugprotocol/db';
+import { DB_ERROR_CODES, type BrokeredWriteInput, type SnugDbDriver, type UserDb } from '@snugprotocol/db';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { SCHEDULED_DB_REFUSAL, scheduledDbDriver } from '../schedule/scheduledDbDriver.js';
@@ -52,11 +52,10 @@ describe('scheduledDbDriver — the hidden frame never holds a transaction open 
 // frame's binding CARRIES it but never opens it: a scheduled run is never a broker (a schedule's
 // write is `ACCESS_UNATTENDED` at the policy, D-PR3-13), so the binding answers the driver's own
 // `FORBIDDEN_STATEMENT`, not retryable, AS DATA (never a throw) and never forwards to the driver it
-// wraps. The seat's input is the broker's plan batch; a LOCAL structural type stands in for
-// `BrokeredWriteInput` and the method until `SnugDbDriver` declares them (Gate 5 replaces it).
+// wraps. The seat's input is the broker's plan batch — the real `BrokeredWriteInput` (the pins
+// lane swapped the Gate-3 local seat type for it; `SnugDbDriver` declares the method).
 describe('scheduledDbDriver — the brokered-write seat is refused as data, never forwarded (PR-3, D-PR3-11)', () => {
-  type BrokeredSeat = { brokeredWrite(namespace: string, input: Record<string, unknown>): Promise<{ ok: boolean; code?: string; retryable?: boolean; message?: string }> };
-  const input = {
+  const input: BrokeredWriteInput = {
     plans: [{ sql: 'UPDATE t SET a = 2 WHERE a = 1', op: 'update', table: 't', columns: ['a'], setColumns: ['a'], previewChanges: 1 }],
     caps: { maxChanges: 200, maxUndoBytes: 64 * 1024 },
     expectChanges: [1],
@@ -67,7 +66,7 @@ describe('scheduledDbDriver — the brokered-write seat is refused as data, neve
   it('answers { ok: false, code: FORBIDDEN_STATEMENT, retryable: false } and NEVER calls the inner driver’s seat', async () => {
     const forwarded = vi.fn(async () => ({ ok: true, steps: [], changes: [1], undoable: true }));
     const inner = { ...db.driver, handle: db.driver.handle.bind(db.driver), kvSet: db.driver.kvSet.bind(db.driver), kvGet: db.driver.kvGet.bind(db.driver), brokeredWrite: forwarded };
-    const guarded = scheduledDbDriver(inner as unknown as SnugDbDriver) as unknown as BrokeredSeat;
+    const guarded = scheduledDbDriver(inner as unknown as SnugDbDriver);
     expect(typeof guarded.brokeredWrite, 'the binding carries the seat').toBe('function');
     const out = await guarded.brokeredWrite(appId, input);
     expect(out).toMatchObject({ ok: false, code: DB_ERROR_CODES.FORBIDDEN_STATEMENT, retryable: false });
@@ -77,7 +76,7 @@ describe('scheduledDbDriver — the brokered-write seat is refused as data, neve
   it('the refusal changes nothing: the row the plan names is untouched', async () => {
     expect((await db.driver.handle(appId, req({ op: 'exec', sql: 'CREATE TABLE t (a INTEGER)' }))).ok).toBe(true);
     expect((await db.driver.handle(appId, req({ op: 'exec', sql: 'INSERT INTO t (a) VALUES (1)' }))).ok).toBe(true);
-    const guarded = scheduledDbDriver(db.driver) as unknown as BrokeredSeat;
+    const guarded = scheduledDbDriver(db.driver);
     expect((await guarded.brokeredWrite(appId, input)).ok).toBe(false);
     expect(await db.driver.handle(appId, req({ op: 'exec', sql: 'SELECT a FROM t' }))).toMatchObject({ ok: true, rows: [[1]] });
   });

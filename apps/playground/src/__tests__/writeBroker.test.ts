@@ -3,11 +3,11 @@
 // modes · D-PR3-11 the driver seat · D-PR3-15 the engine half · D-PR3-20 (c) the broker's doorbells;
 // §24.5 MUSTs 21–24; AC19, AC20).
 //
-// `access/writeBroker.ts` DOES NOT EXIST YET: it is reached through a VARIABLE specifier
-// (`import(/* @vite-ignore */ spec)` — a literal dynamic import of a missing module fails the whole
-// file at transform time, lesson 2026-10-11), and its shapes are local structural types the
-// implementation lane replaces with the real exports at Gate 5. So is every PR-3 name of the wire
-// (I-W) and of the db (I-D): read through namespaces and local widenings, undefined until they land.
+// Written before `access/writeBroker.ts` existed (Gate 3): it is still reached through a VARIABLE
+// specifier (`import(/* @vite-ignore */ spec)` — a literal dynamic import of a missing module fails
+// the whole file at transform time, lesson 2026-10-11). The lane's local structural types — and its
+// namespace reads of the wire's (I-W) and the db's (I-D) PR-3 names — were swapped for the real
+// exports by the pins lane.
 //
 // THE STRICT PATH is driven through the frame — the real `createAccessHandlerFor` → the service's
 // `write` → `brokeredWrite` — over the real in-memory user db and the INLINE worker (the real
@@ -15,7 +15,7 @@
 // dequeue and again after the plan answers; the reader's live-entry cap; the seat
 // (`db.driver.brokeredWrite`); the journal entry; the `wrote` line; the source's read caches
 // cleared; the doorbells; the answer. OWN MODE is `applyApprovedWrite` (the approved write of an
-// app's OWN data): the seat with `requireUndo: false, capture: false`, no journal, no line,
+// app's OWN data): the seat's `{ own, caps, expectChanges }` variant (no capture), no journal, no line,
 // `data-changed` to its own frame, today's outcome shapes. UNDO is the user's act from the source's
 // history: rebuilt from the journal's ROWS (never statement text), reversed, guarded by the values
 // the write left, every live reader rung — the writer too.
@@ -33,15 +33,21 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { UserDb } from '@snugprotocol/db';
-import * as dbPackage from '@snugprotocol/db';
+import { buildUndoStatement, type UserDb } from '@snugprotocol/db';
 import type { AccessHandlerResult } from '@snugprotocol/runner';
-import { FRAME_TYPES, PROTOCOL_VERSION, type AccessRequestFrame } from '@snugprotocol/protocol';
-import * as protocol from '@snugprotocol/protocol';
+import {
+  ACCESS_SOURCE_CHANGED_EVENT,
+  DATA_CHANGED_EVENT,
+  FRAME_TYPES,
+  PROTOCOL_VERSION,
+  type AccessRequestFrame,
+  type AccessUndoEntry,
+  type AccessUndoStep,
+} from '@snugprotocol/protocol';
 
 import { createAccessHandlerFor } from '../access/accessHandler.js';
 import { NO_ACCESS_ASKS_KEY, collectSources } from '../access/consent.js';
-import { ACCESS_APP_MESSAGES, ACCESS_SHEET } from '../access/copy.js';
+import { ACCESS_APP_MESSAGES, ACCESS_SHEET, type UndoFailureReason } from '../access/copy.js';
 import { __setAccessDepsForTests, createGrantFromDecision, resetAccessSession, revokeAccess, type AnyAccessGrant, type CreateGrantInput } from '../access/grants.js';
 import { __scopedReadCachedGrantsForTests, configureScopedRead, resetScopedReadForTests, type WorkerLike } from '../access/scopedRead.js';
 import { createScopedReadResponder } from '../access/scopedRead.worker.js';
@@ -50,64 +56,15 @@ import { registerAppHost } from '../state/appHosts.js';
 import { installTestUserDb, locateWasm } from './userdbTestHelper.js';
 
 // =========================================================================================
-// The shapes not yet exported (local, structural — replaced by the real exports at Gate 5)
+// The shapes — the real exports (the pins lane swapped the Gate-3 local types for them)
 // =========================================================================================
 
-/** The wire's PR-3 names (I-W). */
-const P3 = protocol as typeof protocol & { DATA_CHANGED_EVENT: string; ACCESS_SOURCE_CHANGED_EVENT: string; ACCESS_UNDO_TTL_MS: number };
+/** The undo journal's accessors (I-D) — the UserDb's own. */
+type UndoAccessors = Pick<UserDb, 'listAccessUndo' | 'listAllAccessUndo' | 'putAccessUndo' | 'markAccessUndone'>;
+const undoFailed = (reason: UndoFailureReason, sourceName: string): string => ACCESS_SHEET.undoFailed(reason, sourceName);
 
-/** The write refusal rules' keys — this lane's proposal (question E1-Q1); the words are copy.ts's. */
-type WriteRule = 'table' | 'no-where' | 'column' | 'computed' | 'value' | 'too-many' | 'too-large' | 'waiting';
-const M3 = ACCESS_APP_MESSAGES as typeof ACCESS_APP_MESSAGES & { writeRefused(rule: WriteRule): string; busy: string };
-
-/** Why an undo could not be done — this lane's proposal (question E1-Q2); the sentence is copy.ts's `ACCESS_SHEET.undoFailed`. */
-type UndoFailReason = 'busy' | 'changed' | 'gone';
-const undoFailed = (reason: UndoFailReason, sourceName: string): string =>
-  (ACCESS_SHEET as typeof ACCESS_SHEET & { undoFailed(reason: UndoFailReason, sourceName: string): string }).undoFailed(reason, sourceName);
-
-interface UndoRow {
-  rowid: number;
-  before?: unknown[];
-  after?: unknown[];
-}
-interface UndoStep {
-  table: string;
-  op: 'insert' | 'update' | 'delete';
-  columns: string[];
-  rows: UndoRow[];
-}
-interface UndoEntry {
-  id: string;
-  at: string;
-  expiresAt: string;
-  authority: 'permission' | 'approval' | 'task';
-  via: 'app' | 'chat' | 'schedule' | 'user';
-  grantId: string;
-  readerAppId: string;
-  readerName: string;
-  steps: UndoStep[];
-  undoneAt?: string;
-}
-/** The db lane's accessors (I-D) and the driver seat (D-PR3-11). */
-interface UndoAccessors {
-  listAccessUndo(targetAppId: string, readerAppId?: string): UndoEntry[];
-  listAllAccessUndo(targetAppId: string): UndoEntry[];
-  putAccessUndo(targetAppId: string, entry: UndoEntry): 'ok' | 'reader-cap';
-  markAccessUndone(targetAppId: string, id: string, at: string, failed?: boolean): void;
-}
-interface DriverSeat {
-  brokeredWrite(namespace: string, input: Record<string, unknown>): Promise<unknown>;
-}
-/** `buildUndoStatement` (packages/db brokered-write.ts, I-D). */
-const buildUndoStatement = (step: UndoStep, row: UndoRow): { sql: string; params: unknown[] } =>
-  (dbPackage as unknown as { buildUndoStatement(step: UndoStep, row: UndoRow): { sql: string; params: unknown[] } }).buildUndoStatement(step, row);
-
-type UndoOutcome = { ok: true } | { ok: false; reason: UndoFailReason | 'failed'; message: string };
-interface WriteBrokerModule {
-  applyApprovedWrite(db: UserDb, proposal: PendingWriteProposal): Promise<ExecuteApprovedWriteOutcome>;
-  undoBrokeredWrite(db: UserDb, targetAppId: string, undoId: string, options: { via: 'user' }): Promise<UndoOutcome>;
-  clearSourceReadCaches(db: UserDb, targetAppId: string): void;
-}
+/** The module stays behind a VARIABLE specifier (the Gate-3 isolation); its type is the module's own. */
+type WriteBrokerModule = typeof import('../access/writeBroker.js');
 const WRITE_BROKER_MODULE = '../access/writeBroker.js';
 const writeBroker = (): Promise<WriteBrokerModule> => import(/* @vite-ignore */ WRITE_BROKER_MODULE) as Promise<WriteBrokerModule>;
 
@@ -132,8 +89,8 @@ let posted: unknown[];
 /** Jobs of these kinds wait for the matching gate before the responder runs. */
 let gates: Map<string, Promise<void>>;
 
-const undoJournal = (): UndoAccessors => db as unknown as UndoAccessors;
-const seat = (): DriverSeat => db.driver as unknown as DriverSeat;
+const undoJournal = (): UndoAccessors => db;
+const seat = (): UserDb['driver'] => db.driver;
 
 const kindOf = (msg: unknown): string | undefined => (typeof msg === 'object' && msg !== null && 'id' in msg ? String((msg as { kind?: unknown }).kind ?? 'read') : undefined);
 
@@ -217,7 +174,7 @@ async function writeAsBudget(grantId: string, sql: string): Promise<{ answer: Ac
 }
 
 /** A schema-valid journal entry, planted as if a write had left it. */
-function plantedEntry(grantId: string, steps: UndoStep[]): UndoEntry {
+function plantedEntry(grantId: string, steps: AccessUndoStep[]): AccessUndoEntry {
   return {
     id: crypto.randomUUID(),
     at: iso(clock.now),
@@ -235,7 +192,7 @@ function listen(...appIds: string[]): void {
   for (const appId of appIds) unregister.push(registerAppHost(appId, (event, data) => rings.push({ appId, event, data })));
 }
 
-const doorbells = () => rings.filter((ring) => ring.event === P3.DATA_CHANGED_EVENT || ring.event === P3.ACCESS_SOURCE_CHANGED_EVENT);
+const doorbells = () => rings.filter((ring) => ring.event === DATA_CHANGED_EVENT || ring.event === ACCESS_SOURCE_CHANGED_EVENT);
 
 beforeEach(async () => {
   resetAccessSession();
@@ -360,15 +317,15 @@ describe('the strict path — stillWritable twice, the cap, the seat, the entry,
     const sequence = [order(seatSpy), order(entrySpy), lineSpy.mock.invocationCallOrder[wroteCall]!, order(ring), order(answered)];
     expect(sequence, 'seat → entry → line → doorbell → answer').toEqual([...sequence].sort((a, b) => a - b));
     expect(cachedAtFirstRing, 'the caches of every grant reading the source are cleared before the first doorbell').not.toContain(theirs.id);
-    expect(doorbells()).toContainEqual({ appId: journal, event: P3.DATA_CHANGED_EVENT, data: { table: 'entries' } });
-    expect(doorbells()).toContainEqual({ appId: pantry, event: P3.ACCESS_SOURCE_CHANGED_EVENT, data: { grantId: theirs.id } });
+    expect(doorbells()).toContainEqual({ appId: journal, event: DATA_CHANGED_EVENT, data: { table: 'entries' } });
+    expect(doorbells()).toContainEqual({ appId: pantry, event: ACCESS_SOURCE_CHANGED_EVENT, data: { grantId: theirs.id } });
     expect(doorbells().filter((entry) => entry.appId === budget), 'never the writer').toEqual([]);
   });
 
   it('the per-reader cap is asked after the plan and before the seat: 20 live entries of THIS reader on this target refuse the 21st — another reader’s 20 do not count', async () => {
     const mine = await grantOn(budget, journal, ['entries'], true);
     const theirs = await grantOn(pantry, journal, ['entries'], true);
-    const step: UndoStep = { table: 'entries', op: 'insert', columns: ['title'], rows: [{ rowid: 99, after: ['x'] }] };
+    const step: AccessUndoStep = { table: 'entries', op: 'insert', columns: ['title'], rows: [{ rowid: 99, after: ['x'] }] };
     for (let i = 0; i < 20; i += 1) expect(undoJournal().putAccessUndo(journal, { ...plantedEntry(theirs.id, [step]), readerAppId: pantry, readerName: 'Pantry' })).toBe('ok');
     const seatSpy = vi.spyOn(seat(), 'brokeredWrite');
     expect((await writeAsBudget(mine.id, "UPDATE entries SET amount = 9 WHERE title = 'tea'")).answer, 'Pantry’s twenty are Pantry’s').toEqual({ ok: true, op: 'write', changes: 1 });
@@ -378,7 +335,7 @@ describe('the strict path — stillWritable twice, the cap, the seat, the entry,
     expect(undoJournal().listAccessUndo(journal, budget)).toHaveLength(20);
     posted = [];
     const refused = await writeAsBudget(mine.id, "UPDATE entries SET amount = 8 WHERE title = 'cake'");
-    expect(refused.answer).toEqual(refusal('ACCESS_WRITE_REFUSED', M3.writeRefused('waiting'), false));
+    expect(refused.answer).toEqual(refusal('ACCESS_WRITE_REFUSED', ACCESS_APP_MESSAGES.writeRefused('waiting'), false));
     expect(posted.map(kindOf), 'the plan ran').toEqual(['plan-write']);
     expect(seatSpy, 'the seat was never reached').toHaveBeenCalledTimes(1);
     expect(await rowsOf(journal, "SELECT amount FROM entries WHERE title = 'cake'")).toEqual([[5]]);
@@ -392,7 +349,7 @@ describe('the strict path — stillWritable twice, the cap, the seat, the entry,
 describe('own mode — applyApprovedWrite: the app’s own approved write through the same seat, never journaled (D-PR3-8; AC20)', () => {
   const proposal = (statements: string[], previewed: number[]): PendingWriteProposal => ({ appId: journal, statements, params: statements.map(() => []), summary: 'a change the user approved', previewed });
 
-  it('applies atomically through the seat (requireUndo false, capture false, the previewed counts) — no BEGIN through the frame seat, no journal entry, no line — answers today’s executed counts and rings data-changed to its own frame', async () => {
+  it('applies atomically through the seat’s OWN variant ({ own, caps, expectChanges: the previewed counts } — no capture) — no BEGIN through the frame seat, no journal entry, no line — answers today’s executed counts and rings data-changed to its own frame', async () => {
     const { applyApprovedWrite } = await writeBroker();
     listen(journal);
     const seatSpy = vi.spyOn(seat(), 'brokeredWrite');
@@ -401,13 +358,20 @@ describe('own mode — applyApprovedWrite: the app’s own approved write throug
     expect(outcome).toEqual({ ok: true, executed: [1] });
     expect(seatSpy).toHaveBeenCalledTimes(1);
     expect(seatSpy.mock.calls[0]![0]).toBe(journal);
-    expect(seatSpy.mock.calls[0]![1]).toMatchObject({ requireUndo: false, capture: false, expectChanges: [1] });
+    // The seat's OWN variant (D-PR3-8, E1-Q12): the approved statements with their params, the caps, the previewed counts as the halt — no plans, no capture, no undo asked.
+    const input = seatSpy.mock.calls[0]![1];
+    expect(input).toMatchObject({
+      own: [{ sql: "UPDATE entries SET amount = 9 WHERE title = 'tea'", params: [] }],
+      caps: { maxChanges: expect.any(Number), maxUndoBytes: expect.any(Number) },
+      expectChanges: [1],
+    });
+    for (const strictSeat of ['plans', 'undo', 'requireUndo', 'capture']) expect(input, strictSeat).not.toHaveProperty(strictSeat);
     const transactionControl = handleSpy.mock.calls.filter((call) => /^\s*(BEGIN|COMMIT|ROLLBACK|END)\b/i.test(String((call[1] as { sql?: unknown }).sql ?? '')));
     expect(transactionControl, 'no awaited BEGIN/COMMIT through the frame seat any more').toEqual([]);
     expect(await rowsOf(journal, "SELECT amount FROM entries WHERE title = 'tea'")).toEqual([[9]]);
     expect(undoJournal().listAllAccessUndo(journal)).toEqual([]);
     expect(db.listAccessLog(journal)).toEqual([]);
-    expect(doorbells()).toEqual([{ appId: journal, event: P3.DATA_CHANGED_EVENT, data: { table: 'entries' } }]);
+    expect(doorbells()).toEqual([{ appId: journal, event: DATA_CHANGED_EVENT, data: { table: 'entries' } }]);
   });
 
   it('a drift since approval keeps today’s outcome shape { ok: false, reason: drifted, previewed, current } — nothing applied, nothing rung', async () => {
@@ -418,14 +382,15 @@ describe('own mode — applyApprovedWrite: the app’s own approved write throug
     const before = await rowsOf(journal, ENTRIES);
     expect(await applyApprovedWrite(db, approved)).toEqual({ ok: false, reason: 'drifted', previewed: [2], current: [3] });
     expect(await rowsOf(journal, ENTRIES)).toEqual(before);
-    expect(rings.filter((entry) => entry.event === P3.DATA_CHANGED_EVENT)).toEqual([]);
+    expect(rings.filter((entry) => entry.event === DATA_CHANGED_EVENT)).toEqual([]);
   });
 
   it('executeApprovedWrite is a thin caller of own mode — it reaches the seat (AC20)', async () => {
     const seatSpy = vi.spyOn(seat(), 'brokeredWrite');
     expect(await executeApprovedWrite(db, proposal(["UPDATE entries SET amount = 9 WHERE title = 'tea'"], [1]))).toEqual({ ok: true, executed: [1] });
     expect(seatSpy).toHaveBeenCalledTimes(1);
-    expect(seatSpy.mock.calls[0]![1]).toMatchObject({ requireUndo: false, capture: false });
+    expect(seatSpy.mock.calls[0]![1]).toMatchObject({ own: [{ sql: "UPDATE entries SET amount = 9 WHERE title = 'tea'", params: [] }], caps: expect.any(Object), expectChanges: [1] });
+    expect(seatSpy.mock.calls[0]![1]).not.toHaveProperty('plans');
   });
 });
 
@@ -454,9 +419,9 @@ describe('undoBrokeredWrite — the user’s act from the source’s history, re
     expect(all, 'the undo is itself never journaled').toHaveLength(1);
     expect(all[0]).toMatchObject({ id: undoId });
     expect(all[0]?.undoneAt).toBeDefined();
-    expect(doorbells()).toContainEqual({ appId: journal, event: P3.DATA_CHANGED_EVENT, data: { table: 'entries' } });
-    expect(doorbells()).toContainEqual({ appId: budget, event: P3.ACCESS_SOURCE_CHANGED_EVENT, data: { grantId: mine.id } });
-    expect(doorbells()).toContainEqual({ appId: pantry, event: P3.ACCESS_SOURCE_CHANGED_EVENT, data: { grantId: theirs.id } });
+    expect(doorbells()).toContainEqual({ appId: journal, event: DATA_CHANGED_EVENT, data: { table: 'entries' } });
+    expect(doorbells()).toContainEqual({ appId: budget, event: ACCESS_SOURCE_CHANGED_EVENT, data: { grantId: mine.id } });
+    expect(doorbells()).toContainEqual({ appId: pantry, event: ACCESS_SOURCE_CHANGED_EVENT, data: { grantId: theirs.id } });
   });
 
   it('is never undoable twice: the second undo of the same entry can no longer be done — nothing changes, no second line', async () => {
@@ -532,7 +497,7 @@ describe('undoBrokeredWrite — the user’s act from the source’s history, re
     const { undoBrokeredWrite } = await writeBroker();
     const mine = await grantOn(budget, journal, ['entries'], true);
     const evil = "x'; DROP TABLE entries; --";
-    const step: UndoStep = { table: 'entries', op: 'insert', columns: ['title'], rows: [{ rowid: 1, after: [evil] }] };
+    const step: AccessUndoStep = { table: 'entries', op: 'insert', columns: ['title'], rows: [{ rowid: 1, after: [evil] }] };
     const built = buildUndoStatement(step, step.rows[0]!);
     expect(built.sql).not.toContain(evil);
     expect(built.sql).not.toMatch(/DROP/i);

@@ -37,6 +37,9 @@ import {
   type AccessGrant,
   type AccessLogEntry,
   type AccessLogKind,
+  type AccessUndoEntry,
+  type AccessUndoRow,
+  type AccessUndoStep,
 } from '@snugprotocol/protocol';
 
 import { locateWasm } from '../../__tests__/helpers.js';
@@ -662,43 +665,15 @@ describe('declines and the per-reader mute', () => {
 // rows live in userdb.test.ts beside the declines/mutes pin). The log gains `wrote` · `undone` ·
 // `refreshed`; `PROTECTED_KINDS` gains `wrote`; `clearAccessLog` keeps every non-read kind.
 //
-// Written before the accessors exist (Gate 3). `UndoAccessors` and the entry shape are LOCAL
-// structural types — the implementation lane replaces them with the real exports at Gate 5; the
-// accessors are reached through a cast and the key helpers through the module namespace, so a
-// missing one reds only its rows. The caps are the contract's numbers (D-PR3-7 / "Module contracts").
+// Written before the accessors exist (Gate 3). The entry shape and `UndoAccessors` were LOCAL
+// structural types; the pins lane swapped them for the protocol's `AccessUndoEntry`/`AccessUndoStep`/
+// `AccessUndoRow` and a `Pick` of the UserDb's own accessors. The key helpers are still reached
+// through the module namespace. The caps are the contract's numbers (D-PR3-7 / "Module contracts").
 // =========================================================================================
 
-/* Local structural types — replaced by `AccessUndoEntry` (protocol) and the UserDb accessors at Gate 5. */
-interface UndoRowV {
-  rowid: number;
-  before?: unknown[];
-  after?: unknown[];
-}
-interface UndoStepV {
-  table: string;
-  op: 'insert' | 'update' | 'delete';
-  columns: string[];
-  rows: UndoRowV[];
-}
-interface AccessUndoEntryV {
-  id: string;
-  at: string;
-  expiresAt: string;
-  authority: 'permission' | 'approval' | 'task';
-  via: 'app' | 'chat' | 'schedule' | 'user';
-  grantId: string;
-  readerAppId: string;
-  readerName: string;
-  steps: UndoStepV[];
-  undoneAt?: string;
-}
-interface UndoAccessors {
-  listAccessUndo(targetAppId: string, readerAppId?: string): AccessUndoEntryV[];
-  listAllAccessUndo(targetAppId: string): AccessUndoEntryV[];
-  putAccessUndo(targetAppId: string, entry: AccessUndoEntryV): 'ok' | 'reader-cap';
-  markAccessUndone(targetAppId: string, id: string, at: string, failed?: boolean): void;
-}
-const undo = (): UndoAccessors => db as unknown as UndoAccessors;
+/* The real types (swapped in by the pins lane): the protocol's entry/step/row and the UserDb's own accessors. */
+type UndoAccessors = Pick<UserDb, 'listAccessUndo' | 'listAllAccessUndo' | 'putAccessUndo' | 'markAccessUndone'>;
+const undo = (): UndoAccessors => db;
 
 /** The contract's caps (D-PR3-7): ACCESS_UNDO_MAX_ENTRIES, ACCESS_UNDO_MAX_BYTES, ACCESS_UNDO_MAX_ROW_BYTES, ACCESS_UNDO_TTL_MS. */
 const UNDO_MAX_ENTRIES = 20;
@@ -710,7 +685,7 @@ const UNDO_GRANT = '33333333-3333-4333-8333-333333333333';
 const undoKey = (targetAppId: string): string => `accessUndo:${targetAppId}`;
 const wantsKey = (appId: string): string => `accessWants:${appId}`;
 
-function undoEntry(over: Partial<AccessUndoEntryV> = {}): AccessUndoEntryV {
+function undoEntry(over: Partial<AccessUndoEntry> = {}): AccessUndoEntry {
   const at = over.at ?? new Date().toISOString();
   return {
     id: crypto.randomUUID(),
@@ -727,7 +702,7 @@ function undoEntry(over: Partial<AccessUndoEntryV> = {}): AccessUndoEntryV {
 }
 
 /** An entry just under 64 KiB of JSON: 100 updated rows of prose, before and after. */
-function heavyEntry(over: Partial<AccessUndoEntryV> = {}): AccessUndoEntryV {
+function heavyEntry(over: Partial<AccessUndoEntry> = {}): AccessUndoEntry {
   const prose = (i: number): string => `${i} lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor `.repeat(4).slice(0, 280);
   const rows = Array.from({ length: 100 }, (_, i) => ({ rowid: i + 1, before: [prose(i)], after: [prose(i + 1000)] }));
   return undoEntry({ steps: [{ table: 'transactions', op: 'update', columns: ['note'], rows }], ...over });
@@ -773,7 +748,7 @@ describe('the undo journal — putAccessUndo / listAccessUndo / listAllAccessUnd
   it('parses STRICTLY before it writes: statement text, a credential in a captured cell, no steps, a before/after of the wrong arity → ACCESS_INVALID, file byte-identical', async () => {
     undo().putAccessUndo(LEDGER, undoEntry());
     const before = await fileBytes();
-    const update = (rows: UndoRowV[]): UndoStepV[] => [{ table: 'transactions', op: 'update', columns: ['note'], rows }];
+    const update = (rows: AccessUndoRow[]): AccessUndoStep[] => [{ table: 'transactions', op: 'update', columns: ['note'], rows }];
     for (const [label, bad] of [
       // AC19 negative: a journal entry has no seat for statement text.
       ['a statement-text seat', { ...undoEntry(), sql: "DELETE FROM transactions WHERE 1 = 1" }],
@@ -784,7 +759,7 @@ describe('the undo journal — putAccessUndo / listAccessUndo / listAllAccessUnd
       ['an id that is not a uuid v4', undoEntry({ id: 'undo-1' })],
       ['an entry past 64 KiB', heavyEntry({ steps: [...heavyEntry().steps, ...heavyEntry().steps] })],
     ] as const) {
-      expect(codeOf(() => undo().putAccessUndo(LEDGER, bad as unknown as AccessUndoEntryV)), label).toBe(USERDB_ERROR_CODES.ACCESS_INVALID);
+      expect(codeOf(() => undo().putAccessUndo(LEDGER, bad as unknown as AccessUndoEntry)), label).toBe(USERDB_ERROR_CODES.ACCESS_INVALID);
     }
     expect(await fileBytes()).toEqual(before);
   });
@@ -794,7 +769,7 @@ describe('the undo journal — putAccessUndo / listAccessUndo / listAllAccessUnd
   });
 
   it(`answers 'reader-cap' at the ${UNDO_MAX_ENTRIES + 1}st LIVE entry for the same (target, reader) — nothing written, nothing evicted — while ANOTHER reader still writes`, async () => {
-    const mine: AccessUndoEntryV[] = [];
+    const mine: AccessUndoEntry[] = [];
     for (let i = 0; i < UNDO_MAX_ENTRIES; i += 1) {
       const e = undoEntry();
       mine.push(e);
@@ -833,14 +808,15 @@ describe('the undo journal — putAccessUndo / listAccessUndo / listAllAccessUnd
     expect(undo().listAccessUndo(LEDGER).map((e) => e.id)).toEqual([young.id]);
   });
 
-  it('markAccessUndone stamps undoneAt: the entry leaves listAccessUndo and stays in listAllAccessUndo, marked — with or without failed', () => {
+  // D-Q10: no fourth argument exists — a done undo and a failed one are stamped alike (both stop being live).
+  it('markAccessUndone stamps undoneAt: the entry leaves listAccessUndo and stays in listAllAccessUndo, marked — a done undo and a failed one alike', () => {
     const ok = undoEntry();
     const failed = undoEntry();
     const kept = undoEntry();
     for (const e of [ok, failed, kept]) undo().putAccessUndo(LEDGER, e);
     const at = new Date().toISOString();
     undo().markAccessUndone(LEDGER, ok.id, at);
-    undo().markAccessUndone(LEDGER, failed.id, at, true);
+    undo().markAccessUndone(LEDGER, failed.id, at);
     expect(undo().listAccessUndo(LEDGER).map((e) => e.id)).toEqual([kept.id]);
     const all = undo().listAllAccessUndo(LEDGER);
     expect(all.find((e) => e.id === ok.id)?.undoneAt).toBe(at);

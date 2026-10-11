@@ -250,6 +250,17 @@ describe('onAppVersionChanged — ONE fan-out: the schedules AND the access (AC1
 // ------------------------------------------------------------- the connection-approve seam (AC14)
 
 describe('invalidateNetGrants — a connection change re-checks the app as a SOURCE (AC14, D6)', () => {
+  // The re-check (`state/net.ts`) stamps the WALL clock (`new Date()`), and the seeded 'day' access
+  // runs out at T0 + 1 day — against the real clock this row went red the day after it was written
+  // (a clock bomb). Only `Date` is faked, so `vi.waitFor`'s own polling timers stay real.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(T0 + 60_000);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('an app that now holds a WhatsApp fact pauses every live access to it `source-restricted` — the connection act is not held up for it', async () => {
     const { readsLedger, readsPantry } = await seedGrants();
     db.putDeclaredConnection(
