@@ -556,9 +556,16 @@ function createAccessService(): AccessService {
     const ends = readerFrameEnds(caller.appId);
     const cached = discovered.get(caller.appId);
     const answer = (entry: DiscoverEntry): AccessHandlerResult => ({ ok: true, op: 'discover', candidates: entry.candidates });
+    const usable = (entry: DiscoverEntry): boolean => entry.ends === ends && at - entry.at < ACCESS_DISCOVER_CACHE_MS;
     if (cached !== undefined) {
       const hit = await cached;
-      if (hit.ends === ends && at - hit.at < ACCESS_DISCOVER_CACHE_MS) return answer(hit);
+      if (usable(hit)) return answer(hit);
+      // A stale hit: a concurrent ask may have parked a fresh gather while this one awaited — join it rather than run a second (SEC-3's burst after the cache expires).
+      const parked = discovered.get(caller.appId);
+      if (parked !== undefined && parked !== cached) {
+        const fresh = await parked;
+        if (usable(fresh)) return answer(fresh);
+      }
     }
     // A miss parks its gather BEFORE the first export, so every concurrent ask awaits this one; a gather that throws leaves nothing behind.
     const gather = collectSources(db, caller.appId, input.hints).then((ranked) => ({ at, ends, candidates: classOf(ranked.matched.length + ranked.rest.length) }));
