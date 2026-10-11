@@ -54,23 +54,11 @@ import { __resetNetStateForTests, netConfirmStore, resolveNetConfirm } from '../
 import { createStore } from '../state/store.js';
 import { installTestUserDb } from './userdbTestHelper.js';
 
-// ---------------------------------------------------------------- the module under test (missing)
+// ---------------------------------------------------------------- the module under test
 
-/** Which door asked (D-PR3-6 `ACCESS_LOG_VIAS`). Local structural type — the implementation lane replaces it with the real export at Gate 5. */
-type RefreshVia = 'app' | 'chat' | 'schedule' | 'user';
-/** `refreshSource`'s input (D-PR3-17). Local structural type until `access/refresh.ts` exports it. */
-interface RefreshInput {
-  grant: AccessGrant;
-  requestedBy: string;
-  via: RefreshVia;
-}
-/** `RefreshOutcome` (D-PR3-17) — the frame's answer shapes. Local structural type until `access/refresh.ts` exports it. */
-type RefreshOutcome = { ok: true; op: 'refresh'; fresh: boolean; reason?: string } | { ok: false; code: string; message: string; retryable: boolean };
-interface RefreshModule {
-  refreshSource(db: UserDb, deps: AppRunDeps, input: RefreshInput): Promise<RefreshOutcome>;
-  /** The contract names it (the in-memory cooldown map's reset); called when present. */
-  __resetRefreshForTests?: () => void;
-}
+/** The engine's own surface (`refreshSource`, `RefreshOutcome`, `__resetRefreshForTests`) — the real exports; the implementation lane swapped the local stand-ins. */
+type RefreshModule = typeof import('../access/refresh.js');
+type RefreshOutcome = Awaited<ReturnType<RefreshModule['refreshSource']>>;
 const REFRESH_MODULE = '../access/refresh.js';
 const loadRefresh = (): Promise<RefreshModule> => import(/* @vite-ignore */ REFRESH_MODULE) as Promise<RefreshModule>;
 
@@ -81,10 +69,8 @@ interface WriteBrokerModule {
 const WRITE_BROKER_MODULE = '../access/writeBroker.js';
 const loadWriteBroker = (): Promise<WriteBrokerModule> => import(/* @vite-ignore */ WRITE_BROKER_MODULE) as Promise<WriteBrokerModule>;
 
-/** The delegated record's posture (D-PR3-19). Local structural type until `DelegatedRun` gains it. */
-type Posture = 'schedule' | 'refresh';
-type PosturedRun = DelegatedRun & { posture?: Posture };
-const runOf = (id: string): PosturedRun | undefined => delegatedRunFor(id) as PosturedRun | undefined;
+/** The delegated record, posture included (D-PR3-19 — the real field). */
+const runOf = (id: string): DelegatedRun | undefined => delegatedRunFor(id);
 
 // ------------------------------------------------------------------------------------- fixtures
 
@@ -363,13 +349,13 @@ beforeEach(async () => {
   source = db.installApp({ displayName: 'Ledger', html: '<html>ledger</html>' }).appId;
   reader = db.installApp({ displayName: 'Budget', html: '<html>budget</html>' }).appId;
   refresh = await loadRefresh();
-  refresh.__resetRefreshForTests?.();
+  refresh.__resetRefreshForTests();
 });
 
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
-  refresh?.__resetRefreshForTests?.();
+  refresh?.__resetRefreshForTests();
   __resetNetStateForTests();
   resetAccessSession();
   __setAccessDepsForTests();

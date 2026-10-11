@@ -31,12 +31,27 @@
 // (nothing recorded) instead of parking it out of reach. An ask that carries a seed starts on it
 // (`sheetSeedOf`): a renewal on that access's own duration and away box (AC21's one tap), the
 // chat's ask reviewed while the reader is closed on a day (D-PR2-3). Text nodes only.
+//
+// THE SHEET v2 (TASK-20261010-host-broker PR-3; ADR-0076 §4; D-PR3-4/23; DS2–DS6, DS18, DS23;
+// contract v2.1 U-Q7, U-Q12, U-Q14). The chips stay on the default path; what a ticked table's
+// row adds — *choose columns…* and, under *more options…*, the write toggle — lives in
+// `TableChooser`, and the options row (*settings & notes*, *fetch new data first*) in
+// `SourcePicker`. This sheet owns the state they show: per app, the ticked tables with their
+// ticked columns and write toggle, and the two options; and whether *more options…* is open —
+// OPEN at once when the ask carried `access: 'write'` (`wantsWrite`: the title says "— and change
+// —" and the toggle is on screen, still OFF: the app never pre-ticks it) or when a renewal's seed
+// carries a write, kv or refresh (the old scope back in one tap, nothing clicked). A table whose
+// every column is unticked cannot be allowed (*choose at least one column*, the `pickATable`
+// twin). The egress block gains NO line for a write or a fetch; its closing says *reads and
+// changes* exactly while a write is ticked (`canChange` passed only then). The allow answers the
+// decision v2: per table `{ name, withheld, write }` — the unticked columns in the source's order
+// — and `kv` / `refresh` as ticked.
 
 import type { MouseEvent as ReactMouseEvent, ReactElement } from 'react';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 
-import type { AccessDuration } from '@snugprotocol/protocol';
+import type { AccessDuration, AccessScope } from '@snugprotocol/protocol';
 
 import { netConfirmStore } from '../state/net.js';
 import { openUrlConfirmStore } from '../state/openUrl.js';
@@ -47,10 +62,13 @@ import { ConfirmOverlay } from '../ui/ConfirmOverlay.js';
 import { dismissReview, pendingAccessStore, reviewStore, type ConsentDecision, type PendingAccessRequest } from './consent.js';
 import { ACCESS_SHEET, CONSENT_SHEET, allowLabel } from './copy.js';
 import { DurationControl } from './DurationControl.js';
+import type { EgressOptions } from './egress.js';
 import { EgressNote } from './EgressNote.js';
+import type { TableChoice } from './grants.js';
 import { answerAccess } from './outcome.js';
-import { isOfferable, preselectedTables, type RankedSource } from './relevance.js';
-import { SourcePicker } from './SourcePicker.js';
+import { isOfferable, preselectedTables, type RankedSource, type SourceTable } from './relevance.js';
+import { SourcePicker, type SourceOptions } from './SourcePicker.js';
+import type { TableTick } from './TableChooser.js';
 import { sheetSeedOf } from './userAsk.js';
 
 /** How long the sheet must have been visible before *allow* can be pressed. */
@@ -110,25 +128,76 @@ export function AccessConsentSheet(): ReactElement | null {
   return <ConsentSheetBody key={keyOf(pending)} pending={pending} />;
 }
 
-// ------------------------------------------------------------------------------------- the sheet
+// --------------------------------------------------------------------------------- the choices
 
-function inSourceOrder(source: RankedSource, tables: readonly string[]): string[] {
-  return source.tables.filter((table) => isOfferable(table) && tables.includes(table.name)).map((table) => table.name);
+/** The ticked tables of one app, by name. */
+type Ticks = Readonly<Record<string, TableTick>>;
+
+const NO_OPTIONS: SourceOptions = { kv: false, refresh: false };
+
+/** A table's columns the person may tick: the disclosed, non-sensitive ones, in the source's order. */
+const readableColumns = (table: SourceTable): string[] => table.columns.filter((column) => !column.sensitive).map((column) => column.name);
+
+/** A freshly ticked table: every readable column ticked, the write toggle off. */
+const fullTick = (table: SourceTable): TableTick => ({ columns: readableColumns(table), write: false });
+
+/**
+ * The ticks for `names` of `source` — every readable column, minus the ones a renewal's seed held
+ * WITHHELD, with its write toggle (the old scope back as it was; a column the source gained since
+ * is offered ticked, as it is everywhere else on the sheet).
+ */
+function ticksFor(source: RankedSource, names: readonly string[], seeded?: AccessScope['tables']): Ticks {
+  const ticks: Record<string, TableTick> = {};
+  for (const table of source.tables) {
+    if (!isOfferable(table) || !names.includes(table.name)) continue;
+    const old = seeded?.find((entry) => entry.name === table.name);
+    const withheld = new Set(old?.withheld ?? []);
+    ticks[table.name] = { columns: readableColumns(table).filter((column) => !withheld.has(column)), write: old?.write === true };
+  }
+  return ticks;
 }
+
+/** A ticked table as the decision says it (D-PR3-23), with how many of its columns stayed ticked. */
+interface TableAnswer {
+  choice: TableChoice;
+  columnsTicked: number;
+}
+
+/** The chosen app's ticked tables in the source's order, each with its withheld columns in that order too (U-Q14). */
+function answersFor(source: RankedSource, ticks: Ticks): TableAnswer[] {
+  return source.tables.flatMap((table) => {
+    const tick = ticks[table.name];
+    if (tick === undefined || !isOfferable(table)) return [];
+    const on = new Set(tick.columns);
+    const readable = readableColumns(table);
+    const withheld = readable.filter((column) => !on.has(column));
+    return [{ choice: { name: table.name, withheld, write: tick.write }, columnsTicked: readable.length - withheld.length }];
+  });
+}
+
+// ------------------------------------------------------------------------------------- the sheet
 
 function ConsentSheetBody({ pending }: { pending: PendingAccessRequest }): ReactElement {
   const { candidates, preselect, readerName } = pending;
   const all = useMemo(() => [...candidates.matched, ...candidates.rest], [candidates]);
   const sourceOf = (appId: string | undefined): RankedSource | undefined => (appId === undefined ? undefined : all.find((source) => source.appId === appId));
 
+  // The session is the default (D13) — unless the ask carries a seed: a renewal's own choice (its
+  // whole scope, PR-3), or the chat's day.
+  const [seed] = useState(() => sheetSeedOf(pending));
   const preselected = sourceOf(preselect?.appId);
   const [chosenAppId, setChosenAppId] = useState<string | undefined>(preselected?.appId);
-  const [ticked, setTicked] = useState<Readonly<Record<string, readonly string[]>>>(() =>
-    preselected !== undefined && preselect !== undefined ? { [preselected.appId]: inSourceOrder(preselected, preselect.tables) } : {},
+  const [ticked, setTicked] = useState<Readonly<Record<string, Ticks>>>(() =>
+    preselected !== undefined && preselect !== undefined ? { [preselected.appId]: ticksFor(preselected, preselect.tables, seed?.tables) } : {},
+  );
+  const [options, setOptions] = useState<Readonly<Record<string, SourceOptions>>>(() =>
+    preselected !== undefined ? { [preselected.appId]: { kv: seed?.kv === true, refresh: seed?.refresh === true } } : {},
+  );
+  // *more options…* starts OPEN exactly when it matters (DS6): the ask said write, or the seed turned something on.
+  const [optionsOpen, setOptionsOpen] = useState(
+    () => pending.wantsWrite === true || seed?.kv === true || seed?.refresh === true || (seed?.tables?.some((table) => table.write === true) ?? false),
   );
   const [showMore, setShowMore] = useState(() => candidates.matched.length === 0 || (preselected !== undefined && candidates.rest.includes(preselected)));
-  // The session is the default (D13) — unless the ask carries a seed: a renewal's own choice, or the chat's day.
-  const [seed] = useState(() => sheetSeedOf(pending));
   const [duration, setDuration] = useState<AccessDuration>(seed?.duration ?? 'session');
   const [away, setAway] = useState(seed?.unattended ?? false);
   const [armed, setArmed] = useState(false);
@@ -162,17 +231,24 @@ function ConsentSheetBody({ pending }: { pending: PendingAccessRequest }): React
   }, []);
 
   const chosen = sourceOf(chosenAppId);
-  const tables = chosen === undefined ? [] : inSourceOrder(chosen, ticked[chosen.appId] ?? []);
-  const ready = chosen !== undefined && tables.length > 0;
+  const answers = chosen === undefined ? [] : answersFor(chosen, ticked[chosen.appId] ?? {});
+  const tables = answers.map((answer) => answer.choice);
+  // A table whose every column is unticked cannot be allowed (D-PR3-23) — the sheet says so before the writer would.
+  const bare = answers.some((answer) => answer.columnsTicked === 0);
+  const ready = chosen !== undefined && tables.length > 0 && !bare;
+  const canChange = tables.some((table) => table.write);
+  const chosenOptions = chosen === undefined ? NO_OPTIONS : (options[chosen.appId] ?? NO_OPTIONS);
   // A memory access is never usable while away (D30): the box is not even offered then.
   const unattended = duration !== 'session' && away;
 
   const sourceName = chosen?.displayName;
   const lines = useMemo(() => {
-    if (sourceName !== undefined) return pending.egressFor({ unattended, sourceName });
+    // `canChange` only while a write is ticked (U-Q7): the closing then says *reads and changes*.
+    const opts = (name: string): EgressOptions => ({ unattended, sourceName: name, ...(canChange ? { canChange: true } : {}) });
+    if (sourceName !== undefined) return pending.egressFor(opts(sourceName));
     // No app chosen yet: every line but the closing one, which names the app that keeps the history.
-    return pending.egressFor({ unattended, sourceName: '' }).filter((line) => line.kind !== 'closing');
-  }, [pending, unattended, sourceName]);
+    return pending.egressFor(opts('')).filter((line) => line.kind !== 'closing');
+  }, [pending, unattended, sourceName, canChange]);
 
   const answer = (decision: ConsentDecision): void => {
     if (answered.current) return;
@@ -184,18 +260,30 @@ function ConsentSheetBody({ pending }: { pending: PendingAccessRequest }): React
   const choose = (appId: string): void => {
     setChosenAppId(appId);
     const source = sourceOf(appId);
-    if (source !== undefined && ticked[appId] === undefined) setTicked({ ...ticked, [appId]: preselectedTables(source) });
+    if (source !== undefined && ticked[appId] === undefined) setTicked({ ...ticked, [appId]: ticksFor(source, preselectedTables(source)) });
   };
   const toggle = (appId: string, table: string, on: boolean): void => {
-    const current = ticked[appId] ?? [];
-    setTicked({ ...ticked, [appId]: on ? [...current.filter((name) => name !== table), table] : current.filter((name) => name !== table) });
+    const { [table]: _was, ...rest } = ticked[appId] ?? {};
+    const offered = sourceOf(appId)?.tables.find((entry) => entry.name === table);
+    setTicked({ ...ticked, [appId]: on && offered !== undefined ? { ...rest, [table]: fullTick(offered) } : rest });
   };
+  /** One ticked table's choices, patched; an unticked table has none to patch. */
+  const patchTick = (appId: string, table: string, patch: (tick: TableTick) => TableTick): void => {
+    const ticks = ticked[appId] ?? {};
+    const tick = ticks[table];
+    if (tick === undefined) return;
+    setTicked({ ...ticked, [appId]: { ...ticks, [table]: patch(tick) } });
+  };
+  const column = (appId: string, table: string, name: string, on: boolean): void =>
+    patchTick(appId, table, (tick) => ({ ...tick, columns: on ? [...tick.columns.filter((entry) => entry !== name), name] : tick.columns.filter((entry) => entry !== name) }));
+  const write = (appId: string, table: string, on: boolean): void => patchTick(appId, table, (tick) => ({ ...tick, write: on }));
+  const option = (appId: string, key: keyof SourceOptions, on: boolean): void => setOptions({ ...options, [appId]: { ...(options[appId] ?? NO_OPTIONS), [key]: on } });
 
   const allow = (event: ReactMouseEvent<HTMLButtonElement>): void => {
     if (!armed || !ready || chosen === undefined) return;
     // A pointer activation (detail > 0) whose press began before this sheet existed is not consent.
     if (event.detail > 0 && lastPointerDownAt !== undefined && lastPointerDownAt < renderedAt) return;
-    answer({ kind: 'allow', sourceAppId: chosen.appId, tables, duration, unattended });
+    answer({ kind: 'allow', sourceAppId: chosen.appId, tables, duration, unattended, kv: chosenOptions.kv, refresh: chosenOptions.refresh });
   };
 
   const tileStyle = { '--tile-color': pending.readerIcon?.color ?? 'var(--ember)' } as CSSProperties;
@@ -208,8 +296,8 @@ function ConsentSheetBody({ pending }: { pending: PendingAccessRequest }): React
         </span>
         <div>
           <h2 id={titleId} className="net-confirm-title" data-testid="access-sheet-title">
-            {/* An ask the USER started is theirs — never a want put in the app's mouth (W6 finding 35). */}
-            {pending.provenance === 'user' ? CONSENT_SHEET.userTitle(readerName) : CONSENT_SHEET.title(readerName)}
+            {/* An ask the USER started is theirs — never a want put in the app's mouth (W6 finding 35); an app's write ask says so (DS2). */}
+            {pending.provenance === 'user' ? CONSENT_SHEET.userTitle(readerName) : CONSENT_SHEET.title(readerName, pending.wantsWrite === true)}
           </h2>
           <p className="access-provenance" data-testid="access-sheet-provenance">
             {pending.readerProvenance}
@@ -247,9 +335,16 @@ function ConsentSheetBody({ pending }: { pending: PendingAccessRequest }): React
           <SourcePicker
             candidates={candidates}
             chosenAppId={chosenAppId}
-            tablesOf={(appId) => ticked[appId] ?? []}
+            readerName={readerName}
+            tickedOf={(appId) => ticked[appId] ?? {}}
+            optionsOf={(appId) => options[appId] ?? NO_OPTIONS}
+            optionsOpen={optionsOpen}
+            onOptionsOpen={setOptionsOpen}
             onChoose={choose}
             onToggle={toggle}
+            onColumn={column}
+            onWrite={write}
+            onOption={option}
             showMore={showMore}
             onShowMore={() => setShowMore(true)}
             groupName={sourcesName}
@@ -265,8 +360,8 @@ function ConsentSheetBody({ pending }: { pending: PendingAccessRequest }): React
       <div className="access-sheet-actions">
         {!ready ? (
           <p className="access-pick-table" data-testid="access-pick-table">
-            {/* No app chosen means no table on screen to tick: ask for the app first (W6 finding 41). */}
-            {chosen === undefined ? CONSENT_SHEET.pickAnApp : CONSENT_SHEET.pickATable}
+            {/* No app chosen means no table on screen to tick: ask for the app first (W6 finding 41); then a table; then at least one column of each. */}
+            {chosen === undefined ? CONSENT_SHEET.pickAnApp : tables.length === 0 ? CONSENT_SHEET.pickATable : CONSENT_SHEET.pickAColumn}
           </p>
         ) : null}
         {pending.provenance === 'app' || pending.askedIn === 'chat' ? (

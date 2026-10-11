@@ -417,11 +417,16 @@ export const EMPTY = {
   createPlaceholder: 'describe what and when — every weekday at 8, summarise my ledger',
 } as const;
 
-/** The chip that says a run is in flight, with its one act (security F15); `inApp` when the run is delegated to the OPEN app (ADR-0077 §2). */
+/**
+ * The chip that says a run is in flight, with its one act (security F15); `inApp` when the run is
+ * delegated to the OPEN app (ADR-0077 §2); `fetching` when what runs is a fetch another app asked
+ * for (TASK-20261010-host-broker PR-3, D-PR3-19) — that chip has no act in PR-3 (the run is bounded).
+ */
 export const RUNNING_CHIP = {
   label: `a ${WORDS.item} is running`,
   cancel: 'cancel',
   inApp: (appName: string): string => `running in ${appName}`,
+  fetching: (appName: string): string => `fetching new data in ${appName}`,
 } as const;
 
 // ---------------------------------------------------------------------------------------------
@@ -478,3 +483,20 @@ export const APP_UNREACHABLE_SUMMARY = 'the open app could not be reached';
 
 /** The reconnect chip's attribution when a 401/403 happened inside a scheduled run (R-b closed). */
 export const AUTH_REPAIR_VIA_SCHEDULE = `a ${WORDS.item} ran into this`;
+
+// ---------------------------------------------------------------------------------------------
+// A fetch another app asked for (TASK-20261010-host-broker PR-3; ADR-0076 §6; D-PR3-17, D-PR3-19)
+// — the SOURCE's own code run on a reader's act
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * The delegated record's `title` for a refresh — who asked (`requestedBy`, the reader's display
+ * name folded to one line by the engine): "Budget asked". It is the chip's title and the one
+ * app-authored string on the surface; the label beside it is the host's (`RUNNING_CHIP.fetching`).
+ */
+export const REFRESH_RUN = {
+  title: (requestedBy: string): string => `${requestedBy} asked`,
+} as const;
+
+/** The reconnect chip's attribution when a 401/403 happened inside a fetch another app asked for (DS20). */
+export const AUTH_REPAIR_VIA_REFRESH = 'a fetch another app asked for ran into this';

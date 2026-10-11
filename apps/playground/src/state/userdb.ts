@@ -14,6 +14,7 @@ import { admitConnectionRequirement, type AdmissionChannel } from '@snugprotocol
 import { USERDB_FILE } from '@snugprotocol/protocol';
 import { getPlatform } from '../platform/platform.js';
 import { sqlJsEngineOptions } from '../run/sqlJsEngine.js';
+import { armDoorbell } from '../access/doorbell.js';
 import { resetAccessSession } from '../access/grants.js';
 import { resetThreadSessions } from '../agent/threadSessions.js';
 import { initScheduler } from '../schedule/scheduler.js';
@@ -84,6 +85,10 @@ function attemptOpen(secrets?: ContainerSecrets): void {
   })
     .then((result) => {
       if (result.status === 'ok') {
+        // The access doorbell hears THIS file's write signal (TASK-20261010-host-broker PR-3,
+        // D-PR3-20 b): armed once per open file — the facade keeps the subscription across an
+        // import's inner swap, so only a new file needs a new arm.
+        armDoorbell(result.userDb);
         userDbStatusStore.set({ state: 'ready' });
         resolveReady?.(result.userDb);
       } else if (result.status === 'corrupt') {
@@ -242,6 +247,7 @@ export async function recoverFresh(): Promise<UserDb> {
   resetAccessSession(); // TASK-20261010-cross-app-access AC14: session access mirrors the file being replaced
   const fresh = await corruptResult.openFresh();
   corruptResult = undefined;
+  armDoorbell(fresh); // a fresh file is a new facade: the doorbell follows it (D-PR3-20 b)
   userDbStatusStore.set({ state: 'ready' });
   resolveReady?.(fresh);
   return fresh;

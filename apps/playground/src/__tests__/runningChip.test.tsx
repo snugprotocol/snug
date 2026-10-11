@@ -19,7 +19,7 @@ import type { SnugPlatform } from '../platform/platform.js';
 import { REFRESH_RUN, RUNNING_CHIP } from '../schedule/copy.js';
 import type { StepExecutor, StepOutcome } from '../schedule/engine-types.js';
 import { RunningChip } from '../schedule/RunningChip.js';
-import { beginDelegatedRun, clearTouchedGeneration, endDelegatedRun } from '../schedule/runPlacement.js';
+import { beginDelegatedRun, clearTouchedGeneration, endDelegatedRun, type BeginDelegatedRunInput } from '../schedule/runPlacement.js';
 import { __resetSchedulerForTests, initScheduler, runNow, schedulerStore, type SchedulerDeps } from '../schedule/scheduler.js';
 import { installTestUserDb } from './userdbTestHelper.js';
 
@@ -262,20 +262,17 @@ describe('RunningChip — a run delegated to the open app (TASK-20261010-host-br
 // data — <asker> asked", and NO act in PR-3 (the run is bounded by 90 s; *cancel* is a rider). A
 // delegated run with the default posture and nothing running stays invisible (today's rule).
 //
-// `posture` is what `beginDelegatedRun`'s input gains in PR-3; until then a LOCAL structural type
-// stands in (the implementation lane replaces it with the real field at Gate 5).
+// `posture` is what `beginDelegatedRun`'s input (`BeginDelegatedRunInput`) gained in PR-3 — the
+// real field; the implementation lane swapped the local stand-in.
 // ---------------------------------------------------------------------------------------------
 
 describe('RunningChip — a refresh another app asked for (TASK-20261010-host-broker PR-3)', () => {
-  type Posture = 'schedule' | 'refresh';
-  type PosturedBegin = Parameters<typeof beginDelegatedRun>[0] & { posture?: Posture };
-
   const ended: Array<() => void> = [];
   afterEach(() => {
     for (const end of ended.splice(0)) end();
   });
 
-  function delegate(input: PosturedBegin): void {
+  function delegate(input: BeginDelegatedRunInput): void {
     const begun = beginDelegatedRun(input);
     expect(begun.ok).toBe(true);
     ended.push(() => {
@@ -284,7 +281,7 @@ describe('RunningChip — a refresh another app asked for (TASK-20261010-host-br
     });
   }
 
-  const refreshRun = (): PosturedBegin => ({
+  const refreshRun = (): BeginDelegatedRunInput => ({
     appId: 'ledger',
     appName: 'Ledger',
     runId: 'refresh-run-1',

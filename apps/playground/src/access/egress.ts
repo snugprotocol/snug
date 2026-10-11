@@ -33,7 +33,10 @@
 //                     visible frame (RunView), whatever its connections.
 //   away            — when *also while I'm away* is ticked; it names the reader, because a
 //                     scheduled *ask <Reader>'s AI* reads the away set too (DS-7).
-//   closing         — the copy is made here, and the source keeps the history.
+//   closing         — the copy is made here, and the source keeps the history — "of its reads
+//                     and changes" when the sheet has a write ticked (`canChange`; TASK-20261010-
+//                     host-broker PR-3, D-PR3-23, DS4). A write or a fetch adds NO line of its own:
+//                     this block lists the places data can GO, and its title stays true.
 //
 // Every store is read at the CALL (the transport's own rule: a value captured once would
 // disclose yesterday's route). No brain call, nothing async. `egressFor` is the ONE entry a
@@ -56,6 +59,14 @@ export type EgressKind = 'brain' | 'chat' | 'approved' | 'declared' | 'helper' |
 export interface EgressLine {
   kind: EgressKind;
   text: string;
+}
+
+/** What the sheet's state decides about the block: the away box, the chosen source's name, and (PR-3) whether any write is ticked. */
+export interface EgressOptions {
+  unattended: boolean;
+  sourceName: string;
+  /** Passed only when a write toggle is ticked (U-Q7): the closing sentence says changes too. */
+  canChange?: boolean;
 }
 
 /**
@@ -195,7 +206,7 @@ function connectionLines(db: UserDb, readerAppId: string): EgressLine[] {
  * the one "no connections of its own" line) · the link line · the away line · the closing
  * sentence. The reader's name is its LIBRARY name (the id itself only for a row that is gone).
  */
-export function egressFor(db: UserDb, readerAppId: string, opts: { unattended: boolean; sourceName: string }): EgressLine[] {
+export function egressFor(db: UserDb, readerAppId: string, opts: EgressOptions): EgressLine[] {
   const route = readerBrainRoute(readerAppId, fileHasKey(db));
   const owned = !isUnownedId(readerAppId);
   const readerName = db.getApp(readerAppId)?.displayName ?? readerAppId;
@@ -206,6 +217,6 @@ export function egressFor(db: UserDb, readerAppId: string, opts: { unattended: b
   else lines.push({ kind: 'no-connections', text: EGRESS.noConnections });
   if (owned) lines.push({ kind: 'open-url', text: EGRESS.openUrl });
   if (opts.unattended) lines.push({ kind: 'away', text: EGRESS.away(readerName) });
-  lines.push({ kind: 'closing', text: EGRESS.closing(opts.sourceName) });
+  lines.push({ kind: 'closing', text: EGRESS.closing(opts.sourceName, opts.canChange === true) });
   return lines;
 }

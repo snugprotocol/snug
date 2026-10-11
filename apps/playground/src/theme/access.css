@@ -204,6 +204,89 @@
   background: transparent;
 }
 
+/* ---------------------------------------------------------------- the sheet's disclosures (PR-3)
+   *choose columns…* on a ticked table row and *more options…* under the chosen app: a native
+   <details>, its summary keeping the list-item marker (WCAG 1.4.1 — not told by colour alone),
+   tap-high from padding. */
+
+.access-disclosure {
+  min-width: 0;
+  margin: var(--space-1) 0 0;
+  padding-left: var(--space-5);
+}
+
+.access-disclosure > summary {
+  cursor: pointer;
+  color: var(--ember);
+  font-size: var(--text-xs);
+  display: list-item;
+  min-height: var(--tap);
+  box-sizing: border-box;
+  padding-block: calc((var(--tap) - 1lh) / 2);
+}
+
+.access-disclosure > summary:focus-visible {
+  outline: 2px solid var(--ember);
+  outline-offset: 2px;
+  border-radius: var(--radius-s);
+}
+
+/* The per-column boxes that replace the chips while *choose columns…* is open. */
+.access-column-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.access-column-name {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+/* Listed, never allowed (D23) — the box is disabled, the name faint. */
+.access-column-name.is-sensitive {
+  color: var(--fg-faint);
+}
+
+.access-show-all {
+  margin-top: var(--space-1);
+}
+
+/* The write toggle on a ticked row (under *more options…*), and the one breath under it when ticked. */
+.access-write {
+  margin: var(--space-2) 0 0;
+  padding-left: var(--space-5);
+  min-width: 0;
+}
+
+.access-undo-note {
+  margin: var(--space-1) 0 0;
+  padding-left: var(--space-5);
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+  overflow-wrap: anywhere;
+}
+
+/* The options row: settings & notes, fetch new data first — each a box with its hint under it. */
+.access-options {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+  min-width: 0;
+}
+
+.access-option .hint {
+  margin: var(--space-1) 0 0;
+  padding-left: var(--space-5);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
 .access-excluded {
   margin: 0;
   color: var(--fg-faint);

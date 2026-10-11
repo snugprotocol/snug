@@ -84,7 +84,7 @@ import type { SchedulerSeat } from '../platform/platform.js';
 import { bumpScheduleRevision } from '../platform/signals.js';
 import { createStore, type Store } from '../state/store.js';
 import type { StepContext, StepExecutor, StepOutcome } from './engine-types.js';
-import { applyRunOutcome, dailyCounters, wouldExceedCeiling } from './protection.js';
+import { applyRunOutcome, dailyCounters, foldDailyCalls, wouldExceedCeiling } from './protection.js';
 import { messageOf } from './taskShape.js';
 
 /** The per-run bounds (E5): 120 s, or 300 s when a step asks the AI. */
@@ -427,13 +427,7 @@ export function createRunQueue(deps: RunQueueDeps): RunQueue {
       }
     }
 
-    if (calls.ai > 0 || calls.net > 0) {
-      const latest = db.getSchedulerState();
-      if (latest !== undefined) {
-        const daily = dailyCounters(latest, finishedAt);
-        db.setSchedulerState({ ...latest, daily: { date: daily.date, ai: daily.ai + calls.ai, net: daily.net + calls.net } });
-      }
-    }
+    foldDailyCalls(db, calls, finishedAt);
 
     const fresh = db.getScheduledTask(task.id);
     if (fresh !== undefined) {

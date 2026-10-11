@@ -277,6 +277,21 @@
       noteHeard();
     }
 
+    function onAccessSourceChanged(grantId) {
+      // YOUR WORK: the other app's data changed under this access. Read it again where the
+      // app shows it — snugAccessRequest('query', …) — never ask for access from here.
+    }
+
+    function onDataChanged(table) {
+      // YOUR WORK: another app, or the chat, changed this table of YOUR app under an access
+      // the user allowed (or the user undid such a change). Re-read it where the app shows it.
+    }
+
+    function onAccessRead(grantId) {
+      // YOUR WORK (optional): one of this app's tables was read under an access this app is
+      // the source of. The id only — the runner's history has the rest. Most apps do nothing.
+    }
+
     window.addEventListener('message', (event) => {
       const data = event.data;
       if (event.source !== window.parent || !data || data.v !== 1) return;
@@ -284,13 +299,25 @@
         const resolve = SNUG_ACCESS_PENDING.get(data.requestId);
         if (!resolve) return; // not ours, or already answered
         SNUG_ACCESS_PENDING.delete(data.requestId);
-        // The answer's fields (grant / columns, rows, truncated, totalRows / grants) are at the TOP LEVEL.
+        // The answer's fields (grant / columns, rows, truncated, totalRows / changes / fresh, reason / grants / candidates) are at the TOP LEVEL.
         resolve(data.ok ? data : { ok: false, error: data.error });
         return;
       }
       if (data.type === 'snug:host-event' && data.event === 'access-changed') {
         const change = data.data;
         if (change && typeof change.grantId === 'string' && change.grantId) onAccessChanged(change.grantId);
+      }
+      if (data.type === 'snug:host-event' && data.event === 'access-source-changed') {
+        const change = data.data;
+        if (change && typeof change.grantId === 'string' && change.grantId) onAccessSourceChanged(change.grantId);
+      }
+      if (data.type === 'snug:host-event' && data.event === 'data-changed') {
+        const change = data.data;
+        if (change && typeof change.table === 'string' && change.table) onDataChanged(change.table);
+      }
+      if (data.type === 'snug:host-event' && data.event === 'access-read') {
+        const change = data.data;
+        if (change && typeof change.grantId === 'string' && change.grantId) onAccessRead(change.grantId);
       }
     });
 

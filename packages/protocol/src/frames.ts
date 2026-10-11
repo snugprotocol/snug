@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import {
+  ACCESS_CANDIDATE_CLASSES,
+  ACCESS_LEVELS,
   accessGrantViewSchema,
   accessHintsSchema,
   accessParamsSchema,
@@ -242,19 +244,30 @@ export const openUrlResultSchema = z.strictObject({
 const accessRequestBase = { v: version, type: z.literal(FRAME_TYPES.accessRequest), requestId: id, instanceId: id } as const;
 
 /**
- * Access between apps — the REQUEST (ADR-0075 §1; spec 1.1 §23). STRICT at every level: it
- * carries app-authored SQL and a release act, so an unknown key is MALFORMED (R2's strict
- * exception, the net pair's posture). Like the net pair it has NO app id: the runner's
- * access binding (`accessAppId`) is HOST-assigned exactly like `dbNamespace`, so a reader can
- * never name itself, another reader or a source.
+ * Access between apps — the REQUEST (ADR-0075 §1; spec 1.1 §23; 1.2 §24.5–§24.7, ADR-0076
+ * §4–§7). STRICT at every level: it carries app-authored SQL and a release act, so an unknown
+ * key is MALFORMED (R2's strict exception, the net pair's posture). Like the net pair it has
+ * NO app id: the runner's access binding (`accessAppId`) is HOST-assigned exactly like
+ * `dbNamespace`, so a reader can never name itself, another reader or a source. The seven
+ * variants are declared in `ACCESS_OPS` order:
  *
- *  - `request` — ask the user for access: a purpose (one line, shown quoted, never trusted)
- *    and optional relevance hints; `renew` names a grant being asked for again.
- *  - `query`   — ONE read-only SELECT on a granted source (the host refuses anything else
+ *  - `request`  — ask the user for access: a purpose (one line, shown quoted, never trusted)
+ *    and optional relevance hints; `renew` names a grant being asked for again; `access`
+ *    (1.2) says whether the ask is for `read` (absent ≡ read) or `write` — the sheet opens
+ *    with its write toggles when it is, and a declined read ask never declines a write ask.
+ *  - `query`    — ONE read-only SELECT on a granted source (the host refuses anything else
  *    with `ACCESS_QUERY_REFUSED`; the parser bounds only its size).
- *  - `list`    — this reader's live grants.
- *  - `release` — the reader gives a grant back.
+ *  - `write`    — (1.2) ONE plain INSERT, UPDATE or DELETE with literal or bound values on a
+ *    table whose grant carries `write: true`; the host refuses anything else
+ *    `ACCESS_WRITE_REFUSED`, never MALFORMED — the parser bounds only its size (§24.5 (19)).
+ *  - `refresh`  — (1.2) ask the source to fetch new data before a read, under a grant with
+ *    `refresh: true`; at most once per `ACCESS_REFRESH_COOLDOWN_MS`.
+ *  - `list`     — this reader's live grants.
+ *  - `release`  — the reader gives a grant back.
+ *  - `discover` — (1.2) whether the user has apps worth asking about: a class, never a name.
  *
+ * A 1.1 host answers `write`, `refresh`, `discover` and a `request` carrying `access`
+ * MALFORMED with the `requestId` recovered — the honest fallback, no capability key (D-PR3-5).
  * The superRefine-level rules (purpose/hint display safety, credential refusal, shareable
  * table names) are NOT expressible in JSON Schema — the spec prose carries them.
  */
@@ -265,22 +278,30 @@ export const accessRequestSchema = z.discriminatedUnion('op', [
     purpose: accessPurposeSchema,
     hints: accessHintsSchema.optional(),
     renew: id.optional(),
+    access: z.enum(ACCESS_LEVELS).optional(),
   }),
   z.strictObject({ ...accessRequestBase, op: z.literal('query'), grantId: id, sql: accessSqlSchema, params: accessParamsSchema.optional() }),
+  z.strictObject({ ...accessRequestBase, op: z.literal('write'), grantId: id, sql: accessSqlSchema, params: accessParamsSchema.optional() }),
+  z.strictObject({ ...accessRequestBase, op: z.literal('refresh'), grantId: id }),
   z.strictObject({ ...accessRequestBase, op: z.literal('list') }),
   z.strictObject({ ...accessRequestBase, op: z.literal('release'), grantId: id }),
+  z.strictObject({ ...accessRequestBase, op: z.literal('discover'), hints: accessHintsSchema.optional() }),
 ]);
 
 const accessResponseBase = { v: version, type: z.literal(FRAME_TYPES.accessResponse), requestId: id } as const;
 
 /**
- * Access between apps — the RESPONSE (ADR-0075 §1; spec 1.1 §23). TOLERANT (`z.object`, the
- * db-response shape) by decision D2/D16: nothing in a host→app answer becomes a real-world
- * effect, and a strict answer would turn every reserved growth seat into a MAJOR bump —
- * the SDK drops what `parseFrame` rejects, so a 1.1 app would lose a whole `list` answer the
- * day a host lists a grant with `access: 'write'`. An unknown key still parses; the seats a
- * 1.1 parser knows are still validated. Errors as data (`responseErrorSchema`, R5 open codes —
- * known ones in `ACCESS_ERROR_CODES`).
+ * Access between apps — the RESPONSE (ADR-0075 §1; spec 1.1 §23; 1.2 §24.5–§24.7). TOLERANT
+ * (`z.object`, the db-response shape) by decision D2/D16: nothing in a host→app answer
+ * becomes a real-world effect, and a strict answer would turn every additive seat into a
+ * MAJOR bump — the SDK drops what `parseFrame` rejects. 1.1 reserved `access: 'write'` on the
+ * grant view as exactly such a seat, and 1.2 fills it: a 1.1 app keeps its whole `list`
+ * answer the day a host lists a write grant. An unknown key still parses; the seats a parser
+ * knows are still validated. The eight variants are the seven ops' answers in `ACCESS_OPS`
+ * order and the error (`responseErrorSchema`, R5 open codes — known ones in
+ * `ACCESS_ERROR_CODES`). A `write` answers only `changes` (no undo id — an app can do nothing
+ * with it, DS16); a `refresh` answers `fresh` and, when not, a short machine `reason`
+ * (`recent` inside the cooldown) — never the handler's summary; a `discover` answers a class.
  */
 export const accessResponseSchema = z.union([
   z.object({ ...accessResponseBase, ok: z.literal(true), op: z.literal('request'), grant: accessGrantViewSchema }),
@@ -295,8 +316,11 @@ export const accessResponseSchema = z.union([
     /** The statement's full row count when `truncated`. */
     totalRows: z.int().min(0).optional(),
   }),
+  z.object({ ...accessResponseBase, ok: z.literal(true), op: z.literal('write'), changes: z.int().min(0) }),
+  z.object({ ...accessResponseBase, ok: z.literal(true), op: z.literal('refresh'), fresh: z.boolean(), reason: z.string().max(32).optional() }),
   z.object({ ...accessResponseBase, ok: z.literal(true), op: z.literal('list'), grants: z.array(accessGrantViewSchema) }),
   z.object({ ...accessResponseBase, ok: z.literal(true), op: z.literal('release') }),
+  z.object({ ...accessResponseBase, ok: z.literal(true), op: z.literal('discover'), candidates: z.enum(ACCESS_CANDIDATE_CLASSES) }),
   z.object({ ...accessResponseBase, ok: z.literal(false), error: responseErrorSchema }),
 ]);
 

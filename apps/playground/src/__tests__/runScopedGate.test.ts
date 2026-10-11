@@ -22,7 +22,7 @@
 import type { NetConfirmDecision, NetConfirmGate, NetConfirmRequest } from '@snugprotocol/auth';
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
-import type { DelegatedRun } from '../schedule/runPlacement.js';
+import type { DelegatedRun, DelegatedRunPosture } from '../schedule/runPlacement.js';
 import { DELEGATED_CONFIRM_TIMEOUT_MS, createRunScopedGate, type RunScopedGateDeps, type ScheduledPrompt } from '../schedule/runScopedGate.js';
 
 const APP = 'weather';
@@ -45,6 +45,7 @@ function fakeRun(over: Partial<DelegatedRun> = {}): DelegatedRun & { end(): void
     taskId: 't1',
     title: 'Morning forecast',
     generation: 1,
+    posture: 'schedule',
     calls: { ai: 0, net: 0 },
     refused: [],
     granted: 0,
@@ -377,14 +378,11 @@ describe('(2) the sticky after-run ask — the frame a run touched stays ask-onl
 // and the page's chain is never consulted (LOAD-BEARING NEGATIVE: an inner that would say yes).
 // A `'schedule'` run — the posture every PR-1 caller has — asks exactly as above.
 //
-// `posture` (and `why: 'refused'`) are what `DelegatedRun` and `ScheduledRefusal` gain in PR-3;
-// until then a LOCAL structural type stands in (the implementation lane replaces it at Gate 5).
+// `posture` (and `why: 'refused'`) are what `DelegatedRun` and `ScheduledRefusal` gained in PR-3
+// (`DelegatedRunPosture`, the real field — the implementation lane swapped the local stand-in).
 // ---------------------------------------------------------------------------------------------
 
-type Posture = 'schedule' | 'refresh';
-type PosturedRun = DelegatedRun & { posture?: Posture; end(): void };
-
-const postured = (posture: Posture, over: Partial<DelegatedRun> = {}): PosturedRun => ({ ...fakeRun(over), posture });
+const postured = (posture: DelegatedRunPosture, over: Partial<DelegatedRun> = {}): DelegatedRun & { end(): void } => ({ ...fakeRun(over), posture });
 
 describe('(1) a REFRESH run — refused, never asked (PR-3, D-PR3-19)', () => {
   it('a mutating call → false AT ONCE, `{ host, method, why: "refused" }` recorded, the prompt NEVER called (no dialog parked)', async () => {

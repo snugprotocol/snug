@@ -61,6 +61,7 @@ import {
   type AccessGrant,
   type AccessHints,
   type AccessLogEntry,
+  type AccessUndoEntry,
   type DbRequestFrame,
   type RuntimeContract,
   type ScheduleRun,
@@ -110,6 +111,7 @@ import {
   forbiddenStatementReason,
   type DbDriverResult,
   type DbPersistence,
+  type NamespaceWriteEvent,
   type SnugDbDriver,
 } from '../driver.js';
 import { namespaceToFileName } from '../namespace.js';
@@ -1014,6 +1016,27 @@ export interface UserDb {
   isAccessMuted(readerAppId: string): boolean;
   /** Mute (or unmute — clearing DELETES the row) a reader's asks. */
   setAccessMuted(readerAppId: string, muted: boolean): void;
+
+  // The undo journal `accessUndo:<targetAppId>` (TASK-20261010-host-broker PR-3, D-PR3-7; spec
+  // 1.2 §22.4): the TARGET keeps the rows each brokered write changed, as structure — see the
+  // `access.ts` header for the caps and the postures.
+
+  /** The target's LIVE entries (not undone, not expired), newest first — one reader's when asked. */
+  listAccessUndo(targetAppId: string, readerAppId?: string): AccessUndoEntry[];
+  /** Every readable entry of the target's journal — undone and expired included — newest first. */
+  listAllAccessUndo(targetAppId: string): AccessUndoEntry[];
+  /**
+   * Prepend one entry to the target's journal. Refuses ACCESS_INVALID (the strict schema: the
+   * 64 KiB entry cap, the per-cell credential walk), NOT_FOUND for a target the file does not
+   * hold, and answers `'reader-cap'` — nothing written, nothing evicted — when the entry's
+   * reader already holds `ACCESS_UNDO_MAX_ENTRIES` live entries on this target. Every put drops
+   * the expired; an undone entry is kept, marked, and gives way first when the row would cross
+   * `ACCESS_UNDO_MAX_ROW_BYTES`; when no undone entry is left to give way the put throws
+   * ACCESS_LIMIT with the file byte-identical (a live entry is never evicted).
+   */
+  putAccessUndo(targetAppId: string, entry: AccessUndoEntry): 'ok' | 'reader-cap';
+  /** Stamp `undoneAt` on one entry — a done AND a failed undo alike (D-Q10). An unknown id is a no-op; ACCESS_INVALID for a bad instant. */
+  markAccessUndone(targetAppId: string, id: string, at: string): void;
   getProfileField(key: string): unknown;
   setProfileField(key: string, value: unknown): void;
   getSecret(key: string): string | undefined;
@@ -2285,12 +2308,30 @@ function construct(
     },
   };
 
+  /**
+   * The facade's OWN write listeners (TASK-20261010-host-broker PR-3, D-PR3-20 a / F15): every
+   * inner driver is made with an `onNamespaceWrite` that fans out to this set, so a listener
+   * subscribed through `userDb.driver.subscribeWrites` survives `importUserDb` swapping the
+   * inner driver without anyone re-subscribing. Best-effort, as the driver's own set is.
+   */
+  const writeListeners = new Set<(event: NamespaceWriteEvent) => void>();
+  const fanOutWrite = (event: NamespaceWriteEvent): void => {
+    for (const listener of writeListeners) {
+      try {
+        listener(event);
+      } catch {
+        /* a listener's failure is its own */
+      }
+    }
+  };
+
   const makeInnerDriver = (): SnugDbDriver =>
     createDbDriver({
       backend: materializerBackend,
       ...(options.locateWasm !== undefined ? { locateWasm: options.locateWasm } : {}),
       ...(options.wasmBinary !== undefined ? { wasmBinary: options.wasmBinary } : {}),
       persistDebounceMs: debounceMs,
+      onNamespaceWrite: fanOutWrite,
     });
 
   let inner = makeInnerDriver();
@@ -2304,8 +2345,11 @@ function construct(
    */
   const deletedApps = new Set<string>();
 
-  /** The tombstone's answer, for a frame and for the host-side kv alike. */
-  const deletedAppRefusal = (namespace: string): DbDriverResult => ({
+  /** The one failure shape every seat of the facade refuses with. */
+  type DbDriverRefusal = Extract<DbDriverResult, { ok: false }>;
+
+  /** The tombstone's answer, for a frame, the host-side kv and the brokered seat alike. */
+  const deletedAppRefusal = (namespace: string): DbDriverRefusal => ({
     ok: false as const,
     code: USERDB_ERROR_CODES.NOT_FOUND,
     message: `app "${namespace}" was deleted`,
@@ -2320,7 +2364,7 @@ function construct(
    * row check reads the live handle; a closed handle throws here and the inner driver then
    * answers the closed state as data, as it does for every other call.
    */
-  const hostKvRefusal = (namespace: string): DbDriverResult | undefined => {
+  const hostKvRefusal = (namespace: string): DbDriverRefusal | undefined => {
     if (deletedApps.has(namespace)) return deletedAppRefusal(namespace);
     let held: boolean;
     try {
@@ -2354,6 +2398,23 @@ function construct(
       if (refused !== undefined) return Promise.resolve(refused);
       noteNamespace(namespace);
       return inner.kvGet(namespace, key);
+    },
+    // The brokered seat (TASK-20261010-host-broker PR-3, D-PR3-11) is host-side like the kv
+    // seat and refuses the same way (`hostKvRefusal`: the tombstone, an app the file never
+    // held — opening that namespace would land a file for an app that does not exist);
+    // `noteNamespace` keys the write-back so another app's rows land in the file exactly as
+    // the app's own writes do.
+    brokeredWrite: (namespace, input) => {
+      const refused = hostKvRefusal(namespace);
+      if (refused !== undefined) return Promise.resolve(refused);
+      noteNamespace(namespace);
+      return inner.brokeredWrite(namespace, input);
+    },
+    subscribeWrites: (listener) => {
+      writeListeners.add(listener);
+      return () => {
+        writeListeners.delete(listener);
+      };
     },
     get persistence() {
       return inner.persistence;

@@ -29,7 +29,9 @@ import {
   placeRun,
   touchedAppName,
   touchedGeneration,
+  type BeginDelegatedRunInput,
   type DelegatedRun,
+  type DelegatedRunPosture,
 } from '../schedule/runPlacement.js';
 // Gate-5 folds F-6 / F-12 need the REAL registry. Never `__resetAppHostsForTest` here: it wipes the
 // host listeners, including the belt `runPlacement.ts` installs at load (F-12).
@@ -325,17 +327,12 @@ describe('the sticky posture against the real registry (Gate-5 folds F-6, F-12)'
 // generation is recorded for BOTH postures (S6): a handler that answers `schedule-result` and
 // POSTs afterwards meets the same after-run dialog D-PR1-3 built, whichever kind of run it was.
 //
-// `posture` is a field `DelegatedRun` and `beginDelegatedRun`'s input gain in PR-3; until then it
-// is declared here as a LOCAL structural type (the implementation lane replaces it with the real
-// field at Gate 5).
+// `posture` is the field `DelegatedRun` and `beginDelegatedRun`'s input (`BeginDelegatedRunInput`)
+// gained in PR-3 — the real field; the implementation lane swapped the local stand-in.
 // ---------------------------------------------------------------------------------------------
 
-type Posture = 'schedule' | 'refresh';
-type PosturedBegin = Parameters<typeof beginDelegatedRun>[0] & { posture?: Posture };
-type PosturedRun = DelegatedRun & { posture?: Posture };
-
-function beginWithPosture(appId: string, posture: Posture | undefined, over: Partial<Pick<DelegatedRun, 'appName' | 'runId' | 'taskId' | 'title' | 'generation'>> = {}) {
-  const input: PosturedBegin = {
+function beginWithPosture(appId: string, posture: DelegatedRunPosture | undefined, over: Partial<Pick<DelegatedRun, 'appName' | 'runId' | 'taskId' | 'title' | 'generation'>> = {}) {
+  const input: BeginDelegatedRunInput = {
     appId,
     appName: 'Ledger',
     runId: 'run-r',
@@ -355,30 +352,30 @@ describe('the posture of a delegated run (TASK-20261010-host-broker PR-3, D-PR3-
     const result = beginWithPosture('pl-posture-refresh', 'refresh');
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect((result.run as PosturedRun).posture).toBe('refresh');
-    expect((delegatedRunFor('pl-posture-refresh') as PosturedRun | undefined)?.posture).toBe('refresh');
+    expect(result.run.posture).toBe('refresh');
+    expect(delegatedRunFor('pl-posture-refresh')?.posture).toBe('refresh');
   });
 
   it('no posture named → `"schedule"` (the default — every PR-1 caller is a schedule)', () => {
     const result = beginWithPosture('pl-posture-default', undefined, { taskId: 't1', title: 'Morning forecast' });
     if (!result.ok) throw new Error('begin refused');
-    expect((result.run as PosturedRun).posture).toBe('schedule');
+    expect(result.run.posture).toBe('schedule');
   });
 
   it('`posture: "schedule"` named explicitly is the same record as the default', () => {
     const result = beginWithPosture('pl-posture-schedule', 'schedule', { taskId: 't1' });
     if (!result.ok) throw new Error('begin refused');
-    expect((result.run as PosturedRun).posture).toBe('schedule');
+    expect(result.run.posture).toBe('schedule');
   });
 
   it('one instance whatever the posture: a refresh is REFUSED while a schedule’s run is in flight for the app, and the reverse', () => {
     beginWithPosture('pl-posture-busy', 'schedule', { runId: 'run-s', taskId: 't1' });
     expect(beginWithPosture('pl-posture-busy', 'refresh', { runId: 'run-r' }).ok).toBe(false);
-    expect((delegatedRunFor('pl-posture-busy') as PosturedRun | undefined)?.posture).toBe('schedule');
+    expect(delegatedRunFor('pl-posture-busy')?.posture).toBe('schedule');
 
     beginWithPosture('pl-posture-busy-2', 'refresh', { runId: 'run-r' });
     expect(beginWithPosture('pl-posture-busy-2', 'schedule', { runId: 'run-s', taskId: 't1' }).ok).toBe(false);
-    expect((delegatedRunFor('pl-posture-busy-2') as PosturedRun | undefined)?.posture).toBe('refresh');
+    expect(delegatedRunFor('pl-posture-busy-2')?.posture).toBe('refresh');
   });
 
   it('the STICKY generation is recorded for a REFRESH too (S6) — set by begin, kept by end, with the source’s name for the after-run dialog', () => {
@@ -399,8 +396,8 @@ describe('the posture of a delegated run (TASK-20261010-host-broker PR-3, D-PR3-
   it('end returns the record whatever the posture — a refresh’s refusals ride it like a schedule’s', () => {
     const result = beginWithPosture('pl-posture-end', 'refresh');
     if (!result.ok) throw new Error('begin refused');
-    // `why: 'refused'` is what `ScheduledRefusal.why` gains in PR-3 (local cast until then).
-    result.run.refused.push({ host: 'api.example.com', method: 'POST', why: 'refused' } as unknown as DelegatedRun['refused'][number]);
+    // `why: 'refused'` is what `ScheduledRefusal.why` gained in PR-3.
+    result.run.refused.push({ host: 'api.example.com', method: 'POST', why: 'refused' });
     expect(endDelegatedRun('pl-posture-end', 'run-r')).toEqual({
       calls: { ai: 0, net: 0 },
       refused: [{ host: 'api.example.com', method: 'POST', why: 'refused' }],

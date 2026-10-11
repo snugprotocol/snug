@@ -132,8 +132,9 @@ Say it once, plainly, the first time you hand an app in:
 ## Access between apps
 
 The user allows access between apps; an app never takes it, and neither do you. One app may
-read another app's tables — a budget reading the ledger — only after the user allows it in
-the runner, for as long as the user chose, and the user can stop it at any moment. An app
+read another app's data — a budget reading the ledger — or change it, when the user ticked
+that — only after the user allows it in the runner, for as long as the user chose, and the
+user can stop it at any moment and undo any change from the other app's history. An app
 you build asks through the helper in `references/87-cross-app-access.md`, at runtime, only
 after the user has done something that needs the other app's data — never on load — and the
 runner shows the ask as a strip the user reviews or declines. The app learns only what the

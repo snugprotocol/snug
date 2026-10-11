@@ -2,32 +2,40 @@
 // runtime bytes: ONE read-only statement (`scopedScratchRead` — TASK-20261010-cross-app-access
 // AC6; ADR-0075 §6; D4, D23) or ONE dump of the granted tables' recorded columns
 // (`scopedScratchDump` — TASK-20261010-host-broker PR-2, D-PR2-6; ADR-0076 §2: the rows the
-// chat and scheduler doors hand a brain as plain tables).
+// chat and scheduler doors hand a brain as plain tables) — and, since PR-3 (D-PR3-22), the
+// copy itself (`scopeCopy`, exported) that the Write Broker's planner dry-runs a write on.
 //
 // PURE: no DOM, no Worker, no userdb. The host runs this inside a dedicated Web Worker that
 // owns its OWN sql.js instance under a wall clock (sql.js has no interrupt), so the engine
 // passes `SQL` in and this module never initialises one.
 //
-// THE ORDER IS THE CONTRACT. Steps 2–5 are ONE private `scopeCopy(scratch, scope)` that both
-// entry points run on the handle they opened — and close, on every path — so the read and the
-// dump cannot disagree about what a scoped copy is:
+// THE ORDER IS THE CONTRACT. Steps 2–5 are ONE `scopeCopy(scratch, scope, options)` that every
+// entry point runs on the handle it opened — and closes, on every path — so the read, the
+// dump and the plan cannot disagree about what a scoped copy is:
 //  1. open a FRESH database on the bytes — sql.js copies them into its own heap, so the
 //     caller's bytes are never mutated, whatever happens below;
 //  2. DROP every trigger FIRST (a trigger on a granted table can name a table about to be
 //     dropped — SQLite does not validate trigger bodies on a drop — and its DDL text alone
 //     would carry that name), then every view, then every table outside the grant, `snug_kv`
-//     and the `sqlite_stat*` statistics (they name dropped tables' indexes and count their
-//     rows). A non-granted table is therefore PHYSICALLY ABSENT: the read fails with "no such
-//     table", there is no name guard to get wrong. The drops are VERIFIED against
-//     sqlite_master before anything else runs;
-//  3. withhold every credential-named column of a granted table (see below), THEN mask every
-//     credential-shaped VALUE under any other column of a granted table (see below);
-//  4. `PRAGMA query_only = 1`;
+//     (unless the grant says `kv` — see KV below) and the `sqlite_stat*` statistics (they name
+//     dropped tables' indexes and count their rows). A non-granted table is therefore
+//     PHYSICALLY ABSENT: the read fails with "no such table", there is no name guard to get
+//     wrong. Then the `sqlite_sequence` belt (R-76): every row of SQLite's AUTOINCREMENT
+//     bookkeeping that names a table outside the grant is deleted — a dropped table's counter
+//     and a planted row alike (D-Q17). The drops are VERIFIED against sqlite_master before
+//     anything else runs;
+//  3. withhold every credential-named column AND every `withheld` column of a granted table
+//     (see below), THEN mask every credential-shaped VALUE under any other column of a granted
+//     table (see below) — answering the set of columns the mask touched;
+//  4. `PRAGMA query_only = 1` for a READ copy; a PLAN copy (`forPlan`) skips it and resets
+//     `ignore_check_constraints` to 0 (the withhold set it to 1 so a mask value could land
+//     past a CHECK) — a write's dry run must meet the source's own CHECKs (F2, S5);
 //  5. the drift check: each granted table's live NON-credential columns (`selectableColumns`
 //     — `PRAGMA table_xinfo`, generated columns included, the same list the consent sheet
 //     shows — minus `isCredentialKeyName` — D23: such a column is never in a scope, so a
-//     source that gains `api_key` has not drifted) against the recorded set; a difference — or
-//     a granted table that is gone — answers `drift` and nothing is read;
+//     source that gains `api_key` has not drifted) against the recorded set `columns ∪
+//     withheld`; a difference — a withheld column that vanished, a new column — or a granted
+//     table that is gone — answers `drift` and nothing is read. `snug_kv` is never drift-checked;
 //  then, for the READ:
 //  6. the two guards in order — `isReadOnlySelect` (any PRAGMA/ATTACH/DETACH, more than one
 //     statement, a CTE write) THEN `forbiddenStatementReason` (load_extension, writable_schema)
@@ -45,7 +53,9 @@
 //     `totalRows`), every later table runs under 0 bytes (`rows: []`, `truncated`, the honest
 //     total). `columns` is the scope's list; `types[i]` is the declared type text ONLY when it
 //     matches `DUMP_TYPE_ALLOW`, else '' — the ONE home of that rule (S5: app-authored type
-//     text never reaches a prompt or a CREATE). A SQL error answers `failed`;
+//     text never reaches a prompt or a CREATE). Under `kv`, the filtered `snug_kv` LAST as
+//     `{ name: 'snug_kv', columns: ['key', 'value'], types: ['TEXT', 'TEXT'] }`. A SQL error
+//     answers `failed`;
 //  7. close the scratch, on every path.
 //
 // WITHHELD COLUMNS (step 3). A credential-named column is never in a grant's scope, but it
@@ -54,8 +64,11 @@
 // `query_only`, every credential-named column of a granted table is overwritten with the
 // mask's own `***` (falling back to NULL, then to a random value, for a column whose
 // constraints refuse the literal; triggers are already gone, so the UPDATE fires nothing).
-// A generated column derived from it recomputes from the withheld value. If no value can be
-// written the read fails closed rather than leak.
+// Since PR-3 the scope's `withheld` columns — the ones the user left UNTICKED (D-PR3-2) — are
+// overwritten exactly the same way: fail closed, by the same fallbacks, so `SELECT *` shows
+// the column's NAME and never a value (AC26). A generated column derived from either
+// recomputes from the withheld value. If no value can be written the read fails closed
+// rather than leak.
 //
 // MASKED VALUES (step 3, second half — W6 finding 1). A credential-SHAPED value can sit under a
 // neutral column name (`settings.value = 'sk-ant-…'`). A mask applied to the ANSWER is keyed on
@@ -67,7 +80,19 @@
 // a withheld column. A GENERATED column recomputes from what it is derived from; one that still
 // answers a credential shape after that (it BUILDS one) cannot be overwritten, so the read fails
 // closed. Cost: one pass over the granted tables per read, bounded by the 16 MiB source cap and
-// the host's wall clock.
+// the host's wall clock. The copy REPORTS the `table.column` pairs (lower-cased) the value mask
+// overwrote at least one cell in (D-Q13): the planner refuses a write that names one BY NAME,
+// because a write's `changes` on a masked column would be an oracle on the mask (S1).
+//
+// KV (step 2, under `kv: true` — D-PR3-22, AC25). The app's `snug_kv` STAYS on the copy and is
+// then FILTERED row by row from here: a row whose key is credential-named
+// (`isCredentialKeyName`), whose key starts `snug:` (the host's own handshake rows), whose
+// value is not the JSON text `kvSet` stores, or whose PARSED value the ONE walk
+// (`findRecordCredential({ [key]: parsed })`) refuses is DELETED. The walk, not the
+// start-anchored value scan over the stored text: `kvSet('openai', 'sk-…')` stores the text
+// `"sk-…"` — quoted — and only the parsed value starts with the shape. An app that never used
+// kv gets an empty table, so a kv grant on a fresh source reads honestly empty rather than
+// failing "no such table". The stray belt admits `snug_kv` (and its primary-key index) under `kv`.
 //
 // SCOPING FAILURES ARE TYPED. A copy that still holds a stray object, or a value that could not be
 // withheld or masked, answers `reason: 'copy-failed'` — its message names an object of the
@@ -90,14 +115,20 @@
 // table". The threat-model delta and the spec prose state both residuals beside D23.
 
 import type { BindParams, Database, SqlJsStatic } from 'sql.js';
-import { isCredentialKeyName, isReadOnlySelect, scanForCredentialValues } from '@snugprotocol/protocol';
-import { forbiddenStatementReason } from './driver.js';
+import { findRecordCredential, isCredentialKeyName, isReadOnlySelect, scanForCredentialValues } from '@snugprotocol/protocol';
 import { quoteIdent, selectRows } from './sqlite-helpers.js';
+import { KV_TABLE_DDL, forbiddenStatementReason } from './statement-rules.js';
 import { jsonUtf8Weight, runScratchStatement } from './userdb/scratch-statement.js';
 
-/** The granted tables, each with the columns recorded (FROZEN) at consent — an `AccessScope` satisfies it. */
+/**
+ * The granted tables, each with the columns recorded (FROZEN) at consent — an `AccessScope`
+ * satisfies it. Since PR-3 (D-PR3-2): `withheld` are the UNTICKED non-credential columns
+ * (overwritten on the copy, drift-checked), `write` marks a table a write may name, and `kv`
+ * keeps the source's filtered `snug_kv` on the copy. Every seat absent means the 1.1 scope.
+ */
 export interface ScopedReadScope {
-  tables: ReadonlyArray<{ name: string; columns: readonly string[] }>;
+  tables: ReadonlyArray<{ name: string; columns: readonly string[]; withheld?: readonly string[]; write?: boolean }>;
+  kv?: boolean;
 }
 
 /** The reader's one statement and its bound parameters. */
@@ -158,12 +189,24 @@ export type ScopedDumpResult =
 export const DUMP_TYPE_ALLOW =
   /^(INT|INTEGER|REAL|TEXT|BLOB|NUMERIC|BOOLEAN|DATE|DATETIME|VARCHAR|CHAR|DOUBLE|FLOAT|DECIMAL)(\(\d{1,5}(,\s?\d{1,5})?\))?$/i;
 
-/** What `scopeCopy` answers when the copy could not be scoped — a member of both result types. */
-type ScopingFailure =
+/** What `scopeCopy` answers when the copy could not be scoped — a member of every result type. */
+export type ScopingFailure =
   | { ok: false; reason: 'drift'; drift: ScopedReadDrift; message: string }
   | { ok: false; reason: 'copy-failed'; message: string };
 
+/** What a scoped copy reports: the `table.column` pairs (lower-cased) the VALUE mask overwrote at least one cell in (D-Q13). */
+export interface ScopeCopyReport {
+  masked: ReadonlySet<string>;
+}
+
+/** How the copy will be used: a PLAN copy is writable (no `query_only`) and meets the source's CHECKs. */
+export interface ScopeCopyOptions {
+  forPlan?: boolean;
+}
+
 const KV_TABLE = 'snug_kv';
+/** The host's own kv rows — the scheduler's handshake (`snug:schedule:<runId>`) — never cross. */
+const HOST_KV_KEY_PREFIX = 'snug:';
 
 /** The first guard's refusal — names what IS allowed, so a reader's model can correct itself. */
 const NOT_ONE_READ_MESSAGE =
@@ -175,8 +218,47 @@ function namesOf(scratch: Database, type: 'trigger' | 'view'): string[] {
   return selectRows(scratch, 'SELECT name FROM sqlite_master WHERE type = ?', [type]).map((row) => String(row[0]));
 }
 
-/** Physical absence: triggers, then views, then every table outside the grant (and `snug_kv`, and the statistics). */
-function dropOutsideScope(scratch: Database, granted: ReadonlySet<string>): void {
+const hasTable = (scratch: Database, name: string): boolean =>
+  selectRows(scratch, "SELECT 1 FROM sqlite_master WHERE type = 'table' AND lower(name) = ?", [name]).length > 0;
+
+/** Whether one stored kv row may cross: a neutral key outside the host's prefix, JSON text, and a parsed value the ONE walk admits. */
+function kvRowAdmitted(key: string, stored: unknown): boolean {
+  if (isCredentialKeyName(key) || key.startsWith(HOST_KV_KEY_PREFIX)) return false;
+  if (typeof stored !== 'string') return false; // kvSet stores JSON TEXT; a BLOB or a NULL was never an app's setting
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stored);
+  } catch {
+    return false;
+  }
+  return findRecordCredential({ [key]: parsed }) === undefined;
+}
+
+/** Row by row, from here: delete every kv row that may not cross (see KV in the header). */
+function filterKvRows(scratch: Database): void {
+  const refused: number[] = [];
+  for (const row of selectRows(scratch, `SELECT rowid, key, value FROM ${KV_TABLE}`)) {
+    if (!kvRowAdmitted(String(row[1]), row[2])) refused.push(Number(row[0]));
+  }
+  for (const rowid of refused) scratch.run(`DELETE FROM ${KV_TABLE} WHERE rowid = ?`, [rowid]);
+}
+
+/** The `sqlite_sequence` belt (R-76): no AUTOINCREMENT counter — live or planted — names a table outside the grant. */
+function pruneSequence(scratch: Database, granted: ReadonlySet<string>): void {
+  if (!hasTable(scratch, 'sqlite_sequence')) return;
+  const names = [...granted];
+  if (names.length === 0) {
+    scratch.run('DELETE FROM sqlite_sequence');
+    return;
+  }
+  scratch.run(`DELETE FROM sqlite_sequence WHERE lower(name) NOT IN (${names.map(() => '?').join(', ')})`, names);
+}
+
+/**
+ * Physical absence: triggers, then views, then every table outside the grant (and `snug_kv`
+ * unless `kv`, and the statistics), then the `sqlite_sequence` belt, then the kv filter.
+ */
+function dropOutsideScope(scratch: Database, granted: ReadonlySet<string>, kv: boolean): void {
   for (const trigger of namesOf(scratch, 'trigger')) scratch.run(`DROP TRIGGER IF EXISTS ${quoteIdent(trigger)}`);
   for (const view of namesOf(scratch, 'view')) scratch.run(`DROP VIEW IF EXISTS ${quoteIdent(view)}`);
   // Virtual tables first: dropping one takes its shadow tables with it (IF EXISTS covers those).
@@ -186,13 +268,19 @@ function dropOutsideScope(scratch: Database, granted: ReadonlySet<string>): void
   for (const { name } of tables) {
     const lower = name.toLowerCase();
     if (lower.startsWith('sqlite_') && !lower.startsWith('sqlite_stat')) continue; // sqlite_sequence &c. cannot be dropped
-    if (granted.has(lower) && lower !== KV_TABLE) continue;
+    if (lower === KV_TABLE ? kv : granted.has(lower)) continue;
     scratch.run(`DROP TABLE IF EXISTS ${quoteIdent(name)}`);
+  }
+  pruneSequence(scratch, granted);
+  if (kv) {
+    scratch.run(KV_TABLE_DDL); // an app that never used kv: an honest empty table, not "no such table"
+    filterKvRows(scratch);
   }
 }
 
-/** The belt on the drops: nothing but granted tables (their indexes, SQLite's own bookkeeping) may remain. */
-function strayObject(scratch: Database, granted: ReadonlySet<string>): string | undefined {
+/** The belt on the drops: nothing but granted tables (their indexes, SQLite's own bookkeeping, `snug_kv` under `kv`) may remain. */
+function strayObject(scratch: Database, granted: ReadonlySet<string>, kv: boolean): string | undefined {
+  const admitted = (table: string): boolean => (table === KV_TABLE ? kv : granted.has(table));
   for (const row of selectRows(scratch, 'SELECT type, name, tbl_name FROM sqlite_master')) {
     const [type, name, table] = [String(row[0]), String(row[1]), String(row[2]).toLowerCase()];
     if (type === 'trigger' || type === 'view') return name;
@@ -200,9 +288,9 @@ function strayObject(scratch: Database, granted: ReadonlySet<string>): string | 
       const lower = name.toLowerCase();
       if (lower.startsWith('sqlite_stat')) return name;
       if (lower.startsWith('sqlite_')) continue;
-      if (!granted.has(lower) || lower === KV_TABLE) return name;
+      if (!admitted(lower)) return name;
     }
-    if (type === 'index' && (!granted.has(table) || table === KV_TABLE)) return name;
+    if (type === 'index' && !admitted(table)) return name;
   }
   return undefined;
 }
@@ -210,28 +298,34 @@ function strayObject(scratch: Database, granted: ReadonlySet<string>): string | 
 /** The value expressions a withheld column is overwritten with, in order: the mask itself, then NULL, then a random value. */
 const WITHHELD_VALUES = ["'***'", 'NULL', 'lower(hex(randomblob(16)))', 'abs(random())'] as const;
 
+/** A granted table as `scopeCopy` walks it: the name as the scope spells it, the columns the user left unticked. */
+interface GrantedTable {
+  name: string;
+  withheld: ReadonlySet<string>;
+}
+
 /**
- * Overwrite every credential-named, non-generated column of each granted table in the copy.
- * Answers the column that could not be withheld, if any.
+ * Overwrite every credential-named and every withheld, non-generated column of each granted
+ * table in the copy. Answers the column that could not be withheld, if any.
  */
-function withholdCredentialColumns(scratch: Database, tables: readonly string[]): string | undefined {
+function withholdColumns(scratch: Database, tables: readonly GrantedTable[]): string | undefined {
   scratch.run('PRAGMA ignore_check_constraints = 1');
   for (const table of tables) {
     // table_xinfo: `hidden` 0 is an ordinary column; 1 a virtual table's hidden column; 2/3 generated.
-    const columns = selectRows(scratch, `PRAGMA table_xinfo(${quoteIdent(table)})`)
+    const columns = selectRows(scratch, `PRAGMA table_xinfo(${quoteIdent(table.name)})`)
       .filter((row) => Number(row[6]) === 0)
       .map((row) => String(row[1]))
-      .filter(isCredentialKeyName);
+      .filter((column) => isCredentialKeyName(column) || table.withheld.has(column.toLowerCase()));
     for (const column of columns) {
       const withheld = WITHHELD_VALUES.some((value) => {
         try {
-          scratch.run(`UPDATE ${quoteIdent(table)} SET ${quoteIdent(column)} = ${value}`);
+          scratch.run(`UPDATE ${quoteIdent(table.name)} SET ${quoteIdent(column)} = ${value}`);
           return true;
         } catch {
           return false;
         }
       });
-      if (!withheld) return `${table}.${column}`;
+      if (!withheld) return `${table.name}.${column}`;
     }
   }
   return undefined;
@@ -269,34 +363,36 @@ function credentialValues(scratch: Database, table: string, column: string): unk
 
 /**
  * Overwrite every credential-SHAPED value under a NEUTRAL column of each granted table in the copy
- * (the credential-NAMED ones are already withheld whole). Generated columns recompute; one that
- * still answers a credential shape cannot be overwritten. Answers the column that could not be
- * masked, if any.
+ * (the credential-named and withheld ones are already overwritten whole). Generated columns
+ * recompute; one that still answers a credential shape cannot be overwritten. Answers the
+ * column that could not be masked, if any, and the `table.column` set the mask touched.
  */
-function maskCredentialValues(scratch: Database, tables: readonly string[]): string | undefined {
+function maskCredentialValues(scratch: Database, tables: readonly GrantedTable[]): { failed?: string; masked: Set<string> } {
+  const masked = new Set<string>();
   for (const table of tables) {
-    const info = selectRows(scratch, `PRAGMA table_xinfo(${quoteIdent(table)})`)
-      .filter((row) => Number(row[6]) !== 1 && !isCredentialKeyName(String(row[1])))
+    const info = selectRows(scratch, `PRAGMA table_xinfo(${quoteIdent(table.name)})`)
+      .filter((row) => Number(row[6]) !== 1 && !isCredentialKeyName(String(row[1])) && !table.withheld.has(String(row[1]).toLowerCase()))
       .map((row) => ({ column: String(row[1]), generated: Number(row[6]) >= 2 }));
     for (const { column } of info.filter((entry) => !entry.generated)) {
-      for (const value of credentialValues(scratch, table, column)) {
-        const masked = WITHHELD_VALUES.some((replacement) => {
+      for (const value of credentialValues(scratch, table.name, column)) {
+        const done = WITHHELD_VALUES.some((replacement) => {
           try {
-            scratch.run(`UPDATE ${quoteIdent(table)} SET ${quoteIdent(column)} = ${replacement} WHERE ${quoteIdent(column)} = ?`, [value] as BindParams);
+            scratch.run(`UPDATE ${quoteIdent(table.name)} SET ${quoteIdent(column)} = ${replacement} WHERE ${quoteIdent(column)} = ?`, [value] as BindParams);
             return true;
           } catch {
             return false;
           }
         });
-        if (!masked) return `${table}.${column}`;
+        if (!done) return { failed: `${table.name}.${column}`, masked };
+        masked.add(`${table.name.toLowerCase()}.${column.toLowerCase()}`);
       }
     }
     // After every base column is masked: a generated column that STILL answers a credential builds one.
     for (const { column } of info.filter((entry) => entry.generated)) {
-      if (credentialValues(scratch, table, column).length > 0) return `${table}.${column}`;
+      if (credentialValues(scratch, table.name, column).length > 0) return { failed: `${table.name}.${column}`, masked };
     }
   }
-  return undefined;
+  return { masked };
 }
 
 /**
@@ -312,46 +408,53 @@ export function selectableColumns(db: Database, table: string): string[] {
     .map((row) => String(row[1]));
 }
 
-/** Recorded vs live NON-credential columns of every granted table, as `table.column` names. */
+/** Recorded (`columns ∪ withheld`) vs live NON-credential columns of every granted table, as `table.column` names. */
 function driftOf(scratch: Database, scope: ScopedReadScope): ScopedReadDrift {
   const added: string[] = [];
   const removed: string[] = [];
   for (const table of scope.tables) {
     const live = selectableColumns(scratch, table.name).filter((column) => !isCredentialKeyName(column));
-    const recorded = new Set(table.columns);
+    const recordedList = [...table.columns, ...(table.withheld ?? [])];
+    const recorded = new Set(recordedList);
     const present = new Set(live);
     for (const column of live) if (!recorded.has(column)) added.push(`${table.name}.${column}`);
-    for (const column of table.columns) if (!present.has(column)) removed.push(`${table.name}.${column}`);
+    for (const column of recordedList) if (!present.has(column)) removed.push(`${table.name}.${column}`);
   }
   return { added, removed };
 }
 
 /**
  * Steps 2–5 of the header on an opened copy: the drops and their belt, the withhold, the value
- * mask, `query_only`, the drift check. Answers the scoping failure, or `undefined` when the copy
- * is scoped and nothing has drifted. The caller opened `scratch` and closes it.
+ * mask, `query_only` (a read copy) or the CHECK reset (a plan copy), the drift check. Answers
+ * the scoping failure, or the report of what the mask touched. The caller opened `scratch`
+ * and closes it. EXPORTED for the Write Broker's planner (D-PR3-22), which dry-runs on the
+ * copy this makes and refuses, by name, any masked column a write names.
  */
-function scopeCopy(scratch: Database, scope: ScopedReadScope): ScopingFailure | undefined {
+export function scopeCopy(scratch: Database, scope: ScopedReadScope, options: ScopeCopyOptions = {}): ScopingFailure | ScopeCopyReport {
   const granted = new Set(scope.tables.map((table) => table.name.toLowerCase()));
+  const kv = scope.kv === true;
 
-  dropOutsideScope(scratch, granted);
-  const stray = strayObject(scratch, granted);
+  dropOutsideScope(scratch, granted, kv);
+  const stray = strayObject(scratch, granted, kv);
   if (stray !== undefined) return { ok: false, reason: 'copy-failed', message: `the scoped copy still holds "${stray}"` };
 
   const present = new Set(selectRows(scratch, "SELECT lower(name) FROM sqlite_master WHERE type = 'table'").map((row) => String(row[0])));
-  const grantedPresent = scope.tables.map((table) => table.name).filter((name) => present.has(name.toLowerCase()));
-  const withheld = withholdCredentialColumns(scratch, grantedPresent);
-  if (withheld !== undefined) return { ok: false, reason: 'copy-failed', message: `the column ${withheld} could not be withheld` };
-  const unmasked = maskCredentialValues(scratch, grantedPresent);
-  if (unmasked !== undefined) return { ok: false, reason: 'copy-failed', message: `a value in ${unmasked} could not be masked` };
+  const grantedPresent: GrantedTable[] = scope.tables
+    .filter((table) => present.has(table.name.toLowerCase()))
+    .map((table) => ({ name: table.name, withheld: new Set((table.withheld ?? []).map((column) => column.toLowerCase())) }));
+  const unwithheld = withholdColumns(scratch, grantedPresent);
+  if (unwithheld !== undefined) return { ok: false, reason: 'copy-failed', message: `the column ${unwithheld} could not be withheld` };
+  const mask = maskCredentialValues(scratch, grantedPresent);
+  if (mask.failed !== undefined) return { ok: false, reason: 'copy-failed', message: `a value in ${mask.failed} could not be masked` };
 
-  scratch.run('PRAGMA query_only = 1');
+  if (options.forPlan === true) scratch.run('PRAGMA ignore_check_constraints = 0');
+  else scratch.run('PRAGMA query_only = 1');
 
   const drift = driftOf(scratch, scope);
   if (drift.added.length > 0 || drift.removed.length > 0) {
     return { ok: false, reason: 'drift', drift, message: 'the granted tables changed since access was allowed' };
   }
-  return undefined;
+  return { masked: mask.masked };
 }
 
 /**
@@ -368,8 +471,8 @@ export function scopedScratchRead(
   let scratch: Database | undefined;
   try {
     scratch = new SQL.Database(bytes);
-    const failure = scopeCopy(scratch, scope);
-    if (failure !== undefined) return failure;
+    const copy = scopeCopy(scratch, scope);
+    if (!('masked' in copy)) return copy;
 
     if (!isReadOnlySelect(statement.sql)) return { ok: false, reason: 'refused', message: NOT_ONE_READ_MESSAGE };
     const forbidden = forbiddenStatementReason(statement.sql);
@@ -404,18 +507,20 @@ const allowedType = (declared: string | undefined): string => (declared !== unde
 
 /**
  * Dump ONLY the scope's recorded columns of every granted table from a scoped scratch copy of
- * `bytes` — see the header for the order and the caps. Never throws: every outcome is data.
+ * `bytes` — then, under `kv`, the filtered `snug_kv` LAST — see the header for the order and
+ * the caps. Never throws: every outcome is data.
  */
 export function scopedScratchDump(SQL: SqlJsStatic, bytes: Uint8Array, scope: ScopedReadScope, caps: ScopedDumpCaps): ScopedDumpResult {
   let scratch: Database | undefined;
   try {
     scratch = new SQL.Database(bytes);
-    const failure = scopeCopy(scratch, scope);
-    if (failure !== undefined) return failure;
+    const copy = scopeCopy(scratch, scope);
+    if (!('masked' in copy)) return copy;
 
     const tables: ScopedDumpTable[] = [];
     let remaining = caps.maxTotalBytes;
-    for (const table of scope.tables) {
+    const dumped: ReadonlyArray<{ name: string; columns: readonly string[] }> = [...scope.tables, ...(scope.kv === true ? [{ name: KV_TABLE, columns: ['key', 'value'] }] : [])];
+    for (const table of dumped) {
       const types = declaredTypes(scratch, table.name);
       // The scope's columns, by name and in its order — never `*`: a column the scope does not
       // record (a credential-named one, physically present) is never selected.

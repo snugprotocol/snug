@@ -18,6 +18,11 @@
 // engine's `revokeAccess`), *allow again* (a prefilled ask that renews THIS access with its own
 // duration, opened for review — AC21's one tap, through `startUserAsk`), *remove* (a stopped row
 // leaves the list). Every value is a text node: names and table names come from the user's file.
+//
+// THE WRITE BADGE (TASK-20261010-host-broker PR-3; D-PR3-24; DS14; SPEC §24.4 MUST 17): an access
+// that may change rows on any of its tables says so beside its words — *can also change rows* on a
+// live row, *could also change rows* on an ended one (`access-row-write`) — and gains NO second
+// act: the badge is a fact about the row, and the row's one act stays what the copy derives.
 
 import { useId, useState, type ReactElement } from 'react';
 
@@ -92,6 +97,7 @@ export function GrantRow({ row, side, now, onBeforeReview }: GrantRowProps): Rea
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
   const tables = row.grant.scope.tables.map((table) => table.name);
+  const canChange = row.grant.scope.tables.some((table) => table.write === true);
   const state = grantStateCopy(grantRowView(row), now);
   // A row is live exactly when its one act is *stop* — the same test that draws it ended.
   const live = state.act?.kind === 'stop';
@@ -149,6 +155,11 @@ export function GrantRow({ row, side, now, onBeforeReview }: GrantRowProps): Rea
         <span className="access-row-words" data-testid="access-row-words">
           {state.words}
         </span>
+        {canChange ? (
+          <span className="access-row-write" data-testid="access-row-write">
+            {live ? ACCESS_SHEET.canChange : ACCESS_SHEET.couldChange}
+          </span>
+        ) : null}
         {act !== undefined ? (
           <Button
             variant={act.kind === 'stop' ? 'ghost' : 'default'}

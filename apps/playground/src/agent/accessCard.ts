@@ -22,6 +22,12 @@
  * review always asks for the THREAD's pinned app; `readAccessCardRow` drops a card whose
  * `appId` is not that app, and so does the hook's rehydrate — a persisted row cannot point the
  * ask at another app.
+ *
+ * TASK-20261010-host-broker PR-3 (D-PR3-23/27; contract v2.1 U-Q13): an `allowed` resolution
+ * gains `write` — the tables the person let the app CHANGE — additive and OPTIONAL: written only
+ * when non-empty (a read-only allow persists the 1.1 shape, byte for byte), and re-admitted on
+ * read as a list of the resolution's own tables; anything else is drift. No other persisted
+ * shape changes.
  */
 
 import { ACCESS_DURATIONS, accessHintsSchema, accessPurposeSchema, type AccessDuration, type AccessHints } from '@snugprotocol/protocol';
@@ -29,9 +35,9 @@ import type { UserDb } from '@snugprotocol/db';
 
 import type { AccessProposal } from './accessProposeTool.js';
 
-/** How the user answered the card; absent while it is staged. */
+/** How the user answered the card; absent while it is staged. `write`: the tables it may also change (PR-3) — absent for a read-only allow. */
 export type AccessCardResolution =
-  | { kind: 'allowed'; sourceName: string; tables: string[]; duration: AccessDuration }
+  | { kind: 'allowed'; sourceName: string; tables: string[]; duration: AccessDuration; write?: string[] }
   | { kind: 'not-now' }
   | { kind: 'declined' }
   | { kind: 'failed' };
@@ -73,6 +79,7 @@ export function accessCardToMeta(card: AccessCardState): { access: PersistedAcce
 }
 
 const nonEmptyString = (value: unknown): value is string => typeof value === 'string' && value !== '';
+const isStringList = (value: unknown): value is string[] => Array.isArray(value) && value.every((entry) => typeof entry === 'string');
 
 /** A persisted resolution, re-admitted: a known kind with the fields that kind carries; anything else is no resolution. */
 function readResolution(stored: unknown): AccessCardResolution | undefined {
@@ -80,11 +87,13 @@ function readResolution(stored: unknown): AccessCardResolution | undefined {
   const { kind } = stored as { kind?: unknown };
   if (typeof kind !== 'string' || !RESOLUTION_KINDS.has(kind)) return undefined;
   if (kind !== 'allowed') return { kind: kind as Exclude<AccessCardResolution['kind'], 'allowed'> };
-  const { sourceName, tables, duration } = stored as { sourceName?: unknown; tables?: unknown; duration?: unknown };
+  const { sourceName, tables, duration, write } = stored as { sourceName?: unknown; tables?: unknown; duration?: unknown; write?: unknown };
   if (!nonEmptyString(sourceName)) return undefined;
-  if (!Array.isArray(tables) || !tables.every((table) => typeof table === 'string')) return undefined;
+  if (!isStringList(tables)) return undefined;
   if (typeof duration !== 'string' || !DURATIONS.has(duration)) return undefined;
-  return { kind: 'allowed', sourceName, tables: [...(tables as string[])], duration: duration as AccessDuration };
+  // The written tables (PR-3): optional, and never a table the allow did not name — a line saying "and change x" for an unread x would misstate the allow.
+  if (write !== undefined && (!isStringList(write) || !write.every((table) => tables.includes(table)))) return undefined;
+  return { kind: 'allowed', sourceName, tables: [...tables], duration: duration as AccessDuration, ...(write !== undefined && write.length > 0 ? { write: [...write] } : {}) };
 }
 
 /**

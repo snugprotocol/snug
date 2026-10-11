@@ -1,4 +1,11 @@
-import type { AccessGrantView as ProtocolAccessGrantView, AccessHints, AccessParam, ResponseError } from '@snugprotocol/protocol';
+import type {
+  AccessCandidateClass,
+  AccessGrantView as ProtocolAccessGrantView,
+  AccessHints,
+  AccessLevel,
+  AccessParam,
+  ResponseError,
+} from '@snugprotocol/protocol';
 
 /** App identity shown by the host — display metadata, never a security identity (R4). */
 export interface SnugAppMeta {
@@ -103,9 +110,11 @@ export interface ConnectedFetch {
 
 /**
  * What the reader LEARNS about an access grant: the source's display name and icon, the
- * granted tables with their columns, the duration and expiry — never the source's library id
- * or the user's other apps. The protocol's `accessGrantViewSchema`, inferred (one definition):
- * `access` is `'read'` at 1.1 and an open string so a future grant kind still parses.
+ * granted tables with their columns (and, at 1.2, `write: true` on a table the user ticked
+ * *can change*, `kv: true` and `refresh: true` when the user allowed them — each present only
+ * when set), the duration and expiry — never the source's library id or the user's other
+ * apps. The protocol's `accessGrantViewSchema`, inferred (one definition): `access` is
+ * `'read'` or `'write'` at 1.2 and an open string so a later grant kind still parses.
  */
 export type AccessGrantView = ProtocolAccessGrantView;
 
@@ -131,6 +140,27 @@ export type AccessListResult = { ok: true; grants: AccessGrantView[] } | AccessF
 export type AccessReleaseResult = { ok: true } | AccessFailure;
 
 /**
+ * `write` answered (spec 1.2 §24.5): ONE plain INSERT/UPDATE/DELETE with literal values was
+ * applied atomically on the source, and `changes` is how many rows it touched — the count is
+ * all the app learns (the undo id stays with the user, on the source's history; DS16).
+ */
+export type AccessWriteResult = { ok: true; changes: number } | AccessFailure;
+
+/**
+ * `refresh` answered (spec 1.2 §24.6): `fresh: true` when the source ran and fetched;
+ * `fresh: false` with a short machine `reason` (`recent` inside the source's cooldown) when
+ * nothing ran — never the source handler's own words (S10/DS17).
+ */
+export type AccessRefreshResult = { ok: true; fresh: boolean; reason?: string } | AccessFailure;
+
+/**
+ * `discover` answered (spec 1.2; D-PR3-21): a CLASS of how many of the user's apps hold data
+ * the hints match — `none`, `one` or `several` — never a count, a name or an id. Nothing is
+ * recorded and the user is not asked; `request` is still the only way to access any of it.
+ */
+export type AccessDiscoverResult = { ok: true; candidates: AccessCandidateClass } | AccessFailure;
+
+/**
  * Relevance hints for the host's ranking of the user's apps — hints only; the USER picks the
  * source. The protocol's own inferred type (`accessHintsSchema`; caps `ACCESS_HINT_WORDS_MAX`,
  * `ACCESS_HINT_WORD_MAX_CHARS`, `ACCESS_HINT_TABLES_MAX`), never a retyped shape.
@@ -141,30 +171,63 @@ export interface AccessRequestOptions {
   hints?: AccessRequestHints;
   /** The id of a grant being asked for again (an expired or stopped one). */
   renew?: string;
+  /**
+   * What the ask is for (spec 1.2, D-PR3-4): `'write'` asks the user to let this app CHANGE
+   * the tables it picks (the sheet shows the per-table tick); absent or `'read'` is a read ask.
+   * A read-only grant answered to a write ask is the user's no for writes — do not ask again
+   * until a new user act. A 1.1 host answers an ask carrying `access` MALFORMED: show the
+   * fallback and ask again without it.
+   */
+  access?: AccessLevel;
 }
 
-/** The `onChange` hint: ids only (R7) — call `list()` or `query()` to learn what changed. */
+/**
+ * The id-only hints (R7): `onChange` (a grant was stopped or paused), `onSourceChanged` (the
+ * source of a grant changed its data — read again) and `onRead` (one of THIS app's tables was
+ * read under a grant it is the source of). Call `list()` or `query()` to learn what changed.
+ */
 export interface AccessChange {
   grantId: string;
 }
 
+/** The `onDataChanged` hint (spec 1.2 §24.5 MUST 24): another app — or the chat — changed one of THIS app's tables; re-read it. */
+export interface AccessDataChange {
+  table: string;
+}
+
 /**
- * Host-brokered access to ANOTHER app's tables (useSnugAccess; spec 1.1 Part VI). The app
- * never names a source: it states a purpose, the user picks the app and tables on host UI the
- * app cannot draw over, and the app learns only what was granted. Every read is logged on the
- * source and every grant can be stopped at any moment. Every call ALWAYS resolves (errors as
- * data); before host-ready it resolves a retryable `HOST_ERROR`, and on a host that does not
- * advertise `capabilities.access === true` a non-retryable `HOST_ERROR` (render the fallback).
+ * Host-brokered access to ANOTHER app's tables (useSnugAccess; spec 1.1 Part VI, 1.2 §24.5–
+ * §24.7). The app never names a source: it states a purpose, the user picks the app and tables
+ * on host UI the app cannot draw over, and the app learns only what was granted. Every read
+ * is logged on the source and every grant can be stopped at any moment; a write (1.2) needs
+ * the user's per-table tick, is one plain literal-valued statement on at most
+ * `ACCESS_WRITE_MAX_ROWS` rows, and is undoable by the user from the source's history. Every
+ * call ALWAYS resolves (errors as data); before host-ready it resolves a retryable
+ * `HOST_ERROR`, and on a host that does not advertise `capabilities.access === true` a
+ * non-retryable `HOST_ERROR` (render the fallback). A 1.1 host answers `write`, `refresh`,
+ * `discover` and an ask carrying `access` MALFORMED — the same fallback.
  */
 export interface SnugAccess {
   /** Ask the user for access — after a user act, never on load. `purpose` is one plain line, shown quoted. */
   request(purpose: string, opts?: AccessRequestOptions): Promise<AccessRequestResult>;
   /** Run ONE read-only `SELECT` on a granted source's tables. */
   query(grantId: string, sql: string, params?: AccessParam[]): Promise<AccessQueryResult>;
+  /** Apply ONE plain `INSERT`/`UPDATE`/`DELETE` with literal or bound values on a table whose view says `write: true`; resolves the row count. */
+  write(grantId: string, sql: string, params?: AccessParam[]): Promise<AccessWriteResult>;
+  /** Ask the source to fetch new data through its own connections before you read (needs `refresh: true` on the view); at most once per cooldown. */
+  refresh(grantId: string): Promise<AccessRefreshResult>;
   /** This app's live access grants. */
   list(): Promise<AccessListResult>;
   /** Give a grant back. */
   release(grantId: string): Promise<AccessReleaseResult>;
+  /** Learn whether the user has data the hints match — a class only (`none` | `one` | `several`); nothing is recorded, nobody is asked. */
+  discover(hints?: AccessRequestHints): Promise<AccessDiscoverResult>;
   /** Called when one of this app's grants was stopped or paused on the host (an expiry is not announced — the next `query` answers `ACCESS_EXPIRED`). Returns the unsubscribe. */
   onChange(listener: (data: AccessChange) => void): () => void;
+  /** Called when the source of one of this app's grants changed its data (its own writes, the chat's, another app's): read it again. Returns the unsubscribe. */
+  onSourceChanged(listener: (data: AccessChange) => void): () => void;
+  /** Called when another app, or the chat, changed one of THIS app's tables under an access the user allowed (and after an undo): re-read that table. Returns the unsubscribe. */
+  onDataChanged(listener: (data: AccessDataChange) => void): () => void;
+  /** Called when one of THIS app's tables was read under an access it is the source of — the id only; the history on the host has the rest. Returns the unsubscribe. */
+  onRead(listener: (data: AccessChange) => void): () => void;
 }

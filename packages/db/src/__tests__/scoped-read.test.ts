@@ -40,14 +40,15 @@ import {
 
 import {
   DUMP_TYPE_ALLOW,
+  scopeCopy,
   scopedScratchDump,
   scopedScratchRead,
   type ScopedDumpCaps,
   type ScopedDumpResult,
   type ScopedDumpTable,
   type ScopedReadResult,
+  type ScopedReadScope,
 } from '../scoped-read.js';
-import * as scopedReadModule from '../scoped-read.js';
 import { KV_TABLE_DDL } from '../driver.js';
 import { locateWasm } from './helpers.js';
 
@@ -785,30 +786,12 @@ describe('scopedScratchDump — the copy is throwaway', () => {
 // `table.column` (lower-cased) it MASKED a cell in, and `{ forPlan: true }` skips `query_only` and
 // resets `ignore_check_constraints`. The dump carries `snug_kv` LAST when `kv`.
 //
-// Written before the module changed (Gate 3). `ScopeV2` and `ScopeCopy` are LOCAL structural types
-// — the implementation lane replaces them with the module's own exports at Gate 5; `scopeCopy` is
-// reached through the module namespace so its absence reds only its rows.
+// Written before the module changed (Gate 3) against local structural types; the implementation
+// lane swapped them for the module's own `ScopedReadScope` v2 and the exported `scopeCopy`.
 // =========================================================================================
 
-/* Local structural types — replaced by `ScopedReadScope` v2 / `ScopeCopyReport` at Gate 5. */
-interface ScopeV2 {
-  tables: ReadonlyArray<{ name: string; columns: readonly string[]; withheld?: readonly string[]; write?: boolean }>;
-  kv?: boolean;
-}
-type ScopeCopy = (
-  scratch: Database,
-  scope: ScopeV2,
-  options?: { forPlan?: boolean },
-) => { ok: false; reason: string; message: string } | { masked: ReadonlySet<string> };
-
-function scopeCopyExport(): ScopeCopy {
-  const exported = (scopedReadModule as Record<string, unknown>).scopeCopy;
-  if (typeof exported !== 'function') throw new Error('scoped-read.ts does not export scopeCopy (D-PR3-22)');
-  return exported as ScopeCopy;
-}
-
 describe('scopeCopy v2 — a WITHHELD column is overwritten like a credential column (AC26)', () => {
-  const WITHHOLD_NOTE: ScopeV2 = { tables: [{ name: 'transactions', columns: ['id', 'amount', 'category'], withheld: ['note'] }] };
+  const WITHHOLD_NOTE: ScopedReadScope = { tables: [{ name: 'transactions', columns: ['id', 'amount', 'category'], withheld: ['note'] }] };
 
   it('SELECT * still shows the withheld column’s NAME — every cell crosses as ***', () => {
     const result = read(sourceBytes(LEDGER), 'SELECT * FROM transactions ORDER BY id', WITHHOLD_NOTE);
@@ -828,7 +811,7 @@ describe('scopeCopy v2 — a WITHHELD column is overwritten like a credential co
 
   it('a withheld column that refuses *** falls back to NULL, as a credential column does', () => {
     const bytes = sourceBytes(['CREATE TABLE s (id INTEGER PRIMARY KEY, label TEXT, memo INTEGER) STRICT', "INSERT INTO s (id, label, memo) VALUES (1, 'a', 42)"]);
-    const scope: ScopeV2 = { tables: [{ name: 's', columns: ['id', 'label'], withheld: ['memo'] }] };
+    const scope: ScopedReadScope = { tables: [{ name: 's', columns: ['id', 'label'], withheld: ['memo'] }] };
     expect(rowsOf(read(bytes, 'SELECT id, label, memo FROM s', scope))).toEqual([[1, 'a', null]]);
   });
 
@@ -843,7 +826,7 @@ describe('scopeCopy v2 — driftOf over columns ∪ withheld (AC26)', () => {
   it('a withheld column the source no longer has is drift.removed — nothing run', () => {
     const spy = spyEngine();
     const statement = 'SELECT id FROM transactions';
-    const scope: ScopeV2 = { tables: [{ name: 'transactions', columns: ['id', 'amount', 'category', 'note'], withheld: ['memo'] }] };
+    const scope: ScopedReadScope = { tables: [{ name: 'transactions', columns: ['id', 'amount', 'category', 'note'], withheld: ['memo'] }] };
     const result = scopedScratchRead(spy.engine, sourceBytes(LEDGER), scope, { sql: statement }, CAPS);
     expect(result).toMatchObject({ ok: false, reason: 'drift', drift: { added: [], removed: ['transactions.memo'] } });
     expect(spy.seen).not.toContain(statement);
@@ -851,7 +834,7 @@ describe('scopeCopy v2 — driftOf over columns ∪ withheld (AC26)', () => {
 
   it('a column the source gained still drifts beside a withheld one — and only it', () => {
     const bytes = sourceBytes([...LEDGER, 'ALTER TABLE transactions ADD COLUMN tag TEXT']);
-    const scope: ScopeV2 = { tables: [{ name: 'transactions', columns: ['id', 'amount', 'category'], withheld: ['note'] }] };
+    const scope: ScopedReadScope = { tables: [{ name: 'transactions', columns: ['id', 'amount', 'category'], withheld: ['note'] }] };
     expect(read(bytes, 'SELECT id FROM transactions', scope)).toMatchObject({ ok: false, reason: 'drift', drift: { added: ['transactions.tag'], removed: [] } });
   });
 });
@@ -874,7 +857,7 @@ function kvSourceBytes(rows: ReadonlyArray<readonly [key: string, stored: string
 const kvSet = (key: string, value: unknown): readonly [string, string] => [key, JSON.stringify(value)];
 
 describe('scopeCopy v2 — snug_kv under kv: true is KEPT and FILTERED through the ONE walk (AC25)', () => {
-  const WITH_KV: ScopeV2 = { tables: [{ name: 'transactions', columns: ['id', 'amount', 'category', 'note'] }], kv: true };
+  const WITH_KV: ScopedReadScope = { tables: [{ name: 'transactions', columns: ['id', 'amount', 'category', 'note'] }], kv: true };
   const THEME = kvSet('theme', 'dark');
 
   it('the app’s ordinary settings cross: kvSet("theme", "dark") reads back as its stored JSON text', () => {
@@ -947,7 +930,7 @@ describe('scopeCopy — exported for the planner: the masked set, and the forPla
     const KEY = 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJ';
     const scratch = new SQL.Database(sourceBytes(['CREATE TABLE Settings (Name TEXT, Value TEXT)', `INSERT INTO Settings (Name, Value) VALUES ('anthropic', '${KEY}'), ('theme', 'dark')`]));
     try {
-      const report = scopeCopyExport()(scratch, { tables: [{ name: 'Settings', columns: ['Name', 'Value'] }] });
+      const report = scopeCopy(scratch, { tables: [{ name: 'Settings', columns: ['Name', 'Value'] }] });
       expect('masked' in report).toBe(true);
       if (!('masked' in report)) return;
       expect([...report.masked]).toEqual(['settings.value']);
@@ -959,7 +942,7 @@ describe('scopeCopy — exported for the planner: the masked set, and the forPla
   it('a copy that masked nothing answers an empty set', () => {
     const scratch = new SQL.Database(sourceBytes(LEDGER));
     try {
-      const report = scopeCopyExport()(scratch, GRANT_TRANSACTIONS);
+      const report = scopeCopy(scratch, GRANT_TRANSACTIONS);
       expect('masked' in report && report.masked.size).toBe(0);
     } finally {
       scratch.close();
@@ -971,9 +954,9 @@ describe('scopeCopy — exported for the planner: the masked set, and the forPla
     const readCopy = new SQL.Database(sourceBytes(LEDGER));
     const planCopy = new SQL.Database(sourceBytes(LEDGER));
     try {
-      expect('masked' in scopeCopyExport()(readCopy, GRANT_TRANSACTIONS)).toBe(true);
+      expect('masked' in scopeCopy(readCopy, GRANT_TRANSACTIONS)).toBe(true);
       expect(pragma(readCopy, 'query_only')).toBe(1);
-      expect('masked' in scopeCopyExport()(planCopy, GRANT_TRANSACTIONS, { forPlan: true })).toBe(true);
+      expect('masked' in scopeCopy(planCopy, GRANT_TRANSACTIONS, { forPlan: true })).toBe(true);
       expect(pragma(planCopy, 'query_only')).toBe(0);
       expect(pragma(planCopy, 'ignore_check_constraints')).toBe(0);
     } finally {
@@ -985,7 +968,7 @@ describe('scopeCopy — exported for the planner: the masked set, and the forPla
   it('a scoping failure is answered, not thrown — drift as before', () => {
     const scratch = new SQL.Database(sourceBytes(LEDGER));
     try {
-      expect(scopeCopyExport()(scratch, { tables: [{ name: 'transactions', columns: ['id'] }] })).toMatchObject({ ok: false, reason: 'drift' });
+      expect(scopeCopy(scratch, { tables: [{ name: 'transactions', columns: ['id'] }] })).toMatchObject({ ok: false, reason: 'drift' });
     } finally {
       scratch.close();
     }

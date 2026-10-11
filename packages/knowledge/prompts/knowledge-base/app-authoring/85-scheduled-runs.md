@@ -52,6 +52,17 @@ only for that one outstanding `runId`, and only once — a second result for the
 is dropped. A run the app does not answer within 90 s is recorded as *failed*; *not
 supported* is for an app that never announces at all.
 
+**A fetch another app asked for.** The same handshake can arrive without any schedule:
+when the user allowed another app to ask yours to fetch new data before reading it (see
+"Access Between Apps"), the host wakes your app exactly as above — the kv key, the hint, your
+one result. The ONE signal is `input.kind === 'refresh'`; `taskId` is `'access-refresh'` and
+names no schedule of the user's; `input.requestedBy` is the asking app's display name, for
+your summary if you want it. Fetch and answer as for a schedule — read your data, call your
+approved API, answer a summary — under the same unattended posture (a mutating call is
+refused, never asked). The host counts the run on the user's daily schedule limits and runs
+it at most once every five minutes; the asking app learns only whether your app ran, never
+your summary. An app without the listener simply cannot be asked.
+
 ## The Schedule Listener (copy beside the hooks block)
 
 Add this AFTER the copy-exactly hook sections (it belongs in "your" zone of the template,

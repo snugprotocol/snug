@@ -394,3 +394,43 @@ export function readerAppIdFromAccessMutedSettingKey(key: string): string | unde
   const readerAppId = key.slice(ACCESS_MUTED_SETTING_PREFIX.length);
   return readerAppId.length === 0 ? undefined : readerAppId;
 }
+
+// ---------------------- the undo journal and the wants (TASK-20261010-host-broker PR-3, D-PR3-7, D-Q11)
+//
+// Two more one-row-per-app namespaces beside the four above. `accessUndo:<targetAppId>` is the
+// TARGET's journal of the rows each brokered write changed (spec 1.2 §22.4) — the target keeps
+// it, as it keeps its history; `accessWants:<appId>` is an app's builder-time declaration of
+// what it WILL ask for (ADR-0076 §11; defined here, parsed from the HTML by PR-5). Both are the
+// user's own device state: `deleteApp` equality-deletes each, and an untrusted import drops both.
+
+/** The `accessUndo:` namespace prefix — one row per TARGET app. */
+export const ACCESS_UNDO_SETTING_PREFIX = 'accessUndo:';
+
+/** `accessUndo:<targetAppId>` — the target's undo journal: ONE JSON array of `accessUndoEntrySchema` entries, newest first. */
+export function accessUndoSettingKey(targetAppId: string): string {
+  if (targetAppId.length === 0) throw new Error('targetAppId must be non-empty');
+  return `${ACCESS_UNDO_SETTING_PREFIX}${targetAppId}`;
+}
+
+/** The target app a settings key names, or `undefined` if the key is not a journal row. */
+export function targetAppIdFromAccessUndoSettingKey(key: string): string | undefined {
+  if (!key.startsWith(ACCESS_UNDO_SETTING_PREFIX)) return undefined;
+  const targetAppId = key.slice(ACCESS_UNDO_SETTING_PREFIX.length);
+  return targetAppId.length === 0 ? undefined : targetAppId;
+}
+
+/** The `accessWants:` namespace prefix — one row per app. */
+export const ACCESS_WANTS_SETTING_PREFIX = 'accessWants:';
+
+/** `accessWants:<appId>` — the app's declared asks (`accessWantsSchema` JSON). */
+export function accessWantsSettingKey(appId: string): string {
+  if (appId.length === 0) throw new Error('appId must be non-empty');
+  return `${ACCESS_WANTS_SETTING_PREFIX}${appId}`;
+}
+
+/** The app a settings key names, or `undefined` if the key is not a wants row. */
+export function appIdFromAccessWantsSettingKey(key: string): string | undefined {
+  if (!key.startsWith(ACCESS_WANTS_SETTING_PREFIX)) return undefined;
+  const appId = key.slice(ACCESS_WANTS_SETTING_PREFIX.length);
+  return appId.length === 0 ? undefined : appId;
+}

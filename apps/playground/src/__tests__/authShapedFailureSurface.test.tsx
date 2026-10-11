@@ -475,16 +475,13 @@ describe('AuthRepairChip — the quiet run-surface trace of the failing (appId, 
   // TASK-20261010-host-broker PR-3 (contract v2 D-PR3-19; DS20): a refresh another app asked for
   // runs the source's own code, and a 401 it hits is attributed to THAT — `via: 'refresh'` on the
   // entry, `AUTH_REPAIR_VIA_REFRESH` inline and in the tooltip, never the schedule's line. `via:
-  // 'refresh'` is what `AuthShapedFailure.via` gains in PR-3; until then a LOCAL structural type
-  // stands in (the implementation lane replaces the cast at Gate 5).
+  // 'refresh'` is what `AuthShapedFailure.via` gained in PR-3 (the implementation lane swapped the
+  // local cast for the real member).
   it('`via: refresh` on the entry: the chip text and its tooltip carry AUTH_REPAIR_VIA_REFRESH — not the schedule’s attribution — the provider still named', async () => {
-    type RefreshFailure = { appId: string; slot: string; status: number; via: 'refresh' };
-    type StoredFailure = NonNullable<ReturnType<typeof authShapedFailureStore.get>>;
-    const failure: RefreshFailure = { appId: APP, slot: SLOT, status: 401, via: 'refresh' };
     await seedApprovedApp();
     await renderChip(APP);
     await act(async () => {
-      authShapedFailureStore.set(failure as unknown as StoredFailure);
+      authShapedFailureStore.set({ appId: APP, slot: SLOT, status: 401, via: 'refresh' });
       await Promise.resolve();
     });
     const chip = container.querySelector('[data-testid="auth-repair-chip"]');

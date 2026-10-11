@@ -23,6 +23,11 @@
 // thread row, never from the card; a card whose app is not the thread's is stale. THE ROW IS THE
 // TRUTH on a remount (`readAccessCardRow`). Mounted by `ChatLog` under the agent's message, in
 // both chats, where the host allows access between apps.
+//
+// TASK-20261010-host-broker PR-3 (D-PR3-16/23; DS2; contract v2.1 U-Q13): the chat's ask carries
+// no `access` — but the person may tick *can also change rows* on the sheet, and the outcome
+// line then says what the strip says ("can now read and change …") from the resolution's `write`
+// (the written tables; omitted for a read-only allow, so a 1.1 row reads as before).
 
 import type { ReactElement } from 'react';
 import { useEffect, useRef, useState } from 'react';
@@ -59,7 +64,13 @@ type Phase = 'idle' | 'waiting' | 'answer-other-first';
 function resolutionOf(outcome: ConsentOutcome): AccessCardResolution | undefined {
   switch (outcome.kind) {
     case 'allowed':
-      return { kind: 'allowed', sourceName: outcome.sourceName, tables: outcome.tables, duration: outcome.duration };
+      return {
+        kind: 'allowed',
+        sourceName: outcome.sourceName,
+        tables: outcome.tables,
+        duration: outcome.duration,
+        ...(outcome.write.length > 0 ? { write: outcome.write } : {}),
+      };
     case 'not-now':
       return { kind: 'not-now' };
     case 'declined':
@@ -88,7 +99,7 @@ function OutcomeLine({ resolution, readerName }: { resolution: AccessCardResolut
   const words = ((): string => {
     switch (resolution.kind) {
       case 'allowed':
-        return STRIP_OUTCOME.allowed(readerName, resolution.sourceName, resolution.tables, resolution.duration);
+        return STRIP_OUTCOME.allowed(readerName, resolution.sourceName, resolution.tables, resolution.duration, resolution.write ?? []);
       case 'not-now':
         return ACCESS_CARD.notNowLine;
       case 'declined':

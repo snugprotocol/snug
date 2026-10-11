@@ -13,11 +13,11 @@
  * `COMMIT` — a `committed` flag and a ROLLBACK in `finally`. The undo is BUILT from the captured
  * rows (never from statement text), guarded by the values the write left, and fails whole.
  *
- * Written BEFORE the module exists (Gate 3). The module is loaded through a VARIABLE specifier so a
+ * Written BEFORE the module existed (Gate 3). The module is loaded through a VARIABLE specifier so a
  * missing module reds each row on its own (docs/lessons.md 2026-10-11): a literal dynamic import of
- * a missing module fails the whole file at transform time. The types below are LOCAL STRUCTURAL
- * copies of the contract's ("Module contracts (the wire) → packages/db") — the implementation lane
- * replaces them with the module's own exports at Gate 5.
+ * a missing module fails the whole file at transform time. The types were LOCAL STRUCTURAL copies of
+ * the contract's ("Module contracts (the wire) → packages/db"); the implementation lane swapped them
+ * for the module's own exports (type-only imports, erased at transform time).
  *
  * Mutation checks (to run by hand once the module lands — remove the rule, see the named row red):
  *  - admit a function call / CASE / arithmetic → the matching "refused BY NAME" rows red;
@@ -32,88 +32,16 @@
 import initSqlJs, { type Database, type SqlJsStatic } from 'sql.js';
 import { beforeAll, describe, expect, it } from 'vitest';
 
-import { scopedScratchRead } from '../scoped-read.js';
+import type { BrokeredApplyInput, BrokeredApplyResult, BrokeredCaps, BrokeredOp, BrokeredParseResult, BrokeredPlan, BrokeredPlanResult, ParsedDml, UndoRow, UndoStep } from '../brokered-write.js';
+import { scopedScratchRead, type ScopedReadScope } from '../scoped-read.js';
 import { locateWasm } from './helpers.js';
 
-// ------------------------------------------------------------------ the contract's shapes (local)
+// ------------------------------------------------------------------ the contract's shapes
 
-/* Local structural types — replaced by `brokered-write.ts`'s own exports at Gate 5. */
-type BrokeredOp = 'insert' | 'update' | 'delete';
-interface ParsedDml {
-  op: BrokeredOp;
-  table: string;
-  columns: string[];
-  setColumns?: string[];
-  insertColumns?: string[];
-  literals: string[];
-  placeholders: number;
-  sql: string;
-}
-type ParseResult = { ok: true; parsed: ParsedDml } | { ok: false; reason: 'refused'; message: string };
-interface ColumnFact {
-  name: string;
-  generated: boolean;
-}
-type FactsResult = { ok: true; columns: ColumnFact[] } | { ok: false; reason: 'refused'; message: string };
-interface BrokeredCaps {
-  maxChanges: number;
-  maxUndoBytes: number;
-}
-interface BrokeredPlan {
-  sql: string;
-  params?: readonly unknown[];
-  op: BrokeredOp;
-  table: string;
-  columns: string[];
-  setColumns?: string[];
-  insertColumns?: string[];
-  previewChanges: number;
-}
-interface ScopeTable {
-  name: string;
-  columns: readonly string[];
-  withheld?: readonly string[];
-  write?: boolean;
-}
-interface Scope {
-  tables: readonly ScopeTable[];
-  kv?: boolean;
-}
-type PlanResult =
-  | { ok: true; plan: BrokeredPlan }
-  | { ok: false; reason: 'refused' | 'not-granted' | 'too-many' | 'too-large' | 'failed' | 'copy-failed'; message: string }
-  | { ok: false; reason: 'drift'; drift: { added: string[]; removed: string[] }; message: string };
-interface UndoRow {
-  rowid: number;
-  before?: unknown[];
-  after?: unknown[];
-}
-interface UndoStep {
-  table: string;
-  op: BrokeredOp;
-  columns: string[];
-  rows: UndoRow[];
-}
-type ApplyInput =
-  | { plans: readonly BrokeredPlan[]; caps: BrokeredCaps; expectChanges?: readonly number[]; requireUndo: boolean; capture: boolean }
-  | { undo: readonly UndoStep[]; caps: BrokeredCaps };
-type ApplyResult =
-  | { ok: true; steps: UndoStep[]; changes: number[]; undoable: boolean }
-  | {
-      ok: false;
-      reason: 'busy' | 'drifted' | 'too-many' | 'too-large' | 'unsafe' | 'refused' | 'failed';
-      message: string;
-      previewed?: number[];
-      current?: number[];
-    };
-interface BrokeredWriteModule {
-  parseBrokeredStatement(sql: string): ParseResult;
-  tableFacts(db: Database, table: string, scope: { columns: readonly string[] }, op: BrokeredOp): FactsResult;
-  planBrokeredWrite(SQL: SqlJsStatic, bytes: Uint8Array, scope: Scope, statement: { sql: string; params?: readonly unknown[] }, caps: BrokeredCaps): PlanResult;
-  applyBrokeredBatch(db: Database, input: ApplyInput): ApplyResult;
-  buildUndoStatement(step: UndoStep, row: UndoRow): { sql: string; params: unknown[] };
-  dmlTargetTable(sql: string): string | undefined;
-}
+/** The module's own types — type-only, erased, so the variable specifier below still isolates a missing module. */
+type BrokeredWriteModule = typeof import('../brokered-write.js');
+/** One granted table as the scope spells it. */
+type ScopeTable = ScopedReadScope['tables'][number];
 
 /** The module, through a VARIABLE specifier: a missing module reds each row, never the file. */
 const MODULE = '../brokered-write.js';
@@ -230,7 +158,7 @@ const LEDGER = [
   "INSERT INTO accounts (name, balance, api_key) VALUES ('checking', 100, 'hunter2')",
 ];
 const TX_COLUMNS = ['id', 'amount', 'category', 'note'];
-const WRITE_TX: Scope = { tables: [{ name: 'transactions', columns: TX_COLUMNS, write: true }] };
+const WRITE_TX: ScopedReadScope = { tables: [{ name: 'transactions', columns: TX_COLUMNS, write: true }] };
 /** The contract's caps: ACCESS_WRITE_MAX_ROWS (200) and ACCESS_UNDO_MAX_BYTES (64 KiB) — passed in, as the engine passes them. */
 const CAPS: BrokeredCaps = { maxChanges: 200, maxUndoBytes: 64 * 1024 };
 
@@ -247,7 +175,7 @@ const txPlan = (sql: string, op: BrokeredOp, extra: Partial<BrokeredPlan> = {}):
   ...extra,
 });
 
-const forward = (plans: readonly BrokeredPlan[], over: Partial<Extract<ApplyInput, { plans: unknown }>> = {}): ApplyInput => ({
+const forward = (plans: readonly BrokeredPlan[], over: Partial<Extract<BrokeredApplyInput, { plans: unknown }>> = {}): BrokeredApplyInput => ({
   plans,
   caps: CAPS,
   requireUndo: true,
@@ -258,17 +186,17 @@ const forward = (plans: readonly BrokeredPlan[], over: Partial<Extract<ApplyInpu
 /** The captured rows in rowid order — the capture's own order is the trigger's, not a contract. */
 const byRowid = (steps: readonly UndoStep[]): UndoStep[] => steps.map((step) => ({ ...step, rows: [...step.rows].sort((a, b) => a.rowid - b.rowid) }));
 
-function okApply(result: ApplyResult): Extract<ApplyResult, { ok: true }> {
+function okApply(result: BrokeredApplyResult): Extract<BrokeredApplyResult, { ok: true }> {
   if (!result.ok) throw new Error(`expected an applied batch, got ${result.reason}: ${result.message}`);
   return result;
 }
 
-function okPlan(result: PlanResult): BrokeredPlan {
+function okPlan(result: BrokeredPlanResult): BrokeredPlan {
   if (!result.ok) throw new Error(`expected a plan, got ${result.reason}: ${result.message}`);
   return result.plan;
 }
 
-function okParse(result: ParseResult): ParsedDml {
+function okParse(result: BrokeredParseResult): ParsedDml {
   if (!result.ok) throw new Error(`expected a parse, got refused: ${result.message}`);
   return result.parsed;
 }
@@ -687,7 +615,7 @@ describe('tableFacts at BOTH seats — the plan on the raw copy, the apply on th
 describe('planBrokeredWrite — the grant: the table must be in scope WITH write', () => {
   it('a table outside the scope, or granted read-only, is not-granted — and nothing runs', async () => {
     const { planBrokeredWrite } = await brokered();
-    const readOnly: Scope = { tables: [{ name: 'transactions', columns: TX_COLUMNS }] };
+    const readOnly: ScopedReadScope = { tables: [{ name: 'transactions', columns: TX_COLUMNS }] };
     for (const [scope, sql] of [
       [readOnly, "UPDATE transactions SET note = 'x' WHERE id = 1"],
       [WRITE_TX, "UPDATE accounts SET balance = 0 WHERE name = 'checking'"],
@@ -709,15 +637,15 @@ describe('planBrokeredWrite — the grant: the table must be in scope WITH write
 
 describe('planBrokeredWrite — the column rule: withheld, credential-named, generated, masked — each refused BY NAME, BEFORE any dry run', () => {
   const WITHHELD = ['CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT, memo TEXT)', "INSERT INTO notes (id, body, memo) VALUES (1, 'a', 'private')"];
-  const NOTES: Scope = { tables: [{ name: 'notes', columns: ['id', 'body'], withheld: ['memo'], write: true }] };
-  const ACCOUNTS: Scope = { tables: [{ name: 'accounts', columns: ['name', 'balance'], write: true }] };
+  const NOTES: ScopedReadScope = { tables: [{ name: 'notes', columns: ['id', 'body'], withheld: ['memo'], write: true }] };
+  const ACCOUNTS: ScopedReadScope = { tables: [{ name: 'accounts', columns: ['name', 'balance'], write: true }] };
   const GENERATED = ['CREATE TABLE gen (id INTEGER PRIMARY KEY, body TEXT, shout TEXT GENERATED ALWAYS AS (upper(body)) VIRTUAL)', "INSERT INTO gen (id, body) VALUES (1, 'a')"];
-  const GEN: Scope = { tables: [{ name: 'gen', columns: ['id', 'body', 'shout'], write: true }] };
+  const GEN: ScopedReadScope = { tables: [{ name: 'gen', columns: ['id', 'body', 'shout'], write: true }] };
   const MASKED = ['CREATE TABLE settings (name TEXT, value TEXT)', `INSERT INTO settings (name, value) VALUES ('anthropic', '${KEY}'), ('theme', 'dark')`];
-  const SETTINGS: Scope = { tables: [{ name: 'settings', columns: ['name', 'value'], write: true }] };
+  const SETTINGS: ScopedReadScope = { tables: [{ name: 'settings', columns: ['name', 'value'], write: true }] };
 
   // [label, source, scope, statement, the column the refusal names]
-  const COLUMN_RULE: Array<[string, string[], Scope, string, string]> = [
+  const COLUMN_RULE: Array<[string, string[], ScopedReadScope, string, string]> = [
     ['a withheld column in WHERE', WITHHELD, NOTES, "UPDATE notes SET body = 'x' WHERE memo = 'private'", 'memo'],
     ['a withheld column in SET', WITHHELD, NOTES, "UPDATE notes SET memo = 'x' WHERE id = 1", 'memo'],
     ['a withheld column in the INSERT list', WITHHELD, NOTES, "INSERT INTO notes (id, body, memo) VALUES (2, 'b', 'x')", 'memo'],
@@ -781,7 +709,7 @@ describe('planBrokeredWrite — the dry run on a scoped copy built forPlan', () 
   it('ignore_check_constraints is RESET on the plan copy: a CHECK the write would break fails the dry run (the twin counts)', async () => {
     const { planBrokeredWrite } = await brokered();
     const source = ['CREATE TABLE chk (id INTEGER PRIMARY KEY, amount INTEGER CHECK (amount < 100))', 'INSERT INTO chk (id, amount) VALUES (1, 5)'];
-    const scope: Scope = { tables: [{ name: 'chk', columns: ['id', 'amount'], write: true }] };
+    const scope: ScopedReadScope = { tables: [{ name: 'chk', columns: ['id', 'amount'], write: true }] };
     expect(planBrokeredWrite(SQL, bytesOf(source), scope, { sql: 'UPDATE chk SET amount = 500 WHERE id = 1' }, CAPS)).toMatchObject({ ok: false, reason: 'failed' });
     expect(okPlan(planBrokeredWrite(SQL, bytesOf(source), scope, { sql: 'UPDATE chk SET amount = 7 WHERE id = 1' }, CAPS)).previewChanges).toBe(1);
   });
@@ -798,7 +726,7 @@ describe('planBrokeredWrite — the dry run on a scoped copy built forPlan', () 
     const { planBrokeredWrite } = await brokered();
     const sql = "UPDATE transactions SET note = 'x' WHERE id = 1";
     const spy = spyEngine();
-    const scope: Scope = { tables: [{ name: 'transactions', columns: [...TX_COLUMNS, 'memo'], write: true }] };
+    const scope: ScopedReadScope = { tables: [{ name: 'transactions', columns: [...TX_COLUMNS, 'memo'], write: true }] };
     const result = planBrokeredWrite(spy.engine, bytesOf(LEDGER), scope, { sql }, CAPS);
     expect(result).toMatchObject({ ok: false, reason: 'drift', drift: { added: [], removed: ['transactions.memo'] } });
     expect(spy.seen).not.toContain(sql);
@@ -810,7 +738,7 @@ describe('planBrokeredWrite — the dry run on a scoped copy built forPlan', () 
       'CREATE TABLE big (id INTEGER PRIMARY KEY, note TEXT)',
       `INSERT INTO big (id, note) VALUES ${Array.from({ length: n }, (_, i) => `(${i + 1}, 'n')`).join(', ')}`,
     ];
-    const scope: Scope = { tables: [{ name: 'big', columns: ['id', 'note'], write: true }] };
+    const scope: ScopedReadScope = { tables: [{ name: 'big', columns: ['id', 'note'], write: true }] };
     const sql = "UPDATE big SET note = 'x' WHERE id > 0";
     expect(planBrokeredWrite(SQL, bytesOf(source(CAPS.maxChanges + 1)), scope, { sql }, CAPS)).toMatchObject({ ok: false, reason: 'too-many' });
     expect(okPlan(planBrokeredWrite(SQL, bytesOf(source(CAPS.maxChanges)), scope, { sql }, CAPS)).previewChanges).toBe(CAPS.maxChanges);

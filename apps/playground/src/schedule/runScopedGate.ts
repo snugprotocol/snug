@@ -12,13 +12,18 @@
 // this gate bypasses.
 //
 // `confirm(request)`, in order:
-//   (1) a run is in flight for the app (`delegated`) — `asking || refused.length > 0` → refused AT
-//       ONCE and recorded `already-asked` (one outstanding ask per run; a handler cannot park N
-//       dialogs, and nothing is asked again after a refusal); else ONE prompt, bounded: granted →
-//       `granted += 1`, true; denied → `declined`; no answer within the bound → `timed-out`, and the
-//       prompt's signal is aborted (what withdraws the parked dialog). The run ENDING aborts the
-//       same signal (its own `signal`): the dialog is withdrawn and the call answered no, with
-//       nothing recorded on a run already recorded.
+//   (1) a run is in flight for the app (`delegated`) — FIRST, a run whose posture is `'refresh'`
+//       (a fetch another app asked for; TASK-20261010-host-broker PR-3, D-PR3-19, the spec's §24.6
+//       (25) "a mutating connected call is refused, never asked"): nobody chose to run it and the
+//       person at the frame did not ask for it, so EVERY mutating call of the window is refused at
+//       once — recorded `refused`, no dialog, no prompt, no timer, the page's chain never consulted
+//       (E2-Q10: never `already-asked`). Then, a schedule's run: `asking || refused.length > 0` →
+//       refused AT ONCE and recorded `already-asked` (one outstanding ask per run; a handler cannot
+//       park N dialogs, and nothing is asked again after a refusal); else ONE prompt, bounded:
+//       granted → `granted += 1`, true; denied → `declined`; no answer within the bound →
+//       `timed-out`, and the prompt's signal is aborted (what withdraws the parked dialog). The run
+//       ENDING aborts the same signal (its own `signal`): the dialog is withdrawn and the call
+//       answered no, with nothing recorded on a run already recorded.
 //   (2) no run, but the frame generation a run touched is still the live one — the STICKY after-run
 //       ask (security blocker 1): prompt with `run: undefined`, record nothing, remember nothing.
 //   (3) otherwise `inner.confirm(request)` — byte-for-byte today's chain.
@@ -96,7 +101,12 @@ export function createRunScopedGate(deps: RunScopedGateDeps): NetConfirmGate {
     async confirm(request: NetConfirmRequest): Promise<boolean> {
       const run = deps.delegated(request.appId);
       if (run !== undefined) {
-        // (1) A run owns the app: never the page's chain. One outstanding ask per run.
+        // (1) A run owns the app: never the page's chain. A refresh window refuses outright (D-PR3-19) —
+        // there is nobody to ask; a schedule's window asks once.
+        if (run.posture === 'refresh') {
+          run.refused.push({ host: request.host, method: request.method, why: 'refused' });
+          return false;
+        }
         if (run.asking || run.refused.length > 0) {
           run.refused.push({ host: request.host, method: request.method, why: 'already-asked' });
           return false;

@@ -4,7 +4,16 @@
 import type { DbDriver } from '@snugprotocol/runner';
 import { LIMITS } from '@snugprotocol/protocol';
 import { describe, expect, it } from 'vitest';
-import { DB_ERROR_CODES, USERDB_ERROR_CODES, createDbDriver, createMemoryBackend, openUserDb, type SnugDbDriver } from '../index.js';
+import {
+  DB_ERROR_CODES,
+  USERDB_ERROR_CODES,
+  createDbDriver,
+  createMemoryBackend,
+  openUserDb,
+  type BrokeredPlan,
+  type NamespaceWriteEvent,
+  type SnugDbDriver,
+} from '../index.js';
 import {
   decodeBase64,
   encodeBase64,
@@ -337,29 +346,15 @@ describe('evict (TASK-20260803-hub-ops — app delete, R1)', () => {
 // `busy` (retryable) from the flag BEFORE touching the handle. The user db's FACADE forwards it with the
 // tombstone and `noteNamespace` rules, and keeps ITS listener set across `importUserDb`'s inner swap.
 //
-// Written before the seats exist (Gate 3). The shapes below are LOCAL structural types — the
-// implementation lane replaces them with the real exports at Gate 5.
+// Written before the seats existed (Gate 3). `NamespaceWriteEvent` and `BrokeredPlan` are the
+// real exports (swapped in by the implementation lane); the result shape and the seat cast stay
+// LOCAL on purpose: `isBusy` reads `result.reason` on the loose union without narrowing, which
+// the real `BrokeredWriteResult` (a `code` variant beside the `reason` ones) does not admit.
 // =========================================================================================
 
-/* Local structural types — replaced by `NamespaceWriteEvent`, `BrokeredWriteResult` and the v2 `SnugDbDriver` at Gate 5. */
-interface NamespaceWriteEvent {
-  namespace: string;
-  kind: 'exec' | 'kv' | 'import' | 'brokered';
-  table?: string;
-  changes?: number;
-}
-interface PlanV {
-  sql: string;
-  params?: readonly unknown[];
-  op: 'insert' | 'update' | 'delete';
-  table: string;
-  columns: string[];
-  setColumns?: string[];
-  insertColumns?: string[];
-  previewChanges: number;
-}
+/* Local structural types — the loose result union and the seat cast (see above). */
 interface BrokeredWriteInputV {
-  plans: PlanV[];
+  plans: BrokeredPlan[];
   caps: { maxChanges: number; maxUndoBytes: number };
   expectChanges?: number[];
   requireUndo: boolean;

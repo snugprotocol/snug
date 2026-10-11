@@ -18,7 +18,7 @@
 
 import type { BindParams, Database, Statement } from 'sql.js';
 import { utf8ByteLength } from '@snugprotocol/protocol';
-import { isRowModifyingStatement, isSqlTailEmpty, normalizeCell } from '../driver.js';
+import { isRowModifyingStatement, isSqlTailEmpty, normalizeCell } from '../statement-rules.js';
 
 /** How one kept row is weighed against `maxBytes`. */
 export type RowWeight = (row: readonly unknown[]) => number;

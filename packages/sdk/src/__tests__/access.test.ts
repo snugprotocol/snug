@@ -27,13 +27,16 @@ import { useSnugAccess } from '../access.js';
 import { useSnugApp } from '../hooks.js';
 import * as sdk from '../index.js';
 import type {
+  AccessDiscoverResult,
   AccessGrantView,
   AccessListResult,
   AccessQueryResult,
+  AccessRefreshResult,
   AccessReleaseResult,
   AccessRequestHints,
   AccessRequestOptions,
   AccessRequestResult,
+  AccessWriteResult,
   HostCapabilities,
   SnugAccess,
 } from '../index.js';
@@ -772,19 +775,19 @@ describe('the public surface — @snugprotocol/sdk index and types (AC5)', () =>
     expectTypeOf<SnugAccess['list']>().returns.toEqualTypeOf<Promise<AccessListResult>>();
     expectTypeOf<SnugAccess['release']>().returns.toEqualTypeOf<Promise<AccessReleaseResult>>();
     expectTypeOf<SnugAccess['onChange']>().returns.toEqualTypeOf<() => void>();
-    // PR-3 — LOCAL structural types for the three new result types (AccessWriteResult,
-    // AccessRefreshResult, AccessDiscoverResult do not exist yet): the implementation lane
-    // replaces each with the real export from '../index.js' at Gate 5.
-    type FailureShape = { ok: false; error: ResponseError };
-    type WriteResultShape = { ok: true; changes: number } | FailureShape;
-    type RefreshResultShape = { ok: true; fresh: boolean; reason?: string } | FailureShape;
-    type DiscoverResultShape = { ok: true; candidates: 'none' | 'one' | 'several' } | FailureShape;
+    // PR-3 — the three new result types are the real exports from '../index.js' (I-W swapped the
+    // test lane's LOCAL structural shapes for them, as the lane's note foresaw); each success arm
+    // is still pinned structurally, exactly as the 1.1 result types are above.
+    expectTypeOf<Extract<AccessWriteResult, { ok: true }>>().toEqualTypeOf<{ ok: true; changes: number }>();
+    expectTypeOf<Extract<AccessRefreshResult, { ok: true }>>().toEqualTypeOf<{ ok: true; fresh: boolean; reason?: string }>();
+    expectTypeOf<Extract<AccessDiscoverResult, { ok: true }>>().toEqualTypeOf<{ ok: true; candidates: 'none' | 'one' | 'several' }>();
+    expectTypeOf<Extract<AccessWriteResult, { ok: false }>['error']>().toEqualTypeOf<ResponseError>();
     expectTypeOf<SnugAccess['write']>().parameters.toEqualTypeOf<[grantId: string, sql: string, params?: AccessParam[]]>();
-    expectTypeOf<SnugAccess['write']>().returns.toEqualTypeOf<Promise<WriteResultShape>>();
+    expectTypeOf<SnugAccess['write']>().returns.toEqualTypeOf<Promise<AccessWriteResult>>();
     expectTypeOf<SnugAccess['refresh']>().parameters.toEqualTypeOf<[grantId: string]>();
-    expectTypeOf<SnugAccess['refresh']>().returns.toEqualTypeOf<Promise<RefreshResultShape>>();
+    expectTypeOf<SnugAccess['refresh']>().returns.toEqualTypeOf<Promise<AccessRefreshResult>>();
     expectTypeOf<SnugAccess['discover']>().parameters.toEqualTypeOf<[hints?: AccessRequestHints]>();
-    expectTypeOf<SnugAccess['discover']>().returns.toEqualTypeOf<Promise<DiscoverResultShape>>();
+    expectTypeOf<SnugAccess['discover']>().returns.toEqualTypeOf<Promise<AccessDiscoverResult>>();
     expectTypeOf<SnugAccess['onSourceChanged']>().parameters.toEqualTypeOf<[listener: (data: { grantId: string }) => void]>();
     expectTypeOf<SnugAccess['onDataChanged']>().parameters.toEqualTypeOf<[listener: (data: { table: string }) => void]>();
     expectTypeOf<SnugAccess['onRead']>().parameters.toEqualTypeOf<[listener: (data: { grantId: string }) => void]>();
