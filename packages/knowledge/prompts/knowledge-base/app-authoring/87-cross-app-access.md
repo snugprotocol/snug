@@ -220,6 +220,24 @@ Bundler-built apps on the module SDK get the same exchange typed as `useSnugAcce
 `@snugprotocol/sdk`: `request(purpose, { hints, renew })`, `query(grantId, sql, params)`,
 `list()`, `release(grantId)` and `onChange(listener)`.
 
+## Your App Need Not Read Another App Itself
+
+The runner's own AI beside your app — the chat the user opens next to it — can read what
+the user allowed your app to read, once the user allows it (ADR-0076 §1–§3). On a question
+about the other app's data, the host copies the allowed tables into the chat's throwaway
+working copy as `<source>__<table>` tables (`ledger__transactions`), lists them under
+*From <Source> (read-only …)*, and the chat's AI queries them with `data_query` — joins
+across your app's tables and theirs included. The chat's AI can also ASK for access on your
+app's behalf: the host shows its ask as a card in the chat, and *review* opens the same
+consent sheet an app's ask opens. A scheduled *ask <app>'s AI* question sees the same
+tables when the user ticked *also while I'm away*.
+
+None of this needs code in your app, and none of it reaches your app's frame: the rows go to
+the user's own AI, never to your `query`. Build for what your app does on its own; when the
+user wants your app itself to show the other app's data, use the helper below. The other
+app's history shows every such read as YOUR app's read — the app the user allowed — with
+the tables and the rows copied.
+
 ## Rules for Reading Another App
 
 - **Ask after a user act, never on load.** One ask per user act; a declined ask is not
@@ -234,3 +252,6 @@ Bundler-built apps on the module SDK get the same exchange typed as `useSnugAcce
   allowed, through `query`.
 - **Keep it complete without access.** Every feature that reads another app has a path
   that works when the answer is no.
+- **The chat beside your app may already have it.** A user who allowed access can ask the
+  chat next to your app about the other app's data with no code of yours; your app's own
+  `query` is for what your app shows on screen.
