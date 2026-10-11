@@ -4,6 +4,62 @@ Every change pushed to `snugprotocol/spec`, newest first. Format: `## YYYY-MM-DD
 
 ---
 
+## 2026-10-11 — spec 1.2 — **STAGED, not yet pushed** — TASK-20261010-host-broker (PR-3; the push is the owner's own act after the merge, one line, wait for a yes — the 1.1 precedent)
+**Writes with an undo, refresh on demand and discovery between apps (ADR-0076 §4–§8, §10) —
+the second post-1.0 minor, additive.** No new frame and no new capability flag: the
+`snug:access-request` frame gains three ops (`write {grantId, sql, params?}` ·
+`refresh {grantId}` · `discover {hints?}` — seven in `ACCESS_OPS` order; the inventory stays
+fifteen) and its `request` gains `access?: 'read' | 'write'`; `snug:access-response` gains
+three tolerant variants (`write {changes}` · `refresh {fresh, reason?}` ·
+`discover {candidates}`) and the grant view's `tables[].write?`, `kv?` and `refresh?`, each
+written ONLY when set, so a read-only grant's view is byte-identical to a 1.1 view. §21 names
+the write and the three doors (frame · chat · schedule; PR-2's doors had no spec text —
+every history line now says which, `via`); §22.1 is the grant record v2 — per table `write`
+and the `withheld` columns, per grant `kv` and `refresh`, `access: 'read' | 'write'` derived,
+`provenance: 'chat'`, every default omitted, the canonical intent widened to thirteen fields
+with absent ≡ default, and rule 8: a 1.1 hub holds a v2 row unreadable; §22.2 gains `wrote`,
+`undone` and `refreshed` with `via`, `authority`, `changes`, `undoId` and the fixed
+`ACCESS_REFRESH_REASONS`, and pruning never takes a held grant's latest `wrote`; §22.3's
+semantic hash gains `access`; **§22.4 (new) is the undo journal** — rows, never statement
+text, the inverse rebuilt at undo time; §23.3 is three hints richer (`access-source-changed`,
+`access-read`, `data-changed`, ids only, live frames only); §23.4 gains `ACCESS_WRITE_REFUSED`,
+`ACCESS_BUSY` (retryable) and `ACCESS_REFRESH_FAILED`; **§24.5–§24.7 (new) are MUST 18–30** —
+writes (the present caller, the one literal-valued statement, the column rule from the
+schema and the scope, the table facts, the dry run on a scoped copy then the atomic apply
+with the capture, the `wrote` line with the journal entry, *undo* that changes nothing unless
+every row still holds what the write left, the doorbells), refresh (the source run where it
+lives under the unattended posture, once per cooldown, counted on the file's day, logged
+`refreshed`) and one instance, doorbells, capability truth; §24.2 item 9, §24.3 items 12 and
+14 and §24.4 item 17 name the withheld columns, the filtered key-value store, the
+`sqlite_sequence` trim, the write kinds and "every write with its undo" (ONE act stays); §25
+is pruned (write access, chosen columns, `snug_kv`, the doorbell, the count-only discover,
+the hint to the source and the chat/scheduler read are taken) and gains the task write
+authority's arming surface, the chat's cross-app write and the three *fetch* affordances
+(landing with §9), the own-app undo surface, write on a source-initiated grant, the per-op
+grid and step chaining; §8.1 gains `accessUndo:<targetAppId>` and `accessWants:<appId>`; Part
+VII's wire, app and Part VI bullets follow; Appendix A is fifteen codes; Appendix B gains
+`ACCESS_OPS`, `ACCESS_LOG_KINDS`, `ACCESS_PROVENANCES`, `ACCESS_LOG_VIAS`,
+`ACCESS_WRITE_AUTHORITIES`, `ACCESS_REFRESH_REASONS`, `ACCESS_CANDIDATE_CLASSES`,
+`ACCESS_WRITE_MAX_ROWS`, the four undo caps, `ACCESS_REFRESH_COOLDOWN_MS`,
+`ACCESS_DISCOVER_CACHE_MS`, `ACCESS_DOORBELL_COALESCE_MS`, the four `ACCESS_MATERIALISE_*`
+caps (moved into the protocol), the two wants caps and the four events; Appendix C: sixteen
+files, `access-request` seven variants / `access-response` eight, the undo and wants records
+as prose contracts. `PROTOCOL_VERSION` stays 1.
+**Compatibility (Q19).** A 1.2 app on a 1.1 host: the three ops, and a `request` carrying
+`access`, are answered `MALFORMED` with the `requestId` recovered — that is the feature
+detection (no `accessOps` key on host-ready); the app shows its honest fallback and asks
+again without `access`. A 1.1 hub that meets a 1.2 grant row (any `withheld`, `write`, `kv`
+or `refresh` seat set) cannot parse it and holds it unreadable — no access under it, never a
+read-only grant — fail closed; a defaults-off 1.2 record is byte-identical to a 1.1 record, so
+a backup taken before the upgrade restores unsuspended. A 1.1 app on a 1.2 host sees the
+four ops it knows answered as before and ignores the keys it does not know.
+`schemas/` regenerated in the second pass (16 files; `access-request.json` 4 → 7 `oneOf`
+variants, `access-response.json` 5 → 8; no other schema's bytes change). The whitepaper moves
+to edition 5. Lands as TWO commits on the spec clone after the owner's ask, the 1.1
+precedent: (1) `spec 1.2: …` — `SPEC.md` + `schemas/` + README; (2) `whitepaper: edition 5 —
+…` — the PDF; the `**PUSHED**` rewrite with the two SHAs is added by a docs PR here after the
+push.
+
 ## 2026-10-10 — spec 1.1 — **PUSHED** `23654a6` (spec + schemas + README) · `1756de5` (whitepaper edition 4) via snugprotocol/spec#2, rebase-merged so the two staged commits landed as two — TASK-20261010-cross-app-access (owner's ask, same day)
 **Access between apps (ADR-0075) — the first post-1.0 minor, additive.** Two frames join the
 published set: `snug:access-request` (strict — `op ∈ request, query, list, release`; carries

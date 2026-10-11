@@ -43,7 +43,7 @@ The security model is enforced by architecture, not by policy:
   **human-approved, host-frozen ceiling** of allowed hosts.
 - Credentials live in the user's own file and are injected by the host executor — they never
   enter the app iframe, never reach the LLM, and never reach an app publisher.
-- An app reads another app's tables only under a user-granted, logged, revocable access grant — the one sanctioned crossing, and the user sees exactly what is shared and where it can go before allowing it.
+- An app reads another app's tables — or changes rows in them, with an undo — only under a user-granted, logged, revocable access grant — the one sanctioned crossing, and the user sees exactly what is shared, what may be changed and where it can go before allowing it.
 
 The [threat model and security argument](/docs/whitepaper/) are written down, including what
 is accepted and *not* mitigated.

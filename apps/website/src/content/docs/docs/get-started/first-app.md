@@ -43,7 +43,7 @@ await db.exec('INSERT INTO games (pgn, played_at) VALUES (?, ?)', [pgn, Date.now
 - `useAppDB` is host-brokered SQL against tables that belong to this app alone. Physical
   isolation — the app's runtime database is materialized from its own namespaced tables.
 - `usePersistedState` is the small-state shortcut for the same storage.
-- `useSnugAccess` lets the app ask to read **another** app's tables. It states a purpose, after a user act; the user picks the app and the tables on host chrome the app cannot draw over; the app learns only what was granted, reads with one `SELECT` at a time, and every read is logged on the other app — the user can stop it at any moment. A host that cannot run such a read says so (`capabilities.access` absent), and the app renders its fallback.
+- `useSnugAccess` lets the app ask to read **another** app's tables — and, when the user ticks it per table, change rows in them with an undo. It states a purpose, after a user act; the user picks the app and the tables on host chrome the app cannot draw over; the app learns only what was granted, reads with one `SELECT` at a time, writes with one plain `INSERT`, `UPDATE` or `DELETE` at a time (literal values, at most 200 rows, every change listed in the other app's history and undoable there for seven days), may ask the other app to fetch new data first, and every read and every change is logged on the other app — the user can stop it at any moment. A host that cannot run such a read says so (`capabilities.access` absent), and the app renders its fallback; a host that predates spec 1.2 answers `write`, `refresh` and `discover` with `MALFORMED`, and the app asks again without asking to write.
 
 ## What it cannot do
 
@@ -52,7 +52,7 @@ The sandbox is the point:
 - **No network.** `connect-src` is blocked; the only path out is the governed
   [connected-fetch surface](/docs/concepts/connections/), inside a ceiling you approved.
 - **No credentials.** Tokens are injected by the host executor, outside the iframe, always.
-- **No other app's data, unless you allow it.** Each app sees only its own tables — it cannot read another app's tables, except under an access grant the user gave, can see and can stop.
+- **No other app's data, unless you allow it.** Each app sees only its own tables — it cannot read or change another app's tables, except under an access grant the user gave, can see and can stop; a change the user allowed is journaled and undoable from the other app's history.
 
 ## Living apps
 

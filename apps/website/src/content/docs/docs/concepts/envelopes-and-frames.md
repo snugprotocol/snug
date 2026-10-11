@@ -29,7 +29,7 @@ A mount is a handshake, then requests:
 | Storage | `snug:db-request` · `snug:db-response` | Host-brokered SQL against the app's own isolated tables |
 | Network | `snug:net-request` · `snug:net-response` | The **only** path to the network — governed by an approved host ceiling; the iframe itself has none |
 | Navigation | `snug:open-url-request` · `snug:open-url-result` | The host opens the user's real browser, after its own confirm, on a user gesture |
-| Access | `snug:access-request` · `snug:access-response` | An app reads another app's tables only under a user-granted, logged, revocable access grant — the user picks the source on host chrome, the read runs on a scoped copy in a bounded worker, and the app learns only what it was granted |
+| Access | `snug:access-request` · `snug:access-response` | An app reads another app's tables — or, when the user ticked it per table, changes rows in them with an undo — only under a user-granted, logged, revocable access grant: the user picks the source on host chrome, a read runs on a scoped copy in a bounded worker, a write is dry-run there and then applied atomically with its undo journaled first, and the app learns only what it was granted (seven ops at spec 1.2: ask, query, write, refresh, list, release, discover; a host that predates 1.2 answers the three newer ones `MALFORMED`) |
 | Events | `snug:host-event` · `snug:app-event` | Open additive channel (theme, visibility, resize, connection doorbells); unknown events are ignored |
 
 ## Why apps don't break

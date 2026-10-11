@@ -1,7 +1,7 @@
 <!--
-  paper.html — The Snug Protocol whitepaper, edition 4 — the 1.1 edition
-  (TASK-20261010-cross-app-access; edition 3 was TASK-20260822-spec-10-final, edition 2
-  TASK-20260820, edition 1 TASK-20260807).
+  paper.html — The Snug Protocol whitepaper, edition 5 — the 1.2 edition
+  (TASK-20261010-host-broker; edition 4 was TASK-20261010-cross-app-access, edition 3
+  TASK-20260822-spec-10-final, edition 2 TASK-20260820, edition 1 TASK-20260807).
 
   Source of truth for every normative claim below is the specification:
   docs/spec-drafts/SPEC.md, plus the published schemas exported from
@@ -46,7 +46,7 @@
     </div>
     <div>
       <div class="k">Specification · Edition</div>
-      <div class="v">1.1 · edition 4</div>
+      <div class="v">1.2 · edition 5</div>
     </div>
     <div>
       <div class="k">Date</div>
@@ -95,7 +95,7 @@
     <li><span class="num">7</span><span class="ttl">Connected applications<span class="sub">Requirements, grants, frozen ceilings, and the executor</span></span><span class="pg">21</span></li>
     <li><span class="num">8</span><span class="ttl">Linked-device connections<span class="sub">Governing a provider that has no API: the helper surface</span></span><span class="pg">25</span></li>
     <li><span class="num">9</span><span class="ttl">Runtime contracts and the data surface<span class="sub">Turns cheap enough for any brain; data that answers to its owner</span></span><span class="pg">27</span></li>
-    <li><span class="num">10</span><span class="ttl">Access between apps<span class="sub">The one sanctioned crossing, under an access grant the user gives</span></span><span class="pg">28</span></li>
+    <li><span class="num">10</span><span class="ttl">Access between apps<span class="sub">The one sanctioned crossing — read, or write with an undo — under an access grant the user gives</span></span><span class="pg">28</span></li>
     <li><span class="num">11</span><span class="ttl">Conformance<span class="sub">What an implementation must do to claim the name</span></span><span class="pg">29</span></li>
     <li><span class="num">12</span><span class="ttl">Related work<span class="sub">MCP, vendor application platforms, local-first software</span></span><span class="pg">31</span></li>
     <li><span class="num">13</span><span class="ttl">Limitations and future work<span class="sub">What is unsolved, stated plainly</span></span><span class="pg">32</span></li>
@@ -181,7 +181,8 @@ layer exists to preserve.</p>
   and <strong>MAY</strong> are used in the sense of RFC 2119. The wire protocol's core is
   normative and published since spec v0.1; the storage layer, the connected-application
   surface, runtime contracts, and linked-device connections are normative as of
-  specification 1.0, and access between applications (§10) as of specification 1.1. One
+  specification 1.0, and access between applications (§10) as of specification 1.1, widened
+  at 1.2 to writes with an undo, refresh on demand and discovery. One
   surface — standing approvals — is explicitly
   <span class="badge draft">Provisional</span> and so marked where it appears. Where this
   paper and the specification differ, the specification governs.</p>
@@ -330,7 +331,7 @@ pairs with v0.3, the access pair with 1.1. All fifteen are published as JSON Sch
 exported byte-identically from the reference implementation.</p>
 
 <table>
-  <caption>The fifteen frame types of specification 1.1. Published schemas are input shapes:
+  <caption>The fifteen frame types of specification 1.2. Published schemas are input shapes:
   validators MUST accept unknown fields (R2). The net and open-url frames are the stated
   exception — strict, because their fields become real-world effects.</caption>
   <thead>
@@ -413,9 +414,11 @@ exported byte-identically from the reference implementation.</p>
     <tr>
       <td class="mono-cell">snug:access-request&nbsp;/<br>snug:access-response</td>
       <td><span class="dir">app ↔ host</span></td>
-      <td>Access between apps (Part VI): a reader asks for, queries, lists and releases a
-      user-granted, read-only access grant on another application's tables. The request is
-      strict; the response is tolerant; the runner's binding is host-assigned.</td>
+      <td>Access between apps (Part VI): a reader asks for, queries, writes under, refreshes,
+      lists and releases a user-granted, logged, revocable access grant on another
+      application's tables — read, or write with an undo — and may discover whether a source
+      exists. The request is strict; the response is tolerant; the runner's binding is
+      host-assigned.</td>
     </tr>
     <tr>
       <td class="mono-cell">snug:host-event</td>
@@ -626,10 +629,12 @@ hostile <em>connection requirement</em> authored by a steered model, and a hosti
       <td>Application reads another application's data</td>
       <td>Runtime isolation is physical: an application executes against a materialised
       database containing only its own objects (§6.3). The one sanctioned crossing is an
-      <strong>access grant</strong> the user gives on host chrome (§10): read-only, scoped to named
-      tables with their columns frozen, timed, revocable from anywhere, logged on the source —
-      and executed on a scoped scratch copy in a bounded worker from which every other object has
-      been physically dropped</td>
+      <strong>access grant</strong> the user gives on host chrome (§10): read, or write with an
+      undo, under a user-granted, logged, revocable access grant scoped to named tables with
+      their columns frozen, timed, revocable from anywhere, logged on the source — a read
+      executed on a scoped scratch copy in a bounded worker from which every other object has
+      been physically dropped, a write dry-run on that copy and then applied atomically with the
+      rows it changes journaled first</td>
       <td>What the reader reads is visible to its own model and may travel through the reader's
       own approved paths — both named to the user before consent</td>
     </tr>
@@ -764,7 +769,8 @@ intended use.</p>
 <p><strong>The model can be manipulated in what it says.</strong> C1 and C2 bound what an
 injected instruction can <em>do</em>: it cannot reach a credential, open a socket, or touch
 another application's data without a
-user-granted, logged access grant — and on the connected surface it cannot widen a ceiling or
+user-granted, logged, revocable access grant (read, or write with an undo) — and on the
+connected surface it cannot widen a ceiling or
 bypass a confirmation. It can still influence the <em>content</em> of an answer the
 application then renders, and it can propose actions in the hope a hurried user approves
 them. Applications that act on model output should treat that output as untrusted input;
@@ -809,7 +815,7 @@ their own cost model.</p>
 
 <div class="callout">
   <div class="callout-title">Scope</div>
-  <p>This section describes the storage and host-behaviour layer of specification 1.1;
+  <p>This section describes the storage and host-behaviour layer of specification 1.2;
   the wire protocol of §4 is unchanged by it. Storage schema version 6 is described; the
   source of truth for constants and DDL is the reference implementation, locked by a
   snapshot test.</p>
@@ -1338,24 +1344,26 @@ delimiter spellings defanged in the data.</p>
 </section>
 
 <!-- ============================================================ 10 -->
-<!-- Access between apps — specification 1.1 Part VI (ADR-0075, TASK-20261010-cross-app-access). -->
+<!-- Access between apps — specification 1.2 Part VI (ADR-0075, TASK-20261010-cross-app-access; widened by ADR-0076, TASK-20261010-host-broker). -->
 <section>
 <h2>Access between apps</h2>
 
 <p>Every application's data is its own. That isolation is the guarantee the threat table
 rests on, and it is also a limit a user feels the first time two of their own applications
 should cooperate: a budget that cannot see the ledger, a planner that cannot see the pantry.
-Specification 1.1 adds the one sanctioned crossing, and it is shaped by the same doctrine
-as every other capability here — the model proposes, the human approves, the host enforces
-and freezes. Figure 11 traces the crossing from the ask to the rows.</p>
+Specification 1.1 added the one sanctioned crossing and 1.2 widened it — a read, or a write
+with an undo — and it is shaped by the same doctrine as every other capability here — the
+model proposes, the human approves, the host enforces and freezes. Figure 11 traces the
+crossing from the ask to the rows.</p>
 
 
 <p>A reader application asks, after a user act, with one plain sentence of purpose. The
 host renders the ask as a strip, never a modal; the user reviews on host chrome the
 application cannot draw over, and sees the user's own applications ranked by relevance — the
 reader never sees that list. The user picks the source and its tables, each table with its
-columns shown (credential-named columns are marked <em>never shared</em> and are never in a
-grant), chooses how long — while the reader is open, a day, a week, until stopped — and reads,
+columns shown and tickable (credential-named columns are marked <em>never shared</em> and are
+never in a grant), may tick per table that the reader can also change rows, chooses how long
+— while the reader is open, a day, a week, until stopped — and reads,
 before allowing, exactly where the reader can send what it reads: its brain by name, each
 approved connection by provider and host, any link it may ask to open. The result is an
 <strong>access grant</strong>: a host record the user alone can write, strict and
@@ -1374,7 +1382,26 @@ database is never the thing being queried. Every read is logged on the source's 
 what was read, how many rows, whether anyone was looking — in a bounded history that
 never loses the latest lifecycle line of any grant it still holds. The record travels with the user's file, and an
 imported file disarms every grant it carries that the user did not give here.</p>
-<!--FIGURE:fig11-access-grant|Figure 11|<span class="fignum">Figure 11.</span> Access between apps. The reader asks; the user reviews on host chrome and picks the source and tables; the host writes the grant, copies the source into a scoped scratch database in its own worker, drops everything outside the grant, runs the one read under a wall clock, masks credential columns, logs the read on the source and hands the rows to the reader. The reader never sees the user's inventory; the source's live database is never queried.-->
+
+<p>A write — available since specification 1.2 where the user ticked it for a table — is one
+plain <code>INSERT</code>, <code>UPDATE</code> or <code>DELETE</code> with literal values,
+dry-run in the same worker on the same kind of scoped copy and refused past two hundred rows
+or past the undo's size, then applied on the source's live database as one atomic span
+through the host's one write path, with the rows it changes captured first into a journal the
+source keeps as data, never as statement text. The reader learns only how many rows changed.
+Every change is written on the source's history, and the user can undo it from there for
+seven days — the host rebuilds the inverse from the journal and changes nothing unless every
+row still holds the values the write left. A column the user did not tick, a credential-named
+column, a computed column or a value the copy masked cannot be named in a write at all, so a
+refusal tells the reader nothing a read would not; a table with a trigger, a cascading
+foreign key, a conflict-replace clause or a check over an unshared column cannot be changed
+from another application. A grant may also let the reader ask the host to run the source for
+new data first — at most once every five minutes, where the source lives, under the same
+unattended posture as a scheduled run, counted on the day's limits and logged — and the host
+rings every open reader, with an id and nothing else, when a source changes. The chat beside
+an application sees what the application may read through the same grant and the same
+history, and proposes changes it never applies itself.</p>
+<!--FIGURE:fig11-access-grant|Figure 11|<span class="fignum">Figure 11.</span> Access between apps. The reader asks; the user reviews on host chrome and picks the source and tables; the host writes the grant, copies the source into a scoped scratch database in its own worker, drops everything outside the grant, runs the one read under a wall clock, masks credential columns, logs the read on the source and hands the rows to the reader — and, where the user ticked it, dry-runs a write on the same copy before applying it to the source's live database with its undo journaled first. The reader never sees the user's inventory; the source's live database is never queried for a read.-->
 </section>
 
 <!-- ============================================================ 11 -->
@@ -1507,8 +1534,9 @@ for themselves, which no directory would list and no reviewer should need to app
 whose value to its owner is precisely that it is theirs. Snug is the open, user-owned
 counterpart — not a competing store, but the layer that lets such software exist without one.
 The sandbox, not a submission queue, is the reviewer: a Snug application cannot phone home,
-cannot read another application's tables except under an access grant the user gave, can see
-and can stop, and cannot touch a credential, whether or not
+cannot read — or change — another application's tables except under an access grant the user
+gave, can see and can stop (a change it allowed is journaled and undoable), and cannot touch a
+credential, whether or not
 anyone ever looked at its code.</p>
 
 <h3>Local-first software</h3>
@@ -1583,7 +1611,7 @@ it interacts with synchronisation cost, since the present model transfers whole 
 
 <p><strong>No formal verification.</strong> The security properties are argued from structure
 and tested by suite, not proved. The isolation claim in particular — that materialisation
-makes a cross-application read impossible outside an access grant the user gave (§10), rather
+makes a cross-application read or write impossible outside an access grant the user gave (§10), rather
 than merely difficult — would benefit from
 formal treatment, as would the executor's gate ordering.</p>
 
@@ -1616,7 +1644,7 @@ let it reach the world only through a wall a human froze and a gate a human answ
 put everything the user accumulates into one file they can carry away — and seal, if they
 choose, with a passphrase only they hold. The whole surface — wire, storage, connected
 applications, runtime contracts, linked-device connections, access between applications — is
-normative as of specification 1.1. All of it is MIT licensed, all of it is specified by schemas and contracts exported
+normative as of specification 1.2. All of it is MIT licensed, all of it is specified by schemas and contracts exported
 from a working implementation, and all of it is offered in the expectation that other
 implementations will find it wanting in specific, correctable ways.</p>
 
@@ -1631,9 +1659,9 @@ later, on a device and a provider nobody has chosen yet.</p>
 <h2 class="nonum">Normative references</h2>
 
 <ol>
-  <li><strong>Snug Protocol Specification, 1.1.</strong> The complete specification:
+  <li><strong>Snug Protocol Specification, 1.2.</strong> The complete specification:
   wire protocol, portable user database, connected applications, runtime contracts,
-  linked-device connections, access between apps. <span class="src">snugprotocol/spec —
+  linked-device connections, access between apps (read, or write with an undo). <span class="src">snugprotocol/spec —
   <code>SPEC.md</code></span></li>
   <li><strong>Snug Protocol JSON Schemas.</strong> Normative message shapes, published
   byte-identically from the reference implementation. <span class="src">snugprotocol/spec —
@@ -1668,7 +1696,7 @@ later, on a device and a provider nobody has chosen yet.</p>
     <div class="k">Security contact</div>
     <p>security@snugprotocol.org</p>
     <div class="k" style="margin-top:4mm">Status</div>
-    <p>Specification 1.1 is normative: the wire protocol (published since v0.1), the
+    <p>Specification 1.2 is normative: the wire protocol (published since v0.1), the
     storage layer at schema 6, the connected-application surface, runtime contracts,
     linked-device connections, and access between applications. One surface — standing approvals — is explicitly
     provisional and so marked.</p>
