@@ -250,7 +250,9 @@ differs from the playground is the OUTPUT and what the platform carries:
   `order:'post'`, after Vite's own generateBundle — any other emitted file, any leftover
   `./assets/` reference), and the build stamp `<version> <sha>[-dirty]`. Two modules are
   swapped by RESOLVED path (`swap-resolved`, a dead swap fails the build): the starter
-  source and the sql.js locator. WebLLM is aliased to a stub. Measured 2,219,519 B
+  source and the sql.js locator. WebLLM is aliased to a stub. The prompt files no code reads
+  (`skills/` and the store README) are filtered out of the knowledge content module by
+  `drop-prompt-files` (a dead rule fails the build; TASK-20261010-host-broker PR-3, −253 KB). Measured 2,219,519 B
   (2026-09-05); 3,255,702 B without the starter swap; sha-identical across clean builds.
 - **Starters on demand** (AC14, A3): `src/starterSource.ts` implements the playground's
   `StarterSource` over the index the build bakes in (`starters-pkg/index.json`, emitted by
