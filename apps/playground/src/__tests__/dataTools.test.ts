@@ -234,6 +234,60 @@ describe('data_propose_write — propose, never execute (AC-F2-4)', () => {
   });
 });
 
+/**
+ * AC11 (TASK-20261010-host-broker PR-2, D-PR2-17): with the chat door's shared tables in the
+ * turn, a proposal naming one of them is refused BY NAME before any dry run — the copy of
+ * another app's data is read-only here. The sentence is the copy module's own; the set is a
+ * hand-built materialised set (the service's work is lane A's suite). The new module is reached
+ * inside the row, so the rows above keep proving the harness.
+ */
+describe('AC11 — a proposal naming another app’s shared table is refused by name', () => {
+  it('UPDATE on ledger__transactions answers CHAT_DOOR.readOnly("Ledger") and stages nothing', async () => {
+    const { CHAT_DOOR } = await import('../access/copy.js');
+    const { db, appId, proposals } = await ledger();
+    const before = await bytes(db, appId);
+    const tools = buildDataTools({
+      appId,
+      getDb: () => Promise.resolve(db),
+      onProposal: (p) => {
+        proposals.push(p);
+      },
+      shared: {
+        set: {
+          tables: [
+            {
+              grantId: 'g-1',
+              sourceAppId: 'app-ledger',
+              sourceName: 'Ledger',
+              alias: 'ledger',
+              name: 'ledger__transactions',
+              table: 'transactions',
+              columns: ['id', 'amount'],
+              types: ['INTEGER', 'INTEGER'],
+              rows: [[1, 100]],
+              truncated: false,
+              duration: 'day',
+              expiresAt: '2026-10-12T09:00:00.000Z',
+            },
+          ],
+          skipped: [],
+          readOnlyTables: ['ledger__transactions'],
+        },
+        recordRead: async (grantIds) => ({ recorded: [...grantIds], refused: [] }),
+      },
+    });
+
+    const out = await runTool(tools, DATA_PROPOSE_WRITE_TOOL_NAME, {
+      statements: ['UPDATE ledger__transactions SET amount = 0'],
+      summary: 'Zero the ledger',
+    });
+
+    expect(out).toContain(CHAT_DOOR.readOnly('Ledger'));
+    expect(proposals).toHaveLength(0);
+    expect(await bytes(db, appId)).toBe(before);
+  });
+});
+
 describe('executeApprovedWrite — the only path to the real database (AC-F2-4)', () => {
   it('executes on approval and reports the ACTUAL counts', async () => {
     const { db, appId, proposals } = await ledger();

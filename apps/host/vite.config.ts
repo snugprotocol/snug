@@ -2,10 +2,18 @@
 // own source aliased in, as the desktop does (ADR-0021 D9); what differs is the OUTPUT: one
 // self-contained page. Every chunk is inlined (`inlineDynamicImports`), every asset becomes
 // a data URL, the entry script and the stylesheet are folded into the html by
-// `inlineSingleFile`, and two modules are swapped by resolved path: the starter source (the
-// ≈ 1 MB of starter bytes load on click — AC14) and the sql.js locator (the engine rides as
-// bytes — P4). WebLLM is aliased to a stub so the lazily imported 6 MB engine never enters
-// the bundle.
+// `inlineSingleFile`, and seven modules are swapped by resolved path (`swapResolved`, whose
+// dead-swap guard fails the build if a swap stops being hit): the starter source (the ≈ 1 MB
+// of starter bytes load on click — AC14), the sql.js locator (the engine rides as bytes — P4),
+// and the chat's data lane — `agent/chatRouter`, `agent/laneTools`, `agent/accessProposeTool`,
+// `agent/accessCard` and `access/AccessCard` (TASK-20261010-host-broker PR-2, the owner's
+// kit-ceiling cut of 2026-10-11). The invariant that cut stands on: every kit binding pins the
+// HOST brain, composed `tools: false`, or the DEMO brain, so no kit turn is ever routed to a
+// lane, and the data lane — PR-2's chat door and the brain's ask on it included — never runs
+// here; the stubs under `src/stubs/` keep the names and fail loudly, and
+// `src/__tests__/kitDeadLanes.test.ts` pins the swaps, the invariant and the stubs' surface.
+// The playground and the desktop keep the real modules — they are not built from this config.
+// WebLLM is aliased to a stub so the lazily imported 6 MB engine never enters the bundle.
 //
 // THE ONLY CONFIG, THE ONLY ENTRY, THE ONLY OUTPUT (TASK-20261003 K1, ADR-0072 §1). This
 // page is the artifact page, the chat page, the plain file AND the page the local host
@@ -45,6 +53,13 @@ export default defineConfig({
       [`${playgroundSrc}/starter/starterSource.ts`]: here('./src/starterSource.ts'),
       // The ?url engine asset → a locator that must never run (P4/AC8).
       [`${playgroundSrc}/run/wasm.ts`]: here('./src/stubs/wasm-locator.ts'),
+      // The chat's data lane and the brain's ask on it → stubs that name the fact (the header;
+      // TASK-20261010-host-broker PR-2, `kitDeadLanes.test.ts`).
+      [`${playgroundSrc}/agent/chatRouter.ts`]: here('./src/stubs/chatRouter.ts'),
+      [`${playgroundSrc}/agent/laneTools.ts`]: here('./src/stubs/laneTools.ts'),
+      [`${playgroundSrc}/agent/accessProposeTool.ts`]: here('./src/stubs/accessProposeTool.ts'),
+      [`${playgroundSrc}/agent/accessCard.ts`]: here('./src/stubs/accessCard.ts'),
+      [`${playgroundSrc}/access/AccessCard.tsx`]: here('./src/stubs/AccessCard.tsx'),
     }),
     startersIndexPlugin(here('./starters-pkg/index.json')),
     react(),

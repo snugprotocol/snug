@@ -7,7 +7,12 @@
 //                                host's seat when the task's `alert` is `notification`, with
 //                                the §6 rules (plain text, capped, prefixed, rate-limited).
 //   app-think  *Ask [app]'s AI* — `appThink.ts`: the app's own transport, tool-free, the reply's
-//                                data changes dry-run and pending, never executed.
+//                                data changes dry-run and pending, never executed; since
+//                                TASK-20261010-host-broker PR-2 (D-PR2-13) over the tables the
+//                                user let the app read *also while away* — `defaultSharedFor`
+//                                asks the Access Service for the SCHEDULE caller, records the
+//                                read on every source's history BEFORE anything is rendered,
+//                                and hands the step only the grants it recorded.
 //   app-run    *Run [app]*     — `appRun.ts` (PR-B, ADR-0074 §3; ADR-0077): the kv handshake into
 //                                the ONE instance of the app — the open app's live frame under
 //                                the run-scoped ask gate, else the ONE hidden frame; the user's
@@ -29,15 +34,17 @@
 //     tolerant read would lose the whole result (security F12).
 //
 // `executeStep` is the production composition (`defaultTransportFor` — the brain and the
-// settings stores read per call; `defaultAppRunDeps` — the page's mount store and registry);
-// `createStepExecutor(deps)` is the seam the tests inject into, with `blockedAppRunDeps()` for a
-// fake that wants every app-run step refused by name (M12).
+// settings stores read per call; `defaultSharedFor` — the Access Service through a LAZY edge,
+// F13, the scheduler's import cycle below being the reason; `defaultAppRunDeps` — the page's
+// mount store and registry); `createStepExecutor(deps)` is the seam the tests inject into, with
+// `blockedAppRunDeps()` for a fake that wants every app-run step refused by name (M12).
 
 import { SCHEDULE_STEP_SUMMARY_MAX_CHARS, findScheduleCredential, type ScheduleProposalItem, type ScheduleStep } from '@snugprotocol/protocol';
 import type { AgentTransport } from '@snugprotocol/runner';
 
+import type { MaterialisedSet } from '../access/service.js';
 import { defaultAppRunDeps, executeAppRun, type AppRunDeps } from './appRun.js';
-import { CANCELLED_SUMMARY, defaultTransportFor, executeAppThink } from './appThink.js';
+import { CANCELLED_SUMMARY, defaultTransportFor, executeAppThink, type AppThinkDeps } from './appThink.js';
 import type { StepContext, StepExecutor, StepOutcome } from './engine-types.js';
 import { scrubOrWithhold } from './scrub.js';
 import { messageOf } from './taskShape.js';
@@ -48,6 +55,8 @@ export { blockedAppRunDeps } from './appRun.js';
 export interface StepExecutorDeps {
   /** The app's OWN transport, or `undefined` when no brain can answer (the demo brain) — see `appThink.ts`. */
   transportFor(appId: string): AgentTransport | undefined;
+  /** The scheduler door's tables for an *Ask the AI* step (PR-2) — absent ⇒ the step sees none; see `appThink.ts`. */
+  sharedFor?: AppThinkDeps['sharedFor'];
   /**
    * The *Run [app]* seams (`appRun.ts`): the platform seat, the hidden mount store, the
    * live-host registry, the runtime composition. Required — a unit fake that wants the arm
@@ -60,6 +69,26 @@ export interface StepExecutorDeps {
 export const WITHHELD_SUMMARY = 'a result was withheld because it looked like a credential';
 
 const none = (): StepOutcome['calls'] => ({ ai: 0, net: 0 });
+
+/**
+ * The production `sharedFor` (D-PR2-13; C-Q1): the Access Service, reached LAZILY (the cycle
+ * below), asked for the SCHEDULE caller — `attended: false` for every trigger, *run now*
+ * included, so the step sees exactly the away set — then the read RECORDED on every source's
+ * history with every grant id of the set and no statement (the rows go into the prompt) before
+ * any context is rendered. Only the grants answered `recorded` reach the brain; a refused one
+ * (its access ended meanwhile, or a line the history could not write) is said as a skip.
+ */
+export async function defaultSharedFor(appId: string, ctx: StepContext): Promise<MaterialisedSet> {
+  const { accessService } = await import('../access/service.js');
+  const service = accessService();
+  const caller = { kind: 'schedule' as const, appId, taskId: ctx.task.id, runId: ctx.run.id };
+  const set = await service.materialise(caller);
+  const grantIds = [...new Set(set.tables.map((table) => table.grantId))];
+  const { recorded, refused } = await service.recordRead(caller, set, { grantIds });
+  const kept = new Set(recorded);
+  const tables = set.tables.filter((table) => kept.has(table.grantId));
+  return { tables, skipped: [...set.skipped, ...refused], readOnlyTables: tables.map((table) => table.name).sort() };
+}
 
 /** The `store` policy, then the cap. An empty string stays empty — no sentence is invented. */
 function safeText(text: string): string {
@@ -119,7 +148,8 @@ export function createStepExecutor(deps: StepExecutorDeps): StepExecutor {
 
 /**
  * The production executor: the app transport resolved per call from the brain and the settings
- * stores, the *Run [app]* seams over the page's hidden mount store and live-host registry.
+ * stores, the scheduler door over the Access Service, the *Run [app]* seams over the page's
+ * hidden mount store and live-host registry.
  * Composed on FIRST USE, never at load. Re-evaluated at Gate-5 PR-B M8: moving the handshake's
  * names to `scheduleKey.ts` took `appRun.ts` out of the scheduler's imports, but the cycle this
  * guards remains through THIS module — `scheduler.ts` → `executors.ts` → `appRun.ts` →
@@ -129,6 +159,6 @@ export function createStepExecutor(deps: StepExecutorDeps): StepExecutor {
  */
 let production: StepExecutor | undefined;
 export const executeStep: StepExecutor = (step, ctx) => {
-  production ??= createStepExecutor({ transportFor: defaultTransportFor, appRun: defaultAppRunDeps() });
+  production ??= createStepExecutor({ transportFor: defaultTransportFor, sharedFor: defaultSharedFor, appRun: defaultAppRunDeps() });
   return production(step, ctx);
 };

@@ -21,6 +21,20 @@
 // only that app's rows, and reaches only that app's transport. A multi-app schedule is several
 // calls of this function, each with its own context — nothing here reads another step.
 //
+// THE SCHEDULER DOOR (TASK-20261010-host-broker PR-2 AC13; ADR-0076 §3; D-PR2-13, D-PR2-7,
+// D-PR2-10; C-Q1..C-Q6). Once a brain WILL be sent something — the app exists, the transport
+// resolved, the signal is not aborted — `deps.sharedFor(appId, ctx)` hands the step the tables
+// the user let THIS app read *also while away* (the executors' default asks the Access Service
+// for the schedule caller and RECORDS the read before anything is rendered; tests inject a set).
+// A NON-empty set renders `renderSharedDdl` — the *From <Source>* lines and any unreadable note,
+// the host's sentences — after the `Schema:` block and OUTSIDE the delimiter; INSIDE the one
+// `<query_result>` delimiter the step's own fences come FIRST, then one `data (name: <alias>__<table>)`
+// fence per shared table under ONE `step.context.maxRows` budget shared across them in order
+// (the cut said in band); the trailer is unchanged. The step's own SELECTs run with the set
+// ATTACHED to the scratch copy (a JOIN reaches `ledger__transactions`); the dry run of an offered
+// change NEVER attaches — a shared name there is "no such table" on a copy of the real database.
+// An EMPTY set, or no `sharedFor` at all, renders byte-identically to the context before the door.
+//
 // WHAT IS CHARGED. `calls.ai` is 1 whenever the transport was ASKED and answered anything but
 // F15's `CONSENT_REQUIRED` (nothing left the page then — the imported-endpoint confirm refused
 // before any provider was touched). A refusal before the send (the demo brain, a deleted app,
@@ -35,7 +49,7 @@
 // PR-B's net handler, which is the one seam that holds those values; today's shapes-plus-
 // refusal is the whole reply-side wall, and it is named as such in the threat-model delta.
 
-import type { AppRecord, ScratchStatementResult, UserDb } from '@snugprotocol/db';
+import type { AppRecord, ScratchAttachTable, ScratchStatementResult, UserDb } from '@snugprotocol/db';
 import {
   ERROR_CODES,
   SCHEDULE_PROPOSALS_PER_RUN,
@@ -51,6 +65,9 @@ import {
 } from '@snugprotocol/protocol';
 import type { AgentTransport } from '@snugprotocol/runner';
 
+import { toAttach } from '../access/materialise.js';
+import type { MaterialisedSet, MaterialisedTable } from '../access/service.js';
+import { renderSharedDdl } from '../agent/sharedDdl.js';
 import { createAppTransport } from '../agent/transport.js';
 import { modeStore, providerStore } from '../state/mode.js';
 import { currentBrain } from '../state/webllm.js';
@@ -68,6 +85,12 @@ export interface AppThinkDeps {
    * `defaultTransportFor`; tests inject a recording fake.
    */
   transportFor(appId: string): AgentTransport | undefined;
+  /**
+   * The tables the user let this app read on a schedule (PR-2, D-PR2-13) — asked only once a
+   * brain will be sent something. The production composition is the executors' default (the
+   * Access Service, the read recorded before the context is rendered); tests inject a set.
+   */
+  sharedFor?(appId: string, ctx: StepContext): Promise<MaterialisedSet>;
 }
 
 /** The envelope action — a host-originated turn, so an app's own `action` vocabulary can never collide with it. */
@@ -151,6 +174,10 @@ export interface RenderThinkContextInput {
   schema: AppSchemaJson | undefined;
   queries: readonly ContextQuery[];
   maxRows: number;
+  /** Another app's tables for this step (PR-2) — absent or empty renders today's context byte for byte. */
+  shared?: MaterialisedSet;
+  /** The step's clock, for the heading's date (C-Q3) — never the wall clock on a schedule. */
+  now?: number;
 }
 
 /** Cut the DDL at a UTF-8 byte bound without splitting a character. */
@@ -185,8 +212,25 @@ function renderQuery({ sql, result }: ContextQuery, maxRows: number): string {
   return lines.join('\n');
 }
 
-/** The host-assembled context string: the overview and the DDL as framing, the rows as delimited data. */
-export function renderThinkContext({ app, schema, queries, maxRows }: RenderThinkContextInput): string {
+/**
+ * The shared tables as fenced blocks in the step fences' exact shape (C-Q4), under ONE row budget
+ * across them in order: the columns line, one JSON row per line, the cut said in band.
+ */
+function renderSharedFences(tables: readonly MaterialisedTable[], budget: number): string[] {
+  let left = budget;
+  return tables.map((table) => {
+    const rows = table.rows.slice(0, Math.max(0, left));
+    left -= rows.length;
+    const total = table.totalRows ?? table.rows.length;
+    const body = table.rows.length === 0 ? 'No rows.' : [JSON.stringify(table.columns), ...rows.map((row) => JSON.stringify(row))].join('\n');
+    const lines = [`${FENCE}data (name: ${table.name})`, body, FENCE];
+    if (rows.length < total) lines.push(`[showing ${rows.length} of ${total} rows — the result was truncated]`);
+    return lines.join('\n');
+  });
+}
+
+/** The host-assembled context string: the overview, the DDL and the shared tables' framing as framing, the rows as delimited data. */
+export function renderThinkContext({ app, schema, queries, maxRows, shared, now }: RenderThinkContextInput): string {
   const overview = [`App: ${app.displayName}`, ...(app.description !== undefined && app.description !== '' ? [app.description] : [])].join('\n');
   const ddl = (schema?.objects ?? [])
     .map((object) => object.ddl.trim())
@@ -194,8 +238,13 @@ export function renderThinkContext({ app, schema, queries, maxRows }: RenderThin
     .join(';\n');
   const schemaBlock = ddl === '' ? 'Schema: none registered' : `Schema:\n${boundDdl(ddl)}`;
   const parts = [overview, schemaBlock];
-  if (queries.length > 0) {
-    const blocks = queries.map((query) => renderQuery(query, maxRows)).join('\n');
+  // The doors' ONE renderer, outside the delimiter: names, types and counts — never a row (D-PR2-13).
+  const sharedDdl = shared === undefined ? '' : renderSharedDdl(shared, now ?? Date.now());
+  if (sharedDdl !== '') parts.push(sharedDdl);
+  const sharedTables = shared?.tables ?? [];
+  if (queries.length > 0 || sharedTables.length > 0) {
+    // The step's own fences FIRST, then one per shared table under one budget (C-Q4).
+    const blocks = [...queries.map((query) => renderQuery(query, maxRows)), ...renderSharedFences(sharedTables, maxRows)].join('\n');
     parts.push([SCHEDULE_DATA_DELIMITER.open, defangData(blocks), SCHEDULE_DATA_DELIMITER.close, '', SCHEDULE_DATA_DELIMITER.trailer].join('\n'));
   }
   return parts.join('\n\n');
@@ -204,12 +253,13 @@ export function renderThinkContext({ app, schema, queries, maxRows }: RenderThin
 /**
  * ONE statement per scratch call, so a failing query is an error block and the others still
  * render. The read-only check is re-applied here even though the step's parse already made
- * it: the parse is one half of the boundary, the receiving side is the other.
+ * it: the parse is one half of the boundary, the receiving side is the other. The shared
+ * tables ride into the same throwaway copy (`attach`, D-PR2-9) — never into the dry run below.
  */
-async function runContextQuery(db: UserDb, appId: string, sql: string): Promise<ScratchStatementResult> {
+async function runContextQuery(db: UserDb, appId: string, sql: string, attach: readonly ScratchAttachTable[]): Promise<ScratchStatementResult> {
   if (!isReadOnlySelect(sql)) return { error: 'refused: not a read-only SELECT' };
   try {
-    const result = await db.scratchRun(appId, [{ sql }]);
+    const result = attach.length > 0 ? await db.scratchRun(appId, [{ sql }], { attach }) : await db.scratchRun(appId, [{ sql }]);
     return result.statements[0] ?? { error: 'no result' };
   } catch (err) {
     return { error: messageOf(err) };
@@ -310,12 +360,15 @@ export async function executeAppThink(step: AppThinkStep, ctx: StepContext, deps
   const transport = deps.transportFor(step.appId);
   if (transport === undefined) return { status: 'refused', summary: DEMO_BRAIN_REFUSAL, calls: none() };
 
+  // The scheduler door (C-Q2): asked only now that a brain will be sent something.
+  const shared = deps.sharedFor !== undefined ? await deps.sharedFor(step.appId, ctx) : undefined;
+  const attach = shared === undefined ? [] : toAttach(shared);
   const schema = ctx.db.getAppSchema(step.appId);
   const queries: ContextQuery[] = [];
   for (const sql of step.context.sql ?? []) {
-    queries.push({ sql, result: await runContextQuery(ctx.db, step.appId, sql) });
+    queries.push({ sql, result: await runContextQuery(ctx.db, step.appId, sql, attach) });
   }
-  const context = renderThinkContext({ app, schema, queries, maxRows: step.context.maxRows });
+  const context = renderThinkContext({ app, schema, queries, maxRows: step.context.maxRows, ...(shared !== undefined ? { shared, now: ctx.now().getTime() } : {}) });
 
   const wire = buildAppRequest({
     appId: step.appId,

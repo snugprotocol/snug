@@ -140,6 +140,9 @@ runner shows the ask as a strip the user reviews or declines. The app learns onl
 user allowed and reads it with one read-only query. Never promise the user that an app
 already reads another, and never put another app's data into the bundle: the runner holds
 the access, not the app.
+The chat beside an app — the runner's own AI — can read what the user allowed that app to
+read, and may ask for it on the app's behalf; your app's code is not involved, and the
+other app's history records such a read as the allowed app's read.
 
 ## Schedules
 

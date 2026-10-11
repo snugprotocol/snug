@@ -19,14 +19,26 @@
 //                     sidecar's symbolic host as the helper by name. Where the app may not reach
 //                     the network at all (`appMayReachNetwork`), ONE line — and never "no
 //                     network": the brain line above it may well be one.
+//   the chat        — TASK-20261010-host-broker PR-2 (AC14; D-PR2-12; ADR-0076 §1): the chat
+//                     beside an ATTACHED app routes IDENTICALLY to the app transport
+//                     (`useBuilderChat` → `createDirectBuilder`: the same per-app pin under the
+//                     same guard, the same key rows), so `chatBrainRoute` IS `readerBrainRoute`
+//                     — one derivation, pinned against the REAL `createDirectBuilder` send path
+//                     in accessEgress.test.ts, not rewired (the chooser's memo is synchronous
+//                     and has no db at hand). The chat DOOR exists only where the data lane
+//                     runs — a keyed BYOK or a local route (`chatDoorOpen`), never the host,
+//                     subscription, webllm or demo brains — and the line sits right after the
+//                     brain line for an owned reader exactly there.
 //   links           — ALWAYS for an owned reader: open-url is bound to every owned app's
 //                     visible frame (RunView), whatever its connections.
-//   away            — when *also while I'm away* is ticked.
+//   away            — when *also while I'm away* is ticked; it names the reader, because a
+//                     scheduled *ask <Reader>'s AI* reads the away set too (DS-7).
 //   closing         — the copy is made here, and the source keeps the history.
 //
 // Every store is read at the CALL (the transport's own rule: a value captured once would
 // disclose yesterday's route). No brain call, nothing async. `egressFor` is the ONE entry a
-// sheet renders; `readerAdapterKind` exists for the pin against the transport.
+// sheet renders; `readerAdapterKind` and `chatBrainRoute` exist for the pins against the
+// transport and the chat's builder.
 
 import { CONNECTION_STATUS, SIDECAR_SYMBOLIC_HOST } from '@snugprotocol/protocol';
 import type { UserDb } from '@snugprotocol/db';
@@ -39,7 +51,7 @@ import { SECRET_KEY_PREFIX, localUrlStore, modeStore, providerStore, type ByokPr
 import { currentBrain } from '../state/webllm.js';
 import { BRAIN_NAMES, EGRESS } from './copy.js';
 
-export type EgressKind = 'brain' | 'approved' | 'declared' | 'helper' | 'open-url' | 'no-connections' | 'away' | 'closing';
+export type EgressKind = 'brain' | 'chat' | 'approved' | 'declared' | 'helper' | 'open-url' | 'no-connections' | 'away' | 'closing';
 
 export interface EgressLine {
   kind: EgressKind;
@@ -99,6 +111,19 @@ function readerBrainRoute(appId: string, hasKey: (provider: 'anthropic' | 'opena
 /** The brain kind alone — what the app's next turn routes to, key presence read from the file. */
 export function readerAdapterKind(db: UserDb, appId: string): ReaderBrainKind {
   return readerBrainRoute(appId, fileHasKey(db)).kind;
+}
+
+/**
+ * The route the CHAT beside `appId` takes NOW — the app transport's own derivation (measured
+ * identical for an attached app at PR-2 Gate 2; pinned against the real `createDirectBuilder`).
+ */
+export function chatBrainRoute(db: UserDb, appId: string): ReaderBrainRoute {
+  return readerBrainRoute(appId, fileHasKey(db));
+}
+
+/** Whether the chat door exists on this route: only where the data lane runs — a keyed BYOK or a local route. */
+export function chatDoorOpen(route: ReaderBrainRoute): boolean {
+  return route.kind === 'anthropic' || route.kind === 'openai' || route.kind === 'local';
 }
 
 /** "localhost:11434" from the local endpoint the user set; the raw text when it does not parse. */
@@ -166,16 +191,21 @@ function connectionLines(db: UserDb, readerAppId: string): EgressLine[] {
 
 /**
  * Every place `readerAppId` can send what it reads from `sourceName`, in the sheet's order:
- * its AI · its connections (or the one "no connections of its own" line) · the link line ·
- * the away line · the closing sentence.
+ * its AI · the chat beside it (an owned reader, where the door is open) · its connections (or
+ * the one "no connections of its own" line) · the link line · the away line · the closing
+ * sentence. The reader's name is its LIBRARY name (the id itself only for a row that is gone).
  */
 export function egressFor(db: UserDb, readerAppId: string, opts: { unattended: boolean; sourceName: string }): EgressLine[] {
-  const lines: EgressLine[] = [brainLine(readerBrainRoute(readerAppId, fileHasKey(db)))];
+  const route = readerBrainRoute(readerAppId, fileHasKey(db));
+  const owned = !isUnownedId(readerAppId);
+  const readerName = db.getApp(readerAppId)?.displayName ?? readerAppId;
+  const lines: EgressLine[] = [brainLine(route)];
+  if (owned && chatDoorOpen(route)) lines.push({ kind: 'chat', text: EGRESS.chat(readerName) });
   const connections = appMayReachNetwork(readerAppId) ? connectionLines(db, readerAppId) : [];
   if (connections.length > 0) lines.push(...connections);
   else lines.push({ kind: 'no-connections', text: EGRESS.noConnections });
-  if (!isUnownedId(readerAppId)) lines.push({ kind: 'open-url', text: EGRESS.openUrl });
-  if (opts.unattended) lines.push({ kind: 'away', text: EGRESS.away });
+  if (owned) lines.push({ kind: 'open-url', text: EGRESS.openUrl });
+  if (opts.unattended) lines.push({ kind: 'away', text: EGRESS.away(readerName) });
   lines.push({ kind: 'closing', text: EGRESS.closing(opts.sourceName) });
   return lines;
 }

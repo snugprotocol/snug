@@ -11,6 +11,16 @@
 // - The bootstrap turn — the one that produced the app's v1 artifact (review F9) — is
 //   pinned in the DB and survives any pruning for the life of the app (AC5).
 // - Artifact cards persist in message `meta` and re-render on rehydration.
+// - The brain's ASK card (TASK-20261010-host-broker PR-2, D-PR2-11): `access_propose` stages ONE
+//   ask per turn on the agent's message (`meta.access`, beside `meta.schedule`), through the
+//   builder's handlers and the lanes' deps alike; `resolveAccess` records the user's answer by
+//   merging the row's meta; the rehydrate keeps only a card for the THREAD's pinned app (S10).
+// - The CHAT DOOR (PR-2, D-PR2-10): a DATA-lane turn beside an OWNED app whose chat brain is a
+//   keyed BYOK or local route (`chatDoorOpen(chatBrainRoute(…))` — never the host, subscription,
+//   webllm or demo brains) materialises, ONCE per turn and through a lazy edge to the Access
+//   Service, every table the user let this app read; the set reaches the data lane's context (the
+//   host's framing, never a row) and the data tools' `shared` seat, whose `data_query` records the
+//   read on the source's history before any shared row reaches the brain. No other lane opens it.
 
 import { useCallback, useEffect, useMemo } from 'react';
 
@@ -39,6 +49,13 @@ import { finalizeConnectionDeclaration } from './connectionPipeline.js';
 import { knowledgeDeliveryFor } from './knowledgeDelivery.js';
 import { authChoiceForPersistedRow, metaToAuthChoice, type AuthChoiceSeed } from './authChoiceCard.js';
 import { buildPresentCardTool, metaToCard, sanitizeCardText, type ChatCardState } from './cards.js';
+import { accessCardToMeta, metaToAccessCard, persistAccessResolution, stageAccessCard, type AccessCardResolution, type AccessCardState, type PersistedAccessCard } from './accessCard.js';
+import type { AccessProposal } from './accessProposeTool.js';
+import { chatBrainRoute, chatDoorOpen } from '../access/egress.js';
+import type { AccessCaller } from '../access/policy.js';
+import type { MaterialisedSet } from '../access/service.js';
+import { appMayUseAccess } from '../run/appCapabilityRules.js';
+import type { SharedTablesSeat } from './dataTools.js';
 import { laneToolsFor } from './laneTools.js';
 import { metaToScheduleCard, persistScheduleResolution, scheduleCardToMeta, stageScheduleCard, type ScheduleCardResolution, type ScheduleCardState } from './scheduleCard.js';
 import { ADAPTER_KINDS, type AdapterKind } from './adapter.js';
@@ -103,6 +120,13 @@ export interface ChatMessage {
    * consent surface and the one writer do), and `resolution` records the user's answer.
    */
   schedule?: ScheduleCardState;
+  /**
+   * The brain's ASK to read another app's data, staged by `access_propose` (TASK-20261010-host-broker
+   * PR-2, D-PR2-11). Present only because the tool's hook accepted an ask the protocol's schemas
+   * parsed; the card can allow nothing itself (the one consent sheet and the one writer do), and
+   * `resolution` records the user's answer.
+   */
+  access?: AccessCardState;
   /**
    * What this turn actually ran on (TASK-20260826, ADR-0059 rule 3) — stamped by the
    * builder's `onBrain` from the resolved adapter config, persisted in message meta,
@@ -184,6 +208,13 @@ export interface BuilderChat {
    * and the answer is persisted through the hook's own meta path (the data-write card's rule).
    */
   resolveSchedule: (card: ScheduleCardState, messageId: number, resolution: Exclude<ScheduleCardResolution, 'stale'>, taskId?: string) => void;
+  /**
+   * Record how the user answered the brain's ASK card (TASK-20261010-host-broker PR-2; the ChatLog
+   * contract `onResolveAccess`). The card is UI, not a gate — this records an answer the host's
+   * sheet already gave (or *not now*), it never allows anything — and the answer is persisted
+   * through the hook's own meta path (the schedule card's rule).
+   */
+  resolveAccess: (card: AccessCardState, messageId: number, resolution: AccessCardResolution) => void;
 }
 
 export interface UseBuilderChatOptions {
@@ -224,6 +255,8 @@ interface PersistedMeta {
   card?: ChatCardState;
   /** A staged (and possibly answered) schedule suggestion (TASK-20261009 P1) — `scheduleCardToMeta`'s shape. */
   schedule?: Omit<ScheduleCardState, 'messageRowId'>;
+  /** A staged (and possibly answered) access ask (TASK-20261010-host-broker PR-2) — `accessCardToMeta`'s shape. */
+  access?: PersistedAccessCard;
   /** The brain this turn ran on (TASK-20260826) — 'demo' is what the tag renders from. */
   brainKind?: AdapterKind;
 }
@@ -327,6 +360,7 @@ const STEP_LABELS: Record<string, string> = {
   provider_request: 'calling the connected service…',
   present_card: 'asking you to choose…',
   schedule_propose: 'suggesting a schedule…',
+  access_propose: 'asking to read another app’s data…',
 };
 
 const stepLabel = (tool: string): string => STEP_LABELS[tool] ?? `${tool.replace(/_/g, ' ')}…`;
@@ -482,6 +516,8 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
       if (cancelled || session.store.get().hydrated) return;
       const row = db.getThread(threadId);
       const persisted = db.listChatMessages(threadId);
+      /** The thread's pinned app — the only app a persisted ask card may be for (S10). */
+      const pinnedApp = row?.appId ?? pinnedAppId;
       patchSession(session, (current) => ({
         hydrated: true,
         // The pin is mirrored from the row OR from the caller's pinned app (RunView):
@@ -504,6 +540,10 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
                 const authChoice = metaToAuthChoice(m.meta);
                 const card = metaToCard(m.meta);
                 const schedule = metaToScheduleCard(m.meta);
+                // TASK-20261010-host-broker PR-2 (S10): a persisted ask for any app but the
+                // thread's pinned one is no card — a row cannot point the ask at another app.
+                const access = metaToAccessCard(m.meta);
+                const ownAccess = access !== undefined && pinnedApp !== undefined && access.appId === pinnedApp ? access : undefined;
                 const brainKind = metaToBrainKind(m.meta);
                 return {
                   id: ++messageSeq,
@@ -519,6 +559,7 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
                   // TASK-20261009 P1: the suggestion card outlives the React tree the same
                   // way, re-validated through the protocol's parser on every read.
                   ...(schedule !== undefined ? { schedule: { ...schedule, messageRowId: m.id } } : {}),
+                  ...(ownAccess !== undefined ? { access: { ...ownAccess, messageRowId: m.id } } : {}),
                   // Row provenance (ADR-0059 rule 3): the demo tag must survive a reload.
                   ...(brainKind !== undefined ? { brainKind } : {}),
                 };
@@ -600,6 +641,8 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
       const stagedCard: { current: ChatCardState | undefined } = { current: undefined };
       /** One schedule suggestion per turn (TASK-20261009 P1) — the same single-seat rule again. */
       const stagedSchedule: { current: ScheduleCardState | undefined } = { current: undefined };
+      /** One access ask per turn (TASK-20261010-host-broker PR-2) — the same single-seat rule. */
+      const stagedAccess: { current: AccessCardState | undefined } = { current: undefined };
       /** Per-turn state for bootstrap pinning (F9) + artifact-card persistence. */
       const turn: { userDbId?: number; artifact?: ArtifactEvent; installedV1: boolean; brainKind?: AdapterKind } = {
         installedV1: false,
@@ -696,6 +739,34 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
           return;
         }
 
+        /**
+         * THE CHAT DOOR (TASK-20261010-host-broker PR-2, D-PR2-10; S8, DS-6, F13, F14). Only a
+         * DATA-lane turn, beside an OWNED app (`appMayUseAccess` — an unowned reader's chat may
+         * not read what its frame may not), where the chat's brain is a route the data lane runs
+         * on (keyed BYOK or local — `chatBrainRoute` is the app transport's own derivation; never
+         * the host, subscription, webllm or demo brains). The Access Service is reached through a
+         * LAZY edge (the load-order rule), asked ONCE for every table the user let this app read
+         * — a dump, no history line — and the abort is re-checked exactly as above: a stop that
+         * landed while the worker dumped ends the turn before any context is built. The `read`
+         * line is written later, by `data_query`, only when a statement names a shared table.
+         */
+        let door: { shared: MaterialisedSet; now: number; seat: SharedTablesSeat } | undefined;
+        if (route?.lane === 'data' && contextTarget !== undefined && appMayUseAccess(contextTarget) && chatDoorOpen(chatBrainRoute(db, contextTarget))) {
+          const [{ accessService }, { accessDeps, readerGeneration }] = await Promise.all([import('../access/service.js'), import('../access/grants.js')]);
+          const liveGeneration = readerGeneration(contextTarget);
+          const caller: AccessCaller = { kind: 'chat', appId: contextTarget, threadId, ...(liveGeneration !== undefined ? { liveGeneration } : {}) };
+          const service = accessService();
+          const shared = await service.materialise(caller);
+          if (controller.signal.aborted) {
+            patchMessage(agentId, { streaming: false });
+            setBusy(false);
+            setActivity(undefined);
+            session.abort = null;
+            return;
+          }
+          door = { shared, now: accessDeps().now(), seat: { set: shared, recordRead: (grantIds, sql) => service.recordRead(caller, shared, { grantIds, sql }) } };
+        }
+
         const { contextBlock, history } =
           route === undefined
             ? // The host caps (T4 AC3): the html rides whole or the builder refuses; the
@@ -704,7 +775,7 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
                 // ADR-0066: the block's tool sentences follow the brain's delivery.
                 toolFree: knowledgeDeliveryFor(currentBrain()) !== 'tool',
               })
-            : await buildIntentTurnContext(db, contextTarget, route.intent, threadId);
+            : await buildIntentTurnContext(db, contextTarget, route.intent, threadId, door !== undefined ? { shared: door.shared, now: door.now } : undefined);
         db.upsertThread(threadId, {
           ...(pinnedAppId !== undefined ? { appId: pinnedAppId } : {}),
           ...(isFirstMessage ? { title: displayText.slice(0, 64) } : {}),
@@ -748,6 +819,19 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
           return true;
         };
         /**
+         * ONE ACCESS ASK PER TURN (TASK-20261010-host-broker PR-2, D-PR2-11) — the same rule: the
+         * first is staged on the message with the app the tool resolved HOST-SIDE (the thread's
+         * pin), the rest are refused in the tool result. The same closure serves the builder's set
+         * (through the agent's handlers) and the chat lanes (through `laneToolsFor`'s deps).
+         */
+        const onAccessProposal = (proposal: AccessProposal, appId: string): boolean => {
+          if (stagedAccess.current !== undefined) return false;
+          const card = stageAccessCard(proposal, { appId, threadId });
+          stagedAccess.current = card;
+          patchMessage(agentId, { access: card });
+          return true;
+        };
+        /**
          * THE EXHAUSTIVE LANE SWITCH (`laneToolsFor`, TASK-20261009 P2): the clarify lane
          * settled above, so what reaches here is a routed lane or no route at all.
          *
@@ -780,6 +864,8 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
           },
           onProviderFailureCode: (appId, code) => options.onProviderNetError?.(appId, code),
           onScheduleProposal,
+          onAccessProposal,
+          ...(door !== undefined ? { shared: door.seat } : {}),
         });
 
         const result = await agent.send(
@@ -835,6 +921,8 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
             // TASK-20261009 P1: the builder's set carries `schedule_propose` too — the same
             // single-seat staging the schedule lane uses.
             onScheduleProposal,
+            // TASK-20261010-host-broker PR-2: and `access_propose`, staged the same way.
+            onAccessProposal,
           },
           controller.signal,
         );
@@ -992,6 +1080,7 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
               stagedProposal.current !== undefined ||
               stagedCard.current !== undefined ||
               stagedSchedule.current !== undefined ||
+              stagedAccess.current !== undefined ||
               authChoice !== undefined ||
               turn.brainKind !== undefined
                 ? {
@@ -1019,6 +1108,9 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
                     // TASK-20261009 P1: the suggestion outlives the React tree too;
                     // re-validated via metaToScheduleCard on every read.
                     ...(stagedSchedule.current !== undefined ? scheduleCardToMeta(stagedSchedule.current) : {}),
+                    // TASK-20261010-host-broker PR-2: the ask outlives the React tree too;
+                    // re-validated via metaToAccessCard on every read, and only for the thread's app.
+                    ...(stagedAccess.current !== undefined ? accessCardToMeta(stagedAccess.current) : {}),
                     // ADR-0059 rule 3: what this turn ran on, as row provenance — a
                     // later settings change must not relabel history, and the demo tag
                     // must survive a reload.
@@ -1047,6 +1139,12 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
               const rowId = stored.id;
               patchMessage(agentId, (m) => ({
                 schedule: { ...(m.schedule ?? stagedSchedule.current!), messageRowId: rowId },
+              }));
+            }
+            if (stagedAccess.current !== undefined) {
+              const rowId = stored.id;
+              patchMessage(agentId, (m) => ({
+                access: { ...(m.access ?? stagedAccess.current!), messageRowId: rowId },
               }));
             }
           }
@@ -1190,6 +1288,27 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
     [patchMessage],
   );
 
+  /**
+   * Answer the brain's ASK card (TASK-20261010-host-broker PR-2) — `resolveSchedule`'s body: the
+   * row id from CURRENT message state at click time, the answer persisted by MERGING the row's
+   * meta, best-effort.
+   */
+  const resolveAccess = useCallback(
+    (card: AccessCardState, messageId: number, resolution: AccessCardResolution): void => {
+      let resolved: AccessCardState | undefined;
+      patchMessage(messageId, (m) => {
+        const current = m.access ?? card;
+        const rowId = current.messageRowId ?? card.messageRowId;
+        resolved = { ...current, resolution, ...(rowId !== undefined ? { messageRowId: rowId } : {}) };
+        return { access: resolved };
+      });
+      const answered = resolved;
+      if (answered === undefined) return;
+      void (async () => persistAccessResolution(await getUserDb(), answered))();
+    },
+    [patchMessage],
+  );
+
   // The user's explicit stop — the ONE abort a view may trigger (ADR-0062). There is
   // deliberately no unmount cleanup any more: leaving the view leaves the turn running
   // in its session, visible from the build page's thread sidebar.
@@ -1212,5 +1331,6 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
     declineDataWrite,
     selectCardOption,
     resolveSchedule,
+    resolveAccess,
   };
 }

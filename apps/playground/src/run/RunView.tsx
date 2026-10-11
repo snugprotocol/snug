@@ -81,6 +81,7 @@ import { isNamedLoadRefusal, missingAppCopy, starterInstallDisclosureTail } from
 import { sqlJsEngineOptions } from './sqlJsEngine.js';
 import { RunBlocked } from '../views/AvailabilityNote.js';
 import { ChatLog } from '../views/ChatLog.js';
+import type { ResolveAccessCard } from '../access/AccessCard.js';
 import type { ResolveScheduleCard } from '../schedule/ScheduleCard.js';
 
 type HtmlState = { phase: 'loading' } | { phase: 'ready'; html: string } | { phase: 'missing'; reason?: string };
@@ -918,6 +919,7 @@ export default function RunView(): ReactElement {
             onDeclineDataWrite={chat.declineDataWrite}
             onSelectCardOption={chat.selectCardOption}
             onResolveSchedule={chat.resolveSchedule}
+            onResolveAccess={chat.resolveAccess}
           />
         </>
       )}
@@ -1446,6 +1448,8 @@ interface RailChatProps {
   onSelectCardOption?: (card: ChatCardState, messageId: number, optionId: string) => void;
   /** The schedule suggestion card's resolve path (TASK-20261009 P1) — threaded through to `ChatLog`. */
   onResolveSchedule?: ResolveScheduleCard;
+  /** The brain's ask card's resolve path (TASK-20261010-host-broker PR-2) — threaded through to `ChatLog`. */
+  onResolveAccess?: ResolveAccessCard;
 }
 
 /** Compact chat inside the rail — keep talking to the agent about the app. */
@@ -1462,6 +1466,7 @@ function RailChat({
   onDeclineDataWrite,
   onSelectCardOption,
   onResolveSchedule,
+  onResolveAccess,
 }: RailChatProps): ReactElement {
   const [draft, setDraft] = useState('');
   const submit = (): void => {
@@ -1495,6 +1500,7 @@ function RailChat({
           {...(onDeclineDataWrite !== undefined ? { onDeclineDataWrite } : {})}
           {...(onSelectCardOption !== undefined ? { onSelectCardOption } : {})}
           {...(onResolveSchedule !== undefined ? { onResolveSchedule } : {})}
+          {...(onResolveAccess !== undefined ? { onResolveAccess } : {})}
           phase="edit"
           onDirectiveConnect={onDirectiveConnect}
           onConnectionConnect={onConnectionConnect}

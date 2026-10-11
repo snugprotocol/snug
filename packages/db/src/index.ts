@@ -72,6 +72,9 @@ export {
   type ScratchRunResult,
   type ScratchStatement,
   type ScratchStatementResult,
+  // TASK-20261010-host-broker PR-2 (D-PR2-9): another app's materialised rows as plain tables
+  // in the scratch copy — the chat door's `data_query` attaches them.
+  type ScratchAttachTable,
   // TASK-20261010-cross-app-access AC7: the source side of the consent sheet.
   type AppDataColumn,
   type AppDataTable,
@@ -155,10 +158,18 @@ export {
 export { SCHEDULE_IMPORTED_CLAIM_MAX_AGE_MS } from './userdb/schedules.js';
 
 // Access between apps (TASK-20261010-cross-app-access): the record types the accessors speak,
-// and the PURE scoped read the access engine's Worker runs on its own sql.js instance (AC6).
+// and the PURE scoped read the access engine's Worker runs on its own sql.js instance (AC6) —
+// and, since TASK-20261010-host-broker PR-2 (D-PR2-6), the PURE scoped dump the chat and
+// scheduler doors materialise through the same Worker, with the one allow-list of declared
+// column types a dump passes through.
 export { type AccessDecline, type AccessImportReport } from './userdb/access.js';
 export {
+  DUMP_TYPE_ALLOW,
+  scopedScratchDump,
   scopedScratchRead,
+  type ScopedDumpCaps,
+  type ScopedDumpResult,
+  type ScopedDumpTable,
   type ScopedReadCaps,
   type ScopedReadDrift,
   type ScopedReadResult,

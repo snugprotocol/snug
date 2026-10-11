@@ -15,6 +15,19 @@
 //
 // THE CONNECTION LINES run on a real memory UserDb (installTestUserDb) with declared,
 // approved and revoked rows and the WhatsApp helper's symbolic host.
+//
+// TASK-20261010-host-broker PR-2 (AC14; D-PR2-12) — THE CHAT DOOR'S DISCLOSURE. The chat beside
+// an ATTACHED app routes identically to the app transport (measured at PR-2 Gate 2), and the
+// chooser's memo in `useBuilderChat.ts` is NOT rewired — so `chatBrainRoute(db, appId)` is
+// pinned, arm by arm, equal to the config the REAL `createDirectBuilder` send path hands
+// `createTurnAdapter` (the same recorder as the transport pin above), with the memo's arm
+// choice for an attached app mirrored in `chatBuilderForAttachedApp` (useBuilderChat.ts — the
+// webllm, demo and host arms, then subscription → `createServerBuilder`, else
+// `createDirectBuilder` with the app's id and no fresh pick). `chatDoorOpen(route)` is open
+// only for a keyed BYOK or a local route; the sheet's `chat` line sits right after the brain
+// line for an owned reader exactly where the door opens; the `away` line names the reader's
+// scheduled *ask <Reader>'s AI*. RED until `chatBrainRoute`, `chatDoorOpen`, `EGRESS.chat` and
+// the amended `EGRESS.away` land.
 import { LOCAL_DEFAULT_BASE_URL } from '@snugprotocol/adapters';
 import { SIDECAR_SYMBOLIC_HOST } from '@snugprotocol/protocol';
 import type { UserDb } from '@snugprotocol/db';
@@ -70,7 +83,10 @@ vi.mock('@snugprotocol/adapters', async (importOriginal) => {
 // Imported AFTER the mocks are declared (vitest hoists vi.mock; these bind to the mocked graph).
 import { adapterKindFor, routeOf } from '../agent/adapter.js';
 import { resolveAppTransport } from '../agent/transport.js';
-import { egressFor, readerAdapterKind, type EgressLine } from '../access/egress.js';
+import { chatBrainRoute, chatDoorOpen, egressFor, readerAdapterKind, type EgressLine } from '../access/egress.js';
+import { EGRESS } from '../access/copy.js';
+import type { ArtifactSink } from '../agent/artifactSink.js';
+import { createDirectBuilder, createServerBuilder, type BuilderAgent } from '../agent/builder.js';
 import { appModelStore, appProviderStore, setAppPin } from '../state/appModel.js';
 import {
   byokKeyPresenceStore,
@@ -335,7 +351,11 @@ describe('egressFor — every place the reader can send what it reads (AC15)', (
 
   it('adds the away line when *also while I’m away* is ticked, before the closing sentence', () => {
     const lines = egressFor(db, APP, { unattended: true, sourceName: SOURCE_NAME });
-    expect(lines.slice(-2)).toEqual([{ kind: 'away', text: 'also while you’re away — on a schedule it can read and send with no one watching' }, CLOSING]);
+    // PR-2 (D-PR2-12, DS-7): the away line also names the reader's scheduled *ask <Reader>'s AI* — the contract's literal.
+    expect(lines.slice(-2)).toEqual([
+      { kind: 'away', text: 'also while you’re away — on a schedule it can read and send with no one watching, and so can a scheduled *ask Budget’s AI*' },
+      CLOSING,
+    ]);
     expect(egressFor(db, APP, { unattended: false, sourceName: SOURCE_NAME }).some((line) => line.kind === 'away')).toBe(false);
   });
 
@@ -350,5 +370,258 @@ describe('egressFor — every place the reader can send what it reads (AC15)', (
       .map((line) => line.text)
       .join('\n');
     expect(text).not.toMatch(/stays on this device/i);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// TASK-20261010-host-broker PR-2 — the chat door's route and its line (AC14; D-PR2-12)
+// ---------------------------------------------------------------------------------------------
+
+function testSink(): ArtifactSink {
+  return {
+    write: () => Promise.resolve({ id: APP, displayName: 'unused', version: 1 }),
+    ensureTargetId: () => Promise.resolve(APP),
+  };
+}
+
+/** A fetch that records that the hub was reached and answers a refusal (the subscription arm). */
+const serverFetch = (): Promise<Response> => {
+  h.routes.push({ kind: 'server' });
+  return Promise.resolve(new Response(JSON.stringify({ code: 'TEST_STOP', message: 'recorded' }), { status: 500 }));
+};
+
+/**
+ * The chat agent `useBuilderChat`'s memo builds for a thread ATTACHED to `APP` — mirrored arm for
+ * arm (the brain overrides first: webllm, demo, host; then subscription → the server builder;
+ * else the direct builder with the app's id — a fresh pick is ignored once an app is attached).
+ */
+function chatBuilderForAttachedApp(): BuilderAgent {
+  const brain = h.brain;
+  const mode = modeStore.get();
+  const provider = providerStore.get();
+  const localUrl = localUrlStore.get();
+  const sink = testSink();
+  if (brain.kind === 'webllm') return createDirectBuilder({ mode: 'webllm', provider, sink, localUrl });
+  if (brain.kind === 'demo') return createDirectBuilder({ mode: 'byok', provider: 'mock', sink, localUrl });
+  if (brain.kind === 'host') return createDirectBuilder({ mode: 'host', provider, sink, localUrl, appId: APP });
+  if (mode === 'subscription') return createServerBuilder('thread-1', serverFetch);
+  return createDirectBuilder({ mode, provider, sink, appId: APP, localUrl });
+}
+
+/** What the REAL send path of the chat beside `APP` hands the adapter (or that it reached the hub). */
+async function routeTheChatTakes(): Promise<{ kind: 'direct'; config: TurnAdapterConfig } | { kind: 'server' }> {
+  h.routes = [];
+  await chatBuilderForAttachedApp().send('hello', {}, new AbortController().signal);
+  expect(h.routes).toHaveLength(1);
+  const route = h.routes[0]!;
+  return route.kind === 'server' ? route : { kind: 'direct', config: route.config as TurnAdapterConfig };
+}
+
+interface ChatArm {
+  name: string;
+  setup(): Promise<void>;
+  kind: string;
+  doorOpen: boolean;
+}
+
+/** The SAME arms the transport pin above walks. */
+const CHAT_ARMS: readonly ChatArm[] = [
+  {
+    name: 'byok · anthropic with its key',
+    setup: async () => {
+      providerStore.set('anthropic');
+      await setByokKey('anthropic', 'sk-ant-test');
+    },
+    kind: 'anthropic',
+    doorOpen: true,
+  },
+  {
+    name: 'byok · openai with its key',
+    setup: async () => {
+      providerStore.set('openai');
+      await setByokKey('openai', 'sk-test');
+    },
+    kind: 'openai',
+    doorOpen: true,
+  },
+  {
+    name: 'byok · anthropic WITHOUT a key (key missing → the demo brain)',
+    setup: async () => {
+      providerStore.set('anthropic');
+    },
+    kind: 'demo',
+    doorOpen: false,
+  },
+  { name: 'byok · the mock provider', setup: async () => {}, kind: 'demo', doorOpen: false },
+  {
+    name: 'the per-app pin is IGNORED under a mock default',
+    setup: async () => {
+      await setByokKey('anthropic', 'sk-ant-test');
+      providerStore.set('mock');
+      setAppPin(APP, { provider: 'anthropic', model: 'claude-test' });
+    },
+    kind: 'demo',
+    doorOpen: false,
+  },
+  {
+    name: 'the per-app pin wins over a keyed default',
+    setup: async () => {
+      providerStore.set('anthropic');
+      await setByokKey('anthropic', 'sk-ant-test');
+      await setByokKey('openai', 'sk-test');
+      setAppPin(APP, { provider: 'openai', model: 'gpt-test' });
+    },
+    kind: 'openai',
+    doorOpen: true,
+  },
+  {
+    name: 'a per-app pin whose key is gone',
+    setup: async () => {
+      providerStore.set('anthropic');
+      await setByokKey('anthropic', 'sk-ant-test');
+      setAppPin(APP, { provider: 'openai', model: 'gpt-test' });
+    },
+    kind: 'demo',
+    doorOpen: false,
+  },
+  {
+    name: 'a per-app pin to the mock provider',
+    setup: async () => {
+      providerStore.set('anthropic');
+      await setByokKey('anthropic', 'sk-ant-test');
+      setAppPin(APP, { provider: 'mock', model: 'demo' });
+    },
+    kind: 'demo',
+    doorOpen: false,
+  },
+  {
+    name: 'local mode',
+    setup: async () => {
+      modeStore.set('local');
+    },
+    kind: 'local',
+    doorOpen: true,
+  },
+  {
+    name: 'local mode with a keyless keyed provider',
+    setup: async () => {
+      modeStore.set('local');
+      providerStore.set('anthropic');
+    },
+    kind: 'local',
+    doorOpen: true,
+  },
+  {
+    name: 'subscription mode',
+    setup: async () => {
+      modeStore.set('subscription');
+    },
+    kind: 'subscription',
+    doorOpen: false,
+  },
+  {
+    name: 'the webllm brain',
+    setup: async () => {
+      h.brain = { kind: 'webllm', model: 'test-model' };
+      providerStore.set('anthropic');
+      await setByokKey('anthropic', 'sk-ant-test');
+    },
+    kind: 'webllm',
+    doorOpen: false,
+  },
+  {
+    name: 'the demo brain override',
+    setup: async () => {
+      h.brain = { kind: 'demo', reason: 'no-webgpu' };
+      providerStore.set('anthropic');
+      await setByokKey('anthropic', 'sk-ant-test');
+    },
+    kind: 'demo',
+    doorOpen: false,
+  },
+  {
+    name: 'the platform-pinned host brain',
+    setup: async () => {
+      h.brain = { kind: 'host', label: 'Claude Code on this Mac', streaming: true, tools: false };
+      modeStore.set('subscription');
+    },
+    kind: 'host',
+    doorOpen: false,
+  },
+  {
+    name: 'a STALE key-presence store (the file holds no key)',
+    setup: async () => {
+      providerStore.set('anthropic');
+      byokKeyPresenceStore.set({ anthropic: true, openai: false });
+    },
+    kind: 'demo',
+    doorOpen: false,
+  },
+];
+
+const isKeyedProvider = (provider: string): boolean => provider === 'anthropic' || provider === 'openai';
+
+describe('chatBrainRoute — pinned equal to the config the REAL createDirectBuilder send path builds for an attached app (AC14)', () => {
+  it.each(CHAT_ARMS)('$name', async (arm) => {
+    await arm.setup();
+    const taken = await routeTheChatTakes();
+    const route = chatBrainRoute(db, APP);
+    if (taken.kind === 'server') {
+      expect(route.kind).toBe('subscription');
+    } else {
+      const { config } = taken;
+      expect(route.kind).toBe(adapterKindFor(routeOf(config)));
+      expect(route.provider).toBe(config.provider);
+      expect(route.keyMissing).toBe(config.mode === 'byok' && isKeyedProvider(config.provider) && config.key === undefined);
+    }
+    expect(route.kind).toBe(arm.kind);
+    // One derivation: the chat beside the app and the app's own transport name the same brain.
+    expect(route.kind).toBe(readerAdapterKind(db, APP));
+  });
+});
+
+describe('chatDoorOpen — the chat door exists only where the data lane runs: a keyed BYOK or a local route (D-PR2-10/12)', () => {
+  it.each(CHAT_ARMS)('$name → open: $doorOpen', async (arm) => {
+    await arm.setup();
+    expect(chatDoorOpen(chatBrainRoute(db, APP))).toBe(arm.doorOpen);
+  });
+});
+
+describe('egressFor — the chat line (AC14; D-PR2-12)', () => {
+  it.each(CHAT_ARMS)('$name → the chat line right after the brain line exactly when the door is open', async (arm) => {
+    await arm.setup();
+    const lines = egressFor(db, APP, { unattended: false, sourceName: SOURCE_NAME });
+    const chatLines = lines.filter((line) => (line.kind as string) === 'chat');
+    if (arm.doorOpen) {
+      expect(chatLines).toEqual([{ kind: 'chat', text: EGRESS.chat('Budget') }]);
+      expect(lines[0]?.kind).toBe('brain');
+      expect(lines[1]).toEqual({ kind: 'chat', text: EGRESS.chat('Budget') });
+    } else {
+      expect(chatLines).toEqual([]);
+    }
+  });
+
+  it('the chat line names the reader and its data: the chat beside Budget — the same AI', async () => {
+    providerStore.set('anthropic');
+    await setByokKey('anthropic', 'sk-ant-test');
+    expect(egressFor(db, APP, { unattended: false, sourceName: SOURCE_NAME })[1]).toEqual({
+      kind: 'chat',
+      text: 'the chat beside Budget — the same AI — whenever you ask it about Budget’s data',
+    });
+  });
+
+  it('an UNOWNED reader (a starter preview) has no chat line even under a keyed brain', async () => {
+    providerStore.set('anthropic');
+    await setByokKey('anthropic', 'sk-ant-test');
+    const lines = egressFor(db, 'starter--weather', { unattended: false, sourceName: SOURCE_NAME });
+    expect(lines.map((line) => line.kind)).toEqual(['brain', 'no-connections', 'closing']);
+  });
+
+  it('under a keyed brain with *also while I’m away* ticked: brain · chat · … · away · closing, the away line naming the reader', async () => {
+    providerStore.set('anthropic');
+    await setByokKey('anthropic', 'sk-ant-test');
+    const lines = egressFor(db, APP, { unattended: true, sourceName: SOURCE_NAME });
+    expect(lines.map((line) => line.kind)).toEqual(['brain', 'chat', 'no-connections', 'open-url', 'away', 'closing']);
+    expect(lines.at(-2)).toEqual({ kind: 'away', text: EGRESS.away('Budget') });
   });
 });

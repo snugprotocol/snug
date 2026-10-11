@@ -23,9 +23,11 @@
 // taken only when nothing else may go: protecting them forever would fill a source's history
 // with entries nothing can take, and every later `read` would be refused for good (review
 // finding 1; the stricter reading of §7's "per grant" is "per grant the file holds"). Consecutive reads
-// coalesce only on an identical `(grantId, sql)` within a minute of the coalesced entry's
-// first read — never across a different statement, a withheld one, another grant, an
-// attended/away change or an intervening entry.
+// coalesce within a minute of the coalesced entry's first read on an identical `(grantId, sql)`
+// — or, for two reads that carry NO statement (the chat and scheduler doors' lines,
+// TASK-20261010-host-broker PR-2 D-PR2-7), on identical `(grantId, readerAppId, attended,
+// tables)` — never a statement against none, a different statement, another grant or reader,
+// an attended/away change, an imported line, or across an intervening entry.
 //
 // HOMED BESIDE userdb.ts, not inside it: the seams (`select`/`run` on the open handle, the
 // guarded settings write, the factory's thrower, the app-row check, the clock) are injected
@@ -334,21 +336,31 @@ function pruneVictim(
 
 const bytesOf = (entries: ReadonlyArray<unknown>): number => utf8ByteLength(JSON.stringify(entries));
 
+/** The same table list, in the same order — or both absent. */
+function sameTables(a: readonly string[] | undefined, b: readonly string[] | undefined): boolean {
+  if (a === undefined || b === undefined) return a === b;
+  return a.length === b.length && a.every((table, index) => table === b[index]);
+}
+
 /**
- * The coalesced entry when `next` continues `head`, else `undefined`. ONLY an identical
- * `(grantId, sql)` read: both reads, the same grant, the same NON-withheld statement, the same
- * attended/away fact, neither imported, and `next` within `ACCESS_LOG_COALESCE_MS` of the
- * coalesced entry's `at` — the FIRST read of the group, so one entry never spans more than a
- * minute. The merged entry keeps that `at`, counts both, and carries the newest row count.
+ * The coalesced entry when `next` continues `head`, else `undefined`. ONLY two reads of the
+ * same grant and reader, the same attended/away fact, neither imported, that are identical in
+ * what identifies the read: the same NON-withheld statement — or, when NEITHER carries one
+ * (the chat and scheduler doors' lines, D-PR2-7), the same `tables` — and `next` within
+ * `ACCESS_LOG_COALESCE_MS` of the coalesced entry's `at` — the FIRST read of the group, so one
+ * entry never spans more than a minute. The merged entry keeps that `at`, counts both, and
+ * carries the newest row count.
  */
 function coalesced(head: unknown, next: AccessLogEntry): AccessLogEntry | undefined {
-  if (next.kind !== 'read' || next.sql === undefined || next.imported === true) return undefined;
+  if (next.kind !== 'read' || next.imported === true) return undefined;
   const parsed = accessLogEntrySchema.safeParse(head);
   if (!parsed.success) return undefined;
   const prior = parsed.data;
   if (prior.kind !== 'read' || prior.imported === true) return undefined;
   if (prior.grantId !== next.grantId || prior.readerAppId !== next.readerAppId) return undefined;
-  if (prior.sql === undefined || prior.sql !== next.sql || prior.attended !== next.attended) return undefined;
+  if (prior.attended !== next.attended) return undefined;
+  const identical = next.sql === undefined ? prior.sql === undefined && sameTables(prior.tables, next.tables) : prior.sql === next.sql;
+  if (!identical) return undefined;
   const gap = instant(next.at) - instant(prior.at);
   if (!(gap >= 0 && gap <= ACCESS_LOG_COALESCE_MS)) return undefined;
   const merged = accessLogEntrySchema.safeParse({

@@ -26,12 +26,34 @@
  * task's scope; it is recorded in the threat-model delta as a residual risk rather than
  * implied away. The UI copy is worded accordingly: it reports what drift detection found,
  * never "your data is unchanged".
+ *
+ * THE CHAT DOOR (TASK-20261010-host-broker PR-2 AC10, AC11, AC15; ADR-0076 §2; D-PR2-10,
+ * D-PR2-17; B-Q4). When the turn carries a `shared` seat — another app's tables the user let
+ * this chat read, already dumped and aliased `<alias>__<table>` by the Access Service —
+ * `data_query` is LAZY: a statement that names none of them runs exactly as before, with no
+ * attach and nothing written; one that names a shared table (the whole-identifier match,
+ * `namesTable`) first asks the seat to RECORD the read — one `read` line per named grant on
+ * the source's history, with the real SQL — and only the grants answered `recorded` are
+ * attached to the throwaway copy before the statement runs. A grant the history refuses
+ * (`ended`, `failed`) answers `CHAT_DOOR.ended(source)` and the statement never runs: no row
+ * reaches the brain without its line. `data_propose_write` refuses ANY batch naming a shared
+ * table by name (`CHAT_DOOR.readOnly(source)`), BEFORE the DML class check and before any dry
+ * run — the copy of another app's data is read-only here — and its dry run never attaches, nor
+ * does `executeApprovedWrite`'s: a shared name that slipped past is "no such table" on a copy
+ * of the real database, which holds no alias table. A source's name in either answer is folded
+ * to ONE line first (`oneLine`, the renderer's own rule — Gate-5 SEC-1): another app's name is
+ * its author's text and never adds a line to what the brain reads.
  */
 
 import type { AgentTool } from '@snugprotocol/adapters';
-import { nonDataStatementReason, type UserDb, type ScratchStatementResult } from '@snugprotocol/db';
+import { nonDataStatementReason, type ScratchAttachTable, type UserDb, type ScratchStatementResult } from '@snugprotocol/db';
 import { getToolPrompt } from '@snugprotocol/knowledge';
 import { FRAME_TYPES, PROTOCOL_VERSION } from '@snugprotocol/protocol';
+
+import { CHAT_DOOR } from '../access/copy.js';
+import { namesTable, toAttach } from '../access/materialise.js';
+import type { MaterialisedSet, MaterialisedTable, RecordReadOutcome } from '../access/service.js';
+import { oneLine } from './sharedDdl.js';
 
 /** Instance id for host-issued approved writes — never an app's own instance. */
 const APPROVED_WRITE_INSTANCE = 'host-approved-write';
@@ -56,6 +78,15 @@ export interface PendingWriteProposal {
   previewed: number[];
 }
 
+/**
+ * The chat door's seat (PR-2): the materialised set this turn may read, and the service's
+ * `recordRead` bound to the turn's caller — the line BEFORE any shared row reaches the brain.
+ */
+export interface SharedTablesSeat {
+  set: MaterialisedSet;
+  recordRead(grantIds: readonly string[], sql: string): Promise<RecordReadOutcome>;
+}
+
 export interface BuildDataToolsOptions {
   appId: string;
   getDb: () => Promise<UserDb>;
@@ -69,6 +100,8 @@ export interface BuildDataToolsOptions {
   onProposal?: (proposal: PendingWriteProposal) => boolean | void;
   /** Include the write tool. Absent/false ⇒ a `data_read` turn gets the read tool only. */
   allowWrites?: boolean;
+  /** Another app's tables the user let this chat read (PR-2) — absent ⇒ the tools are exactly today's. */
+  shared?: SharedTablesSeat;
 }
 
 /**
@@ -123,7 +156,10 @@ function normalizeParams(value: unknown, statementCount: number): unknown[][] {
 }
 
 export function buildDataTools(options: BuildDataToolsOptions): AgentTool[] {
-  const { appId, getDb, onProposal } = options;
+  const { appId, getDb, onProposal, shared } = options;
+
+  /** The shared tables a statement names (D-PR2-10) — none ⇒ no attach, nothing written. */
+  const namedBy = (sql: string): MaterialisedTable[] => (shared === undefined ? [] : shared.set.tables.filter((table) => namesTable(sql, table.name)));
 
   const queryTool: AgentTool = {
     def: {
@@ -142,9 +178,21 @@ export function buildDataTools(options: BuildDataToolsOptions): AgentTool[] {
       const params = Array.isArray(input.params) ? (input.params as unknown[]) : undefined;
       try {
         const db = await getDb();
-        const result = await db.scratchRun(appId, [
-          { sql: input.sql, ...(params !== undefined ? { params } : {}) },
-        ]);
+        const statement = { sql: input.sql, ...(params !== undefined ? { params } : {}) };
+        const named = namedBy(input.sql);
+        let attach: ScratchAttachTable[] | undefined;
+        if (shared !== undefined && named.length > 0) {
+          // THE LINE FIRST (D-PR2-7): one read per named grant, with the real SQL, before any row
+          // of theirs can reach the brain; a grant the history refuses withholds its tables and
+          // the statement never runs (B-Q4).
+          const grantIds = [...new Set(named.map((table) => table.grantId))];
+          const outcome = await shared.recordRead(grantIds, input.sql);
+          if (outcome.refused.length > 0) {
+            return `Error: ${[...new Set(outcome.refused.map((skip) => CHAT_DOOR.ended(oneLine(skip.sourceName))))].join('\n')}`;
+          }
+          attach = toAttach(shared.set, outcome.recorded);
+        }
+        const result = attach === undefined ? await db.scratchRun(appId, [statement]) : await db.scratchRun(appId, [statement], { attach });
         const first = result.statements[0];
         return first === undefined ? 'No statement ran.' : renderRows(first);
       } catch (err) {
@@ -175,6 +223,14 @@ export function buildDataTools(options: BuildDataToolsOptions): AgentTool[] {
       if (typeof input.summary !== 'string' || input.summary.trim() === '') {
         return 'Error: "summary" must describe the change in plain language for the user to approve.';
       }
+      /**
+       * ANOTHER APP'S TABLE, refused BY NAME before the class check and before any dry run
+       * (D-PR2-17): the copy of its data is read-only here, whatever the statement would do to
+       * it — an `INSERT INTO own … SELECT … FROM <alias>` included. Refusing the whole batch keeps
+       * the approved SQL exactly the SQL the model proposed.
+       */
+      const sharedNamed = statements.map(namedBy).find((named) => named.length > 0)?.[0];
+      if (sharedNamed !== undefined) return `Error: ${CHAT_DOOR.readOnly(oneLine(sharedNamed.sourceName))}`;
       /**
        * DML ONLY, checked BEFORE the dry run (R-B1).
        *

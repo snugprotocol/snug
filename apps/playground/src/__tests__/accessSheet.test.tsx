@@ -39,7 +39,7 @@ import {
   type AnyAccessGrant,
   type LiveGrantRow,
 } from '../access/grants.js';
-import { renewSeedOf } from '../access/userAsk.js';
+import { sheetSeedOf } from '../access/userAsk.js';
 import { installTestUserDb } from './userdbTestHelper.js';
 
 declare global {
@@ -414,7 +414,7 @@ describe('ONE GrantRow for both directions (both parties named, the known side m
     expect(reviewStore.get()).toBe(budget);
     expect(onClose).toHaveBeenCalled();
     // The sheet starts on the paused access's own duration (AC21: one tap puts it back as it was).
-    expect(renewSeedOf(pending)).toEqual({ duration: 'week', unattended: false });
+    expect(sheetSeedOf(pending)).toEqual({ duration: 'week', unattended: false });
   });
 
   it("*allow again* is ONE tap: the consent sheet's prefilled default re-activates THAT access in place — one row for the pair, live", async () => {

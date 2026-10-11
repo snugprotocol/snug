@@ -7,11 +7,15 @@
 // through `answerAccess` (the strip's line hears it).
 //
 // WHAT IT SHOWS, top to bottom: who is asking — the LIBRARY name and tile with the provenance line
-// the host derived (D11; the collision note inside it); "<app> says:" with the purpose as a quoted
-// text node in a bidi-isolated `<q>` (skipped for an access the user started — D34); *from* — the
-// ranked candidates, their tables, columns and row counts (`SourcePicker`); *for how long*
-// (`DurationControl`); *where <app> can send what it reads* (`EgressNote`, derived at the call for
-// the chosen source and the away box); and the acts.
+// the host derived (D11; the collision note inside it); the says-line, THREE-WAY (DS-15): an ask
+// the chat's AI made (`askedIn: 'chat'`, TASK-20261010-host-broker PR-2) reads "asked in <app>'s
+// chat:" with the AI's purpose as a quoted text node in a bidi-isolated `<q>`; an app's ask reads
+// "<app> says:" with its purpose quoted the same way; an access the user started shows the host's
+// own sentence and no quote (D34); *from* — the ranked candidates, their tables, columns and row
+// counts (`SourcePicker`); *for how long* (`DurationControl`); *where <app> can send what it
+// reads* (`EgressNote`, derived at the call for the chosen source and the away box); and the acts
+// — *don't allow* offered for an app's ask and for the chat's (it records the ask's hash, so the
+// tool's "won't ask this again" is true), never for an ask the user started themselves.
 //
 // THE PRIMARY NAMES THE CHOICE and is ARMED only after 600 ms of visibility (disabled before — a
 // tap meant for what was under the sheet cannot land on *allow*), and a pointer activation whose
@@ -24,8 +28,9 @@
 // and the strip's outcome line takes focus). THE YIELD RULE: the sheet never shows over a network
 // or link confirm — one that arrives while it is open closes it unanswered (the strip still holds
 // an app's ask); an ask the USER started has no strip to reopen it from, so the yield dismisses it
-// (nothing recorded) instead of parking it out of reach. An ask that renews an access starts on
-// that access's own duration and away box (`renewSeedOf` — AC21's one tap). Text nodes only.
+// (nothing recorded) instead of parking it out of reach. An ask that carries a seed starts on it
+// (`sheetSeedOf`): a renewal on that access's own duration and away box (AC21's one tap), the
+// chat's ask reviewed while the reader is closed on a day (D-PR2-3). Text nodes only.
 
 import type { MouseEvent as ReactMouseEvent, ReactElement } from 'react';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
@@ -46,7 +51,7 @@ import { EgressNote } from './EgressNote.js';
 import { answerAccess } from './outcome.js';
 import { isOfferable, preselectedTables, type RankedSource } from './relevance.js';
 import { SourcePicker } from './SourcePicker.js';
-import { renewSeedOf } from './userAsk.js';
+import { sheetSeedOf } from './userAsk.js';
 
 /** How long the sheet must have been visible before *allow* can be pressed. */
 export const ACCESS_ARM_MS = 600;
@@ -122,8 +127,8 @@ function ConsentSheetBody({ pending }: { pending: PendingAccessRequest }): React
     preselected !== undefined && preselect !== undefined ? { [preselected.appId]: inSourceOrder(preselected, preselect.tables) } : {},
   );
   const [showMore, setShowMore] = useState(() => candidates.matched.length === 0 || (preselected !== undefined && candidates.rest.includes(preselected)));
-  // The session is the default (D13) — unless this ask renews an access: then that access's own choice.
-  const [seed] = useState(() => renewSeedOf(pending));
+  // The session is the default (D13) — unless the ask carries a seed: a renewal's own choice, or the chat's day.
+  const [seed] = useState(() => sheetSeedOf(pending));
   const [duration, setDuration] = useState<AccessDuration>(seed?.duration ?? 'session');
   const [away, setAway] = useState(seed?.unattended ?? false);
   const [armed, setArmed] = useState(false);
@@ -213,7 +218,15 @@ function ConsentSheetBody({ pending }: { pending: PendingAccessRequest }): React
       </div>
 
       <div className="release-notes-scroll access-sheet-body">
-        {pending.provenance === 'app' ? (
+        {pending.askedIn === 'chat' ? (
+          <p className="access-says" data-testid="access-sheet-says">
+            {/* The AI's words, quoted and isolated exactly as an app's would be — never the host's own line (DS-15). */}
+            {CONSENT_SHEET.askedInChat(readerName)}{' '}
+            <q className="access-quote" data-testid="access-sheet-quote">
+              {CONSENT_SHEET.quote(pending.purpose)}
+            </q>
+          </p>
+        ) : pending.provenance === 'app' ? (
           <p className="access-says" data-testid="access-sheet-says">
             {CONSENT_SHEET.says(readerName)}{' '}
             <q className="access-quote" data-testid="access-sheet-quote">
@@ -256,7 +269,7 @@ function ConsentSheetBody({ pending }: { pending: PendingAccessRequest }): React
             {chosen === undefined ? CONSENT_SHEET.pickAnApp : CONSENT_SHEET.pickATable}
           </p>
         ) : null}
-        {pending.provenance === 'app' ? (
+        {pending.provenance === 'app' || pending.askedIn === 'chat' ? (
           <Button variant="ghost" onClick={() => answer({ kind: 'dont-allow' })} data-testid="access-dont-allow">
             {CONSENT_SHEET.dontAllow}
           </Button>

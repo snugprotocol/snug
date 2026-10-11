@@ -17,8 +17,10 @@ Rules:
 
 - One statement per call. Call it again to ask another question.
 - Bind values with `?` and pass them in `params`; never paste user text into the SQL.
-- This tool reaches ONLY this app's data. No other app's tables and no host tables exist
-  from here — a query naming them fails.
+- This tool reaches this app's data — and, when your context has a *From <Source>* section,
+  those tables too, by the exact names shown there (`ledger__transactions`, never
+  `Ledger.transactions`). Nothing else exists from here: no host tables, no other app's
+  tables beyond the ones listed.
 - Results are capped. When a reply says it was truncated, say so in your answer rather
   than presenting a partial count as a total.
 - Prefer aggregating in SQL over pulling rows and counting them yourself: `SUM`, `COUNT`,

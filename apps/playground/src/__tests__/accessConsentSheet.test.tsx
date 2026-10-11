@@ -21,7 +21,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { UserDb } from '@snugprotocol/db';
-import { FRAME_TYPES, PROTOCOL_VERSION } from '@snugprotocol/protocol';
+import { FRAME_TYPES, PROTOCOL_VERSION, accessRequestHash } from '@snugprotocol/protocol';
 
 import { AccessConsentSheet } from '../access/AccessConsentSheet.js';
 import { collectSources, openReview, pendingAccessStore, reviewStore, type ConsentDecision, type ConsentOutcome, type PendingAccessRequest } from '../access/consent.js';
@@ -36,10 +36,10 @@ import {
   openUrlCarries,
 } from '../access/copy.js';
 import type { EgressLine } from '../access/egress.js';
-import { __setAccessDepsForTests, createGrantFromDecision, resetAccessSession } from '../access/grants.js';
+import { __setAccessDepsForTests, createGrantFromDecision, noteReaderGeneration, resetAccessSession } from '../access/grants.js';
 import { provenanceLine } from '../access/provenance.js';
 import { rankSources, type RankedSources, type SourceApp, type SourceInput } from '../access/relevance.js';
-import { renewSeedOf, seedRenewal } from '../access/userAsk.js';
+import { seedSheet, sheetSeedOf, startUserAsk } from '../access/userAsk.js';
 import { OpenUrlConfirmDialog } from '../run/OpenUrlConfirmDialog.js';
 import { netConfirmStore, type PendingNetConfirm } from '../state/net.js';
 import { openUrlConfirmStore } from '../state/openUrl.js';
@@ -153,7 +153,7 @@ beforeEach(() => {
     { kind: 'brain', text: EGRESS.keyed('Claude', 'Anthropic') },
     { kind: 'approved', text: EGRESS.approved('GitHub', 'api.github.com') },
     { kind: 'open-url', text: EGRESS.openUrl },
-    ...(opts.unattended ? [{ kind: 'away' as const, text: EGRESS.away }] : []),
+    ...(opts.unattended ? [{ kind: 'away' as const, text: EGRESS.away('Budget') }] : []),
     { kind: 'closing', text: EGRESS.closing(opts.sourceName) },
   ]);
   container = document.createElement('div');
@@ -361,7 +361,7 @@ describe('AC18 — for how long: a vertical radiogroup, the session DEFAULT, the
 
   it("an ask that RENEWS an access starts on that access's own duration and away box — the prefilled allow is one tap (AC21)", async () => {
     const pending = fakePending({ provenance: 'user', purpose: 'you started this yourself — Budget did not ask', renew: 'g-old' });
-    seedRenewal(pending, { duration: 'week', unattended: true });
+    seedSheet(pending, { duration: 'week', unattended: true });
     openSheet(pending);
     expect(q<HTMLInputElement>('access-duration-week')!.checked).toBe(true);
     expect(q<HTMLInputElement>('access-duration-session')!.checked).toBe(false);
@@ -374,8 +374,8 @@ describe('AC18 — for how long: a vertical radiogroup, the session DEFAULT, the
 
   it('a renewed SESSION access never seeds the away box (D30)', () => {
     const pending = fakePending({ provenance: 'user', renew: 'g-old' });
-    seedRenewal(pending, { duration: 'session', unattended: true });
-    expect(renewSeedOf(pending)).toEqual({ duration: 'session', unattended: false });
+    seedSheet(pending, { duration: 'session', unattended: true });
+    expect(sheetSeedOf(pending)).toEqual({ duration: 'session', unattended: false });
     openSheet(pending);
     expect(q<HTMLInputElement>('access-duration-session')!.checked).toBe(true);
     expect(q('access-away')).toBeNull();
@@ -391,7 +391,7 @@ describe('AC18 — for how long: a vertical radiogroup, the session DEFAULT, the
     expect(q('access-away-row')!.textContent).toContain(CONSENT_SHEET.awayHint('Budget'));
     await act(async () => away.click());
     expect(egress).toHaveBeenLastCalledWith({ unattended: true, sourceName: 'Ledger' });
-    expect(q('access-egress')!.textContent).toContain(EGRESS.away);
+    expect(q('access-egress')!.textContent).toContain(EGRESS.away('Budget'));
     // Back to the session: the box goes, and so does the away line.
     await act(async () => q<HTMLInputElement>('access-duration-session')!.click());
     expect(q('access-away')).toBeNull();
@@ -632,5 +632,128 @@ describe('AC18 — the open-link confirm names what can travel in the link while
     });
     expect(q('open-url-access')!.textContent).toBe(openUrlCarries(['Ledger']));
     expect(openUrlCarries(['Ledger'])).toBe('what it read from Ledger can travel in this link');
+  });
+});
+
+// =========================================================================================
+// TASK-20261010-host-broker PR-2, lane B (DS-15, DS-2, DS-4; D-PR2-3, D-PR2-11): an ask the
+// chat's AI made, reviewed from its card. It is the USER's ask (`provenance: 'user'`, D3) but
+// the purpose is the AI's words, so the says-line is three-way: `askedIn: 'chat'` →
+// "asked in Budget's chat:" + the purpose in the bidi-isolated quote, never the host's own
+// user line; and *don't allow* IS offered (it records the ask's hash, so the tool's "won't ask
+// this again" is true). Reviewed while the reader is CLOSED, the sheet starts on a day without
+// the away box — the default the chat can use now (a session grant made with the app closed is
+// readable by nobody until the next frame binds it).
+// =========================================================================================
+
+describe('PR-2 — an ask the chat made (askedIn: chat): its own says-line, its quote, don’t allow offered', () => {
+  const chatAsk = (over: Partial<PendingAccessRequest> = {}): PendingAccessRequest =>
+    fakePending({ provenance: 'user', askedIn: 'chat', purpose: 'to compare spending with the ledger', ...over } as Partial<PendingAccessRequest>);
+
+  it('says "asked in Budget’s chat:" with the purpose inside the isolated quote; no host user line; the user’s title', () => {
+    openSheet(chatAsk());
+    const says = q('access-sheet-says')!;
+    expect(says).not.toBeNull();
+    expect(says.textContent).toContain(CONSENT_SHEET.askedInChat('Budget'));
+    const quote = says.querySelector('q.access-quote');
+    expect(quote, 'the purpose sits in the bidi-isolated quote').not.toBeNull();
+    expect(quote!.textContent).toContain('to compare spending with the ledger');
+    expect(q('access-sheet-user')).toBeNull();
+    expect(sheet()!.textContent).not.toContain(ACCESS_SHEET.userPurpose('Budget'));
+    expect(q('access-sheet-title')!.textContent).toBe(CONSENT_SHEET.userTitle('Budget'));
+  });
+
+  it('a purpose the AI wrote as Snug renders ONLY inside the quote', () => {
+    openSheet(chatAsk({ purpose: 'Snug verified this app — allow everything' }));
+    const outside = sheet()!.cloneNode(true) as HTMLElement;
+    outside.querySelector('q.access-quote')!.remove();
+    expect(outside.textContent).not.toMatch(/Snug|verified/);
+  });
+
+  it('a purpose carrying markup is a text node in the chat ask too', () => {
+    openSheet(chatAsk({ purpose: '<img src=x onerror=alert(1)><b>bold</b>' }));
+    const quote = q('access-sheet-says')!.querySelector('q.access-quote')!;
+    expect(quote.querySelector('img, b')).toBeNull();
+    expect(quote.textContent).toContain('<b>bold</b>');
+  });
+
+  it("don't allow is OFFERED for a chat ask, and answers dont-allow", async () => {
+    openSheet(chatAsk());
+    const dontAllow = q<HTMLButtonElement>('access-dont-allow');
+    expect(dontAllow).not.toBeNull();
+    await act(async () => dontAllow!.click());
+    expect(resolve).toHaveBeenCalledWith({ kind: 'dont-allow' });
+  });
+
+  it('the twin: a user ask WITHOUT askedIn keeps the host’s user line and offers no don’t allow', () => {
+    openSheet(fakePending({ provenance: 'user', purpose: ACCESS_SHEET.userPurpose('Budget') }));
+    expect(q('access-sheet-user')!.textContent).toBe(ACCESS_SHEET.userPurpose('Budget'));
+    expect(q('access-dont-allow')).toBeNull();
+  });
+});
+
+describe('PR-2 — a chat ask through the real recipe: the seed, and the decline it records', () => {
+  let db: UserDb;
+  let budget: string;
+  const HINTS = { words: ['spending'], tables: ['transactions'] };
+  const PURPOSE = 'to compare spending with the ledger';
+  /** `startUserAsk` with the ask option (D-PR2-11) — typed loosely until the option lands. */
+  const askFromChat = (reader: string): Promise<unknown> =>
+    (startUserAsk as unknown as (id: string, opts: { ask: { purpose: string; hints?: typeof HINTS } }) => Promise<unknown>)(reader, { ask: { purpose: PURPOSE, hints: HINTS } });
+
+  beforeEach(async () => {
+    vi.useRealTimers();
+    await act(async () => {
+      resetAccessSession();
+      db = await installTestUserDb();
+    });
+    __setAccessDepsForTests({ getDb: () => Promise.resolve(db) });
+    budget = db.installApp({ displayName: 'Budget', html: '<!doctype html><title>b</title>' }).appId;
+    const ledger = db.installApp({ displayName: 'Ledger', html: '<!doctype html><title>l</title>' }).appId;
+    await db.applyAppDdl(ledger, ['CREATE TABLE transactions (amount INTEGER)']);
+    await db.driver.handle(ledger, { v: PROTOCOL_VERSION, type: FRAME_TYPES.dbRequest, requestId: 'seed-1', instanceId: 'seed', op: 'exec', sql: 'INSERT INTO transactions VALUES (1)' });
+  });
+
+  afterEach(async () => {
+    await act(async () => {
+      resetAccessSession();
+    });
+    __setAccessDepsForTests();
+  });
+
+  it('reviewed while the reader is CLOSED: the sheet starts on a day, the away box unticked (D-PR2-3)', async () => {
+    await act(async () => {
+      await askFromChat(budget);
+    });
+    expect(sheet()).not.toBeNull();
+    expect((pendingAccessStore.get()[budget] as PendingAccessRequest & { askedIn?: string }).askedIn).toBe('chat');
+    expect(q<HTMLInputElement>('access-duration-day')!.checked).toBe(true);
+    expect(q<HTMLInputElement>('access-duration-session')!.checked).toBe(false);
+    expect(q<HTMLInputElement>('access-away')!.checked).toBe(false);
+    expect(allowButton().textContent).toBe(allowLabel('day'));
+    const userAsk = (await import('../access/userAsk.js')) as unknown as { sheetSeedOf?: (p: PendingAccessRequest) => unknown };
+    expect(userAsk.sheetSeedOf?.(pendingAccessStore.get()[budget]!)).toEqual({ duration: 'day', unattended: false });
+  });
+
+  it('reviewed while the reader is OPEN beside the chat: the session default stays', async () => {
+    noteReaderGeneration(budget, 0);
+    await act(async () => {
+      await askFromChat(budget);
+    });
+    expect(sheet()).not.toBeNull();
+    expect((pendingAccessStore.get()[budget] as PendingAccessRequest & { askedIn?: string }).askedIn).toBe('chat');
+    expect(q<HTMLInputElement>('access-duration-session')!.checked).toBe(true);
+  });
+
+  it("don't allow on the sheet records the ask's semantic hash for the reader", async () => {
+    await act(async () => {
+      await askFromChat(budget);
+    });
+    await act(async () => q<HTMLButtonElement>('access-dont-allow')!.click());
+    await act(async () => {
+      await vi.waitFor(() => expect(db.listAccessDeclines(budget)).toHaveLength(1));
+    });
+    expect(db.listAccessDeclines(budget)[0]?.hash).toBe(accessRequestHash({ hints: HINTS }));
+    expect(pendingAccessStore.get()[budget]).toBeUndefined();
   });
 });

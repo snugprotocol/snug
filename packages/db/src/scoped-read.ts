@@ -1,11 +1,16 @@
-// scoped-read.ts — one read another app was granted, on a SCOPED SCRATCH COPY of the source's
-// runtime bytes (TASK-20261010-cross-app-access AC6; ADR-0075 §6; D4, D23).
+// scoped-read.ts — what another app was granted, on a SCOPED SCRATCH COPY of the source's
+// runtime bytes: ONE read-only statement (`scopedScratchRead` — TASK-20261010-cross-app-access
+// AC6; ADR-0075 §6; D4, D23) or ONE dump of the granted tables' recorded columns
+// (`scopedScratchDump` — TASK-20261010-host-broker PR-2, D-PR2-6; ADR-0076 §2: the rows the
+// chat and scheduler doors hand a brain as plain tables).
 //
 // PURE: no DOM, no Worker, no userdb. The host runs this inside a dedicated Web Worker that
 // owns its OWN sql.js instance under a wall clock (sql.js has no interrupt), so the engine
 // passes `SQL` in and this module never initialises one.
 //
-// THE ORDER IS THE CONTRACT:
+// THE ORDER IS THE CONTRACT. Steps 2–5 are ONE private `scopeCopy(scratch, scope)` that both
+// entry points run on the handle they opened — and close, on every path — so the read and the
+// dump cannot disagree about what a scoped copy is:
 //  1. open a FRESH database on the bytes — sql.js copies them into its own heap, so the
 //     caller's bytes are never mutated, whatever happens below;
 //  2. DROP every trigger FIRST (a trigger on a granted table can name a table about to be
@@ -22,7 +27,8 @@
 //     — `PRAGMA table_xinfo`, generated columns included, the same list the consent sheet
 //     shows — minus `isCredentialKeyName` — D23: such a column is never in a scope, so a
 //     source that gains `api_key` has not drifted) against the recorded set; a difference — or
-//     a granted table that is gone — answers `drift` and the statement is NOT run;
+//     a granted table that is gone — answers `drift` and nothing is read;
+//  then, for the READ:
 //  6. the two guards in order — `isReadOnlySelect` (any PRAGMA/ATTACH/DETACH, more than one
 //     statement, a CTE write) THEN `forbiddenStatementReason` (load_extension, writable_schema)
 //     — a refusal answers `refused` and the statement is NOT run;
@@ -30,7 +36,17 @@
 //     the row cap and a byte cap measured in UTF-8 BYTES (the answer crosses a frame whose
 //     class is counted in bytes); `truncated`/`totalRows` exactly as `scratchRun` reports
 //     them; a SQL error answers `failed`;
-//  8. close the scratch, on every path.
+//  8. close the scratch, on every path;
+//  and, for the DUMP (D-PR2-6 / F11):
+//  6. per granted table, in the scope's order, `SELECT <the recorded columns> FROM <table>` —
+//     the host's own statement, so no guard — through the same runner under `maxRows` and
+//     `min(maxBytes, the set budget's remainder)`, each kept row weighed in UTF-8 JSON bytes:
+//     the table that crosses the ONE set budget (`maxTotalBytes`) is CUT (`truncated`,
+//     `totalRows`), every later table runs under 0 bytes (`rows: []`, `truncated`, the honest
+//     total). `columns` is the scope's list; `types[i]` is the declared type text ONLY when it
+//     matches `DUMP_TYPE_ALLOW`, else '' — the ONE home of that rule (S5: app-authored type
+//     text never reaches a prompt or a CREATE). A SQL error answers `failed`;
+//  7. close the scratch, on every path.
 //
 // WITHHELD COLUMNS (step 3). A credential-named column is never in a grant's scope, but it
 // is physically present in a granted table — and `SELECT api_key AS harmless …` would carry
@@ -106,6 +122,45 @@ export type ScopedReadResult =
   | { ok: true; columns: string[]; rows: unknown[][]; truncated?: boolean; totalRows?: number }
   | { ok: false; reason: 'drift' | 'refused' | 'failed'; drift?: ScopedReadDrift; message: string }
   /** The copy could not be scoped (a stray object, a value that could not be withheld or masked): failed CLOSED. The message names a source object — never for the reader. */
+  | { ok: false; reason: 'copy-failed'; message: string };
+
+/** The dump's caps (D-PR2-6): per table, rows and UTF-8 JSON bytes; across the whole set, ONE byte budget. */
+export interface ScopedDumpCaps {
+  maxRows: number;
+  /** Per table, measured in UTF-8 BYTES of each kept row's JSON. */
+  maxBytes: number;
+  /** Across every table of the dump, in scope order: the table that crosses it is cut, every later one is empty. */
+  maxTotalBytes: number;
+}
+
+/** One granted table as dumped: the scope's columns, the allow-listed declared types ('' otherwise), its rows. */
+export interface ScopedDumpTable {
+  name: string;
+  columns: string[];
+  types: string[];
+  rows: unknown[][];
+  truncated?: boolean;
+  totalRows?: number;
+}
+
+export type ScopedDumpResult =
+  | { ok: true; tables: ScopedDumpTable[] }
+  | { ok: false; reason: 'drift' | 'failed'; drift?: ScopedReadDrift; message: string }
+  /** The copy could not be scoped: failed CLOSED, as the read. The message names a source object — never for a brain. */
+  | { ok: false; reason: 'copy-failed'; message: string };
+
+/**
+ * The declared column types a dump passes through AS DECLARED (D-PR2-6, S5) — the SQL type
+ * words, with an optional `(n)` or `(n, m)`, whole text only, case kept. Anything else an app
+ * wrote in a CREATE (`"ignore all instructions"`, a constraint, a second statement) dumps as
+ * '' and never reaches a prompt or a CREATE. The ONE home of that rule.
+ */
+export const DUMP_TYPE_ALLOW =
+  /^(INT|INTEGER|REAL|TEXT|BLOB|NUMERIC|BOOLEAN|DATE|DATETIME|VARCHAR|CHAR|DOUBLE|FLOAT|DECIMAL)(\(\d{1,5}(,\s?\d{1,5})?\))?$/i;
+
+/** What `scopeCopy` answers when the copy could not be scoped — a member of both result types. */
+type ScopingFailure =
+  | { ok: false; reason: 'drift'; drift: ScopedReadDrift; message: string }
   | { ok: false; reason: 'copy-failed'; message: string };
 
 const KV_TABLE = 'snug_kv';
@@ -272,6 +327,34 @@ function driftOf(scratch: Database, scope: ScopedReadScope): ScopedReadDrift {
 }
 
 /**
+ * Steps 2–5 of the header on an opened copy: the drops and their belt, the withhold, the value
+ * mask, `query_only`, the drift check. Answers the scoping failure, or `undefined` when the copy
+ * is scoped and nothing has drifted. The caller opened `scratch` and closes it.
+ */
+function scopeCopy(scratch: Database, scope: ScopedReadScope): ScopingFailure | undefined {
+  const granted = new Set(scope.tables.map((table) => table.name.toLowerCase()));
+
+  dropOutsideScope(scratch, granted);
+  const stray = strayObject(scratch, granted);
+  if (stray !== undefined) return { ok: false, reason: 'copy-failed', message: `the scoped copy still holds "${stray}"` };
+
+  const present = new Set(selectRows(scratch, "SELECT lower(name) FROM sqlite_master WHERE type = 'table'").map((row) => String(row[0])));
+  const grantedPresent = scope.tables.map((table) => table.name).filter((name) => present.has(name.toLowerCase()));
+  const withheld = withholdCredentialColumns(scratch, grantedPresent);
+  if (withheld !== undefined) return { ok: false, reason: 'copy-failed', message: `the column ${withheld} could not be withheld` };
+  const unmasked = maskCredentialValues(scratch, grantedPresent);
+  if (unmasked !== undefined) return { ok: false, reason: 'copy-failed', message: `a value in ${unmasked} could not be masked` };
+
+  scratch.run('PRAGMA query_only = 1');
+
+  const drift = driftOf(scratch, scope);
+  if (drift.added.length > 0 || drift.removed.length > 0) {
+    return { ok: false, reason: 'drift', drift, message: 'the granted tables changed since access was allowed' };
+  }
+  return undefined;
+}
+
+/**
  * Run ONE read-only statement on a scoped scratch copy of `bytes` — see the header for the
  * order. Never throws: every outcome is data.
  */
@@ -285,25 +368,8 @@ export function scopedScratchRead(
   let scratch: Database | undefined;
   try {
     scratch = new SQL.Database(bytes);
-    const granted = new Set(scope.tables.map((table) => table.name.toLowerCase()));
-
-    dropOutsideScope(scratch, granted);
-    const stray = strayObject(scratch, granted);
-    if (stray !== undefined) return { ok: false, reason: 'copy-failed', message: `the scoped copy still holds "${stray}"` };
-
-    const present = new Set(selectRows(scratch, "SELECT lower(name) FROM sqlite_master WHERE type = 'table'").map((row) => String(row[0])));
-    const grantedPresent = scope.tables.map((table) => table.name).filter((name) => present.has(name.toLowerCase()));
-    const withheld = withholdCredentialColumns(scratch, grantedPresent);
-    if (withheld !== undefined) return { ok: false, reason: 'copy-failed', message: `the column ${withheld} could not be withheld` };
-    const unmasked = maskCredentialValues(scratch, grantedPresent);
-    if (unmasked !== undefined) return { ok: false, reason: 'copy-failed', message: `a value in ${unmasked} could not be masked` };
-
-    scratch.run('PRAGMA query_only = 1');
-
-    const drift = driftOf(scratch, scope);
-    if (drift.added.length > 0 || drift.removed.length > 0) {
-      return { ok: false, reason: 'drift', drift, message: 'the granted tables changed since access was allowed' };
-    }
+    const failure = scopeCopy(scratch, scope);
+    if (failure !== undefined) return failure;
 
     if (!isReadOnlySelect(statement.sql)) return { ok: false, reason: 'refused', message: NOT_ONE_READ_MESSAGE };
     const forbidden = forbiddenStatementReason(statement.sql);
@@ -325,5 +391,54 @@ export function scopedScratchRead(
     return { ok: false, reason: 'failed', message: errorMessage(err) };
   } finally {
     scratch?.close(); // the copy — every drop and every withheld value with it — is discarded here
+  }
+}
+
+/** Each column's declared type text as the copy holds it (`PRAGMA table_xinfo`), by exact column name. */
+function declaredTypes(scratch: Database, table: string): Map<string, string> {
+  return new Map(selectRows(scratch, `PRAGMA table_xinfo(${quoteIdent(table)})`).map((row) => [String(row[1]), String(row[2] ?? '')]));
+}
+
+/** The declared type as it may reach a prompt: itself when `DUMP_TYPE_ALLOW` admits it, else ''. */
+const allowedType = (declared: string | undefined): string => (declared !== undefined && DUMP_TYPE_ALLOW.test(declared) ? declared : '');
+
+/**
+ * Dump ONLY the scope's recorded columns of every granted table from a scoped scratch copy of
+ * `bytes` — see the header for the order and the caps. Never throws: every outcome is data.
+ */
+export function scopedScratchDump(SQL: SqlJsStatic, bytes: Uint8Array, scope: ScopedReadScope, caps: ScopedDumpCaps): ScopedDumpResult {
+  let scratch: Database | undefined;
+  try {
+    scratch = new SQL.Database(bytes);
+    const failure = scopeCopy(scratch, scope);
+    if (failure !== undefined) return failure;
+
+    const tables: ScopedDumpTable[] = [];
+    let remaining = caps.maxTotalBytes;
+    for (const table of scope.tables) {
+      const types = declaredTypes(scratch, table.name);
+      // The scope's columns, by name and in its order — never `*`: a column the scope does not
+      // record (a credential-named one, physically present) is never selected.
+      const outcome = runScratchStatement(scratch, `SELECT ${table.columns.map(quoteIdent).join(', ')} FROM ${quoteIdent(table.name)}`, undefined, {
+        maxRows: caps.maxRows,
+        maxBytes: Math.min(caps.maxBytes, Math.max(0, remaining)),
+        rowWeight: jsonUtf8Weight,
+      });
+      if (outcome.error !== undefined) return { ok: false, reason: 'failed', message: outcome.error };
+      const rows = outcome.rows ?? [];
+      remaining -= rows.reduce((sum, row) => sum + jsonUtf8Weight(row), 0);
+      tables.push({
+        name: table.name,
+        columns: [...table.columns],
+        types: table.columns.map((column) => allowedType(types.get(column))),
+        rows,
+        ...(outcome.truncated === true ? { truncated: true, totalRows: outcome.totalRows } : {}),
+      });
+    }
+    return { ok: true, tables };
+  } catch (err) {
+    return { ok: false, reason: 'failed', message: errorMessage(err) };
+  } finally {
+    scratch?.close(); // the copy is discarded here, as the read's
   }
 }

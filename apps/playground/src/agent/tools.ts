@@ -2,7 +2,11 @@
 // buildServerTools. Tool names/descriptions come from the knowledge store (ADR-0004);
 // artifact_write flows through an ArtifactSink into the USER DB — the sink pins the
 // target app host-side (F9), so a write is an install or a new version, never a
-// model-chosen destination.
+// model-chosen destination. The two propose-only tools ride beside the authoring set:
+// `schedule_propose` where the host schedules, and `access_propose` (TASK-20261010-host-broker
+// PR-2, D-PR2-11) where the host allows access between apps, asks are not switched off, and a
+// surface can stage the card — the rungs that need the resolved app (an owned app, not muted)
+// are the tool's own, at the call.
 
 import type { AgentTool } from '@snugprotocol/adapters';
 import type { UserDb } from '@snugprotocol/db';
@@ -17,8 +21,10 @@ import {
 } from '@snugprotocol/knowledge';
 import { runtimeContractSchema } from '@snugprotocol/protocol';
 
+import { accessAsksOff } from '../access/consent.js';
 import { allows } from '../platform/platform.js';
 import { getUserDb } from '../state/userdb.js';
+import { buildAccessProposeTool, type OnAccessProposal } from './accessProposeTool.js';
 import type { ArtifactSink, ArtifactWriteResult } from './artifactSink.js';
 import { buildScheduleProposeTool, type OnScheduleProposal } from './scheduleProposeTool.js';
 
@@ -45,6 +51,12 @@ export interface ByokToolHooks {
    * tool says that instead of pretending.
    */
   onScheduleProposal?: OnScheduleProposal;
+  /**
+   * An `access_propose` call staged an ask (TASK-20261010-host-broker PR-2). The host renders it
+   * as a card on the agent's message; `false` means it was NOT staged (one card per turn). Absent
+   * ⇒ no surface can show an ask here, and the tool is not offered.
+   */
+  onAccessProposal?: OnAccessProposal;
 }
 
 export interface BuildByokToolsOptions {
@@ -288,6 +300,20 @@ export function buildByokTools(
             getDb,
             resolveAppId: () => sink.ensureTargetId(),
             ...(hooks.onScheduleProposal !== undefined ? { onProposal: hooks.onScheduleProposal } : {}),
+          }),
+        ]
+      : []),
+    // TASK-20261010-host-broker PR-2 (D-PR2-11): the builder may ASK to read another app's data
+    // for the app it is building — staged on the message, allowed only by the user on the host's
+    // sheet. Offered under the offer rule's host-wide rungs (the surface, the Settings switch) when
+    // a surface can stage it; the app-level rungs (owned, not muted, not declined, nothing
+    // pending) are answered by the tool at the call, once the sink's target is known.
+    ...(hooks.onAccessProposal !== undefined && allows('access') && !accessAsksOff()
+      ? [
+          buildAccessProposeTool({
+            getDb,
+            resolveAppId: () => sink.ensureTargetId(),
+            onProposal: hooks.onAccessProposal,
           }),
         ]
       : []),

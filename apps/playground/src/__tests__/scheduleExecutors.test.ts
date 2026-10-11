@@ -8,14 +8,33 @@
 // The *Ask the AI* arm is exercised end to end against a real in-memory user db in
 // `scheduleAppThink.test.ts`; here it is driven through a FAKE db and a fake transport so the
 // shared discipline is proven without a wasm boot.
+//
+// TASK-20261010-host-broker PR-2 (D-PR2-13, D-PR2-7; AC13) — ONE row at the end: the PRODUCTION
+// executor composes the scheduler door's `sharedFor` beside `transportFor`, and that default
+// materialises for the schedule caller, records the read BEFORE the context is rendered and
+// sent, and hands the step only the grants it recorded. The app transport is replaced by a
+// recorder at `createAppTransport` (the seam `defaultTransportFor` calls); the service through
+// `__setAccessServiceForTests`. RED until `access/service.ts` and the composition land.
 import type { UserDb } from '@snugprotocol/db';
-import { SCHEDULE_STEP_SUMMARY_MAX_CHARS, type ScheduleStep, type ScheduledTask } from '@snugprotocol/protocol';
+import { SCHEDULE_STEP_SUMMARY_MAX_CHARS, parseAppRequest, type ScheduleStep, type ScheduledTask } from '@snugprotocol/protocol';
 import type { AgentTransport } from '@snugprotocol/runner';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+const h = vi.hoisted(() => ({ transport: undefined as import('@snugprotocol/runner').AgentTransport | undefined }));
+
+// Only the PR-2 row sets `h.transport`; every other row reaches the real composition unchanged.
+vi.mock('../agent/transport.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../agent/transport.js')>();
+  return {
+    ...actual,
+    createAppTransport: (...args: Parameters<typeof actual.createAppTransport>) => h.transport ?? actual.createAppTransport(...args),
+  };
+});
 
 import { NO_HIDDEN_FRAME, blockedAppRunDeps, type AppRunDeps } from '../schedule/appRun.js';
 import { appMissing, blockedHere } from '../schedule/copy.js';
 import type { StepContext } from '../schedule/engine-types.js';
+import type { MaterialisedSet, MaterialisedTable } from '../access/service.js';
 import {
   CANCELLED_SUMMARY,
   WITHHELD_SUMMARY,
@@ -248,5 +267,88 @@ describe('finalizeOutcome — the one place the result text is made safe to stor
   it('an absent summary stays absent and an empty one stays empty — no sentence is invented', () => {
     expect(finalizeOutcome({ status: 'skipped', calls: { ai: 0, net: 0 } })).toEqual({ status: 'skipped', calls: { ai: 0, net: 0 } });
     expect(finalizeOutcome({ status: 'ok', summary: '', calls: { ai: 0, net: 0 } }).summary).toBe('');
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// TASK-20261010-host-broker PR-2 — the scheduler door's production composition (D-PR2-13)
+// ---------------------------------------------------------------------------------------------
+
+/** A module PR-2 adds, imported at RUN time (a literal `import('…')` is pre-resolved by vite and would fail the whole file). */
+const later = <T>(specifier: string): Promise<T> => import(/* @vite-ignore */ specifier) as Promise<T>;
+
+function shared(over: Partial<MaterialisedTable> & Pick<MaterialisedTable, 'grantId' | 'sourceAppId' | 'sourceName' | 'alias' | 'table'>): MaterialisedTable {
+  return {
+    name: `${over.alias}__${over.table}`,
+    columns: ['id', 'note'],
+    types: ['INTEGER', 'TEXT'],
+    rows: [],
+    truncated: false,
+    duration: 'always',
+    ...over,
+  };
+}
+
+describe('the scheduler door — the production executor composes sharedFor beside transportFor (D-PR2-13)', () => {
+  afterEach(() => {
+    h.transport = undefined;
+  });
+
+  it('the default materialises for the schedule caller, records the read BEFORE the context is sent, and only the recorded grants reach the brain', async () => {
+    const { __setAccessServiceForTests } = await later<typeof import('../access/service.js')>('../access/service.js');
+    const events: string[] = [];
+    const set: MaterialisedSet = {
+      tables: [
+        shared({ grantId: 'g-ledger', sourceAppId: 'ledger-app', sourceName: 'Ledger', alias: 'ledger', table: 'transactions', rows: [[1, 'LEDGER-ROW']] }),
+        shared({ grantId: 'g-pantry', sourceAppId: 'pantry-app', sourceName: 'Pantry', alias: 'pantry', table: 'items', rows: [[1, 'PANTRY-ROW']] }),
+      ],
+      skipped: [],
+      readOnlyTables: ['ledger__transactions', 'pantry__items'],
+    };
+    const materialise = vi.fn((_caller: unknown) => {
+      events.push('materialise');
+      return Promise.resolve(set);
+    });
+    const recordRead = vi.fn((_caller: unknown, _set: MaterialisedSet, _input: { grantIds?: readonly string[]; sql?: string }) => {
+      events.push('recordRead');
+      // The pantry grant ended while the dump ran: refused, never handed to the brain.
+      return Promise.resolve({ recorded: ['g-ledger'], refused: [{ grantId: 'g-pantry', sourceAppId: 'pantry-app', sourceName: 'Pantry', reason: 'ended' as const }] });
+    });
+    __setAccessServiceForTests({ materialise, recordRead });
+    try {
+      const wires: string[] = [];
+      h.transport = {
+        send: (wire) => {
+          events.push('send');
+          wires.push(wire);
+          return Promise.resolve({ ok: true as const, text: JSON.stringify({ answer: 'read it' }) });
+        },
+      };
+      const outcome = await executeStep(think, context([think]));
+      expect(outcome).toEqual({ status: 'ok', summary: 'read it', calls: { ai: 1, net: 0 } });
+
+      const caller = { kind: 'schedule', appId: 'app-1', taskId: 'task-1', runId: 'run-1' };
+      expect(materialise).toHaveBeenCalledTimes(1);
+      expect(materialise.mock.calls[0]?.[0]).toEqual(caller);
+      expect(recordRead).toHaveBeenCalledTimes(1);
+      const [recordedFor, handed, input] = recordRead.mock.calls[0]!;
+      expect(recordedFor).toEqual(caller);
+      expect(handed).toEqual(set);
+      expect(input.sql).toBeUndefined(); // the rows go into the prompt — no statement of the brain's
+      if (input.grantIds !== undefined) expect([...input.grantIds].sort()).toEqual(['g-ledger', 'g-pantry']);
+      // The line is written BEFORE any row reaches the brain.
+      expect(events).toEqual(['materialise', 'recordRead', 'send']);
+
+      expect(wires).toHaveLength(1);
+      const parsed = parseAppRequest(wires[0] ?? '');
+      if (!parsed.ok) throw new Error(`wire did not parse: ${parsed.detail}`);
+      const sent = (parsed.envelope as { payload: { context: string } }).payload.context;
+      expect(sent).toContain('ledger__transactions');
+      expect(sent).toContain('LEDGER-ROW');
+      expect(sent).not.toContain('pantry__items');
+      expect(sent).not.toContain('PANTRY-ROW');
+    } finally {
+      __setAccessServiceForTests();
+    }
   });
 });

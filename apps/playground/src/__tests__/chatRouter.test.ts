@@ -101,6 +101,8 @@ describe('lane dispatch', () => {
       onDataProposal: () => true,
       onProviderFailureCode: () => undefined,
       onScheduleProposal: () => true,
+      // PR-2 (D-PR2-11): the required access-ask seat — the exhaustive discipline's literal.
+      onAccessProposal: () => true,
     });
     const names = tools?.map((tool) => tool.def.name);
     expect(names).toEqual([SCHEDULE_PROPOSE_TOOL_NAME]);
