@@ -7,7 +7,7 @@
       "sources": [
         {
           "path": "docs/spec-drafts/SPEC.md",
-          "sha256": "082091cbe525eab457822ce4a337fa2585e4ddfb0c9b0664525be55bc49cc7cb"
+          "sha256": "71408b21e4f5c84ad540104b9874b334682467c3b79af40d18ae11c2f2218e0c"
         }
       ]
     },
@@ -17,7 +17,7 @@
       "sources": [
         {
           "path": "docs/spec-drafts/SPEC.md",
-          "sha256": "082091cbe525eab457822ce4a337fa2585e4ddfb0c9b0664525be55bc49cc7cb"
+          "sha256": "71408b21e4f5c84ad540104b9874b334682467c3b79af40d18ae11c2f2218e0c"
         }
       ]
     },
@@ -27,7 +27,7 @@
       "sources": [
         {
           "path": "docs/spec-drafts/SPEC.md",
-          "sha256": "082091cbe525eab457822ce4a337fa2585e4ddfb0c9b0664525be55bc49cc7cb"
+          "sha256": "71408b21e4f5c84ad540104b9874b334682467c3b79af40d18ae11c2f2218e0c"
         }
       ]
     },
@@ -37,7 +37,7 @@
       "sources": [
         {
           "path": "docs/spec-drafts/SPEC.md",
-          "sha256": "082091cbe525eab457822ce4a337fa2585e4ddfb0c9b0664525be55bc49cc7cb"
+          "sha256": "71408b21e4f5c84ad540104b9874b334682467c3b79af40d18ae11c2f2218e0c"
         }
       ]
     },
@@ -47,7 +47,7 @@
       "sources": [
         {
           "path": "docs/spec-drafts/SPEC.md",
-          "sha256": "082091cbe525eab457822ce4a337fa2585e4ddfb0c9b0664525be55bc49cc7cb"
+          "sha256": "71408b21e4f5c84ad540104b9874b334682467c3b79af40d18ae11c2f2218e0c"
         }
       ]
     },
@@ -57,7 +57,7 @@
       "sources": [
         {
           "path": "docs/spec-drafts/SPEC.md",
-          "sha256": "082091cbe525eab457822ce4a337fa2585e4ddfb0c9b0664525be55bc49cc7cb"
+          "sha256": "71408b21e4f5c84ad540104b9874b334682467c3b79af40d18ae11c2f2218e0c"
         }
       ]
     },
@@ -67,7 +67,7 @@
       "sources": [
         {
           "path": "docs/spec-drafts/SPEC.md",
-          "sha256": "082091cbe525eab457822ce4a337fa2585e4ddfb0c9b0664525be55bc49cc7cb"
+          "sha256": "71408b21e4f5c84ad540104b9874b334682467c3b79af40d18ae11c2f2218e0c"
         }
       ]
     },
@@ -77,7 +77,7 @@
       "sources": [
         {
           "path": "docs/spec-drafts/SPEC.md",
-          "sha256": "082091cbe525eab457822ce4a337fa2585e4ddfb0c9b0664525be55bc49cc7cb"
+          "sha256": "71408b21e4f5c84ad540104b9874b334682467c3b79af40d18ae11c2f2218e0c"
         }
       ]
     },
@@ -87,7 +87,7 @@
       "sources": [
         {
           "path": "docs/spec-drafts/SPEC.md",
-          "sha256": "082091cbe525eab457822ce4a337fa2585e4ddfb0c9b0664525be55bc49cc7cb"
+          "sha256": "71408b21e4f5c84ad540104b9874b334682467c3b79af40d18ae11c2f2218e0c"
         }
       ]
     },
@@ -97,11 +97,11 @@
       "sources": [
         {
           "path": "packages/protocol/schemas/access-request.json",
-          "sha256": "8f59b59687ad3351a04893359726d290e3ec5609dac8cac91c81d85c414dec8f"
+          "sha256": "a7fe27312d6cec1054e5f6559677b965804880fa51ac42e325c3c1f454476c98"
         },
         {
           "path": "packages/protocol/schemas/access-response.json",
-          "sha256": "ae57234c6051cbb500ef1850d4a42db9a7ec56836c71ba7bd9677c0bf828098b"
+          "sha256": "61957577fc7f924d13a5c57ee81d9cc8567a81ec955d3a2b394b743d3b54e537"
         },
         {
           "path": "packages/protocol/schemas/app-announce.json",
@@ -167,7 +167,7 @@
       "sources": [
         {
           "path": "docs/whitepaper/dist/snug-protocol-whitepaper.pdf",
-          "sha256": "add3a84e1367a502566e66ab523ee076becba61eb6064f63f944d11c983f738f"
+          "sha256": "e0be3526cf9ed1487edfa158b658b4b7797df15d91043c1b30b27a729637c508"
         }
       ]
     },
@@ -177,7 +177,7 @@
       "sources": [
         {
           "path": "docs/product-vision.md",
-          "sha256": "f87cde60bc13b8896bec79b81bcd9b7d1a1066704380bc86e641e60c90705f12"
+          "sha256": "df3904ab5643d74487ec46f90a1f60fb4d35c1954f90db5b7c75b114196e72fd"
         }
       ]
     },
@@ -187,7 +187,7 @@
       "sources": [
         {
           "path": "docs/product-vision.md",
-          "sha256": "f87cde60bc13b8896bec79b81bcd9b7d1a1066704380bc86e641e60c90705f12"
+          "sha256": "df3904ab5643d74487ec46f90a1f60fb4d35c1954f90db5b7c75b114196e72fd"
         }
       ]
     },
@@ -197,7 +197,7 @@
       "sources": [
         {
           "path": "docs/product-vision.md",
-          "sha256": "f87cde60bc13b8896bec79b81bcd9b7d1a1066704380bc86e641e60c90705f12"
+          "sha256": "df3904ab5643d74487ec46f90a1f60fb4d35c1954f90db5b7c75b114196e72fd"
         }
       ]
     },
@@ -207,11 +207,11 @@
       "sources": [
         {
           "path": "docs/product-vision.md",
-          "sha256": "f87cde60bc13b8896bec79b81bcd9b7d1a1066704380bc86e641e60c90705f12"
+          "sha256": "df3904ab5643d74487ec46f90a1f60fb4d35c1954f90db5b7c75b114196e72fd"
         },
         {
           "path": "docs/spec-drafts/SPEC.md",
-          "sha256": "082091cbe525eab457822ce4a337fa2585e4ddfb0c9b0664525be55bc49cc7cb"
+          "sha256": "71408b21e4f5c84ad540104b9874b334682467c3b79af40d18ae11c2f2218e0c"
         }
       ]
     },
@@ -231,11 +231,11 @@
       "sources": [
         {
           "path": "docs/spec-drafts/SPEC.md",
-          "sha256": "082091cbe525eab457822ce4a337fa2585e4ddfb0c9b0664525be55bc49cc7cb"
+          "sha256": "71408b21e4f5c84ad540104b9874b334682467c3b79af40d18ae11c2f2218e0c"
         },
         {
           "path": "packages/sdk/src/types.ts",
-          "sha256": "77d11631767c56a04e62c5878f1880355a8764c54490f2c50df85f47e5c6156c"
+          "sha256": "6109b544741335992a778581583e964f188d8bd2d869845e7f98546597cad9a8"
         }
       ]
     },
@@ -249,7 +249,7 @@
         },
         {
           "path": "docs/spec-drafts/SPEC.md",
-          "sha256": "082091cbe525eab457822ce4a337fa2585e4ddfb0c9b0664525be55bc49cc7cb"
+          "sha256": "71408b21e4f5c84ad540104b9874b334682467c3b79af40d18ae11c2f2218e0c"
         }
       ]
     },
@@ -259,7 +259,7 @@
       "sources": [
         {
           "path": "docs/spec-drafts/SPEC.md",
-          "sha256": "082091cbe525eab457822ce4a337fa2585e4ddfb0c9b0664525be55bc49cc7cb"
+          "sha256": "71408b21e4f5c84ad540104b9874b334682467c3b79af40d18ae11c2f2218e0c"
         }
       ]
     },
@@ -269,7 +269,7 @@
       "sources": [
         {
           "path": "docs/spec-drafts/SPEC.md",
-          "sha256": "082091cbe525eab457822ce4a337fa2585e4ddfb0c9b0664525be55bc49cc7cb"
+          "sha256": "71408b21e4f5c84ad540104b9874b334682467c3b79af40d18ae11c2f2218e0c"
         }
       ]
     },
@@ -279,7 +279,7 @@
       "sources": [
         {
           "path": "docs/spec-drafts/SPEC.md",
-          "sha256": "082091cbe525eab457822ce4a337fa2585e4ddfb0c9b0664525be55bc49cc7cb"
+          "sha256": "71408b21e4f5c84ad540104b9874b334682467c3b79af40d18ae11c2f2218e0c"
         }
       ]
     },
@@ -289,7 +289,7 @@
       "sources": [
         {
           "path": "docs/spec-drafts/SPEC.md",
-          "sha256": "082091cbe525eab457822ce4a337fa2585e4ddfb0c9b0664525be55bc49cc7cb"
+          "sha256": "71408b21e4f5c84ad540104b9874b334682467c3b79af40d18ae11c2f2218e0c"
         }
       ]
     },
@@ -299,7 +299,7 @@
       "sources": [
         {
           "path": "docs/spec-drafts/SPEC.md",
-          "sha256": "082091cbe525eab457822ce4a337fa2585e4ddfb0c9b0664525be55bc49cc7cb"
+          "sha256": "71408b21e4f5c84ad540104b9874b334682467c3b79af40d18ae11c2f2218e0c"
         }
       ]
     },
@@ -309,7 +309,7 @@
       "sources": [
         {
           "path": "docs/spec-drafts/SPEC.md",
-          "sha256": "082091cbe525eab457822ce4a337fa2585e4ddfb0c9b0664525be55bc49cc7cb"
+          "sha256": "71408b21e4f5c84ad540104b9874b334682467c3b79af40d18ae11c2f2218e0c"
         }
       ]
     },
@@ -319,7 +319,7 @@
       "sources": [
         {
           "path": "docs/whitepaper/dist/snug-protocol-whitepaper.pdf",
-          "sha256": "add3a84e1367a502566e66ab523ee076becba61eb6064f63f944d11c983f738f"
+          "sha256": "e0be3526cf9ed1487edfa158b658b4b7797df15d91043c1b30b27a729637c508"
         }
       ]
     }

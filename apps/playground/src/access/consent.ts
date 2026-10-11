@@ -34,6 +34,18 @@
 // THE LADDER. The access ask's rate limit, mutes, declines and one-pending rule are the shared
 // rungs of `state/appAsk.ts`, keyed on the HOST-assigned id; the window is per APP (`rateBy:
 // 'app'`), so neither a re-announce nor a remount mints a fresh slot.
+//
+// THE DECISION v2 (TASK-20261010-host-broker PR-3; ADR-0076 §4; D-PR3-4/23; contract v2.1 E1-Q7,
+// U-Q8, U-Q11). The sheet's *allow* now says, per table, the unticked columns and the write
+// toggle, and for the source its settings & notes and fetch-first options; a bare table name is
+// the 1.1 choice (every PR-2 fixture stays byte-identical). The outcome names the WRITTEN tables
+// (`allowed.write`) so the strip and the card can say "read and change". An app's ask may carry
+// `access: 'write'` (the handler threads it as `wantsWrite`): the strip's title and the sheet's
+// say so, and the sheet opens its options at once — but the toggle is never pre-ticked by the
+// ask. The ladder hashes `access` too (`accessRequestHash`), so a declined read ask does not
+// decline a later write ask, nor the reverse. The chat's ask (`askedIn: 'chat'`) now writes
+// `provenance: 'chat'` on the GRANT (the log admits it at 1.2; R-86 closes) while the pending
+// stays the user's (`provenance: 'user'` drives the strip and the dismiss rules as before).
 
 import { ACCESS_REQUEST_MIN_GAP_MS, ACCESS_SOURCE_MAX_BYTES, accessRequestHash, type AccessDuration, type AccessHints, type AccessRequestSemantics } from '@snugprotocol/protocol';
 import type { AppRecord, UserDb } from '@snugprotocol/db';
@@ -44,24 +56,28 @@ import { netConfirmStore } from '../state/net.js';
 import { openUrlConfirmStore } from '../state/openUrl.js';
 import { appHasSidecarFact } from '../state/sidecarLive.js';
 import { createStore, type Store } from '../state/store.js';
-import { egressFor, type EgressLine } from './egress.js';
-import { accessDeps, armAccessListeners, bumpAccessRevision, createGrantFromDecision, readerGeneration, revokeAccess, type AnyAccessGrant } from './grants.js';
+import { egressFor, type EgressLine, type EgressOptions } from './egress.js';
+import { accessDeps, armAccessListeners, bumpAccessRevision, createGrantFromDecision, readerGeneration, revokeAccess, type AnyAccessGrant, type TableChoice } from './grants.js';
 import { nameCollides, provenanceLine } from './provenance.js';
 import { preselectedTables, rankSources, type RankedSource, type RankedSources, type SourceInput } from './relevance.js';
 
 // ------------------------------------------------------------------------------------- types
 
-/** The user's act on the sheet (or the strip). */
+/**
+ * The user's act on the sheet (or the strip). An allow's `tables` are the per-table choices
+ * (D-PR3-23) — or bare names, the 1.1 choice (E1-Q7); `kv` and `refresh` absent ≡ false, the
+ * sheet always says both.
+ */
 export type ConsentDecision =
-  | { kind: 'allow'; sourceAppId: string; tables: string[]; duration: AccessDuration; unattended: boolean }
+  | { kind: 'allow'; sourceAppId: string; tables: ReadonlyArray<string | TableChoice>; duration: AccessDuration; unattended: boolean; kv?: boolean; refresh?: boolean }
   | { kind: 'not-now' }
   | { kind: 'dont-allow' }
   | { kind: 'stop-asking' }
   | { kind: 'dismissed' };
 
-/** What the act came to — the strip's outcome line reads it (`allowed` carries the id its *stop* undoes). */
+/** What the act came to — the strip's outcome line reads it (`allowed` carries the id its *stop* undoes, and `write`, the tables the reader may change — empty for a read access). */
 export type ConsentOutcome =
-  | { kind: 'allowed'; grantId: string; sourceAppId: string; sourceName: string; tables: string[]; duration: AccessDuration }
+  | { kind: 'allowed'; grantId: string; sourceAppId: string; sourceName: string; tables: string[]; duration: AccessDuration; write: string[] }
   | { kind: 'not-now' }
   | { kind: 'declined' }
   | { kind: 'muted' }
@@ -84,9 +100,11 @@ export interface PendingAccessRequest {
   askedIn?: 'chat';
   /** A grant this ask renews (one of THIS reader's). */
   renew?: string;
+  /** The app's ask carried `access: 'write'` (D-PR3-4): the title says so and the sheet's options open at once — the toggle itself stays off until the person ticks it. */
+  wantsWrite?: boolean;
   candidates: RankedSources;
   preselect?: { appId: string; tables: string[] };
-  egressFor: (opts: { unattended: boolean; sourceName: string }) => EgressLine[];
+  egressFor: (opts: EgressOptions) => EgressLine[];
   /** The ONE answer. Later calls answer `dismissed` and change nothing. */
   resolve(decision: ConsentDecision): Promise<ConsentOutcome>;
 }
@@ -189,8 +207,11 @@ export interface ParkAccessRequestInput {
   provenance: 'app' | 'user';
   /** The chat's AI asked, from its card (PR-2). */
   askedIn?: 'chat';
+  /** The frame's ask said `access: 'write'` (D-PR3-4) — threaded to the pending as `wantsWrite`. */
+  wantsWrite?: boolean;
   candidates: RankedSources;
   hints?: AccessHints;
+  /** The access being renewed: the preselection reads its table names; its whole scope reaches the sheet through `userAsk.ts`'s seed (U-Q12). */
   renew?: { grantId: string; sourceAppId: string; tables: string[] };
   /** The ask's semantic hash — what *don't allow* records (app asks, and the chat's asks). */
   hash?: string;
@@ -228,10 +249,13 @@ async function carryOut(input: ParkAccessRequestInput, pending: PendingAccessReq
         duration: decision.duration,
         unattended: decision.unattended,
         purpose: pending.purpose,
-        provenance: input.provenance,
+        // The GRANT says the chat asked (D-PR3-23; R-86); the pending stays the user's.
+        provenance: pending.askedIn === 'chat' ? 'chat' : input.provenance,
         ...(generation !== undefined ? { generation } : {}),
         now: accessDeps().now(),
         ...(input.renew !== undefined ? { renew: input.renew.grantId } : {}),
+        ...(decision.kv === true ? { kv: true } : {}),
+        ...(decision.refresh === true ? { refresh: true } : {}),
       });
       // D36 on EVERY path (the app's ask and the user's alike): an allow that wrote a NEW access for
       // the renewed pair — the default *while it's open*, or another duration — REPLACES the old one,
@@ -240,7 +264,15 @@ async function carryOut(input: ParkAccessRequestInput, pending: PendingAccessReq
         await revokeAccess(input.renew.grantId);
       }
       return {
-        outcome: { kind: 'allowed', grantId: grant.id, sourceAppId: source.appId, sourceName: source.displayName, tables: grant.scope.tables.map((table) => table.name), duration: decision.duration },
+        outcome: {
+          kind: 'allowed',
+          grantId: grant.id,
+          sourceAppId: source.appId,
+          sourceName: source.displayName,
+          tables: grant.scope.tables.map((table) => table.name),
+          duration: decision.duration,
+          write: grant.scope.tables.filter((table) => table.write === true).map((table) => table.name),
+        },
         grant,
       };
     }
@@ -285,6 +317,7 @@ export function parkAccessRequest(input: ParkAccessRequestInput): PendingAccessR
     provenance: input.provenance,
     ...(input.askedIn !== undefined ? { askedIn: input.askedIn } : {}),
     ...(input.renew !== undefined ? { renew: input.renew.grantId } : {}),
+    ...(input.wantsWrite === true ? { wantsWrite: true } : {}),
     candidates: input.candidates,
     ...(preselect !== undefined ? { preselect } : {}),
     egressFor: (opts) => egressFor(db, reader.appId, opts),

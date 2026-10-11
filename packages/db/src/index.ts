@@ -18,6 +18,10 @@ export {
   type DbRecoverableErrorEvent,
   type SnugDbDriver,
   type SqlJsEngineOptions,
+  // The write signal and the brokered seat (TASK-20261010-host-broker PR-3, D-PR3-11 / D-PR3-20).
+  type BrokeredWriteInput,
+  type BrokeredWriteResult,
+  type NamespaceWriteEvent,
 } from './driver.js';
 
 export { DB_ERROR_CODES, type DbErrorCode } from './errors.js';
@@ -152,6 +156,13 @@ export {
   grantIdFromAccessGrantSettingKey,
   readerAppIdFromAccessMutedSettingKey,
   sourceAppIdFromAccessLogSettingKey,
+  // The undo journal and the wants (TASK-20261010-host-broker PR-3, D-PR3-7).
+  ACCESS_UNDO_SETTING_PREFIX,
+  ACCESS_WANTS_SETTING_PREFIX,
+  accessUndoSettingKey,
+  accessWantsSettingKey,
+  appIdFromAccessWantsSettingKey,
+  targetAppIdFromAccessUndoSettingKey,
 } from './userdb/app-settings-keys.js';
 
 // The import/export bound a `running`/`pending` claim is retired under (TASK-20261009 C4).
@@ -167,6 +178,9 @@ export {
   DUMP_TYPE_ALLOW,
   scopedScratchDump,
   scopedScratchRead,
+  // The copy itself (`scopeCopy`) stays inside the package: the Write Broker's planner is its one consumer (Gate-5 W-5).
+  type ScopeCopyOptions,
+  type ScopeCopyReport,
   type ScopedDumpCaps,
   type ScopedDumpResult,
   type ScopedDumpTable,
@@ -175,7 +189,34 @@ export {
   type ScopedReadResult,
   type ScopedReadScope,
   type ScopedReadStatement,
+  type ScopingFailure,
 } from './scoped-read.js';
+
+// The Write Broker's pure half (TASK-20261010-host-broker PR-3, D-PR3-9 / D-PR3-10): the parse +
+// plan the Worker runs (`planBrokeredWrite`) — the apply is the driver's seat (Gate-5 W-5: the
+// apply, the undo builder, the parser and the facts are reachable only through `brokeredWrite`),
+// and `dmlTargetTable` is the write signal's table rule the host reads too.
+export {
+  dmlTargetTable,
+  planBrokeredWrite,
+  type ApplyRefusal,
+  type BrokeredApplyInput,
+  type BrokeredApplyResult,
+  type BrokeredCaps,
+  type BrokeredFactsResult,
+  type BrokeredOp,
+  type BrokeredParseResult,
+  type BrokeredPlan,
+  type BrokeredPlanResult,
+  type BrokeredRefusalRule,
+  type BrokeredRefused,
+  type ColumnFact,
+  type OwnStatement,
+  type ParsedDml,
+  type PlanRefusal,
+  type UndoRow,
+  type UndoStep,
+} from './brokered-write.js';
 
 // App sharing (TASK-20260904, ADR-0063): build / install / update one app as a bundle, and
 // the first-bytes sniff that tells a bundle from a user file.

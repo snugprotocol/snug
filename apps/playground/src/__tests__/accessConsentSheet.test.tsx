@@ -12,6 +12,19 @@
 //  - drop the stale-pointerdown comparison → the stale-press row reds;
 //  - let a sensitive column's table be ticked → the never-shared row reds;
 //  - render the purpose outside the isolated quote → the quote row reds.
+//
+// TASK-20261010-host-broker PR-3 (D-PR3-23; DS2–DS6, DS18, DS22, DS23): the sheet v2 — the chips
+// stay on the default path; each table row gains *choose columns…* (`access-columns-<app>-<t>`),
+// which swaps the chips for pre-ticked per-column boxes (`access-column-<app>-<t>-<c>`; a
+// sensitive column a DISABLED unticked box reading *never shared*; *show all N columns* past the
+// eighth); the write toggle (`access-write-<app>-<t>`, OFF) and the options row (`access-kv`,
+// `access-refresh`) live under ONE *more options…* disclosure (`access-options-more`) that starts
+// CLOSED — and OPEN when the ask carried `access: 'write'` or a seed turned a write, kv or refresh
+// on; the undo note under a ticked write only; NO write or refresh egress line, the closing says
+// *reads and changes*; the title says *— and change —* for a write ask; and the allow answers the
+// decision v2 `{ tables: [{ name, withheld, write }], kv, refresh }`. The three rows that pinned
+// the v1 decision (`tables: string[]`) are rewritten to v2 with the reason in their titles. The
+// new keys and the v2 decision are LOCAL structural types until copy.ts / consent.ts export them.
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -21,7 +34,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { UserDb } from '@snugprotocol/db';
-import { FRAME_TYPES, PROTOCOL_VERSION, accessRequestHash } from '@snugprotocol/protocol';
+import { FRAME_TYPES, PROTOCOL_VERSION, accessRequestHash, type AccessDuration } from '@snugprotocol/protocol';
 
 import { AccessConsentSheet } from '../access/AccessConsentSheet.js';
 import { collectSources, openReview, pendingAccessStore, reviewStore, type ConsentDecision, type ConsentOutcome, type PendingAccessRequest } from '../access/consent.js';
@@ -53,6 +66,50 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
 const READER = 'app-budget';
 const ARM_MS = 600;
+
+// ---- PR-3 LOCAL structural types (D-PR3-23) — replaced by the real exports at Gate 5 ----------
+/** One ticked table in the decision v2. */
+interface TableChoiceV2 {
+  name: string;
+  withheld: string[];
+  write: boolean;
+}
+/** The allow decision v2 (`ConsentDecision.allow`, D-PR3-23). */
+interface AllowV2 {
+  kind: 'allow';
+  sourceAppId: string;
+  tables: TableChoiceV2[];
+  duration: AccessDuration;
+  unattended: boolean;
+  kv: boolean;
+  refresh: boolean;
+}
+const allowV2 = (over: Partial<AllowV2> & Pick<AllowV2, 'tables'>): AllowV2 => ({
+  kind: 'allow',
+  sourceAppId: 'app-ledger',
+  duration: 'session',
+  unattended: false,
+  kv: false,
+  refresh: false,
+  ...over,
+});
+const readOf = (name: string, withheld: string[] = []): TableChoiceV2 => ({ name, withheld, write: false });
+/** The PR-3 consent-sheet sentences (copy.ts, D-PR3-23). */
+const SHEET3 = CONSENT_SHEET as unknown as {
+  title(readerName: string, wantsWrite?: boolean): string;
+  canChange: string;
+  chooseColumns: string;
+  showAllColumns(n: number): string;
+  pickAColumn: string;
+  settingsAndNotes(sourceName: string): string;
+  settingsAndNotesHint(sourceName: string): string;
+  fetchFirst(sourceName: string): string;
+  fetchFirstHint(sourceName: string): string;
+  undoNote(sourceName: string, table: string, readerName: string): string;
+  moreOptions: string;
+};
+/** `EGRESS.closing(sourceName, canChange)` (D-PR3-23). */
+const closing3 = EGRESS.closing as unknown as (sourceName: string, canChange?: boolean) => string;
 
 const col = (name: string, sensitive = false) => ({ name, sensitive });
 
@@ -146,7 +203,16 @@ beforeEach(() => {
     pendingAccessStore.set({});
     reviewStore.set(undefined);
     return decision.kind === 'allow'
-      ? { kind: 'allowed', grantId: 'g-1', sourceAppId: decision.sourceAppId, sourceName: 'Ledger', tables: decision.tables, duration: decision.duration }
+      ? // As the real resolve answers (consent.ts): the outcome names the tables, and the written ones (a bare name is a read, E1-Q7).
+        {
+          kind: 'allowed',
+          grantId: 'g-1',
+          sourceAppId: decision.sourceAppId,
+          sourceName: 'Ledger',
+          tables: decision.tables.map((table) => (typeof table === 'string' ? table : table.name)),
+          duration: decision.duration,
+          write: decision.tables.flatMap((table) => (typeof table !== 'string' && table.write ? [table.name] : [])),
+        }
       : { kind: 'not-now' };
   });
   egress = vi.fn((opts: { unattended: boolean; sourceName: string }): EgressLine[] => [
@@ -154,7 +220,8 @@ beforeEach(() => {
     { kind: 'approved', text: EGRESS.approved('GitHub', 'api.github.com') },
     { kind: 'open-url', text: EGRESS.openUrl },
     ...(opts.unattended ? [{ kind: 'away' as const, text: EGRESS.away('Budget') }] : []),
-    { kind: 'closing', text: EGRESS.closing(opts.sourceName) },
+    // PR-3: the closing says *reads and changes* when the sheet asks for it (`canChange`, D-PR3-23).
+    { kind: 'closing', text: closing3(opts.sourceName, (opts as { canChange?: boolean }).canChange === true) },
   ]);
   container = document.createElement('div');
   document.body.appendChild(container);
@@ -359,7 +426,7 @@ describe('AC18 — for how long: a vertical radiogroup, the session DEFAULT, the
     expect(allowButton().textContent).toBe('allow for a week');
   });
 
-  it("an ask that RENEWS an access starts on that access's own duration and away box — the prefilled allow is one tap (AC21)", async () => {
+  it("an ask that RENEWS an access starts on that access's own duration and away box — the prefilled allow is one tap (AC21) — answered in the v2 decision shape (D-PR3-23)", async () => {
     const pending = fakePending({ provenance: 'user', purpose: 'you started this yourself — Budget did not ask', renew: 'g-old' });
     seedSheet(pending, { duration: 'week', unattended: true });
     openSheet(pending);
@@ -369,7 +436,7 @@ describe('AC18 — for how long: a vertical radiogroup, the session DEFAULT, the
     expect(allowButton().textContent).toBe(allowLabel('week'));
     arm();
     await press(allowButton());
-    expect(resolve).toHaveBeenCalledWith({ kind: 'allow', sourceAppId: 'app-ledger', tables: ['transactions'], duration: 'week', unattended: true });
+    expect(resolve).toHaveBeenCalledWith(allowV2({ tables: [readOf('transactions')], duration: 'week', unattended: true }));
   });
 
   it('a renewed SESSION access never seeds the away box (D30)', () => {
@@ -425,7 +492,7 @@ describe('AC18 — the primary arms after 600 ms of visibility and ignores a pre
     expect(allowButton().disabled).toBe(false);
   });
 
-  it('a pointerdown that PRECEDED the render never allows; a fresh press does — with the choice as made', async () => {
+  it('a pointerdown that PRECEDED the render never allows; a fresh press does — with the choice as made, in the v2 decision shape (D-PR3-23)', async () => {
     const early = new MouseEvent('pointerdown', { bubbles: true }); // stamped now, before the sheet exists
     act(() => {
       vi.advanceTimersByTime(5);
@@ -439,7 +506,7 @@ describe('AC18 — the primary arms after 600 ms of visibility and ignores a pre
     expect(resolve).not.toHaveBeenCalled();
     await press(allowButton());
     expect(resolve).toHaveBeenCalledTimes(1);
-    expect(resolve).toHaveBeenCalledWith({ kind: 'allow', sourceAppId: 'app-ledger', tables: ['transactions'], duration: 'session', unattended: false });
+    expect(resolve).toHaveBeenCalledWith(allowV2({ tables: [readOf('transactions')] }));
   });
 
   it('a keyboard activation (no pointer) allows once armed, whatever pointer pressed review', async () => {
@@ -456,14 +523,14 @@ describe('AC18 — the primary arms after 600 ms of visibility and ignores a pre
     expect(resolve).toHaveBeenCalledTimes(1);
   });
 
-  it('the allow carries the tables ticked, the duration chosen and the away box (day + away)', async () => {
+  it('the allow carries the tables ticked, the duration chosen and the away box (day + away) — each table v2: nothing withheld, no write (D-PR3-23)', async () => {
     openSheet();
     await act(async () => q<HTMLInputElement>('access-table-app-ledger-accounts')!.click());
     await act(async () => q<HTMLInputElement>('access-duration-day')!.click());
     await act(async () => q<HTMLInputElement>('access-away')!.click());
     arm();
     await press(allowButton());
-    expect(resolve).toHaveBeenCalledWith({ kind: 'allow', sourceAppId: 'app-ledger', tables: ['transactions', 'accounts'], duration: 'day', unattended: true });
+    expect(resolve).toHaveBeenCalledWith(allowV2({ tables: [readOf('transactions'), readOf('accounts')], duration: 'day', unattended: true }));
   });
 });
 
@@ -755,5 +822,343 @@ describe('PR-2 — a chat ask through the real recipe: the seed, and the decline
     });
     expect(db.listAccessDeclines(budget)[0]?.hash).toBe(accessRequestHash({ hints: HINTS }));
     expect(pendingAccessStore.get()[budget]).toBeUndefined();
+  });
+});
+
+// =========================================================================================
+// TASK-20261010-host-broker PR-3 (D-PR3-23; DS2–DS6, DS18, DS22, DS23): the sheet v2.
+//
+// A disclosure here may be a <details> or a button that reveals (the contract names the test id,
+// not the element): `shown` treats an element inside a CLOSED <details> as not shown, and
+// `openDisclosure` opens either kind the way a person would.
+// =========================================================================================
+
+/** On screen: rendered, and not inside a closed <details>. */
+const shown = (el: Element | null): boolean => el !== null && el.closest('details:not([open])') === null;
+const shownBy = (testId: string): boolean => shown(q(testId));
+
+async function openDisclosure(testId: string): Promise<void> {
+  const el = q(testId);
+  if (el === null) throw new Error(`no disclosure ${testId}`);
+  const details = el instanceof HTMLDetailsElement ? el : el.tagName === 'SUMMARY' ? (el.parentElement as HTMLDetailsElement | null) : null;
+  await act(async () => {
+    if (details === null) {
+      el.click();
+      return;
+    }
+    if (!details.open) {
+      details.open = true;
+      details.dispatchEvent(new Event('toggle'));
+    }
+  });
+}
+
+/** The words beside a control: its label, or the row it sits in. */
+const wordsBeside = (el: Element): string => (el.closest('label') ?? el.parentElement)?.textContent ?? '';
+
+const columnBox = (app: string, table: string, column: string): HTMLInputElement | null => q<HTMLInputElement>(`access-column-${app}-${table}-${column}`);
+const writeToggle = (app: string, table: string): HTMLInputElement | null => q<HTMLInputElement>(`access-write-${app}-${table}`);
+const egressKinds = (): (string | null)[] => [...q('access-egress')!.querySelectorAll('li')].map((line) => line.getAttribute('data-kind'));
+const clickIn = async (el: Element | null): Promise<void> => {
+  if (el === null) throw new Error('nothing to click');
+  await act(async () => (el as HTMLElement).click());
+};
+
+describe('PR-3 — the chips stay on the default path; *choose columns…* swaps them for pre-ticked boxes (D-PR3-23; DS5)', () => {
+  it('closed: today’s chips, and no per-column box on screen', () => {
+    openSheet();
+    expect(q('access-chips-app-ledger-transactions')).not.toBeNull();
+    expect(q('access-columns-app-ledger-transactions')).not.toBeNull();
+    expect(q('access-columns-app-ledger-transactions')!.textContent).toContain(SHEET3.chooseColumns);
+    for (const column of ['id', 'amount', 'category', 'date', 'note', 'api_key']) expect(shown(columnBox('app-ledger', 'transactions', column)), column).toBe(false);
+  });
+
+  it('open: every non-sensitive column a ticked box; a sensitive one a DISABLED unticked box reading never shared; the chips swapped away', async () => {
+    openSheet();
+    await openDisclosure('access-columns-app-ledger-transactions');
+    for (const column of ['id', 'amount', 'category', 'date', 'note']) {
+      const box = columnBox('app-ledger', 'transactions', column)!;
+      expect(shown(box), column).toBe(true);
+      expect(box.type, column).toBe('checkbox');
+      expect(box.checked, column).toBe(true);
+      expect(box.disabled, column).toBe(false);
+    }
+    const key = columnBox('app-ledger', 'transactions', 'api_key')!;
+    expect(shown(key)).toBe(true);
+    expect(key.disabled).toBe(true);
+    expect(key.checked).toBe(false);
+    expect(wordsBeside(key)).toContain(CONSENT_SHEET.neverShared);
+    expect(shownBy('access-chips-app-ledger-transactions'), 'the boxes REPLACE the chips').toBe(false);
+  });
+
+  it('unticked columns are WITHHELD in the decision, in the source’s column order — never a sensitive one', async () => {
+    openSheet();
+    await openDisclosure('access-columns-app-ledger-transactions');
+    await clickIn(columnBox('app-ledger', 'transactions', 'note'));
+    await clickIn(columnBox('app-ledger', 'transactions', 'date'));
+    expect(columnBox('app-ledger', 'transactions', 'note')!.checked).toBe(false);
+    arm();
+    await press(allowButton());
+    expect(resolve).toHaveBeenCalledTimes(1);
+    expect(resolve).toHaveBeenCalledWith(allowV2({ tables: [readOf('transactions', ['date', 'note'])] }));
+  });
+
+  it('every column of a ticked table unticked → allow is disabled and the sheet says choose at least one column; one back → armed again', async () => {
+    openSheet();
+    await openDisclosure('access-columns-app-ledger-transactions');
+    for (const column of ['id', 'amount', 'category', 'date', 'note']) await clickIn(columnBox('app-ledger', 'transactions', column));
+    arm();
+    expect(allowButton().disabled).toBe(true);
+    expect(sheet()!.textContent).toContain(SHEET3.pickAColumn);
+    await press(allowButton());
+    expect(resolve).not.toHaveBeenCalled();
+    await clickIn(columnBox('app-ledger', 'transactions', 'amount'));
+    expect(allowButton().disabled).toBe(false);
+    expect(sheet()!.textContent).not.toContain(SHEET3.pickAColumn);
+  });
+
+  it('past the eighth column: *show all N columns* inside the disclosure reveals the rest', async () => {
+    openSheet();
+    await act(async () => q<HTMLButtonElement>('access-more-apps')!.click());
+    await act(async () => q<HTMLInputElement>('access-source-app-wide')!.click());
+    await openDisclosure('access-columns-app-wide-wide');
+    const visibleBoxes = (): string[] =>
+      [...document.querySelectorAll<HTMLInputElement>('[data-testid^="access-column-app-wide-wide-"]')].filter(shown).map((box) => box.getAttribute('data-testid')!);
+    expect(visibleBoxes()).toHaveLength(8);
+    const showAll = [...sheet()!.querySelectorAll<HTMLElement>('button, summary')].find((el) => el.textContent?.trim() === SHEET3.showAllColumns(10));
+    expect(showAll, 'a *show all 10 columns* control').toBeDefined();
+    await clickIn(showAll!);
+    expect(visibleBoxes()).toHaveLength(10);
+    await clickIn(columnBox('app-wide', 'wide', 'c9'));
+    arm();
+    await press(allowButton());
+    expect(resolve).toHaveBeenCalledWith(allowV2({ sourceAppId: 'app-wide', tables: [readOf('wide', ['c9'])] }));
+  });
+});
+
+describe('PR-3 — *more options…*: the write toggle and the options row, CLOSED by default (D-PR3-23; DS6, DS23)', () => {
+  it('a read ask: the disclosure is there, closed — no write toggle, no settings & notes, no fetch-first on screen', () => {
+    openSheet();
+    expect(q('access-options-more')).not.toBeNull();
+    expect(q('access-options-more')!.textContent).toContain(SHEET3.moreOptions);
+    expect(shown(writeToggle('app-ledger', 'transactions'))).toBe(false);
+    expect(shownBy('access-kv')).toBe(false);
+    expect(shownBy('access-refresh')).toBe(false);
+  });
+
+  // Gate-5 UI-2: a screen reader hears what opening the disclosure does before it opens it.
+  it('the *more options…* summary is described (aria-describedby) by a visually-hidden span whose text is CONSENT_SHEET.moreOptionsHint — outside the closed disclosure', () => {
+    openSheet();
+    expect(CONSENT_SHEET.moreOptionsHint).toBe('also shows a change toggle on each ticked table');
+    const more = q('access-options-more')!;
+    const summary = more.querySelector('summary')!;
+    expect(summary.textContent).toBe(SHEET3.moreOptions);
+    const describedBy = summary.getAttribute('aria-describedby');
+    expect(describedBy).toBeTruthy();
+    const hint = document.getElementById(describedBy!);
+    expect(hint, 'the id names a real element').not.toBeNull();
+    expect(hint!.tagName).toBe('SPAN');
+    expect(hint!.classList.contains('visually-hidden')).toBe(true);
+    expect(hint!.textContent).toBe(CONSENT_SHEET.moreOptionsHint);
+    expect(more.contains(hint), 'not hidden inside the closed details').toBe(false);
+    expect(document.querySelectorAll(`[id="${describedBy}"]`), 'the id is unique').toHaveLength(1);
+  });
+
+  it('opened: the write toggle on the table row (OFF, *can also change rows*), and the options row naming the source with its hints', async () => {
+    openSheet();
+    await openDisclosure('access-options-more');
+    const write = writeToggle('app-ledger', 'transactions')!;
+    expect(shown(write)).toBe(true);
+    expect(write.type).toBe('checkbox');
+    expect(write.checked).toBe(false);
+    expect(wordsBeside(write)).toContain(SHEET3.canChange);
+    const kv = q<HTMLInputElement>('access-kv')!;
+    const refresh = q<HTMLInputElement>('access-refresh')!;
+    expect(shown(kv)).toBe(true);
+    expect(shown(refresh)).toBe(true);
+    expect(kv.checked).toBe(false);
+    expect(refresh.checked).toBe(false);
+    const more = sheet()!.textContent ?? '';
+    expect(more).toContain(SHEET3.settingsAndNotes('Ledger'));
+    expect(more).toContain(SHEET3.settingsAndNotesHint('Ledger'));
+    expect(more).toContain(SHEET3.fetchFirst('Ledger'));
+    expect(more).toContain(SHEET3.fetchFirstHint('Ledger'));
+  });
+
+  it('the chips are byte-identical whatever the options say (the default path is untouched by a ticked write)', async () => {
+    openSheet();
+    const before = q('access-chips-app-ledger-transactions')!.outerHTML;
+    await openDisclosure('access-options-more');
+    await clickIn(writeToggle('app-ledger', 'transactions'));
+    expect(q('access-chips-app-ledger-transactions')!.outerHTML).toBe(before);
+  });
+
+  it('a ticked write: the one-breath undo note under it, the closing says reads and changes — and NO write line joins the egress block', async () => {
+    openSheet();
+    await openDisclosure('access-options-more');
+    const note = SHEET3.undoNote('Ledger', 'transactions', 'Budget');
+    expect(sheet()!.textContent).not.toContain(note);
+    expect(egressKinds()).toEqual(['brain', 'approved', 'open-url', 'closing']);
+    await clickIn(writeToggle('app-ledger', 'transactions'));
+    expect(writeToggle('app-ledger', 'transactions')!.checked).toBe(true);
+    expect(sheet()!.textContent).toContain(note);
+    expect(egressKinds(), 'the block lists places data can go — a write is not one').toEqual(['brain', 'approved', 'open-url', 'closing']);
+    expect(q('access-egress')!.querySelector('li[data-kind="closing"]')!.textContent).toBe(closing3('Ledger', true));
+    // Unticked again: the note goes, and the closing is today's.
+    await clickIn(writeToggle('app-ledger', 'transactions'));
+    expect(sheet()!.textContent).not.toContain(note);
+    expect(q('access-egress')!.querySelector('li[data-kind="closing"]')!.textContent).toBe(EGRESS.closing('Ledger'));
+  });
+
+  it('settings & notes and fetch-first add NO egress line and leave the closing as it is', async () => {
+    openSheet();
+    await openDisclosure('access-options-more');
+    await clickIn(q('access-kv'));
+    await clickIn(q('access-refresh'));
+    expect(egressKinds()).toEqual(['brain', 'approved', 'open-url', 'closing']);
+    expect(q('access-egress')!.querySelector('li[data-kind="closing"]')!.textContent).toBe(EGRESS.closing('Ledger'));
+  });
+
+  it('the allow carries the ticked write on THAT table only, and kv / refresh as ticked', async () => {
+    openSheet();
+    await act(async () => q<HTMLInputElement>('access-table-app-ledger-accounts')!.click());
+    await openDisclosure('access-options-more');
+    await clickIn(writeToggle('app-ledger', 'transactions'));
+    await clickIn(q('access-kv'));
+    await clickIn(q('access-refresh'));
+    await act(async () => q<HTMLInputElement>('access-duration-day')!.click());
+    arm();
+    await press(allowButton());
+    expect(resolve).toHaveBeenCalledWith(
+      allowV2({ tables: [{ name: 'transactions', withheld: [], write: true }, readOf('accounts')], duration: 'day', kv: true, refresh: true }),
+    );
+  });
+});
+
+describe('PR-3 — an ask that carried access: write (D-PR3-4/23; DS2, DS6)', () => {
+  const writeAsk = (over: Partial<PendingAccessRequest> = {}): PendingAccessRequest => fakePending({ wantsWrite: true, ...over } as Partial<PendingAccessRequest>);
+
+  it('the title says "— and change —"; a read ask keeps today’s title', () => {
+    openSheet(writeAsk());
+    expect(q('access-sheet-title')!.textContent).toBe(SHEET3.title('Budget', true));
+    expect(SHEET3.title('Budget', true)).not.toBe(CONSENT_SHEET.title('Budget'));
+    act(() => {
+      pendingAccessStore.set({});
+      reviewStore.set(undefined);
+    });
+    openSheet();
+    expect(q('access-sheet-title')!.textContent).toBe(CONSENT_SHEET.title('Budget'));
+  });
+
+  it('*more options…* starts OPEN: the write toggle is on screen at once — and still OFF until the person ticks it', () => {
+    openSheet(writeAsk());
+    const write = writeToggle('app-ledger', 'transactions');
+    expect(shown(write), 'offered without a click').toBe(true);
+    expect(write!.checked, 'never pre-ticked by the app’s ask').toBe(false);
+    expect(sheet()!.textContent).not.toContain(SHEET3.undoNote('Ledger', 'transactions', 'Budget'));
+  });
+
+  it('allowed without ticking it, the access stays read-only (write: false)', async () => {
+    openSheet(writeAsk());
+    arm();
+    await press(allowButton());
+    expect(resolve).toHaveBeenCalledWith(allowV2({ tables: [readOf('transactions')] }));
+  });
+
+  it('allowed with it ticked, the decision says write on that table', async () => {
+    openSheet(writeAsk());
+    await clickIn(writeToggle('app-ledger', 'transactions'));
+    expect(sheet()!.textContent).toContain(SHEET3.undoNote('Ledger', 'transactions', 'Budget'));
+    arm();
+    await press(allowButton());
+    expect(resolve).toHaveBeenCalledWith(allowV2({ tables: [{ name: 'transactions', withheld: [], write: true }] }));
+  });
+});
+
+describe('PR-3 — a renewal of a write access shows its toggle ticked without a click (D-PR3-23; DS6)', () => {
+  let db: UserDb;
+  let budget: string;
+  let ledger: string;
+  /** LOCAL structural type — `CreateGrantInput` v2 (D-PR3-23) until grants.ts exports it. */
+  type CreateGrantV2 = (
+    db: UserDb,
+    input: Omit<Parameters<typeof createGrantFromDecision>[1], 'tables'> & { tables: TableChoiceV2[]; kv?: boolean; refresh?: boolean },
+  ) => ReturnType<typeof createGrantFromDecision>;
+  const createGrantV2 = createGrantFromDecision as unknown as CreateGrantV2;
+
+  beforeEach(async () => {
+    vi.useRealTimers();
+    await act(async () => {
+      resetAccessSession();
+      db = await installTestUserDb();
+    });
+    __setAccessDepsForTests({ getDb: () => Promise.resolve(db) });
+    budget = db.installApp({ displayName: 'Budget', html: '<!doctype html><title>b</title>' }).appId;
+    ledger = db.installApp({ displayName: 'Ledger', html: '<!doctype html><title>l</title>' }).appId;
+    await db.applyAppDdl(ledger, ['CREATE TABLE transactions (amount INTEGER, category TEXT)']);
+    await db.driver.handle(ledger, { v: PROTOCOL_VERSION, type: FRAME_TYPES.dbRequest, requestId: 'seed-1', instanceId: 'seed', op: 'exec', sql: "INSERT INTO transactions VALUES (1, 'food')" });
+  });
+
+  afterEach(async () => {
+    await act(async () => {
+      resetAccessSession();
+    });
+    __setAccessDepsForTests();
+  });
+
+  it('*allow again* on a paused write + fetch-first access: more options OPEN, the write toggle and fetch-first TICKED, nothing clicked', async () => {
+    const sources = await collectSources(db, budget);
+    const source = [...sources.matched, ...sources.rest].find((candidate) => candidate.appId === ledger)!;
+    let grant: Awaited<ReturnType<typeof createGrantFromDecision>> | undefined;
+    await act(async () => {
+      grant = await createGrantV2(db, {
+        readerAppId: budget,
+        source,
+        tables: [{ name: 'transactions', withheld: [], write: true }],
+        refresh: true,
+        duration: 'week',
+        unattended: false,
+        purpose: 'to tidy the categories',
+        provenance: 'app',
+        generation: 0,
+        now: Date.now(),
+      });
+    });
+    await act(async () => {
+      await startUserAsk(budget, { renew: { grant: grant!, duration: 'week' } });
+    });
+    expect(sheet()).not.toBeNull();
+    const write = writeToggle(ledger, 'transactions');
+    expect(shown(write), 'the toggle is on screen without opening anything').toBe(true);
+    expect(write!.checked, 'the renewal carries the old access’s write').toBe(true);
+    expect(shownBy('access-refresh')).toBe(true);
+    expect(q<HTMLInputElement>('access-refresh')!.checked).toBe(true);
+    expect(q<HTMLInputElement>('access-kv')!.checked).toBe(false);
+    expect(sheet()!.textContent).toContain(SHEET3.undoNote('Ledger', 'transactions', 'Budget'));
+  });
+
+  it('the twin: renewing a READ access leaves more options closed', async () => {
+    const sources = await collectSources(db, budget);
+    const source = [...sources.matched, ...sources.rest].find((candidate) => candidate.appId === ledger)!;
+    let grant: Awaited<ReturnType<typeof createGrantFromDecision>> | undefined;
+    await act(async () => {
+      grant = await createGrantV2(db, {
+        readerAppId: budget,
+        source,
+        tables: [{ name: 'transactions', withheld: [], write: false }],
+        duration: 'week',
+        unattended: false,
+        purpose: 'to add things up',
+        provenance: 'app',
+        generation: 0,
+        now: Date.now(),
+      });
+    });
+    await act(async () => {
+      await startUserAsk(budget, { renew: { grant: grant!, duration: 'week' } });
+    });
+    expect(sheet()).not.toBeNull();
+    expect(shown(writeToggle(ledger, 'transactions'))).toBe(false);
+    expect(shownBy('access-refresh')).toBe(false);
   });
 });

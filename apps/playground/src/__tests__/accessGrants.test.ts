@@ -13,6 +13,14 @@
 // a session grant dies with its reader's frame (retract, or a newer generation).
 //
 // The real memory user db; the engine's clock is its injected seam.
+//
+// TASK-20261010-host-broker PR-3 (D-PR3-2/3/23; AC26; R-86): `createGrantFromDecision` writes the
+// RECORD v2 with every default OMITTED — a plain read allow's record is byte-for-byte a 1.1 record
+// (no `withheld`/`write`/`kv`/`refresh` key, `access: 'read'`); a ticked write writes `write: true`
+// on THAT table and `access: 'write'`; an unticked column is `withheld` (never a credential-named
+// one); `kv`/`refresh` only when ticked; `provenance: 'chat'` when the pending was the chat's ask.
+// `grantView` v2 adds `write`/`kv`/`refresh` only when set and never `withheld`. The v2 input and
+// record seats are LOCAL structural types until grants.ts / the protocol export them.
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -29,10 +37,12 @@ import {
 
 import { createAccessHandlerFor } from '../access/accessHandler.js';
 import { collectSources, pendingAccessStore } from '../access/consent.js';
+import { startUserAsk } from '../access/userAsk.js';
 import {
   __setAccessDepsForTests,
   accessRevisionStore,
   createGrantFromDecision,
+  grantView,
   grantsForApp,
   markExpiredOnce,
   noteReaderGeneration,
@@ -421,5 +431,169 @@ describe('suspendIfSourceRestricted — the connection-approve / import seam', (
     expect(db.getAccessGrant(other.id)).toMatchObject({ status: 'active' });
     expect(rings.map((ring) => ring.data)).toEqual([{ grantId: persisted.id }]);
     expect(await suspendIfSourceRestricted(db, ledger, at), 'already paused').toBe(0);
+  });
+});
+
+// =========================================================================================
+// TASK-20261010-host-broker PR-3 (D-PR3-2/3/23; AC26; R-86) — the record v2, defaults omitted
+// =========================================================================================
+
+/** LOCAL structural types (D-PR3-2/23) — replaced by the real exports at Gate 5. */
+interface TableChoiceV2 {
+  name: string;
+  withheld: string[];
+  write: boolean;
+}
+type CreateGrantV2 = (
+  db: UserDb,
+  input: Omit<Parameters<typeof createGrantFromDecision>[1], 'tables'> & { tables: TableChoiceV2[]; kv?: boolean; refresh?: boolean },
+) => ReturnType<typeof createGrantFromDecision>;
+const createGrantV2 = createGrantFromDecision as unknown as CreateGrantV2;
+/** The record's v2 seats, read without the 1.1 type. */
+type RecordV2 = { access: string; provenance: string; kv?: unknown; refresh?: unknown; scope: { tables: Array<Record<string, unknown>> } };
+const v2 = (grant: AnyAccessGrant): RecordV2 => grant as unknown as RecordV2;
+
+async function allowV2(
+  tables: TableChoiceV2[],
+  over: { kv?: boolean; refresh?: boolean; duration?: 'session' | 'day' | 'week' | 'always' } = {},
+): Promise<AnyAccessGrant> {
+  const ranked = await collectSources(db, budget);
+  const source = [...ranked.matched, ...ranked.rest].find((candidate) => candidate.appId === ledger);
+  if (source === undefined) throw new Error('no such candidate');
+  return createGrantV2(db, {
+    readerAppId: budget,
+    source,
+    tables,
+    ...(over.kv !== undefined ? { kv: over.kv } : {}),
+    ...(over.refresh !== undefined ? { refresh: over.refresh } : {}),
+    duration: over.duration ?? 'day',
+    unattended: false,
+    purpose: 'to tidy the categories',
+    provenance: 'app',
+    generation: 0,
+    now: clock.now,
+  });
+}
+
+const read = (name: string, withheld: string[] = []): TableChoiceV2 => ({ name, withheld, write: false });
+
+describe('PR-3 — createGrantFromDecision writes the record v2 with every default OMITTED (D-PR3-2/23)', () => {
+  it('a plain read allow is byte-for-byte a 1.1 record: no withheld, write, kv or refresh key — access read', async () => {
+    const grant = await allowV2([read('transactions')], { kv: false, refresh: false });
+    expect(grant).toMatchObject({ access: 'read', scope: { tables: [{ name: 'transactions', columns: ['id', 'amount', 'category'] }] } });
+    expect(grant.scope).toEqual({ tables: [{ name: 'transactions', columns: ['id', 'amount', 'category'] }] });
+    for (const key of ['kv', 'refresh']) expect(Object.prototype.hasOwnProperty.call(grant, key), key).toBe(false);
+    expect(db.getAccessGrant(grant.id)).toEqual(grant);
+  });
+
+  it('a ticked write: write: true on THAT table only, access write — and the granted line as today', async () => {
+    const grant = await allowV2([{ name: 'transactions', withheld: [], write: true }, read('accounts')]);
+    expect(v2(grant).access).toBe('write');
+    expect(grant.scope).toEqual({
+      tables: [
+        { name: 'transactions', columns: ['id', 'amount', 'category'], write: true },
+        { name: 'accounts', columns: ['name', 'balance'] },
+      ],
+    });
+    expect(db.getAccessGrant(grant.id)).toEqual(grant);
+    expect(db.listAccessLog(ledger)).toEqual([
+      { at: new Date(T0).toISOString(), kind: 'granted', grantId: grant.id, readerAppId: budget, readerName: 'Budget', tables: ['transactions', 'accounts'] },
+    ]);
+  });
+
+  it('an unticked column is WITHHELD; the granted columns are the rest — a credential-named column is in neither', async () => {
+    const grant = await allowV2([read('transactions', ['category'])]);
+    expect(grant.scope).toEqual({ tables: [{ name: 'transactions', columns: ['id', 'amount'], withheld: ['category'] }] });
+    expect(JSON.stringify(grant)).not.toContain('api_key');
+  });
+
+  it('a withheld list naming a credential-named column records nothing for it — it was never offered, so it is never "withheld"', async () => {
+    const grant = await allowV2([read('transactions', ['api_key'])]);
+    expect(grant.scope).toEqual({ tables: [{ name: 'transactions', columns: ['id', 'amount', 'category'] }] });
+  });
+
+  it('kv and refresh are written only when ticked', async () => {
+    const both = await allowV2([read('transactions')], { kv: true, refresh: true });
+    expect(v2(both).kv).toBe(true);
+    expect(v2(both).refresh).toBe(true);
+    expect(v2(both).access, 'kv and refresh widen what may be asked — not what may be changed').toBe('read');
+    const onlyRefresh = await allowV2([read('accounts')], { refresh: true });
+    expect(v2(onlyRefresh).refresh).toBe(true);
+    expect(Object.prototype.hasOwnProperty.call(onlyRefresh, 'kv')).toBe(false);
+  });
+
+  it('every readable column withheld → refused, and nothing is written', async () => {
+    await expect(allowV2([read('transactions', ['id', 'amount', 'category'])])).rejects.toThrow();
+    expect(db.listAccessGrants()).toEqual([]);
+    expect(db.listAccessLog(ledger)).toEqual([]);
+  });
+
+  it('a session grant carries the same v2 seats in memory', async () => {
+    const grant = await allowV2([{ name: 'transactions', withheld: ['category'], write: true }], { duration: 'session', refresh: true });
+    expect(db.listAccessGrants()).toEqual([]);
+    expect(grant.scope).toEqual({ tables: [{ name: 'transactions', columns: ['id', 'amount'], withheld: ['category'], write: true }] });
+    expect(v2(grant).access).toBe('write');
+    expect(v2(grant).refresh).toBe(true);
+  });
+});
+
+describe('PR-3 — provenance chat when the pending was the chat’s ask (D-PR3-23; R-86)', () => {
+  type AllowV2 = { kind: 'allow'; sourceAppId: string; tables: TableChoiceV2[]; duration: 'session' | 'day' | 'week' | 'always'; unattended: boolean; kv: boolean; refresh: boolean };
+  const answer = async (decision: AllowV2): Promise<AnyAccessGrant | undefined> => {
+    const outcome = (await (pendingAccessStore.get()[budget]!.resolve as unknown as (d: AllowV2) => Promise<{ kind: string; grantId?: string }>)(decision)) as {
+      kind: string;
+      grantId?: string;
+    };
+    expect(outcome.kind).toBe('allowed');
+    return db.getAccessGrant(outcome.grantId!);
+  };
+  const dayRead: AllowV2 = { kind: 'allow', sourceAppId: '', tables: [read('transactions')], duration: 'day', unattended: false, kv: false, refresh: false };
+
+  it('the chat’s ask (askedIn: chat) writes provenance chat', async () => {
+    await startUserAsk(budget, { ask: { purpose: 'to compare spending with the ledger', hints: { tables: ['transactions'] } } });
+    expect(pendingAccessStore.get()[budget]?.askedIn).toBe('chat');
+    const grant = await answer({ ...dayRead, sourceAppId: ledger });
+    expect(grant?.provenance).toBe('chat');
+  });
+
+  it('the twin: the user’s own ask from host chrome stays provenance user', async () => {
+    await startUserAsk(budget);
+    expect(pendingAccessStore.get()[budget]?.askedIn).toBeUndefined();
+    const grant = await answer({ ...dayRead, sourceAppId: ledger });
+    expect(grant?.provenance).toBe('user');
+  });
+});
+
+describe('PR-3 — grantView v2: write, kv and refresh only when set; never withheld (D-PR3-3)', () => {
+  /** Today's view seats — a read-only grant's view is byte-identical to PR-2's. */
+  const TODAYS_VIEW_KEYS = ['access', 'duration', 'expiresAt', 'id', 'source', 'tables', 'unattended'];
+
+  it('a read-only grant’s view is today’s, key for key', async () => {
+    const grant = await allowV2([read('transactions')]);
+    const view = grantView(db, grant);
+    expect(Object.keys(view).sort()).toEqual(TODAYS_VIEW_KEYS);
+    expect(view.access).toBe('read');
+    expect(view.tables).toEqual([{ name: 'transactions', columns: ['id', 'amount', 'category'] }]);
+  });
+
+  it('a write + kv + refresh grant with a withheld column: write on its table, kv and refresh — and the withheld column nowhere', async () => {
+    const grant = await allowV2([{ name: 'transactions', withheld: ['category'], write: true }, read('accounts')], { kv: true, refresh: true });
+    const view = grantView(db, grant);
+    expect(view).toEqual({
+      id: grant.id,
+      access: 'write',
+      source: { displayName: 'Ledger' },
+      tables: [
+        { name: 'transactions', columns: ['id', 'amount'], write: true },
+        { name: 'accounts', columns: ['name', 'balance'] },
+      ],
+      duration: 'day',
+      expiresAt: new Date(T0 + DAY).toISOString(),
+      unattended: false,
+      kv: true,
+      refresh: true,
+    });
+    expect(JSON.stringify(view)).not.toContain('withheld');
+    expect(JSON.stringify(view)).not.toContain('category');
   });
 });

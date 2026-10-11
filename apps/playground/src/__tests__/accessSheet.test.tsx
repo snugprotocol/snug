@@ -13,11 +13,22 @@
 // with nothing says so; the sheet is a labelled modal dialog and Escape closes it.
 //
 // The real memory user db; the engine's clock is its injected seam.
+//
+// TASK-20261010-host-broker PR-3 (D-PR3-6/15/24; DS7, DS12, DS14, S18): the source's history gains
+// the `wrote`, `undone` and `refreshed` rows — the who is the reader's name for a change made by
+// the app, its chat or a schedule and "you" for the user's own act (the reader's name moves INTO
+// the sentence), the words are `historyLine(entry, now, readerName)`, and a `wrote` row keeps its
+// statement behind the disclosure titled *what it changed*; *undo* (`access-history-undo`) is
+// offered only on a `wrote` row whose `undoId` is in the sheet's undoable set, behind the armed
+// confirm (`access-undo-confirm`, the Settings card's clear-history recipe) with its question and
+// ONE outcome line (`access-history-undo-outcome`); a write access's row carries the badge
+// (`access-row-write`: *can also change rows*, past tense when ended) and still exactly ONE act.
+// New props, keys and the v2 record are LOCAL structural types until the modules export them.
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
-import { act } from 'react';
+import { act, type ReactElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -25,6 +36,7 @@ import type { UserDb } from '@snugprotocol/db';
 import { FRAME_TYPES, PROTOCOL_VERSION, SIDECAR_SYMBOLIC_HOST, accessRequestHash } from '@snugprotocol/protocol';
 
 import { ACCESS_ARM_MS, AccessConsentSheet } from '../access/AccessConsentSheet.js';
+import { AccessHistory } from '../access/AccessHistory.js';
 import { AccessSheet } from '../access/AccessSheet.js';
 import { collectSources, pendingAccessStore, reviewStore, type ConsentOutcome } from '../access/consent.js';
 import { ACCESS_SHEET, CONSENT_SHEET, allowLabel, grantStateCopy, historyLine } from '../access/copy.js';
@@ -621,5 +633,353 @@ describe('the sheet re-reads on the access revision', () => {
     });
     await until(() => rowsIn('access-reads').length === 1, 'the new row');
     expect(one('access-row-sentence', rowsIn('access-reads')[0])?.textContent).toBe(ACCESS_SHEET.row('Budget', 'Pantry', ['items']));
+  });
+});
+
+// =========================================================================================
+// TASK-20261010-host-broker PR-3 (D-PR3-6/15/24; DS7, DS12, DS14, S18)
+// =========================================================================================
+
+/** LOCAL structural types — the PR-3 copy and props (D-PR3-24) until copy.ts / AccessHistory.tsx export them. */
+const SHEET3 = ACCESS_SHEET as unknown as {
+  canChange: string;
+  couldChange: string;
+  whatItChanged: string;
+  undo: string;
+  undoArm(table: string, n: number, sourceName: string): string;
+  undoYes: string;
+  undoKeep: string;
+  undone: string;
+  undoFailed(reason: string): string;
+};
+/** `historyLine(entry, now, readerName)` — and the source's name for the refreshed line (Q: lane U). */
+const historyLineV3 = historyLine as unknown as (entry: Record<string, unknown>, now: number, readerName: string, sourceName?: string) => string;
+/** What `onUndo` answers: done, or why not (the engine's words). */
+type UndoAnswer = { ok: true } | { ok: false; reason: string; message: string };
+type AccessHistoryPropsV3 = {
+  entries: readonly Record<string, unknown>[];
+  now: number;
+  undoable?: ReadonlySet<string>;
+  onUndo?: (undoId: string) => Promise<UndoAnswer>;
+  /** Q (lane U): the undo question names the source ("if Ledger changed them since"). */
+  sourceName?: string;
+};
+const HistoryV3 = AccessHistory as unknown as (props: AccessHistoryPropsV3) => ReactElement | null;
+type CreateGrantV2 = (
+  db: UserDb,
+  input: Omit<Parameters<typeof createGrantFromDecision>[1], 'tables'> & { tables: Array<{ name: string; withheld: string[]; write: boolean }>; kv?: boolean; refresh?: boolean },
+) => ReturnType<typeof createGrantFromDecision>;
+const createGrantV2 = createGrantFromDecision as unknown as CreateGrantV2;
+/** The db's undo journal seat (D-PR3-7) until the facade declares it. */
+type UndoJournal = { putAccessUndo(targetAppId: string, entry: Record<string, unknown>): string };
+
+const UNDO_ID = '3b2a1c0d-4e5f-4a6b-8c7d-9e0f1a2b3c4d';
+const OTHER_UNDO_ID = '9c8b7a6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d';
+
+function wroteLine(grantId: string, over: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    at: new Date(clock.now - 2 * MIN).toISOString(),
+    kind: 'wrote',
+    grantId,
+    readerAppId: budget,
+    readerName: 'Budget',
+    via: 'app',
+    authority: 'permission',
+    changes: 2,
+    undoId: UNDO_ID,
+    tables: ['transactions'],
+    sql: "UPDATE transactions SET category = '<b>groceries</b>' WHERE category = 'food'",
+    ...over,
+  };
+}
+
+const appendLine = (appId: string, entry: Record<string, unknown>): void => db.appendAccessLog(appId, entry as unknown as Parameters<UserDb['appendAccessLog']>[1]);
+const rowOfKind = (kind: string, within: ParentNode = document): HTMLElement[] => all('access-history-row', within).filter((row) => row.getAttribute('data-kind') === kind);
+
+describe("PR-3 — the source's history: a change, its undo, a fetch (D-PR3-6/24; DS7, DS13)", () => {
+  it('wrote: the reader’s name, the words, and the statement as TEXT behind *what it changed*', async () => {
+    const grant = await allow();
+    const line = wroteLine(grant.id);
+    appendLine(ledger, line);
+    await renderSheet(ledger);
+    const [row] = rowOfKind('wrote');
+    expect(row).toBeDefined();
+    expect(one('access-history-who', row)?.textContent).toBe('Budget');
+    expect(one('access-history-words', row)?.textContent).toBe(historyLineV3(line, clock.now, 'Budget', 'Ledger'));
+    expect(one('access-history-words', row)?.textContent).toBe('changed 2 rows in transactions · 2 min ago');
+    const changed = one('access-history-asked', row)!;
+    expect(changed.tagName).toBe('DETAILS');
+    expect(changed.querySelector('summary')?.textContent).toBe(SHEET3.whatItChanged);
+    expect(changed.querySelector('code')?.textContent).toBe("UPDATE transactions SET category = '<b>groceries</b>' WHERE category = 'food'");
+    expect(changed.querySelector('b')).toBeNull();
+  });
+
+  it('a change made from its chat or on a schedule is still the reader’s — its name is the who', async () => {
+    const grant = await allow();
+    appendLine(ledger, wroteLine(grant.id, { via: 'chat', undoId: OTHER_UNDO_ID }));
+    appendLine(ledger, wroteLine(grant.id, { via: 'schedule', undoId: UNDO_ID }));
+    await renderSheet(ledger);
+    const rows = rowOfKind('wrote');
+    expect(rows).toHaveLength(2);
+    for (const row of rows) expect(one('access-history-who', row)?.textContent).toBe('Budget');
+  });
+
+  it('undone by the user: the who is "you", and Budget’s name moves into the sentence', async () => {
+    const grant = await allow();
+    const line = { at: new Date(clock.now - 2 * MIN).toISOString(), kind: 'undone', grantId: grant.id, readerAppId: budget, readerName: 'Budget', via: 'user', changes: 2, tables: ['transactions'] };
+    appendLine(ledger, line);
+    await renderSheet(ledger);
+    const [row] = rowOfKind('undone');
+    expect(one('access-history-who', row)?.textContent).toBe('you');
+    expect(one('access-history-words', row)?.textContent).toBe(historyLineV3(line, clock.now, 'Budget', 'Ledger'));
+    expect(one('access-history-words', row)?.textContent).toBe("undid Budget's change to transactions · 2 rows put back · 2 min ago");
+    expect(one('access-history-undo', row), 'an undo is never itself undoable').toBeNull();
+  });
+
+  it('refreshed: the reader asked the source to fetch — with the reason’s words when it failed', async () => {
+    const grant = await allow();
+    const fetched = { at: new Date(clock.now - 2 * MIN).toISOString(), kind: 'refreshed', grantId: grant.id, readerAppId: budget, readerName: 'Budget', via: 'app' };
+    const failed = { ...fetched, at: new Date(clock.now - 3 * MIN).toISOString(), reason: 'no-handler' };
+    appendLine(ledger, failed);
+    appendLine(ledger, fetched);
+    await renderSheet(ledger);
+    const rows = rowOfKind('refreshed');
+    expect(rows).toHaveLength(2);
+    const words = rows.map((row) => one('access-history-words', row)?.textContent);
+    expect(words).toContain(historyLineV3(fetched, clock.now, 'Budget', 'Ledger'));
+    expect(words).toContain(historyLineV3(failed, clock.now, 'Budget', 'Ledger'));
+    expect(words).toContain('asked Ledger to fetch new data · 2 min ago');
+    for (const row of rows) expect(one('access-history-who', row)?.textContent).toBe('Budget');
+  });
+
+  it('the empty note counts changes and fetches too: a history with a change and no read is not "nothing on record"', async () => {
+    const grant = await allow();
+    appendLine(ledger, wroteLine(grant.id));
+    await renderSheet(ledger);
+    expect(one('access-history-empty')).toBeNull();
+  });
+
+  it('…and a history with only a fetch is not empty either', async () => {
+    const grant = await allow();
+    appendLine(ledger, { at: new Date(clock.now - MIN).toISOString(), kind: 'refreshed', grantId: grant.id, readerAppId: budget, readerName: 'Budget', via: 'app' });
+    await renderSheet(ledger);
+    expect(one('access-history-empty')).toBeNull();
+  });
+});
+
+describe('PR-3 — *undo* on a change, behind the armed confirm (D-PR3-24; DS12, S18) — AccessHistory itself', () => {
+  async function renderHistory(props: AccessHistoryPropsV3): Promise<void> {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    await act(async () => {
+      root!.render(<HistoryV3 {...props} />);
+    });
+  }
+
+  const GRANT = '6f1c1d4e-2b3a-4c5d-8e9f-0a1b2c3d4e5f';
+  const entriesWith = (...extra: Record<string, unknown>[]): Record<string, unknown>[] => [
+    { at: new Date(T0 - MIN).toISOString(), kind: 'wrote', grantId: GRANT, readerAppId: 'budget', readerName: 'Budget', via: 'app', authority: 'permission', changes: 3, undoId: UNDO_ID, tables: ['transactions'], sql: 'UPDATE transactions SET note = 1 WHERE id = 2' },
+    ...extra,
+  ];
+
+  it('*undo* only on a wrote row whose undoId is LIVE — not on an expired one, a read, or an undone line', async () => {
+    const onUndo = vi.fn(async (): Promise<UndoAnswer> => ({ ok: true }));
+    await renderHistory({
+      entries: entriesWith(
+        { at: new Date(T0 - 2 * MIN).toISOString(), kind: 'wrote', grantId: GRANT, readerAppId: 'budget', readerName: 'Budget', via: 'app', authority: 'permission', changes: 1, undoId: OTHER_UNDO_ID, tables: ['transactions'] },
+        { at: new Date(T0 - 3 * MIN).toISOString(), kind: 'read', grantId: GRANT, readerAppId: 'budget', readerName: 'Budget', tables: ['transactions'], rows: 4, attended: true },
+        { at: new Date(T0 - 4 * MIN).toISOString(), kind: 'undone', grantId: GRANT, readerAppId: 'budget', readerName: 'Budget', via: 'user', changes: 1, tables: ['transactions'] },
+      ),
+      now: T0,
+      undoable: new Set([UNDO_ID]),
+      onUndo,
+      sourceName: 'Ledger',
+    });
+    const undos = all('access-history-undo');
+    expect(undos).toHaveLength(1);
+    expect(undos[0]!.textContent).toBe(SHEET3.undo);
+    expect(undos[0]!.closest('[data-testid="access-history-row"]')?.getAttribute('data-kind')).toBe('wrote');
+    expect(one('access-history-words', undos[0]!.closest('[data-testid="access-history-row"]')!)?.textContent).toBe('changed 3 rows in transactions · 1 min ago');
+    expect(onUndo).not.toHaveBeenCalled();
+  });
+
+  it('no undoable set, no undo: a history rendered without the act offers none', async () => {
+    await renderHistory({ entries: entriesWith(), now: T0, sourceName: 'Ledger' });
+    expect(all('access-history-undo')).toHaveLength(0);
+  });
+
+  it('the first press only ARMS: the question names the table, the count and the source; *keep* disarms and nothing is undone', async () => {
+    const onUndo = vi.fn(async (): Promise<UndoAnswer> => ({ ok: true }));
+    await renderHistory({ entries: entriesWith(), now: T0, undoable: new Set([UNDO_ID]), onUndo, sourceName: 'Ledger' });
+    await click(one('access-history-undo'));
+    const confirm = one('access-undo-confirm')!;
+    expect(confirm).not.toBeNull();
+    expect(confirm.getAttribute('role')).toBe('group');
+    expect(confirm.getAttribute('aria-label')).toBe(SHEET3.undo);
+    expect(confirm.textContent).toContain(SHEET3.undoArm('transactions', 3, 'Ledger'));
+    expect(one('access-undo-yes', confirm)?.textContent).toBe(SHEET3.undoYes);
+    expect(one('access-undo-keep', confirm)?.textContent).toBe(SHEET3.undoKeep);
+    expect(onUndo).not.toHaveBeenCalled();
+    await click(one('access-undo-keep'));
+    expect(one('access-undo-confirm')).toBeNull();
+    expect(onUndo).not.toHaveBeenCalled();
+    expect(one('access-history-undo')).not.toBeNull();
+  });
+
+  it('*yes, undo* calls onUndo ONCE with the undoId, and the one outcome line says it is undone', async () => {
+    const onUndo = vi.fn(async (): Promise<UndoAnswer> => ({ ok: true }));
+    await renderHistory({ entries: entriesWith(), now: T0, undoable: new Set([UNDO_ID]), onUndo, sourceName: 'Ledger' });
+    await click(one('access-history-undo'));
+    await click(one('access-undo-yes'));
+    expect(onUndo).toHaveBeenCalledTimes(1);
+    expect(onUndo).toHaveBeenCalledWith(UNDO_ID);
+    expect(one('access-undo-confirm')).toBeNull();
+    const outcomes = all('access-history-undo-outcome');
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0]!.textContent).toBe(SHEET3.undone);
+  });
+
+  // Gate-5 UI-2: the confirm *yes, undo* answered is gone with the arm, so focus would fall to the
+  // page — the one outcome line is focusable (tabIndex -1) and catches it.
+  it('after *yes*, focus lands on the one outcome line (tabIndex -1) — the button that held it is gone', async () => {
+    const onUndo = vi.fn(async (): Promise<UndoAnswer> => ({ ok: true }));
+    await renderHistory({ entries: entriesWith(), now: T0, undoable: new Set([UNDO_ID]), onUndo, sourceName: 'Ledger' });
+    await click(one('access-history-undo'));
+    const yes = one('access-undo-yes')!;
+    act(() => yes.focus());
+    expect(document.activeElement).toBe(yes);
+    await click(yes);
+    expect(one('access-undo-yes')).toBeNull();
+    const line = one('access-history-undo-outcome')!;
+    expect(line.textContent).toBe(SHEET3.undone);
+    expect(line.tabIndex).toBe(-1);
+    expect(line.getAttribute('tabindex')).toBe('-1');
+    expect(document.activeElement, 'focus is on the outcome line, not lost to the page').toBe(line);
+  });
+
+  it('a failed undo’s line catches focus the same way', async () => {
+    const onUndo = vi.fn(async (): Promise<UndoAnswer> => ({ ok: false, reason: 'try again in a moment', message: 'try again in a moment' }));
+    await renderHistory({ entries: entriesWith(), now: T0, undoable: new Set([UNDO_ID]), onUndo, sourceName: 'Ledger' });
+    await click(one('access-history-undo'));
+    const yes = one('access-undo-yes')!;
+    act(() => yes.focus());
+    await click(yes);
+    const line = one('access-history-undo-outcome')!;
+    expect(line.textContent).toBe(SHEET3.undoFailed('try again in a moment'));
+    expect(document.activeElement).toBe(line);
+  });
+
+  it('a failed undo says why in the same one line — and offers nothing new', async () => {
+    const onUndo = vi.fn(async (): Promise<UndoAnswer> => ({ ok: false, reason: 'try again in a moment', message: 'try again in a moment' }));
+    await renderHistory({ entries: entriesWith(), now: T0, undoable: new Set([UNDO_ID]), onUndo, sourceName: 'Ledger' });
+    await click(one('access-history-undo'));
+    await click(one('access-undo-yes'));
+    expect(onUndo).toHaveBeenCalledTimes(1);
+    expect(all('access-history-undo-outcome').map((el) => el.textContent)).toEqual([SHEET3.undoFailed('try again in a moment')]);
+  });
+});
+
+describe('PR-3 — *undo* on the source’s sheet runs the real undo (D-PR3-7/15/24; S3, S18)', () => {
+  async function selectCategory(id: number): Promise<unknown> {
+    const answer = await db.driver.handle(ledger, { v: PROTOCOL_VERSION, type: FRAME_TYPES.dbRequest, requestId: `peek-${Math.random()}`, instanceId: 'seed', op: 'exec', sql: `SELECT category FROM transactions WHERE id = ${id}` });
+    return answer.ok ? answer.rows?.[0]?.[0] : `failed: ${answer.message}`;
+  }
+
+  it('a live journal entry offers *undo*; yes puts the row back, writes an undone line whose who is "you", and the change is no longer undoable', async () => {
+    const grant = await allow();
+    // The change the reader made (row 1: food → groceries), the journal entry the broker kept, and its line.
+    await db.driver.handle(ledger, { v: PROTOCOL_VERSION, type: FRAME_TYPES.dbRequest, requestId: 'w-1', instanceId: 'seed', op: 'exec', sql: "UPDATE transactions SET category = 'groceries' WHERE id = 1" });
+    expect(await selectCategory(1)).toBe('groceries');
+    const journal = db as unknown as UndoJournal;
+    expect(
+      journal.putAccessUndo(ledger, {
+        id: UNDO_ID,
+        at: new Date(clock.now - 2 * MIN).toISOString(),
+        expiresAt: new Date(clock.now + 7 * 86_400_000).toISOString(),
+        authority: 'permission',
+        via: 'app',
+        grantId: grant.id,
+        readerAppId: budget,
+        readerName: 'Budget',
+        steps: [{ table: 'transactions', op: 'update', columns: ['category'], rows: [{ rowid: 1, before: ['food'], after: ['groceries'] }] }],
+      }),
+    ).toBe('ok');
+    appendLine(ledger, wroteLine(grant.id, { changes: 1, sql: "UPDATE transactions SET category = 'groceries' WHERE id = 1" }));
+    await renderSheet(ledger);
+    await until(() => one('access-history-undo') !== null, 'the undo is offered');
+    await click(one('access-history-undo'));
+    expect(one('access-undo-confirm')?.textContent).toContain(SHEET3.undoArm('transactions', 1, 'Ledger'));
+    await click(one('access-undo-yes'));
+    await until(() => one('access-history-undo-outcome')?.textContent === SHEET3.undone, 'the undo is done');
+    expect(await selectCategory(1)).toBe('food');
+    expect(await selectCategory(2)).toBe('rent');
+    const undone = db.listAccessLog(ledger).filter((entry) => (entry.kind as string) === 'undone');
+    expect(undone).toHaveLength(1);
+    expect(undone[0]).toMatchObject({ via: 'user', changes: 1, tables: ['transactions'], grantId: grant.id, readerName: 'Budget' });
+    await until(() => rowOfKind('undone').length === 1, 'the undone row');
+    expect(one('access-history-who', rowOfKind('undone')[0])?.textContent).toBe('you');
+    await until(() => one('access-history-undo') === null, 'the change is no longer undoable');
+  });
+
+  it('a wrote line whose entry is not in the journal offers no undo', async () => {
+    const grant = await allow();
+    appendLine(ledger, wroteLine(grant.id, { undoId: OTHER_UNDO_ID }));
+    await renderSheet(ledger);
+    expect(rowOfKind('wrote')).toHaveLength(1);
+    expect(one('access-history-undo')).toBeNull();
+  });
+});
+
+describe('PR-3 — the write badge on a row, live and ended; still ONE act (D-PR3-24; DS14; SPEC §24.4 MUST 17)', () => {
+  async function allowWrite(): Promise<AnyAccessGrant> {
+    const ranked = await collectSources(db, budget);
+    const source = [...ranked.matched, ...ranked.rest].find((candidate) => candidate.appId === ledger)!;
+    return createGrantV2(db, {
+      readerAppId: budget,
+      source,
+      tables: [{ name: 'transactions', withheld: [], write: true }],
+      duration: 'week',
+      unattended: false,
+      purpose: 'to tidy the categories',
+      provenance: 'app',
+      generation: 0,
+      now: clock.now,
+    });
+  }
+
+  it('a live write access: *can also change rows* beside its words, and exactly one act', async () => {
+    await allowWrite();
+    await renderSheet(budget);
+    const [row] = rowsIn('access-reads');
+    expect(one('access-row-write', row)?.textContent).toBe(SHEET3.canChange);
+    expect(all('access-row-act', row)).toHaveLength(1);
+    expect(one('access-row-act', row)?.getAttribute('data-act')).toBe('stop');
+  });
+
+  it('the same badge on the source’s side', async () => {
+    await allowWrite();
+    await renderSheet(ledger);
+    const [row] = rowsIn('access-read-by');
+    expect(one('access-row-write', row)?.textContent).toBe(SHEET3.canChange);
+    expect(all('access-row-act', row)).toHaveLength(1);
+  });
+
+  it('an ended write access says it in the past tense — still one act', async () => {
+    const grant = await allowWrite();
+    await revokeAccess(grant.id);
+    await renderSheet(budget);
+    const [row] = rowsIn('access-reads');
+    expect(one('access-row-write', row)?.textContent).toBe(SHEET3.couldChange);
+    expect(all('access-row-act', row)).toHaveLength(1);
+    expect(one('access-row-act', row)?.getAttribute('data-act')).toBe('remove');
+  });
+
+  it('a read-only access has no badge', async () => {
+    await allow();
+    await renderSheet(budget);
+    const [row] = rowsIn('access-reads');
+    expect(one('access-row-write', row)).toBeNull();
+    expect(all('access-row-act', row)).toHaveLength(1);
   });
 });

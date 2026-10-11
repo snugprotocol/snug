@@ -30,7 +30,18 @@
 // it is `appMissing` on the step that needs it.
 //
 // `updatedAt` is never touched here: the one writer that persists a task stamps it.
+//
+// THE FILE'S DAY HAS TWO READERS NOW (TASK-20261010-host-broker PR-3, D-PR3-17/18). The counters
+// are ONE counter for the file — never per app — and a fetch another app asked for (`access/
+// refresh.ts`) is counted on the same day as a scheduled run. So the two helpers that touch the
+// row through the db live here, beside the rules they apply, and both callers share them:
+// `countersSoFar` is the question (today's counters plus what the run and the step already spent)
+// the ceilings are asked over, and `foldDailyCalls` the one writer that adds an attempt's calls
+// to the day. Both read the day from the `nowIso` they are handed — the scheduler's injected
+// clock, never the wall clock — and the fold is a no-op without the row (the row is created at
+// the scheduler's boot; the refresh engine refuses before dispatch when it is absent, E1-Q11).
 
+import type { UserDb } from '@snugprotocol/db';
 import { SCHEDULE_DAILY_CEILINGS, type ScheduleRun, type ScheduledTask, type SchedulerState } from '@snugprotocol/protocol';
 
 import { RESULT_STATUSES } from './taskShape.js';
@@ -65,6 +76,39 @@ export function ceilingWarning(daily: DailyCounters): CeilingKind | undefined {
   if (daily.ai >= SCHEDULE_DAILY_CEILINGS.ai * CEILING_WARN_SHARE) return 'ai';
   if (daily.net >= SCHEDULE_DAILY_CEILINGS.net * CEILING_WARN_SHARE) return 'net';
   return undefined;
+}
+
+/** What a run or a step spent, by kind. */
+export interface Calls {
+  ai: number;
+  net: number;
+}
+
+/** The one row the day's counters live in — the file, as the queue and the refresh engine reach it. */
+export type SchedulerStateSeat = Pick<UserDb, 'getSchedulerState' | 'setSchedulerState'>;
+
+/**
+ * The file's counters for the day of `nowIso` (zeros when the scheduler never booted on this
+ * file), plus what the run already spent (`spent`: the steps before this one), plus what this step
+ * spent so far (`soFar`: its earlier attempts and the one in flight) — the figure every ceiling
+ * question is asked over.
+ */
+export function countersSoFar(db: SchedulerStateSeat, spent: Calls, soFar: Calls, nowIso: string): DailyCounters {
+  const state = db.getSchedulerState();
+  const daily = state === undefined ? { date: nowIso.slice(0, 10), ai: 0, net: 0 } : dailyCounters(state, nowIso);
+  return { date: daily.date, ai: daily.ai + spent.ai + soFar.ai, net: daily.net + spent.net + soFar.net };
+}
+
+/**
+ * Add an attempt's calls to the day of `nowIso` — the ONE writer of `schedulerState.daily`. A tally
+ * of nothing writes nothing; without the row (the scheduler never booted here) nothing is folded.
+ */
+export function foldDailyCalls(db: SchedulerStateSeat, calls: Calls, nowIso: string): void {
+  if (calls.ai <= 0 && calls.net <= 0) return;
+  const latest = db.getSchedulerState();
+  if (latest === undefined) return;
+  const daily = dailyCounters(latest, nowIso);
+  db.setSchedulerState({ ...latest, daily: { date: daily.date, ai: daily.ai + calls.ai, net: daily.net + calls.net } });
 }
 
 /** The task after one run's outcome (see the header for the fold); a new object. */

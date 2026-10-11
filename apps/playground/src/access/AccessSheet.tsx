@@ -18,6 +18,15 @@
 // (every status, both directions, persisted and session), the source's history, the declines.
 // `useHasAccessState` is the ⋈'s own rule (the ⚯ rule): access either way, a pending ask, or a
 // declined ask.
+//
+// TASK-20261010-host-broker PR-3 (ADR-0076 §5; D-PR3-7/15/24; DS12, S18): the data gains the
+// UNDOABLE set — the ids of the live journal entries the file holds for this app as a target
+// (`listAccessUndo`) — and the sheet carries out *undo* on a `wrote` row (`AccessHistory` shows
+// the act behind its armed confirm): the engine's `undoBrokeredWrite`, an act of host chrome
+// (`via: 'user'`), reached at the call — no module under access/ reaches another at its top level.
+// The engine bumps the access revision on EVERY outcome (Gate-5 ENG-4), so this sheet's re-read
+// follows it — the row loses its *undo* and the `undone` line appears without a reopen — and the
+// sheet never bumps on its own. A write access's row carries its badge through `GrantRow`.
 
 import { useEffect, useId, useRef, useState, type ReactElement } from 'react';
 
@@ -29,7 +38,7 @@ import '../theme/access-sheet.css';
 import { useStore } from '../state/store.js';
 import { Button } from '../ui/Button.js';
 import { ConfirmOverlay } from '../ui/ConfirmOverlay.js';
-import { AccessHistory } from './AccessHistory.js';
+import { AccessHistory, type UndoOutcome } from './AccessHistory.js';
 import { pendingAccessStore } from './consent.js';
 import { ACCESS_SHEET, CONSENT_SHEET } from './copy.js';
 import { GrantRow } from './GrantRow.js';
@@ -43,6 +52,8 @@ interface SheetData {
   reads: LiveGrantRow[];
   readBy: LiveGrantRow[];
   history: AccessLogEntry[];
+  /** The live journal entries this app holds as a TARGET — a `wrote` row whose `undoId` is here offers *undo*. */
+  undoable: ReadonlySet<string>;
   declines: AccessDecline[];
   now: number;
 }
@@ -64,6 +75,7 @@ function useSheetData(appId: string): SheetData | undefined {
           reads,
           readBy,
           history: db.listAccessLog(appId),
+          undoable: new Set(db.listAccessUndo(appId).map((entry) => entry.id)),
           declines: db.listAccessDeclines(appId),
           now,
         });
@@ -135,6 +147,18 @@ export function AccessSheet({ appId, onClose }: AccessSheetProps): ReactElement 
     await startUserAsk(appId, decline !== undefined ? { decline } : {});
   };
 
+  /**
+   * *undo* on a `wrote` row: the engine's act for the user (D-PR3-15), loaded at the call (the
+   * load-order rule); the engine bumps the revision on every outcome, and this sheet's re-read
+   * follows — the row loses its *undo*, the `undone` line appears. The engine answers errors as
+   * data; a throw is the history's to word.
+   */
+  const undo = async (undoId: string): Promise<UndoOutcome> => {
+    const db = await accessDeps().getDb();
+    const { undoBrokeredWrite } = await import('./writeBroker.js');
+    return undoBrokeredWrite(db, appId, undoId, { via: 'user' });
+  };
+
   const nothing = data.reads.length === 0 && data.readBy.length === 0;
   const showHistory = data.readBy.length > 0 || data.history.length > 0;
 
@@ -192,7 +216,7 @@ export function AccessSheet({ appId, onClose }: AccessSheetProps): ReactElement 
           </section>
         ) : null}
 
-        {showHistory ? <AccessHistory entries={data.history} now={data.now} /> : null}
+        {showHistory ? <AccessHistory entries={data.history} now={data.now} sourceName={name} undoable={data.undoable} onUndo={undo} /> : null}
 
         {data.declines.length > 0 ? (
           <section className="access-sheet-section" data-testid="access-declined">

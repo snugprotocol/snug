@@ -1,6 +1,8 @@
 // access/service.ts — the Access Service: the ONE engine every door reads through
 // (TASK-20261010-host-broker PR-2 AC9–AC10; ADR-0076 §1–§3; contract v2 D-PR2-1 effects named by
-// the policy, performed here · D-PR2-5 the minute is a frame-only effect · D-PR2-7 · D-PR2-18).
+// the policy, performed here · D-PR2-5 the minute is a frame-only effect · D-PR2-7 · D-PR2-18;
+// PR-3 ADR-0076 §4–§8; D-PR3-14 the three verbs · D-PR3-20 (d) the read's doorbell · D-PR3-21
+// `discover` as a class; v2.1 notes E1-Q3/Q6/Q10, E2-Q3).
 //
 // THREE CALLERS, ONE BODY. The app's FRAME (`accessHandler.ts`), the CHAT beside the app and a
 // SCHEDULE's step all come here with an `AccessCaller`; the policy (`policy.ts`) answers the
@@ -38,6 +40,33 @@
 // answers the empty set with one skip naming the reader (its name folded to one line, as every
 // name a brain reads is — `oneLine`), and the turn proceeds without shared tables.
 //
+// THE THREE VERBS OF PR-3 (D-PR3-14). `write` is a frame's one plain statement on a table the user
+// let it change: the per-app minute FIRST — a write counts in the same window as a read, refused
+// or not (E1-Q6) — then the table read off the statement's verb (`dmlTargetTable`; a statement
+// that names none is not one plain INSERT, UPDATE or DELETE and is refused `statement` HERE,
+// before any verdict — Gate-5 ENG-2), then the policy's `write` verdict (rules 1–3, attendance
+// REQUIRED, the WhatsApp fact, the named table's `write`), then the Write Broker (`writeBroker.ts`: the plan on a fresh export, the seat, the journal, the
+// `wrote` line, the doorbells) whose answer is the wire's. `refresh` is the policy's `refresh`
+// verdict (rules 1–5 as a read, then the grant's `refresh` seat), then the refresh engine
+// (`refresh.ts`: the three gates, the cooldown, the dispatch, the `refreshed` line) reached with
+// `appRun.ts`'s `defaultAppRunDeps` through ONE lazy edge — the executors' pattern, so no
+// top-level cycle through the run runtime is added (F8) — and its outcome IS the wire's shape.
+// `discover` is the `ask`'s presence verdict, then a per-reader cache of the CLASS of what the
+// library holds for `ACCESS_DISCOVER_CACHE_MS` (E1-Q10: keyed by the reader's app id, read with the
+// engine's clock, and dropped by `resetAccessSession` — each entry carries the reader's frame-ends
+// counter it was made at, which every reset moves, so a reset's entry is unreachable without this
+// module holding a hook into grants.ts, D-IE1-2); a miss runs the same gather `request` runs and
+// answers `none` · `one` · `several` — nothing recorded, nothing parked, `request`'s window
+// untouched. The cache holds the IN-FLIGHT gather too (Gate-5 SEC-3): a miss parks its promise
+// before the first export, concurrent calls await that one promise, and a gather that throws
+// leaves no entry behind — eight asks at once are one walk of the library, not eight. A refusal's named effect is performed on a `read` ONLY (E1-Q3): a refused write,
+// refresh or discover leaves the history and the grant exactly as they were.
+//
+// THE READ'S DOORBELL (D-PR3-20 (d)): after a frame's read is logged, and after each grant a chat
+// turn's `recordRead` recorded, the SOURCE's live frame hears `access-read { grantId }` —
+// uncoalesced, ids only. The scope a read or a dump is copied under is `readScopeOf(grant)`: the
+// record's tables plus `snug_kv` when the user allowed the source's settings & notes (D-PR3-22).
+//
 // ONE INSTANCE over `accessDeps()` — the engine's file and clock, read at every call — behind a
 // test seam in the `__setAccessDepsForTests` pattern: `__setAccessServiceForTests({ materialise })`
 // overrides the named acts for every holder of `accessService()`, and no argument restores the
@@ -49,43 +78,50 @@
 // instance is built on first use.
 
 import {
+  ACCESS_DISCOVER_CACHE_MS,
   ACCESS_ERROR_CODES,
   ACCESS_LOG_COALESCE_MS,
-  ACCESS_LOG_SQL_MAX_CHARS,
   ACCESS_MAX_RESULT_BYTES,
   ACCESS_MAX_ROWS,
-  ACCESS_SOURCE_MAX_BYTES,
   ACCESS_TIMEOUT_STRIKES,
-  findRecordCredential,
   isCredentialKeyName,
   scanForCredentialValues,
+  type AccessCandidateClass,
   type AccessDuration,
-  type AccessLogEntry,
+  type AccessHints,
+  type AccessLogVia,
+  type AccessWriteAuthority,
 } from '@snugprotocol/protocol';
-import type { UserDb } from '@snugprotocol/db';
+import { dmlTargetTable, type UserDb } from '@snugprotocol/db';
 import type { AccessHandlerResult } from '@snugprotocol/runner';
 
 import { oneLine } from '../agent/sharedDdl.js';
 import { appHasSidecarFact } from '../state/sidecarLive.js';
+import { collectSources } from './consent.js';
 import { ACCESS_APP_MESSAGES } from './copy.js';
+import { ringRead } from './doorbell.js';
 import { isExpired } from './grantFacts.js';
 import {
   accessDeps,
   findAccessGrant,
   grantView,
   grantsForApp,
+  iso,
   markExpiredOnce,
   noteRead,
   noteTimeout,
   queryRateLimited,
+  readerFrameEnds,
+  readerNameOf,
   releaseAccess,
   suspendAccess,
   type FoundAccessGrant,
   type LiveGrantRow,
 } from './grants.js';
-import { materialiseGrants } from './materialise.js';
+import { SourceTooLarge, materialiseGrants, readScopeOf, sourceBytesOf } from './materialise.js';
 import { attendedFor, authorise, ownsGrant, stillReadable, type AccessCaller, type PolicyContext, type Refusal } from './policy.js';
 import { scopedDump, scopedRead } from './scopedRead.js';
+import { appendLine, brokeredWrite, loggedSql, writeRefused } from './writeBroker.js';
 
 // ---------------------------------------------------------------------------------------- shapes
 
@@ -143,6 +179,22 @@ export interface RecordReadOutcome {
   refused: MaterialiseSkip[];
 }
 
+/** One plain statement on a table the user let the reader change (PR-3, D-PR3-14); `authority` is `permission` from a frame. */
+export interface AccessWriteInput {
+  grantId: string;
+  sql: string;
+  params?: readonly unknown[];
+  authority: AccessWriteAuthority;
+}
+
+export interface AccessRefreshInput {
+  grantId: string;
+}
+
+export interface AccessDiscoverInput {
+  hints?: AccessHints;
+}
+
 export interface AccessService {
   /** The handler's former `query` body, byte-identical for a frame but for policy rule 4's one named invert. */
   read(caller: AccessCaller, input: AccessReadInput): Promise<AccessHandlerResult>;
@@ -152,6 +204,12 @@ export interface AccessService {
   recordRead(caller: AccessCaller, set: MaterialisedSet, input: RecordReadInput): Promise<RecordReadOutcome>;
   list(caller: AccessCaller): Promise<AccessHandlerResult>;
   release(caller: AccessCaller, grantId: string): Promise<AccessHandlerResult>;
+  /** PR-3: the minute, the verdict, the Write Broker — answers `{ ok, op: 'write', changes }` or the refusal. */
+  write(caller: AccessCaller, input: AccessWriteInput): Promise<AccessHandlerResult>;
+  /** PR-3: the verdict, then the refresh engine through the lazy edge — its outcome is the wire's. */
+  refresh(caller: AccessCaller, input: AccessRefreshInput): Promise<AccessHandlerResult>;
+  /** PR-3: the presence rule, then the cached class of the library — nothing recorded. */
+  discover(caller: AccessCaller, input: AccessDiscoverInput): Promise<AccessHandlerResult>;
 }
 
 // --------------------------------------------------------------------------------------- answers
@@ -168,9 +226,23 @@ const queryFailed = (message: string = ACCESS_APP_MESSAGES.queryFailed): AccessH
 /** The mask's replacement — the scan's and the scoped copy's own. */
 const MASK = '***';
 
-class SourceTooLarge extends Error {}
+/** The door a caller came through, as a history line names it (D-PR3-6): the frame is the app's own act. */
+function viaOf(caller: AccessCaller): AccessLogVia {
+  switch (caller.kind) {
+    case 'frame':
+      return 'app';
+    case 'chat':
+      return 'chat';
+    case 'schedule':
+      return 'schedule';
+  }
+}
 
-const iso = (at: number): string => new Date(at).toISOString();
+/** D-PR3-21: how many sources the library offers, as a class — the reader learns no name and no count. */
+function classOf(count: number): AccessCandidateClass {
+  if (count === 0) return 'none';
+  return count === 1 ? 'one' : 'several';
+}
 
 /** The policy's context over the engine: its finder, the WhatsApp check and the instant the op started. */
 export function policyContextFor(db: UserDb, now: number): PolicyContext {
@@ -196,25 +268,6 @@ function maskRows(columns: readonly string[], rows: readonly unknown[][]): unkno
   );
 }
 
-/** The statement as the history keeps it: walked WHOLE first (a hit omits the seat), then cut. */
-function loggedSql(sql: string): string | undefined {
-  if (findRecordCredential({ sql }) !== undefined) return undefined;
-  return sql.slice(0, ACCESS_LOG_SQL_MAX_CHARS);
-}
-
-/** Append a history line; a refused `sql` seat is dropped and the line tried again. Throws when the history refuses the line itself. */
-function logRead(db: UserDb, sourceAppId: string, entry: AccessLogEntry): void {
-  try {
-    db.appendAccessLog(sourceAppId, entry);
-  } catch (err) {
-    if (entry.sql === undefined) throw err;
-    const { sql: _withheld, ...rest } = entry;
-    db.appendAccessLog(sourceAppId, rest);
-  }
-}
-
-const readerName = (db: UserDb, appId: string): string => db.getApp(appId)?.displayName ?? appId;
-
 /** One `refused` line per access per coalescing window — the line is the fact, not the count. */
 function logRefused(db: UserDb, readerAppId: string, grantId: string, sourceAppId: string, tables: string[], at: number): void {
   try {
@@ -222,7 +275,7 @@ function logRefused(db: UserDb, readerAppId: string, grantId: string, sourceAppI
       .listAccessLog(sourceAppId)
       .some((entry) => entry.kind === 'refused' && entry.grantId === grantId && at - Date.parse(entry.at) < ACCESS_LOG_COALESCE_MS);
     if (recent) return;
-    db.appendAccessLog(sourceAppId, { at: iso(at), kind: 'refused', grantId, readerAppId, readerName: readerName(db, readerAppId), tables, attended: false });
+    db.appendAccessLog(sourceAppId, { at: iso(at), kind: 'refused', grantId, readerAppId, readerName: readerNameOf(db, readerAppId), tables, attended: false });
   } catch {
     // the refusal stands whether or not the history had room for it
   }
@@ -230,8 +283,17 @@ function logRefused(db: UserDb, readerAppId: string, grantId: string, sourceAppI
 
 // ----------------------------------------------------------------------------------------- body
 
+/** One reader's cached discover class (D-PR3-21): made at `at`, while its frame-ends counter was `ends` (E1-Q10; D-IE1-2). */
+interface DiscoverEntry {
+  at: number;
+  ends: number;
+  candidates: AccessCandidateClass;
+}
+
 function createAccessService(): AccessService {
   const now = (): number => accessDeps().now();
+  /** Per reader: the class, or the gather still making it (SEC-3 — a concurrent ask awaits the same promise). */
+  const discovered = new Map<string, DiscoverEntry | Promise<DiscoverEntry>>();
 
   /** This caller's grant by id — found and owned, else nothing (the caller answers not-granted). */
   const owned = (db: UserDb, caller: AccessCaller, grantId: string): FoundAccessGrant | undefined => {
@@ -289,12 +351,8 @@ function createAccessService(): AccessService {
     try {
       outcome = await scopedRead({
         grantId: grant.id,
-        bytes: async () => {
-          const bytes = await db.exportAppRuntime(grant.sourceAppId);
-          if (bytes.byteLength > ACCESS_SOURCE_MAX_BYTES) throw new SourceTooLarge();
-          return bytes;
-        },
-        scope: grant.scope,
+        bytes: sourceBytesOf(db, grant.sourceAppId),
+        scope: readScopeOf(grant),
         // Re-checked when the read DEQUEUES: a stop or a pause that landed while it waited behind
         // other reads ends it before any export, slice or worker (W6 finding 7).
         stillLive: () => stillReadable(ctx.find, caller, grant.id, now()) !== undefined,
@@ -316,12 +374,12 @@ function createAccessService(): AccessService {
       const rows = maskRows(outcome.columns, outcome.rows);
       const sql = loggedSql(input.sql);
       try {
-        logRead(db, grant.sourceAppId, {
+        appendLine(db, grant.sourceAppId, {
           at: stamp,
           kind: 'read',
           grantId: grant.id,
           readerAppId: caller.appId,
-          readerName: readerName(db, caller.appId),
+          readerName: readerNameOf(db, caller.appId),
           tables,
           ...(sql !== undefined ? { sql } : {}),
           rows: rows.length,
@@ -331,6 +389,7 @@ function createAccessService(): AccessService {
         return queryFailed(); // a read the source's history cannot record does not happen
       }
       noteRead(db, grant.id, stamp);
+      ringRead(grant.sourceAppId, grant.id);
       return {
         ok: true,
         op: 'query',
@@ -384,7 +443,7 @@ function createAccessService(): AccessService {
   /** The reader's library name for a skip naming the reader itself — never a throw inside a catch. */
   const readerNameQuietly = (db: UserDb | undefined, appId: string): string => {
     try {
-      return db === undefined ? appId : readerName(db, appId);
+      return db === undefined ? appId : readerNameOf(db, appId);
     } catch {
       return appId;
     }
@@ -435,18 +494,19 @@ function createAccessService(): AccessService {
         const { grant } = current;
         const stamp = iso(now());
         // The line BEFORE the rows leave: EVERY granted table (A-Q7), the rows handed over across this grant's tables.
-        logRead(db, grant.sourceAppId, {
+        appendLine(db, grant.sourceAppId, {
           at: stamp,
           kind: 'read',
           grantId: id,
           readerAppId: caller.appId,
-          readerName: readerName(db, caller.appId),
+          readerName: readerNameOf(db, caller.appId),
           tables: grant.scope.tables.map((table) => table.name),
           ...(sql !== undefined ? { sql } : {}),
           rows: handedOf(id).reduce((sum, table) => sum + table.rows.length, 0),
           attended,
         });
         noteRead(db, id, stamp);
+        ringRead(grant.sourceAppId, id);
         recorded.push(id);
       } catch {
         refuse(id, 'failed'); // a read the source's history cannot record does not happen
@@ -455,7 +515,72 @@ function createAccessService(): AccessService {
     return { recorded, refused };
   }
 
-  return { read, materialise, recordRead, list, release };
+  async function write(caller: AccessCaller, input: AccessWriteInput): Promise<AccessHandlerResult> {
+    const db = await accessDeps().getDb();
+    const at = now();
+    // FIRST, for a frame: a write counts in the minute it shares with reads — refused, unknown or not (E1-Q6).
+    if (caller.kind === 'frame' && queryRateLimited(caller.appId, at)) {
+      return refuse(ACCESS_ERROR_CODES.ACCESS_RATE_LIMITED, ACCESS_APP_MESSAGES.queryRateLimited, true);
+    }
+    // The table the statement names, read off its verb — a statement that names none is not one plain INSERT, UPDATE or DELETE: refused by name before any verdict (ENG-2).
+    const table = dmlTargetTable(input.sql);
+    if (table === undefined) return writeRefused('statement');
+    const verdict = authorise(policyContextFor(db, at), caller, { kind: 'write', grantId: input.grantId, table });
+    if (!verdict.ok) return refused(verdict); // no effect, no line (E1-Q3)
+    return brokeredWrite(db, {
+      targetAppId: verdict.grant.grant.sourceAppId,
+      statement: { sql: input.sql, ...(input.params !== undefined ? { params: input.params } : {}) },
+      table,
+      authority: input.authority,
+      via: viaOf(caller),
+      grant: verdict.grant,
+      caller,
+    });
+  }
+
+  async function refresh(caller: AccessCaller, input: AccessRefreshInput): Promise<AccessHandlerResult> {
+    const db = await accessDeps().getDb();
+    const verdict = authorise(policyContextFor(db, now()), caller, { kind: 'refresh', grantId: input.grantId });
+    if (!verdict.ok) return refused(verdict); // no effect, no line (E1-Q3)
+    // The ONE lazy edge (F8): the engine and the run path's production seams, loaded at the call so no top-level cycle closes through the service.
+    const [{ refreshSource }, { defaultAppRunDeps }] = await Promise.all([import('./refresh.js'), import('../schedule/appRun.js')]);
+    return refreshSource(db, defaultAppRunDeps(), { grant: verdict.grant.grant, requestedBy: readerNameOf(db, caller.appId), via: viaOf(caller) });
+  }
+
+  async function discover(caller: AccessCaller, input: AccessDiscoverInput): Promise<AccessHandlerResult> {
+    const db = await accessDeps().getDb();
+    const at = now();
+    const verdict = authorise(policyContextFor(db, at), caller, { kind: 'discover' });
+    if (!verdict.ok) return refused(verdict);
+    // The per-reader cache (E1-Q10): a hit — settled, or the gather still in flight (SEC-3) — answers the class and exports nothing; a reset of the session moved `ends`, so its entry misses.
+    const ends = readerFrameEnds(caller.appId);
+    const cached = discovered.get(caller.appId);
+    const answer = (entry: DiscoverEntry): AccessHandlerResult => ({ ok: true, op: 'discover', candidates: entry.candidates });
+    const usable = (entry: DiscoverEntry): boolean => entry.ends === ends && at - entry.at < ACCESS_DISCOVER_CACHE_MS;
+    if (cached !== undefined) {
+      const hit = await cached;
+      if (usable(hit)) return answer(hit);
+      // A stale hit: a concurrent ask may have parked a fresh gather while this one awaited — join it rather than run a second (SEC-3's burst after the cache expires).
+      const parked = discovered.get(caller.appId);
+      if (parked !== undefined && parked !== cached) {
+        const fresh = await parked;
+        if (usable(fresh)) return answer(fresh);
+      }
+    }
+    // A miss parks its gather BEFORE the first export, so every concurrent ask awaits this one; a gather that throws leaves nothing behind.
+    const gather = collectSources(db, caller.appId, input.hints).then((ranked) => ({ at, ends, candidates: classOf(ranked.matched.length + ranked.rest.length) }));
+    discovered.set(caller.appId, gather);
+    try {
+      const entry = await gather;
+      if (discovered.get(caller.appId) === gather) discovered.set(caller.appId, entry);
+      return answer(entry);
+    } catch (err) {
+      if (discovered.get(caller.appId) === gather) discovered.delete(caller.appId);
+      throw err;
+    }
+  }
+
+  return { read, materialise, recordRead, list, release, write, refresh, discover };
 }
 
 // ----------------------------------------------------------------------------------- instance
@@ -472,6 +597,9 @@ function current(): AccessService {
     recordRead: overrides.recordRead ?? real.recordRead,
     list: overrides.list ?? real.list,
     release: overrides.release ?? real.release,
+    write: overrides.write ?? real.write,
+    refresh: overrides.refresh ?? real.refresh,
+    discover: overrides.discover ?? real.discover,
   };
 }
 
@@ -481,6 +609,9 @@ const facade: AccessService = {
   recordRead: (caller, set, input) => current().recordRead(caller, set, input),
   list: (caller) => current().list(caller),
   release: (caller, grantId) => current().release(caller, grantId),
+  write: (caller, input) => current().write(caller, input),
+  refresh: (caller, input) => current().refresh(caller, input),
+  discover: (caller, input) => current().discover(caller, input),
 };
 
 /** The one service, over `accessDeps()` — built on first use. */

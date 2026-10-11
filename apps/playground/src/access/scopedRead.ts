@@ -1,7 +1,8 @@
 // access/scopedRead.ts — the host side of a scoped read (TASK-20261010-cross-app-access AC12;
-// ADR-0075 §6; D10) and of a scoped DUMP (TASK-20261010-host-broker PR-2; ADR-0076 §2; contract
-// v2 D-PR2-6): ONE lazy Worker per page that owns its own sql.js, a wall clock on every job, and
-// a short per-grant cache of the source's bytes — and of a dump's result.
+// ADR-0075 §6; D10), of a scoped DUMP (TASK-20261010-host-broker PR-2; ADR-0076 §2; contract v2
+// D-PR2-6) and of a brokered write's PLAN (PR-3; ADR-0076 §4; D-PR3-15 (2), E1-Q9): ONE lazy
+// Worker per page that owns its own sql.js, a wall clock on every job, and a short per-grant
+// cache of the source's bytes — and of a dump's result.
 //
 // THE WALL CLOCK. sql.js has no interrupt, so the only bound on an app-authored read is the
 // thread it runs on: after the job's clock the worker is TERMINATED and forgotten — the next job
@@ -34,6 +35,14 @@
 // and sends the engine source again (W6 finding 5).
 // Every scoping step (drops, withheld columns, `query_only`) runs in the worker on that copy.
 //
+// THE PLAN (PR-3). `scopedPlanWrite` runs the Write Broker's pure planner (`planBrokeredWrite`)
+// in the same worker, through the same queue, under the READ's clock (a timeout is the service's
+// strike, as a read's is) — on a FRESH export, never the bytes cache: writes are rare and the
+// preview must be of the handle the seat will apply to, so the grant's cached bytes (and its
+// cached dump, which they made) are EVICTED before the caller's thunk runs, and nothing of the
+// plan — not the fresh bytes, not the answer — is kept (F5/S15; E1-Q9: the next read exports
+// again). The job is `kind: 'plan-write'`, answered with the plan's counts and shape — never a row.
+//
 // NO WORKER. Where no Worker can be constructed, a job answers `unavailable` without fetching
 // anything (the handler says "this host cannot run cross-app reads"; a dump skips the grant); the
 // host kit's boot probe uses `canConstructWorker` to turn the capability off instead (ADR-0072 §4).
@@ -46,11 +55,19 @@
 // `configureScopedRead`; production builds the worker from Vite's `?worker&inline` import so the
 // single-file kit carries it inline (a Blob URL at runtime).
 
-import { ACCESS_QUERY_TIMEOUT_MS, ACCESS_SCOPED_CACHE_MS } from '@snugprotocol/protocol';
-import type { ScopedDumpCaps, ScopedDumpResult, ScopedReadCaps, ScopedReadResult, ScopedReadScope, ScopedReadStatement } from '@snugprotocol/db';
+import { ACCESS_MATERIALISE_TIMEOUT_MS, ACCESS_QUERY_TIMEOUT_MS, ACCESS_SCOPED_CACHE_MS } from '@snugprotocol/protocol';
+import type {
+  BrokeredCaps,
+  BrokeredPlanResult,
+  ScopedDumpCaps,
+  ScopedDumpResult,
+  ScopedReadCaps,
+  ScopedReadResult,
+  ScopedReadScope,
+  ScopedReadStatement,
+} from '@snugprotocol/db';
 
 import { sqlJsEngineOptions } from '../run/sqlJsEngine.js';
-import { ACCESS_MATERIALISE_TIMEOUT_MS } from './limits.js';
 
 /** The slice of a Worker the host uses — injectable, because vitest has none. */
 export interface WorkerLike {
@@ -90,10 +107,20 @@ export interface ScopedDumpJob {
   caps: ScopedDumpCaps;
 }
 
+/** host → worker, one per brokered write (PR-3): the plan of ONE statement on the scoped copy; `bytes` a fresh export, transferred. */
+export interface ScopedPlanWriteJob {
+  id: number;
+  kind: 'plan-write';
+  bytes: Uint8Array;
+  scope: ScopedReadScope;
+  statement: ScopedReadStatement;
+  caps: BrokeredCaps;
+}
+
 /** worker → host. `engineFailed`: the worker's engine could not start — the host retires that worker. */
 export interface ScopedReadAnswer {
   id: number;
-  result: ScopedReadResult | ScopedDumpResult;
+  result: ScopedReadResult | ScopedDumpResult | BrokeredPlanResult;
   engineFailed?: true;
 }
 
@@ -102,6 +129,9 @@ export type ScopedReadOutcome = ScopedReadResult | { ok: false; reason: 'timeout
 
 /** A dump's outcome — the engine's, or the same three of the host's. */
 export type ScopedDumpOutcome = ScopedDumpResult | { ok: false; reason: 'timeout' | 'unavailable' | 'ended'; message: string };
+
+/** A plan's outcome (PR-3) — the planner's, or the same three of the host's. */
+export type PlanOutcome = BrokeredPlanResult | { ok: false; reason: 'timeout' | 'unavailable' | 'ended'; message: string };
 
 export interface ScopedReadInput {
   grantId: string;
@@ -124,6 +154,17 @@ export interface ScopedDumpInput {
   stillLive?: () => boolean;
   /** The dump's own clock — `ACCESS_MATERIALISE_TIMEOUT_MS` when absent; never the read's. */
   timeoutMs?: number;
+}
+
+export interface ScopedPlanWriteInput {
+  grantId: string;
+  /** The source's live bytes — ALWAYS called (a plan never reads the cache); a rejection rejects the plan. */
+  bytes: () => Promise<Uint8Array>;
+  scope: ScopedReadScope;
+  statement: ScopedReadStatement;
+  caps: BrokeredCaps;
+  /** Asked when the plan DEQUEUES; false answers `ended` with nothing evicted, fetched or posted. */
+  stillLive?: () => boolean;
 }
 
 interface Config {
@@ -314,7 +355,7 @@ async function sourceBytes(input: Pick<ScopedReadInput, 'grantId' | 'bytes'>): P
   return bytes;
 }
 
-type WorkerJob = Omit<ScopedReadJob, 'id'> | Omit<ScopedDumpJob, 'id'>;
+type WorkerJob = Omit<ScopedReadJob, 'id'> | Omit<ScopedDumpJob, 'id'> | Omit<ScopedPlanWriteJob, 'id'>;
 /** What the host side answers on its own: the clock fired, or the worker died. */
 type HostFailure = { ok: false; reason: 'timeout' | 'failed'; message: string };
 
@@ -343,14 +384,14 @@ function runOnWorker(worker: WorkerLike, job: WorkerJob, timeoutMs: number): Pro
     };
     worker.onerror = () => settle({ ok: false, reason: 'failed', message: 'the read engine stopped' }, true);
     try {
-      worker.postMessage({ id, ...job } satisfies ScopedReadJob | ScopedDumpJob, [job.bytes.buffer as ArrayBuffer]);
+      worker.postMessage({ id, ...job } satisfies ScopedReadJob | ScopedDumpJob | ScopedPlanWriteJob, [job.bytes.buffer as ArrayBuffer]);
     } catch (err) {
       settle({ ok: false, reason: 'failed', message: err instanceof Error ? err.message : String(err) }, true);
     }
   });
 }
 
-/** The worker is the host's own code, but an answer of the other job's shape is still never passed through as rows. */
+/** The worker is the host's own code, but an answer of another job's shape is still never passed through as rows, a dump or a plan. */
 const WRONG_SHAPE = 'the read engine answered the wrong shape';
 
 /** One scoped job's common front: the dequeue re-check, the no-Worker refusal, the bytes, the worker. */
@@ -373,21 +414,49 @@ export function scopedRead(input: ScopedReadInput): Promise<ScopedReadOutcome> {
     const ready = await prepare(input);
     if ('ok' in ready) return ready;
     const answer = await runOnWorker(ready.worker, { bytes: ready.bytes.slice(), scope: input.scope, statement: input.statement, caps: input.caps }, config.timeoutMs);
-    if (answer.ok && 'tables' in answer) return { ok: false, reason: 'failed', message: WRONG_SHAPE };
-    return answer;
+    return asReadOutcome(answer);
   };
   const result = queue.then(run, run);
   queue = result.catch(() => undefined);
   return result;
 }
 
+/** A read job's answer as the read's outcome — a dump's or a plan's shape is never passed through as rows. */
+function asReadOutcome(answer: ScopedReadAnswer['result'] | HostFailure): ScopedReadResult | HostFailure {
+  if (answer.ok) return 'columns' in answer ? answer : { ok: false, reason: 'failed', message: WRONG_SHAPE };
+  switch (answer.reason) {
+    case 'refused':
+      return 'rule' in answer ? { ok: false, reason: 'failed', message: WRONG_SHAPE } : answer;
+    case 'drift':
+      return { ok: false, reason: 'drift', message: answer.message, ...(answer.drift !== undefined ? { drift: answer.drift } : {}) };
+    case 'failed':
+    case 'timeout':
+      return { ok: false, reason: answer.reason, message: answer.message };
+    case 'copy-failed':
+      return { ok: false, reason: 'copy-failed', message: answer.message };
+    case 'not-granted':
+    case 'too-many':
+    case 'too-large':
+    case 'unsafe':
+      return { ok: false, reason: 'failed', message: WRONG_SHAPE };
+    default: {
+      const never: never = answer;
+      return never;
+    }
+  }
+}
+
 const capsKey = (caps: ScopedDumpCaps): string => `${caps.maxRows}:${caps.maxBytes}:${caps.maxTotalBytes}`;
 
-/** A dump job's answer as the dump's outcome — a read's shape (rows, or a statement refusal) is never passed through. */
+/** A dump job's answer as the dump's outcome — a read's shape (rows, or a statement refusal) or a plan's is never passed through. */
 function asDumpOutcome(answer: ScopedReadAnswer['result'] | HostFailure): ScopedDumpResult | HostFailure {
   if (answer.ok) return 'tables' in answer ? answer : { ok: false, reason: 'failed', message: WRONG_SHAPE };
   switch (answer.reason) {
     case 'refused':
+    case 'not-granted':
+    case 'too-many':
+    case 'too-large':
+    case 'unsafe':
       return { ok: false, reason: 'failed', message: WRONG_SHAPE };
     case 'drift':
       return { ok: false, reason: 'drift', message: answer.message, ...(answer.drift !== undefined ? { drift: answer.drift } : {}) };
@@ -396,6 +465,33 @@ function asDumpOutcome(answer: ScopedReadAnswer['result'] | HostFailure): Scoped
     case 'failed':
     case 'timeout':
       return { ok: false, reason: answer.reason, message: answer.message };
+    default: {
+      const never: never = answer;
+      return never;
+    }
+  }
+}
+
+/** A plan job's answer as the plan's outcome — a read's rows, a read's statement refusal or a dump's tables are never passed through as a plan. */
+function asPlanOutcome(answer: ScopedReadAnswer['result'] | HostFailure): PlanOutcome {
+  if (answer.ok) return 'plan' in answer ? answer : { ok: false, reason: 'failed', message: WRONG_SHAPE };
+  switch (answer.reason) {
+    case 'refused':
+      return 'rule' in answer ? answer : { ok: false, reason: 'failed', message: WRONG_SHAPE };
+    case 'drift':
+      return answer.drift !== undefined ? { ok: false, reason: 'drift', drift: answer.drift, message: answer.message } : { ok: false, reason: 'failed', message: WRONG_SHAPE };
+    case 'not-granted':
+    case 'too-many':
+    case 'too-large':
+    case 'unsafe':
+    case 'copy-failed':
+    case 'failed':
+    case 'timeout':
+      return { ok: false, reason: answer.reason, message: answer.message };
+    default: {
+      const never: never = answer;
+      return never;
+    }
   }
 }
 
@@ -421,6 +517,27 @@ export function scopedDump(input: ScopedDumpInput): Promise<ScopedDumpOutcome> {
     evictFrom(dumps, input.grantId);
     dumps.set(input.grantId, { value: { caps: key, result: answer }, at, timer: evictionTimer(dumps, input.grantId) });
     return answer;
+  };
+  const result = queue.then(run, run);
+  queue = result.catch(() => undefined);
+  return result;
+}
+
+/**
+ * One brokered write's plan (PR-3, D-PR3-15 (2)): the same queue and worker as a read, the READ's
+ * clock, and a FRESH export — the grant's cached bytes and dump are evicted first and the caller's
+ * thunk always runs; nothing of the plan is cached (E1-Q9). `ended` at the dequeue when the grant
+ * may no longer be written (nothing evicted, fetched or posted); `unavailable` where no Worker exists.
+ */
+export function scopedPlanWrite(input: ScopedPlanWriteInput): Promise<PlanOutcome> {
+  const run = async (): Promise<PlanOutcome> => {
+    if (input.stillLive !== undefined && !input.stillLive()) return { ok: false, reason: 'ended', message: 'the access ended while the read waited' };
+    if (!workerAvailable()) return { ok: false, reason: 'unavailable', message: 'no worker' };
+    evict(input.grantId);
+    const bytes = await input.bytes();
+    const worker = await acquireWorker();
+    if (worker === undefined) return { ok: false, reason: 'unavailable', message: 'no worker' };
+    return asPlanOutcome(await runOnWorker(worker, { kind: 'plan-write', bytes: bytes.slice(), scope: input.scope, statement: input.statement, caps: input.caps }, config.timeoutMs));
   };
   const result = queue.then(run, run);
   queue = result.catch(() => undefined);

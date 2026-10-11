@@ -1,18 +1,23 @@
-# Snug Protocol — Specification 1.1
+# Snug Protocol — Specification 1.2
 
-- **Version:** 1.1 · **Date:** 2026-10-10 · **Task:** TASK-20261010-cross-app-access
-  (1.0 finalised by TASK-20260822-spec-10-final; consolidated at v0.3 by TASK-20260820-spec-v03-whitepaper)
+- **Version:** 1.2 · **Date:** 2026-10-11 · **Task:** TASK-20261010-host-broker
+  (1.1 by TASK-20261010-cross-app-access; 1.0 finalised by TASK-20260822-spec-10-final; consolidated at v0.3 by TASK-20260820-spec-v03-whitepaper)
 - **Status: NORMATIVE.** This is the complete specification of the protocol — wire,
   storage, connected apps, runtime contracts, linked-device connections, and access between
   apps. One section is explicitly **provisional** and so marked: §17 (standing approvals);
-  everything else is stable at 1.1. Every published change is recorded in the spec changelog.
-- **Supersedes as documents:** Specification 1.0 (this document, as published 2026-08-22 and
-  last corrected 2026-08-27; the 1.1 revision is additive — a 1.0 host ignores the new keys and advertises no `access`
-  capability, so a 1.1 app renders its honest fallback), the v0.1 `SPEC.md` wire-protocol
-  core, `SPEC-v0.2-draft.md` and the v0.3 consolidated draft. In the published spec
-  repository, this document IS `SPEC.md`; the historical filenames remain as pointer stubs.
+  everything else is stable at 1.2. Every published change is recorded in the spec changelog.
+- **Supersedes as documents:** Specification 1.1 (this document, as published 2026-10-10;
+  the 1.2 revision is additive — a 1.1 host answers `write`, `refresh` and `discover`, and a
+  `request` carrying `access`, `MALFORMED` with the `requestId` recovered, so a 1.2 app learns
+  the host predates 1.2 and asks again without `access`; a 1.1 hub cannot parse a 1.2 grant row
+  and holds it unreadable — no access under it, fail closed), Specification 1.0 (as published
+  2026-08-22 and last corrected 2026-08-27; the 1.1 revision is additive — a 1.0 host ignores
+  the new keys and advertises no `access` capability, so a 1.1 app renders its honest
+  fallback), the v0.1 `SPEC.md` wire-protocol core, `SPEC-v0.2-draft.md` and the v0.3
+  consolidated draft. In the published spec repository, this document IS `SPEC.md`; the
+  historical filenames remain as pointer stubs.
 - **Versioning:** spec versions are independent of implementation package versions.
-  Post-1.0, additive changes bump the minor (1.x — 1.1 is the first, adding Part VI); a
+  Post-1.0, additive changes bump the minor (1.x — 1.1 added Part VI; 1.2 widens it); a
   change that breaks a conforming implementation bumps the major. Every published change is
   a single commit referencing its origin task.
 - **Normative schemas:** JSON Schema for every published message type, exported
@@ -34,13 +39,15 @@
 | III | Connected apps: requirements, grants, custody, the executor | **Normative at 1.0** |
 | IV | Runtime contracts and the app chat surface | **Normative at 1.0** |
 | V | Linked-device connections (the sidecar surface) | **Normative at 1.0** |
-| VI | Access between apps — the access grant, the two frames, the host obligations | **Normative at 1.1** (additive; a 1.0 host is still conforming) |
+| VI | Access between apps — the access grant, the two frames, the host obligations | **Normative at 1.1, widened at 1.2** (writes with an undo, refresh, discover; additive — a 1.0 or 1.1 host is still conforming) |
 
 The net and open-url frame pairs, `capabilities.net`/`openUrl`, and rule R7 joined Part I
 with the v0.3 consolidation and are normative at 1.0 (Appendix C records the publication
 line). One section is explicitly **provisional** and so marked: §17 (standing approvals).
 The access frame pair, `capabilities.access` and Part VI joined with the 1.1 revision
-(ADR-0075) and are normative at 1.1; Conformance is Part VII.
+(ADR-0075) and are normative at 1.1; the 1.2 revision (ADR-0076) widened them — writes with
+an undo, refresh, discover — with no new frame and no new capability flag; Conformance is
+Part VII.
 
 **Revisions, v0.3-draft → 1.0** (2026-08-22): (1) §11.1's `SNUGENC1` slot-table layout
 corrected to the shipping container — 61-byte slot stride (kind + IV + 48 reserved
@@ -63,6 +70,23 @@ its state are independent of the LLM provider, while a conforming host supplies 
 intelligence — in place of a one-line comparison to another protocol. **Prose only.** No
 normative requirement, constant, schema byte, conformance rule or protocol mechanic
 changed; the version stays 1.0 per the versioning note above.
+
+**Revision 1.2 (2026-10-11, TASK-20261010-host-broker, ADR-0076 §4–§8, §10):** writes,
+refresh and discovery between apps, additive. §2's access row gains three ops (`write`,
+`refresh`, `discover` — seven in all; the frame inventory stays fifteen); §8.1 gains
+`accessUndo:<targetAppId>` and `accessWants:<appId>`; §21 names the write and the three doors;
+§22.1 is the grant record v2 (per table `write` and the `withheld` columns, per grant `kv` and
+`refresh`, `access: 'read' | 'write'` derived, `provenance: 'chat'` — every default omitted, so
+a record that carries none is byte-identical to a 1.1 record); §22.2 gains the `wrote`,
+`undone` and `refreshed` kinds and `via`; §22.3's semantic hash gains `access`; §22.4 (new) is
+the undo journal; §23.1–§23.4 gain the three ops, the ask's `access`, the three response
+variants, the three hints and the three codes; §24.5–§24.7 (new) are the host obligations for
+writes, refresh, one instance and the doorbells (MUST 18–30); §24.2–§24.4 name the withheld
+columns, the key-value store and the write kinds; §25 is pruned; Part VII and Appendices A, B
+and C follow. A 1.1 host answers the three ops, and a `request` carrying `access`,
+`MALFORMED` with the `requestId` recovered — that is how a 1.2 app learns it is on a 1.1 host
+(no capability key is added); a 1.1 hub cannot parse a 1.2 grant row and holds it unreadable,
+never as a read-only grant — fail closed. `PROTOCOL_VERSION` stays 1.
 
 **Revision 1.1 (2026-10-10, TASK-20261010-cross-app-access, ADR-0075):** access between
 apps, additive. §2 gains the `snug:access-request` / `snug:access-response` pair and
@@ -101,8 +125,9 @@ version 1 and has been additively extended, never broken, since v0.1.
 
 Fifteen frame types are defined, and all fifteen are published as JSON Schemas — the
 nine core frames since v0.1, the net pair and the open-url pair with v0.3, the access pair
-with 1.1 (Appendix C). The strict frames' refinement rules are carried by this prose, not by
-the schemas, which JSON Schema cannot express (§3, §23).
+with 1.1 (Appendix C; the access request gains three ops at 1.2, the inventory does not
+grow). The strict frames' refinement rules are carried by this prose, not by the schemas,
+which JSON Schema cannot express (§3, §23).
 
 | Type | Direction | Purpose |
 |---|---|---|
@@ -114,7 +139,7 @@ the schemas, which JSON Schema cannot express (§3, §23).
 | `snug:db-request` / `snug:db-response` | app ↔ host | Host-brokered per-app storage: `op ∈ exec, export, import, kvGet, kvSet`. |
 | `snug:net-request` / `snug:net-response` | app ↔ host | The governed network capability (§3). The iframe still has **zero** network of its own (C2); this pair is the app's only path to the network, and the host is the only caller. |
 | `snug:open-url-request` / `snug:open-url-result` | app ↔ host | Host-mediated navigation (§4). The **host** opens the user's real browser after its own confirm dialog, on a user gesture; the sandbox gains no capability. |
-| `snug:access-request` / `snug:access-response` | app ↔ host | Access between apps (Part VI). A reader app asks for, queries, lists and releases a user-granted, read-only **access grant** on another app's tables: `op ∈ request, query, list, release`. The request is **strict** (it carries app-authored SQL and a release act); the response is **tolerant**. The reader never names a source — the user picks it on host chrome — and the runner's binding is host-assigned (§23). |
+| `snug:access-request` / `snug:access-response` | app ↔ host | Access between apps (Part VI). A reader app asks for, queries, writes under, refreshes, lists and releases a user-granted **access grant** on another app's tables — read, or write with an undo — and may discover whether a candidate source exists: `op ∈ request, query, write, refresh, list, release, discover` (seven at 1.2; four at 1.1). The request is **strict** (it carries app-authored SQL and a release act); the response is **tolerant**. The reader never names a source — the user picks it on host chrome — and the runner's binding is host-assigned (§23). |
 | `snug:host-event` / `snug:app-event` | either | Open additive channel (`theme-change`, `visibility`, `connection-event`, `resize {height}`, …); unknown events ignored. Subject to rule R7. |
 
 **Capability advertisement.** `snug:host-ready.capabilities` requires `streaming`, `db`,
@@ -322,9 +347,17 @@ property (§22). `accessGrant:<id>` (an access grant — reader, source, the gra
 their frozen columns, purpose, duration, status), `accessLog:<sourceAppId>` (the source's
 bounded history of every read and every lifecycle event, newest first), and the per-reader
 `accessDeclined:<readerAppId>:<hash>` and `accessMuted:<readerAppId>` (the user's answers to a
-reader's asks — dropped on an untrusted import). A hub that does not implement Part VI MAY
-carry these rows untouched and is still conforming. The per-app keys are cascaded on app
-delete (both directions for a grant).
+reader's asks — dropped on an untrusted import). The 1.2 revision (2026-10-11, ADR-0076)
+adds two more: `accessUndo:<targetAppId>` (the target's undo journal — the rows each brokered
+write changed, as data, never statement text; one bounded array per target, newest first;
+§22.4) and `accessWants:<appId>` (an app's declared wishes — `[{ purpose, hints? }]`, ≤ 4
+entries, ≤ 2 KiB, strict-parsed under the same display and credential rules as an ask; defined
+here, written and consumed by a later revision). The undo journal is dropped on an untrusted
+import and kept on a trusted pull; the wants row is dropped on an untrusted import. A hub that
+does not implement Part VI MAY carry these rows untouched and is still conforming; a hub that
+implements Part VI at 1.1 cannot parse a 1.2 grant row and MUST hold it unreadable (§22.1 rule
+8). The per-app keys are cascaded on app delete (both directions for a grant; the undo journal
+and the wants with their app).
 
 ### 8.2 Per-app data: native namespaced tables
 
@@ -1415,33 +1448,54 @@ source-parsing test. None of those specifics are normative; §20.1–§20.7 are.
 
 Every app's data is its own (§8.2): its tables are materialised into its own runtime
 database, and no frame of Parts I–V lets one app see another's rows. Part VI adds the ONE
-sanctioned crossing. A **reader** app reads a **source** app's tables, read-only, under an
-**access grant** — a host record written ONLY by the user's act on host chrome the app
-cannot draw over, scoped to named tables with their columns disclosed and frozen, for a
-duration the user chose, revocable from anywhere, and logged on the source's own row. (The
-spec always says *access grant*; Part III's *connection grant* is a different record.)
+sanctioned crossing. A **reader** app reads — or, when the user ticked it, changes rows in —
+a **source** app's tables under an **access grant** — a host record written ONLY by the
+user's act on host chrome the app cannot draw over, scoped to named tables with their
+columns disclosed and frozen, for a duration the user chose, revocable from anywhere, and
+logged on the source's own row. (The spec always says *access grant*; Part III's *connection
+grant* is a different record.)
 
 The parties and their roles:
 
 - **The reader** asks (`op: 'request'`) with a one-line purpose and optional relevance
   hints; it learns only what was granted — the source's display name and icon, the granted
   tables with their columns, the duration and expiry — never the user's inventory, never a
-  library id. It reads with ONE read-only `SELECT` per `query`, may `list` its live grants,
-  and may `release` one. It is told, as data, why a call was refused (Appendix A).
-- **The source** is never told it was read by any frame; its data is copied for the read
-  and the copy discarded. It keeps the history (§22.2).
+  library id. It reads with ONE read-only `SELECT` per `query`; where the grant allows it,
+  writes with ONE literal-valued `INSERT`, `UPDATE` or `DELETE` per `write` (§24.5) and
+  learns only how many rows changed; may ask the source to fetch new data first with
+  `refresh` (§24.6); may `list` its live grants and `release` one; and may `discover`
+  whether a candidate source exists — a class, never a name or a count. It is told, as data,
+  why a call was refused (Appendix A).
+- **The source** is hinted, ids only, when it was read or changed (§23.3); its data is
+  copied for a read and the copy discarded, and a write lands on its live database through
+  the host's one write path with the rows it changed journaled first (§22.4). It keeps the
+  history (§22.2) and offers the undo.
 - **The host** owns everything in between: it ranks the user's apps for the consent sheet
   (never the reader), renders the ask as a strip and the review as a sheet, writes the
   grant, runs the read on a scoped scratch copy in a bounded worker, masks credentials,
-  logs on the source, and revokes, suspends and sweeps (§24).
+  dry-runs and then applies a write atomically with its undo journaled, runs a refresh where
+  the source lives, logs on the source, rings the doorbells, and revokes, suspends and
+  sweeps (§24).
 - **The user** is the only principal who can create a grant, and can stop one at any
   moment from the source's side, the reader's side or Settings.
 
 Four durations exist: *while it's open* — a MEMORY grant bound to the reader's visible
 frame and the DEFAULT, never persisted — a day, a week, and *until I stop it*. A separate
 opt-in, `unattended`, lets a hidden (scheduled) run of the reader query under a persisted
-grant; a memory grant is never usable unattended. `access` is read-only at 1.1; the `write`
-seat is reserved (§23.2, §25).
+grant; a memory grant is never usable unattended.
+
+A grant may carry more than a read at 1.2, each seat off unless the user ticked it. Per
+table, `write`: the reader may change rows — one plain statement at a time, up to
+`ACCESS_WRITE_MAX_ROWS` rows, every change journaled and undoable from the source's history
+for seven days (§22.4, §24.5). Per grant, `kv`: the source's key-value store crosses, filtered
+(§24.3); and `refresh`: the reader may ask the host to run the source for new data before it
+reads (§24.6). An ask may say `access: 'write'` so the toggle is offered; the user decides
+per table. **Three doors reach the same grant:** the reader's **frame** (this Part's frames),
+the **chat** beside the reader (the host's data lane — the granted tables materialised into
+its scratch copy under the same copy rules, read-only at 1.2) and a **schedule** (a scheduled
+question to the reader's AI, under the away posture — persisted grants with `unattended`
+only). The same grant, the same consent surface, the same history, whichever door asks; a
+person never learns there are doors, and every history line says which one (`via`, §22.2).
 
 ## 22. The access-grant record and the history
 
@@ -1452,14 +1506,18 @@ AccessGrant = {
   id: uuid v4 (lowercase — crypto.randomUUID()'s shape),
   readerAppId, sourceAppId: string (1..64; never equal),
   scope: { tables: [{ name: APP_OBJECT_NAME (never snug_kv; 1..32 tables),
-                      columns: string (1..64 chars) [1..64] }] },   // no duplicate table or column
-  access: 'read',                                                   // a one-member enum at 1.1
+                      columns: string (1..64 chars) [1..64],       // the GRANTED columns — what may be read or written; no duplicate table or column
+                      withheld?: string (1..64 chars) [≤64],       // 1.2: the non-credential columns the user left unticked — disjoint from columns, never credential-named; OMITTED when empty
+                      write?: true }] },                           // 1.2: the user ticked "can also change rows" for this table; OMITTED when false
+  kv?: true,                                                        // 1.2: the source's key-value store crosses, filtered (§24.3); OMITTED when false
+  refresh?: true,                                                   // 1.2: the reader may ask the source to fetch new data first (§24.6); OMITTED when false
+  access: 'read' | 'write',                                         // DERIVED: 'write' iff some table carries write ('read' is the one member at 1.1)
   purpose: string (1..200; one line of visible text — §23.1),
   duration: { kind: 'until', at: ISO instant } | { kind: 'always' }, // 'session' never persists
   unattended: boolean,
   status: 'active' | 'revoked' | 'suspended',                       // 'expired' is DERIVED from duration, never stored
   suspendedReason?: 'imported' | 'reader-updated' | 'source-changed' | 'source-restricted' | 'reader-misbehaved',
-  provenance: 'app' | 'user',                                       // who asked; only the user's act WRITES
+  provenance: 'app' | 'user' | 'chat',                              // who asked (the reader's frame, the user on host chrome, the brain beside the reader); only the user's act WRITES
   readerVersion: int ≥ 1, grantedAt, updatedAt: ISO, revokedAt?: ISO,
   reads: int ≥ 0, lastReadAt?: ISO, timeouts: int ≥ 0
 }
@@ -1471,12 +1529,18 @@ Normative rules (all MUST, for a hub implementing Part VI):
    UTF-8 is at most `ACCESS_GRANT_MAX_BYTES` (16 KiB), and a credential anywhere in it — an
    authorization-like key at any depth, a URL with userinfo, a Bearer/JWT/provider-key value
    shape, whole or embedded in text — is a parse refusal. A hub parses BEFORE it writes; a
-   refused write leaves the file byte-identical.
-2. **A credential-named column is never in a scope.** The host's column-name rule (the C1
-   value scan's own key rule: `authorization`, `password`, `secret`, `api_key`, `*_token`,
-   `credential`, `token`, …) decides; the consent sheet shows such a column as *never
-   shared* and leaves it out; a read withholds it on the copy and masks it in the rows
-   (§24.3).
+   refused write leaves the file byte-identical. Every 1.2 seat is optional with the 1.1
+   meaning when absent, and a writer OMITS every default (`withheld` when empty; `write`,
+   `kv` and `refresh` when false), so a record that carries none is byte-identical to a 1.1
+   record.
+2. **A credential-named column is never in a scope** — not in `columns`, not in `withheld`.
+   The host's column-name rule (the C1 value scan's own key rule: `authorization`,
+   `password`, `secret`, `api_key`, `*_token`, `credential`, `token`, …) decides; the consent
+   sheet shows such a column as *never shared* and leaves it out; a read withholds it on the
+   copy and masks it in the rows (§24.3). What may be read — by any door — is `columns`, one
+   rule; `withheld` exists for the drift check (§24.2 item 9) and the consent surface, and a
+   withheld column is withheld on the copy exactly like a credential-named one. A generated
+   column may be listed in `columns` for reads; it is never nameable in a write (§24.5).
 3. `status` and its seats agree: `suspended` ⇔ `suspendedReason`; `revoked` ⇔ `revokedAt`.
    A grant that is allowed again clears both.
 4. Only the user's act on host chrome writes a grant. A hub holds at most
@@ -1485,8 +1549,12 @@ Normative rules (all MUST, for a hub implementing Part VI):
    app the file does not hold is refused.
 5. **Import reconciliation.** On an UNTRUSTED import (a file the user picked off disk, however
    empty the hub — Part II §9's doctrine) every grant whose **canonical intent** — the
-   key-sorted, whitespace-free JSON of `{ id, readerAppId, sourceAppId, scope, access,
-   purpose, duration, unattended, provenance }` and nothing the engine writes on its own —
+   key-sorted, whitespace-free JSON of `{ id, readerAppId, sourceAppId, scope (each table's
+   name, columns, withheld, write), kv, refresh, access, purpose, duration, unattended,
+   provenance }` and nothing the engine writes on its own, with every absent 1.2 seat read as
+   its default (`withheld` empty; `write`, `kv`, `refresh` false), so a defaults-off 1.2
+   record and the 1.1 record it extends have ONE intent (a backup taken before the upgrade
+   restores unsuspended) while a widened grant — any seat set — is not intent-identical —
    differs from an ACTIVE local grant of the same id lands `suspended / imported`; an
    intent-identical grant stays as it arrived ONLY when the reader's current code in the
    imported file equals the local reader's code — consent is bound to the code it was given
@@ -1494,13 +1562,20 @@ Normative rules (all MUST, for a hub implementing Part VI):
    local file holds REVOKED is written back revoked (the user's stop is a tombstone no
    imported copy can lift); an imported `revoked` grant stays revoked (it is never
    re-armable); a row that does not parse is removed and reported; every `accessDeclined:*` and `accessMuted:*`
-   row is dropped; every imported history entry is tagged `imported: true`. On a TRUSTED pull
-   (the user's own sync origin, the recovery restore) every row is kept exactly as it is —
-   including a grant row the hub cannot parse, which stays inert.
+   row is dropped; every `accessUndo:*` row (§22.4) and every `accessWants:*` row is dropped;
+   every imported history entry is tagged `imported: true`. On a TRUSTED pull (the user's own
+   sync origin, the recovery restore) every row is kept exactly as it is — including a grant
+   row the hub cannot parse, which stays inert, and the undo journal.
 6. **Delete.** Deleting an app removes every grant where it is reader OR source, its own
-   history row, its declines and its mute, inside the delete's own transaction.
-7. **Export** carries grants and histories (they are settings rows); a trusted round trip
-   preserves them byte for byte.
+   history row, its undo journal, its declared wishes, its declines and its mute, inside the
+   delete's own transaction.
+7. **Export** carries grants, histories and undo journals (they are settings rows); a trusted
+   round trip preserves them byte for byte; an untrusted import drops the undo rows (rule 5)
+   — an undo is offered only for a write this hub brokered.
+8. **A 1.1 reader.** A hub that implements Part VI at 1.1 parses the record strictly and
+   cannot read a record carrying any 1.2 seat; it MUST treat such a row as unreadable — no
+   access under it, the row left inert — and never as a read-only grant. A 1.2 hub reads a
+   1.1 record as a defaults-off 1.2 record (rule 1).
 
 ### 22.2 The history (`accessLog:<sourceAppId>`)
 
@@ -1508,45 +1583,106 @@ The SOURCE keeps the history: one bounded row per source holding a JSON array, n
 first, of entries
 
 ```
-AccessLogEntry = { at: ISO, kind: 'granted' | 'read' | 'refused' | 'revoked' | 'expired' | 'released' | 'suspended',
+AccessLogEntry = { at: ISO, kind: 'granted' | 'read' | 'refused' | 'revoked' | 'expired' | 'released' | 'suspended'
+                             | 'wrote' | 'undone' | 'refreshed',                 // the three 1.2 kinds
   grantId: uuid v4, readerAppId, readerName (≤ 80, host-written from the library row),
+  via?: 'app' | 'chat' | 'schedule' | 'user',    // 1.2: which door asked — the reader's frame, the chat beside it, a schedule; 'user' for an act from host chrome (an undo)
   tables?: APP_OBJECT_NAME[≤32], sql?: ≤ 200 chars, rows?: int, count?: int ≥ 1,
-  attended?: boolean, reason?: ≤ 120 chars, imported?: boolean }
+  attended?: boolean, reason?: ≤ 120 chars, imported?: boolean,
+  authority?: 'permission' | 'approval' | 'task',  // 1.2, on wrote only: the standing per-table tick · the user's approve of one change · a task's standing authority (§25)
+  changes?: int ≥ 0,                               // 1.2, on wrote and undone: rows the statement changed / put back
+  undoId?: uuid v4 }                               // 1.2, on wrote only: the journal entry (§22.4) — present while an undo is offered
 ```
 
 Rules: strict and capped per seat; a credential in an app-authored seat (`sql`, `reason`,
 `tables`) is a refusal — a host walks the FULL statement before cutting it to 200 characters
 and omits the `sql` seat on a hit (a key straddling the cut would otherwise persist as a
-prefix). Consecutive `read` entries coalesce ONLY on an identical `(grantId, sql)` pair within
-`ACCESS_LOG_COALESCE_MS` (60 s) into one entry with `count`. Caps: `ACCESS_LOG_MAX_ENTRIES`
+prefix). The 1.2 seats belong to their kinds: `authority` and `undoId` appear only on `wrote`;
+`changes` only on `wrote` or `undone`; a `wrote` line carries `tables: [<the one table>]`,
+`via`, `authority`, `changes` and `sql` — the forward statement as the history keeps it (walked
+whole, cut at 200, omitted on a hit; shown to the person as *what it changed*); an `undone`
+line carries `via: 'user'`, `tables` and `changes`; a `refreshed` line carries `via` and, when
+the run failed, `reason` as ONE of `ACCESS_REFRESH_REASONS` (`no-handler` · `timeout` ·
+`capped` · `refused` · `failed`) — a machine token the host words for the person; a source
+handler's own text never reaches a line. Every `wrote`, `undone` and `refreshed` line has a
+grant: a write of an app's OWN data the user approved writes no line here. Consecutive `read`
+entries coalesce ONLY on an identical `(grantId, sql)` pair within `ACCESS_LOG_COALESCE_MS`
+(60 s) into one entry with `count`; no other kind coalesces. Caps: `ACCESS_LOG_MAX_ENTRIES`
 (200) and `ACCESS_LOG_MAX_BYTES` (64 KiB) per source, `ACCESS_LOG_TOTAL_MAX_BYTES` (1 MiB)
 across sources; pruning takes `read` entries (oldest first) before any lifecycle kind and
 NEVER the latest `granted` / `revoked` / `suspended` / `released` entry of a grant the file
-still holds — the history can never be made to lie about when or by whose act access began.
-A `read` line is written BEFORE the rows leave the host: a read the history cannot record
-does not happen. The user may clear the reads; lifecycle entries stay.
+still holds, nor the latest `wrote` entry of one — the history can never be made to lie about
+when or by whose act access began, nor made to forget that a reader changed something while
+its grant stands. A `read` line is written BEFORE the rows leave the host: a read the history
+cannot record does not happen. A `wrote` line is written with the journal entry (§22.4),
+after the commit and before the answer leaves (§24.5); a `refreshed` line before the refresh
+answer (§24.6). The user may clear the reads; lifecycle entries and every `wrote`, `undone`
+and `refreshed` entry stay.
 
 ### 22.3 Declines and mutes
 
 `accessDeclined:<readerAppId>:<hash>` records a *don't allow* against an ask's semantic
 identity — `accessRequestHash`: FNV-1a 64 (hex) over the key-sorted JSON of `{ tables:
-sorted, words: sorted, renew }` with each hint list trimmed, lower-cased, de-duplicated and
-sorted, and the free-text purpose EXCLUDED, so a reworded ask with the same hints is the same
-ask. `accessMuted:<readerAppId>` is *stop asking*. Both are the user's own answers: dropped
+sorted, words: sorted, renew, access }` with each hint list trimmed, lower-cased, de-duplicated
+and sorted, the free-text purpose EXCLUDED, and `access` read as `'read'` when absent (1.2) —
+so a reworded ask with the same hints is the same ask, a 1.1 ask hashes as it always did, and
+a declined read ask does not decline a later write ask, nor the reverse.
+`accessMuted:<readerAppId>` is *stop asking*. Both are the user's own answers: dropped
 on an untrusted import, swept on delete. A host MAY also keep a per-browser switch that mutes
 every reader; it is not part of the file.
+
+### 22.4 The undo journal (`accessUndo:<targetAppId>`)
+
+A hub that brokers a write (§24.5) MUST keep, per target app, a journal of the rows each
+brokered write changed — for an INSERT the new rowids and the inserted values; for an UPDATE
+the rowid, the previous and the new values of the columns the statement set; for a DELETE the
+whole previous row — as data, never as statement text: an undo is built from the journal at
+the time of the undo. ≤ 20 live entries per (target, reader), ≤ 64 KiB per entry, ≤ 256 KiB
+per row, kept seven days; never a credential (a write whose captured values would carry one
+is refused); an undone entry is kept, marked, until it expires; swept with the app; DROPPED on
+an untrusted import, kept on a trusted pull. Rule: a strict parser of 1.1 cannot read this row
+and MUST ignore it.
+
+The row is ONE JSON array per target app, newest first, of entries
+
+```
+AccessUndoEntry = { id: uuid v4, at, expiresAt: ISO,
+  authority: 'permission' | 'approval' | 'task', via: 'app' | 'chat' | 'schedule' | 'user',
+  grantId: uuid v4, readerAppId, readerName (host-written),
+  steps: [{ table: APP_OBJECT_NAME, op: 'insert' | 'update' | 'delete',
+            columns: string (1..64) [1..64],      // UPDATE: the SET columns in order · DELETE: every non-generated column · INSERT: the INSERT list
+            rows: [{ rowid: int, before?: scalar[], after?: scalar[] }] [≤ ACCESS_WRITE_MAX_ROWS] }] [1..64],
+                                                  // INSERT: after · UPDATE: before and after over columns · DELETE: before; each array as long as columns
+  undoneAt?: ISO }
+```
+
+The constants are `ACCESS_UNDO_MAX_ENTRIES` (20), `ACCESS_UNDO_MAX_BYTES` (64 KiB),
+`ACCESS_UNDO_MAX_ROW_BYTES` (256 KiB) and `ACCESS_UNDO_TTL_MS` (seven days). A frame's `write`
+is exactly one step. The entry is strict; every captured value is walked under its column's
+name by the same credential walk the record uses (§22.1 rule 1), and a hit refuses the WRITE
+before the entry exists. An undo rebuilds the inverse from the structure — every identifier
+quoted and checked against the live table, every value a bound parameter — so a journal row
+planted by a trusted pull can move values and never run a statement (§24.5 item 23). The
+`wrote` line's `undoId` names the entry; a reader is never told it.
 
 ## 23. The frames
 
 ### 23.1 `snug:access-request` — strict
 
 ```
-base = { v: 1, type: 'snug:access-request', requestId: id, instanceId: id }
-request = base + { op: 'request', purpose: string (1..200), hints?: { words?: word (1..32) [≤16], tables?: APP_OBJECT_NAME [≤16] }, renew?: id }
-query   = base + { op: 'query', grantId: id, sql: string (1..4096), params?: scalar [≤64] }   // scalar = string (≤ 4096) | number | boolean | null
-list    = base + { op: 'list' }
-release = base + { op: 'release', grantId: id }
+base     = { v: 1, type: 'snug:access-request', requestId: id, instanceId: id }
+request  = base + { op: 'request', purpose: string (1..200), hints?: { words?: word (1..32) [≤16], tables?: APP_OBJECT_NAME [≤16] }, renew?: id,
+                    access?: 'read' | 'write' }                                                 // 1.2; absent = read
+query    = base + { op: 'query', grantId: id, sql: string (1..4096), params?: scalar [≤64] }    // scalar = string (≤ 4096) | number | boolean | null
+write    = base + { op: 'write', grantId: id, sql: string (1..4096), params?: scalar [≤64] }    // 1.2 — ONE literal-valued INSERT / UPDATE / DELETE (§24.5)
+refresh  = base + { op: 'refresh', grantId: id }                                                // 1.2 — ask the source to fetch new data first (§24.6)
+list     = base + { op: 'list' }
+release  = base + { op: 'release', grantId: id }
+discover = base + { op: 'discover', hints?: { words?: word (1..32) [≤16], tables?: APP_OBJECT_NAME [≤16] } }   // 1.2 — a class, never a name
 ```
+
+The seven variants are published in this order (`ACCESS_OPS`); 1.1 defined `request`,
+`query`, `list` and `release`, and a 1.1-shaped frame still parses at 1.2.
 
 Strict at every level (an unknown key is `MALFORMED`) — this frame carries app-authored SQL
 and a release act, R2's stated exception alongside the net pair. Like the net pair it has NO
@@ -1562,37 +1698,71 @@ never credential-shaped; a hint table is an app object name outside every reserv
 and never `snug_kv`; `sql` refuses the bidi controls and every C0/C1 control other than tab,
 newline and carriage return. The parser bounds `sql` by size only — the host, not the
 parser, decides that it is one read-only `SELECT` (§24.3), so a non-SELECT is answered
-`ACCESS_QUERY_REFUSED`, never `MALFORMED`.
+`ACCESS_QUERY_REFUSED`, never `MALFORMED`. The same holds for a `write`: the host decides that
+it is ONE plain, literal-valued `INSERT`, `UPDATE` or `DELETE` on a granted table within the
+rules of §24.5, so anything else is answered `ACCESS_WRITE_REFUSED`, never `MALFORMED`.
+`access` on a `request` is the reader saying it would like to change rows too: the host offers
+the write toggle on the consent surface, the user decides per table, and the answer's view
+says what was allowed; a read-only answer to a write ask is the user's no for writes, and the
+ask's semantic identity (§22.3) includes `access`, so it is not the no for a later read ask.
+A `discover` carries the same hints an ask may carry and nothing else.
 
 ### 23.2 `snug:access-response` — tolerant
 
 ```
 resp = { v: 1, type: 'snug:access-response', requestId: id }
-grantView = { id: id, access: string (1..32 — 'read' at 1.1), source: { displayName (1..80), iconEmoji? (≤8), iconColor? (≤32) },
-              tables: [{ name: APP_OBJECT_NAME, columns: string (1..64) [1..64] }] [1..32],
+grantView = { id: id, access: string (1..32 — 'read' | 'write' at 1.2; 'read' alone at 1.1),
+              source: { displayName (1..80), iconEmoji? (≤8), iconColor? (≤32) },
+              tables: [{ name: APP_OBJECT_NAME, columns: string (1..64) [1..64], write?: true }] [1..32],   // write only when set (1.2)
+              kv?: true, refresh?: true,                                                                    // only when set (1.2); withheld is NEVER on the view
               duration: 'session' | 'day' | 'week' | 'always', expiresAt?: ISO, unattended: boolean }
 ok = resp + { ok: true, op: 'request', grant: grantView }
    | resp + { ok: true, op: 'query', columns: string[], rows: unknown[][], truncated?: boolean, totalRows?: int }
+   | resp + { ok: true, op: 'write', changes: int ≥ 0 }                                      // 1.2 — the rows the statement changed, nothing else
+   | resp + { ok: true, op: 'refresh', fresh: boolean, reason?: string (≤ 32) }              // 1.2 — 'recent' inside the cooldown; else a token of ACCESS_REFRESH_REASONS
    | resp + { ok: true, op: 'list', grants: grantView[] }
    | resp + { ok: true, op: 'release' }
+   | resp + { ok: true, op: 'discover', candidates: 'none' | 'one' | 'several' }             // 1.2 — ACCESS_CANDIDATE_CLASSES
 error = resp + { ok: false, error: { code, message, retryable, … } }   // the shared error shape, R5
 ```
 
 Tolerant (`z.object`, the db-response shape): nothing in a host→app answer becomes a
-real-world effect, and a strict answer would make every reserved growth seat — a future
-`access: 'write'` in a `list` answer — a MAJOR bump, because an SDK drops what its parser
-rejects. The seats a 1.1 parser knows are still validated (a malformed `rows` is still
-refused). Exactly one terminal response per `requestId` (R3). Both frames ride the default
-256 KiB class (R6); the host truncates a query answer in band at `ACCESS_MAX_ROWS` (500) /
-`ACCESS_MAX_RESULT_BYTES` (192 KiB, UTF-8) with `truncated` and `totalRows`, and an answer
-that still exceeds the class becomes a SMALL terminal `ACCESS_SIZE_EXCEEDED` — never silence.
+real-world effect, and a strict answer would make every growth seat a MAJOR bump, because an
+SDK drops what its parser rejects. The 1.2 revision is the worked example: `access: 'write'`,
+a table's `write`, `kv` and `refresh` in a `request` or `list` answer reach a 1.1 SDK as an
+open string and ignored keys — the grant view still parses and the app keeps reading — and a
+1.2 host writes each additive key ONLY when set, so a read-only grant's view is byte-identical
+to a 1.1 view. The seats a 1.2 parser knows are still validated (a malformed `rows` is still
+refused). A `write` answer carries `changes` and nothing else — never a row, a rowid or the
+journal entry's id (an app can do nothing with an undo; the undo is the user's act from the
+source's history, §24.5). A `refresh` answer's `reason` is a token, never the source handler's
+text; a `discover` answer is a class, never a name or a count. Exactly one terminal response
+per `requestId` (R3). Both frames ride the default 256 KiB class (R6); the host truncates a
+query answer in band at `ACCESS_MAX_ROWS` (500) / `ACCESS_MAX_RESULT_BYTES` (192 KiB, UTF-8)
+with `truncated` and `totalRows`, and an answer that still exceeds the class becomes a SMALL
+terminal `ACCESS_SIZE_EXCEEDED` — never silence.
 
-### 23.3 The change hint
+### 23.3 The change hints
 
 When a grant the reader holds is stopped or paused, the host posts `snug:host-event` with
 `event: 'access-changed'` and `data: { grantId }` to the reader's LIVE frame — ids only (R7).
 The reader re-`list`s; it learns an expiry from its next `query` (`ACCESS_EXPIRED`) and a
 re-activation from the `request` answer; nothing else is implied.
+
+Three more hints exist at 1.2, ids only, to LIVE frames only (a hidden frame is never rung;
+an app that was closed learns on its next open), each as `snug:host-event`:
+
+- `access-source-changed { grantId }` to every live reader of a source after a successful
+  row-modifying statement on that source's own database (coalesced, §24.7), and after a
+  brokered write or an undo landed there by another reader (§24.5);
+- `access-read { grantId }` to the SOURCE's live frame after a read under that grant — the
+  source learns it was read, never what;
+- `data-changed { table }` to the TARGET's own live frame after a brokered write or an undo
+  landed on its database, so an open app re-reads what another app — or its own chat —
+  changed.
+
+No event carries a row, a value, a name or a count beyond the one id or table name. A hint
+is a hint: the reader re-queries, the source re-reads, nothing else is implied.
 
 ### 23.4 Error codes
 
@@ -1601,7 +1771,13 @@ grant of another frame — byte-identical answers) · `ACCESS_DECLINED` (`retrya
 *not now*; `false` after *don't allow* or a mute) · `ACCESS_PENDING` (retryable) ·
 `ACCESS_UNATTENDED` (retryable — nobody is looking) · `ACCESS_NO_SOURCES` · `ACCESS_REVOKED`
 (stopped or paused) · `ACCESS_EXPIRED` · `ACCESS_QUERY_REFUSED` · `ACCESS_QUERY_FAILED` ·
-`ACCESS_RATE_LIMITED` (retryable) · `ACCESS_SIZE_EXCEEDED`. R5's open-string rule applies.
+`ACCESS_RATE_LIMITED` (retryable) · `ACCESS_SIZE_EXCEEDED` · and, at 1.2,
+`ACCESS_WRITE_REFUSED` (not retryable — the statement's shape, a column it names, a value in
+it, the table's own shape or the undo's bounds; the message names the rule in words that
+reveal no fact about the source) · `ACCESS_BUSY` (retryable — the target holds an open
+transaction, or changed between the dry run and the apply; no count is given) ·
+`ACCESS_REFRESH_FAILED` (not retryable — no handler, timed out, the day's ceiling, schedules
+off or paused). R5's open-string rule applies.
 
 ## 24. Host obligations
 
@@ -1638,7 +1814,8 @@ A host that advertises `capabilities.access` MUST:
    bundle or an agent hand-in (the user's own edit and a starter update change nothing);
    name what will pause on the update's confirm.
 9. Suspend `source-changed` when a granted table's non-credential columns differ from the
-   recorded set (a credential-named column gained or lost is not drift); suspend
+   recorded set — `columns` together with `withheld`, so a withheld column that vanished or a
+   new column is drift too (a credential-named column gained or lost is not drift); suspend
    `source-restricted` when the source holds a linked-device fact (Part V), checked at every
    query and at every connection-approve/import seam.
 10. Take a stop effect on the NEXT query, and let a stop that lands during a read win (no
@@ -1655,10 +1832,15 @@ A host that advertises `capabilities.access` MUST:
     on a **scoped scratch copy** of the source's live runtime bytes (refused above
     `ACCESS_SOURCE_MAX_BYTES`, 16 MiB) from which every trigger (first), every view, every
     table outside the grant, `snug_kv` and the statistics tables have been physically
-    dropped and the drops verified, every credential-named column of a granted table
-    withheld, every credential-SHAPED value under a neutral column of a granted table
-    overwritten on the copy (a reader's own statement — an alias, `hex()`, `substr()` — cannot
-    reach behind the copy), and `PRAGMA query_only` set; in an execution context the page does not share
+    dropped and the drops verified — `snug_kv` KEPT only under a grant with `kv`, and then
+    filtered on the copy: every row whose key is credential-named or host-prefixed (`snug:`),
+    whose value is not JSON, or whose parsed value the record's credential walk (§22.1 rule
+    1) refuses is deleted, and the rest is queryable as `snug_kv(key, value)` — and
+    `sqlite_sequence` trimmed to the granted names; every credential-named column and every
+    `withheld` column of a granted table withheld, every credential-SHAPED value under a
+    neutral column of a granted table overwritten on the copy (a reader's own statement — an
+    alias, `hex()`, `substr()` — cannot reach behind the copy), and `PRAGMA query_only` set;
+    in an execution context the page does not share
     (a dedicated worker with its own engine) under a wall clock of `ACCESS_QUERY_TIMEOUT_MS`
     (2 s) that terminates the context when it fires; suspend `reader-misbehaved` after
     `ACCESS_TIMEOUT_STRIKES` (3) consecutive timeouts.
@@ -1669,7 +1851,9 @@ A host that advertises `capabilities.access` MUST:
     whole first; omitted on a hit), the row count and whether anyone was looking — BEFORE the
     rows leave; log `granted`, `refused` (a hidden frame on a grant without `unattended`, at
     most once per minute per grant), `revoked`, `expired`, `released` and `suspended` with
-    their reason; keep the caps and the pruning order of §22.2.
+    their reason, and — at 1.2 — `wrote`, `undone` and `refreshed` as §22.2, §24.5 and §24.6
+    state, every line saying through which door (`via`); keep the caps and the pruning order
+    of §22.2.
 15. Answer a memory grant only to the visible frame of its generation; never to a hidden
     frame, whatever the opt-in says.
 
@@ -1684,20 +1868,105 @@ A host that advertises `capabilities.access` MUST:
 17. Advertise `capabilities.access` only where a scoped read can actually run (a host that
     cannot construct the bounded execution context composes `false`); show the user, on both
     apps and in a cross-app list, every grant with its words and ONE act, the source's
-    history in words, and a stop that works from every one of those places.
+    history in words — every write with its undo — and a stop that works from every one of
+    those places.
+
+### 24.5 Writes
+
+A host MUST:
+
+18. Broker a write only under a grant whose named table carries `write: true` and only for a
+    PRESENT caller (an app's frame: the visible frame of its generation; the chat beside the
+    app: always; a scheduled step: never at 1.2 → `ACCESS_UNATTENDED`), counting it in the
+    reader's per-minute window first.
+19. Accept exactly ONE plain `INSERT INTO t (cols) VALUES …`, `UPDATE t SET … WHERE …` or
+    `DELETE FROM t WHERE …` whose values are literals or bound parameters and whose WHERE is
+    a conjunction/disjunction of simple comparisons on the granted columns — a withheld,
+    credential-named, generated or masked column named anywhere, a subquery, a CTE,
+    `RETURNING`, a conflict clause, a schema qualifier, a function, a missing WHERE, or a
+    credential-shaped value → `ACCESS_WRITE_REFUSED`, never `MALFORMED`.
+20. Refuse a write on a table that is virtual, WITHOUT ROWID, carries a trigger (temporary
+    ones included), an `ON CONFLICT REPLACE`, a foreign-key action, or a CHECK over an
+    unshared column; refuse a DELETE unless every column of the table is granted.
+21. Dry-run the statement in the bounded context on a scoped copy and refuse past
+    `ACCESS_WRITE_MAX_ROWS` (200) or past `ACCESS_UNDO_MAX_BYTES`; then apply it atomically on
+    the live database — `BEGIN IMMEDIATE`, the capture, the statement, the journal entry,
+    `COMMIT` — with no other statement interleaved; answer `ACCESS_BUSY` (retryable) when the
+    target holds an open transaction or changed between the dry run and the apply; no row
+    leaves the context, and the reader learns only `changes`.
+22. Write the `wrote` line on the target's history (`via`, `authority`, `changes`, the table,
+    the statement as the history keeps it) with the journal entry, before the answer.
+23. Offer *undo* from the target's history for a live entry: rebuild the inverse from the
+    journal, apply it in reverse step order atomically, change nothing unless every row still
+    holds the values the write left (else fail whole), write `undone`, and never offer to undo
+    an undo.
+24. After a commit or an undo, hint the target's live frame `data-changed { table }` and every
+    other live reader `access-source-changed { grantId }`.
+
+The column rule of item 19 is decided from the schema and the scope — never from a row's
+value — so a refusal tells the reader nothing it could not learn from a read; the table facts
+of item 20 are checked on the live database at the apply as well as at the dry run, and the
+apply's check is the rule. A write of an app's OWN data that the user approved one change at
+a time (the chat beside the app, a run's result page) goes through the same atomic path with
+the same counting and the same `data-changed` hint; it keeps no journal and writes no line
+at 1.2 — when §25's own-app undo lands, its entry and line carry `authority: 'approval'`.
+
+### 24.6 Refresh
+
+A host MUST:
+
+25. Run the SOURCE where it lives (one instance, §24.7) with `input { kind: 'refresh',
+    requestedBy }` over the schedule handshake only under a grant with `refresh: true`, under
+    the unattended posture (a mutating connected call is refused, never asked; nothing is
+    remembered), counted on the file's daily ceilings and refused before dispatch when they
+    would be crossed or when schedules are off or paused.
+26. Run a source at most once per `ACCESS_REFRESH_COOLDOWN_MS` (five minutes) — within it
+    answer `fresh: false, reason: 'recent'` and run nothing.
+27. Write `refreshed` on the source's history before the answer, with who asked and, on
+    failure, a reason from the fixed set; a source without a handler → `ACCESS_REFRESH_FAILED`
+    (not retryable); the handler's own text never reaches the reader.
+
+`requestedBy` is the reader's display name as the host holds it, folded to one line and
+capped — the one piece of reader-supplied text that enters the source's frame, as data.
+
+### 24.7 One instance, doorbells, capability truth
+
+A host MUST:
+
+28. Never run a second copy of the source beside an open one for a refresh — the placement
+    rule of a scheduled run applies, and the frame that hosted a refresh stays ask-only
+    afterwards exactly as one that hosted a scheduled run.
+29. After a successful row-modifying statement on a source, hint every live reader
+    `access-source-changed { grantId }`, coalesced ≥ `ACCESS_DOORBELL_COALESCE_MS`; after a
+    read, hint the source's live frame `access-read { grantId }`; ids only — never a row, a
+    value, a name or a count.
+30. Answer an op it does not serve `MALFORMED` with the `requestId` recovered — how a 1.2 app
+    learns it is on a 1.1 host.
 
 A host that does not implement Part VI advertises no `access` capability and is conforming;
-it MAY carry Part VI's rows untouched.
+it MAY carry Part VI's rows untouched. A host that implements Part VI at 1.1 serves four ops
+and is conforming; item 30 is what it already does.
 
 ## 25. Deferred by name
 
-Write access (`access: 'write'` — the seat is reserved); user-chosen column scope (columns
-are frozen as disclosed, not filtered); sharing `snug_kv`; a source→reader change hint; a
-builder-time access declaration; grants inside shared bundles; linked-device sources; a
-count-only discovery answer; a source-initiated grant; a hint to the source that it was read;
-cross-app content in the chat data lane and the scheduler's think step; two-device history
-appends as a sync divergence; an app-level "arrived with an imported file" marker for the
-provenance line.
+A builder-time access declaration (the `accessWants:<appId>` row is defined at §8.1; the
+`<meta name="snug:access-wants">` read at install, update and hand-in, the install preview
+line and the pre-filled consent sheet are a later revision); grants inside shared bundles;
+linked-device sources; a source-initiated grant, and write on one (the source side offers
+READ); two-device history appends as a sync divergence; an app-level "arrived with an imported
+file" marker for the provenance line; the arming surface of the task write authority
+(`authority: 'task'` — a scheduled task's standing permission to apply its own changes,
+ADR-0033's shape, with its kill switches and its *undo* on the result); the chat's cross-app
+write through its proposal card and the three *fetch* affordances (the chat's, the
+scheduler's and the source sheet's *fetch now*) — the chat door is read-only at 1.2 and
+`refresh` is the frame's op; the undo surface for an app's OWN approved writes (§24.5); a
+per-op write grid (insert, update and delete as separate ticks — one toggle at 1.2); step
+chaining across apps inside one schedule.
+
+Taken at 1.2 from the 1.1 list: write access, user-chosen columns, sharing `snug_kv`, the
+source→reader change hint, the count-only discovery answer, the hint to the source that it
+was read, and cross-app content in the chat data lane and the scheduler's think step (the
+doors, §21).
 
 ---
 
@@ -1724,14 +1993,22 @@ minimum. Each item below is asserted by the reference implementation's test suit
 - Advertise `access` only with a handler bound to the host-assigned id; route the access
   pair through the same value-blind ladder as db and net; answer an over-cap access
   response with `ACCESS_SIZE_EXCEEDED`, a malformed access request with a recoverable
-  `requestId` with `MALFORMED`.
+  `requestId` with `MALFORMED`, and an op the host does not serve the same way (§24.7).
+- Broker a write only through the one write path with the rows it changes journaled first,
+  atomically, under the column and table rules of §24.5; answer `ACCESS_BUSY` rather than
+  interleave; ring the doorbells with ids only (§23.3).
 
 **Apps and SDKs:**
 - Announce on mount; wait for `snug:host-ready`; echo `instanceId`; unique `requestId`
   per instance; ignore unknown frames and fields; treat streaming frames as provisional;
   never assume storage or network APIs — use the frames; feature-detect
   `net`/`openUrl`/`access` from capabilities and render honest fallbacks; ask for access only
-  after a user act, never on load; treat `access-changed` as a hint and re-list.
+  after a user act, never on load; treat the four access hints (`access-changed`,
+  `access-source-changed`, `access-read`, `data-changed`) as hints — re-list, re-query or
+  re-read, never infer content; read a `MALFORMED` answer to `write`, `refresh`, `discover`
+  or an ask carrying `access` as a 1.1 host and render the honest fallback, asking again
+  without `access`; ask for a write only when the app needs one, and take a read-only answer
+  to a write ask as the user's no until a new user act.
 
 **Hubs (Part II):**
 - Carry the schema version in `PRAGMA user_version`, migrate forward-only, refuse
@@ -1777,9 +2054,22 @@ minimum. Each item below is asserted by the reference implementation's test suit
 - Keep the source's history per §22.2 (coalescing, caps, the pruning order, the line before
   the rows).
 - Read only on a scoped scratch copy in a bounded execution context with the drops verified
-  and credential columns withheld (§24.3); mask by column name; key every limit on the
+  and credential and withheld columns withheld, the key-value store filtered through the one
+  credential walk when it crosses (§24.3); mask by column name; key every limit on the
   host-assigned id and frame generation; take a stop effect on the next query.
 - Disclose egress before consent (§24.4); advertise `access` only where a read can run.
+- Keep the undo journal per §22.4 — rows, never statement text; the caps; dropped on an
+  untrusted import, kept on a trusted pull; swept with the app.
+- Broker a write per §24.5: one literal-valued statement; the column rule decided from the
+  schema and the scope; the table facts checked at the dry run and again at the apply; the
+  dry run on a scoped copy in the bounded context; the atomic apply with the capture; the
+  `wrote` line with the journal entry before the answer; *undo* from the target's history
+  that changes nothing unless every row still holds what the write left; the doorbells.
+- Run a refresh per §24.6 where the source lives, under the unattended posture, once per
+  cooldown, counted on the file's day, refused before dispatch when schedules are off,
+  paused or capped, logged `refreshed`.
+- Ring ids only and coalesced (§24.7); never run a second copy of a source; answer an
+  unserved op `MALFORMED` with the `requestId` recovered.
 
 ---
 
@@ -1796,10 +2086,12 @@ unparseable frame, not a member of this list.)
 `NET_SIZE_EXCEEDED` · `NET_FETCH_FAILED` · `NET_AUTH_FAILED` ·
 `NET_SCRUBBED_HEADER_STRIPPED` (reserved).
 
-**Access capability (Part VI):** `ACCESS_INVALID_REQUEST` · `ACCESS_NOT_GRANTED` ·
-`ACCESS_DECLINED` · `ACCESS_PENDING` · `ACCESS_UNATTENDED` · `ACCESS_NO_SOURCES` ·
-`ACCESS_REVOKED` · `ACCESS_EXPIRED` · `ACCESS_QUERY_REFUSED` · `ACCESS_QUERY_FAILED` ·
-`ACCESS_RATE_LIMITED` · `ACCESS_SIZE_EXCEEDED`.
+**Access capability (Part VI; fifteen at 1.2 — twelve at 1.1 plus the three marked):**
+`ACCESS_INVALID_REQUEST` · `ACCESS_NOT_GRANTED` · `ACCESS_DECLINED` · `ACCESS_PENDING` ·
+`ACCESS_UNATTENDED` · `ACCESS_NO_SOURCES` · `ACCESS_REVOKED` · `ACCESS_EXPIRED` ·
+`ACCESS_QUERY_REFUSED` · `ACCESS_QUERY_FAILED` · `ACCESS_RATE_LIMITED` ·
+`ACCESS_SIZE_EXCEEDED` · `ACCESS_WRITE_REFUSED` (1.2) · `ACCESS_BUSY` (1.2) ·
+`ACCESS_REFRESH_FAILED` (1.2).
 
 # Appendix B — Normative constants
 
@@ -1842,7 +2134,15 @@ unparseable frame, not a member of this list.)
 | `ACCESS_LOG_MAX_ENTRIES` / `ACCESS_LOG_MAX_BYTES` / `ACCESS_LOG_TOTAL_MAX_BYTES` / `ACCESS_LOG_SQL_MAX_CHARS` / `ACCESS_LOG_COALESCE_MS` | 200 / 64 KiB / 1 MiB / 200 / 60 000 |
 | `ACCESS_REQUEST_MIN_GAP_MS` / `ACCESS_QUERY_RATE_PER_MINUTE` | 10 000 / 60 (per reader app) |
 | `ACCESS_DURATIONS` / `ACCESS_GRANT_STATUSES` / `ACCESS_SUSPEND_REASONS` | session · day · week · always / active · revoked · suspended / imported · reader-updated · source-changed · source-restricted · reader-misbehaved |
-| `ACCESS_CHANGED_EVENT` | `access-changed` (host-event; `{ grantId }`) |
+| `ACCESS_OPS` / `ACCESS_LOG_KINDS` / `ACCESS_PROVENANCES` | request · query · write · refresh · list · release · discover (seven; the request's variant order) / granted · read · refused · revoked · expired · released · suspended · wrote · undone · refreshed (ten) / app · user · chat |
+| `ACCESS_LOG_VIAS` / `ACCESS_WRITE_AUTHORITIES` / `ACCESS_REFRESH_REASONS` / `ACCESS_CANDIDATE_CLASSES` | app · chat · schedule · user / permission · approval · task / no-handler · timeout · capped · refused · failed / none · one · several |
+| `ACCESS_LEVELS` | read · write — what an ask asks for (`request.access`; absent ≡ `read`) and what a grant holds (`access`, derived: `write` exactly when a table of the scope carries `write`; §22.1, §23.1) |
+| `ACCESS_WRITE_MAX_ROWS` | 200 rows per brokered statement (the dry run's count and the apply's) |
+| `ACCESS_UNDO_MAX_ENTRIES` / `ACCESS_UNDO_MAX_BYTES` / `ACCESS_UNDO_MAX_ROW_BYTES` / `ACCESS_UNDO_TTL_MS` | 20 live per (target, reader) / 64 KiB per entry / 256 KiB per captured row / 7 days (604 800 000) |
+| `ACCESS_REFRESH_COOLDOWN_MS` / `ACCESS_DISCOVER_CACHE_MS` / `ACCESS_DOORBELL_COALESCE_MS` | 300 000 (one run per source per five minutes) / 60 000 (one gather per reader per minute) / 2 000 (the first rings at once; later ones inside the window ring once more at its end) |
+| `ACCESS_MATERIALISE_MAX_ROWS` / `ACCESS_MATERIALISE_MAX_BYTES` / `ACCESS_MATERIALISE_MAX_SET_BYTES` / `ACCESS_MATERIALISE_TIMEOUT_MS` | 5 000 rows / 2 MiB per table / 8 MiB per set / 5 000 — the in-host copy a door materialises for a brain (never a frame; §21) |
+| `ACCESS_WANTS_MAX_ENTRIES` / `ACCESS_WANTS_MAX_BYTES` | 4 / 2 KiB (§8.1 `accessWants:<appId>`) |
+| `ACCESS_CHANGED_EVENT` / `ACCESS_SOURCE_CHANGED_EVENT` / `ACCESS_READ_EVENT` / `DATA_CHANGED_EVENT` | `access-changed` (host-event; `{ grantId }`) / `access-source-changed` (`{ grantId }`) / `access-read` (`{ grantId }`) / `data-changed` (`{ table }`) — ids only, live frames only (§23.3) |
 
 # Appendix C — Published schemas and publication lines
 
@@ -1853,7 +2153,10 @@ unparseable frame, not a member of this list.)
 `host-event` · `host-ready` · `net-request` · `net-response` · `open-url-request` ·
 `open-url-result`.
 
-Three publication-line facts — two decided at v0.3 (owner ask 2026-08-20), the third at 1.1:
+Three publication-line facts — two decided at v0.3 (owner ask 2026-08-20), the third at 1.1
+and revised at 1.2 (`access-request` publishes seven `oneOf` variants in `ACCESS_OPS` order
+and `access-response` eight; the file count stays sixteen and no other schema's bytes
+change):
 
 1. **The strict frames publish strict.** `net-*`, `open-url-*` and `access-request` schemas
    carry `additionalProperties: false` — that IS their contract (§2, R2's stated exception).
@@ -1873,7 +2176,9 @@ Three publication-line facts — two decided at v0.3 (owner ask 2026-08-20), the
    against the export and admit what the contract refuses — so none is offered. This
    specification's prose is normative for those surfaces, the reference implementation's
    contract files are the machine-readable authority, and in-package tests lock them. The
-   access-grant and access-log records of §22 likewise — their refinements (the
-   credential walk, the column-name rule, the status invariants, the canonical intent) are
-   prose, the reference implementation's `access.ts`/`record-guards.ts` are the
-   machine-readable authority, and in-package tests lock them.
+   access-grant, access-log and undo-journal records of §22 and the declared-wishes record
+   of §8.1 likewise — their refinements (the credential walk, the column-name rule, the
+   status invariants, the canonical intent with absent ≡ default, the per-kind seats of a
+   history line, the per-op arity of an undo step) are prose, the reference implementation's
+   `access.ts`/`record-guards.ts` are the machine-readable authority, and in-package tests
+   lock them.

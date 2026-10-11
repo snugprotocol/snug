@@ -52,12 +52,15 @@ const grantView: AccessGrantView = {
   unattended: false,
 };
 
-/** The op-specific body of each access-request (the request frame is STRICT per op). */
+/** The op-specific body of each access-request (the request frame is STRICT per op). PR-3 (spec 1.2): seven ops. */
 const OP_BODIES = {
   request: { op: 'request', purpose: 'to show spending by category' },
   query: { op: 'query', grantId: GRANT_ID, sql: 'SELECT amount, category FROM transactions' },
+  write: { op: 'write', grantId: GRANT_ID, sql: 'UPDATE transactions SET category = ? WHERE id = ?', params: ['food', 7] },
+  refresh: { op: 'refresh', grantId: GRANT_ID },
   list: { op: 'list' },
   release: { op: 'release', grantId: GRANT_ID },
+  discover: { op: 'discover', hints: { words: ['spending'] } },
 } as const;
 
 type Op = keyof typeof OP_BODIES;
@@ -78,8 +81,11 @@ const accessRequest = (
 const OK_RESULTS: Record<Op, AccessHandlerResult> = {
   request: { ok: true, op: 'request', grant: grantView },
   query: { ok: true, op: 'query', columns: ['amount', 'category'], rows: [[12.5, 'food'], [40, 'rent']], truncated: true, totalRows: 900 },
+  write: { ok: true, op: 'write', changes: 3 },
+  refresh: { ok: true, op: 'refresh', fresh: false, reason: 'recent' },
   list: { ok: true, op: 'list', grants: [grantView] },
   release: { ok: true, op: 'release' },
+  discover: { ok: true, op: 'discover', candidates: 'several' },
 };
 
 function accessResponses(ctx: HostContext, requestId: string): Frame[] {
@@ -587,5 +593,152 @@ describe('db, net and access are ONE ladder (routeCapability) — a structural p
   it('no capability keeps a hand-rolled copy of the ladder: one in-flight flood check for app messages, one for capabilities', () => {
     expect(hostSource.match(/\.size\s*>=\s*MAX_IN_FLIGHT/g) ?? []).toHaveLength(2);
     expect(hostSource).not.toMatch(/function\s+handle(Db|Net|Access)Request\b/);
+  });
+});
+
+// TASK-20261010-host-broker PR-3 (AC18; spec 1.2, ADR-0076 §4–§8): the seat's `ok` mapper covers
+// write, refresh and discover — ENUMERATED per op (never spread), so only the fields the protocol
+// defines cross; everything else about the seat (the binding, the ladder, the belt) is unchanged.
+describe('PR-3 — the three new ops through the same seat, value-blind (AC18)', () => {
+  it('routes a write, a refresh, a discover and an ask carrying access to the handler as the parsed frame, under the HOST-assigned binding', async () => {
+    const handle = vi.fn<AccessHandler['handle']>(async () => OK_RESULTS.list);
+    const ctx = await mountWithAccess({ handle }, 'host-assigned-reader');
+    const instanceId = await ctx.connect();
+    postFromApp(ctx.iframe, accessRequest('acc-w', instanceId, OP_BODIES.write));
+    postFromApp(ctx.iframe, accessRequest('acc-r', instanceId, OP_BODIES.refresh));
+    postFromApp(ctx.iframe, accessRequest('acc-d', instanceId, OP_BODIES.discover));
+    postFromApp(ctx.iframe, accessRequest('acc-a', instanceId, { ...OP_BODIES.request, access: 'write' }));
+    await flush();
+    expect(handle).toHaveBeenCalledTimes(4);
+    for (const call of handle.mock.calls) expect(call[0]).toBe('host-assigned-reader');
+    expect(handle.mock.calls.map((call) => call[1])).toEqual([
+      expect.objectContaining({ requestId: 'acc-w', ...OP_BODIES.write }),
+      expect.objectContaining({ requestId: 'acc-r', ...OP_BODIES.refresh }),
+      expect.objectContaining({ requestId: 'acc-d', ...OP_BODIES.discover }),
+      expect.objectContaining({ requestId: 'acc-a', op: 'request', access: 'write' }),
+    ]);
+  });
+
+  it('the write answer carries changes ONLY — a handler that also returns an undo id or rows has them dropped (no undoId on the wire, DS16)', async () => {
+    const leaky = { ok: true, op: 'write', changes: 3, undoId: '7c9e6679-7425-40de-944b-e07fc1f90ae7', rows: [[1]] } as unknown as AccessHandlerResult;
+    const ctx = await mountWithAccess({ handle: async () => leaky });
+    const instanceId = await ctx.connect();
+    postFromApp(ctx.iframe, accessRequest('acc-1', instanceId, OP_BODIES.write));
+    await flush();
+    expect(accessResponses(ctx, 'acc-1')).toEqual([
+      { v: PROTOCOL_VERSION, type: FRAME_TYPES.accessResponse, requestId: 'acc-1', ok: true, op: 'write', changes: 3 },
+    ]);
+  });
+
+  it('the refresh answer carries fresh and reason ONLY — a handler summary never reaches the reader (S10/DS17)', async () => {
+    const leaky = { ok: true, op: 'refresh', fresh: true, summary: 'fetched 3 new rows from the bank' } as unknown as AccessHandlerResult;
+    const ctx = await mountWithAccess({ handle: async () => leaky });
+    const instanceId = await ctx.connect();
+    postFromApp(ctx.iframe, accessRequest('acc-1', instanceId, OP_BODIES.refresh));
+    await flush();
+    expect(accessResponses(ctx, 'acc-1')).toEqual([
+      { v: PROTOCOL_VERSION, type: FRAME_TYPES.accessResponse, requestId: 'acc-1', ok: true, op: 'refresh', fresh: true },
+    ]);
+  });
+
+  it('a refresh answer without reason carries no reason key (absent stays absent); the twin with a reason carries it', async () => {
+    const ctx = await mountWithAccess({ handle: async () => ({ ok: true, op: 'refresh', fresh: true }) });
+    const instanceId = await ctx.connect();
+    postFromApp(ctx.iframe, accessRequest('acc-1', instanceId, OP_BODIES.refresh));
+    await flush();
+    const frame = accessResponses(ctx, 'acc-1').at(-1) as Record<string, unknown>;
+    expect(frame).toEqual({ v: PROTOCOL_VERSION, type: FRAME_TYPES.accessResponse, requestId: 'acc-1', ok: true, op: 'refresh', fresh: true });
+    expect('reason' in frame).toBe(false);
+    const twin = await mountWithAccess({ handle: async () => ({ ok: true, op: 'refresh', fresh: false, reason: 'recent' }) });
+    const twinInstance = await twin.connect();
+    postFromApp(twin.iframe, accessRequest('acc-2', twinInstance, OP_BODIES.refresh));
+    await flush();
+    expect(accessResponses(twin, 'acc-2').at(-1)).toMatchObject({ ok: true, op: 'refresh', fresh: false, reason: 'recent' });
+  });
+
+  it('the discover answer carries candidates ONLY — never a count or a name', async () => {
+    const leaky = { ok: true, op: 'discover', candidates: 'one', names: ['Ledger'], count: 1 } as unknown as AccessHandlerResult;
+    const ctx = await mountWithAccess({ handle: async () => leaky });
+    const instanceId = await ctx.connect();
+    postFromApp(ctx.iframe, accessRequest('acc-1', instanceId, OP_BODIES.discover));
+    await flush();
+    expect(accessResponses(ctx, 'acc-1')).toEqual([
+      { v: PROTOCOL_VERSION, type: FRAME_TYPES.accessResponse, requestId: 'acc-1', ok: true, op: 'discover', candidates: 'one' },
+    ]);
+  });
+
+  it('the new refusal codes map through as data with retryable intact: ACCESS_WRITE_REFUSED (no), ACCESS_BUSY (yes), ACCESS_REFRESH_FAILED (no)', async () => {
+    const answers = [
+      { code: ACCESS_ERROR_CODES.ACCESS_WRITE_REFUSED, message: 'the change was refused', retryable: false },
+      { code: ACCESS_ERROR_CODES.ACCESS_BUSY, message: 'try again', retryable: true },
+      { code: ACCESS_ERROR_CODES.ACCESS_REFRESH_FAILED, message: 'the other app does not fetch on request', retryable: false },
+    ];
+    for (const [i, error] of answers.entries()) {
+      const ctx = await mountWithAccess({ handle: async () => ({ ok: false, ...error }) });
+      const instanceId = await ctx.connect();
+      postFromApp(ctx.iframe, accessRequest(`acc-${i}`, instanceId, i === 2 ? OP_BODIES.refresh : OP_BODIES.write));
+      await flush();
+      expect(accessResponses(ctx, `acc-${i}`).at(-1)).toEqual({ v: PROTOCOL_VERSION, type: FRAME_TYPES.accessResponse, requestId: `acc-${i}`, ok: false, error });
+    }
+  });
+
+  it('the unknown-op fallback: a JS handler answering { ok: true, op: "nope" } gets the app a named, non-retryable HOST_ERROR terminal — never an undefined post', async () => {
+    const stray = { ok: true, op: 'nope' } as unknown as AccessHandlerResult;
+    const ctx = await mountWithAccess({ handle: async () => stray });
+    const instanceId = await ctx.connect();
+    postFromApp(ctx.iframe, accessRequest('acc-1', instanceId, OP_BODIES.list));
+    await flush();
+    const frames = accessResponses(ctx, 'acc-1');
+    expect(frames).toEqual([
+      {
+        v: PROTOCOL_VERSION,
+        type: FRAME_TYPES.accessResponse,
+        requestId: 'acc-1',
+        ok: false,
+        error: { code: ERROR_CODES.HOST_ERROR, message: 'access handler answered an unknown op', retryable: false },
+      },
+    ]);
+    expect(accessResponseSchema.safeParse(frames[0]).success).toBe(true);
+  });
+
+  it('the size belt covers the new answers too: an over-cap discover answer is the SMALL terminal ACCESS_SIZE_EXCEEDED, never silence', async () => {
+    // The runner is value-blind: it never checks `candidates` against the class set — a handler
+    // bug that put a huge value there meets the per-capability belt, exactly like a query.
+    const huge = { ok: true, op: 'discover', candidates: 'x'.repeat(LIMITS.MAX_FRAME_BYTES + 1) } as unknown as AccessHandlerResult;
+    const ctx = await mountWithAccess({ handle: async () => huge });
+    const instanceId = await ctx.connect();
+    postFromApp(ctx.iframe, accessRequest('acc-1', instanceId, OP_BODIES.discover));
+    await flush();
+    const frames = accessResponses(ctx, 'acc-1');
+    expect(frames).toEqual([
+      {
+        v: PROTOCOL_VERSION,
+        type: FRAME_TYPES.accessResponse,
+        requestId: 'acc-1',
+        ok: false,
+        error: { code: ACCESS_ERROR_CODES.ACCESS_SIZE_EXCEEDED, message: 'access result exceeds the frame size limit', retryable: false },
+      },
+    ]);
+    expect(new TextEncoder().encode(JSON.stringify(frames[0])).byteLength).toBeLessThan(1024);
+  });
+
+  it('twin: an in-class discover answer crosses whole', async () => {
+    const ctx = await mountWithAccess({ handle: async () => OK_RESULTS.discover });
+    const instanceId = await ctx.connect();
+    postFromApp(ctx.iframe, accessRequest('acc-1', instanceId, OP_BODIES.discover));
+    await flush();
+    expect(accessResponses(ctx, 'acc-1')).toEqual([{ v: PROTOCOL_VERSION, type: FRAME_TYPES.accessResponse, requestId: 'acc-1', ...OK_RESULTS.discover }]);
+  });
+
+  it('a 1.2 frame with an unknown key on a new op is answered MALFORMED; the handler is never called (the request stays STRICT)', async () => {
+    const handle = vi.fn<AccessHandler['handle']>(async () => OK_RESULTS.write);
+    const ctx = await mountWithAccess({ handle });
+    const instanceId = await ctx.connect();
+    postFromApp(ctx.iframe, accessRequest('acc-1', instanceId, { ...OP_BODIES.write, table: 'transactions' }));
+    postFromApp(ctx.iframe, accessRequest('acc-2', instanceId, { ...OP_BODIES.refresh, summary: 'x' }));
+    await flush();
+    expect(handle).not.toHaveBeenCalled();
+    expect(accessResponses(ctx, 'acc-1').at(-1)).toMatchObject({ ok: false, error: { code: 'MALFORMED', retryable: false } });
+    expect(accessResponses(ctx, 'acc-2').at(-1)).toMatchObject({ ok: false, error: { code: 'MALFORMED', retryable: false } });
   });
 });

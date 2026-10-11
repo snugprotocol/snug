@@ -32,6 +32,18 @@
 // made, an ask parked), never at module load: a load-time subscription is a side effect, and a
 // test reset of the app-host registry would silently strip it for the rest of a suite. Each arm
 // drops the previous subscription and subscribes again, so there is always exactly one.
+//
+// THE RECORD v2 (TASK-20261010-host-broker PR-3; ADR-0076 §4; D-PR3-2/3/23; contract v2.1
+// E1-Q7/U-Q11/U-Q14). The user's allow now says, per table, which of the non-sensitive columns
+// stay UNTICKED (`withheld`) and whether the reader may change the rest (`write`), and for the
+// source as a whole whether its settings & notes join the copy (`kv`) and whether the reader may
+// ask it to fetch first (`refresh`). `createGrantFromDecision` writes every default OMITTED —
+// `withheld` only when non-empty, `write`/`kv`/`refresh` only when true, `access` derived from the
+// tables — so a plain read allow's record is byte for byte a 1.1 record (a backup from before the
+// upgrade restores unsuspended) and a widened one is a strict-parse refusal on a 1.1 hub (fail
+// closed). A bare table name in the input is the 1.1 choice (`{ name, withheld: [], write: false }`),
+// so every PR-2 caller is unchanged. `grantView` shows the reader `write` per table and `kv` /
+// `refresh` at the root only when set, and never `withheld` — what it may read is `columns`.
 
 import {
   ACCESS_CHANGED_EVENT,
@@ -42,8 +54,10 @@ import {
   type AccessGrant,
   type AccessGrantDuration,
   type AccessGrantView,
+  type AccessLevel,
   type AccessLogEntry,
   type AccessProvenance,
+  type AccessScope,
   type AccessSuspendReason,
 } from '@snugprotocol/protocol';
 import type { UserDb } from '@snugprotocol/db';
@@ -136,7 +150,12 @@ const frameEnds = new Map<string, number>();
 let allEnds = 0;
 
 const QUERY_WINDOW_MS = 60_000;
-const iso = (at: number): string => new Date(at).toISOString();
+
+/** An instant as the records keep it — the ONE spelling under access/ (Gate-5 ENG-4). */
+export const iso = (at: number): string => new Date(at).toISOString();
+
+/** An app's library name for a history line or a journal entry, its id when the row is gone — the ONE spelling under access/ (Gate-5 ENG-4). */
+export const readerNameOf = (db: UserDb, appId: string): string => db.getApp(appId)?.displayName ?? appId;
 
 /** The reader's attended frame generation, when one is open — a session grant made from host chrome binds to it (or, absent, to the next frame). */
 export function readerGeneration(appId: string): number | undefined {
@@ -262,6 +281,7 @@ export function grantView(db: UserDb, grant: AnyAccessGrant): AccessGrantView {
   const source = db.getApp(grant.sourceAppId);
   if (source === undefined) throw new Error('the other app is not in this file');
   const expiresAt = expiresAtOf(grant);
+  // D-PR3-3: the additive keys appear ONLY when set, so a read-only view is byte-identical to 1.1's; `withheld` is never shown.
   return {
     id: grant.id,
     access: grant.access,
@@ -270,10 +290,12 @@ export function grantView(db: UserDb, grant: AnyAccessGrant): AccessGrantView {
       ...(source.iconEmoji !== undefined ? { iconEmoji: source.iconEmoji } : {}),
       ...(source.iconColor !== undefined ? { iconColor: source.iconColor } : {}),
     },
-    tables: grant.scope.tables.map((table) => ({ name: table.name, columns: [...table.columns] })),
+    tables: grant.scope.tables.map((table) => ({ name: table.name, columns: [...table.columns], ...(table.write === true ? { write: true as const } : {}) })),
     duration: durationOf(grant),
     ...(expiresAt !== undefined ? { expiresAt } : {}),
     unattended: grant.unattended,
+    ...(grant.kv === true ? { kv: true as const } : {}),
+    ...(grant.refresh === true ? { refresh: true as const } : {}),
   };
 }
 
@@ -348,35 +370,77 @@ function withoutEndings<G extends AnyAccessGrant>(grant: G): G {
   return rest as G;
 }
 
+/** A renewed record's base: its endings cleared (D25) and its option seats dropped — the NEW decision says which of `kv` / `refresh` it carries. */
+function renewalBase(grant: AccessGrant): Omit<AccessGrant, 'suspendedReason' | 'revokedAt' | 'kv' | 'refresh'> {
+  const { kv: _kv, refresh: _refresh, ...rest } = withoutEndings(grant);
+  return rest;
+}
+
 /** Ring the reader's LIVE frame: `access-changed { grantId }` — ids only. Silent when it is not open. */
 export function ringReader(readerAppId: string, grantId: string): void {
   notifyAppHost(readerAppId, ACCESS_CHANGED_EVENT, { grantId });
+}
+
+/**
+ * One table of the user's allow (D-PR3-23): which of its non-sensitive columns stay unticked, and
+ * the write toggle. A bare table name in `CreateGrantInput.tables` is the 1.1 choice —
+ * `{ name, withheld: [], write: false }` (E1-Q7/U-Q11); the consent sheet always emits objects.
+ */
+export interface TableChoice {
+  name: string;
+  /** The non-sensitive columns the user left UNTICKED — every other disclosed, non-sensitive column is allowed. A credential-named column here is ignored: never offered, so never withheld. */
+  withheld: readonly string[];
+  /** *can also change rows* — the reader may change this table's allowed columns, one plain statement at a time. */
+  write: boolean;
 }
 
 export interface CreateGrantInput {
   readerAppId: string;
   /** The source as the consent sheet DISCLOSED it — its tables and their columns (a `RankedSource` satisfies it). */
   source: SourceApp;
-  /** The tables the user ticked. */
-  tables: readonly string[];
+  /** The tables the user ticked, each with its column and write choice — or a bare name (the 1.1 choice). */
+  tables: ReadonlyArray<string | TableChoice>;
   duration: AccessDuration;
   unattended: boolean;
   purpose: string;
+  /** `'chat'` when the ask was the chat's (the caller says so — consent.ts reads the pending's `askedIn`). */
   provenance: AccessProvenance;
   /** Session grants: the reader's frame generation; absent = the next frame that opens. */
   generation?: number;
   now: number;
   /** A grant being allowed again: re-activated in place when it is this pair's and not stopped. */
   renew?: string;
+  /** *Ledger's settings & notes*: the source's `snug_kv` joins the copy, through the one credential walk (D-PR3-22). */
+  kv?: boolean;
+  /** *may ask Ledger to fetch new data before reading it* (D-PR3-17). */
+  refresh?: boolean;
+}
+
+const asChoice = (table: string | TableChoice): TableChoice => (typeof table === 'string' ? { name: table, withheld: [], write: false } : table);
+
+/** The choices by table name, the first of a repeated name kept (the 1.1 `Set` over names). */
+function uniqueChoices(tables: ReadonlyArray<string | TableChoice>): TableChoice[] {
+  const seen = new Set<string>();
+  const out: TableChoice[] = [];
+  for (const table of tables) {
+    const choice = asChoice(table);
+    if (seen.has(choice.name)) continue;
+    seen.add(choice.name);
+    out.push(choice);
+  }
+  return out;
 }
 
 /**
  * THE writer behind the user's *allow* (never the app's): a persisted grant for day/week/always,
  * a memory grant for the session; the scope is the ticked tables with their NON-sensitive columns
- * exactly as disclosed (D23 — a credential-named column is never in a scope); a `granted` line on
- * the source. Refuses (throws, nothing written) a source that is the asking app, a source the file
- * does not hold or that holds a WhatsApp fact, and a choice naming no table — or a table the
- * source did not offer, or one with no shareable column. A suspended or expired grant of the same
+ * exactly as disclosed (D23 — a credential-named column is never in a scope), minus the ones the
+ * user left unticked, which the record keeps as `withheld` in the source's column order (U-Q14);
+ * `write` on the tables the user ticked it for, `kv` and `refresh` when ticked, every default
+ * omitted (D-PR3-2); a `granted` line on the source. Refuses (throws, nothing written) a source
+ * that is the asking app, a source the file does not hold or that holds a WhatsApp fact, and a
+ * choice naming no table — or a table the source did not offer, one with no shareable column, or
+ * one whose every shareable column was left unticked. A suspended or expired grant of the same
  * pair named by `renew` is re-activated in place (D25: its reason cleared); a stopped one is never
  * re-armed.
  */
@@ -388,15 +452,25 @@ export async function createGrantFromDecision(db: UserDb, input: CreateGrantInpu
   if (db.getApp(input.source.appId) === undefined) throw new Error('the other app is not in this file');
   if (appHasSidecarFact(db, input.source.appId)) throw new Error('that app keeps messages from others to itself');
 
-  const chosen = [...new Set(input.tables)];
+  const chosen = uniqueChoices(input.tables);
   if (chosen.length === 0) throw new Error('choose at least one table');
-  const tables = chosen.map((name) => {
-    const offered = input.source.tables.find((table) => table.name === name);
-    if (offered === undefined) throw new Error(`the other app offers no table "${name}"`);
-    const columns = offered.columns.filter((column) => !column.sensitive).map((column) => column.name);
-    if (columns.length === 0) throw new Error(`"${name}" has nothing that can be read`);
-    return { name, columns };
+  const tables: AccessScope['tables'] = chosen.map((choice) => {
+    const offered = input.source.tables.find((table) => table.name === choice.name);
+    if (offered === undefined) throw new Error(`the other app offers no table "${choice.name}"`);
+    const readable = offered.columns.filter((column) => !column.sensitive).map((column) => column.name);
+    if (readable.length === 0) throw new Error(`"${choice.name}" has nothing that can be read`);
+    const unticked = new Set(choice.withheld);
+    const columns = readable.filter((column) => !unticked.has(column));
+    if (columns.length === 0) throw new Error('choose at least one column');
+    const withheld = readable.filter((column) => unticked.has(column));
+    return {
+      name: choice.name,
+      columns,
+      ...(withheld.length > 0 ? { withheld } : {}),
+      ...(choice.write ? { write: true as const } : {}),
+    };
   });
+  const access: AccessLevel = tables.some((table) => table.write === true) ? 'write' : 'read';
 
   const at = iso(input.now);
   // `durationToExpiry` answers no instant for exactly the durations that never expire (the session, always).
@@ -415,12 +489,12 @@ export async function createGrantFromDecision(db: UserDb, input: CreateGrantInpu
       : undefined;
 
   const record = accessGrantSchema.parse({
-    ...(inPlace !== undefined ? withoutEndings(inPlace) : { reads: 0 }),
+    ...(inPlace !== undefined ? renewalBase(inPlace) : { reads: 0 }),
     id: inPlace?.id ?? crypto.randomUUID(),
     readerAppId: input.readerAppId,
     sourceAppId: input.source.appId,
     scope: { tables },
-    access: 'read',
+    access,
     purpose: input.purpose,
     duration: persistedDuration,
     unattended: input.unattended,
@@ -430,6 +504,8 @@ export async function createGrantFromDecision(db: UserDb, input: CreateGrantInpu
     grantedAt: at,
     updatedAt: at,
     timeouts: 0,
+    ...(input.kv === true ? { kv: true } : {}),
+    ...(input.refresh === true ? { refresh: true } : {}),
   });
 
   let grant: AnyAccessGrant;

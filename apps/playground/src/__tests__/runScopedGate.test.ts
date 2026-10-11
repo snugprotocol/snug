@@ -22,7 +22,7 @@
 import type { NetConfirmDecision, NetConfirmGate, NetConfirmRequest } from '@snugprotocol/auth';
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
-import type { DelegatedRun } from '../schedule/runPlacement.js';
+import type { DelegatedRun, DelegatedRunPosture } from '../schedule/runPlacement.js';
 import { DELEGATED_CONFIRM_TIMEOUT_MS, createRunScopedGate, type RunScopedGateDeps, type ScheduledPrompt } from '../schedule/runScopedGate.js';
 
 const APP = 'weather';
@@ -45,6 +45,7 @@ function fakeRun(over: Partial<DelegatedRun> = {}): DelegatedRun & { end(): void
     taskId: 't1',
     title: 'Morning forecast',
     generation: 1,
+    posture: 'schedule',
     calls: { ai: 0, net: 0 },
     refused: [],
     granted: 0,
@@ -365,5 +366,104 @@ describe('(2) the sticky after-run ask — the frame a run touched stays ask-onl
     expect(ask.signal.aborted).toBe(true);
     expect(call.result()).toBe(false);
     expect(h.inner.confirm).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// TASK-20261010-host-broker PR-3 (contract v2 D-PR3-19; the spec's §24.6 (25) "a mutating
+// connected call is refused, never asked") — THE REFUSING BRANCH. A refresh another app asked for
+// runs the source's code on its live frame as a delegated run with `posture: 'refresh'`. Nobody
+// chose to run it, and the person at the frame did not ask for it, so branch (1) gains: a refresh
+// run → push `{ host, method, why: 'refused' }`, answer false, park NOTHING — no dialog, no prompt,
+// and the page's chain is never consulted (LOAD-BEARING NEGATIVE: an inner that would say yes).
+// A `'schedule'` run — the posture every PR-1 caller has — asks exactly as above.
+//
+// `posture` (and `why: 'refused'`) are what `DelegatedRun` and `ScheduledRefusal` gained in PR-3
+// (`DelegatedRunPosture`, the real field — the implementation lane swapped the local stand-in).
+// ---------------------------------------------------------------------------------------------
+
+const postured = (posture: DelegatedRunPosture, over: Partial<DelegatedRun> = {}): DelegatedRun & { end(): void } => ({ ...fakeRun(over), posture });
+
+describe('(1) a REFRESH run — refused, never asked (PR-3, D-PR3-19)', () => {
+  it('a mutating call → false AT ONCE, `{ host, method, why: "refused" }` recorded, the prompt NEVER called (no dialog parked)', async () => {
+    const run = postured('refresh');
+    const h = harness({ run, touched: 1, live: 1 });
+    const call = start(h.gate, post({ method: 'PUT', url: 'https://api.example.com/v1/items/3' }));
+    await flush();
+    expect(call.result()).toBe(false);
+    expect(run.refused).toEqual([{ host: 'api.example.com', method: 'PUT', why: 'refused' }]);
+    expect(h.prompt).not.toHaveBeenCalled();
+    expect(h.parked).toEqual([]);
+    expect(run.asking).toBe(false);
+    expect(run.granted).toBe(0);
+  });
+
+  it('NEGATIVE: the inner chain — which WOULD say yes (a remembered or armed grant) — is NEVER consulted', async () => {
+    const run = postured('refresh');
+    const h = harness({ run });
+    const call = start(h.gate, post());
+    await flush();
+    expect(call.result()).toBe(false);
+    expect(h.inner.confirm).not.toHaveBeenCalled();
+  });
+
+  it('it answers without waiting on any clock — no timer is involved (the refusal is not a timed-out ask)', async () => {
+    const run = postured('refresh');
+    const h = harness({ run, timeoutMs: 60_000 });
+    const settled = h.gate.confirm(post());
+    expect(vi.getTimerCount(), 'nothing scheduled').toBe(0);
+    expect(await settled).toBe(false);
+    expect(run.refused.map((refusal) => refusal.why)).toEqual(['refused']);
+  });
+
+  it('EVERY mutating call of the window is refused the same way — never a dialog, whatever came before', async () => {
+    const run = postured('refresh');
+    const h = harness({ run });
+    const answers = [start(h.gate, post()), start(h.gate, post({ method: 'DELETE' })), start(h.gate, post({ method: 'PATCH', host: 'hooks.example.com', url: 'https://hooks.example.com/x' }))];
+    await flush();
+    expect(answers.map((answer) => answer.result())).toEqual([false, false, false]);
+    expect(run.refused).toEqual([
+      { host: 'api.example.com', method: 'POST', why: 'refused' },
+      { host: 'api.example.com', method: 'DELETE', why: 'refused' },
+      { host: 'hooks.example.com', method: 'PATCH', why: 'refused' },
+    ]);
+    expect(h.prompt).not.toHaveBeenCalled();
+    expect(h.inner.confirm).not.toHaveBeenCalled();
+  });
+
+  it('a refresh run for ANOTHER app changes nothing for this one — today’s chain', async () => {
+    const h = harness({ run: postured('refresh') }); // the refresh runs Weather; the call is Ledger's
+    const call = start(h.gate, post({ appId: 'ledger' }));
+    await flush();
+    expect(call.result()).toBe(true);
+    expect(h.inner.confirm).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('(1) a run with `posture: "schedule"` — unchanged: the ask gate (PR-3 keeps PR-1’s branch)', () => {
+  it('a SCHEDULE run still parks ONE prompt with the run’s identity; inner never consulted; granted → true', async () => {
+    const run = postured('schedule');
+    const h = harness({ run });
+    const call = start(h.gate, post());
+    await flush();
+    expect(h.prompt).toHaveBeenCalledTimes(1);
+    expect(h.parked[0]!.ask.run).toMatchObject({ runId: 'run-1', title: 'Morning forecast', appName: 'Weather' });
+    expect(h.inner.confirm).not.toHaveBeenCalled();
+    h.parked[0]!.answer({ granted: true });
+    await flush();
+    expect(call.result()).toBe(true);
+    expect(run.granted).toBe(1);
+    expect(run.refused).toEqual([]);
+  });
+
+  it('a SCHEDULE run’s denial is still `declined`, never `refused`', async () => {
+    const run = postured('schedule');
+    const h = harness({ run });
+    const call = start(h.gate, post());
+    await flush();
+    h.parked[0]!.answer({ granted: false });
+    await flush();
+    expect(call.result()).toBe(false);
+    expect(run.refused).toEqual([{ host: 'api.example.com', method: 'POST', why: 'declined' }]);
   });
 });

@@ -18,7 +18,8 @@
 
 import type { BindParams, Database, Statement } from 'sql.js';
 import { utf8ByteLength } from '@snugprotocol/protocol';
-import { isRowModifyingStatement, isSqlTailEmpty, normalizeCell } from '../driver.js';
+import { errorMessage } from '../sqlite-helpers.js';
+import { isRowModifyingStatement, isSqlTailEmpty, normalizeCell } from '../statement-rules.js';
 
 /** How one kept row is weighed against `maxBytes`. */
 export type RowWeight = (row: readonly unknown[]) => number;
@@ -56,7 +57,6 @@ export interface StatementOutcome {
 /** The refusal for text holding more than one statement — the wording `scratchRun` has always used. */
 export const SINGLE_STATEMENT_MESSAGE = 'exec accepts exactly one SQL statement — split multi-statement scripts into separate entries';
 
-const errorMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
 /**
  * Run ONE statement of `sql` on `scratch` under `caps`. Never throws: a SQL error, an empty

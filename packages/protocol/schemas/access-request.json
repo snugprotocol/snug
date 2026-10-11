@@ -4,6 +4,13 @@
     {
       "additionalProperties": false,
       "properties": {
+        "access": {
+          "enum": [
+            "read",
+            "write"
+          ],
+          "type": "string"
+        },
         "hints": {
           "additionalProperties": false,
           "properties": {
@@ -141,6 +148,115 @@
     {
       "additionalProperties": false,
       "properties": {
+        "grantId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "instanceId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "op": {
+          "const": "write",
+          "type": "string"
+        },
+        "params": {
+          "items": {
+            "anyOf": [
+              {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "maxItems": 64,
+          "type": "array"
+        },
+        "requestId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "sql": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "type": "string"
+        },
+        "type": {
+          "const": "snug:access-request",
+          "type": "string"
+        },
+        "v": {
+          "const": 1,
+          "type": "number"
+        }
+      },
+      "required": [
+        "v",
+        "type",
+        "requestId",
+        "instanceId",
+        "op",
+        "grantId",
+        "sql"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "grantId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "instanceId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "op": {
+          "const": "refresh",
+          "type": "string"
+        },
+        "requestId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "type": {
+          "const": "snug:access-request",
+          "type": "string"
+        },
+        "v": {
+          "const": 1,
+          "type": "number"
+        }
+      },
+      "required": [
+        "v",
+        "type",
+        "requestId",
+        "instanceId",
+        "op",
+        "grantId"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
         "instanceId": {
           "maxLength": 128,
           "minLength": 1,
@@ -211,6 +327,64 @@
         "instanceId",
         "op",
         "grantId"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "hints": {
+          "additionalProperties": false,
+          "properties": {
+            "tables": {
+              "items": {
+                "pattern": "^[A-Za-z][A-Za-z0-9_]{0,40}$",
+                "type": "string"
+              },
+              "maxItems": 16,
+              "type": "array"
+            },
+            "words": {
+              "items": {
+                "maxLength": 32,
+                "minLength": 1,
+                "type": "string"
+              },
+              "maxItems": 16,
+              "type": "array"
+            }
+          },
+          "type": "object"
+        },
+        "instanceId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "op": {
+          "const": "discover",
+          "type": "string"
+        },
+        "requestId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "type": {
+          "const": "snug:access-request",
+          "type": "string"
+        },
+        "v": {
+          "const": 1,
+          "type": "number"
+        }
+      },
+      "required": [
+        "v",
+        "type",
+        "requestId",
+        "instanceId",
+        "op"
       ],
       "type": "object"
     }

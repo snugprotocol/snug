@@ -27,6 +27,9 @@ import { getUserDb } from '../state/userdb.js';
 // TASK-20261010-host-broker PR-1 — the delegated run's record and the registry's generations.
 import { beginDelegatedRun, clearTouchedGeneration, endDelegatedRun, touchedGeneration } from '../schedule/runPlacement.js';
 import { markAppHostAnnounced, registerAppHost, setAppHostGeneration } from '../state/appHosts.js';
+// TASK-20261010-host-broker PR-3 (E2-dev / X-1) — the live frame's runtime as RunView composes it.
+import { composeAppRuntime } from '../run/appRuntime.js';
+import { modeStore, providerStore } from '../state/mode.js';
 
 const APP = 'app-net-1';
 
@@ -429,6 +432,56 @@ describe('the run-scoped gate through the real handler (TASK-20261010-host-broke
     expect(result).toMatchObject({ ok: true, status: 401 });
     expect(authShapedFailureStore.get()).toEqual({ appId, slot: SLOT, status: 401, detail: 'unauthorized', via: 'scheduled-run' });
   });
+
+  // E2-dev / X-1 (PR-3): through the REAL composition — `composeAppRuntime({ attended: true })` hands
+  // `createNetHandlerFor` its `scheduledVia` seam, which reads the delegated record per failure — a
+  // credentialed 401 on the LIVE frame is attributed to the run's posture: a refresh another app
+  // asked for says `via: 'refresh'`; a schedule's window keeps `via: 'scheduled-run'`.
+  for (const [posture, via] of [
+    ['refresh', 'refresh'],
+    ['schedule', 'scheduled-run'],
+  ] as const) {
+    it(`the live frame's composed runtime: a credentialed 401 during a delegated run with posture '${posture}' lands { …, via: '${via}' }`, async () => {
+      const appId = `app-deleg-via-${posture}`;
+      await seedApp(appId);
+      const calls: Array<{ url: string; init: RequestInit }> = [];
+      const db = await getUserDb();
+      const runtime = composeAppRuntime({
+        appId,
+        attended: true,
+        generation: 1,
+        mode: modeStore.get(),
+        provider: providerStore.get(),
+        driver: db.driver,
+        fetchImpl: async (url, init) => {
+          calls.push({ url, init: init ?? {} });
+          return new Response('unauthorized', { status: 401 });
+        },
+      });
+      const { net } = runtime.frameProps;
+      if (net === undefined) throw new Error('an owned app on this platform reaches the network');
+
+      openApp(appId, 1);
+      const begun = beginDelegatedRun({ appId, appName: 'Net App', runId: `run-${posture}`, taskId: posture === 'refresh' ? 'access-refresh' : 't1', title: 'Budget asked', generation: 1, posture });
+      expect(begun.ok).toBe(true);
+      cleanups.push(() => {
+        endDelegatedRun(appId, `run-${posture}`);
+        clearTouchedGeneration(appId, 1);
+      });
+
+      const result = await net.handle(appId, {
+        v: 1,
+        type: 'snug:net-request',
+        requestId: 'r1',
+        instanceId: 'ins-1',
+        url: 'https://api.example.com/v1/data',
+        method: 'GET',
+      });
+      expect(result).toMatchObject({ ok: true, status: 401 });
+      expect(new Headers(calls[0]?.init.headers).get('X-Api-Key'), 'the request was credentialed').toBe('stored-key-abc123');
+      expect(authShapedFailureStore.get()).toEqual({ appId, slot: SLOT, status: 401, detail: 'unauthorized', via });
+    });
+  }
 
   it('NEGATIVE: `scheduledRun()` answering false leaves the entry exactly as today — no `via` key', async () => {
     const appId = 'app-deleg-auth-no';

@@ -39,6 +39,22 @@
 // driver SKIPS those cells with that reason; the policy driver asserts the refusal.
 //
 // Mute, decline and rate stay the handler's ladder (pinned by accessHandler.test.ts), not this table.
+//
+// PR-3 (contract v2 D-PR3-13, the wire): THE SECOND TABLE (`TABLE_V2`, below the first) — the three
+// new acts `write {grantId, table}` · `refresh {grantId}` · `discover` over the SAME eight callers ×
+// the ten grants, plus three new grant fixtures (a persisted grant with `write` on ONE of two tables ·
+// a persisted grant with `refresh`, also while I'm away · a session g0 grant with `write`). Written
+// by hand like the first: write = rules 1–3 as read, 4′ attendance REQUIRED for every caller
+// (ACCESS_UNATTENDED, retryable — the hidden frame, a present:false frame, the schedule), rule 5,
+// then the named table's `write` (else ACCESS_NOT_GRANTED `writeNotGranted`); refresh = rules 1–5
+// as read (rule 4 is READ's: a grant allowed *also while I'm away* passes with nobody present), then
+// `grant.refresh` (else `refreshNotGranted`); discover = the ask presence rule. Effects stay NAMED
+// by the rule (A-Q1) and are performed on a `read` only — so the handler driver checks a v2 cell
+// performed NOTHING. An admitted refresh, driven through the handler, meets the refresh engine's
+// first gate in this world (no scheduler state row was ever made — D-PR3-17 (1)): it answers
+// ACCESS_REFRESH_FAILED `refreshOff`, a cell whose answer is not the verdict. The first table and
+// its drivers are untouched; the v2 cells are red until the policy gains the acts (policy driver)
+// and the handler maps the ops (handler driver).
 
 import { expect } from 'vitest';
 
@@ -53,6 +69,8 @@ import {
   __setAccessDepsForTests,
   createGrantFromDecision,
   findAccessGrant,
+  type CreateGrantInput,
+  type TableChoice,
   readerGeneration,
   resetAccessSession,
   revokeAccess,
@@ -108,8 +126,10 @@ export const GRANT_KEYS = [
   'session-unbound',
   'source-restricted',
 ] as const;
-/** The table's grants, plus the order-row variant (`ORDER_CELLS`). */
-export type GrantKey = (typeof GRANT_KEYS)[number] | 'source-restricted-attended-only';
+/** PR-3: the three new grant fixtures (the second table's extra rows). */
+export const GRANT_KEYS_PR3 = ['persisted-write', 'persisted-refresh', 'session-g0-write'] as const;
+/** The table's grants, plus the order-row variant (`ORDER_CELLS`), plus PR-3's three fixtures. */
+export type GrantKey = (typeof GRANT_KEYS)[number] | 'source-restricted-attended-only' | (typeof GRANT_KEYS_PR3)[number];
 
 export const GRANT_LABELS: Record<GrantKey, string> = {
   persisted: 'persisted active (for a day)',
@@ -123,6 +143,9 @@ export const GRANT_LABELS: Record<GrantKey, string> = {
   'session-unbound': 'session UNBOUND (made from host chrome with the app closed)',
   'source-restricted': 'persisted also-away; the source holds a WhatsApp fact',
   'source-restricted-attended-only': 'persisted (not away); the source holds a WhatsApp fact',
+  'persisted-write': 'persisted (for a day), can change transactions — accounts read-only',
+  'persisted-refresh': 'persisted, also while I’m away, may ask for new data',
+  'session-g0-write': 'session g0, can change transactions',
 };
 
 export const ACT_KEYS = ['read-select', 'read-delete', 'materialise', 'list', 'release', 'ask'] as const;
@@ -567,7 +590,57 @@ export async function makeGrant(key: GrantKey): Promise<string> {
       plantWhatsAppFact();
       return id;
     }
+    case 'persisted-write':
+      await ensureLedgerAccounts();
+      return grantFromLedgerV2({
+        duration: 'day',
+        unattended: false,
+        tables: [
+          { name: 'transactions', withheld: [], write: true },
+          { name: 'accounts', withheld: [], write: false },
+        ],
+      });
+    case 'persisted-refresh':
+      return grantFromLedgerV2({ duration: 'always', unattended: true, refresh: true, tables: [{ name: 'transactions', withheld: [], write: false }] });
+    case 'session-g0-write':
+      return grantFromLedgerV2({ duration: 'session', unattended: false, generation: 0, tables: [{ name: 'transactions', withheld: [], write: true }] });
   }
+}
+
+/**
+ * PR-3 (D-PR3-23): one table of the v2 decision — `withheld` the unticked non-sensitive columns,
+ * `write` the per-table toggle. The real `TableChoice` (grants.ts) — the pins lane swapped the
+ * Gate-3 local structural type for it; the name stays for the files that import it.
+ */
+export type DecisionTableV2 = TableChoice;
+
+/** PR-3: a v2 grant Budget holds on Ledger, made through THE writer behind the user's allow. */
+async function grantFromLedgerV2(over: { duration: 'session' | 'day' | 'week' | 'always'; unattended: boolean; generation?: number; tables: DecisionTableV2[]; kv?: boolean; refresh?: boolean }): Promise<string> {
+  const { db, budget, ledger, clock } = world();
+  const ranked = await collectSources(db, budget);
+  const source = [...ranked.matched, ...ranked.rest].find((candidate) => candidate.appId === ledger);
+  if (source === undefined) throw new Error('Ledger was not offered');
+  const input: CreateGrantInput = {
+    readerAppId: budget,
+    source,
+    tables: over.tables,
+    duration: over.duration,
+    unattended: over.unattended,
+    ...(over.kv === true ? { kv: true } : {}),
+    ...(over.refresh === true ? { refresh: true } : {}),
+    purpose: 'to show spending by category',
+    provenance: 'app' as const,
+    ...(over.generation !== undefined ? { generation: over.generation } : {}),
+    now: clock.now,
+  };
+  const grant = await createGrantFromDecision(db, input);
+  return grant.id;
+}
+
+/** PR-3: Ledger's second table — only the `persisted-write` fixture needs it (the first table's world is unchanged). */
+async function ensureLedgerAccounts(): Promise<void> {
+  const { db, ledger } = world();
+  await seed(db, ledger, ['CREATE TABLE accounts (name TEXT, balance INTEGER)'], ["INSERT INTO accounts VALUES ('main', 9000)"]);
 }
 
 /** The caller as the contract types it (`AccessCaller`) — structural here, so this file never imports the policy. */
@@ -763,6 +836,314 @@ export async function driveHandlerCell(cell: Cell): Promise<void> {
         expect(await answer).toEqual(asRefusal(expected));
         expect(pendingAccessStore.get()[budget], 'nothing parked').toBeUndefined();
       }
+      return;
+    }
+  }
+}
+
+// =========================================================================================
+// PR-3 — THE SECOND TABLE: write · refresh · discover (contract v2 D-PR3-13)
+// =========================================================================================
+
+/**
+ * The v2 act columns: `write` names transactions (the table the write fixtures tick), `write-readonly`
+ * names accounts (ticked read-only in `persisted-write`, outside every other scope), `refresh`,
+ * `discover`.
+ */
+export const ACT_KEYS_V2 = ['write', 'write-readonly', 'refresh', 'discover'] as const;
+export type ActKeyV2 = (typeof ACT_KEYS_V2)[number];
+
+/** Every grant of the second table: the first table's ten, then PR-3's three. */
+export const GRANT_KEYS_V2 = [...GRANT_KEYS, ...GRANT_KEYS_PR3] as const;
+export type GrantKeyV2 = (typeof GRANT_KEYS_V2)[number];
+
+/** The statement each write column sends — one plain UPDATE of one row of its table. */
+export const WRITE_SQL: Record<'write' | 'write-readonly', string> = {
+  write: "UPDATE transactions SET category = 'groceries' WHERE id = 1",
+  'write-readonly': "UPDATE accounts SET balance = 1 WHERE name = 'main'",
+};
+export const WRITE_TABLE: Record<'write' | 'write-readonly', string> = { write: 'transactions', 'write-readonly': 'accounts' };
+
+/**
+ * The PR-3 codes and sentences — the real exports (the pins lane dropped the Gate-3 local
+ * widenings: I-W exports the three codes, I-U the sentences in copy.ts). Read at cell time, never retyped.
+ */
+const C3 = ACCESS_ERROR_CODES;
+const M3 = ACCESS_APP_MESSAGES;
+
+/** A readable name per expectation — the v2 codes/sentences are undefined until they land, so a cell's title never prints them. */
+const LABELS = new Map<Expected, string>();
+const named = <T extends Expected>(expected: T, label: string): T => {
+  LABELS.set(expected, label);
+  return expected;
+};
+const labelOf = (expected: Expected): string => LABELS.get(expected) ?? describeExpected(expected);
+named(OK_HERE, 'ok (attended true)');
+named(OK_AWAY, 'ok (attended false)');
+named(OK, 'ok');
+named(NOT_GRANTED, 'ACCESS_NOT_GRANTED notGranted');
+named(NOT_GRANTED_LINE, 'ACCESS_NOT_GRANTED notGranted + refused-line (named, not performed)');
+named(REVOKED, 'ACCESS_REVOKED revoked');
+named(PAUSED, 'ACCESS_REVOKED paused');
+named(SOURCE_CHANGED, 'ACCESS_REVOKED sourceChanged');
+named(EXPIRED, 'ACCESS_EXPIRED expired + mark-expired (named, not performed)');
+named(RESTRICTED, 'ACCESS_REVOKED paused + suspend-source-restricted (named, not performed)');
+named(UNATTENDED, 'ACCESS_UNATTENDED unattended (retryable)');
+
+/** Admitted to change the named table — always with someone present (rule 4′). */
+const WRITE_OK = named<Expected>({ ok: true, attended: true }, 'ok (attended true)');
+/** Rule 7: the named table carries no `write` in this grant (or is outside its scope). */
+const WRITE_NOT_GRANTED = named(refusal(C3.ACCESS_NOT_GRANTED, M3.writeNotGranted, false), 'ACCESS_NOT_GRANTED writeNotGranted');
+/** After rules 1–5: the grant was not allowed to ask for new data. */
+const REFRESH_NOT_GRANTED = named(refusal(C3.ACCESS_NOT_GRANTED, M3.refreshNotGranted, false), 'ACCESS_NOT_GRANTED refreshNotGranted');
+/** The refresh engine's first gate in this world: no scheduler state row (D-PR3-17 (1)). */
+const REFRESH_OFF = named(refusal(C3.ACCESS_REFRESH_FAILED, M3.refreshOff, false), 'ACCESS_REFRESH_FAILED refreshOff');
+const REFRESH_GATE_WHY = 'admitted by the policy; the refresh engine’s first gate answers — this world never booted the scheduler, so no scheduler state row exists (D-PR3-17 (1))';
+const REFRESH_HERE: Diverging = { verdict: OK_HERE, answer: REFRESH_OFF, why: REFRESH_GATE_WHY };
+const REFRESH_AWAY: Diverging = { verdict: OK_AWAY, answer: REFRESH_OFF, why: REFRESH_GATE_WHY };
+
+type RowV2 = readonly [write: Entry, writeReadonly: Entry, refresh: Entry, discover: Entry];
+
+const U = UNATTENDED;
+const WNG = WRITE_NOT_GRANTED;
+const RNG = REFRESH_NOT_GRANTED;
+
+/**
+ * THE SECOND TABLE, by hand. Columns: write transactions · write accounts · refresh · discover.
+ * write: 1 owned · 2 status · 3 expiry · 4′ someone present, whatever the grant says · 5 WhatsApp fact
+ * · 7 the table's `write`. refresh: 1–5 exactly as read, then `refresh`. discover: the ask's presence.
+ */
+export const TABLE_V2: Record<CallerKey, Record<GrantKeyV2, RowV2>> = {
+  // Someone present at g0: the write reaches rule 7; composing g0 binds the unbound session grant.
+  'frame-g0': {
+    persisted: [WNG, WNG, RNG, OK],
+    'persisted-away': [WNG, WNG, RNG, OK],
+    revoked: [REVOKED, REVOKED, REVOKED, OK],
+    'suspended-source-changed': [SOURCE_CHANGED, SOURCE_CHANGED, SOURCE_CHANGED, OK],
+    'suspended-imported': [PAUSED, PAUSED, PAUSED, OK],
+    expired: [EXPIRED, EXPIRED, EXPIRED, OK],
+    'session-g0': [WNG, WNG, RNG, OK],
+    'session-g0-away': [WNG, WNG, RNG, OK],
+    'session-unbound': [WNG, WNG, RNG, OK],
+    // Rule 5 precedes rule 7: the fact pauses the access before its tables are looked at.
+    'source-restricted': [RESTRICTED, RESTRICTED, RESTRICTED, OK],
+    'persisted-write': [WRITE_OK, WNG, RNG, OK],
+    'persisted-refresh': [WNG, WNG, REFRESH_HERE, OK],
+    'session-g0-write': [WRITE_OK, WNG, RNG, OK],
+  },
+  // A delegated run in flight: nobody present. Rule 4′ refuses EVERY write that reaches it — even a
+  // grant allowed while away; a refresh follows read's rule 4 (away passes; a session grant never).
+  'frame-g0-delegated': {
+    persisted: [U, U, NOT_GRANTED_LINE, U],
+    'persisted-away': [U, U, RNG, U],
+    revoked: [REVOKED, REVOKED, REVOKED, U],
+    'suspended-source-changed': [SOURCE_CHANGED, SOURCE_CHANGED, SOURCE_CHANGED, U],
+    'suspended-imported': [PAUSED, PAUSED, PAUSED, U],
+    expired: [EXPIRED, EXPIRED, EXPIRED, U],
+    'session-g0': [U, U, NOT_GRANTED_LINE, U],
+    'session-g0-away': [U, U, NOT_GRANTED_LINE, U],
+    'session-unbound': [U, U, NOT_GRANTED_LINE, U],
+    // Rule 4′ precedes rule 5 for a write; for a refresh read's rule 4 passes (away) and rule 5 pauses.
+    'source-restricted': [U, U, RESTRICTED, U],
+    'persisted-write': [U, U, NOT_GRANTED_LINE, U],
+    'persisted-refresh': [U, U, REFRESH_AWAY, U],
+    'session-g0-write': [U, U, NOT_GRANTED_LINE, U],
+  },
+  // g1: g0's session grants died with their frame (rule 1, silent); the unbound one binds to g1.
+  'frame-g1': {
+    persisted: [WNG, WNG, RNG, OK],
+    'persisted-away': [WNG, WNG, RNG, OK],
+    revoked: [REVOKED, REVOKED, REVOKED, OK],
+    'suspended-source-changed': [SOURCE_CHANGED, SOURCE_CHANGED, SOURCE_CHANGED, OK],
+    'suspended-imported': [PAUSED, PAUSED, PAUSED, OK],
+    expired: [EXPIRED, EXPIRED, EXPIRED, OK],
+    'session-g0': [NOT_GRANTED, NOT_GRANTED, NOT_GRANTED, OK],
+    'session-g0-away': [NOT_GRANTED, NOT_GRANTED, NOT_GRANTED, OK],
+    'session-unbound': [WNG, WNG, RNG, OK],
+    'source-restricted': [RESTRICTED, RESTRICTED, RESTRICTED, OK],
+    'persisted-write': [WRITE_OK, WNG, RNG, OK],
+    'persisted-refresh': [WNG, WNG, REFRESH_HERE, OK],
+    'session-g0-write': [NOT_GRANTED, NOT_GRANTED, NOT_GRANTED, OK],
+  },
+  // The hidden frame: no generation (owns no session grant), nobody present.
+  'frame-hidden': {
+    persisted: [U, U, NOT_GRANTED_LINE, U],
+    'persisted-away': [U, U, RNG, U],
+    revoked: [REVOKED, REVOKED, REVOKED, U],
+    'suspended-source-changed': [SOURCE_CHANGED, SOURCE_CHANGED, SOURCE_CHANGED, U],
+    'suspended-imported': [PAUSED, PAUSED, PAUSED, U],
+    expired: [EXPIRED, EXPIRED, EXPIRED, U],
+    'session-g0': [NOT_GRANTED, NOT_GRANTED, NOT_GRANTED, U],
+    'session-g0-away': [NOT_GRANTED, NOT_GRANTED, NOT_GRANTED, U],
+    'session-unbound': [NOT_GRANTED, NOT_GRANTED, NOT_GRANTED, U],
+    'source-restricted': [U, U, RESTRICTED, U],
+    'persisted-write': [U, U, NOT_GRANTED_LINE, U],
+    'persisted-refresh': [U, U, REFRESH_AWAY, U],
+    'session-g0-write': [NOT_GRANTED, NOT_GRANTED, NOT_GRANTED, U],
+  },
+  // The chat beside the open reader (g0): the user typed — attended; owns g0's session grants.
+  'chat-g0': {
+    persisted: [WNG, WNG, RNG, OK],
+    'persisted-away': [WNG, WNG, RNG, OK],
+    revoked: [REVOKED, REVOKED, REVOKED, OK],
+    'suspended-source-changed': [SOURCE_CHANGED, SOURCE_CHANGED, SOURCE_CHANGED, OK],
+    'suspended-imported': [PAUSED, PAUSED, PAUSED, OK],
+    expired: [EXPIRED, EXPIRED, EXPIRED, OK],
+    'session-g0': [WNG, WNG, RNG, OK],
+    'session-g0-away': [WNG, WNG, RNG, OK],
+    'session-unbound': [WNG, WNG, RNG, OK],
+    'source-restricted': [RESTRICTED, RESTRICTED, RESTRICTED, OK],
+    'persisted-write': [WRITE_OK, WNG, RNG, OK],
+    'persisted-refresh': [WNG, WNG, REFRESH_HERE, OK],
+    'session-g0-write': [WRITE_OK, WNG, RNG, OK],
+  },
+  // The chat beside a CLOSED app: attended, owns no session grant.
+  'chat-none': {
+    persisted: [WNG, WNG, RNG, OK],
+    'persisted-away': [WNG, WNG, RNG, OK],
+    revoked: [REVOKED, REVOKED, REVOKED, OK],
+    'suspended-source-changed': [SOURCE_CHANGED, SOURCE_CHANGED, SOURCE_CHANGED, OK],
+    'suspended-imported': [PAUSED, PAUSED, PAUSED, OK],
+    expired: [EXPIRED, EXPIRED, EXPIRED, OK],
+    'session-g0': [NOT_GRANTED, NOT_GRANTED, NOT_GRANTED, OK],
+    'session-g0-away': [NOT_GRANTED, NOT_GRANTED, NOT_GRANTED, OK],
+    'session-unbound': [NOT_GRANTED, NOT_GRANTED, NOT_GRANTED, OK],
+    'source-restricted': [RESTRICTED, RESTRICTED, RESTRICTED, OK],
+    'persisted-write': [WRITE_OK, WNG, RNG, OK],
+    'persisted-refresh': [WNG, WNG, REFRESH_HERE, OK],
+    'session-g0-write': [NOT_GRANTED, NOT_GRANTED, NOT_GRANTED, OK],
+  },
+  // The chat during a delegated run on the reader's frame: the chat door never reads the run state (D-PR2-4).
+  'chat-g0-delegated': {
+    persisted: [WNG, WNG, RNG, OK],
+    'persisted-away': [WNG, WNG, RNG, OK],
+    revoked: [REVOKED, REVOKED, REVOKED, OK],
+    'suspended-source-changed': [SOURCE_CHANGED, SOURCE_CHANGED, SOURCE_CHANGED, OK],
+    'suspended-imported': [PAUSED, PAUSED, PAUSED, OK],
+    expired: [EXPIRED, EXPIRED, EXPIRED, OK],
+    'session-g0': [WNG, WNG, RNG, OK],
+    'session-g0-away': [WNG, WNG, RNG, OK],
+    'session-unbound': [WNG, WNG, RNG, OK],
+    'source-restricted': [RESTRICTED, RESTRICTED, RESTRICTED, OK],
+    'persisted-write': [WRITE_OK, WNG, RNG, OK],
+    'persisted-refresh': [WNG, WNG, REFRESH_HERE, OK],
+    'session-g0-write': [WRITE_OK, WNG, RNG, OK],
+  },
+  // A scheduled step: never present, owns no session grant; its read-rule-4 refusals are silent.
+  schedule: {
+    persisted: [U, U, NOT_GRANTED, U],
+    'persisted-away': [U, U, RNG, U],
+    revoked: [REVOKED, REVOKED, REVOKED, U],
+    'suspended-source-changed': [SOURCE_CHANGED, SOURCE_CHANGED, SOURCE_CHANGED, U],
+    'suspended-imported': [PAUSED, PAUSED, PAUSED, U],
+    expired: [EXPIRED, EXPIRED, EXPIRED, U],
+    'session-g0': [NOT_GRANTED, NOT_GRANTED, NOT_GRANTED, U],
+    'session-g0-away': [NOT_GRANTED, NOT_GRANTED, NOT_GRANTED, U],
+    'session-unbound': [NOT_GRANTED, NOT_GRANTED, NOT_GRANTED, U],
+    'source-restricted': [U, U, RESTRICTED, U],
+    'persisted-write': [U, U, NOT_GRANTED, U],
+    'persisted-refresh': [U, U, REFRESH_AWAY, U],
+    'session-g0-write': [NOT_GRANTED, NOT_GRANTED, NOT_GRANTED, U],
+  },
+};
+
+export interface CellV2 {
+  caller: CallerKey;
+  grant: GrantKeyV2;
+  act: ActKeyV2;
+  verdict: Expected;
+  answer: Expected;
+  why?: string;
+  name: string;
+}
+
+function cellOfV2(caller: CallerKey, grant: GrantKeyV2, act: ActKeyV2, entry: Entry): CellV2 {
+  const verdict = isDiverging(entry) ? entry.verdict : entry;
+  const answer = isDiverging(entry) ? entry.answer : entry;
+  return {
+    caller,
+    grant,
+    act,
+    verdict,
+    answer,
+    ...(isDiverging(entry) ? { why: entry.why } : {}),
+    name: `${CALLER_LABELS[caller]} × ${GRANT_LABELS[grant]} × ${act} → ${labelOf(verdict)}`,
+  };
+}
+
+/** Every cell of the second table, caller by caller, grant by grant, act by act. */
+export function tableCellsV2(): CellV2[] {
+  const cells: CellV2[] = [];
+  for (const caller of CALLER_KEYS) {
+    for (const grant of GRANT_KEYS_V2) {
+      const row = TABLE_V2[caller][grant];
+      ACT_KEYS_V2.forEach((act, index) => cells.push(cellOfV2(caller, grant, act, row[index]!)));
+    }
+  }
+  return cells;
+}
+
+/** The v2 act as the contract types it (D-PR3-13's `AccessAct` additions) — structural here. */
+export function actOfV2(act: ActKeyV2, grantId: string): { kind: 'write'; grantId: string; table: string } | { kind: 'refresh'; grantId: string } | { kind: 'discover' } {
+  switch (act) {
+    case 'write':
+    case 'write-readonly':
+      return { kind: 'write', grantId, table: WRITE_TABLE[act] };
+    case 'refresh':
+      return { kind: 'refresh', grantId };
+    case 'discover':
+      return { kind: 'discover' };
+  }
+}
+
+/** What a discover answers in this world: Ledger and Pantry hold tables — but a WhatsApp fact leaves Ledger out. */
+export function discoverClassFor(grant: GrantKeyV2): 'one' | 'several' {
+  return grant === 'source-restricted' ? 'one' : 'several';
+}
+
+// The three new frames — members of the protocol's request union since I-W (the Gate-3 casts dropped).
+const writeFrame = (grantId: string, sql: string): AccessRequestFrame => ({ ...base(), op: 'write', grantId, sql });
+const refreshFrame = (grantId: string): AccessRequestFrame => ({ ...base(), op: 'refresh', grantId });
+const discoverFrame = (): AccessRequestFrame => ({ ...base(), op: 'discover', hints: { tables: ['transactions'], words: ['spending'] } });
+
+/**
+ * Drive ONE frame cell of the second table through the REAL handler: the answer, and — A-Q1 — that
+ * the act PERFORMED nothing a refusal names (no `refused`/`expired` line, no pause): a refused v2 act
+ * leaves the source's history and the grant exactly as they were. An admitted write changes one row
+ * and answers its count; an admitted discover answers the class and records nothing.
+ */
+export async function driveHandlerCellV2(cell: CellV2): Promise<void> {
+  const { budget, db, ledger } = world();
+  const { grantId, handler } = await prepare(cell);
+  if (handler === undefined) throw new Error(`${cell.caller} is not a frame caller`);
+  const expected = cell.answer;
+  const before = observe(grantId);
+
+  switch (cell.act) {
+    case 'write':
+    case 'write-readonly': {
+      const answer = await handler.handle(budget, writeFrame(grantId, WRITE_SQL[cell.act]));
+      if (expected.ok) {
+        expect(answer, 'changes only — no undo id on the wire').toEqual({ ok: true, op: 'write', changes: 1 });
+        expect(db.listAccessLog(ledger)[0], 'the write is on the source’s history').toMatchObject({ kind: 'wrote', grantId });
+      } else {
+        expect(answer).toEqual(asRefusal(expected));
+        expect(observe(grantId), 'a refused write performs nothing — no line, no status change (A-Q1)').toEqual(before);
+      }
+      return;
+    }
+    case 'refresh': {
+      const answer = await handler.handle(budget, refreshFrame(grantId));
+      expect(answer).toEqual(asRefusal(expected));
+      expect(observe(grantId), 'a refused refresh performs nothing (A-Q1); the engine’s gate runs nothing and writes no line').toEqual(before);
+      return;
+    }
+    case 'discover': {
+      const answer = await handler.handle(budget, discoverFrame());
+      if (expected.ok) expect(answer).toEqual({ ok: true, op: 'discover', candidates: discoverClassFor(cell.grant) });
+      else expect(answer).toEqual(asRefusal(expected));
+      expect(observe(grantId), 'a discover records nothing').toEqual(before);
+      expect(pendingAccessStore.get()[budget], 'nothing parked').toBeUndefined();
       return;
     }
   }

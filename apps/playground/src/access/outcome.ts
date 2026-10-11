@@ -12,8 +12,8 @@
 import { createStore, type Store } from '../state/store.js';
 import type { ConsentDecision, ConsentOutcome, PendingAccessRequest } from './consent.js';
 
-/** What a strip's line says: the engine's outcome, or the undo's own result. */
-export type StripOutcome = ConsentOutcome | { kind: 'stopped'; sourceName: string; tables: string[] };
+/** What a strip's line says: the engine's outcome, or the undo's own result — `write` the tables the stopped access could change (PR-3, U-Q8; empty for a read access). */
+export type StripOutcome = ConsentOutcome | { kind: 'stopped'; sourceName: string; tables: string[]; write: string[] };
 
 export interface RecordedOutcome {
   /** Monotonic — a strip shows only outcomes recorded after it mounted (or after its last ask). */

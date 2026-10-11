@@ -7,6 +7,10 @@
 // unmute; *clear history* behind an armed inline confirm (the schedule card's shape) — clears
 // the reads, keeps the lifecycle lines; the same creation act, for the app the user picks; and
 // the card is mounted in SettingsView only where the host allows access.
+//
+// TASK-20261010-host-broker PR-3 (D-PR3-24; DS14, DS21): a write access's row carries the write
+// badge here too (`access-row-write`, *can also change rows*) beside its ONE act, and the card's
+// intro and *clear history* hint say changes too — their new bytes pinned through the export.
 
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -249,3 +253,54 @@ describe('the same creation act', () => {
 // SettingsView mounts the card only where the host allows access: pinned by BEHAVIOUR in
 // hostSettings.test.tsx ('Settings → access between apps is mounted only where the host allows
 // access' — absent with access off, present with it on), not by the shape of the JSX (W6 finding 34).
+
+// =========================================================================================
+// TASK-20261010-host-broker PR-3 (D-PR3-24; DS14, DS21)
+// =========================================================================================
+
+describe('PR-3 — the write badge in Settings, and the intro and hint that say changes too', () => {
+  /** LOCAL structural types (D-PR3-23/24) until grants.ts / copy.ts export them. */
+  type CreateGrantV2 = (
+    db: UserDb,
+    input: Omit<Parameters<typeof createGrantFromDecision>[1], 'tables'> & { tables: Array<{ name: string; withheld: string[]; write: boolean }> },
+  ) => ReturnType<typeof createGrantFromDecision>;
+  const createGrantV2 = createGrantFromDecision as unknown as CreateGrantV2;
+  const SHEET3 = ACCESS_SHEET as unknown as { canChange: string };
+
+  it('a write access’s row carries *can also change rows* — and exactly one act; a read access’s row none', async () => {
+    const ranked = await collectSources(db, budget);
+    const source = [...ranked.matched, ...ranked.rest].find((candidate) => candidate.appId === ledger)!;
+    await createGrantV2(db, {
+      readerAppId: budget,
+      source,
+      tables: [{ name: 'transactions', withheld: [], write: true }],
+      duration: 'day',
+      unattended: false,
+      purpose: 'to tidy the categories',
+      provenance: 'app',
+      generation: 0,
+      now: clock.now,
+    });
+    await allow(budget, pantry, ['items']);
+    await renderCard();
+    const rows = all('access-row');
+    expect(rows).toHaveLength(2);
+    const writeRow = rows.find((row) => one('access-row-sentence', row)?.textContent === ACCESS_SHEET.row('Budget', 'Ledger', ['transactions']))!;
+    const readRow = rows.find((row) => one('access-row-sentence', row)?.textContent === ACCESS_SHEET.row('Budget', 'Pantry', ['items']))!;
+    expect(one('access-row-write', writeRow)?.textContent).toBe(SHEET3.canChange);
+    expect(all('access-row-act', writeRow)).toHaveLength(1);
+    expect(one('access-row-write', readRow)).toBeNull();
+    expect(all('access-row-act', readRow)).toHaveLength(1);
+  });
+
+  it('the intro and the *clear history* hint say changes too — the contract’s bytes, through the export', async () => {
+    expect(SETTINGS_CARD.intro).toBe(
+      "which of your apps can read — or change, when you allowed it — another app's data; the app that was read keeps a history of its reads and changes",
+    );
+    expect(SETTINGS_CARD.clearHistoryHint).toBe('when access was allowed, stopped or paused — and every change — stays on record');
+    await allow(budget, ledger, ['transactions']);
+    await renderCard();
+    expect(one('access-settings-intro')?.textContent).toBe(SETTINGS_CARD.intro);
+    expect(one('access-clear-history-hint')?.textContent).toBe(SETTINGS_CARD.clearHistoryHint);
+  });
+});

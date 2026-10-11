@@ -10,7 +10,7 @@
 import { createMemoryBackend, installAppFromBundle, openUserDb, type UserDb } from '@snugprotocol/db';
 import type { AppBundle } from '@snugprotocol/protocol';
 import { createRequire } from 'node:module';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { collectSources } from '../access/consent.js';
 import { __setAccessDepsForTests, createGrantFromDecision, resetAccessSession, type AnyAccessGrant } from '../access/grants.js';
@@ -66,7 +66,23 @@ const scheduleNaming = (appId: string, version: number): TaskRow => ({
   unseenResults: 0,
 });
 
+/**
+ * The clock the production seams read is the WALL clock (`installShared.ts` passes `new Date()`
+ * into the app-version fan-out), while every fixture here is seeded at the fixed instant below —
+ * a one-day access seeded at 2026-10-10T09:00Z reads as EXPIRED once the real clock passes
+ * 2026-10-11T09:00Z, and nothing is suspended (found 2026-10-11, TASK-20261010-host-broker PR-3
+ * Gate 5: a clock bomb, not an engine defect). Only `Date` is faked, so vitest's own polling and
+ * the test db's persist debounce keep their real timers.
+ */
+const FIXED_NOW = Date.parse('2026-10-10T09:01:00.000Z');
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 beforeEach(async () => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(FIXED_NOW);
   const result = await openUserDb({ backend: createMemoryBackend(), locateWasm, persistDebounceMs: 1 });
   if (result.status !== 'ok') throw new Error('open failed');
   db = result.userDb;

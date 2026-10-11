@@ -625,3 +625,50 @@ describe('egressFor — the chat line (AC14; D-PR2-12)', () => {
     expect(lines.at(-2)).toEqual({ kind: 'away', text: EGRESS.away('Budget') });
   });
 });
+
+// ---------------------------------------------------------------------------------------------
+// TASK-20261010-host-broker PR-3 (D-PR3-23; DS4) — the egress block lists the places data can GO,
+// so a write or a fetch adds NO line of its own (its title stays true); the one thing a ticked
+// write changes is the closing sentence: the source keeps a history of its reads AND changes.
+// `canChange` on egressFor's options and the two-argument `EGRESS.closing` are reached through
+// LOCAL structural types until egress.ts and copy.ts declare them (Q: the option's name).
+// ---------------------------------------------------------------------------------------------
+
+describe('PR-3 — no write or refresh line; the closing says changes when a write is ticked (D-PR3-23; DS4)', () => {
+  type EgressOptsV3 = { unattended: boolean; sourceName: string; canChange?: boolean };
+  const egressForV3 = egressFor as unknown as (db: UserDb, readerAppId: string, opts: EgressOptsV3) => EgressLine[];
+  const closingV3 = EGRESS.closing as unknown as (sourceName: string, canChange?: boolean) => string;
+  /** The nine kinds the block has today — PR-3 adds none (no `write`, no `refresh`, no `fetch`). */
+  const TODAYS_KINDS: readonly string[] = ['brain', 'chat', 'approved', 'declared', 'helper', 'open-url', 'no-connections', 'away', 'closing'];
+
+  it('a ticked write changes ONLY the closing sentence — the same kinds, the same lines before it', () => {
+    seedConnections();
+    for (const unattended of [false, true]) {
+      const plain = egressForV3(db, APP, { unattended, sourceName: SOURCE_NAME });
+      const changing = egressForV3(db, APP, { unattended, sourceName: SOURCE_NAME, canChange: true });
+      expect(changing.map((line) => line.kind)).toEqual(plain.map((line) => line.kind));
+      expect(changing.slice(0, -1)).toEqual(plain.slice(0, -1));
+      expect(changing.at(-1)).toEqual({ kind: 'closing', text: closingV3(SOURCE_NAME, true) });
+    }
+    expect(closingV3(SOURCE_NAME, true)).toBe('the copy is made here, on this device; Ledger keeps a history of its reads and changes');
+  });
+
+  it('no write ticked (canChange false or absent): the closing is today’s sentence, byte for byte', () => {
+    expect(egressForV3(db, APP, { unattended: false, sourceName: SOURCE_NAME, canChange: false }).at(-1)).toEqual(CLOSING);
+    expect(egressForV3(db, APP, { unattended: false, sourceName: SOURCE_NAME }).at(-1)).toEqual(CLOSING);
+    expect(closingV3(SOURCE_NAME, false)).toBe(CLOSING.text);
+  });
+
+  it('the kinds stay today’s nine under every arm — a keyed brain with its chat, connections, the helper, away, and a ticked write', async () => {
+    providerStore.set('anthropic');
+    await setByokKey('anthropic', 'sk-ant-test');
+    seedConnections();
+    db.putDeclaredConnection(APP, 'whatsapp', { slot: 'whatsapp', provider: { name: 'WhatsApp' }, kind: 'linked_device', declaredApiHosts: [SIDECAR_SYMBOLIC_HOST] } as Parameters<UserDb['putDeclaredConnection']>[2], 'starter');
+    db.approveConnection(APP, 'whatsapp');
+    const lines = egressForV3(db, APP, { unattended: true, sourceName: SOURCE_NAME, canChange: true });
+    expect(lines.map((line) => line.kind)).toContain('chat');
+    for (const line of lines) expect(TODAYS_KINDS, `an egress line of a kind the block never had: ${line.kind}`).toContain(line.kind);
+    // Nothing but the closing speaks of changing or fetching: the block is where data can GO.
+    for (const line of lines.slice(0, -1)) expect(line.text, line.kind).not.toMatch(/\bchang(e|es|ed|ing)\b|\bfetch/i);
+  });
+});

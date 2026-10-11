@@ -10,8 +10,13 @@
 //     file (Q15);
 //   - the apps the user told to stop asking, each with *let Budget ask again*;
 //   - *clear history* behind an armed inline confirm: it clears the READS from every app's
-//     history; when access was allowed, stopped or paused stays on record (the db keeps them);
+//     history; when access was allowed, stopped or paused — and, since TASK-20261010-host-broker
+//     PR-3 (D-PR3-6/24), every change — stays on record (the db keeps them);
 //   - the same creation act as the ⋈ sheet (`startUserAsk`), for the app the user picks.
+//
+// PR-3 (D-PR3-24; DS14, DS21) reaches this card through what it already renders: the intro and
+// the *clear history* hint are copy.ts's sentences, and a write access's row carries its badge
+// through the ONE `GrantRow` — nothing here is derived twice.
 
 import { useEffect, useId, useState, type ReactElement } from 'react';
 

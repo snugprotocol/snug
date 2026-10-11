@@ -5,6 +5,7 @@ import {
   LIMITS,
   PROTOCOL_VERSION,
   createResponder,
+  hostReadySchema,
   parseFrame,
   type AppAnnounceFrame,
   type AppMessageFrame,
@@ -96,6 +97,7 @@ describe('parseFrame — happy paths', () => {
   });
 
   // TASK-20261010-cross-app-access (AC1): the access pair joins the frame inventory (15 frames).
+  // TASK-20261010-host-broker PR-3 (AC17, spec 1.2): + write/refresh/discover on each side (7 ops, 8 variants).
   it('parses snug:access-request (every op) and snug:access-response (every variant)', () => {
     const grantId = '3f2b8c1e-9a4d-4e6f-8b2a-1c3d5e7f9a0b';
     const req = { v: 1, type: FRAME_TYPES.accessRequest, requestId: 'a1', instanceId: 'i1' } as const;
@@ -113,10 +115,16 @@ describe('parseFrame — happy paths', () => {
       { ...req, op: 'query', grantId, sql: 'SELECT amount FROM transactions', params: [] },
       { ...req, op: 'list' },
       { ...req, op: 'release', grantId },
+      { ...req, op: 'write', grantId, sql: 'UPDATE transactions SET amount = ? WHERE id = ?', params: [12.5, 7] },
+      { ...req, op: 'refresh', grantId },
+      { ...req, op: 'discover', hints: { words: ['spending'] } },
       { ...resp, ok: true, op: 'request', grant },
       { ...resp, ok: true, op: 'query', columns: ['amount'], rows: [[1]], truncated: false, totalRows: 1 },
       { ...resp, ok: true, op: 'list', grants: [grant] },
       { ...resp, ok: true, op: 'release' },
+      { ...resp, ok: true, op: 'write', changes: 1 },
+      { ...resp, ok: true, op: 'refresh', fresh: false, reason: 'recent' },
+      { ...resp, ok: true, op: 'discover', candidates: 'several' },
       { ...resp, ok: false, error: { code: 'ACCESS_NOT_GRANTED', message: 'no such access', retryable: false } },
     ];
     for (const f of frames) {
@@ -127,6 +135,51 @@ describe('parseFrame — happy paths', () => {
     const strict = parseFrame({ ...req, op: 'list', appId: 'evil' });
     expect(!strict.ok && !strict.ignored && strict.code).toBe('MALFORMED');
     expect(parseFrame({ ...resp, ok: true, op: 'release', future: 1 }).ok).toBe(true);
+  });
+
+  // TASK-20261010-host-broker PR-3 (AC17 negative; D-PR3-4/5): additive — a 1.1 app's frames are unchanged.
+  it('PR-3: a 1.1-shaped access-request of every 1.1 op still parses; request.access is optional and only "read" | "write"', () => {
+    const grantId = '3f2b8c1e-9a4d-4e6f-8b2a-1c3d5e7f9a0b';
+    const req = { v: 1, type: FRAME_TYPES.accessRequest, requestId: 'a1', instanceId: 'i1' } as const;
+    for (const f of [
+      { ...req, op: 'request', purpose: 'to show spending by category' },
+      { ...req, op: 'request', purpose: 'to show spending by category', hints: { tables: ['transactions'] }, renew: grantId },
+      { ...req, op: 'query', grantId, sql: 'SELECT amount FROM transactions' },
+      { ...req, op: 'list' },
+      { ...req, op: 'release', grantId },
+    ]) {
+      expect(parseFrame(f).ok, `frame ${JSON.stringify(f)} should parse`).toBe(true);
+    }
+    expect(parseFrame({ ...req, op: 'request', purpose: 'to fix categories', access: 'write' }).ok).toBe(true);
+    const bad = parseFrame({ ...req, op: 'request', purpose: 'to fix categories', access: 'owner' });
+    expect(!bad.ok && !bad.ignored && bad.code).toBe('MALFORMED');
+  });
+
+  it('PR-3: the access-response union stays tolerant — an unknown key on each new variant still parses; a wrong shape does not', () => {
+    const resp = { v: 1, type: FRAME_TYPES.accessResponse, requestId: 'a1' } as const;
+    for (const f of [
+      { ...resp, ok: true, op: 'write', changes: 2, futureSeat: { a: 1 } },
+      { ...resp, ok: true, op: 'refresh', fresh: true, futureSeat: 1 },
+      { ...resp, ok: true, op: 'discover', candidates: 'none', futureSeat: 'x' },
+    ]) {
+      expect(parseFrame(f).ok, `frame ${JSON.stringify(f)} should parse`).toBe(true);
+    }
+    const wrong = parseFrame({ ...resp, ok: true, op: 'write', changes: 'two' });
+    expect(!wrong.ok && !wrong.ignored && wrong.code).toBe('MALFORMED');
+  });
+
+  it('PR-3 (D-PR3-5): host-ready is UNCHANGED — capabilities has no accessOps key; a 1.2 app detects a 1.1 host by its MALFORMED answer', () => {
+    expect(Object.keys(hostReadySchema.shape.capabilities.shape).sort()).toEqual(['access', 'auth', 'db', 'net', 'openUrl', 'streaming']);
+    const result = parseFrame({
+      v: 1,
+      type: FRAME_TYPES.hostReady,
+      instanceId: 'ins-1',
+      protocolVersions: [1],
+      capabilities: { streaming: true, db: true, auth: false, access: true, accessOps: ['write', 'refresh', 'discover'] },
+      theme: 'light',
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect('accessOps' in (result.frame as HostReadyFrame).capabilities).toBe(false);
   });
 
   it('parses host-ready without capabilities.access (a 1.0 frame) and with it', () => {

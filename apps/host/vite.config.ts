@@ -12,7 +12,12 @@
 // lane, and the data lane — PR-2's chat door and the brain's ask on it included — never runs
 // here; the stubs under `src/stubs/` keep the names and fail loudly, and
 // `src/__tests__/kitDeadLanes.test.ts` pins the swaps, the invariant and the stubs' surface.
-// The playground and the desktop keep the real modules — they are not built from this config.
+// The knowledge package's content module is rewritten without the prompt files nothing
+// shipped reads — everything under `skills/` and the store's `README.md` (`dropPromptFiles`,
+// whose dead-rule guard fails the build the same way; TASK-20261010-host-broker PR-3,
+// `kitDeadPrompts.test.ts`).
+// The playground and the desktop keep the real modules and the whole prompt store — they are
+// not built from this config.
 // WebLLM is aliased to a stub so the lazily imported 6 MB engine never enters the bundle.
 //
 // THE ONLY CONFIG, THE ONLY ENTRY, THE ONLY OUTPUT (TASK-20261003 K1, ADR-0072 §1). This
@@ -31,6 +36,7 @@ import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 
 import { buildStamp } from './src/plugins/build-stamp.js';
+import { dropPromptFiles } from './src/plugins/drop-prompt-files.js';
 import { inlineSingleFile } from './src/plugins/inline-single-file.js';
 import { startersIndexPlugin } from './src/plugins/starters-index.js';
 import { swapResolved } from './src/plugins/swap-resolved.js';
@@ -61,6 +67,9 @@ export default defineConfig({
       [`${playgroundSrc}/agent/accessCard.ts`]: here('./src/stubs/accessCard.ts'),
       [`${playgroundSrc}/access/AccessCard.tsx`]: here('./src/stubs/AccessCard.tsx'),
     }),
+    // The prompt files nothing shipped reads (everything under `skills/`, the store's README)
+    // → out of the page (the header; TASK-20261010-host-broker PR-3, `kitDeadPrompts.test.ts`).
+    dropPromptFiles({ contentModule: here('../../packages/knowledge/dist/generated/content.js') }),
     startersIndexPlugin(here('./starters-pkg/index.json')),
     react(),
     inlineSingleFile({ stamp, fileName: 'snug-host.html' }),

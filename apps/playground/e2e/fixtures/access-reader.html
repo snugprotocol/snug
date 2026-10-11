@@ -20,6 +20,15 @@
   survives a reopen), #changed the last access-changed hint, and #log EVERY access answer and
   access-changed hint this page ever received — the whole of what the reader learned, so the spec
   can prove it never saw the user's other apps.
+  TASK-20261010-host-broker PR-3 (AC28; D-PR3-4/14): five more user acts, each a button — #ask-write
+  asks with `access: 'write'` (the plain #ask stays the read ask every earlier clause and the mobile
+  and kit specs use), #write sends ONE literal-valued UPDATE of `transactions` whose WHERE names a
+  granted column (`op: 'write'` → #result "changes: N"), #refresh asks the source to fetch first
+  (`op: 'refresh'` → #result "fresh: true" / "fresh: false · recent"), and #peek / #fetches READ
+  (a query) what the write and the fetch changed into #peeked. The helper block IS KB 87 v2's
+  render — `snugAccessRequest(op, fields)` carries every op, and the three listener arms
+  (`access-source-changed`, `data-changed`, `access-read`) are its; re-render it from that page
+  per the SYNC RULE whenever the page changes.
 -->
 <html lang="en">
 <head>
@@ -269,6 +278,21 @@
       noteHeard();
     }
 
+    function onAccessSourceChanged(grantId) {
+      // YOUR WORK: the other app's data changed under this access. Read it again where the
+      // app shows it — snugAccessRequest('query', …) — never ask for access from here.
+    }
+
+    function onDataChanged(table) {
+      // YOUR WORK: another app, or the chat, changed this table of YOUR app under an access
+      // the user allowed (or the user undid such a change). Re-read it where the app shows it.
+    }
+
+    function onAccessRead(grantId) {
+      // YOUR WORK (optional): one of this app's tables was read under an access this app is
+      // the source of. The id only — the runner's history has the rest. Most apps do nothing.
+    }
+
     window.addEventListener('message', (event) => {
       const data = event.data;
       if (event.source !== window.parent || !data || data.v !== 1) return;
@@ -276,13 +300,25 @@
         const resolve = SNUG_ACCESS_PENDING.get(data.requestId);
         if (!resolve) return; // not ours, or already answered
         SNUG_ACCESS_PENDING.delete(data.requestId);
-        // The answer's fields (grant / columns, rows, truncated, totalRows / grants) are at the TOP LEVEL.
+        // The answer's fields (grant / columns, rows, truncated, totalRows / changes / fresh, reason / grants / candidates) are at the TOP LEVEL.
         resolve(data.ok ? data : { ok: false, error: data.error });
         return;
       }
       if (data.type === 'snug:host-event' && data.event === 'access-changed') {
         const change = data.data;
         if (change && typeof change.grantId === 'string' && change.grantId) onAccessChanged(change.grantId);
+      }
+      if (data.type === 'snug:host-event' && data.event === 'access-source-changed') {
+        const change = data.data;
+        if (change && typeof change.grantId === 'string' && change.grantId) onAccessSourceChanged(change.grantId);
+      }
+      if (data.type === 'snug:host-event' && data.event === 'data-changed') {
+        const change = data.data;
+        if (change && typeof change.table === 'string' && change.table) onDataChanged(change.table);
+      }
+      if (data.type === 'snug:host-event' && data.event === 'access-read') {
+        const change = data.data;
+        if (change && typeof change.grantId === 'string' && change.grantId) onAccessRead(change.grantId);
       }
     });
 
@@ -299,6 +335,12 @@
     const ACCOUNTS_SQL = 'SELECT name, balance FROM accounts';
     /** An unbounded read: the host's wall clock must stop it, not this page. */
     const BOMB_SQL = 'WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c) SELECT count(*) FROM c';
+    /** PR-3: ONE plain UPDATE, literal values, a WHERE on a granted column — the change the user can undo. */
+    const WRITE_SQL = "UPDATE transactions SET note = 'checked' WHERE category = 'music'";
+    /** What that change touched, read back with a query. */
+    const NOTE_SQL = "SELECT note FROM transactions WHERE category = 'music'";
+    /** The fetching source's counter (access-source-fetch.html): how many fetches, and who asked last. */
+    const FETCHES_SQL = 'SELECT n, asked_by FROM fetches';
 
     // What this page has heard from the host about access — the module-level store the
     // listeners above write and the component reads.
@@ -330,6 +372,7 @@
       const [held, setHeld] = usePersistedState('access-held', null);
       const [status, setStatus] = useState('ready');
       const [result, setResult] = useState('');
+      const [peeked, setPeeked] = useState('');
       const [, setTick] = useState(0);
       useEffect(() => {
         const rerender = () => setTick((n) => n + 1);
@@ -343,13 +386,14 @@
         if (HEARD.changed) setStatus('access-changed ' + HEARD.changed);
       }, [HEARD.changed]);
 
-      // A user act: ask to read another app's data. Never on load.
-      const ask = async () => {
+      // A user act: ask to read another app's data (PR-3: or to read AND change it). Never on load.
+      const ask = async (wantsWrite) => {
         setStatus('request: waiting');
         setResult('');
         const asked = await snugAccessRequest('request', {
           purpose: 'to show spending by category',
           hints: { tables: ['transactions'], words: ['spending', 'category'] },
+          ...(wantsWrite === true ? { access: 'write' } : {}),
         });
         if (!asked.ok) {
           setStatus('request: ' + asked.error.code);
@@ -378,6 +422,57 @@
         setResult('rows: ' + answer.rows.length + ' · columns: ' + answer.columns.join(', '));
       };
 
+      // PR-3: one change through the host's Write Broker — the answer is a count, never a row.
+      const write = async (grantId) => {
+        if (!grantId) {
+          setStatus('write: nothing held');
+          return;
+        }
+        setStatus('write: waiting');
+        setResult('');
+        const answer = await snugAccessRequest('write', { grantId, sql: WRITE_SQL });
+        if (!answer.ok) {
+          setStatus('write: ' + answer.error.code);
+          setResult(describeError(answer.error));
+          return;
+        }
+        setStatus('write: ok');
+        setResult('changes: ' + answer.changes);
+      };
+
+      // PR-3: ask the source to fetch new data before reading it.
+      const refresh = async (grantId) => {
+        if (!grantId) {
+          setStatus('refresh: nothing held');
+          return;
+        }
+        setStatus('refresh: waiting');
+        setResult('');
+        const answer = await snugAccessRequest('refresh', { grantId });
+        if (!answer.ok) {
+          setStatus('refresh: ' + answer.error.code);
+          setResult(describeError(answer.error));
+          return;
+        }
+        setStatus('refresh: ok');
+        setResult('fresh: ' + answer.fresh + (answer.reason ? ' · ' + answer.reason : ''));
+      };
+
+      // PR-3: read back what a change or a fetch touched (a query, into #peeked).
+      const peek = async (grantId, sql, say) => {
+        if (!grantId) {
+          setPeeked('nothing held');
+          return;
+        }
+        setPeeked('waiting');
+        const answer = await snugAccessRequest('query', { grantId, sql });
+        if (!answer.ok) {
+          setPeeked(answer.error.code);
+          return;
+        }
+        setPeeked(answer.rows.length === 0 ? 'no rows' : say(answer.rows[0]));
+      };
+
       const list = async () => {
         setStatus('list: waiting');
         const answer = await snugAccessRequest('list', {});
@@ -396,17 +491,23 @@
         <main>
           <h1>Budget</h1>
           <div>
-            <button type="button" id="ask" onClick={ask}>use another app's data</button>
+            <button type="button" id="ask" onClick={() => ask(false)}>use another app's data</button>
+            <button type="button" id="ask-write" onClick={() => ask(true)}>ask to read and change data</button>
             <button type="button" id="query" onClick={() => read(heldId, SPENDING_SQL)}>show spending</button>
             <button type="button" id="query-accounts" onClick={() => read(heldId, ACCOUNTS_SQL)}>read accounts</button>
             <button type="button" id="bomb" onClick={() => read(heldId, BOMB_SQL)}>count forever</button>
             <button type="button" id="requery" disabled={!HEARD.changed} onClick={() => read(HEARD.changed, SPENDING_SQL)}>read again after the change</button>
             <button type="button" id="list" onClick={list}>what can I read</button>
+            <button type="button" id="write" onClick={() => write(heldId)}>mark the music row checked</button>
+            <button type="button" id="peek" onClick={() => peek(heldId, NOTE_SQL, (row) => 'note: ' + row[0])}>show the music note</button>
+            <button type="button" id="refresh" onClick={() => refresh(heldId)}>ask for fresh data</button>
+            <button type="button" id="fetches" onClick={() => peek(heldId, FETCHES_SQL, (row) => 'fetches: ' + row[0] + ' · asked by ' + row[1])}>count the fetches</button>
           </div>
           <div id="status">{status}</div>
           <div id="result">{result}</div>
           <div id="held">{heldId || 'none'}</div>
           <div id="changed">{HEARD.changed ? 'access-changed ' + HEARD.changed : ''}</div>
+          <div id="peeked">{peeked}</div>
           <pre id="view">{held ? JSON.stringify(held) : ''}</pre>
           <pre id="log">{HEARD.log.join('\n')}</pre>
         </main>

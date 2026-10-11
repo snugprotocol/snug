@@ -35,16 +35,34 @@
  * or a run delegated to this open app — and the chip says so inline and in its tooltip, so the
  * user does not read a 401 their schedule hit as something the app did in front of them. The
  * sentence is hedged on purpose: inside a delegated window the user's own click can carry the
- * tag too (over-attribution, R-81).
+ * tag too (over-attribution, R-81). A failure tagged `via: 'refresh'` (TASK-20261010-host-broker
+ * PR-3; ADR-0076 §6; D-PR3-19, DS20) happened inside a fetch another app asked for — the source's
+ * own code run on a reader's act — and the chip says THAT, never the schedule's line.
  */
 import { useEffect, useState } from 'react';
 import type { ReactElement } from 'react';
 
-import { AUTH_REPAIR_VIA_SCHEDULE } from '../schedule/copy.js';
-import { authShapedFailureStore } from '../state/net.js';
+import { AUTH_REPAIR_VIA_REFRESH, AUTH_REPAIR_VIA_SCHEDULE } from '../schedule/copy.js';
+import { authShapedFailureStore, type AuthShapedFailure } from '../state/net.js';
 import { connectionWizardStore, openConnectionWizardForFailure } from '../state/connectionWizard.js';
 import { getUserDb } from '../state/userdb.js';
 import { useStore } from '../state/store.js';
+
+/** Which kind of run hit the connection, as the chip's inline attribution — or nothing for the open app's own call. */
+function attribution(via: AuthShapedFailure['via']): string {
+  switch (via) {
+    case 'scheduled-run':
+      return ` · ${AUTH_REPAIR_VIA_SCHEDULE}`;
+    case 'refresh':
+      return ` · ${AUTH_REPAIR_VIA_REFRESH}`;
+    case undefined:
+      return '';
+    default: {
+      const never: never = via;
+      return never;
+    }
+  }
+}
 
 export function AuthRepairChip({ appId }: { appId: string }): ReactElement | null {
   const failure = useStore(authShapedFailureStore);
@@ -77,7 +95,7 @@ export function AuthRepairChip({ appId }: { appId: string }): ReactElement | nul
   // The row is the naming authority; the slot is the honest fallback while it loads (or
   // if the row has been deleted out from under the failure).
   const provider = providerName ?? active.slot;
-  const via = active.via === 'scheduled-run' ? ` · ${AUTH_REPAIR_VIA_SCHEDULE}` : '';
+  const via = attribution(active.via);
 
   return (
     <button

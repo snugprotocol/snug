@@ -30,9 +30,24 @@
 // a retraction through `clearTouchedGeneration`, which clears only the generation it names (a
 // stale clear never lifts a newer posture).
 //
+// THE POSTURE (TASK-20261010-host-broker PR-3; ADR-0076 §6; contract v2 D-PR3-19). A run on the
+// live frame is either a SCHEDULE's (`'schedule'`, the default — every PR-1 caller) or a REFRESH
+// another app asked for (`'refresh'`: the source's own code run on a reader's act, `access/refresh.ts`).
+// The record carries which, and the two readers that care decide by it: the run-scoped gate REFUSES
+// every mutating call of a refresh window — nobody chose to run it, so there is nobody to ask —
+// where a schedule's window asks the present user once (`ScheduledRefusal.why` gains `'refused'` for
+// that record); the running chip shows a refresh in flight when the scheduler has nothing running.
+// Everything else is one rule for both: one instance per app (a refresh is refused while a schedule's
+// run is in flight and the reverse), the counting seams, the access door closed for the window
+// (D-PR1-8), and the STICKY posture — `touched` is written for BOTH postures (S6): a refresh runs
+// the source's app code, and a handler that answers `schedule-result` and POSTs afterwards must meet
+// the same after-run dialog D-PR1-3 built. The cost (after a refresh, the source's *remember for
+// this session* is unavailable on that frame until the user reopens it) is PR-1's, accepted.
+//
 // A LEAF. Imports `state/store.ts`, `state/appHosts.ts` and `schedule/copy.ts` (pure strings) only —
-// `state/net.ts`, `state/openUrl.ts`, `run/appRuntime.ts`, `access/accessHandler.ts` and
-// `RunningChip.tsx` sit above it, so loading it can never enter the scheduler's import cycle.
+// `state/net.ts`, `state/openUrl.ts`, `run/appRuntime.ts`, `access/accessHandler.ts`,
+// `access/refresh.ts` and `RunningChip.tsx` sit above it, so loading it can never enter the
+// scheduler's import cycle.
 
 import { liveAppHostGeneration, liveAppHostToken, subscribeAppHosts } from '../state/appHosts.js';
 import { createStore, type Store } from '../state/store.js';
@@ -46,14 +61,18 @@ export const MAX_HANDOVERS = 1;
 /**
  * What a scheduled run's gate refused — enough to say what the app tried, never the body or a
  * credential. The ONE refusal type (Gate-5 F-13): the run-scoped ask gate records WHY nothing was
- * sent; the hidden frame's refusing gate (`scheduledConfirmGate.ts`, which re-exports this) has no
- * dialog and records no `why`.
+ * sent — `refused` is a refresh window's answer (D-PR3-19: refused at once, no dialog); the hidden
+ * frame's refusing gate (`scheduledConfirmGate.ts`, which re-exports this) has no dialog and records
+ * no `why`.
  */
 export interface ScheduledRefusal {
   host: string;
   method: string;
-  why?: 'declined' | 'timed-out' | 'already-asked';
+  why?: 'declined' | 'timed-out' | 'already-asked' | 'refused';
 }
+
+/** Whose act a delegated run is: a schedule's (every PR-1 caller), or a fetch another app asked for (D-PR3-19). */
+export type DelegatedRunPosture = 'schedule' | 'refresh';
 
 /** A run in flight on the live frame — a MUTABLE record; the store notifies on presence changes only. */
 export interface DelegatedRun {
@@ -63,6 +82,8 @@ export interface DelegatedRun {
   taskId: string;
   title: string;
   generation: number;
+  /** A schedule's run asks the present user once per window; a refresh's refuses every mutating call (D-PR3-19). */
+  posture: DelegatedRunPosture;
   calls: { ai: number; net: number };
   refused: ScheduledRefusal[];
   granted: number;
@@ -91,10 +112,15 @@ export function delegatedRunFor(appId: string): DelegatedRun | undefined {
   return delegatedRunStore.get().get(appId);
 }
 
-/** Begin a run on the live frame. Refuses a second run for the same app (never a throw); a refusal moves nothing. */
-export function beginDelegatedRun(
-  input: Pick<DelegatedRun, 'appId' | 'appName' | 'runId' | 'taskId' | 'title' | 'generation'>,
-): { ok: true; run: DelegatedRun } | { ok: false; reason: string } {
+/** What `beginDelegatedRun` takes: the record's identity; `posture` defaults to `'schedule'` (every PR-1 caller). */
+export type BeginDelegatedRunInput = Pick<DelegatedRun, 'appId' | 'appName' | 'runId' | 'taskId' | 'title' | 'generation'> & { posture?: DelegatedRunPosture };
+
+/**
+ * Begin a run on the live frame. Refuses a second run for the same app WHATEVER its posture (one
+ * instance, §24.7 (28)) — never a throw; a refusal moves nothing. The sticky generation is recorded
+ * for both postures (S6).
+ */
+export function beginDelegatedRun(input: BeginDelegatedRunInput): { ok: true; run: DelegatedRun } | { ok: false; reason: string } {
   const current = delegatedRunStore.get();
   if (current.has(input.appId)) return { ok: false, reason: alreadyRunning(input.appName) };
   const controller = new AbortController();
@@ -105,6 +131,7 @@ export function beginDelegatedRun(
     taskId: input.taskId,
     title: input.title,
     generation: input.generation,
+    posture: input.posture ?? 'schedule',
     calls: { ai: 0, net: 0 },
     refused: [],
     granted: 0,

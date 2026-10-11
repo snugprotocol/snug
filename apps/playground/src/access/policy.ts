@@ -1,16 +1,18 @@
 // access/policy.ts — ONE policy, one verdict: who may do what with a grant, at every door
 // (TASK-20261010-host-broker PR-2 AC9; ADR-0076 §1–§3; contract v2 D-PR2-1 one verdict whose
 // effects are NAMED here and PERFORMED by the service · D-PR2-2 three callers, no `user` caller ·
-// D-PR2-3 session grants per door · D-PR2-4 attendance per door · D-PR2-14 `ask`).
+// D-PR2-3 session grants per door · D-PR2-4 attendance per door · D-PR2-14 `ask`; PR-3 D-PR3-13
+// the three acts — `write`, `refresh`, `discover` — and `stillWritable`; v2.1 notes E1-Q3/Q4/Q5).
 //
 // `authorise(ctx, caller, act)` answers the verdict the service acts on, for the three callers a
 // read can come from — the app's FRAME (visible at a generation, or hidden), the CHAT beside the
-// app (the user's own brain) and a SCHEDULE's step — and the five acts. It is PURE: it reads only
+// app (the user's own brain) and a SCHEDULE's step — and the eight acts. It is PURE: it reads only
 // the context it is handed (`find`, `sourceRestricted`, `now` — the service binds the engine's
 // finder, the WhatsApp check and its clock) and changes nothing. A refusal may NAME one effect —
 // `refused-line` · `mark-expired` · `suspend-source-restricted` — which `service.ts` performs
-// exactly where the handler performed it before PR-2 (on a `read` only, never on a `list` or a
-// `materialise`); so the rules are written once and the file is touched in one place.
+// exactly where the handler performed it before PR-2 (on a `read` only, never on a `list`, a
+// `materialise`, a `write`, a `refresh` or a `discover` — E1-Q3); so the rules are written once
+// and the file is touched in one place.
 //
 // THE RULES, in the handler's `query` order (`read` and `materialise`; `materialise` skips rule 6):
 //  1. found and OWNED (`ownsGrant`) — else not-granted, no effect, no grant carried: another app's
@@ -26,6 +28,22 @@
 //     or a schedule's skip is silent;
 //  5. the source holds a WhatsApp fact → paused, naming `suspend-source-restricted`;
 //  6. (`read` only) one read-only SELECT — else the query is refused.
+//
+// THE THREE ACTS OF PR-3 (D-PR3-13):
+//  - `write { grantId, table }`: rules 1–3 as `read`; rule 4′ — attendance REQUIRED for every
+//    caller, whatever the grant's *also while I'm away* says (a frame must be `present`, the chat
+//    always is, a schedule never) → `ACCESS_UNATTENDED`, retryable, no effect, no line (E1-Q4);
+//    rule 5 as `read`; rule 7 — the named table carries `write`, else `ACCESS_NOT_GRANTED` with
+//    `writeNotGranted` ("this access is read-only for that table"). The table is what the
+//    statement names, as the service reads it off the verb — REQUIRED on the act (Gate-5 ENG-2):
+//    a statement that names none is not one plain INSERT, UPDATE or DELETE, and the service
+//    refuses it by name BEFORE the verdict is asked, so rule 7 always has a table to judge.
+//  - `refresh { grantId }`: rules 1–5 LITERALLY as `read` (rule 4 admits a persisted away grant
+//    with nobody present, never a session grant; a frame's refusal names `refused-line` — still
+//    performed only on a read, E1-Q5), then the grant's `refresh` seat, else `ACCESS_NOT_GRANTED`
+//    with `refreshNotGranted`.
+//  - `discover`: the `ask`'s presence rule and nothing more (a hidden or delegated-window frame
+//    is refused before any gather — E1-Q10).
 //
 // OWNERSHIP (`ownsGrant`). A persisted grant is its reader's at every door. A session grant
 // ("while it's open") belongs to the GENERATION it is bound to, and a caller owns it only when its
@@ -43,10 +61,12 @@
 // stopped (nothing left to give back).
 //
 // THE TYPE CARRIES THE FACT (Gate-5 M-1): an act that names a grant — `read`, `materialise`,
-// `release` — is answered `Admitted | Refusal`, and `Admitted` always carries the grant, so the
-// service never has to guard a can't-happen absence. `stillReadable` (M-2) is the ONE spelling
-// of "still this caller's, active and unexpired" — the re-check the service and the loop ask
-// after time has passed (a read dequeues, a dump answers, a line is about to be written).
+// `release`, `write`, `refresh` — is answered `Admitted | Refusal`, and `Admitted` always carries
+// the grant, so the service never has to guard a can't-happen absence. `stillReadable` (M-2) is
+// the ONE spelling of "still this caller's, active and unexpired" — the re-check the service and
+// the loop ask after time has passed (a read dequeues, a dump answers, a line is about to be
+// written); `stillWritable` is that spelling ∧ the named table's `write` — asked when a plan job
+// dequeues and again, synchronously, after the plan answers and before the seat (D-PR3-15, S8).
 //
 // PURITY, PINNED. The module imports the protocol, the leaf `grantFacts.ts`, `copy.ts`, and
 // grants.ts for TYPES only (accessPolicy.test.ts reads the import lines) — so it loads anywhere
@@ -56,7 +76,7 @@
 import { ACCESS_ERROR_CODES, isReadOnlySelect } from '@snugprotocol/protocol';
 
 import { ACCESS_APP_MESSAGES } from './copy.js';
-import { isExpired } from './grantFacts.js';
+import { isExpired, type AnyAccessGrant } from './grantFacts.js';
 import type { FoundAccessGrant } from './grants.js';
 
 /** Who is reading: the app's frame (generation absent = the hidden frame), the chat beside it, or a schedule's step. */
@@ -70,7 +90,11 @@ export type AccessAct =
   | { kind: 'read'; grantId: string; sql: string }
   | { kind: 'materialise'; grantId: string }
   | { kind: 'list' }
-  | { kind: 'release'; grantId: string };
+  | { kind: 'release'; grantId: string }
+  /** PR-3: one statement on `table`, as the statement names it (the service refuses a statement that names none before asking — ENG-2). */
+  | { kind: 'write'; grantId: string; table: string }
+  | { kind: 'refresh'; grantId: string }
+  | { kind: 'discover' };
 
 /** What the policy reads — the service binds the engine's finder, the WhatsApp check and its clock. */
 export interface PolicyContext {
@@ -151,6 +175,12 @@ export function ownsGrant(caller: AccessCaller, found: FoundAccessGrant): boolea
   return callerGen !== undefined && found.generation !== undefined && found.generation === callerGen;
 }
 
+/** Rule 7's fact: the grant's scope names `table` (identifiers compare without case, as SQLite does) with its write seat set. */
+function tableWritable(grant: AnyAccessGrant, table: string): boolean {
+  const lower = table.toLowerCase();
+  return grant.scope.tables.some((entry) => entry.name.toLowerCase() === lower && entry.write === true);
+}
+
 /**
  * The grant as it is NOW, when it is still this caller's, active and unexpired — else nothing.
  * The one re-check for time that passed: asked when a read dequeues, when a dump answers, and
@@ -161,9 +191,16 @@ export function stillReadable(find: PolicyContext['find'], caller: AccessCaller,
   return found !== undefined && ownsGrant(caller, found) && found.grant.status === 'active' && !isExpired(found.grant, now) ? found : undefined;
 }
 
-function authoriseRead(ctx: PolicyContext, caller: AccessCaller, act: ReadAct, attended: boolean): Admitted | Refusal {
+/** D-PR3-13: `stillReadable` ∧ the named table's `write` — the Write Broker's re-check at the plan job's dequeue and after the plan answers. */
+export function stillWritable(find: PolicyContext['find'], caller: AccessCaller, grantId: string, table: string, now: number): FoundAccessGrant | undefined {
+  const found = stillReadable(find, caller, grantId, now);
+  return found !== undefined && tableWritable(found.grant, table) ? found : undefined;
+}
+
+/** Rules 1–3, the same for every act that uses a grant: owned, not ended, not expired. */
+function usable(ctx: PolicyContext, caller: AccessCaller, grantId: string): { ok: true; found: FoundAccessGrant } | Refusal {
   // 1. Owned — else nothing is said about what was found, or whether anything was.
-  const found = ctx.find(act.grantId);
+  const found = ctx.find(grantId);
   if (found === undefined || !ownsGrant(caller, found)) return notGranted();
   const { grant } = found;
   // 2. Status.
@@ -173,14 +210,60 @@ function authoriseRead(ctx: PolicyContext, caller: AccessCaller, act: ReadAct, a
   }
   // 3. Expiry — derived, marked once by the service.
   if (isExpired(grant, ctx.now)) return refusal(C.ACCESS_EXPIRED, M.expired, false, { effect: 'mark-expired', grant: found });
-  // 4. Attendance: a session grant needs someone present whatever `unattended` says; a persisted one only when not ticked.
-  if (!attended && (found.session || !grant.unattended)) {
-    return refusal(C.ACCESS_NOT_GRANTED, M.notGranted, false, caller.kind === 'frame' ? { effect: 'refused-line', grant: found } : { grant: found });
-  }
-  // 5. The source's WhatsApp fact, at this moment.
-  if (ctx.sourceRestricted(grant.sourceAppId)) return refusal(C.ACCESS_REVOKED, M.paused, false, { effect: 'suspend-source-restricted', grant: found });
+  return { ok: true, found };
+}
+
+/** Rule 4 as a READ has it: a session grant needs someone present whatever `unattended` says; a persisted one only when not ticked. */
+function readAttendance(caller: AccessCaller, found: FoundAccessGrant, attended: boolean): Refusal | undefined {
+  if (attended || (!found.session && found.grant.unattended)) return undefined;
+  return refusal(C.ACCESS_NOT_GRANTED, M.notGranted, false, caller.kind === 'frame' ? { effect: 'refused-line', grant: found } : { grant: found });
+}
+
+/** Rule 5: the source's WhatsApp fact, at this moment. */
+function restricted(ctx: PolicyContext, found: FoundAccessGrant): Refusal | undefined {
+  return ctx.sourceRestricted(found.grant.sourceAppId) ? refusal(C.ACCESS_REVOKED, M.paused, false, { effect: 'suspend-source-restricted', grant: found }) : undefined;
+}
+
+function authoriseRead(ctx: PolicyContext, caller: AccessCaller, act: ReadAct, attended: boolean): Admitted | Refusal {
+  const live = usable(ctx, caller, act.grantId);
+  if (!live.ok) return live;
+  const { found } = live;
+  // 4. Attendance, as a read has it.
+  const away = readAttendance(caller, found, attended);
+  if (away !== undefined) return away;
+  // 5. The source's WhatsApp fact.
+  const paused = restricted(ctx, found);
+  if (paused !== undefined) return paused;
   // 6. One read-only SELECT.
   if (act.kind === 'read' && !isReadOnlySelect(act.sql)) return refusal(C.ACCESS_QUERY_REFUSED, M.queryRefused, false, { grant: found });
+  return { ok: true, grant: found, attended };
+}
+
+/** PR-3 (D-PR3-13): rules 1–3, then 4′ (someone present, whatever the grant says), 5, and 7 (the named table's `write`). */
+function authoriseWrite(ctx: PolicyContext, caller: AccessCaller, act: Extract<AccessAct, { kind: 'write' }>, attended: boolean): Admitted | Refusal {
+  const live = usable(ctx, caller, act.grantId);
+  if (!live.ok) return live;
+  const { found } = live;
+  // 4′. Attendance REQUIRED for every caller in PR-3: no effect, no line, retryable (E1-Q4).
+  if (!attended) return refusal(C.ACCESS_UNATTENDED, M.unattended, true, { grant: found });
+  // 5. The source's WhatsApp fact.
+  const paused = restricted(ctx, found);
+  if (paused !== undefined) return paused;
+  // 7. The named table carries `write`.
+  if (!tableWritable(found.grant, act.table)) return refusal(C.ACCESS_NOT_GRANTED, M.writeNotGranted, false, { grant: found });
+  return { ok: true, grant: found, attended };
+}
+
+/** PR-3 (D-PR3-13, E1-Q5): rules 1–5 literally as a read, then the grant's `refresh` seat. */
+function authoriseRefresh(ctx: PolicyContext, caller: AccessCaller, act: Extract<AccessAct, { kind: 'refresh' }>, attended: boolean): Admitted | Refusal {
+  const live = usable(ctx, caller, act.grantId);
+  if (!live.ok) return live;
+  const { found } = live;
+  const away = readAttendance(caller, found, attended);
+  if (away !== undefined) return away;
+  const paused = restricted(ctx, found);
+  if (paused !== undefined) return paused;
+  if (found.grant.refresh !== true) return refusal(C.ACCESS_NOT_GRANTED, M.refreshNotGranted, false, { grant: found });
   return { ok: true, grant: found, attended };
 }
 
@@ -191,6 +274,7 @@ export function authorise(ctx: PolicyContext, caller: AccessCaller, act: AccessA
   const attended = attendedFor(caller);
   switch (act.kind) {
     case 'ask':
+    case 'discover':
       return attended ? { ok: true, attended } : refusal(C.ACCESS_UNATTENDED, M.unattended, true);
     case 'list':
       return { ok: true, attended };
@@ -201,5 +285,9 @@ export function authorise(ctx: PolicyContext, caller: AccessCaller, act: AccessA
     case 'read':
     case 'materialise':
       return authoriseRead(ctx, caller, act, attended);
+    case 'write':
+      return authoriseWrite(ctx, caller, act, attended);
+    case 'refresh':
+      return authoriseRefresh(ctx, caller, act, attended);
   }
 }

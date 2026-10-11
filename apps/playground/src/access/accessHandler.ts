@@ -1,6 +1,7 @@
 // access/accessHandler.ts — the runner's access seam for ONE composed frame
 // (TASK-20261010-cross-app-access AC11–AC13; ADR-0075 §1–§9; D5, D6, D7, D10, D14, D19, D23;
-// TASK-20261010-host-broker PR-2: the frame is one CALLER of the Access Service, ADR-0076 §1–§3).
+// TASK-20261010-host-broker PR-2: the frame is one CALLER of the Access Service, ADR-0076 §1–§3;
+// PR-3: the three new ops and the ask that may say `write`, ADR-0076 §4–§8, D-PR3-4/14).
 //
 // `createAccessHandlerFor(appId, frame)` is composed by the run view (`{ attended: true,
 // generation }`) and the scheduler's hidden frame (`{ attended: false }`) for an OWNED app.
@@ -52,6 +53,21 @@
 //  - `list` → `accessService().list(caller)`: this reader's live grants as views (a hidden frame:
 //    the ones usable while away).
 //  - `release` → `accessService().release(caller, grantId)`: the reader gives back its own grant.
+//  - `write` → `accessService().write(caller, …)` (PR-3, D-PR3-14): the minute, the policy's write
+//    verdict and the Write Broker; the frame hears `{ ok, op: 'write', changes }` and nothing else.
+//  - `refresh` → `accessService().refresh(caller, { grantId })`: the verdict, then the refresh engine.
+//  - `discover` → `accessService().discover(caller, { hints })`: the presence rule, then the class.
+//
+// THE ASK MAY SAY `write` (PR-3, D-PR3-4): a `request` carrying `access: 'write'` is threaded to
+// the pending as `wantsWrite` — the strip's title and the sheet's toggles read it — and `access`
+// is part of the ask's meaning for the ladder's declines (`accessRequestHash`: a declined read ask
+// does not decline a later write ask, nor the reverse). The chat's ask does not say it in PR-3.
+//
+// A RENEWAL FROM THE APP SEEDS THE OLD SCOPE (Gate-5 ENG-1). An ask that names one of this reader's
+// grants to renew parks its pending with `userAsk.ts`'s `renewalSeedOf` — the old access's tables
+// with their columns, withheld ones and write toggles, its `kv` / `refresh` — over the sheet's
+// own session/away defaults (an app never chooses the duration): the one tap that puts a write
+// access back as it was is the same whether the person or the app asked again.
 //
 // App-facing messages are `copy.ts`'s `ACCESS_APP_MESSAGES` — never a fact about another app the
 // reader was not granted. Errors are data; anything unexpected answers `HOST_ERROR`.
@@ -77,6 +93,8 @@ import {
 } from './grants.js';
 import { authorise, ownsGrant, type AccessCaller, type Refusal } from './policy.js';
 import { accessService, policyContextFor } from './service.js';
+// A leaf beside consent.ts (the ladder, the stores, copy.ts, grants.ts, outcome.ts) — no path back here.
+import { renewalSeedOf, seedSheet } from './userAsk.js';
 
 /** Who composed the handler: the visible view at its generation, or the hidden (scheduled) frame, which has none. */
 export type AccessFrame = { attended: true; generation: number } | { attended: false };
@@ -141,9 +159,10 @@ export function createAccessHandlerFor(appId: string, frame: AccessFrame): Acces
     const reader = db.getApp(appId);
     if (reader === undefined) return notGranted();
 
-    // `renew` is part of the ask only when it names one of THIS reader's grants (else hashed as absent).
+    // `renew` is part of the ask only when it names one of THIS reader's grants (else hashed as absent);
+    // `access` is part of it whenever the ask says it (D-PR3-4 — a read ask and a write ask are two asks).
     const renewed = frame.renew === undefined ? undefined : ownGrant(db, frame.renew);
-    const semantics = { hints: frame.hints, renew: renewed?.grant.id };
+    const semantics = { hints: frame.hints, renew: renewed?.grant.id, ...(frame.access !== undefined ? { access: frame.access } : {}) };
     switch (accessAskLadder.consume({ appId, generation, ask: semantics, db, at: now() })) {
       case 'rate-limited':
         return refuse(ACCESS_ERROR_CODES.ACCESS_RATE_LIMITED, ACCESS_APP_MESSAGES.askRateLimited, true);
@@ -171,12 +190,13 @@ export function createAccessHandlerFor(appId: string, frame: AccessFrame): Acces
     }
 
     return new Promise<AccessHandlerResult>((resolve) => {
-      parkAccessRequest({
+      const pending = parkAccessRequest({
         db,
         reader,
         generation,
         purpose: frame.purpose,
         provenance: 'app',
+        ...(frame.access === 'write' ? { wantsWrite: true } : {}),
         candidates,
         ...(frame.hints !== undefined ? { hints: frame.hints } : {}),
         ...(renewed !== undefined
@@ -194,6 +214,8 @@ export function createAccessHandlerFor(appId: string, frame: AccessFrame): Acces
           resolve(answer);
         },
       });
+      // The renewed access's scope travels to the sheet (ENG-1); the duration and the away box stay the sheet's defaults.
+      if (renewed !== undefined) seedSheet(pending, renewalSeedOf(renewed.grant, 'session', false));
     });
   }
 
@@ -210,6 +232,12 @@ export function createAccessHandlerFor(appId: string, frame: AccessFrame): Acces
             return await accessService().list(caller());
           case 'release':
             return await accessService().release(caller(), frame.grantId);
+          case 'write':
+            return await accessService().write(caller(), { grantId: frame.grantId, sql: frame.sql, ...(frame.params !== undefined ? { params: frame.params } : {}), authority: 'permission' });
+          case 'refresh':
+            return await accessService().refresh(caller(), { grantId: frame.grantId });
+          case 'discover':
+            return await accessService().discover(caller(), { ...(frame.hints !== undefined ? { hints: frame.hints } : {}) });
         }
       } catch {
         return hostError();

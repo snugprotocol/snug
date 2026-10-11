@@ -18,6 +18,12 @@
 // it. The outcome line is therefore focusable (`tabIndex=-1`) and takes focus when it appears
 // while focus has fallen to the page (`<body>`), so a keyboard user's next Tab starts here, not
 // at the top of the page. Focus that sits anywhere else is left alone.
+//
+// TASK-20261010-host-broker PR-3 (D-PR3-4/23; DS2; contract v2.1 U-Q8): an ask that carried
+// `access: 'write'` (`wantsWrite`) is titled "<app> wants to read — and change — another app's
+// data"; the allowed line names the tables the person let it change ("can now read and change
+// …" / "…, and change <t>") from the outcome's `write`, and *stop* on such an access says "no
+// longer reads or changes". A read ask and a read-only allow keep the 1.1 lines, byte for byte.
 
 import type { ReactElement } from 'react';
 import { useEffect, useRef, useState } from 'react';
@@ -49,10 +55,10 @@ function OutcomeLine({ appId, recorded }: { appId: string; recorded: RecordedOut
     if (active === null || active === document.body) lineRef.current?.focus();
   }, []);
 
-  const undo = async (grantId: string, sourceName: string, tables: string[]): Promise<void> => {
+  const undo = async (grantId: string, sourceName: string, tables: string[], write: string[]): Promise<void> => {
     setStopping(true);
     await revokeAccess(grantId);
-    recordOutcome(appId, readerName, { kind: 'stopped', sourceName, tables });
+    recordOutcome(appId, readerName, { kind: 'stopped', sourceName, tables, write });
   };
 
   const words = ((): ReactElement | string | null => {
@@ -60,15 +66,20 @@ function OutcomeLine({ appId, recorded }: { appId: string; recorded: RecordedOut
       case 'allowed':
         return (
           <>
-            <span data-testid="access-ask-outcome-words">{STRIP_OUTCOME.allowed(readerName, outcome.sourceName, outcome.tables, outcome.duration)}</span>
+            <span data-testid="access-ask-outcome-words">{STRIP_OUTCOME.allowed(readerName, outcome.sourceName, outcome.tables, outcome.duration, outcome.write)}</span>
             {' · '}
-            <Button variant="ghost" disabled={stopping} data-testid="access-ask-undo" onClick={() => void undo(outcome.grantId, outcome.sourceName, outcome.tables)}>
+            <Button
+              variant="ghost"
+              disabled={stopping}
+              data-testid="access-ask-undo"
+              onClick={() => void undo(outcome.grantId, outcome.sourceName, outcome.tables, outcome.write)}
+            >
               {STRIP_OUTCOME.undo}
             </Button>
           </>
         );
       case 'stopped':
-        return CONSENT_UI.stopped(readerName, outcome.sourceName, outcome.tables);
+        return CONSENT_UI.stopped(readerName, outcome.sourceName, outcome.tables, outcome.write);
       case 'not-now':
         return STRIP_OUTCOME.notNow(readerName);
       case 'declined':
@@ -127,7 +138,7 @@ export function AccessStrip({ appId }: AccessStripProps): ReactElement | null {
     <div className="connection-note is-strip" role="status" data-testid="access-ask" data-app={appId}>
       <div className="connection-note-lead">
         <p className="connection-note-title" data-testid="access-ask-title">
-          {STRIP.title(pending.readerName)}
+          {STRIP.title(pending.readerName, pending.wantsWrite === true)}
         </p>
         <p className="connection-note-body access-strip-says" data-testid="access-ask-says">
           {STRIP.says(pending.readerName)}{' '}

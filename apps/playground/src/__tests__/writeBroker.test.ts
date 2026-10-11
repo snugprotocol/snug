@@ -1,0 +1,700 @@
+// writeBroker.test.ts — the engine half of the Write Broker (TASK-20261010-host-broker PR-3;
+// ADR-0076 §4–§5; contract v2 D-PR3-7 the journal holds rows never SQL · D-PR3-8 one broker, two
+// modes · D-PR3-11 the driver seat · D-PR3-15 the engine half · D-PR3-20 (c) the broker's doorbells;
+// §24.5 MUSTs 21–24; AC19, AC20).
+//
+// Written before `access/writeBroker.ts` existed (Gate 3): it is still reached through a VARIABLE
+// specifier (`import(/* @vite-ignore */ spec)` — a literal dynamic import of a missing module fails
+// the whole file at transform time, lesson 2026-10-11). The lane's local structural types — and its
+// namespace reads of the wire's (I-W) and the db's (I-D) PR-3 names — were swapped for the real
+// exports by the pins lane.
+//
+// THE STRICT PATH is driven through the frame — the real `createAccessHandlerFor` → the service's
+// `write` → `brokeredWrite` — over the real in-memory user db and the INLINE worker (the real
+// responder on node sql.js), so its ORDER is the production order: `stillWritable` at the plan job's
+// dequeue and again after the plan answers; the reader's live-entry cap; the seat
+// (`db.driver.brokeredWrite`); the journal entry; the `wrote` line; the source's read caches
+// cleared; the doorbells; the answer. OWN MODE is `applyApprovedWrite` (the approved write of an
+// app's OWN data): the seat's `{ own, expectChanges }` variant (no caps — Gate-5 W-2 — no capture), no journal, no line,
+// `data-changed` to its own frame, today's outcome shapes. UNDO is the user's act from the source's
+// history: rebuilt from the journal's ROWS (never statement text), reversed, guarded by the values
+// the write left, every live reader rung — the writer too.
+//
+// The source in this suite is Journal, seeded with ONE row-modifying exec, so the doorbell's
+// coalescing window (D-PR3-20 (b)) never has a trailing ring to add to the broker's.
+//
+// Mutation checks (to run by hand once I-E1 lands, each red then restored):
+//  - read the grant once (no `stillWritable` after the plan) → the stop-while-planning row reds;
+//  - write the line before the journal entry → the order row reds;
+//  - clear the read caches after the doorbells → the order row's cache assertion reds;
+//  - ring with `except: readerAppId` on an undo → the undo's every-reader row reds;
+//  - apply the undo steps in forward order → the reverse-order row reds;
+//  - splice a step's value into the statement text → the bound-parameter row reds (its builder half lives in
+//    packages/db's brokered-write.test.ts since the Gate-5 W-5 fold).
+
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import type { UserDb } from '@snugprotocol/db';
+import type { AccessHandlerResult } from '@snugprotocol/runner';
+import {
+  ACCESS_SOURCE_CHANGED_EVENT,
+  ACCESS_UNDO_MAX_BYTES,
+  ACCESS_WRITE_MAX_ROWS,
+  DATA_CHANGED_EVENT,
+  FRAME_TYPES,
+  PROTOCOL_VERSION,
+  type AccessRequestFrame,
+  type AccessUndoEntry,
+  type AccessUndoStep,
+} from '@snugprotocol/protocol';
+
+import { createAccessHandlerFor } from '../access/accessHandler.js';
+import { NO_ACCESS_ASKS_KEY, collectSources } from '../access/consent.js';
+import { ACCESS_APP_MESSAGES, ACCESS_SHEET, type UndoFailureReason } from '../access/copy.js';
+import { __setAccessDepsForTests, accessRevisionStore, createGrantFromDecision, resetAccessSession, revokeAccess, type AnyAccessGrant, type CreateGrantInput } from '../access/grants.js';
+import { __scopedReadCachedGrantsForTests, configureScopedRead, resetScopedReadForTests, type WorkerLike } from '../access/scopedRead.js';
+import { createScopedReadResponder } from '../access/scopedRead.worker.js';
+import { executeApprovedWrite, type ExecuteApprovedWriteOutcome, type PendingWriteProposal } from '../agent/dataTools.js';
+import { registerAppHost } from '../state/appHosts.js';
+import { installTestUserDb, locateWasm } from './userdbTestHelper.js';
+
+// =========================================================================================
+// The shapes — the real exports (the pins lane swapped the Gate-3 local types for them)
+// =========================================================================================
+
+/** The undo journal's accessors (I-D) — the UserDb's own. */
+type UndoAccessors = Pick<UserDb, 'listAccessUndo' | 'listAllAccessUndo' | 'putAccessUndo' | 'markAccessUndone'>;
+const undoFailed = (reason: UndoFailureReason, sourceName: string): string => ACCESS_SHEET.undoFailed(reason, sourceName);
+
+/** The module stays behind a VARIABLE specifier (the Gate-3 isolation); its type is the module's own. */
+type WriteBrokerModule = typeof import('../access/writeBroker.js');
+const WRITE_BROKER_MODULE = '../access/writeBroker.js';
+const writeBroker = (): Promise<WriteBrokerModule> => import(/* @vite-ignore */ WRITE_BROKER_MODULE) as Promise<WriteBrokerModule>;
+
+// =========================================================================================
+// The world
+// =========================================================================================
+
+const T0 = Date.parse('2026-10-11T09:00:00.000Z');
+/** writeBroker.ts's module-private ACCESS_UNDO_ENTRY_RESERVE_BYTES (Gate-5 SEC-1): the entry's host-written seats around `steps`. */
+const UNDO_ENTRY_RESERVE_BYTES = 1024;
+const DAY = 86_400_000;
+const iso = (at: number): string => new Date(at).toISOString();
+
+let db: UserDb;
+let budget: string;
+let pantry: string;
+let journal: string;
+let clock: { now: number };
+let seq = 0;
+let rings: Array<{ appId: string; event: string; data: unknown }>;
+let unregister: Array<() => void>;
+/** Every job posted to any worker, in order. */
+let posted: unknown[];
+/** Jobs of these kinds wait for the matching gate before the responder runs. */
+let gates: Map<string, Promise<void>>;
+
+const undoJournal = (): UndoAccessors => db;
+const seat = (): UserDb['driver'] => db.driver;
+
+const kindOf = (msg: unknown): string | undefined => (typeof msg === 'object' && msg !== null && 'id' in msg ? String((msg as { kind?: unknown }).kind ?? 'read') : undefined);
+
+/** The inline worker — the real responder — recording every job; a job whose kind has a gate waits for it. */
+function gatedWorkers(): () => WorkerLike {
+  return () => {
+    const respond = createScopedReadResponder();
+    const worker: WorkerLike = {
+      onmessage: null,
+      onerror: null,
+      postMessage(msg) {
+        const kind = kindOf(msg);
+        if (kind !== undefined) posted.push(msg);
+        void (async () => {
+          const gate = kind === undefined ? undefined : gates.get(kind);
+          if (gate !== undefined) await gate;
+          const answer = await respond(msg);
+          if (answer !== undefined) worker.onmessage?.({ data: answer });
+        })();
+      },
+      terminate() {},
+    };
+    return worker;
+  };
+}
+
+/** A gate on one job kind: the jobs of that kind wait until `open()`. */
+function hold(kind: string): { open: () => void } {
+  let open!: () => void;
+  gates.set(
+    kind,
+    new Promise<void>((resolve) => {
+      open = resolve;
+    }),
+  );
+  return { open };
+}
+
+async function exec(appId: string, sql: string): Promise<void> {
+  const result = await db.driver.handle(appId, { v: PROTOCOL_VERSION, type: FRAME_TYPES.dbRequest, requestId: `x-${++seq}`, instanceId: 'frame', op: 'exec', sql });
+  if (!result.ok) throw new Error(`exec failed: ${JSON.stringify(result)}`);
+}
+
+async function rowsOf(appId: string, sql: string): Promise<unknown> {
+  const result = await db.driver.handle(appId, { v: PROTOCOL_VERSION, type: FRAME_TYPES.dbRequest, requestId: `r-${++seq}`, instanceId: 'check', op: 'exec', sql });
+  return result.ok ? result.rows : result;
+}
+
+const base = () => ({ v: PROTOCOL_VERSION, type: FRAME_TYPES.accessRequest, requestId: `req-${++seq}`, instanceId: 'inst-1' }) as const;
+const writeFrame = (grantId: string, sql: string): AccessRequestFrame => ({ ...base(), op: 'write', grantId, sql }) as unknown as AccessRequestFrame;
+const queryFrame = (grantId: string, sql: string): AccessRequestFrame => ({ ...base(), op: 'query', grantId, sql });
+const refusal = (code: string, message: string, retryable: boolean): AccessHandlerResult => ({ ok: false, code, message, retryable });
+
+/** A grant made through THE writer behind the user's allow; `write` ticks every named table (the v2 decision, D-PR3-23). */
+async function grantOn(reader: string, source: string, tables: string[], write: boolean): Promise<AnyAccessGrant> {
+  const ranked = await collectSources(db, reader);
+  const offered = [...ranked.matched, ...ranked.rest].find((candidate) => candidate.appId === source);
+  if (offered === undefined) throw new Error('no such candidate');
+  const input = {
+    readerAppId: reader,
+    source: offered,
+    tables: write ? tables.map((name) => ({ name, withheld: [], write: true })) : tables,
+    duration: 'day',
+    unattended: false,
+    purpose: 'to keep a diary of spending',
+    provenance: 'app',
+    generation: 0,
+    now: clock.now,
+  };
+  return createGrantFromDecision(db, input as unknown as CreateGrantInput);
+}
+
+const linesOf = (appId: string): Array<Record<string, unknown>> => db.listAccessLog(appId) as unknown as Array<Record<string, unknown>>;
+
+/** Budget writes through its frame and answers the undo id its `wrote` line names. */
+async function writeAsBudget(grantId: string, sql: string): Promise<{ answer: AccessHandlerResult; undoId: string | undefined }> {
+  const handler = createAccessHandlerFor(budget, { attended: true, generation: 0 });
+  const answer = await handler.handle(budget, writeFrame(grantId, sql));
+  const line = linesOf(journal).find((entry) => entry.kind === 'wrote');
+  return { answer, undoId: line?.undoId as string | undefined };
+}
+
+/** A schema-valid journal entry, planted as if a write had left it. */
+function plantedEntry(grantId: string, steps: AccessUndoStep[]): AccessUndoEntry {
+  return {
+    id: crypto.randomUUID(),
+    at: iso(clock.now),
+    expiresAt: iso(clock.now + 7 * DAY),
+    authority: 'permission',
+    via: 'app',
+    grantId,
+    readerAppId: budget,
+    readerName: 'Budget',
+    steps,
+  };
+}
+
+function listen(...appIds: string[]): void {
+  for (const appId of appIds) unregister.push(registerAppHost(appId, (event, data) => rings.push({ appId, event, data })));
+}
+
+const doorbells = () => rings.filter((ring) => ring.event === DATA_CHANGED_EVENT || ring.event === ACCESS_SOURCE_CHANGED_EVENT);
+
+beforeEach(async () => {
+  resetAccessSession();
+  resetScopedReadForTests();
+  localStorage.removeItem(NO_ACCESS_ASKS_KEY);
+  clock = { now: T0 };
+  rings = [];
+  unregister = [];
+  posted = [];
+  gates = new Map();
+  db = await installTestUserDb();
+  __setAccessDepsForTests({ getDb: () => Promise.resolve(db), now: () => clock.now });
+  budget = db.installApp({ displayName: 'Budget', html: '<!doctype html><title>b</title>' }).appId;
+  pantry = db.installApp({ displayName: 'Pantry', html: '<!doctype html><title>p</title>' }).appId;
+  journal = db.installApp({ displayName: 'Journal', html: '<!doctype html><title>j</title>' }).appId;
+  await db.applyAppDdl(journal, [
+    'CREATE TABLE entries (id INTEGER PRIMARY KEY, title TEXT, amount INTEGER)',
+    'CREATE TABLE sums (id INTEGER PRIMARY KEY, a INTEGER, doubled INTEGER GENERATED ALWAYS AS (a * 2))',
+  ]);
+  await exec(journal, "INSERT INTO entries (title, amount) VALUES ('tea', 3), ('cake', 5), ('bread', 2)");
+  await db.applyAppDdl(pantry, ['CREATE TABLE items (name TEXT, qty INTEGER)']);
+  await exec(pantry, "INSERT INTO items VALUES ('rice', 2)");
+  configureScopedRead({ createWorker: gatedWorkers(), wasm: { wasmUrl: locateWasm() }, now: () => clock.now });
+});
+
+afterEach(() => {
+  for (const off of unregister) off();
+  resetAccessSession();
+  resetScopedReadForTests();
+  __setAccessDepsForTests();
+  localStorage.removeItem(NO_ACCESS_ASKS_KEY);
+  vi.restoreAllMocks();
+});
+
+const ENTRIES = 'SELECT id, title, amount FROM entries ORDER BY id';
+
+// =========================================================================================
+// The strict path — its order
+// =========================================================================================
+
+describe('the strict path — stillWritable twice, the cap, the seat, the entry, the line, the caches, the doorbells, the answer (D-PR3-15 (1)–(6))', () => {
+  it('a write whose access was stopped while it waited in the queue never plans: ACCESS_REVOKED, no plan job posted, the seat never reached', async () => {
+    const mine = await grantOn(budget, journal, ['entries'], true);
+    const seatSpy = vi.spyOn(seat(), 'brokeredWrite');
+    const reads = hold('read');
+    const handler = createAccessHandlerFor(budget, { attended: true, generation: 0 });
+    const ahead = handler.handle(budget, queryFrame(mine.id, 'SELECT 1'));
+    await expect.poll(() => posted.length, { timeout: 3000 }).toBe(1);
+    const write = handler.handle(budget, writeFrame(mine.id, "UPDATE entries SET amount = 9 WHERE title = 'tea'"));
+    await revokeAccess(mine.id);
+    reads.open();
+    await ahead;
+    expect(await write).toEqual(refusal('ACCESS_REVOKED', ACCESS_APP_MESSAGES.revoked, false));
+    expect(posted.map(kindOf), 'the queued plan job was never posted').toEqual(['read']);
+    expect(seatSpy).not.toHaveBeenCalled();
+    expect(await rowsOf(journal, ENTRIES)).toEqual([
+      [1, 'tea', 3],
+      [2, 'cake', 5],
+      [3, 'bread', 2],
+    ]);
+  });
+
+  it('an access stopped while the plan runs wins — stillWritable again after the plan answers: ACCESS_REVOKED, the seat never reached, no entry, no line', async () => {
+    const mine = await grantOn(budget, journal, ['entries'], true);
+    const seatSpy = vi.spyOn(seat(), 'brokeredWrite');
+    const plans = hold('plan-write');
+    const handler = createAccessHandlerFor(budget, { attended: true, generation: 0 });
+    const write = handler.handle(budget, writeFrame(mine.id, "UPDATE entries SET amount = 9 WHERE title = 'tea'"));
+    await expect.poll(() => posted.map(kindOf), { timeout: 3000 }).toEqual(['plan-write']);
+    await revokeAccess(mine.id);
+    plans.open();
+    expect(await write).toEqual(refusal('ACCESS_REVOKED', ACCESS_APP_MESSAGES.revoked, false));
+    expect(seatSpy).not.toHaveBeenCalled();
+    expect(undoJournal().listAllAccessUndo(journal)).toEqual([]);
+    expect(linesOf(journal).map((entry) => entry.kind)).toEqual(['revoked', 'granted']);
+  });
+
+  it('the plan runs on a FRESH export, never on the read cache: the grant’s cached bytes are evicted first and the plan is not cached', async () => {
+    const mine = await grantOn(budget, journal, ['entries'], true);
+    const handler = createAccessHandlerFor(budget, { attended: true, generation: 0 });
+    expect(await handler.handle(budget, queryFrame(mine.id, 'SELECT count(*) FROM entries'))).toMatchObject({ ok: true, rows: [[3]] });
+    expect(__scopedReadCachedGrantsForTests()).toContain(mine.id);
+    const exports = vi.spyOn(db, 'exportAppRuntime');
+    expect(await handler.handle(budget, writeFrame(mine.id, "UPDATE entries SET amount = 9 WHERE title = 'tea'"))).toEqual({ ok: true, op: 'write', changes: 1 });
+    expect(exports, 'the plan exported the source afresh').toHaveBeenCalledWith(journal);
+    expect(__scopedReadCachedGrantsForTests(), 'nothing of the plan is cached').not.toContain(mine.id);
+  });
+
+  it('after the plan, in order: the seat, the journal entry, the wrote line, the source’s read caches cleared, the doorbells, then the answer', async () => {
+    const mine = await grantOn(budget, journal, ['entries'], true);
+    const theirs = await grantOn(pantry, journal, ['entries'], false);
+    // Pantry's read caches the source's bytes under its grant — the write must clear them before anyone is rung.
+    const pantryHandler = createAccessHandlerFor(pantry, { attended: true, generation: 0 });
+    expect(await pantryHandler.handle(pantry, queryFrame(theirs.id, 'SELECT 1'))).toMatchObject({ ok: true });
+    expect(__scopedReadCachedGrantsForTests()).toContain(theirs.id);
+
+    const seatSpy = vi.spyOn(seat(), 'brokeredWrite');
+    const entrySpy = vi.spyOn(undoJournal(), 'putAccessUndo');
+    const lineSpy = vi.spyOn(db, 'appendAccessLog');
+    let cachedAtFirstRing: string[] | undefined;
+    const ring = vi.fn((appId: string, event: string, data: unknown) => {
+      cachedAtFirstRing ??= __scopedReadCachedGrantsForTests();
+      rings.push({ appId, event, data });
+    });
+    for (const appId of [journal, budget, pantry]) unregister.push(registerAppHost(appId, (event, data) => ring(appId, event, data)));
+    const answered = vi.fn();
+    const handler = createAccessHandlerFor(budget, { attended: true, generation: 0 });
+    const answer = await handler.handle(budget, writeFrame(mine.id, "UPDATE entries SET amount = 9 WHERE title = 'tea'")).then((settled) => {
+      answered();
+      return settled;
+    });
+
+    expect(answer).toEqual({ ok: true, op: 'write', changes: 1 });
+    const order = (spy: { mock: { invocationCallOrder: number[] } }, index = 0): number => spy.mock.invocationCallOrder[index] ?? Number.NaN;
+    const wroteCall = lineSpy.mock.calls.findIndex((call) => (call[1] as { kind?: string }).kind === 'wrote');
+    expect(seatSpy).toHaveBeenCalledTimes(1);
+    expect(seatSpy.mock.calls[0]![0]).toBe(journal);
+    // Gate-5 SEC-1: the undo bytes are the entry's cap LESS the 1 KiB reserve for the entry's host-written seats around `steps`.
+    expect(seatSpy.mock.calls[0]![1], 'the plan, the caps, the previewed count; undo required, captured').toMatchObject({
+      caps: { maxChanges: ACCESS_WRITE_MAX_ROWS, maxUndoBytes: ACCESS_UNDO_MAX_BYTES - UNDO_ENTRY_RESERVE_BYTES },
+      expectChanges: [1],
+      requireUndo: true,
+      capture: true,
+    });
+    expect(entrySpy).toHaveBeenCalledTimes(1);
+    expect(wroteCall).toBeGreaterThanOrEqual(0);
+    expect(ring).toHaveBeenCalled();
+    const sequence = [order(seatSpy), order(entrySpy), lineSpy.mock.invocationCallOrder[wroteCall]!, order(ring), order(answered)];
+    expect(sequence, 'seat → entry → line → doorbell → answer').toEqual([...sequence].sort((a, b) => a - b));
+    expect(cachedAtFirstRing, 'the caches of every grant reading the source are cleared before the first doorbell').not.toContain(theirs.id);
+    expect(doorbells()).toContainEqual({ appId: journal, event: DATA_CHANGED_EVENT, data: { table: 'entries' } });
+    expect(doorbells()).toContainEqual({ appId: pantry, event: ACCESS_SOURCE_CHANGED_EVENT, data: { grantId: theirs.id } });
+    expect(doorbells().filter((entry) => entry.appId === budget), 'never the writer').toEqual([]);
+  });
+
+  it('the per-reader cap is asked after the plan and before the seat: 20 live entries of THIS reader on this target refuse the 21st — another reader’s 20 do not count', async () => {
+    const mine = await grantOn(budget, journal, ['entries'], true);
+    const theirs = await grantOn(pantry, journal, ['entries'], true);
+    const step: AccessUndoStep = { table: 'entries', op: 'insert', columns: ['title'], rows: [{ rowid: 99, after: ['x'] }] };
+    for (let i = 0; i < 20; i += 1) expect(undoJournal().putAccessUndo(journal, { ...plantedEntry(theirs.id, [step]), readerAppId: pantry, readerName: 'Pantry' })).toBe('ok');
+    const seatSpy = vi.spyOn(seat(), 'brokeredWrite');
+    expect((await writeAsBudget(mine.id, "UPDATE entries SET amount = 9 WHERE title = 'tea'")).answer, 'Pantry’s twenty are Pantry’s').toEqual({ ok: true, op: 'write', changes: 1 });
+    expect(seatSpy).toHaveBeenCalledTimes(1);
+
+    for (let i = 0; i < 19; i += 1) expect(undoJournal().putAccessUndo(journal, plantedEntry(mine.id, [step]))).toBe('ok');
+    expect(undoJournal().listAccessUndo(journal, budget)).toHaveLength(20);
+    posted = [];
+    const refused = await writeAsBudget(mine.id, "UPDATE entries SET amount = 8 WHERE title = 'cake'");
+    expect(refused.answer).toEqual(refusal('ACCESS_WRITE_REFUSED', ACCESS_APP_MESSAGES.writeRefused('waiting'), false));
+    expect(posted.map(kindOf), 'the plan ran').toEqual(['plan-write']);
+    expect(seatSpy, 'the seat was never reached').toHaveBeenCalledTimes(1);
+    expect(await rowsOf(journal, "SELECT amount FROM entries WHERE title = 'cake'")).toEqual([[5]]);
+  });
+});
+
+// =========================================================================================
+// Own mode — applyApprovedWrite
+// =========================================================================================
+
+describe('own mode — applyApprovedWrite: the app’s own approved write through the same seat, never journaled (D-PR3-8; AC20)', () => {
+  const proposal = (statements: string[], previewed: number[]): PendingWriteProposal => ({ appId: journal, statements, params: statements.map(() => []), summary: 'a change the user approved', previewed });
+
+  it('applies atomically through the seat’s OWN variant ({ own, expectChanges: the previewed counts } — no caps, no capture) — no BEGIN through the frame seat, no journal entry, no line — answers today’s executed counts and rings data-changed to its own frame', async () => {
+    const { applyApprovedWrite } = await writeBroker();
+    listen(journal);
+    const seatSpy = vi.spyOn(seat(), 'brokeredWrite');
+    const handleSpy = vi.spyOn(db.driver, 'handle');
+    const outcome = await applyApprovedWrite(db, proposal(["UPDATE entries SET amount = 9 WHERE title = 'tea'"], [1]));
+    expect(outcome).toEqual({ ok: true, executed: [1] });
+    expect(seatSpy).toHaveBeenCalledTimes(1);
+    expect(seatSpy.mock.calls[0]![0]).toBe(journal);
+    // The seat's OWN variant (D-PR3-8, E1-Q12): the approved statements with their params, the previewed counts as the halt — no plans, no capture, no undo asked,
+    // and no caps (Gate-5 W-2: the approved counts are own mode's only bound).
+    const input = seatSpy.mock.calls[0]![1];
+    expect(input).toEqual({
+      own: [{ sql: "UPDATE entries SET amount = 9 WHERE title = 'tea'", params: [] }],
+      expectChanges: [1],
+    });
+    for (const strictSeat of ['plans', 'undo', 'requireUndo', 'capture', 'caps']) expect(input, strictSeat).not.toHaveProperty(strictSeat);
+    const transactionControl = handleSpy.mock.calls.filter((call) => /^\s*(BEGIN|COMMIT|ROLLBACK|END)\b/i.test(String((call[1] as { sql?: unknown }).sql ?? '')));
+    expect(transactionControl, 'no awaited BEGIN/COMMIT through the frame seat any more').toEqual([]);
+    expect(await rowsOf(journal, "SELECT amount FROM entries WHERE title = 'tea'")).toEqual([[9]]);
+    expect(undoJournal().listAllAccessUndo(journal)).toEqual([]);
+    expect(db.listAccessLog(journal)).toEqual([]);
+    expect(doorbells()).toEqual([{ appId: journal, event: DATA_CHANGED_EVENT, data: { table: 'entries' } }]);
+  });
+
+  it('a drift since approval keeps today’s outcome shape { ok: false, reason: drifted, previewed, current } — nothing applied, nothing rung', async () => {
+    const { applyApprovedWrite } = await writeBroker();
+    const approved = proposal(['UPDATE entries SET amount = 1 WHERE amount < 4'], [2]);
+    await exec(journal, "INSERT INTO entries (title, amount) VALUES ('jam', 1)"); // the app wrote between preview and approval
+    listen(journal);
+    const before = await rowsOf(journal, ENTRIES);
+    expect(await applyApprovedWrite(db, approved)).toEqual({ ok: false, reason: 'drifted', previewed: [2], current: [3] });
+    expect(await rowsOf(journal, ENTRIES)).toEqual(before);
+    expect(rings.filter((entry) => entry.event === DATA_CHANGED_EVENT)).toEqual([]);
+  });
+
+  it('executeApprovedWrite is a thin caller of own mode — it reaches the seat (AC20)', async () => {
+    const seatSpy = vi.spyOn(seat(), 'brokeredWrite');
+    expect(await executeApprovedWrite(db, proposal(["UPDATE entries SET amount = 9 WHERE title = 'tea'"], [1]))).toEqual({ ok: true, executed: [1] });
+    expect(seatSpy).toHaveBeenCalledTimes(1);
+    expect(seatSpy.mock.calls[0]![1]).toEqual({ own: [{ sql: "UPDATE entries SET amount = 9 WHERE title = 'tea'", params: [] }], expectChanges: [1] });
+    expect(seatSpy.mock.calls[0]![1]).not.toHaveProperty('plans');
+    expect(seatSpy.mock.calls[0]![1], 'Gate-5 W-2: own mode carries no caps').not.toHaveProperty('caps');
+  });
+});
+
+// =========================================================================================
+// undoBrokeredWrite
+// =========================================================================================
+
+describe('undoBrokeredWrite — the user’s act from the source’s history, rebuilt from rows (D-PR3-7/15; §24.5 MUST 23)', () => {
+  it('rebuilds the inverse from the journal’s rows and applies it; writes the undone line (via user, changes, the table); marks the entry; rings data-changed to the target and access-source-changed to EVERY live reader — the writer too', async () => {
+    const { undoBrokeredWrite } = await writeBroker();
+    const mine = await grantOn(budget, journal, ['entries'], true);
+    const theirs = await grantOn(pantry, journal, ['entries'], false);
+    const { answer, undoId } = await writeAsBudget(mine.id, 'UPDATE entries SET amount = 0 WHERE amount < 4');
+    expect(answer).toEqual({ ok: true, op: 'write', changes: 2 });
+    listen(journal, budget, pantry);
+
+    expect(await undoBrokeredWrite(db, journal, undoId!, { via: 'user' })).toEqual({ ok: true });
+    expect(await rowsOf(journal, ENTRIES)).toEqual([
+      [1, 'tea', 3],
+      [2, 'cake', 5],
+      [3, 'bread', 2],
+    ]);
+    expect(linesOf(journal)[0]).toMatchObject({ kind: 'undone', via: 'user', changes: 2, tables: ['entries'], grantId: mine.id, readerAppId: budget, readerName: 'Budget' });
+    expect(undoJournal().listAccessUndo(journal), 'no live entry is left').toEqual([]);
+    const all = undoJournal().listAllAccessUndo(journal);
+    expect(all, 'the undo is itself never journaled').toHaveLength(1);
+    expect(all[0]).toMatchObject({ id: undoId });
+    expect(all[0]?.undoneAt).toBeDefined();
+    expect(doorbells()).toContainEqual({ appId: journal, event: DATA_CHANGED_EVENT, data: { table: 'entries' } });
+    expect(doorbells()).toContainEqual({ appId: budget, event: ACCESS_SOURCE_CHANGED_EVENT, data: { grantId: mine.id } });
+    expect(doorbells()).toContainEqual({ appId: pantry, event: ACCESS_SOURCE_CHANGED_EVENT, data: { grantId: theirs.id } });
+  });
+
+  it('is never undoable twice: the second undo of the same entry can no longer be done — nothing changes, no second line', async () => {
+    const { undoBrokeredWrite } = await writeBroker();
+    const mine = await grantOn(budget, journal, ['entries'], true);
+    const { undoId } = await writeAsBudget(mine.id, "UPDATE entries SET amount = 0 WHERE title = 'tea'");
+    expect(await undoBrokeredWrite(db, journal, undoId!, { via: 'user' })).toEqual({ ok: true });
+    await exec(journal, "UPDATE entries SET amount = 0 WHERE title = 'tea'"); // the same value again — a second inverse would match it
+    expect(await undoBrokeredWrite(db, journal, undoId!, { via: 'user' })).toMatchObject({ ok: false, reason: 'gone' });
+    expect(await rowsOf(journal, "SELECT amount FROM entries WHERE title = 'tea'")).toEqual([[0]]);
+    expect(linesOf(journal).filter((entry) => entry.kind === 'undone')).toHaveLength(1);
+  });
+
+  it('applies the steps in REVERSE order: a planted two-step entry (insert a row, then update it) undoes cleanly — forward order would fail its guard', async () => {
+    const { undoBrokeredWrite } = await writeBroker();
+    const mine = await grantOn(budget, journal, ['entries'], true);
+    await exec(journal, "INSERT INTO entries (id, title, amount) VALUES (4, 'jam', 10)");
+    await exec(journal, 'UPDATE entries SET amount = 50 WHERE id = 4');
+    const entry = plantedEntry(mine.id, [
+      { table: 'entries', op: 'insert', columns: ['id', 'title', 'amount'], rows: [{ rowid: 4, after: [4, 'jam', 10] }] },
+      { table: 'entries', op: 'update', columns: ['amount'], rows: [{ rowid: 4, before: [10], after: [50] }] },
+    ]);
+    expect(undoJournal().putAccessUndo(journal, entry)).toBe('ok');
+    expect(await undoBrokeredWrite(db, journal, entry.id, { via: 'user' })).toEqual({ ok: true });
+    expect(await rowsOf(journal, 'SELECT count(*) FROM entries WHERE id = 4')).toEqual([[0]]);
+    expect(linesOf(journal)[0]).toMatchObject({ kind: 'undone', via: 'user', changes: 2, tables: ['entries'] });
+  });
+
+  it('the other app in the middle of a change (its frame’s BEGIN) → busy: nothing undone, the entry still live, “try again in a moment”', async () => {
+    const { undoBrokeredWrite } = await writeBroker();
+    const mine = await grantOn(budget, journal, ['entries'], true);
+    const { undoId } = await writeAsBudget(mine.id, "UPDATE entries SET amount = 0 WHERE title = 'tea'");
+    await exec(journal, 'BEGIN');
+    expect(await undoBrokeredWrite(db, journal, undoId!, { via: 'user' })).toEqual({ ok: false, reason: 'busy', message: undoFailed('busy', 'Journal') });
+    expect(undoJournal().listAccessUndo(journal).map((entry) => entry.id)).toEqual([undoId]);
+    expect(linesOf(journal).filter((entry) => entry.kind === 'undone')).toEqual([]);
+  });
+
+  it('a guard mismatch — the source changed ONE of the rows since — rolls the WHOLE undo back: nothing changes, “couldn’t undo — Journal changed these rows since”', async () => {
+    const { undoBrokeredWrite } = await writeBroker();
+    const mine = await grantOn(budget, journal, ['entries'], true);
+    const { undoId } = await writeAsBudget(mine.id, 'UPDATE entries SET amount = 0 WHERE amount < 4');
+    await exec(journal, "UPDATE entries SET amount = 7 WHERE title = 'bread'");
+    expect(await undoBrokeredWrite(db, journal, undoId!, { via: 'user' })).toEqual({ ok: false, reason: 'changed', message: undoFailed('changed', 'Journal') });
+    expect(await rowsOf(journal, ENTRIES), 'tea is NOT put back: all or nothing').toEqual([
+      [1, 'tea', 0],
+      [2, 'cake', 5],
+      [3, 'bread', 7],
+    ]);
+    expect(linesOf(journal).filter((entry) => entry.kind === 'undone')).toEqual([]);
+  });
+
+  it('a planted entry naming a table or a column the source no longer has — or a computed one — can no longer be undone: refused before the seat, and the entry marked undone (failed)', async () => {
+    const { undoBrokeredWrite } = await writeBroker();
+    const mine = await grantOn(budget, journal, ['entries'], true);
+    const seatSpy = vi.spyOn(seat(), 'brokeredWrite');
+    const markSpy = vi.spyOn(undoJournal(), 'markAccessUndone');
+    const planted = [
+      plantedEntry(mine.id, [{ table: 'ghost', op: 'update', columns: ['amount'], rows: [{ rowid: 1, before: [3], after: [0] }] }]),
+      plantedEntry(mine.id, [{ table: 'entries', op: 'update', columns: ['nope'], rows: [{ rowid: 1, before: [3], after: [0] }] }]),
+      plantedEntry(mine.id, [{ table: 'sums', op: 'update', columns: ['doubled'], rows: [{ rowid: 1, before: [2], after: [4] }] }]),
+    ];
+    for (const entry of planted) {
+      expect(undoJournal().putAccessUndo(journal, entry)).toBe('ok');
+      expect(await undoBrokeredWrite(db, journal, entry.id, { via: 'user' }), entry.steps[0]!.table).toEqual({ ok: false, reason: 'gone', message: undoFailed('gone', 'Journal') });
+      expect(markSpy).toHaveBeenLastCalledWith(journal, entry.id, expect.any(String));
+    }
+    expect(seatSpy, 'refused before the seat').not.toHaveBeenCalled();
+    expect(undoJournal().listAccessUndo(journal), 'none of them is live any more').toEqual([]);
+  });
+
+  // The builder half of this pin (the built text carries no value, the params carry it) moved to
+  // packages/db's brokered-write.test.ts with the Gate-5 W-5 fold: `buildUndoStatement` is reachable
+  // only through the driver's seat now. Here the seat is handed the STRUCTURE — the value as data.
+  it('a planted entry’s values ride ONLY as bound parameters: the seat is handed the structure, never statement text — a value shaped like SQL is matched as data, and nothing else runs', async () => {
+    const { undoBrokeredWrite } = await writeBroker();
+    const mine = await grantOn(budget, journal, ['entries'], true);
+    const evil = "x'; DROP TABLE entries; --";
+    const step: AccessUndoStep = { table: 'entries', op: 'insert', columns: ['title'], rows: [{ rowid: 1, after: [evil] }] };
+    const entry = plantedEntry(mine.id, [step]);
+    expect(undoJournal().putAccessUndo(journal, entry)).toBe('ok');
+    const seatSpy = vi.spyOn(seat(), 'brokeredWrite');
+    expect(await undoBrokeredWrite(db, journal, entry.id, { via: 'user' })).toMatchObject({ ok: false, reason: 'changed' });
+    expect(seatSpy.mock.calls[0]![1], 'the undo variant carries the rows as data — no sql seat, no caps (W-2)').toEqual({ undo: [step] });
+    expect(await rowsOf(journal, ENTRIES), 'the table and its rows are intact').toEqual([
+      [1, 'tea', 3],
+      [2, 'cake', 5],
+      [3, 'bread', 2],
+    ]);
+  });
+});
+
+// =========================================================================================
+// clearSourceReadCaches
+// =========================================================================================
+
+describe('clearSourceReadCaches — every grant whose source is the target, and only those (D-PR3-15)', () => {
+  it('evicts the cached bytes of every grant reading the source — Budget’s and Pantry’s of Journal — and keeps a grant reading another source', async () => {
+    const { clearSourceReadCaches } = await writeBroker();
+    const mine = await grantOn(budget, journal, ['entries'], false);
+    const theirs = await grantOn(pantry, journal, ['entries'], false);
+    const other = await grantOn(budget, pantry, ['items'], false);
+    const budgetFrame = createAccessHandlerFor(budget, { attended: true, generation: 0 });
+    const pantryFrame = createAccessHandlerFor(pantry, { attended: true, generation: 0 });
+    for (const [handler, appId, grantId] of [
+      [budgetFrame, budget, mine.id],
+      [pantryFrame, pantry, theirs.id],
+      [budgetFrame, budget, other.id],
+    ] as const) {
+      expect(await handler.handle(appId, queryFrame(grantId, 'SELECT 1'))).toMatchObject({ ok: true });
+    }
+    expect([...__scopedReadCachedGrantsForTests()].sort()).toEqual([mine.id, theirs.id, other.id].sort());
+    clearSourceReadCaches(db, journal);
+    expect(__scopedReadCachedGrantsForTests()).toEqual([other.id]);
+  });
+});
+
+// =========================================================================================
+// The Gate-5 folds' pins (SEC-1, SEC-4, W-1, ENG-4)
+// =========================================================================================
+
+describe('Gate-5 SEC-1 — the undo cap is measured on the WHOLE entry: the steps run under the cap less the entry’s reserve', () => {
+  /** A DELETE of `notes (id, body)` captures every column of every row — its journal bytes are the JSON of this step (the apply's own measure). */
+  const ROWS = 16;
+  const PROSE = 'note '.repeat(1000);
+  const bodyOf = (length: number): string => PROSE.slice(0, length);
+  const deleteStepOf = (length: number): AccessUndoStep => ({
+    table: 'notes',
+    op: 'delete',
+    columns: ['id', 'body'],
+    rows: Array.from({ length: ROWS }, (_, i) => ({ rowid: i + 1, before: [i + 1, bodyOf(length)] })),
+  });
+  const bytesOf = (value: unknown): number => new TextEncoder().encode(JSON.stringify(value)).length;
+  /** The longest body (each ≤ the journal's 4096-character cell) whose step's journal bytes stay at or under `maxBytes`. */
+  function bodyLengthUnder(maxBytes: number): number {
+    for (let length = 4096; length > 0; length -= 1) if (bytesOf([deleteStepOf(length)]) <= maxBytes) return length;
+    throw new Error('no body fits');
+  }
+  async function seedNotes(length: number): Promise<void> {
+    await db.applyAppDdl(journal, ['CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT)']);
+    const values = Array.from({ length: ROWS }, (_, i) => `(${i + 1}, '${bodyOf(length)}')`).join(', ');
+    await exec(journal, `INSERT INTO notes (id, body) VALUES ${values}`);
+  }
+  const DELETE_ALL = `DELETE FROM notes WHERE id <= ${ROWS}`;
+
+  it('steps that fit ACCESS_UNDO_MAX_BYTES but not the entry around them (inside the 1 KiB reserve) are refused too-large at the DRY RUN — the seat never reached, nothing changed, no entry, no line', async () => {
+    const length = bodyLengthUnder(ACCESS_UNDO_MAX_BYTES);
+    const bytes = bytesOf([deleteStepOf(length)]);
+    expect(bytes, 'the steps alone fit the schema’s cap').toBeLessThanOrEqual(ACCESS_UNDO_MAX_BYTES);
+    expect(bytes, 'and sit inside the reserve the entry’s seats need').toBeGreaterThan(ACCESS_UNDO_MAX_BYTES - UNDO_ENTRY_RESERVE_BYTES);
+    await seedNotes(length);
+    const mine = await grantOn(budget, journal, ['notes'], true);
+    const seatSpy = vi.spyOn(seat(), 'brokeredWrite');
+    const entrySpy = vi.spyOn(undoJournal(), 'putAccessUndo');
+    const { answer, undoId } = await writeAsBudget(mine.id, DELETE_ALL);
+    expect(answer).toEqual(refusal('ACCESS_WRITE_REFUSED', ACCESS_APP_MESSAGES.writeRefused('too-large'), false));
+    expect(posted.map(kindOf), 'the plan ran — and answered').toEqual(['plan-write']);
+    expect(seatSpy, 'refused before any live handle').not.toHaveBeenCalled();
+    expect(entrySpy).not.toHaveBeenCalled();
+    expect(undoId).toBeUndefined();
+    expect(linesOf(journal).filter((entry) => entry.kind === 'wrote')).toEqual([]);
+    expect(await rowsOf(journal, 'SELECT count(*) FROM notes')).toEqual([[ROWS]]);
+  });
+
+  it('a write just under STRICT_CAPS.maxUndoBytes lands: the journal never refuses it — the wrote line carries its undoId, the entry fits the schema’s cap whole', async () => {
+    const length = bodyLengthUnder(ACCESS_UNDO_MAX_BYTES - UNDO_ENTRY_RESERVE_BYTES);
+    const bytes = bytesOf([deleteStepOf(length)]);
+    expect(bytes).toBeLessThanOrEqual(ACCESS_UNDO_MAX_BYTES - UNDO_ENTRY_RESERVE_BYTES);
+    expect(bytes, 'within a step of the steps’ cap').toBeGreaterThan(ACCESS_UNDO_MAX_BYTES - UNDO_ENTRY_RESERVE_BYTES - 2 * ROWS);
+    await seedNotes(length);
+    const mine = await grantOn(budget, journal, ['notes'], true);
+    const warn = vi.spyOn(console, 'warn');
+    const { answer, undoId } = await writeAsBudget(mine.id, DELETE_ALL);
+    expect(answer).toEqual({ ok: true, op: 'write', changes: ROWS });
+    expect(undoId, 'the wrote line carries the undo').toEqual(expect.any(String));
+    const [entry] = undoJournal().listAccessUndo(journal);
+    expect(entry?.id).toBe(undoId);
+    expect(bytesOf(entry!.steps), 'the model of the measure is the apply’s own').toBe(bytes);
+    expect(bytesOf(entry), 'the whole entry fits').toBeLessThanOrEqual(ACCESS_UNDO_MAX_BYTES);
+    expect(warn.mock.calls.filter((call) => String(call[0]).startsWith('access:')), 'the schema’s refusal is unreachable').toEqual([]);
+    expect(await rowsOf(journal, 'SELECT count(*) FROM notes')).toEqual([[0]]);
+  });
+});
+
+describe('Gate-5 SEC-4 — a planted undo step naming a credential column is refused at the seat’s phase 1', () => {
+  it('a step naming api_key on an otherwise shared table: the seat refuses it, the user hears gone, the entry is marked — nothing written', async () => {
+    const { undoBrokeredWrite } = await writeBroker();
+    await db.applyAppDdl(journal, ['CREATE TABLE vault (id INTEGER PRIMARY KEY, label TEXT, api_key TEXT)']);
+    await exec(journal, "INSERT INTO vault (id, label, api_key) VALUES (1, 'home', 'kept')");
+    const mine = await grantOn(budget, journal, ['entries'], true);
+    const entry = plantedEntry(mine.id, [{ table: 'vault', op: 'update', columns: ['label', 'api_key'], rows: [{ rowid: 1, before: ['home', 'planted'], after: ['home', 'kept'] }] }]);
+    expect(undoJournal().putAccessUndo(journal, entry)).toBe('ok');
+    const seatSpy = vi.spyOn(seat(), 'brokeredWrite');
+    const markSpy = vi.spyOn(undoJournal(), 'markAccessUndone');
+    expect(await undoBrokeredWrite(db, journal, entry.id, { via: 'user' })).toEqual({ ok: false, reason: 'gone', message: undoFailed('gone', 'Journal') });
+    expect(seatSpy, 'the live schema has the column — the seat’s phase 1 is what refuses it').toHaveBeenCalledTimes(1);
+    expect(markSpy).toHaveBeenCalledWith(journal, entry.id, expect.any(String));
+    expect(await rowsOf(journal, 'SELECT id, label, api_key FROM vault')).toEqual([[1, 'home', 'kept']]);
+    expect(undoJournal().listAccessUndo(journal)).toEqual([]);
+    expect(linesOf(journal).filter((line) => line.kind === 'undone')).toEqual([]);
+  });
+});
+
+describe('Gate-5 W-1 — a brokered write matching NO row is not undoable', () => {
+  for (const sql of ["UPDATE entries SET amount = 9 WHERE title = 'nothing'", 'DELETE FROM entries WHERE id = 99']) {
+    it(`${sql.split(' ')[0]} matching no row: { changes: 0 }, NO undo entry written, the wrote line carries no undoId`, async () => {
+      const mine = await grantOn(budget, journal, ['entries'], true);
+      const seatSpy = vi.spyOn(seat(), 'brokeredWrite');
+      const entrySpy = vi.spyOn(undoJournal(), 'putAccessUndo');
+      const { answer, undoId } = await writeAsBudget(mine.id, sql);
+      expect(answer).toEqual({ ok: true, op: 'write', changes: 0 });
+      const applied = await seatSpy.mock.results[0]!.value;
+      expect(applied).toEqual({ ok: true, steps: [], changes: [0], undoable: false });
+      expect(entrySpy, 'nothing to put back — no entry').not.toHaveBeenCalled();
+      expect(undoJournal().listAllAccessUndo(journal)).toEqual([]);
+      expect(undoId).toBeUndefined();
+      const wrote = linesOf(journal).filter((line) => line.kind === 'wrote');
+      expect(wrote).toHaveLength(1);
+      expect(wrote[0]).toMatchObject({ changes: 0, tables: ['entries'] });
+      expect(wrote[0]).not.toHaveProperty('undoId');
+    });
+  }
+});
+
+describe('Gate-5 ENG-4 — EVERY undo outcome bumps the access revision exactly once', () => {
+  async function bumpsOf(run: () => Promise<unknown>): Promise<{ outcome: unknown; bumps: number }> {
+    const before = accessRevisionStore.get();
+    const outcome = await run();
+    return { outcome, bumps: accessRevisionStore.get() - before };
+  }
+
+  it('ok · gone · busy · changed · failed — one bump each', async () => {
+    const { undoBrokeredWrite } = await writeBroker();
+    const mine = await grantOn(budget, journal, ['entries'], true);
+    const undo = (undoId: string) => () => undoBrokeredWrite(db, journal, undoId, { via: 'user' });
+
+    // ok
+    const done = await writeAsBudget(mine.id, "UPDATE entries SET amount = 0 WHERE title = 'tea'");
+    expect(await bumpsOf(undo(done.undoId!))).toEqual({ outcome: { ok: true }, bumps: 1 });
+
+    // gone — an id the journal does not hold
+    expect(await bumpsOf(undo(crypto.randomUUID()))).toEqual({ outcome: { ok: false, reason: 'gone', message: undoFailed('gone', 'Journal') }, bumps: 1 });
+
+    // changed — the source changed the row since
+    const changedEntry = plantedEntry(mine.id, [{ table: 'entries', op: 'update', columns: ['amount'], rows: [{ rowid: 2, before: [1], after: [77] }] }]);
+    expect(undoJournal().putAccessUndo(journal, changedEntry)).toBe('ok');
+    expect(await bumpsOf(undo(changedEntry.id))).toEqual({ outcome: { ok: false, reason: 'changed', message: undoFailed('changed', 'Journal') }, bumps: 1 });
+
+    // failed — a DELETE-undo whose rowid is held by a row again (a SQL error, D-Q19)
+    const failedEntry = plantedEntry(mine.id, [{ table: 'entries', op: 'delete', columns: ['id', 'title', 'amount'], rows: [{ rowid: 3, before: [3, 'bread', 2] }] }]);
+    expect(undoJournal().putAccessUndo(journal, failedEntry)).toBe('ok');
+    expect(await bumpsOf(undo(failedEntry.id))).toEqual({ outcome: { ok: false, reason: 'failed', message: undoFailed('failed', 'Journal') }, bumps: 1 });
+
+    // busy — the source in the middle of a change
+    const busyEntry = plantedEntry(mine.id, [{ table: 'entries', op: 'update', columns: ['amount'], rows: [{ rowid: 2, before: [1], after: [5] }] }]);
+    expect(undoJournal().putAccessUndo(journal, busyEntry)).toBe('ok');
+    await exec(journal, 'BEGIN');
+    try {
+      expect(await bumpsOf(undo(busyEntry.id))).toEqual({ outcome: { ok: false, reason: 'busy', message: undoFailed('busy', 'Journal') }, bumps: 1 });
+    } finally {
+      await exec(journal, 'ROLLBACK');
+    }
+  });
+});

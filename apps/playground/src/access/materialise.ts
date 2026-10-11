@@ -2,7 +2,7 @@
 // named `<alias>__<table>` in the reader's own throwaway copy (TASK-20261010-host-broker PR-2
 // AC10; ADR-0076 §2; contract v2 D-PR2-6 the dump and its caps · D-PR2-8 aliases de-collided
 // against the reader's FULL object names · D-PR2-10 the whole-identifier match · D-PR2-18 never
-// throws; v2.1 notes A-Q5..A-Q8).
+// throws; v2.1 notes A-Q5..A-Q8; PR-3 D-PR3-16/22 the kv table · D-PR3-26 the caps in the protocol).
 //
 // `materialiseGrants` takes the rows the service ADMITTED (live, owned, allowed for this caller —
 // the policy's verdict is the service's to ask) and, in grant order, dumps each through
@@ -26,6 +26,14 @@
 // appended. So the brain's `ledger__transactions` is never the reader's own object in disguise,
 // and the attach (`scratchRun`'s belt, D-PR2-9) never has to refuse a name.
 //
+// THE KV TABLE (PR-3, D-PR3-16/22). A grant the user allowed the source's *settings & notes*
+// (`kv`) brings `snug_kv` into the copy: the scope handed to the Worker is `readScopeOf(grant)` —
+// the record's tables plus the root `kv` seat — and the db's dump answers `snug_kv` LAST, each row
+// already filtered through the ONE credential walk, so it is aliased `<alias>__snug_kv` after the
+// granted tables and `toAttach` hands it to the scratch copy like any other. `readScopeOf` is the
+// one spelling of "what this grant may read" for a read, a dump and a plan alike. The caps live in
+// the protocol's Appendix B (D-PR3-26) — `access/limits.ts` is gone.
+//
 // `namesTable` is the lazy door's test (D-PR2-10): does this statement name this table, as a whole
 // identifier — bare, "quoted", `quoted`, [bracketed], in any case, and conservatively inside a
 // string literal too (a name that merely contains it, `ledger__transactions_archive`, does not).
@@ -34,15 +42,22 @@
 // `recordRead`, before rows reach a brain.
 //
 // This module reaches the engine through `deps` and the db it is handed — it imports the pure
-// policy (the still-readable re-check), the limits and types only — so the data tools can import
+// policy (the still-readable re-check), the protocol and types only — so the data tools can import
 // `namesTable` and `toAttach` without loading the engine (F13). No string here spells the engine's
 // internal words (copy.ts's vocabulary scan reads this file).
 
-import { ACCESS_SOURCE_MAX_BYTES, utf8ByteLength } from '@snugprotocol/protocol';
-import type { ScratchAttachTable, UserDb } from '@snugprotocol/db';
+import {
+  ACCESS_MATERIALISE_MAX_BYTES,
+  ACCESS_MATERIALISE_MAX_ROWS,
+  ACCESS_MATERIALISE_MAX_SET_BYTES,
+  ACCESS_MATERIALISE_TIMEOUT_MS,
+  ACCESS_SOURCE_MAX_BYTES,
+  utf8ByteLength,
+} from '@snugprotocol/protocol';
+import type { ScopedReadScope, ScratchAttachTable, UserDb } from '@snugprotocol/db';
 
+import type { AnyAccessGrant } from './grantFacts.js';
 import type { FoundAccessGrant, LiveGrantRow } from './grants.js';
-import { ACCESS_MATERIALISE_MAX_BYTES, ACCESS_MATERIALISE_MAX_ROWS, ACCESS_MATERIALISE_MAX_SET_BYTES, ACCESS_MATERIALISE_TIMEOUT_MS } from './limits.js';
 import { stillReadable, type AccessCaller } from './policy.js';
 import type { scopedDump } from './scopedRead.js';
 import type { MaterialiseSkip, MaterialiseSkipReason, MaterialisedSet, MaterialisedTable } from './service.js';
@@ -61,8 +76,29 @@ const RESERVED_PREFIX = 'sqlite_';
 const KV_TABLE = 'snug_kv';
 const JOIN = '__';
 
-/** A source too large to export for a read (the protocol's bound on a runtime). */
-class SourceTooLarge extends Error {}
+/** A source too large to export for a read, a dump or a plan (the protocol's bound on a runtime) — thrown by `sourceBytesOf`'s thunk, caught by its caller. */
+export class SourceTooLarge extends Error {}
+
+/**
+ * The bytes thunk every Worker job is handed (Gate-5 ENG-4 — the read, the dump and the plan
+ * share one): the source's live runtime exported at the call, refused `SourceTooLarge` past
+ * `ACCESS_SOURCE_MAX_BYTES` so no over-cap copy is ever sliced or sent.
+ */
+export function sourceBytesOf(db: UserDb, appId: string): () => Promise<Uint8Array> {
+  return async () => {
+    const bytes = await db.exportAppRuntime(appId);
+    if (bytes.byteLength > ACCESS_SOURCE_MAX_BYTES) throw new SourceTooLarge();
+    return bytes;
+  };
+}
+
+/** What a grant lets the Worker copy (D-PR3-22): its tables as the record keeps them, and `snug_kv` when the root `kv` seat is set. */
+export function readScopeOf(grant: AnyAccessGrant): ScopedReadScope {
+  return { tables: grant.scope.tables, ...(grant.kv === true ? { kv: true } : {}) };
+}
+
+/** The names a grant's dump answers, in the dump's order: the granted tables, then the kv table when the grant carries it. */
+const dumpedNames = (grant: AnyAccessGrant): string[] => [...grant.scope.tables.map((table) => table.name), ...(grant.kv === true ? [KV_TABLE] : [])];
 
 /** D-PR2-8: the slug, then the first of `slug`, `slug2`, `slug3`, … none of whose full names is taken. */
 export function aliasFor(sourceName: string, grantedTables: readonly string[], taken: ReadonlySet<string>): string {
@@ -126,12 +162,8 @@ export async function materialiseGrants(db: UserDb, caller: AccessCaller, rows: 
     try {
       outcome = await deps.dump({
         grantId: grant.id,
-        bytes: async () => {
-          const bytes = await db.exportAppRuntime(grant.sourceAppId);
-          if (bytes.byteLength > ACCESS_SOURCE_MAX_BYTES) throw new SourceTooLarge();
-          return bytes;
-        },
-        scope: grant.scope,
+        bytes: sourceBytesOf(db, grant.sourceAppId),
+        scope: readScopeOf(grant),
         caps: { maxRows: ACCESS_MATERIALISE_MAX_ROWS, maxBytes: ACCESS_MATERIALISE_MAX_BYTES, maxTotalBytes: remaining },
         stillLive: stillOwned,
         timeoutMs: ACCESS_MATERIALISE_TIMEOUT_MS,
@@ -149,7 +181,7 @@ export async function materialiseGrants(db: UserDb, caller: AccessCaller, rows: 
       skip('ended');
       continue;
     }
-    const granted = grant.scope.tables.map((table) => table.name);
+    const granted = dumpedNames(grant);
     const alias = aliasFor(row.sourceName, granted, taken);
     for (const name of granted) taken.add(`${alias}${JOIN}${name}`.toLowerCase());
     for (const table of outcome.tables) {

@@ -103,24 +103,32 @@ type WithoutEnvelope<F> = F extends unknown ? Omit<F, 'v' | 'type' | 'requestId'
 /**
  * Result of one access operation — errors as data, mirroring DbDriverResult/NetHandlerResult.
  * Success is exactly one of the protocol's `snug:access-response` success variants WITHOUT
- * `v`/`type`/`requestId` (derived from `accessResponseSchema`, never retyped):
+ * `v`/`type`/`requestId` (derived from `accessResponseSchema`, never retyped — so the three
+ * 1.2 variants arrived here with the protocol, in `ACCESS_OPS` order):
  * `request` → `{ ok: true, op: 'request', grant }` · `query` → `{ ok: true, op: 'query',
- * columns, rows, truncated?, totalRows? }` · `list` → `{ ok: true, op: 'list', grants }` ·
- * `release` → `{ ok: true, op: 'release' }`. Known error codes live in the protocol's
- * ACCESS_ERROR_CODES (R5 open-string rule); the runner adds the envelope and posts it.
+ * columns, rows, truncated?, totalRows? }` · `write` → `{ ok: true, op: 'write', changes }`
+ * (the count alone — no undo id reaches the wire, DS16) · `refresh` → `{ ok: true, op:
+ * 'refresh', fresh, reason? }` (a short machine reason such as `recent`; never the source
+ * handler's summary, S10/DS17) · `list` → `{ ok: true, op: 'list', grants }` · `release` →
+ * `{ ok: true, op: 'release' }` · `discover` → `{ ok: true, op: 'discover', candidates }`
+ * (a class — `none` | `one` | `several` — never a count or a name). Known error codes live
+ * in the protocol's ACCESS_ERROR_CODES (R5 open-string rule; 1.2 adds ACCESS_WRITE_REFUSED,
+ * ACCESS_BUSY and ACCESS_REFRESH_FAILED); the runner adds the envelope and posts it.
  */
 export type AccessHandlerResult =
   | WithoutEnvelope<Extract<AccessResponseFrame, { ok: true }>>
   | { ok: false; code: string; message: string; retryable: boolean };
 
 /**
- * Host-brokered access-between-apps handler (ADR-0075 §1; implemented in apps/playground
- * by the access engine — consent, grants, the scoped read in its own Worker). `accessAppId`
+ * Host-brokered access-between-apps handler (ADR-0075 §1; ADR-0076 §4–§8 for the 1.2 ops;
+ * implemented in apps/playground by the access engine — consent, grants, the scoped read in
+ * its own Worker, the brokered write, the refresh engine, the discover class). `accessAppId`
  * is the HOST-assigned `accessAppId` option — the dbNamespace discipline (F5): it is decided
  * by the embedder, NEVER by the app-claimed announce `appId`, which identifies no one; so a
  * reader can never name itself, another reader or a source. The runner is value-blind: it
- * routes the validated access-request frame and posts the access-response the handler
- * returns, and never reads a grant, a scope, a row or the SQL (the AC4 lint proves the
+ * routes the validated access-request frame — every op, `write`/`refresh`/`discover` and an
+ * ask carrying `access` included — and posts the access-response the handler returns, and
+ * never reads a grant, a scope, a row, the SQL or a change count (the AC4 lint proves the
  * runner imports no storage, sql.js, Worker or access-engine module). An over-cap answer
  * becomes a small terminal ACCESS_SIZE_EXCEEDED at the bridge, never silence.
  */

@@ -21,6 +21,11 @@
 //
 // The card never writes the chat row: the hook does (`useBuilderChatLanes.test.tsx`). The real
 // memory user db, the real consent engine (`startUserAsk` is spied, calling through).
+//
+// TASK-20261010-host-broker PR-3 (D-PR3-23; DS2): the chat's ask carries no `access` (D-PR3-16), but
+// the person may tick *can also change rows* on the sheet; the card's outcome line then says what
+// the strip says — "can now read and change …" — from `resolution.allowed.write`. The decision v2
+// and the five-argument `STRIP_OUTCOME.allowed` are LOCAL structural types until they are exported.
 
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -461,5 +466,73 @@ describe('startUserAsk answers what happened (D-PR2-11)', () => {
     expect(pending.askedIn).toBeUndefined();
     expect(pending.provenance).toBe('user');
     expect(pending.purpose).not.toBe(PURPOSE);
+  });
+});
+
+// =========================================================================================
+// TASK-20261010-host-broker PR-3 (D-PR3-23; DS2) — the card's allowed line carries write
+// =========================================================================================
+
+describe('PR-3 — the sheet’s write tick reaches the card’s outcome line (resolution.allowed.write)', () => {
+  type AllowV2 = {
+    kind: 'allow';
+    sourceAppId: string;
+    tables: Array<{ name: string; withheld: string[]; write: boolean }>;
+    duration: 'session' | 'day' | 'week' | 'always';
+    unattended: boolean;
+    kv: boolean;
+    refresh: boolean;
+  };
+  const resolveV2 = (pending: PendingAccessRequest, decision: AllowV2): Promise<unknown> => (pending.resolve as unknown as (d: AllowV2) => Promise<unknown>)(decision);
+  const allowed3 = STRIP_OUTCOME.allowed as unknown as (readerName: string, sourceName: string, tables: readonly string[], duration: AllowV2['duration'], write?: readonly string[]) => string;
+
+  it('allowed with a write: the line says "can now read and change", and the hook hears the written tables', async () => {
+    const card = stagedCard();
+    await render(card);
+    await click(mustButton(ACCESS_CARD.review));
+    await act(async () => {
+      await resolveV2(parked()!, {
+        kind: 'allow',
+        sourceAppId: ledger,
+        tables: [{ name: 'transactions', withheld: [], write: true }],
+        duration: 'day',
+        unattended: false,
+        kv: false,
+        refresh: false,
+      });
+    });
+    await settle();
+    const line = outcome()!;
+    expect(line).not.toBeNull();
+    expect(line.dataset.outcome).toBe('allowed');
+    expect(line.textContent).toBe(allowed3('Budget', 'Ledger', ['transactions'], 'day', ['transactions']));
+    expect(line.textContent).toBe("Budget can now read and change Ledger's transactions · for a day");
+    expect(resolved).toEqual([
+      {
+        card: expect.objectContaining({ threadId: THREAD, messageRowId: card.messageRowId }),
+        messageId: MESSAGE_ID,
+        resolution: { kind: 'allowed', sourceName: 'Ledger', tables: ['transactions'], duration: 'day', write: ['transactions'] },
+      },
+    ]);
+  });
+
+  it('allowed read-only in the v2 shape: today’s line, and the resolution carries no write seat (defaults omitted)', async () => {
+    const card = stagedCard();
+    await render(card);
+    await click(mustButton(ACCESS_CARD.review));
+    await act(async () => {
+      await resolveV2(parked()!, {
+        kind: 'allow',
+        sourceAppId: ledger,
+        tables: [{ name: 'transactions', withheld: [], write: false }],
+        duration: 'day',
+        unattended: false,
+        kv: false,
+        refresh: false,
+      });
+    });
+    await settle();
+    expect(outcome()?.textContent).toBe(STRIP_OUTCOME.allowed('Budget', 'Ledger', ['transactions'], 'day'));
+    expect(resolved.map((entry) => entry.resolution)).toEqual([{ kind: 'allowed', sourceName: 'Ledger', tables: ['transactions'], duration: 'day' }]);
   });
 });

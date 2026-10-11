@@ -11,12 +11,24 @@
 // refuses both by name with the driver's existing `FORBIDDEN_STATEMENT` (no new code); every
 // other request — reads, writes, kv, export, the host-side kv — passes through untouched. No
 // shipped starter uses either.
+//
+// THE BROKER'S SEAT (TASK-20261010-host-broker PR-3; contract v2 D-PR3-11; F15/SC9). The driver
+// gains ONE synchronous way onto a namespace's handle — `brokeredWrite`, the Write Broker's apply
+// of another app's change. A scheduled run is never a broker (a schedule's write is
+// `ACCESS_UNATTENDED` at the policy, D-PR3-13), and a fetch another app asked for runs under the
+// same binding (`access/refresh.ts` dispatches hidden exactly as a schedule does), so the binding
+// CARRIES the seat — it is the driver's interface — but never opens it: the same
+// `FORBIDDEN_STATEMENT`, not retryable, answered as data and never forwarded to the driver it
+// wraps. `subscribeWrites` is the host's ear on the driver (the doorbell's), not a frame op — it
+// passes through like `persistence`; so does `inTransaction`, the engine's READ of the driver's
+// transaction record before a plan's export (code-fix D-FIX-1) — a read seat, never a write.
 
-import { DB_ERROR_CODES, type DbDriverResult, type SnugDbDriver } from '@snugprotocol/db';
+import { DB_ERROR_CODES, type BrokeredWriteResult, type DbDriverResult, type SnugDbDriver } from '@snugprotocol/db';
 
 export const SCHEDULED_DB_REFUSAL = {
   transaction: 'a scheduled run cannot hold a transaction open — run each change as one statement',
   import: 'a scheduled run cannot replace the whole database',
+  brokered: "a scheduled run never changes another app's data",
 } as const;
 
 const TRANSACTION_CONTROL = /(?:^|;)\s*(?:BEGIN|COMMIT|END|ROLLBACK|SAVEPOINT|RELEASE)\b/i;
@@ -31,6 +43,7 @@ const statementText = (sql: string): string =>
     .trim();
 
 const refused = (message: string): DbDriverResult => ({ ok: false, code: DB_ERROR_CODES.FORBIDDEN_STATEMENT, message, retryable: false });
+const refusedSeat = (message: string): BrokeredWriteResult => ({ ok: false, code: DB_ERROR_CODES.FORBIDDEN_STATEMENT, message, retryable: false });
 
 export function scheduledDbDriver(driver: SnugDbDriver): SnugDbDriver {
   return {
@@ -47,5 +60,8 @@ export function scheduledDbDriver(driver: SnugDbDriver): SnugDbDriver {
     close: () => driver.close(),
     kvSet: (namespace, key, value) => driver.kvSet(namespace, key, value),
     kvGet: (namespace, key) => driver.kvGet(namespace, key),
+    brokeredWrite: () => Promise.resolve(refusedSeat(SCHEDULED_DB_REFUSAL.brokered)),
+    inTransaction: (namespace) => driver.inTransaction(namespace),
+    subscribeWrites: (listener) => driver.subscribeWrites(listener),
   };
 }

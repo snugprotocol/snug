@@ -33,10 +33,12 @@
 // in `createRunCountingTransport` (`schedule/scheduledTransport.ts`): while a delegated run is in
 // flight for the app, every send that reached the brain is one `calls.ai` on the run's record;
 // otherwise the wrapper is a pass-through — no cap, no scrub, the options forwarded whole (the open
-// app streams). `scheduledRun` tells the net handler whether an auth-shaped failure belongs to a
-// run (the hidden frame: always; the live frame: while a run is in flight) so the reconnect chip
-// can say so. Both edges — `schedule/runPlacement.ts` (a leaf) and `schedule/scheduledTransport.ts`
-// — are dereferenced ONLY inside `composeAppRuntime`, at call time, never while modules load.
+// app streams). `scheduledVia` tells the net handler WHICH run an auth-shaped failure belongs to
+// (the hidden frame: a schedule's, always; the live frame: a schedule's while its delegated run is
+// in flight, or a fetch another app asked for while a delegated run with `posture: 'refresh'` is —
+// TASK-20261010-host-broker PR-3, D-PR3-19) so the reconnect chip can say so. Both edges —
+// `schedule/runPlacement.ts` (a leaf) and `schedule/scheduledTransport.ts` — are dereferenced ONLY
+// inside `composeAppRuntime`, at call time, never while modules load.
 //
 // THE NET RULE IS ONE RULE: an app reaches the network only when it is OWNED (an uninstalled
 // starter has no auth spec; a shared preview is uninstalled by definition) and the host allows
@@ -152,14 +154,22 @@ export function composeAppRuntime(options: ComposeAppRuntimeOptions): AppRuntime
           return true;
         }
       : undefined);
-  const scheduledRun = options.attended ? (): boolean => delegatedRunFor(appId) !== undefined : (): boolean => true;
+  // The attended frame reads the delegated record per failure: a refresh window is attributed as a
+  // fetch another app asked for, a schedule's window as the schedule's; the hidden frame is always a schedule's.
+  const scheduledVia: CreateNetHandlerOptions['scheduledVia'] = options.attended
+    ? () => {
+        const run = delegatedRunFor(appId);
+        if (run === undefined) return undefined;
+        return run.posture === 'refresh' ? 'refresh' : 'scheduled-run';
+      }
+    : () => 'scheduled-run';
   const netHandler = appMayReachNetwork(appId)
     ? createNetHandlerFor({
         ...(options.fetchImpl !== undefined ? { fetchImpl: options.fetchImpl } : {}),
         ...(options.onNetError !== undefined ? { onNetError: options.onNetError } : {}),
         ...(onNetCall !== undefined ? { onNetCall } : {}),
         ...(options.confirmGate !== undefined ? { confirmGate: options.confirmGate } : {}),
-        scheduledRun,
+        scheduledVia,
       })
     : undefined;
   const netPair: NetPair = netHandler !== undefined ? { net: netHandler, netAppId: appId } : {};

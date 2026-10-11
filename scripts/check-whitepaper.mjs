@@ -1,17 +1,18 @@
 #!/usr/bin/env node
-// check-whitepaper.mjs — conformance checks for the Snug Protocol whitepaper, edition 4
-// (TASK-20261010-cross-app-access; edition 3 was TASK-20260822-spec-10-final, edition 2
-// TASK-20260820, edition 1 TASK-20260807).
+// check-whitepaper.mjs — conformance checks for the Snug Protocol whitepaper, edition 5
+// (TASK-20261010-host-broker PR-3; edition 4 was TASK-20261010-cross-app-access, edition 3
+// TASK-20260822-spec-10-final, edition 2 TASK-20260820, edition 1 TASK-20260807).
 //
 // The whitepaper is a DERIVATIVE publication: the spec is normative, the paper only
 // explains it. So the paper must never be the place a constant, a frame name, or a rule
 // drifts. This checker treats the spec as a FIXTURE and fails when the two disagree.
 //
-// Edition-4 fixture: Specification 1.1 (docs/spec-drafts/SPEC.md — TASK-20261010 renamed it)
-// plus the published schemas exported from packages/protocol — the monorepo is the master
-// (SPEC_SYNC), so pre-publication the paper is checked against the staged spec. After the
-// 1.1 push, point --spec at a spec-repo clone and the same checks run against its SPEC.md
-// (the 1.1 document; the old draft filenames there are pointer stubs, never fixtures).
+// Edition-5 fixture: Specification 1.2 (docs/spec-drafts/SPEC.md — TASK-20261010-cross-app-access
+// renamed it; TASK-20261010-host-broker PR-3 took it to 1.2) plus the published schemas
+// exported from packages/protocol — the monorepo is the master (SPEC_SYNC), so
+// pre-publication the paper is checked against the staged spec. After the 1.2 push, point
+// --spec at a spec-repo clone and the same checks run against its SPEC.md (the 1.2 document;
+// the old draft filenames there are pointer stubs, never fixtures).
 //
 // Dependency-free on purpose (node: builtins + regexes). Run via
 // `pnpm run check-whitepaper`, or directly:
@@ -22,7 +23,7 @@
 //   AC2  embedded PDF metadata carries the exact title and Author "Jeetu Maker"
 //   AC3  every protocol constant quoted in the paper matches the spec draft
 //   AC4  the frame inventory matches schemas + the draft (15 frames); R5/NET codes listed
-//   AC5  1.1 surfaces are COVERED; stale draft/RC self-description absent; superseded facts absent
+//   AC5  1.2 surfaces are COVERED; stale draft/RC self-description absent; superseded facts absent
 //   AC6  claim discipline: forbidden framings absent; bounded claims stay bounded
 //   AC7  figures are inline vector, numbered, and each cited in prose
 //   AC8  structural completeness; section numbering cannot drift
@@ -89,7 +90,7 @@ function assembleForCheck() {
 
 function loadSpecFixtures() {
   // Draft prose: the staged consolidated spec (or the same file in a --spec clone).
-  // In a --spec clone, SPEC.md IS the 1.1 document; the historical draft filenames
+  // In a --spec clone, SPEC.md IS the 1.2 document; the historical draft filenames
   // there are pointer stubs and must never be picked up as fixtures.
   const draftCandidates = SPEC_OVERRIDE
     ? [join(SPEC_OVERRIDE, 'SPEC.md')]
@@ -326,14 +327,15 @@ const SUPERSEDED = [
 
 function checkCoverage(html) {
   const text = stripTags(html);
-  // Edition 4 describes the NORMATIVE Specification 1.1 — the inverse of edition 2's
-  // draft-marking requirement. The paper must claim 1.1 and must NOT self-describe as a
+  // Edition 5 describes the NORMATIVE Specification 1.2 — the inverse of edition 2's
+  // draft-marking requirement. The paper must claim 1.2 and must NOT self-describe as a
   // draft, a release candidate, or not-yet-normative. (§17 stays provisional and its own
   // check below still requires that word FOR that feature — "provisional" is a per-surface
   // maturity marker, not a document-level draft claim.)
-  // TASK-20261010-cross-app-access: edition 4 documents Specification 1.1.
-  check('AC5', 'edition 4 names specification 1.1',
-    /spec(?:ification)?\s*1\.1/i.test(text),
+  // TASK-20261010-cross-app-access: edition 4 documented Specification 1.1;
+  // TASK-20261010-host-broker PR-3: edition 5 documents Specification 1.2.
+  check('AC5', 'edition 5 names specification 1.2',
+    /spec(?:ification)?\s*1\.2/i.test(text),
     'the paper must state the spec version it documents');
   check('AC5', 'no stale draft self-description',
     // TASK-20261010-cross-app-access: the frame history ("the net and open-url pairs with
@@ -496,10 +498,11 @@ function checkStructure(html) {
       'margin boxes are what put running heads and folios on every page');
     check('AC8', 'section + figure counters declared',
       /counter-reset/.test(css) && /counter-increment/.test(css));
-    // TASK-20261010-cross-app-access: the running head moves to 1.1.
+    // TASK-20261010-cross-app-access: the running head moved to 1.1; PR-3 of
+    // TASK-20261010-host-broker: 1.2.
     check('AC8', 'running head names the current spec version',
-      /content:\s*"[^"]*\b1\.1\b[^"]*"/.test(css) && !/v0\.3/.test(css),
-      'a content: "…1.1…" margin-box string must carry the label (an incidental 1.1 elsewhere in the CSS must not satisfy this), and no stale v0.3');
+      /content:\s*"[^"]*\b1\.2\b[^"]*"/.test(css) && !/v0\.3/.test(css),
+      'a content: "…1.2…" margin-box string must carry the label (an incidental 1.2 elsewhere in the CSS must not satisfy this), and no stale v0.3');
   }
 }
 

@@ -29,6 +29,14 @@
               "minLength": 1,
               "type": "string"
             },
+            "kv": {
+              "const": true,
+              "type": "boolean"
+            },
+            "refresh": {
+              "const": true,
+              "type": "boolean"
+            },
             "source": {
               "properties": {
                 "displayName": {
@@ -66,6 +74,10 @@
                   "name": {
                     "pattern": "^[A-Za-z][A-Za-z0-9_]{0,40}$",
                     "type": "string"
+                  },
+                  "write": {
+                    "const": true,
+                    "type": "boolean"
                   }
                 },
                 "required": [
@@ -182,6 +194,86 @@
     },
     {
       "properties": {
+        "changes": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "ok": {
+          "const": true,
+          "type": "boolean"
+        },
+        "op": {
+          "const": "write",
+          "type": "string"
+        },
+        "requestId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "type": {
+          "const": "snug:access-response",
+          "type": "string"
+        },
+        "v": {
+          "const": 1,
+          "type": "number"
+        }
+      },
+      "required": [
+        "v",
+        "type",
+        "requestId",
+        "ok",
+        "op",
+        "changes"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "fresh": {
+          "type": "boolean"
+        },
+        "ok": {
+          "const": true,
+          "type": "boolean"
+        },
+        "op": {
+          "const": "refresh",
+          "type": "string"
+        },
+        "reason": {
+          "maxLength": 32,
+          "type": "string"
+        },
+        "requestId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "type": {
+          "const": "snug:access-response",
+          "type": "string"
+        },
+        "v": {
+          "const": 1,
+          "type": "number"
+        }
+      },
+      "required": [
+        "v",
+        "type",
+        "requestId",
+        "ok",
+        "op",
+        "fresh"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
         "grants": {
           "items": {
             "properties": {
@@ -208,6 +300,14 @@
                 "maxLength": 128,
                 "minLength": 1,
                 "type": "string"
+              },
+              "kv": {
+                "const": true,
+                "type": "boolean"
+              },
+              "refresh": {
+                "const": true,
+                "type": "boolean"
               },
               "source": {
                 "properties": {
@@ -246,6 +346,10 @@
                     "name": {
                       "pattern": "^[A-Za-z][A-Za-z0-9_]{0,40}$",
                       "type": "string"
+                    },
+                    "write": {
+                      "const": true,
+                      "type": "boolean"
                     }
                   },
                   "required": [
@@ -336,6 +440,48 @@
         "requestId",
         "ok",
         "op"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "candidates": {
+          "enum": [
+            "none",
+            "one",
+            "several"
+          ],
+          "type": "string"
+        },
+        "ok": {
+          "const": true,
+          "type": "boolean"
+        },
+        "op": {
+          "const": "discover",
+          "type": "string"
+        },
+        "requestId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "type": {
+          "const": "snug:access-response",
+          "type": "string"
+        },
+        "v": {
+          "const": 1,
+          "type": "number"
+        }
+      },
+      "required": [
+        "v",
+        "type",
+        "requestId",
+        "ok",
+        "op",
+        "candidates"
       ],
       "type": "object"
     },

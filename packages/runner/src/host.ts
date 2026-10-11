@@ -568,13 +568,18 @@ export function createRunnerHost(options: RunnerHostOptions): RunnerHost {
   };
 
   /**
-   * access (ADR-0075 §1): the binding is the HOST-assigned `accessAppId` (≡ the dbNamespace
-   * discipline — the announce appId never identifies a reader or a source). Value-blind:
-   * the runner routes the validated access-request and posts the handler's answer; the
-   * grant, the scope, the rows and the SQL are the handler's business. The pair rides the
-   * DEFAULT frame class (LIMITS.MAX_FRAME_BYTES); the engine truncates in band at
-   * ACCESS_MAX_RESULT_BYTES, so an over-cap answer reaching here is a handler bug and
-   * becomes a SMALL terminal ACCESS_SIZE_EXCEEDED — the runner's belt, never silence.
+   * access (ADR-0075 §1; spec 1.2 §24.5–§24.7, ADR-0076 §4–§8): the binding is the
+   * HOST-assigned `accessAppId` (≡ the dbNamespace discipline — the announce appId never
+   * identifies a reader or a source). Value-blind: the runner routes the validated
+   * access-request — all seven ops of `ACCESS_OPS`, the 1.2 `write`, `refresh` and
+   * `discover` through the SAME seat — and posts the handler's answer; the grant, the
+   * scope, the rows, the SQL, the change count and the candidate class are the handler's
+   * business. The pair rides the DEFAULT frame class (LIMITS.MAX_FRAME_BYTES); the engine
+   * truncates in band at ACCESS_MAX_RESULT_BYTES, so an over-cap answer reaching here is a
+   * handler bug and becomes a SMALL terminal ACCESS_SIZE_EXCEEDED — the runner's belt,
+   * never silence. A 1.1 runner answers the three new ops (and an ask carrying `access`)
+   * MALFORMED from `answerUnparseable` — that is how a 1.2 app learns it predates 1.2
+   * (D-PR3-5; MUST 30): no capability key announces them.
    */
   const accessSeat: CapabilitySeat<AccessRequestFrame, Extract<AccessHandlerResult, { ok: true }>> = {
     name: 'access',
@@ -586,7 +591,10 @@ export function createRunnerHost(options: RunnerHostOptions): RunnerHost {
     sizeCode: ACCESS_ERROR_CODES.ACCESS_SIZE_EXCEEDED,
     ok: (requestId, result): AccessResponseFrame => {
       const envelope = { v: PROTOCOL_VERSION, type: FRAME_TYPES.accessResponse, requestId } as const;
-      // Enumerated per op (not spread) so only the fields the protocol defines cross.
+      // Enumerated per op (not spread), in ACCESS_OPS order, so only the fields the protocol
+      // defines cross: a `write` answers `changes` alone (no undo id — DS16), a `refresh`
+      // `fresh` and the machine `reason` only when the handler set one (never a summary —
+      // S10/DS17), a `discover` the candidate class alone (never a count or a name).
       switch (result.op) {
         case 'request':
           return { ...envelope, ok: true, op: 'request', grant: result.grant };
@@ -600,10 +608,16 @@ export function createRunnerHost(options: RunnerHostOptions): RunnerHost {
             ...(result.truncated !== undefined ? { truncated: result.truncated } : {}),
             ...(result.totalRows !== undefined ? { totalRows: result.totalRows } : {}),
           };
+        case 'write':
+          return { ...envelope, ok: true, op: 'write', changes: result.changes };
+        case 'refresh':
+          return { ...envelope, ok: true, op: 'refresh', fresh: result.fresh, ...(result.reason !== undefined ? { reason: result.reason } : {}) };
         case 'list':
           return { ...envelope, ok: true, op: 'list', grants: result.grants };
         case 'release':
           return { ...envelope, ok: true, op: 'release' };
+        case 'discover':
+          return { ...envelope, ok: true, op: 'discover', candidates: result.candidates };
         default: {
           // Unreachable for a typed handler; a JS handler answering an unknown op still
           // gets the app a named terminal frame rather than an undefined post.

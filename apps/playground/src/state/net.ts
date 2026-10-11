@@ -213,9 +213,11 @@ export interface AuthShapedFailure {
    * The failure happened inside a scheduled run (TASK-20261010-host-broker PR-1; ADR-0077 §4; the
    * open-app delta's R-b closed): the hidden frame's handler always, the live frame's while a
    * delegated run is in flight. The reconnect chip says so, so a 401 the schedule hit is not read
-   * as something the open app did in front of the user. Absent → exactly today's entry.
+   * as something the open app did in front of the user. Absent → exactly today's entry. `refresh`
+   * (PR-3; ADR-0076 §6; D-PR3-19): inside a fetch another app asked for — the source's own code on
+   * a reader's act — which the chip attributes in its own words (`AUTH_REPAIR_VIA_REFRESH`).
    */
-  via?: 'scheduled-run';
+  via?: 'scheduled-run' | 'refresh';
 }
 
 /** null when no credentialed 401/403 is waiting on the user. The RunView banner renders this. */
@@ -519,8 +521,17 @@ export interface CreateNetHandlerOptions {
    * hidden frame answers `true` always; the live frame's composition answers true while a delegated
    * run is in flight for its app. Read at the moment an auth-shaped failure is reported, so the
    * store entry can carry `via: 'scheduled-run'` and the reconnect chip can say which run hit it.
+   * The PR-1 seam, kept for the callers that answer only yes or no; `scheduledVia` says WHICH run.
    */
   scheduledRun?: () => boolean;
+  /**
+   * WHICH kind of run this handler is carrying at the moment an auth-shaped failure is reported
+   * (TASK-20261010-host-broker PR-3; D-PR3-19, E2-dev): `'scheduled-run'` for a schedule's — the
+   * hidden frame always, the live frame while a schedule's delegated run is in flight —
+   * `'refresh'` while a fetch another app asked for runs on the live frame, `undefined` for the
+   * open app's own call. Answers the store entry's `via` and outranks `scheduledRun` when both are given.
+   */
+  scheduledVia?: () => AuthShapedFailure['via'];
   /**
    * Asked BEFORE every request this handler carries, with the host-assigned app id — the
    * scheduler's counting seam. It answers whether the request may proceed: `true` ADMITS it
@@ -534,6 +545,16 @@ export interface CreateNetHandlerOptions {
 
 /** What the app reads when the host's counting seam refuses a call at the day's ceiling. */
 export const NET_CALL_LIMIT_MESSAGE = 'the limit on network calls for today is reached — Snug tries again tomorrow';
+
+/** Which run an auth-shaped failure belongs to, read at the moment it is reported: `scheduledVia` first, else the PR-1 yes/no seam. */
+function failureVia(options: CreateNetHandlerOptions): AuthShapedFailure['via'] {
+  const via = options.scheduledVia?.();
+  if (via !== undefined) return via;
+  return options.scheduledRun?.() === true ? 'scheduled-run' : undefined;
+}
+
+/** The `via` seat exactly as the store entry carries it — absent, never `undefined`, for the open app's own call. */
+const viaSeat = (via: AuthShapedFailure['via']): Pick<AuthShapedFailure, 'via'> => (via === undefined ? {} : { via });
 
 /**
  * Build a NetHandler for the runner. `netAppId` is host-assigned by SnugAppFrame (never
@@ -570,7 +591,7 @@ export function createNetHandlerFor(options: CreateNetHandlerOptions = {}): NetH
               slot,
               status,
               ...(detail !== undefined ? { detail } : {}),
-              ...(options.scheduledRun?.() === true ? { via: 'scheduled-run' } : {}),
+              ...viaSeat(failureVia(options)),
             }),
           // The frame path's default is the run-scoped gate (ADR-0077 §3) — only here, never in
           // `connectedFetchDepsFor`'s own default.

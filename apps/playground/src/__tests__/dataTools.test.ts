@@ -496,3 +496,37 @@ describe('R-M4 — an approved multi-statement write is all-or-nothing', () => {
     expect(check.ok && check.rows?.[0]?.[0]).toBe(1300);
   });
 });
+
+/**
+ * TASK-20261010-host-broker PR-3 (contract v2 D-PR3-8, AC20): `executeApprovedWrite` becomes a thin
+ * caller of the Write Broker's OWN mode (the synchronous driver seat, no journal, no line) — and
+ * `ExecuteApprovedWriteOutcome` is UNCHANGED. The characterisation above stays green; this row pins
+ * the three outcome shapes whole, so a seat that leaks a new key (an undo id, a step list, a
+ * retryable flag) into the outcome reds here. Green before and after the move.
+ */
+describe('PR-3 AC20 — executeApprovedWrite’s outcome shapes are unchanged by the move to the broker’s own mode', () => {
+  it('executed · drifted · failed — exactly these keys', async () => {
+    const applied = await ledger();
+    await runTool(toolsFor(applied.db, applied.appId, applied.proposals), DATA_PROPOSE_WRITE_TOOL_NAME, {
+      statements: ["UPDATE expenses SET cents = 999 WHERE label = 'coffee'"],
+      summary: 'Set coffees',
+    });
+    expect(await executeApprovedWrite(applied.db, applied.proposals[0]!)).toEqual({ ok: true, executed: [2] });
+
+    const drifting = await ledger();
+    await runTool(toolsFor(drifting.db, drifting.appId, drifting.proposals), DATA_PROPOSE_WRITE_TOOL_NAME, {
+      statements: ["UPDATE expenses SET cents = 999 WHERE label = 'coffee'"],
+      summary: 'Set coffees',
+    });
+    await drifting.db.driver.handle(drifting.appId, execFrame("INSERT INTO expenses (id, label, cents) VALUES (4, 'coffee', 300)"));
+    expect(await executeApprovedWrite(drifting.db, drifting.proposals[0]!)).toEqual({ ok: false, reason: 'drifted', previewed: [2], current: [3] });
+
+    const failing = await ledger();
+    await runTool(toolsFor(failing.db, failing.appId, failing.proposals), DATA_PROPOSE_WRITE_TOOL_NAME, {
+      statements: ["UPDATE expenses SET cents = 500 WHERE id = 1"],
+      summary: 'Correct the coffee entry',
+    });
+    const failed = await executeApprovedWrite(failing.db, { ...failing.proposals[0]!, statements: ['DROP TABLE expenses'] });
+    expect(failed).toEqual({ ok: false, reason: 'failed', message: expect.any(String) });
+  });
+});

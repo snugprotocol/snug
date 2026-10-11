@@ -16,7 +16,12 @@
  * AND ONE TIMING GUARANTEE (fold F-Sm1). Between preview and approval the app itself may
  * write. So `executeApprovedWrite` re-runs the dry run first and HALTS if the affected-row
  * counts have drifted from what the user approved: they agreed to "change 2 rows", and
- * silently changing 3 is not that agreement.
+ * silently changing 3 is not that agreement. Since TASK-20261010-host-broker PR-3 (D-PR3-8,
+ * AC20) that body is the Write Broker's OWN MODE (`access/writeBroker.ts`
+ * `applyApprovedWrite`): the same guards, then the driver's synchronous seat — atomic and
+ * counted, no journal, no history line — and `data-changed` to the app's own frame.
+ * `executeApprovedWrite` is a thin caller through a lazy edge, so this module still loads
+ * without the access engine (F13); its outcome shapes are unchanged.
  *
  * WHAT THAT GUARANTEE DOES NOT COVER, stated where the guard lives (P4 review): it compares
  * COUNTS, not identities. A concurrent change that leaves the affected-row count identical
@@ -48,16 +53,11 @@
 import type { AgentTool } from '@snugprotocol/adapters';
 import { nonDataStatementReason, type ScratchAttachTable, type UserDb, type ScratchStatementResult } from '@snugprotocol/db';
 import { getToolPrompt } from '@snugprotocol/knowledge';
-import { FRAME_TYPES, PROTOCOL_VERSION } from '@snugprotocol/protocol';
 
 import { CHAT_DOOR } from '../access/copy.js';
 import { namesTable, toAttach } from '../access/materialise.js';
 import type { MaterialisedSet, MaterialisedTable, RecordReadOutcome } from '../access/service.js';
 import { oneLine } from './sharedDdl.js';
-
-/** Instance id for host-issued approved writes — never an app's own instance. */
-const APPROVED_WRITE_INSTANCE = 'host-approved-write';
-let approvedSeq = 0;
 
 export const DATA_QUERY_TOOL_NAME = 'data_query';
 export const DATA_PROPOSE_WRITE_TOOL_NAME = 'data_propose_write';
@@ -293,94 +293,12 @@ export type ExecuteApprovedWriteOutcome =
   | { ok: false; reason: 'failed'; message: string };
 
 /**
- * Execute a proposal the user approved. The ONLY path from the data lane to real data.
- *
- * Re-validates first (fold F-Sm1): the affected-row counts are recomputed on a fresh
- * scratch copy and must match what the user approved. The app may have written between
- * preview and approval — a background sync, the user's own tap in the app — and the
- * approval was for the change the card described, not for whatever it means now.
+ * Execute a proposal the user approved. The ONLY path from the data lane to real data —
+ * the Write Broker's own mode (PR-3, D-PR3-8): the class guard, the dry run's drift halt
+ * (fold F-Sm1), the one synchronous seat (all or nothing, R-M4), `data-changed` to the
+ * app's own frame. The lazy edge keeps the engine out of this module's graph (F13).
  */
-export async function executeApprovedWrite(
-  db: UserDb,
-  proposal: PendingWriteProposal,
-): Promise<ExecuteApprovedWriteOutcome> {
-  const entries = proposal.statements.map((sql, i) => ({ sql, params: proposal.params[i] ?? [] }));
-  /**
-   * The class guard again, at the gate that actually touches data (R-B1, defense in depth).
-   * The propose handler refuses DDL before staging, so reaching here with any means the
-   * proposal was mutated after the user approved it — exactly the case a second check is
-   * for. Cheap, and it keeps the two ends of the approval honest about the same rule.
-   */
-  const outOfClass = proposal.statements.map((sql) => nonDataStatementReason(sql)).find((r) => r !== undefined);
-  if (outOfClass !== undefined) return { ok: false, reason: 'failed', message: outOfClass };
-
-  const exec = (sql: string, params: unknown[] = []): Promise<{ ok: boolean; message?: string }> =>
-    db.driver.handle(proposal.appId, {
-      v: PROTOCOL_VERSION,
-      type: FRAME_TYPES.dbRequest,
-      requestId: `approved-${approvedSeq++}`,
-      instanceId: APPROVED_WRITE_INSTANCE,
-      op: 'exec',
-      sql,
-      params,
-    });
-
-  try {
-    const dryRun = await db.scratchRun(proposal.appId, entries);
-    const failure = dryRun.statements.find((statement) => statement.error !== undefined);
-    if (failure !== undefined) return { ok: false, reason: 'failed', message: failure.error ?? 'unknown error' };
-
-    const current = dryRun.statements.map((statement) => statement.changes ?? 0);
-    if (
-      current.length !== proposal.previewed.length ||
-      current.some((count, i) => count !== proposal.previewed[i])
-    ) {
-      return { ok: false, reason: 'drifted', previewed: proposal.previewed, current };
-    }
-
-    /**
-     * ALL OR NOTHING (R-M4). The loop used to run statements one at a time with no
-     * transaction, so a mid-batch failure left the data half-changed — while the UI said
-     * "the change could not be applied — nothing was changed". That copy is only true if
-     * it is MADE true here: a two-statement "delete the old row, insert the corrected one"
-     * that failed on the insert silently destroyed the row and reported success-of-nothing.
-     *
-     * The dry run passing is not a guarantee the batch will apply: it ran against a
-     * snapshot, and the app owns the live DB in between.
-     */
-    const begin = await exec('BEGIN IMMEDIATE');
-    if (!begin.ok) {
-      return { ok: false, reason: 'failed', message: begin.message ?? 'could not start a transaction' };
-    }
-    for (const entry of entries) {
-      const result = await exec(entry.sql, entry.params as unknown[]);
-      if (!result.ok) {
-        await exec('ROLLBACK'); // best effort: the failure below is what the user is told
-        return { ok: false, reason: 'failed', message: result.message ?? 'the write was refused' };
-      }
-    }
-    const commit = await exec('COMMIT');
-    if (!commit.ok) {
-      await exec('ROLLBACK');
-      return { ok: false, reason: 'failed', message: commit.message ?? 'the change could not be committed' };
-    }
-    /**
-     * `executed` is the RE-VALIDATED count, not the previewed one.
-     *
-     * The driver's exec result carries no affected-row count (`DbDriverResult` is
-     * `{rows, columns, value, bytesBase64}`), so the honest number available here is the
-     * one the dry run just produced against current data — computed AFTER any drift, and
-     * equal to the preview only because the drift check above passed. That satisfies
-     * AC-F2-4's "record what was actually executed, never what was previewed": on any
-     * divergence this function has already halted, so a recorded count can never describe
-     * a change the user did not approve.
-     *
-     * Threading a true count out of the driver would mean widening a protocol-facing
-     * result shape for an audit field; that is a separate change with its own blast
-     * radius, and it is noted in the threat-model delta rather than smuggled in here.
-     */
-    return { ok: true, executed: current };
-  } catch (err) {
-    return { ok: false, reason: 'failed', message: err instanceof Error ? err.message : String(err) };
-  }
+export async function executeApprovedWrite(db: UserDb, proposal: PendingWriteProposal): Promise<ExecuteApprovedWriteOutcome> {
+  const { applyApprovedWrite } = await import('../access/writeBroker.js');
+  return applyApprovedWrite(db, proposal);
 }

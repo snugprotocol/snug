@@ -29,6 +29,26 @@
 // tables)` — never a statement against none, a different statement, another grant or reader,
 // an attended/away change, an imported line, or across an intervening entry.
 //
+// THE UNDO JOURNAL (TASK-20261010-host-broker PR-3, D-PR3-7; spec 1.2 §22.4). `accessUndo:
+// <targetAppId>` is ONE JSON array row per TARGET app, newest first, of `accessUndoEntrySchema`
+// entries — the ROWS each brokered write changed, never statement text; an undo is built from
+// the structure at undo time. The same two postures: a put parses STRICTLY first (the schema's
+// 64 KiB cap and the per-cell credential walk included — ACCESS_INVALID leaves the file
+// byte-identical) and NOT_FOUND names a target the file does not hold (D-Q9); a read skips
+// what does not parse. A put REBUILDS the row from that same strict read (Gate-5 SEC-2): an
+// element the strict parse refuses is worthless bytes and is dropped with the expired ones, so
+// the per-reader count and the row's bytes are measured over exactly what `listAccessUndo`
+// answers — a loosely-valid, strictly-unreadable element can neither hold a reader's seat nor
+// crowd the row. Its caps (D-Q7, D-Q8): every put drops EXPIRED entries; an UNDONE entry
+// is KEPT, marked, until it expires (§22.4) and is the FIRST to go when the row needs room;
+// a LIVE entry is never evicted — the 21st live entry of one (target, reader) answers
+// 'reader-cap' and writes nothing (S9: refuse, never evict), and a row that would still cross
+// `ACCESS_UNDO_MAX_ROW_BYTES` after the undone entries gave way throws ACCESS_LIMIT (the
+// engine pre-checks, so the throw is a belt). `deleteApp` sweeps the target's journal and the
+// app's `accessWants:` declaration (D-Q12 — entries in OTHER targets' journals whose reader is
+// the deleted app stay: the user may still undo what it changed); an untrusted import drops
+// both prefixes, a trusted pull keeps them (the user's own device state).
+//
 // HOMED BESIDE userdb.ts, not inside it: the seams (`select`/`run` on the open handle, the
 // guarded settings write, the factory's thrower, the app-row check, the clock) are injected
 // because userdb.ts imports this module and it cannot import userdb.ts back. The cascade
@@ -43,11 +63,14 @@ import {
   ACCESS_LOG_MAX_ENTRIES,
   ACCESS_LOG_TOTAL_MAX_BYTES,
   ACCESS_MAX_GRANTS,
+  ACCESS_UNDO_MAX_ENTRIES,
+  ACCESS_UNDO_MAX_ROW_BYTES,
   USERDB_TABLES,
   accessGrantSchema,
   accessHintsSchema,
   accessLogEntrySchema,
   accessPurposeSchema,
+  accessUndoEntrySchema,
   canonicalAccessGrantIntent,
   parseAccessGrant,
   utf8ByteLength,
@@ -55,17 +78,22 @@ import {
   type AccessHints,
   type AccessLogEntry,
   type AccessLogKind,
+  type AccessUndoEntry,
 } from '@snugprotocol/protocol';
 import {
   ACCESS_DECLINED_SETTING_PREFIX,
   ACCESS_GRANT_SETTING_PREFIX,
   ACCESS_LOG_SETTING_PREFIX,
   ACCESS_MUTED_SETTING_PREFIX,
+  ACCESS_UNDO_SETTING_PREFIX,
+  ACCESS_WANTS_SETTING_PREFIX,
   accessDeclinedSettingKey,
   accessDeclinedSettingPrefixFor,
   accessGrantSettingKey,
   accessLogSettingKey,
   accessMutedSettingKey,
+  accessUndoSettingKey,
+  accessWantsSettingKey,
   grantIdFromAccessGrantSettingKey,
   sourceAppIdFromAccessLogSettingKey,
 } from './app-settings-keys.js';
@@ -114,6 +142,10 @@ export type AccessAccessors = Pick<
   | 'clearAccessDecline'
   | 'isAccessMuted'
   | 'setAccessMuted'
+  | 'listAccessUndo'
+  | 'listAllAccessUndo'
+  | 'putAccessUndo'
+  | 'markAccessUndone'
 >;
 
 // ----------------------------------------------------------------------- helpers
@@ -249,8 +281,8 @@ function looseEntries(raw: string | undefined): unknown[] {
 }
 
 const LOG_KIND_SET: ReadonlySet<string> = new Set(ACCESS_LOG_KINDS);
-/** The lifecycle kinds whose LATEST entry per grant is never pruned (ADR-0075 §7). */
-const PROTECTED_KINDS: ReadonlySet<AccessLogKind> = new Set<AccessLogKind>(['granted', 'revoked', 'suspended', 'released']);
+/** The lifecycle kinds whose LATEST entry per grant is never pruned (ADR-0075 §7) — and, since 1.2, a grant's latest `wrote` (D-PR3-6). */
+const PROTECTED_KINDS: ReadonlySet<AccessLogKind> = new Set<AccessLogKind>(['granted', 'revoked', 'suspended', 'released', 'wrote']);
 
 interface EntryView {
   /** Undefined for an element that is not a readable entry: worthless bytes, pruned first. */
@@ -369,6 +401,41 @@ function coalesced(head: unknown, next: AccessLogEntry): AccessLogEntry | undefi
     ...(next.rows !== undefined ? { rows: next.rows } : {}),
   });
   return merged.success ? merged.data : undefined;
+}
+
+// ------------------------------------------------------------- the undo journal
+
+/** The LOOSE view of a stored journal element — what `markAccessUndone` reads to find the id it marks (it marks what it finds); the put and the caps read the STRICT parse (SEC-2). */
+interface UndoView {
+  id: string;
+  readerAppId: string;
+  /** Epoch milliseconds. */
+  at: number;
+  expiresAt: number;
+  undone: boolean;
+}
+
+/** `undefined` for an element that is not a readable entry — worthless bytes, dropped by the next put. */
+function undoView(item: unknown): UndoView | undefined {
+  if (typeof item !== 'object' || item === null || Array.isArray(item)) return undefined;
+  const { id, readerAppId, at, expiresAt, undoneAt } = item as { id?: unknown; readerAppId?: unknown; at?: unknown; expiresAt?: unknown; undoneAt?: unknown };
+  const atMs = typeof at === 'string' ? instant(at) : Number.NaN;
+  const expiresMs = typeof expiresAt === 'string' ? instant(expiresAt) : Number.NaN;
+  if (typeof id !== 'string' || typeof readerAppId !== 'string' || Number.isNaN(atMs) || Number.isNaN(expiresMs)) return undefined;
+  return { id, readerAppId, at: atMs, expiresAt: expiresMs, undone: undoneAt !== undefined };
+}
+
+/** LIVE: not undone and not expired — what `listAccessUndo` answers and what the per-reader cap counts. */
+const isLiveUndo = (view: { undone: boolean; expiresAt: number }, now: number): boolean => !view.undone && view.expiresAt > now;
+
+/** The STRICT journal read: a non-array row is empty; an entry the strict parse refuses is skipped. */
+function readUndo(raw: string | undefined): AccessUndoEntry[] {
+  const entries: AccessUndoEntry[] = [];
+  for (const item of looseEntries(raw)) {
+    const parsed = accessUndoEntrySchema.safeParse(item);
+    if (parsed.success) entries.push(parsed.data);
+  }
+  return entries;
 }
 
 // --------------------------------------------------------------------- accessors
@@ -600,6 +667,64 @@ export function createAccessAccessors(seams: AccessSeams): AccessAccessors {
       if (!muted) deleteKey(seams, key);
       else seams.setSetting(key, true);
     },
+
+    listAccessUndo(targetAppId, readerAppId) {
+      assertOpen();
+      const now = seams.now();
+      return readUndo(rawValue(seams, accessUndoSettingKey(targetAppId))).filter(
+        (entry) =>
+          isLiveUndo({ undone: entry.undoneAt !== undefined, expiresAt: instant(entry.expiresAt) }, now) &&
+          (readerAppId === undefined || entry.readerAppId === readerAppId),
+      );
+    },
+
+    listAllAccessUndo(targetAppId) {
+      assertOpen();
+      return readUndo(rawValue(seams, accessUndoSettingKey(targetAppId)));
+    },
+
+    putAccessUndo(targetAppId, entry) {
+      assertOpen();
+      const parsed = accessUndoEntrySchema.safeParse(entry);
+      if (!parsed.success) invalid(`undo entry failed validation: ${issuesOf(parsed.error)}`);
+      if (!seams.hasApp(targetAppId)) notFound(`no app "${targetAppId}" to keep this journal`);
+      const key = accessUndoSettingKey(targetAppId);
+      const now = seams.now();
+      // The row is rebuilt from the STRICT read (SEC-2): the expired and the unreadable are dropped
+      // (D-Q7); an undone entry stays, marked. What the caps count below is what `listAccessUndo` answers.
+      const kept = readUndo(rawValue(seams, key)).filter((entry) => instant(entry.expiresAt) > now);
+      const liveness = (entry: AccessUndoEntry): { undone: boolean; expiresAt: number } => ({ undone: entry.undoneAt !== undefined, expiresAt: instant(entry.expiresAt) });
+      // The per-reader cap REFUSES — never evicts a live entry (S9). Nothing is written.
+      const live = kept.filter((entry) => entry.readerAppId === parsed.data.readerAppId && isLiveUndo(liveness(entry), now)).length;
+      if (live >= ACCESS_UNDO_MAX_ENTRIES) return 'reader-cap';
+      // The row cap: the OLDEST undone entry gives way first; when none is left the put is refused whole.
+      const row = (): unknown[] => [parsed.data, ...kept];
+      while (bytesOf(row()) > ACCESS_UNDO_MAX_ROW_BYTES) {
+        let victim = -1;
+        for (const [index, entry] of kept.entries()) {
+          const oldest = victim === -1 ? undefined : kept[victim];
+          if (entry.undoneAt !== undefined && (oldest === undefined || instant(entry.at) < instant(oldest.at))) victim = index;
+        }
+        if (victim === -1) limit(`the undo journal of "${targetAppId}" holds ${ACCESS_UNDO_MAX_ROW_BYTES} bytes of live entries and nothing may be pruned`);
+        kept.splice(victim, 1);
+      }
+      seams.setSetting(key, row());
+      return 'ok';
+    },
+
+    markAccessUndone(targetAppId, id, at) {
+      assertOpen();
+      const stamp = isoInstantSchema.safeParse(at);
+      if (!stamp.success) invalid(`undo instant failed validation: ${issuesOf(stamp.error)}`);
+      const key = accessUndoSettingKey(targetAppId);
+      const raw = rawValue(seams, key);
+      if (raw === undefined) return;
+      const entries = looseEntries(raw);
+      const index = entries.findIndex((item) => undoView(item)?.id === id);
+      if (index === -1) return; // an unknown id is a no-op
+      entries[index] = { ...(entries[index] as Record<string, unknown>), undoneAt: stamp.data };
+      seams.setSetting(key, entries);
+    },
   };
 }
 
@@ -636,7 +761,11 @@ function readDecline(hash: string, raw: string): AccessDecline | undefined {
  *  - its `accessDeclined:<appId>:*` rows by escaped prefix, and its `accessMuted:<appId>` row
  *    by equality — the per-app-row-in-a-shared-namespace obligation. Known limit, as for the
  *    `auth:` prefix: an app id containing a literal colon would over-match a sibling sharing
- *    that prefix — unreachable with UUID ids.
+ *    that prefix — unreachable with UUID ids;
+ *  - its own undo journal `accessUndo:<appId>` (the rows written INTO this app — nothing is
+ *    left to put back) and its `accessWants:<appId>` declaration, each by equality (PR-3,
+ *    D-Q12). Entries in OTHER targets' journals whose reader is this app stay: the user may
+ *    still undo what it changed, and the reader's name is on the entry.
  */
 export function sweepAccessForDeletedApp(sql: SettingsSql, appId: string): void {
   for (const [key, raw] of rowsUnder(sql, ACCESS_GRANT_SETTING_PREFIX)) {
@@ -646,6 +775,8 @@ export function sweepAccessForDeletedApp(sql: SettingsSql, appId: string): void 
   deleteKey(sql, accessLogSettingKey(appId));
   sql.run(`DELETE FROM ${SETTINGS} WHERE ${PREFIX_WHERE}`, [likePrefix(accessDeclinedSettingPrefixFor(appId))]);
   deleteKey(sql, accessMutedSettingKey(appId));
+  deleteKey(sql, accessUndoSettingKey(appId));
+  deleteKey(sql, accessWantsSettingKey(appId));
 }
 
 // --------------------------------------------------------------- import (AC10)
@@ -723,13 +854,15 @@ export interface AccessImportReport {
  * already inert, and suspending it would make a grant the user never gave revivable with one
  * tap. Declines and mutes are dropped (the user's own answers, not something a file carries
  * in), and every history entry is tagged `imported: true` (shown under its own heading);
- * entries that do not parse are dropped.
+ * entries that do not parse are dropped. The undo journals and the wants are dropped too
+ * (PR-3, D-PR3-7): a journal names rows to write back into an app, and a file must never plant
+ * one; the wants are re-parsed from the app's own HTML (PR-5).
  *
- * TRUSTED (the user's own configured origin): grants, declines, mutes and histories stay as
- * they are — a grant row this hub cannot parse included (the `schedules.ts` precedent, review
- * finding 2): it may be a NEWER hub's grant carrying a field this spec does not know; it is
- * inert here (the tolerant read answers "no such grant"), and removing it would sync the loss
- * back to the device that wrote it.
+ * TRUSTED (the user's own configured origin): grants, declines, mutes, histories, journals and
+ * wants stay as they are — a grant row this hub cannot parse included (the `schedules.ts`
+ * precedent, review finding 2): it may be a NEWER hub's grant carrying a field this spec does
+ * not know; it is inert here (the tolerant read answers "no such grant"), and removing it
+ * would sync the loss back to the device that wrote it.
  */
 export function reconcileImportedAccessGrants(
   sql: SettingsSql,
@@ -781,8 +914,9 @@ export function reconcileImportedAccessGrants(
   }
 
   if (!trustedOrigin) {
-    sql.run(`DELETE FROM ${SETTINGS} WHERE ${PREFIX_WHERE}`, [likePrefix(ACCESS_DECLINED_SETTING_PREFIX)]);
-    sql.run(`DELETE FROM ${SETTINGS} WHERE ${PREFIX_WHERE}`, [likePrefix(ACCESS_MUTED_SETTING_PREFIX)]);
+    for (const prefix of [ACCESS_DECLINED_SETTING_PREFIX, ACCESS_MUTED_SETTING_PREFIX, ACCESS_UNDO_SETTING_PREFIX, ACCESS_WANTS_SETTING_PREFIX]) {
+      sql.run(`DELETE FROM ${SETTINGS} WHERE ${PREFIX_WHERE}`, [likePrefix(prefix)]);
+    }
     for (const [key, raw] of rowsUnder(sql, ACCESS_LOG_SETTING_PREFIX)) {
       if (sourceAppIdFromAccessLogSettingKey(key) === undefined) {
         deleteKey(sql, key);

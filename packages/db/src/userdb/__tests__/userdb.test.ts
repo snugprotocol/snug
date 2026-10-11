@@ -1268,3 +1268,84 @@ describe('importUserDb — access grants are disarmed unless intent-identical (T
     await db.close();
   });
 });
+
+// TASK-20261010-host-broker PR-3 (contract v2 D-PR3-7) — the undo journal `accessUndo:<targetAppId>`
+// and the declared wants `accessWants:<appId>` are the user's own device state: an UNTRUSTED file's
+// rows are DROPPED by the access import pass (a journal names rows to write back; a file must never
+// plant one — and the wants are re-parsed from the app's HTML by PR-5), while a TRUSTED pull (the
+// user's own origin) keeps both exactly. Planted raw through `setSetting`, so the pin does not depend
+// on the accessors the same PR adds (red until the reconcile pass learns both prefixes).
+describe('importUserDb — the undo journal and the wants (TASK-20261010-host-broker PR-3)', () => {
+  const journal = [
+    {
+      id: '8c6f1d2e-3a4b-4c5d-8e6f-7a8b9c0d1e2f',
+      at: ACCESS_AT,
+      expiresAt: '2026-10-17T08:00:00.000Z',
+      authority: 'permission',
+      via: 'app',
+      grantId: '9d8c7b6a-5f4e-4d3c-8b2a-1f0e9d8c7b6a',
+      readerAppId: READER_APP,
+      readerName: 'Budget',
+      steps: [{ table: 'transactions', op: 'update', columns: ['note'], rows: [{ rowid: 1, before: ['coffee'], after: ['snack'] }] }],
+    },
+  ];
+  const wants = [{ purpose: 'to show spending by category', hints: { tables: ['transactions'] } }];
+  const undoKey = `accessUndo:${SOURCE_APP}`;
+  const wantsKey = `accessWants:${READER_APP}`;
+
+  it('an UNTRUSTED file’s accessUndo: and accessWants: rows are dropped; a TRUSTED pull keeps both byte for byte', async () => {
+    const bytes = await accessDonor((donor) => {
+      donor.setSetting(undoKey, journal);
+      donor.setSetting(wantsKey, wants);
+    });
+    expect(await settingFromBytes(bytes, undoKey)).toEqual(journal); // the donor really carries them
+
+    const untrusted = await open(createMemoryBackend());
+    await untrusted.importUserDb(bytes);
+    expect(untrusted.listSettingKeys()).not.toContain(undoKey);
+    expect(untrusted.listSettingKeys()).not.toContain(wantsKey);
+    expect(untrusted.listSettingKeys().filter((key) => key.startsWith('accessUndo:') || key.startsWith('accessWants:'))).toEqual([]);
+    await untrusted.close();
+
+    const trusted = await open(createMemoryBackend());
+    await trusted.importUserDb(bytes, { trustedOrigin: true });
+    expect(trusted.getSetting(undoKey)).toEqual(journal);
+    expect(trusted.getSetting(wantsKey)).toEqual(wants);
+    await trusted.close();
+  });
+});
+
+// TASK-20261010-host-broker PR-3 code-fix D-FIX-1 — the facade forwards the driver's `inTransaction`
+// read beside `brokeredWrite` (whose facade rows live in driver.test.ts): a deleted or unheld app
+// holds no transaction (plain false, the `hostKvRefusal` reasoning — never a refusal object, and the
+// namespace is not opened for it); a held app answers the inner driver's record.
+describe('the facade’s inTransaction — forwarded for a held app, false for a deleted or unheld one (D-FIX-1)', () => {
+  it('a held app mid-transaction → true; after its COMMIT → false', async () => {
+    // A debounce that cannot fire inside the row: a persist exports, and an export ends the transaction.
+    const db = await open(backend, { persistDebounceMs: 60_000 });
+    const app = db.installApp({ displayName: 'Ledger', html: '<html>ledger</html>' });
+    expect(await db.driver.inTransaction(app.appId)).toBe(false);
+    expect((await db.driver.handle(app.appId, execFrame('CREATE TABLE t (a TEXT)'))).ok).toBe(true);
+    expect((await db.driver.handle(app.appId, execFrame('BEGIN'))).ok).toBe(true);
+    expect(await db.driver.inTransaction(app.appId)).toBe(true);
+    expect((await db.driver.handle(app.appId, execFrame('COMMIT'))).ok).toBe(true);
+    expect(await db.driver.inTransaction(app.appId)).toBe(false);
+    await db.close();
+  });
+
+  it('an app the file never held → false (a boolean, not a refusal)', async () => {
+    const db = await open(backend, { persistDebounceMs: 60_000 });
+    await expect(db.driver.inTransaction('f0f0f0f0-0000-4000-8000-000000000000')).resolves.toBe(false);
+    await db.close();
+  });
+
+  it('a DELETED app → false, even when it was mid-transaction before the delete', async () => {
+    const db = await open(backend, { persistDebounceMs: 60_000 });
+    const app = db.installApp({ displayName: 'Notes', html: '<html>notes</html>' });
+    expect((await db.driver.handle(app.appId, execFrame('BEGIN'))).ok).toBe(true);
+    expect(await db.driver.inTransaction(app.appId)).toBe(true);
+    await db.deleteApp(app.appId);
+    await expect(db.driver.inTransaction(app.appId)).resolves.toBe(false);
+    await db.close();
+  });
+});

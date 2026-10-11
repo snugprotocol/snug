@@ -33,6 +33,23 @@
 //   8. the reading app never saw the app list: nothing it received names Pantry or an app id;
 //   9. 375 px: the owned-app header cluster with the ⋈, the strip and the consent sheet — no
 //      horizontal overflow of the page or the sheet's card.
+//  10. (TASK-20261010-host-broker PR-3, AC28) THE WRITE + UNDO WALK: Budget's #ask-write carries
+//      `access: 'write'` → the strip and the sheet say "— and change —", the write toggle is on
+//      screen at once (more options open for a write ask) and OFF; ticked, the undo note shows and
+//      the egress block gains no line (its closing says *reads and changes*) → allow for a day →
+//      #write (ONE literal-valued UPDATE of transactions, WHERE on a granted column) answers
+//      `changes: 1` and the reader's query sees the new value → Ledger's ⋈ history shows the
+//      `wrote` row with *what it changed* → *undo* → the armed confirm → *yes, undo* → the `undone`
+//      row ("you") → back in Budget the query shows the OLD value.
+//  11. (PR-3, AC28) THE REFRESH WALK: a third source, Bank (e2e/fixtures/access-source-fetch.html
+//      — Ledger plus the KB 85 listener that counts the fetches another app asks for), is installed;
+//      a read ask, Bank chosen with its `fetches` table, *fetch new data before reading it* ticked
+//      under more options (no egress line) → #refresh answers `fresh: true` and the counter moved
+//      (and names who asked) → #refresh again answers `fresh: false · recent` and nothing ran →
+//      the handler-less Ledger, allowed the same, answers ACCESS_REFRESH_FAILED (not retryable)
+//      once the host's 90 s bound is crossed on the page clock. The scheduler is on in this app
+//      (the playground boots it with the shell — App.tsx → initScheduler → the schedulerState
+//      row), so the refresh engine's gates pass.
 //
 // WHY CLAUSE 4 AND CLAUSE 7 ARE SPLIT (a deviation from the one-grant reading of AC22, reported):
 // Settings is a route, so opening it closes Budget's view — a *while it's open* access ends right
@@ -65,6 +82,7 @@ import {
   STRIP,
   STRIP_OUTCOME,
   allowLabel,
+  historyLine,
 } from '../src/access/copy';
 import { APP_URL, AWAITS_INTEGRATION, playgroundDir } from './helpers';
 
@@ -73,6 +91,8 @@ const hasApp = process.env.SNUG_E2E_HAS_APP === '1';
 const FIXTURES = path.join(playgroundDir(), 'e2e', 'fixtures');
 const READER_HTML = fs.readFileSync(path.join(FIXTURES, 'access-reader.html'), 'utf8');
 const SOURCE_HTML = fs.readFileSync(path.join(FIXTURES, 'access-source.html'), 'utf8');
+/** PR-3: the source that fetches on request (Ledger plus the KB 85 listener). */
+const FETCH_SOURCE_HTML = fs.readFileSync(path.join(FIXTURES, 'access-source-fetch.html'), 'utf8');
 
 /** The source fixture's ONE naming line, and the second source made from it. */
 const LEDGER_LINE = "const SOURCE = { appId: 'e2e-access-ledger', displayName: 'Ledger', iconEmoji: '📒', iconColor: '#c9852b' };";
@@ -87,6 +107,11 @@ const TRANSACTIONS = 4;
 
 /** The ids the library assigned at install — filled by clause 1. */
 const ids = { ledger: '', pantry: '', budget: '' };
+/** PR-3: the fetching source, installed by clause 11. */
+const BANK = 'Bank';
+const fetching = { bank: '' };
+/** The reader fixture's #write statement (access-reader.html WRITE_SQL) — the history keeps it as written. */
+const WRITE_SQL = "UPDATE transactions SET note = 'checked' WHERE category = 'music'";
 /** The access ids Budget was answered — filled as the clauses run. */
 const held = { day: '', bomb: '' };
 
@@ -161,7 +186,7 @@ async function ask(page: Page, app: FrameLocator, opts: { afterAnother: boolean 
  * *review* → the consent sheet. Before the click, an observer records the primary's state the
  * moment it first renders and the moment it arms — the 600 ms delay asserted, never slept on.
  */
-async function review(page: Page): Promise<Locator> {
+async function review(page: Page, title: string = CONSENT_SHEET.title(READER)): Promise<Locator> {
   await page.evaluate(() => {
     const w = window as unknown as { __arming?: { appearedAt?: number; disabledAtFirst?: boolean; enabledAt?: number } };
     const record: { appearedAt?: number; disabledAtFirst?: boolean; enabledAt?: number } = {};
@@ -182,9 +207,21 @@ async function review(page: Page): Promise<Locator> {
     observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['disabled'] });
   });
   await strip(page).getByTestId('access-ask-review').click();
-  const sheet = consentSheet(page);
+  const sheet = page.getByRole('dialog', { name: title });
   await expect(sheet).toBeVisible({ timeout: 10_000 });
   return sheet;
+}
+
+/** PR-3: open the sheet's *more options…* disclosure (a <details> or a button — the contract names the test id). */
+async function openMoreOptions(sheet: Locator): Promise<void> {
+  const more = sheet.getByTestId('access-options-more');
+  await expect(more).toBeVisible();
+  const tag = await more.evaluate((el) => el.tagName);
+  if (tag === 'DETAILS') {
+    if ((await more.getAttribute('open')) === null) await more.locator('summary').first().click();
+  } else {
+    await more.click();
+  }
 }
 
 /** The primary armed: disabled when it rendered, enabled ≥ ~600 ms later. */
@@ -541,5 +578,167 @@ test.describe('AC22 — access between apps, end to end (Playground)', () => {
     await expect(consentSheet(page)).toHaveCount(0);
     await expect(app.locator('#status')).toHaveText('request: ACCESS_DECLINED');
     await expectNoHorizontalScroll(page);
+  });
+
+  test('10 · PR-3 write + undo: the ask says change, the toggle is offered at once, one UPDATE changes one row, Ledger’s history shows it and *undo* puts it back', async () => {
+    test.setTimeout(150_000);
+    await page.setViewportSize({ width: 1280, height: 800 });
+    const app = appFrame(page);
+    await page.clock.fastForward(ACCESS_REQUEST_MIN_GAP_MS);
+    await app.locator('#ask-write').click();
+    await expect(app.locator('#status')).toHaveText('request: waiting');
+    const shown = strip(page);
+    await expect(shown).toBeVisible({ timeout: 15_000 });
+    await expect(shown.getByTestId('access-ask-title')).toHaveText(STRIP.title(READER, true));
+
+    const sheet = await review(page, CONSENT_SHEET.title(READER, true));
+    await expect(sheet.getByTestId('access-sheet-title')).toHaveText(CONSENT_SHEET.title(READER, true));
+    await expect(sheet.getByTestId(`access-source-${ids.ledger}`)).toBeChecked();
+    const toggle = sheet.getByTestId(`access-write-${ids.ledger}-transactions`);
+    await expect(toggle, 'a write ask opens more options: the toggle is on screen without a click').toBeVisible();
+    await expect(toggle, 'never pre-ticked by the app').not.toBeChecked();
+    await expect(sheet).not.toContainText(CONSENT_SHEET.undoNote(SOURCE, 'transactions', READER));
+    await toggle.check();
+    await expect(sheet).toContainText(CONSENT_SHEET.undoNote(SOURCE, 'transactions', READER));
+    const egress = sheet.getByTestId('access-egress');
+    await expect(egress.locator('li[data-kind="closing"]')).toHaveText(EGRESS.closing(SOURCE, true));
+    await expect(egress.locator('li[data-kind="write"], li[data-kind="refresh"]'), 'no egress line for a write').toHaveCount(0);
+    await sheet.getByTestId('access-duration-day').check();
+    await expectArmedAfterDelay(page, sheet);
+    await sheet.getByTestId('access-allow').click();
+    await expect(page.getByRole('dialog', { name: CONSENT_SHEET.title(READER, true) })).toHaveCount(0);
+    await expect(page.getByTestId('access-ask-outcome').getByTestId('access-ask-outcome-words')).toHaveText(
+      STRIP_OUTCOME.allowed(READER, SOURCE, ['transactions'], 'day', ['transactions']),
+    );
+    await expect(app.locator('#status')).toHaveText('request: ok');
+    const view = await heldView(app);
+    expect(view.access).toBe('write');
+    expect(view.tables).toEqual([{ name: 'transactions', columns: ['amount', 'category', 'date', 'note'], write: true }]);
+    expect(Object.keys(view), 'the view never carries a withheld seat').not.toContain('withheld');
+
+    // Before, the change, after — the reader learns a count, and reads the row like any other.
+    await app.locator('#peek').click();
+    await expect(app.locator('#peeked')).toHaveText('note: monthly plan', { timeout: 10_000 });
+    await app.locator('#write').click();
+    await expect(app.locator('#status')).toHaveText('write: ok', { timeout: 20_000 });
+    await expect(app.locator('#result')).toHaveText('changes: 1');
+    await app.locator('#peek').click();
+    await expect(app.locator('#peeked')).toHaveText('note: checked', { timeout: 10_000 });
+
+    // The source's side: the change on its history, behind *what it changed*, and its undo.
+    await openApp(page, ids.ledger);
+    await page.getByRole('button', { name: ACCESS_SHEET.iconLabel, exact: true }).click();
+    const own = page.getByRole('dialog', { name: ACCESS_SHEET.title(SOURCE) });
+    await expect(own).toBeVisible();
+    const history = own.getByTestId('access-history');
+    const wrote = history.locator('[data-testid="access-history-row"][data-kind="wrote"]');
+    await expect(wrote).toHaveCount(1);
+    await expect(wrote.getByTestId('access-history-who')).toHaveText(READER);
+    const now = await page.evaluate(() => Date.now());
+    const line = historyLine({ at: new Date(now).toISOString(), kind: 'wrote', via: 'app', changes: 1, tables: ['transactions'] } as never, now, READER);
+    await expect(wrote.getByTestId('access-history-words')).toContainText(line.split(' · ')[0] as string);
+    const changed = wrote.getByTestId('access-history-asked');
+    await expect(changed.locator('summary')).toHaveText(ACCESS_SHEET.whatItChanged);
+    await expect(changed.locator('code')).toHaveText(WRITE_SQL);
+
+    await wrote.getByTestId('access-history-undo').click();
+    const confirm = own.getByTestId('access-undo-confirm');
+    await expect(confirm).toContainText(ACCESS_SHEET.undoArm('transactions', 1, SOURCE));
+    await confirm.getByTestId('access-undo-yes').click();
+    await expect(own.getByTestId('access-history-undo-outcome')).toHaveText(ACCESS_SHEET.undone, { timeout: 10_000 });
+    const undone = history.locator('[data-testid="access-history-row"][data-kind="undone"]');
+    await expect(undone).toHaveCount(1);
+    await expect(undone.getByTestId('access-history-who')).toHaveText('you');
+    await expect(wrote.getByTestId('access-history-undo'), 'an undone change is not offered again').toHaveCount(0);
+    await own.getByTestId('access-sheet-close').click();
+    await expect(own).toHaveCount(0);
+
+    // Back in Budget: the row reads as it was before the change.
+    const reopened = await openApp(page, ids.budget);
+    await reopened.locator('#peek').click();
+    await expect(reopened.locator('#peeked')).toHaveText('note: monthly plan', { timeout: 10_000 });
+  });
+
+  test('11 · PR-3 refresh: fetch-first ticked on Bank → fresh, the counter moved; again → recent; the handler-less Ledger → ACCESS_REFRESH_FAILED', async () => {
+    test.setTimeout(240_000);
+    fetching.bank = await installBundle(
+      page,
+      'bank.snug',
+      bundle({ displayName: BANK, description: 'Keeps transactions and accounts, and fetches new ones when asked.', iconEmoji: '🏦', iconColor: '#3b6fa3', html: FETCH_SOURCE_HTML }),
+      'ready',
+    );
+    await expect(appFrame(page).locator('#counts')).toHaveText(`transactions: ${TRANSACTIONS} · accounts: 2 · fetches: 0`);
+
+    // A read ask; the person picks Bank, its counter table, and *fetch new data before reading it*.
+    let app = await openApp(page, ids.budget);
+    await ask(page, app, { afterAnother: true });
+    let sheet = await review(page);
+    await sheet.getByTestId(`access-source-${fetching.bank}`).check();
+    await expect(sheet.getByTestId(`access-table-${fetching.bank}-transactions`)).toBeChecked();
+    await sheet.getByTestId(`access-table-${fetching.bank}-fetches`).check();
+    await expect(sheet.getByTestId('access-refresh'), 'a read ask keeps more options closed').toBeHidden();
+    await openMoreOptions(sheet);
+    await expect(sheet).toContainText(CONSENT_SHEET.fetchFirst(BANK));
+    await expect(sheet).toContainText(CONSENT_SHEET.fetchFirstHint(BANK));
+    await sheet.getByTestId('access-refresh').check();
+    await expect(sheet.getByTestId('access-egress').locator('li[data-kind="refresh"], li[data-kind="write"]'), 'no egress line for a fetch').toHaveCount(0);
+    await sheet.getByTestId('access-duration-day').check();
+    await expectArmedAfterDelay(page, sheet);
+    await sheet.getByTestId('access-allow').click();
+    await expect(app.locator('#status')).toHaveText('request: ok');
+    expect((await heldView(app)).refresh).toBe(true);
+
+    await app.locator('#fetches').click();
+    await expect(app.locator('#peeked')).toHaveText('fetches: 0 · asked by null', { timeout: 10_000 });
+    await app.locator('#refresh').click();
+    await expect(app.locator('#status')).toHaveText('refresh: ok', { timeout: 90_000 });
+    await expect(app.locator('#result')).toHaveText('fresh: true');
+    await app.locator('#fetches').click();
+    await expect(app.locator('#peeked'), 'the source ran: the counter moved, and it was told who asked').toHaveText(`fetches: 1 · asked by ${READER}`, { timeout: 10_000 });
+
+    // Within five minutes: nothing runs, and the answer says why.
+    await app.locator('#refresh').click();
+    await expect(app.locator('#status')).toHaveText('refresh: ok', { timeout: 10_000 });
+    await expect(app.locator('#result')).toHaveText('fresh: false · recent');
+    await app.locator('#fetches').click();
+    await expect(app.locator('#peeked')).toHaveText(`fetches: 1 · asked by ${READER}`, { timeout: 10_000 });
+
+    // Bank's history: the reader asked it to fetch.
+    await openApp(page, fetching.bank);
+    await page.getByRole('button', { name: ACCESS_SHEET.iconLabel, exact: true }).click();
+    const own = page.getByRole('dialog', { name: ACCESS_SHEET.title(BANK) });
+    await expect(own).toBeVisible();
+    const refreshed = own.getByTestId('access-history').locator('[data-testid="access-history-row"][data-kind="refreshed"]');
+    await expect(refreshed).toHaveCount(1);
+    await expect(refreshed.getByTestId('access-history-who')).toHaveText(READER);
+    const now = await page.evaluate(() => Date.now());
+    const line = (historyLine as unknown as (e: unknown, n: number, r: string, s: string) => string)({ at: new Date(now).toISOString(), kind: 'refreshed', via: 'app' }, now, READER, BANK);
+    await expect(refreshed.getByTestId('access-history-words')).toContainText(line.split(' · ')[0] as string);
+    await own.getByTestId('access-sheet-close').click();
+
+    // The handler-less Ledger: allowed the same, its frame never answers the run.
+    app = await openApp(page, ids.budget);
+    await ask(page, app, { afterAnother: true });
+    sheet = await review(page);
+    await sheet.getByTestId(`access-source-${ids.ledger}`).check();
+    await openMoreOptions(sheet);
+    await sheet.getByTestId('access-refresh').check();
+    await sheet.getByTestId('access-duration-day').check();
+    await expectArmedAfterDelay(page, sheet);
+    await sheet.getByTestId('access-allow').click();
+    await expect(app.locator('#status')).toHaveText('request: ok');
+    await app.locator('#refresh').click();
+    await expect(app.locator('#status')).toHaveText('refresh: waiting');
+    // The host's bound on a run (SCHEDULE_RESULT_TIMEOUT_MS, 90 s) is crossed on the page clock.
+    await expect
+      .poll(
+        async () => {
+          await page.clock.fastForward(15_000);
+          return app.locator('#status').textContent();
+        },
+        { timeout: 90_000, intervals: [1_000] },
+      )
+      .toBe('refresh: ACCESS_REFRESH_FAILED');
+    await expect(app.locator('#result')).toContainText('ACCESS_REFRESH_FAILED · final');
   });
 });
