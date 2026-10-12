@@ -52,6 +52,7 @@ import {
   type StepTools,
 } from '@snugprotocol/protocol';
 
+import { appMidChange } from '../access/copy.js';
 import { namesTable } from '../access/materialise.js';
 import type { MaterialisedSet } from '../access/service.js';
 import { createTurnAdapter, type TurnAdapterConfig } from '../agent/adapter.js';
@@ -59,29 +60,21 @@ import { buildDataTools, capToolCalls, type SharedTablesSeat } from '../agent/da
 import { buildFetchConnectionTool, fetchableConnections } from '../agent/fetchConnectionTool.js';
 import { AI_CEILING_CODE, gatedAdapter } from '../agent/gatedAdapter.js';
 import { oneLine } from '../agent/sharedDdl.js';
-import { promptPlatform } from '../agent/transport.js';
+import { ENDPOINTS_UNCONFIRMED, promptPlatform } from '../agent/transport.js';
 import { appProviderPinFor, resolveModelForApp } from '../state/appModel.js';
 import { SECRET_KEY_PREFIX, endpointsNeedConfirm, localUrlStore, modeStore, providerStore } from '../state/mode.js';
 import { currentBrain } from '../state/webllm.js';
 import { CANCELLED_SUMMARY, renderThinkContext, runContextQuery, sawOf, type AppThinkStep, type ContextQuery } from './appThink.js';
-import { appMissing, capped, ranOutOfTurns } from './copy.js';
+import { appMissing, capped, ranOutOfTime, ranOutOfTurns } from './copy.js';
 import type { StepContext, StepOutcome } from './engine-types.js';
 import { WITHHELD_SUMMARY } from './executors.js';
 import { countersSoFar, wouldExceedCeiling, type Calls } from './protection.js';
-import { appBusy } from './proposalGate.js';
 import { scrubOrWithhold } from './scrub.js';
 
 const NOTHING: Calls = { ai: 0, net: 0 };
 
-/** F15's sentence, as the app transport words it: an imported file's endpoints are executable config. */
-const ENDPOINTS_UNCONFIRMED = 'endpoint settings came from an imported or synced file — confirm them in Settings before running';
-
 /** The brain moved to one that cannot look things up after the executors' gate let the step through. */
 const NO_DIRECT_BRAIN = 'the brain in Settings can’t look things up for a schedule — it will answer without looking next time';
-
-/** The step's own deadline hit before the brain answered — the time twin of `ranOutOfTurns`. */
-const ranOutOfTime = (appName: string, lookups: number): string =>
-  `${appName}’s AI looked things up ${lookups} ${lookups === 1 ? 'time' : 'times'} and ran out of time before answering`;
 
 /**
  * The adapter the app's own transport would build for this app NOW (`agent/transport.ts`
@@ -199,7 +192,7 @@ export async function executeAppAgent(step: AppThinkStep, ctx: StepContext): Pro
     const busy = (step.context.sql ?? []).length > 0 && (await ctx.db.driver.inTransaction(step.appId));
     const queries: ContextQuery[] = [];
     for (const sql of step.context.sql ?? []) {
-      queries.push({ sql, result: busy ? { error: appBusy(appName) } : await runContextQuery(ctx.db, step.appId, sql, []) });
+      queries.push({ sql, result: busy ? { error: appMidChange(appName) } : await runContextQuery(ctx.db, step.appId, sql, []) });
     }
     const context = renderThinkContext({ app, schema: ctx.db.getAppSchema(step.appId), queries, maxRows: step.context.maxRows, shared: set, withSharedRows: false, now: ctx.now().getTime() });
     const message = [context, connectionsBlock(ctx.db, step.appId), `The question to answer now:\n${step.prompt}`].join('\n\n');

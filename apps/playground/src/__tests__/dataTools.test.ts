@@ -511,7 +511,13 @@ describe('PR-3 AC20 — executeApprovedWrite’s outcome shapes are unchanged by
       statements: ["UPDATE expenses SET cents = 999 WHERE label = 'coffee'"],
       summary: 'Set coffees',
     });
-    expect(await executeApprovedWrite(applied.db, applied.proposals[0]!)).toEqual({ ok: true, executed: [2] });
+    // sanctioned by PR-4 v2.2 note a — D-PR4-6: an applied change says it can be undone and names its entry.
+    expect(await executeApprovedWrite(applied.db, applied.proposals[0]!)).toEqual({
+      ok: true,
+      executed: [2],
+      undoable: true,
+      undoId: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/),
+    });
 
     const drifting = await ledger();
     await runTool(toolsFor(drifting.db, drifting.appId, drifting.proposals), DATA_PROPOSE_WRITE_TOOL_NAME, {

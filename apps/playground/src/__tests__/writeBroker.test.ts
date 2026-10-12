@@ -413,7 +413,8 @@ describe('own mode — applyApprovedWrite: the app’s own approved write throug
     expect(await rowsOf(journal, "SELECT amount FROM entries WHERE title = 'tea'")).toEqual([[9]]);
     // The journal: the OWN approval bucket — never the access journal, never a history line.
     expect(undoJournal().listAllAccessUndo(journal)).toEqual([]);
-    expect(db.listAccessLog(journal)).toEqual([]);
+    // sanctioned by PR-4 v2.2 note b — the journal holds the setup's grant line; the WRITE adds none.
+    expect(linesOf(journal).map((l) => l.kind), 'no line from the write').toEqual(['granted']);
     const entries = ownJournal().listOwnUndo(journal, { bucket: 'approval' });
     expect(entries).toHaveLength(1);
     expect(entries[0]).toMatchObject({ id: (outcome as { undoId?: string }).undoId, authority: 'approval', via: 'chat' });
@@ -1098,7 +1099,8 @@ describe('PR-4 — undoOwnWrite(db, appId, bucket, undoId, { via: user }) → Un
       [3, 'bread', 2],
     ]);
     expect(ownJournal().listOwnUndo(journal, { bucket: 'approval' }), 'no live entry is left').toEqual([]);
-    expect(db.listAccessLog(journal), 'undone without an access line').toEqual([]);
+    // sanctioned by PR-4 v2.2 note c — the lines are exactly the setup's (the grant and the reader's query); the undo adds none.
+    expect(linesOf(journal).map((l) => l.kind), 'undone without an access line').toEqual(['read', 'granted']);
     expect(__scopedReadCachedGrantsForTests()).not.toContain(theirs.id);
     expect(doorbells()).toContainEqual({ appId: journal, event: DATA_CHANGED_EVENT, data: { table: 'entries' } });
     expect(doorbells()).toContainEqual({ appId: pantry, event: ACCESS_SOURCE_CHANGED_EVENT, data: { grantId: theirs.id } });

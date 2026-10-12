@@ -360,9 +360,10 @@ describe('PR-4 — the row: chip, act, attention, delete warning (D-PR4-8, D-PR4
     expect(attention?.querySelector('span')?.textContent).toBe(text);
     const act1 = rowEl(c).querySelector('[data-testid="schedule-attention-act"]');
     expect(act1?.textContent).toBe('review');
+    // sanctioned by PR-4 v2.2 note f — the group is read before the click navigates away from the list.
+    expect(c.querySelector('[data-testid="schedule-group-attention"] [data-schedule-id="t1"]'), 'it sits under needs your attention').not.toBeNull();
     await harness.click(act1);
     expect(path).toBe('/schedule/t1');
-    expect(c.querySelector('[data-testid="schedule-group-attention"] [data-schedule-id="t1"]'), 'it sits under needs your attention').not.toBeNull();
   });
 
   it('paused by an app update on a schedule that was armed: the armed paused copy, resume the act', async () => {

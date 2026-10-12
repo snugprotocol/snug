@@ -62,7 +62,12 @@ function useAccessPausing(appId: string, enabled: boolean): string | undefined {
 
 export function UpdatePausesNote({ appId, source }: { appId: string; source: ReaderVersionSource }): ReactElement | null {
   const { tasks } = useScheduler();
-  const schedules = updatePausesSentence(schedulesNamingApp(tasks, appId).map((task) => task.title));
+  const named = schedulesNamingApp(tasks, appId);
+  // An update disarms every armed schedule naming the app (D-PR4-8), so the confirm says so first.
+  const schedules = updatePausesSentence(
+    named.map((task) => task.title),
+    { armed: named.some((task) => task.writeAuthority !== undefined) },
+  );
   const access = useAccessPausing(appId, readerUpdateSuspends(source));
   if (schedules === undefined && access === undefined) return null;
   return (

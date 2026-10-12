@@ -87,6 +87,49 @@ describe('AgentUpdateControls', () => {
     expect(q('agent-update-confirm')).not.toBeNull();
   });
 
+  // sanctioned by PR-4 v2.2 note i — an update disarms an armed schedule (D-PR4-8), so the confirm says that too.
+  it('a named schedule that makes changes on its own: the note carries the armed tail; its unarmed twin keeps today’s sentence', async () => {
+    const seat: AgentHandInSeat = {
+      pending: createStore<readonly PendingAgentUpdate[]>([{ appId: 'app-1', displayName: 'Pomodoro', bundleId: 'b2' }]),
+      apply: vi.fn(async () => ({ version: 3 })),
+    };
+    await mount(hostPlatform(seat), 'app-1');
+    const { schedulerStore } = await import('../schedule/scheduler.js');
+    const { updatePausesSentence } = await import('../schedule/appDrift.js');
+    const base = schedulerStore.get();
+    const task = (armed: boolean) =>
+      ({
+        id: 'n',
+        title: 'Nightly',
+        enabled: true,
+        provenance: 'user',
+        steps: [],
+        spec: { kind: 'every', n: 1, unit: 'hours', tz: 'UTC' },
+        cron: '0 * * * *',
+        missedPolicy: 'ask',
+        staleAfterMs: 3_600_000,
+        alert: 'inbox',
+        appVersions: { 'app-1': 1 },
+        createdAt: 'x',
+        updatedAt: 'x',
+        consecutiveFailures: 0,
+        unseenResults: 0,
+        ...(armed ? { writeAuthority: { rowsPerRun: 200, armedAt: '2026-10-08T09:00:00.000Z', armedVersion: 1 } } : {}),
+      }) as (typeof base.tasks)[number];
+    act(() => {
+      schedulerStore.set({ ...base, tasks: [task(true)] });
+    });
+    click(q('agent-update'));
+    expect(q('update-pauses-note')?.textContent).toBe(updatePausesSentence(['Nightly'], { armed: true }));
+    expect(q('update-pauses-note')?.textContent).toBe(
+      'Updating pauses the schedule that runs this app — “Nightly” — and stops it making changes on its own until you turn it back on from the Schedule page.',
+    );
+    act(() => {
+      schedulerStore.set({ ...base, tasks: [task(false)] });
+    });
+    expect(q('update-pauses-note')?.textContent, 'the unarmed twin').toBe('Updating pauses the schedule that runs this app — “Nightly” — until you turn it back on from the Schedule page.');
+  });
+
   it('web (positive twin) and a host without the seat: nothing', async () => {
     await mount(undefined, 'app-1');
     expect(q('agent-update')).toBeNull();

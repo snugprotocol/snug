@@ -21,6 +21,8 @@
 import type { UserDb } from '@snugprotocol/db';
 import { SCHEDULE_PROPOSAL_SUMMARY_MAX_CHARS, findScheduleCredential, scheduleProposalItemSchema, type ScheduleProposalItem } from '@snugprotocol/protocol';
 
+import { appMidChange } from '../access/copy.js';
+
 /** One change as a step offers it: the statement and, optionally, its one-line reason. */
 export interface ProposalCandidate {
   sql: string;
@@ -39,13 +41,8 @@ export type ProposalVerdict = { ok: true; item: ScheduleProposalItem } | { ok: f
  */
 export const OWN_CAPTURE_RULE = 'literal values or ?, a WHERE on UPDATE/DELETE, no functions, arithmetic or conflict clause';
 
-/** What the model reads when the app is mid-change — it names the app the step asked (T-A-12). */
-export function appBusy(appName: string): string {
-  return `${appName} is in the middle of a change — try later`;
-}
-
-/** The same, as a tool's answer. */
-export const appBusyAnswer = (appName: string): string => `Error: ${appBusy(appName)}`;
+/** What the model reads, as a tool's answer, when the app is mid-change — it names the app the step asked (T-A-12); the sentence is access/copy.ts's. */
+export const appBusyAnswer = (appName: string): string => `Error: ${appMidChange(appName)}`;
 
 /**
  * Admit one candidate for `appId`, or say why not — the four questions above, nothing past a

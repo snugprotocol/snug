@@ -156,7 +156,7 @@ import {
 import type { AccessHandlerResult } from '@snugprotocol/runner';
 
 import type { ExecuteApprovedWriteOutcome, PendingWriteProposal } from '../agent/dataTools.js';
-import { ACCESS_APP_MESSAGES, ACCESS_SHEET, OWN_UNDO, type UndoFailureReason, type WriteRefusalRule } from './copy.js';
+import { ACCESS_APP_MESSAGES, ACCESS_SHEET, OWN_UNDO, appMidChange, type UndoFailureReason, type WriteRefusalRule } from './copy.js';
 import { ringDataChanged, ringSourceChanged } from './doorbell.js';
 import { isExpired } from './grantFacts.js';
 import { accessDeps, bumpAccessRevision, findAccessGrant, grantsForApp, iso, markExpiredOnce, noteTimeout, readerNameOf, suspendAccess, type FoundAccessGrant } from './grants.js';
@@ -470,7 +470,7 @@ export async function brokeredWrite(db: UserDb, input: BrokeredWriteRequest): Pr
 // --------------------------------------------------------------------------------------- own writes
 
 /** The busy sentence an own write answers with: the app by its name, so the user knows what to wait for. */
-const midChange = (db: UserDb, appId: string): string => `${readerNameOf(db, appId)} is in the middle of a change — try later`;
+const midChange = (db: UserDb, appId: string): string => appMidChange(readerNameOf(db, appId));
 
 /** The caps an own write captures under: the call's own bound on the rows, and the steps' bytes as strict mode's — the entry's cap less its reserve (SEC-1). */
 const ownCaps = (maxChanges: number): BrokeredCaps => ({ maxChanges, maxUndoBytes: STRICT_CAPS.maxUndoBytes });

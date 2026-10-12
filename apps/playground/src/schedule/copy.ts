@@ -324,6 +324,11 @@ export function ranOutOfTurns(appName: string, lookups: number): string {
   return `${appName}’s AI looked things up ${lookups} ${lookups === 1 ? 'time' : 'times'} and ran out of turns before answering`;
 }
 
+/** The same step's own deadline hit before the brain answered (D-PR4-15, D-I2b-12) — the time twin of `ranOutOfTurns`. */
+export function ranOutOfTime(appName: string, lookups: number): string {
+  return `${appName}’s AI looked things up ${lookups} ${lookups === 1 ? 'time' : 'times'} and ran out of time before answering`;
+}
+
 /** This tab lost the leader election (E2): another tab is ticking for this file. */
 export const followerTab = 'scheduling runs in another tab';
 

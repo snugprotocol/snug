@@ -597,6 +597,16 @@ export const OWN_UNDO = {
   failed: ACCESS_SHEET.undoFailed,
 } as const;
 
+/**
+ * What an app's OWN change is answered with while that app is mid-change (its frame's BEGIN — the
+ * driver's `inTransaction`): the app by its name, so the user and the model know what to wait for
+ * (TASK-20261010-host-broker PR-4, D-PR4-5; T-A-12). ONE home: the write broker's own writes and
+ * the schedule's proposal gate (and the scheduled agent through it) say it from here.
+ */
+export function appMidChange(appName: string): string {
+  return `${appName} is in the middle of a change — try later`;
+}
+
 const SUSPEND_HISTORY_WORDS: Readonly<Record<AccessSuspendReason, string>> = {
   'reader-updated': 'it was updated',
   imported: 'arrived with an imported file',

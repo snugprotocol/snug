@@ -17,7 +17,7 @@ import { MemoryRouter, Route, Routes, type NavigateFunction, type NavigateOption
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { UserDb } from '@snugprotocol/db';
-import { RUN_STATUSES, SCHEDULE_HELD_REASONS, SCHEDULE_PROPOSAL_TTL_MS, type ScheduleProposalItem, type ScheduleRun, type ScheduleStep, type ScheduledTask } from '@snugprotocol/protocol';
+import { RUN_STATUSES, SCHEDULE_HELD_REASONS, SCHEDULE_PROPOSAL_TTL_MS, type OwnUndoEntry, type ScheduleProposalItem, type ScheduleRun, type ScheduleStep, type ScheduledTask } from '@snugprotocol/protocol';
 
 import { ACCESS_SHEET, OWN_UNDO } from '../access/copy.js';
 import type { SnugPlatform } from '../platform/platform.js';
@@ -621,7 +621,8 @@ const ARMED = { rowsPerRun: 200, armedAt: '2026-10-08T09:00:00.000Z', armedVersi
 const armedTask = (over: Partial<ScheduledTask> = {}): ScheduledTask => task({ writeAuthority: ARMED, ...over } as Partial<ScheduledTask>);
 
 /** A live task-bucket entry for the two coffees (rowid 1 and 3), seeded relative to the real clock. */
-function taskEntry(id: string, rows = 2): Record<string, unknown> {
+// sanctioned by PR-4 v2.2 note h — typed as the entry `putOwnUndo` takes, so the test tsc is clean.
+function taskEntry(id: string, rows = 2): OwnUndoEntry {
   const at = Date.now() - 3 * 3_600_000;
   return {
     id,
@@ -919,24 +920,25 @@ describe('PR-4 — each step’s ONE host line, stepFacts (D-PR4-18; D18, R-88)'
   });
 
   it('what it looked up, through which connection (slot names on the row, the connection’s name on the page)', async () => {
+    // sanctioned by PR-4 v2.2 note g — a provider the registry does not know, so the 'inference' declaration is admitted as written.
     db.putDeclaredConnection(
       'ledger',
-      'spotify',
+      'songbook',
       {
-        slot: 'spotify',
+        slot: 'songbook',
         kind: 'api_key',
-        provider: { name: 'Spotify' },
+        provider: { name: 'Songbook' },
         fields: [{ key: 'api_key', label: 'API key', type: 'secret' }],
         request: { headerTemplate: { Authorization: 'Bearer {{api_key}}' } },
-        declaredApiHosts: ['api.spotify.example'],
+        declaredApiHosts: ['api.songbook.example'],
       },
       'inference',
     );
-    db.approveConnection('ledger', 'spotify');
-    seed(task(), run({ steps: [{ status: 'ok', tools: { used: 3, fetched: [{ connection: 'spotify', calls: 3 }] } } as never] }));
+    db.approveConnection('ledger', 'songbook');
+    seed(task(), run({ steps: [{ status: 'ok', tools: { used: 3, fetched: [{ connection: 'songbook', calls: 3 }] } } as never] }));
     await initScheduler(deps());
     const el = await open();
-    expect(facts(el)[0]).toBe('Snug did this itself — Ledger didn’t open · looked things up 3 times through Spotify');
+    expect(facts(el)[0]).toBe('Snug did this itself — Ledger didn’t open · looked things up 3 times through Songbook');
   });
 
   it('a brain that could not look things up: the step says so on the result too', async () => {

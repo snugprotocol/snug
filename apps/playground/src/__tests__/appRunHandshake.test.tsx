@@ -1028,7 +1028,8 @@ describe('a delegated run — the app is OPEN (ADR-0077)', () => {
       deps.live.open(appId);
       const step: AppRunStep = { kind: 'app-run', appId };
       const outcome = await executeAppRun(step, ctx(step, { trigger: 'manual' }).context, deps);
-      expect(outcome).toEqual({ status: 'failed', summary: APP_CLOSED_SUMMARY, calls: { ai: 0, net: 0 } });
+      // sanctioned by PR-4 v2.2 note e — D-PR4-17: a run that ran in the open app says so.
+      expect(outcome).toEqual({ status: 'failed', summary: APP_CLOSED_SUMMARY, calls: { ai: 0, net: 0 }, inOpenApp: true });
       expect(deps.live.notified).toEqual([]);
       expect(mounts).toEqual([]);
       expect('value' in (await kv())).toBe(false);
@@ -1318,7 +1319,8 @@ describe('the live frame — a MANUAL run with the app on screen', () => {
     expect(deps.live.notified[0]).toEqual({ appId, event: SCHEDULE_RUN_EVENT, data: { taskId: 'task-1', runId: RUN_ID } });
     expect(await kvValue()).toEqual({ taskId: 'task-1', runId: RUN_ID, input: 1 });
     deps.live.emit(appId, SCHEDULE_RESULT_EVENT, { ok: true, summary: 'refreshed on screen' });
-    expect(await pending).toEqual({ status: 'ok', summary: 'refreshed on screen', calls: { ai: 0, net: 0 } });
+    // sanctioned by PR-4 v2.2 note e — D-PR4-17: a run that ran in the open app says so.
+    expect(await pending).toEqual({ status: 'ok', summary: 'refreshed on screen', calls: { ai: 0, net: 0 }, inOpenApp: true });
     expect('value' in (await kv())).toBe(false);
   });
 
@@ -1327,7 +1329,8 @@ describe('the live frame — a MANUAL run with the app on screen', () => {
     deps.live.open(appId);
     const step: AppRunStep = { kind: 'app-run', appId };
     const outcome = await executeAppRun(step, ctx(step, { trigger: 'manual' }).context, deps);
-    expect(outcome).toEqual({ status: 'failed', summary: appDidNotAnswer(QUICK_RESULT_MS), calls: { ai: 0, net: 0 } });
+    // sanctioned by PR-4 v2.2 note e — D-PR4-17: a run that ran in the open app says so.
+    expect(outcome).toEqual({ status: 'failed', summary: appDidNotAnswer(QUICK_RESULT_MS), calls: { ai: 0, net: 0 }, inOpenApp: true });
     expect('value' in (await kv())).toBe(false);
   });
 
@@ -1338,7 +1341,8 @@ describe('the live frame — a MANUAL run with the app on screen', () => {
     const pending = executeAppRun(step, ctx(step, { trigger: 'manual' }).context, deps);
     await vi.waitFor(() => expect(deps.live.notified).toHaveLength(1));
     deps.live.close(appId);
-    expect(await pending).toEqual({ status: 'failed', summary: APP_CLOSED_SUMMARY, calls: { ai: 0, net: 0 } });
+    // sanctioned by PR-4 v2.2 note e — D-PR4-17: a run that ran in the open app says so.
+    expect(await pending).toEqual({ status: 'failed', summary: APP_CLOSED_SUMMARY, calls: { ai: 0, net: 0 }, inOpenApp: true });
     expect(APP_CLOSED_SUMMARY).toBe('the app was closed');
     expect('value' in (await kv())).toBe(false);
   });
@@ -1368,7 +1372,8 @@ describe('the live frame — a MANUAL run with the app on screen', () => {
     await vi.waitFor(() => expect(deps.live.notified).toHaveLength(1));
     expect(deps.live.notified[0]).toEqual({ appId, event: SCHEDULE_RUN_EVENT, data: { taskId: 'task-1', runId: RUN_ID } });
     deps.live.emit(appId, SCHEDULE_RESULT_EVENT, { ok: true, summary: 'ran once it was ready' });
-    expect(await pending).toEqual({ status: 'ok', summary: 'ran once it was ready', calls: { ai: 0, net: 0 } });
+    // sanctioned by PR-4 v2.2 note e — D-PR4-17: a run that ran in the open app says so.
+    expect(await pending).toEqual({ status: 'ok', summary: 'ran once it was ready', calls: { ai: 0, net: 0 }, inOpenApp: true });
   });
 });
 

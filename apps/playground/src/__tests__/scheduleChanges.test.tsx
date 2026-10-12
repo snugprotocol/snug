@@ -21,7 +21,7 @@ import { act } from 'react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { ScheduleStep, ScheduledTask } from '@snugprotocol/protocol';
+import type { OwnUndoEntry, ScheduleStep, ScheduledTask } from '@snugprotocol/protocol';
 
 import { ACCESS_SHEET, OWN_UNDO } from '../access/copy.js';
 import { ROW } from '../schedule/copy.page.js';
@@ -53,7 +53,8 @@ const armedTask = (over: Partial<ScheduledTask> = {}): ScheduledTask =>
   harness.makeTask({ id: 't1', title: 'Tidy', steps: [ask], appVersions: { ledger: 1 }, writeAuthority: { rowsPerRun: 200, armedAt: ARMED_AT, armedVersion: 1 }, ...over } as Partial<ScheduledTask>);
 
 /** An entry that changed `rows` coffees from 450 to 999 at `agoMs` before NOW, in `taskId`'s bucket. */
-function entry(id: string, over: Record<string, unknown> = {}, rows = ROWS, agoMs = 3 * harness.HOUR): Record<string, unknown> {
+// sanctioned by PR-4 v2.2 note h — typed as the entry `putOwnUndo` takes, so the test tsc is clean.
+function entry(id: string, over: Partial<OwnUndoEntry> = {}, rows = ROWS, agoMs = 3 * harness.HOUR): OwnUndoEntry {
   const at = harness.NOW - agoMs;
   return {
     id,

@@ -369,7 +369,8 @@ describe('the scheduler door — the production executor composes sharedFor besi
         },
       };
       const outcome = await executeStep(think, context([think]));
-      expect(outcome).toEqual({ status: 'ok', summary: 'read it', calls: { ai: 1, net: 0 } });
+      // sanctioned by PR-4 v2.2 note d — D-PR4-17: the outcome names what the step saw, only the recorded grant's table.
+      expect(outcome).toEqual({ status: 'ok', summary: 'read it', calls: { ai: 1, net: 0 }, saw: [{ source: 'Ledger', table: 'transactions' }] });
 
       const caller = { kind: 'schedule', appId: 'app-1', taskId: 'task-1', runId: 'run-1' };
       expect(materialise).toHaveBeenCalledTimes(1);
