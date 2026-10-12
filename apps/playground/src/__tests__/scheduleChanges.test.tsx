@@ -237,3 +237,66 @@ describe('undo from the list — the result page’s armed confirm (D-PR4-18, D-
     expect((await cents())[1], 'nothing was put back').toBe(999);
   });
 });
+
+// =============================================================================================
+// TASK-20261010-host-broker PR-4 Gate 5 — U6: the result page's link `/schedule?history=<id>` lands
+// ON the history — opened, scrolled to and focused (`tabIndex={-1}`) — never at the top of the page
+// with focus on <body>. jsdom has no layout, so `scrollIntoView` is stubbed and observed.
+// =============================================================================================
+
+describe('PR-4 Gate-5 U6 — arriving from the result page’s link lands on the history', () => {
+  function renderAt(path: string): HTMLDivElement {
+    return harness.mount(
+      <MemoryRouter initialEntries={[path]}>
+        <Routes>
+          <Route path="/schedule" element={<ScheduleView />} />
+          <Route path="/schedule/:id" element={<span data-testid="editor-route" />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+  }
+
+  const original = Element.prototype.scrollIntoView;
+  let scrolled: Element[] = [];
+
+  beforeEach(() => {
+    scrolled = [];
+    Element.prototype.scrollIntoView = function scrollIntoView(this: Element): void {
+      scrolled.push(this);
+    };
+  });
+
+  afterEach(() => {
+    Element.prototype.scrollIntoView = original;
+  });
+
+  it('/schedule?history=t1 opens t1’s history, scrolls it into view and moves the focus into it', async () => {
+    env.db.putScheduledTask(armedTask());
+    env.db.putOwnUndo('ledger', 't1', entry(ENTRY_T1));
+    await env.boot();
+    const c = renderAt('/schedule?history=t1');
+    await harness.settle();
+    const history = c.querySelector<HTMLElement>('[data-schedule-id="t1"] [data-testid="schedule-history"]');
+    expect(history, 'the history is open on arrival').not.toBeNull();
+    expect(history?.getAttribute('tabindex'), 'focusable without joining the tab order').toBe('-1');
+    expect(history!.contains(document.activeElement), 'focus is in the history, never on <body>').toBe(true);
+    expect(scrolled.some((el) => el === history || history!.contains(el)), 'scrolled to it').toBe(true);
+    expect(entries(c)).toHaveLength(1);
+  });
+
+  it('NEGATIVE: another schedule’s row is not opened, and a plain /schedule moves neither focus nor scroll', async () => {
+    env.db.putScheduledTask(armedTask());
+    env.db.putScheduledTask(armedTask({ id: 't2', title: 'Other' }));
+    await env.boot();
+    const c = renderAt('/schedule?history=t1');
+    await harness.settle();
+    expect(c.querySelector('[data-schedule-id="t2"] [data-testid="schedule-history"]')).toBeNull();
+    harness.unmount();
+    scrolled = [];
+    const plain = renderAt('/schedule');
+    await harness.settle();
+    expect(plain.querySelector('[data-testid="schedule-history"]')).toBeNull();
+    expect(scrolled).toEqual([]);
+    expect(document.activeElement === document.body || document.activeElement === null).toBe(true);
+  });
+});

@@ -45,7 +45,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ConnectedFetchDeps, NetRequestInput } from '@snugprotocol/auth';
 import { authConnectionCredentialSecretKey, authConnectionStateSecretKey, type UserDb } from '@snugprotocol/db';
 import { getToolPrompt } from '@snugprotocol/knowledge';
-import { FETCH_CONNECTION_MAX_CHARS, SIDECAR_SYMBOLIC_HOST } from '@snugprotocol/protocol';
+import { APP_AGENT_DEADLINE_MARGIN_MS, FETCH_CONNECTION_MAX_CHARS, SIDECAR_SYMBOLIC_HOST } from '@snugprotocol/protocol';
 
 const h = vi.hoisted(() => ({
   built: [] as unknown[],
@@ -419,13 +419,16 @@ describe('negatives — each refused BY NAME before the executor (AC30)', () => 
 });
 
 describe('the deps — a scheduled run’s, with no sidecar transport', () => {
-  it('createConnectedFetch gets NO sidecarFetch (even on a platform that has one), requestTimeoutMs 30_000 and a fresh scheduled confirm gate', async () => {
+  // INVERTED by PR-4 Gate-5 J5 — the request timeout drops below the agent's 30 s deadline margin so the
+  // margin holds even for a fetch the signal cannot reach. Was: `expect(deps.requestTimeoutMs).toBe(30_000);`
+  it('createConnectedFetch gets NO sidecarFetch (even on a platform that has one), requestTimeoutMs 20_000 and a fresh scheduled confirm gate', async () => {
     const built = build();
     await built.run({ connection: KEY_SLOT, path: '/v1/top-track' });
     expect(h.built.length).toBeGreaterThan(0);
     for (const deps of h.built as ConnectedFetchDeps[]) {
       expect('sidecarFetch' in deps).toBe(false);
-      expect(deps.requestTimeoutMs).toBe(30_000);
+      expect(deps.requestTimeoutMs).toBe(20_000);
+      expect(deps.requestTimeoutMs!).toBeLessThan(APP_AGENT_DEADLINE_MARGIN_MS);
       expect(h.gates).toContain(deps.confirmGate);
     }
   });
@@ -558,6 +561,51 @@ describe('the turn’s signal', () => {
     const built = build({ signal: controller.signal });
     await built.run({ connection: KEY_SLOT, path: '/v1/a' });
     expect(built.fetches).toEqual([]);
+  });
+
+  // PR-4 Gate-5 J5 [JOBS-F5] — the fetch carries the turn's signal (`AbortSignal.any` over the executor's own).
+  it('a fetch IN FLIGHT hears the turn’s abort: the transport’s signal fires and the tool answers at once', async () => {
+    const controller = new AbortController();
+    let seen: AbortSignal | undefined;
+    const tool = buildFetchConnectionTool({
+      appId: APP,
+      getDb: () => getUserDb(),
+      taint: () => false,
+      signal: controller.signal,
+      fetchImpl: (_url: string, init?: RequestInit) =>
+        new Promise<Response>((resolve, reject) => {
+          seen = init?.signal ?? undefined;
+          init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true });
+          // The red case's bound, in real time: a transport the turn cannot reach answers late.
+          setTimeout(() => resolve(new Response('{"late":true}', { status: 200, headers: { 'content-type': 'application/json' } })), 400);
+        }),
+    });
+    const pending = Promise.resolve(tool.run({ connection: KEY_SLOT, path: '/v1/slow' })).then(String);
+    await vi.waitFor(() => expect(seen).toBeDefined());
+    controller.abort();
+    const answer = await Promise.race([pending, new Promise<string>((resolve) => setTimeout(() => resolve('STILL IN FLIGHT'), 150))]);
+    expect(seen?.aborted, 'the transport’s signal is the turn’s too').toBe(true);
+    expect(answer).not.toBe('STILL IN FLIGHT');
+    expect(answer).not.toContain('"late":true');
+    await pending; // settle the red case's late answer before the next row
+  });
+
+  it('the executor’s own timeout signal still rides alongside: an un-aborted turn’s fetch carries a live signal', async () => {
+    const controller = new AbortController();
+    let seen: AbortSignal | undefined;
+    const tool = buildFetchConnectionTool({
+      appId: APP,
+      getDb: () => getUserDb(),
+      taint: () => false,
+      signal: controller.signal,
+      fetchImpl: async (_url: string, init?: RequestInit) => {
+        seen = init?.signal ?? undefined;
+        return new Response('{"top":"song"}', { status: 200, headers: { 'content-type': 'application/json' } });
+      },
+    });
+    expect(String(await tool.run({ connection: KEY_SLOT, path: '/v1/a' }))).toContain('"top":"song"');
+    expect(seen).toBeDefined();
+    expect(seen?.aborted).toBe(false);
   });
 });
 

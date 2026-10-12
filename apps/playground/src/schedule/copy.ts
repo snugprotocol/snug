@@ -28,7 +28,7 @@
 
 import type { AlertKind, MissedPolicy, PausedReason, RunStatus, ScheduleDisarmedReason, ScheduleHostKind, ScheduleStep, StepResultStatus } from '@snugprotocol/protocol';
 
-import { rowsWord } from '../access/copy.js';
+import { appMidChange, rowsWord } from '../access/copy.js';
 import { PAUSE_AFTER_FAILURES, PAUSE_AFTER_UNSEEN } from './protection.js';
 
 /** The user-facing nouns (Q8). Views compose sentences from these rather than respelling them. */
@@ -281,6 +281,15 @@ export type CappedWhat = 'AI call' | 'network call';
 /** The global daily ceiling was reached (E7); `what` names it. No act — tomorrow is the act. */
 export function capped(what: CappedWhat): string {
   return `daily ${what} limit reached — resumes tomorrow`;
+}
+
+/**
+ * Which ceiling a capped run reached, read back from its reason (PR-4 Gate 5, U14; J6): the queue
+ * words a capped step's kind as `capped(<what>)`, so the network one is named by its own words; any
+ * other reason — the AI sentence, a step's own words, none — is the AI ceiling, PR-A's only one.
+ */
+export function cappedWhatOf(reason: string | undefined): CappedWhat {
+  return reason?.includes('network call') === true ? 'network call' : 'AI call';
 }
 
 /** Arrived disabled with an untrusted import (C4); the one act is review. */
@@ -569,3 +578,16 @@ export const REFRESH_RUN = {
 
 /** The reconnect chip's attribution when a 401/403 happened inside a fetch another app asked for (DS20). */
 export const AUTH_REPAIR_VIA_REFRESH = 'a fetch another app asked for ran into this';
+
+// ---------------------------------------------------------------------------------------------
+// Suggested changes an *ask* step could not check (TASK-20261010-host-broker PR-4 Gate 5, JOBS-F8)
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * Appended to an *ask* step's answer when the app was in the middle of a change, so its suggested
+ * changes were never tried on a copy. Nothing was wrong with them — the note never says they were
+ * not safe to keep (that is a change that failed its checks); the busy words are the access door's.
+ */
+export function busyNote(count: number, appName: string): string {
+  return `${count} suggested ${count === 1 ? 'change' : 'changes'} not kept — ${appMidChange(appName)}`;
+}

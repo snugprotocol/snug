@@ -18,6 +18,8 @@
 //
 // Assumed seam (Q-T-A-3): `gateProposal(db, appId, candidate: {sql, summary?})` →
 //   `{ok:true, item}` | `{ok:false, reason: 'invalid' | 'credential' | 'busy' | 'failed'}`.
+// PR-4 Gate-5 (J1, J10): a fifth refusal `'placeholder'` (an unbound `?`/`?N`/`:v`/`@v`/`$v`), and
+// `failed` carries `detail` — SQLite's own words from the copy.
 //
 // RED until `schedule/proposalGate.ts` exists (the static import below fails the file).
 
@@ -136,19 +138,81 @@ describe('gateProposal — refusals, in the contract’s order (nothing past a r
     expect(scratch).not.toHaveBeenCalled();
   });
 
-  it('a dry run that fails (an unknown column) → failed', async () => {
+  // ADAPTED by PR-4 Gate-5 J10 (the gate's `failed` carries SQLite's detail): was
+  //   expect(verdict).toEqual({ ok: false, reason: 'failed' });
+  it('a dry run that fails (an unknown column) → failed, carrying SQLite’s detail (J10)', async () => {
     const verdict = await gateProposal(db, appId, { sql: 'UPDATE t SET nope = 1 WHERE id = 1' });
-    expect(verdict).toEqual({ ok: false, reason: 'failed' });
+    expect(verdict).toEqual({ ok: false, reason: 'failed', detail: expect.stringContaining('no such column') });
   });
 
+  // ADAPTED by PR-4 Gate-5 J10: was `expect(verdict).toEqual({ ok: false, reason: 'failed' });`
   it('a statement naming a shared alias table is "no such table" on the copy → failed (the dry run never attaches)', async () => {
     const verdict = await gateProposal(db, appId, { sql: 'UPDATE ledger__transactions SET amount = 0 WHERE id = 1' });
-    expect(verdict).toEqual({ ok: false, reason: 'failed' });
+    expect(verdict).toEqual({ ok: false, reason: 'failed', detail: expect.stringContaining('no such table') });
   });
 
+  // ADAPTED by PR-4 Gate-5 J10: was `expect(verdict).toEqual({ ok: false, reason: 'failed' });` — a throw carries no SQLite detail of its own.
   it('a scratch run that throws → failed, never a throw', async () => {
     vi.spyOn(db, 'scratchRun').mockRejectedValue(new Error('worker gone'));
     const verdict = await gateProposal(db, appId, { sql: 'DELETE FROM t WHERE id = 1' });
-    expect(verdict).toEqual({ ok: false, reason: 'failed' });
+    expect(verdict).toMatchObject({ ok: false, reason: 'failed' });
+  });
+
+  it('J10 — a constraint failure on the copy carries SQLite’s own words (NOT NULL), so the model is not sent to fix names that are right', async () => {
+    const verdict = await gateProposal(db, appId, { sql: "INSERT INTO t (id, label) VALUES (4, 'x')" });
+    expect(verdict).toMatchObject({ ok: false, reason: 'failed' });
+    expect((verdict as { detail?: string }).detail).toMatch(/NOT NULL constraint failed/);
   });
 });
+
+// =================================================================================================
+// PR-4 Gate-5 J1 [JOBS-F1, major] — an UNBOUND placeholder is refused BEFORE any dry run.
+//
+// A scheduled change carries no params (the item has no seat for one), so a `?`, `?N`, `:v`, `@v` or
+// `$v` outside quoted text would bind NULL on the copy AND on the real data. The gate blanks the
+// quoted text (`'…'` and `"…"`) first, then tests `/(?<![\w$])(?:\?\d*|[:@$][A-Za-z_]\w*)/`; a match is
+// `{ok:false, reason:'placeholder'}`, and neither `inTransaction` nor the dry run is asked.
+// =================================================================================================
+
+describe('PR-4 Gate-5 J1 — an unbound placeholder is refused before any dry run', () => {
+  const PLACEHOLDERS = [
+    ['?', 'UPDATE t SET label = ? WHERE id = 1'],
+    ['?1', 'UPDATE t SET label = ?1 WHERE id = 1'],
+    [':v', 'UPDATE t SET label = :v WHERE id = 1'],
+    ['@v', 'UPDATE t SET label = @v WHERE id = 1'],
+    ['$v', 'UPDATE t SET label = $v WHERE id = 1'],
+    ['? in the WHERE', "UPDATE t SET label = 'chai' WHERE id = ?"],
+    ['? in an INSERT', 'INSERT INTO t (id, label, cents) VALUES (4, ?, 1)'],
+    ['? in a DELETE', 'DELETE FROM t WHERE id = ?'],
+  ] as const;
+
+  for (const [name, sql] of PLACEHOLDERS) {
+    it(`${name} → placeholder; neither inTransaction nor the dry run is asked`, async () => {
+      const busy = vi.spyOn(db.driver, 'inTransaction');
+      const scratch = vi.spyOn(db, 'scratchRun');
+      const verdict = await gateProposal(db, appId, { sql });
+      expect(verdict).toEqual({ ok: false, reason: 'placeholder' });
+      expect(busy).not.toHaveBeenCalled();
+      expect(scratch).not.toHaveBeenCalled();
+    });
+  }
+
+  const QUOTED = [
+    ['a ? inside single quotes', "UPDATE t SET label = 'what?' WHERE id = 1"],
+    ['a :word inside single quotes', "UPDATE t SET label = 'at 9:30 :v' WHERE id = 1"],
+    ['an @ and a $ inside single quotes', "UPDATE t SET label = 'me@home $v' WHERE id = 1"],
+  ] as const;
+
+  for (const [name, sql] of QUOTED) {
+    it(`the passing twin — ${name} is text, not a placeholder: admitted with its count`, async () => {
+      const verdict = await gateProposal(db, appId, { sql });
+      expect(verdict.ok, JSON.stringify(verdict)).toBe(true);
+    });
+  }
+
+  it('double-quoted text is blanked too — a `?` inside "…" is never read as a placeholder (whatever the copy then says of it)', async () => {
+    const verdict = await gateProposal(db, appId, { sql: 'UPDATE t SET label = "why?" WHERE id = 1' });
+    expect(verdict.ok === false && verdict.reason === 'placeholder', JSON.stringify(verdict)).toBe(false);
+  });
+});
+

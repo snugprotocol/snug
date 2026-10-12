@@ -19,6 +19,7 @@ import { OWN_UNDO_MAX_LIVE, OWN_UNDO_ROW_MAX_BYTES, scheduledTaskSchema, type Ow
 import { locateWasm } from '../../__tests__/helpers.js';
 import { createMemoryBackend, type MemoryBackend } from '../../persistence.js';
 import { ownUndoKey } from '../app-settings-keys.js';
+import * as ownUndoModule from '../own-undo.js';
 import { UserDbError, openUserDb, type UserDb } from '../userdb.js';
 
 let backend: MemoryBackend;
@@ -363,5 +364,111 @@ describe('import — an UNTRUSTED file drops every ownUndo:* row; a TRUSTED pull
     expect(own(target).listOwnUndo(LEDGER, { taskId: 'task-1' })).toEqual([task]);
     expect(own(target).listOwnUndo(LEDGER, { bucket: 'approval' })).toEqual([approved]);
     await target.close();
+  });
+});
+
+// =================================================================================================
+// PR-4 Gate-5 A1 (the bucket rule, one predicate), A12 (undone-but-unexpired entries on request),
+// A13 (the room check stays the gate; the live count is the listing's).
+// =================================================================================================
+
+type Belongs = (bucket: string, entry: { authority: 'task' | 'approval'; taskId?: string }) => boolean;
+const belongs = (): Belongs => {
+  const fn = (ownUndoModule as Record<string, unknown>).ownUndoBelongsIn;
+  if (typeof fn !== 'function') throw new Error('ownUndoBelongsIn is not exported from own-undo.ts yet');
+  return fn as Belongs;
+};
+
+describe('PR-4 Gate-5 A1 — ownUndoBelongsIn(bucket, {authority, taskId}): ONE rule for the put, every read and the seat', () => {
+  it('approval ⇔ the approval bucket and no taskId', () => {
+    expect(belongs()('approval', { authority: 'approval' })).toBe(true);
+    expect(belongs()('approval', { authority: 'approval', taskId: 'task-1' })).toBe(false);
+    expect(belongs()('task-1', { authority: 'approval' })).toBe(false);
+  });
+
+  it('task ⇔ taskId === bucket, and the bucket is never approval (a task whose id spells it included)', () => {
+    expect(belongs()('task-1', { authority: 'task', taskId: 'task-1' })).toBe(true);
+    expect(belongs()('task-2', { authority: 'task', taskId: 'task-1' })).toBe(false);
+    expect(belongs()('task-1', { authority: 'task' })).toBe(false);
+    expect(belongs()('approval', { authority: 'task', taskId: 'approval' })).toBe(false);
+  });
+
+  it('it is exported from @snugprotocol/db (the engine asks it before any seat)', async () => {
+    const db = (await import('../../index.js')) as Record<string, unknown>;
+    expect(db.ownUndoBelongsIn).toBe((ownUndoModule as Record<string, unknown>).ownUndoBelongsIn);
+  });
+
+  it('putOwnUndo refuses a task entry into the approval bucket — the file byte-identical', async () => {
+    const before = await fileBytes();
+    expect(() => own().putOwnUndo(LEDGER, 'approval', ownEntry({ taskId: 'approval' }))).toThrow(UserDbError);
+    expect(await fileBytes()).toEqual(before);
+  });
+
+  it('listOwnUndo FILTERS by the rule: a planted element from another bucket is never listed (nor counted as live, nor kept on the next put)', () => {
+    const mine = ownEntry();
+    const otherTask = ownEntry({ taskId: 'task-2' });
+    const anApproval = approvalEntry();
+    db.setSetting(ownUndoKey(LEDGER, 'task-1'), [mine, otherTask, anApproval]); // planted: no put has filtered them
+    expect(own().listOwnUndo(LEDGER, { taskId: 'task-1' })).toEqual([mine]);
+
+    const aTasksChange = ownEntry({ taskId: 'approval' });
+    const approved = approvalEntry();
+    db.setSetting(ownUndoKey(LEDGER, 'approval'), [aTasksChange, approved]);
+    expect(own().listOwnUndo(LEDGER, { bucket: 'approval' })).toEqual([approved]);
+
+    const next = ownEntry();
+    expect(own().putOwnUndo(LEDGER, 'task-1', next)).toBe('ok');
+    expect(idsIn(db.getSetting(ownUndoKey(LEDGER, 'task-1')))).toEqual([next.id, mine.id]);
+  });
+
+  it('a planted out-of-bucket element takes no room (the twenty count only what belongs)', () => {
+    db.setSetting(
+      ownUndoKey(LEDGER, 'task-1'),
+      Array.from({ length: LIVE }, () => ownEntry({ taskId: 'task-2' })),
+    );
+    expect(own().ownUndoRoom(LEDGER, 'task-1')).toBe(true);
+  });
+});
+
+describe('PR-4 Gate-5 A12 — listOwnUndo(appId, which, {includeUndone}) reports undone-but-unexpired entries with their undoneAt', () => {
+  type ListWith = (appId: string, which: { taskId: string } | { bucket: 'approval' }, options?: { includeUndone?: boolean }) => OwnUndoEntry[];
+  const list = (): ListWith => (own().listOwnUndo as unknown as ListWith).bind(db);
+
+  it('without the option, only LIVE entries (as before); with it, the undone one too — carrying its undoneAt — newest first', () => {
+    const done = ownEntry({ at: iso(Date.now() - 60_000) });
+    const kept = ownEntry();
+    own().putOwnUndo(LEDGER, 'task-1', done);
+    own().putOwnUndo(LEDGER, 'task-1', kept);
+    const at = iso(Date.now());
+    own().markOwnUndone(LEDGER, 'task-1', done.id, at);
+    expect(list()(LEDGER, { taskId: 'task-1' }).map((e) => e.id)).toEqual([kept.id]);
+    expect(list()(LEDGER, { taskId: 'task-1' }, { includeUndone: false }).map((e) => e.id)).toEqual([kept.id]);
+    const all = list()(LEDGER, { taskId: 'task-1' }, { includeUndone: true });
+    expect(all.map((e) => e.id)).toEqual([kept.id, done.id]);
+    expect(all.find((e) => e.id === done.id)?.undoneAt).toBe(at);
+    expect(all.find((e) => e.id === kept.id)?.undoneAt).toBeUndefined();
+  });
+
+  it('an EXPIRED entry is never reported, undone or not', () => {
+    const expiredUndone = { ...ownEntry({ at: iso(Date.now() - 8 * DAY), expiresAt: iso(Date.now() - DAY) }), undoneAt: iso(Date.now() - 2 * DAY) };
+    db.setSetting(ownUndoKey(LEDGER, 'task-1'), [expiredUndone]);
+    expect(list()(LEDGER, { taskId: 'task-1' }, { includeUndone: true })).toEqual([]);
+  });
+
+  it('the approval bucket answers the same way', () => {
+    const approved = approvalEntry();
+    own().putOwnUndo(LEDGER, 'approval', approved);
+    own().markOwnUndone(LEDGER, 'approval', approved.id, iso(Date.now()));
+    expect(list()(LEDGER, { bucket: 'approval' })).toEqual([]);
+    expect(list()(LEDGER, { bucket: 'approval' }, { includeUndone: true }).map((e) => e.id)).toEqual([approved.id]);
+  });
+});
+
+describe('PR-4 Gate-5 A13 — ownUndoRoom stays the gate (a boolean); the live count the page words is the listing’s', () => {
+  it('four near-64-KiB live entries: no room, and the bucket’s real live count is 4 — not twenty', () => {
+    for (let i = 0; i < 4; i += 1) own().putOwnUndo(LEDGER, 'task-1', heavy());
+    expect(own().ownUndoRoom(LEDGER, 'task-1')).toBe(false);
+    expect(typeof own().ownUndoRoom(LEDGER, 'task-1')).toBe('boolean');
+    expect(own().listOwnUndo(LEDGER, { taskId: 'task-1' })).toHaveLength(4);
   });
 });

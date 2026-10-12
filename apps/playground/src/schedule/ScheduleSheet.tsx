@@ -27,6 +27,7 @@ import { getUserDb } from '../state/userdb.js';
 import '../theme/schedule-editor.css';
 import { Button } from '../ui/Button.js';
 import { ConfirmOverlay } from '../ui/ConfirmOverlay.js';
+import { blockedAppsOf } from './askBrain.js';
 import { EMPTY, stepLabel } from './copy.js';
 import { ACTIONS, SENTENCE, SHEET, STEPS } from './copy.editor.js';
 import { describeSpec } from './cron.js';
@@ -56,6 +57,8 @@ export function ScheduleSheet({ appId, onClose }: ScheduleSheetProps): ReactElem
   const [done, setDone] = useState<string | undefined>(undefined);
   const [hosts, setHosts] = useState<Record<string, string[]>>({});
   const [lookUps, setLookUps] = useState<Record<string, string[]>>({});
+  /** This app, when no brain here would answer its *ask* step — the consent says so on the step (U1). */
+  const [blocked, setBlocked] = useState<readonly string[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -65,6 +68,7 @@ export function ScheduleSheet({ appId, onClose }: ScheduleSheetProps): ReactElem
       if (app !== undefined) setName(app.displayName);
       setHosts(approvedHostsByApp(db, [appId]));
       setLookUps(lookUpNamesByApp(db, [appId]));
+      setBlocked(blockedAppsOf(db, [appId]));
     });
     return () => {
       cancelled = true;
@@ -143,6 +147,7 @@ export function ScheduleSheet({ appId, onClose }: ScheduleSheetProps): ReactElem
             appNames={{ [appId]: name }}
             hostsByApp={hosts}
             connectionsByApp={lookUps}
+            blockedApps={blocked}
             busy={busy}
             {...(error !== undefined ? { error } : {})}
             onEnable={(choice) => void commit(consent, choice)}

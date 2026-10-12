@@ -31,6 +31,7 @@ import {
   stepAvailability,
   type AppName,
 } from '../schedule/ScheduleStates.js';
+import { updateTask } from '../schedule/scheduler.js';
 import { ScheduleView } from '../views/ScheduleView.js';
 import * as harness from './scheduleUiHarness.js';
 
@@ -364,6 +365,21 @@ describe('PR-4 — the row: chip, act, attention, delete warning (D-PR4-8, D-PR4
     expect(c.querySelector('[data-testid="schedule-group-attention"] [data-schedule-id="t1"]'), 'it sits under needs your attention').not.toBeNull();
     await harness.click(act1);
     expect(path).toBe('/schedule/t1');
+  });
+
+  // PR-4 Gate-5 U8: the editor's save is the way out of the disarmed attention line — it clears the
+  // trace (v2.1 N3), and the row leaves *needs your attention* (the editor's half is scheduleEditor.test.tsx).
+  it('a disarmed schedule saved from its editor (any save through updateTask) leaves the attention group', async () => {
+    env.db.putScheduledTask(harness.makeTask({ id: 't1', title: 'Tidy', steps: [ask], appVersions: { ledger: 1 }, disarmed: { reason: 'app-updated', at: ARMED_AT } } as Partial<ScheduledTask>));
+    await env.boot();
+    const c = render();
+    await harness.settle();
+    expect(c.querySelector('[data-testid="schedule-group-attention"] [data-schedule-id="t1"]'), 'under needs your attention first').not.toBeNull();
+    const saved = await updateTask('t1', { title: 'Tidy', steps: [ask], spec: env.db.getScheduledTask('t1')!.spec });
+    expect(saved.ok).toBe(true);
+    await harness.settleUntil(() => c.querySelector('[data-testid="schedule-group-attention"] [data-schedule-id="t1"]') === null, 'the row leaves the attention group');
+    expect(env.db.getScheduledTask('t1')?.disarmed).toBeUndefined();
+    expect(rowEl(c).querySelector('[data-testid="schedule-attention"]'), 'no attention line left').toBeNull();
   });
 
   it('paused by an app update on a schedule that was armed: the armed paused copy, resume the act', async () => {

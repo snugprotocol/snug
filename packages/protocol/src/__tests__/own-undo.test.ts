@@ -121,7 +121,9 @@ describe('ownUndoEntrySchema — the shape', () => {
   });
 
   it('authority is approval | task only — permission (a grant\'s) is refused; via is chat | schedule | user only', () => {
-    for (const authority of OWN_WRITE_AUTHORITIES) expect(parses(ownUndoEntrySchema, entry({ authority })), authority).toBe(true);
+    // ADAPTED by PR-4 Gate-5 A1 (the refinement: authority task ⇔ taskId present) — a task entry now
+    // carries its taskId. Was: `for (const authority of OWN_WRITE_AUTHORITIES) expect(parses(ownUndoEntrySchema, entry({ authority })), authority).toBe(true);`
+    for (const authority of OWN_WRITE_AUTHORITIES) expect(parses(ownUndoEntrySchema, authority === 'task' ? taskEntry() : entry({ authority })), authority).toBe(true);
     expect(parses(ownUndoEntrySchema, entry({ authority: 'permission' }))).toBe(false);
     expect(parses(ownUndoEntrySchema, entry({ authority: 'cross' }))).toBe(false);
     expect(parses(ownUndoEntrySchema, entry({ via: 'app' }))).toBe(false);
@@ -255,5 +257,47 @@ describe('ownUndoEntrySchema — what admit() catches (D-PR4-4: the engine safeP
     expect(parses(ownUndoEntrySchema, withSteps(step({ rows: [{ rowid: 7, before: [{ a: 1 }, 'b'], after: ['c', 'd'] }] })))).toBe(false);
     expect(parses(ownUndoEntrySchema, withSteps(step({ rows: [{ rowid: 7, before: [['a'], 'b'], after: ['c', 'd'] }] })))).toBe(false);
     expect(parses(ownUndoEntrySchema, withSteps(step({ rows: [{ rowid: '7', before: ['a', 'b'], after: ['c', 'd'] }] })))).toBe(false);
+  });
+});
+
+// =================================================================================================
+// PR-4 Gate-5 A1 [SEC-F1, AUTH-F4, AUTH-F10] — which bucket an entry belongs in is decidable from the
+// entry alone (the schema ties `taskId` to the `task` authority), and each authority is exported by
+// NAME so no caller picks one by its position in OWN_WRITE_AUTHORITIES.
+// =================================================================================================
+
+describe('PR-4 Gate-5 A1 — the authorities by name', () => {
+  const exported = protocolIndex as Record<string, unknown>;
+
+  it('TASK_WRITE_AUTHORITY is "task" and APPROVAL_WRITE_AUTHORITY is "approval" — both members of OWN_WRITE_AUTHORITIES', () => {
+    expect(exported.TASK_WRITE_AUTHORITY).toBe('task');
+    expect(exported.APPROVAL_WRITE_AUTHORITY).toBe('approval');
+    expect(OWN_WRITE_AUTHORITIES as readonly unknown[]).toContain(exported.TASK_WRITE_AUTHORITY);
+    expect(OWN_WRITE_AUTHORITIES as readonly unknown[]).toContain(exported.APPROVAL_WRITE_AUTHORITY);
+  });
+
+  it('they are exported from the module and the index alike', async () => {
+    const module = (await import('../own-undo.js')) as Record<string, unknown>;
+    expect(module.TASK_WRITE_AUTHORITY).toBe(exported.TASK_WRITE_AUTHORITY);
+    expect(module.APPROVAL_WRITE_AUTHORITY).toBe(exported.APPROVAL_WRITE_AUTHORITY);
+  });
+});
+
+describe('PR-4 Gate-5 A1 — the refinement: authority task ⇔ taskId present', () => {
+  it('a task entry WITH its taskId parses; WITHOUT one it is refused', () => {
+    expect(parses(ownUndoEntrySchema, taskEntry())).toBe(true);
+    const { taskId: _gone, ...noTask } = taskEntry();
+    expect(parses(ownUndoEntrySchema, noTask)).toBe(false);
+    expect(parses(ownUndoEntrySchema, entry({ authority: 'task', via: 'schedule', runId: 'run-1' }))).toBe(false);
+  });
+
+  it('an approval entry WITHOUT a taskId parses; WITH one it is refused', () => {
+    expect(parses(ownUndoEntrySchema, entry())).toBe(true);
+    expect(parses(ownUndoEntrySchema, entry({ taskId: 'task-1' }))).toBe(false);
+    expect(parses(ownUndoEntrySchema, entry({ taskId: 'approval' }))).toBe(false);
+  });
+
+  it('a task entry whose taskId spells the approval bucket still parses (the BUCKET rule is the accessor’s, the arming refusal the act’s)', () => {
+    expect(parses(ownUndoEntrySchema, taskEntry({ taskId: 'approval' }))).toBe(true);
   });
 });

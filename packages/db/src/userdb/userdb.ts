@@ -1048,8 +1048,12 @@ export interface UserDb {
   // rows an own write changed — a bucket per armed schedule (its task id) and one for the user's
   // approvals (`approval`) — see the `own-undo.ts` header for the caps and the postures.
 
-  /** The bucket's LIVE entries (not undone, not expired), newest first. Never throws on what the row holds. */
-  listOwnUndo(appId: string, which: { taskId: string } | { bucket: typeof OWN_UNDO_APPROVAL_BUCKET }): OwnUndoEntry[];
+  /**
+   * The bucket's LIVE entries (not undone, not expired), newest first — with `includeUndone`, the
+   * undone-but-unexpired ones too, each carrying its `undoneAt` (PR-4 Gate 5, A12). Only entries
+   * that BELONG in the bucket (`ownUndoBelongsIn`, A1). Never throws on what the row holds.
+   */
+  listOwnUndo(appId: string, which: { taskId: string } | { bucket: typeof OWN_UNDO_APPROVAL_BUCKET }, options?: { includeUndone?: boolean }): OwnUndoEntry[];
   /**
    * Prepend one entry to a bucket. Refuses ACCESS_INVALID (the strict schema: no statement text,
    * the 64 KiB entry cap, the per-cell credential walk — or an entry outside its own bucket: an
@@ -2890,7 +2894,8 @@ function construct(
         db.run(`DELETE FROM ${USERDB_TABLES.settings} WHERE key LIKE ? ESCAPE '!'`, [`${linkPrefix}%`]);
         // 3c'. The scheduler's rows (TASK-20261009 C3, ADR-0074 §2): a task whose EVERY
         //     step names this app goes with its runs row (a multi-app task is left as is
-        //     — the engine marks the dead step's result at run time), plus the app's
+        //     — the engine marks the dead step's result at run time — save that it loses
+        //     any authority to change this app's data on its own, PR-4 Gate 5 A6), plus the app's
         //     `scheduleDeclined:<appId>:*` by escaped prefix and `scheduleMuted:<appId>`
         //     by equality. Three sweeps, each mutation-checked by delete-app.test.ts.
         sweepSchedulesForDeletedApp(sqlOn(db), appId);
@@ -3793,10 +3798,11 @@ function construct(
       const bytes = db.export();
       // PROPOSALS NEVER LEAVE THE DEVICE (TASK-20261009 C4, ADR-0074 §6): a run's pending
       // data changes are this device's own dry-run, stripped from every history row on
-      // BOTH export paths — the file export and the sync push alike — and with them what
-      // this device MADE of them (PR-4: the `applied` and `approved` seats, whose undo lives
-      // in this device's journal). The secrets-included path keeps its no-copy fast path when
-      // no history row carries one.
+      // BOTH export paths — the file export and the sync push alike. What this device MADE
+      // of them (PR-4: the `applied` and `approved` seats) rides along: only an UNTRUSTED
+      // import strips those (Gate 5, A7), so a pull keeps the device's record of what
+      // changed. The secrets-included path keeps its no-copy fast path when no history row
+      // carries a seat the scrub may touch.
       if (opts.includeSecrets === true && !hasScheduleRunSeatsToStrip(sqlOn(db))) {
         if (bytes.byteLength > maxBytes) {
           throw new UserDbError(USERDB_ERROR_CODES.TOO_LARGE, `export is ${bytes.byteLength} bytes — cap is ${maxBytes}`);

@@ -22,7 +22,14 @@ import type { ScheduleStep, ScheduledTask } from '@snugprotocol/protocol';
 
 import type { SnugPlatform } from '../platform/platform.js';
 import { scheduleRevisionStore } from '../platform/signals.js';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+
+import { createAppTargetSink } from '../agent/artifactSink.js';
+import * as acts from '../schedule/acts.js';
 import { armTask, disarmAllTasks, disarmTask } from '../schedule/acts.js';
+import * as taskShape from '../schedule/taskShape.js';
+import { createUserDbLibrary } from '../state/library.js';
 import type { StepExecutor } from '../schedule/engine-types.js';
 import { __resetSchedulerForTests, createTask, initScheduler, noteAppVersion, setTaskEnabled, updateTask, type SchedulerDeps, type TaskPatch } from '../schedule/scheduler.js';
 import { installTestUserDb } from './userdbTestHelper.js';
@@ -74,8 +81,14 @@ beforeEach(async () => {
   __resetSchedulerForTests();
   clock = NOW;
   db = await installTestUserDb();
+  // ADAPTED by PR-4 Gate-5 A6 — a consent never predates the app it covers (armTask refuses an app
+  // installed after now): the apps are installed at CREATED, before the injected clock. Was installed
+  // at the WALL clock, which may be ahead of NOW.
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(Date.parse(CREATED));
   db.installApp({ appId: 'ledger', displayName: 'Ledger', html: '<html>ledger</html>' });
   db.installApp({ appId: 'notes', displayName: 'Notes', html: '<html>notes</html>' });
+  vi.useRealTimers();
   const execute: StepExecutor = async () => ({ status: 'ok', calls: { ai: 0, net: 0 } });
   const deps: Partial<SchedulerDeps> = {
     db: () => Promise.resolve(db),
@@ -260,5 +273,107 @@ describe('kept across off/on and pause/resume — nothing applies meanwhile, but
     await noteAppVersion('ledger', 2, 'own');
     expect(authorityOf('t1')).toBeUndefined();
     expect(traceOf('t1')).toEqual({ reason: 'app-updated', at: iso(NOW) });
+  });
+});
+
+// =================================================================================================
+// PR-4 Gate-5 — A1 (the reserved id), A2 (the user's own edit disarms through the production seam),
+// A6 (a deleted app takes the authority with it; armTask never arms an app newer than the consent),
+// A11 (the arming rules' one home).
+// =================================================================================================
+
+describe('PR-4 Gate-5 A1 — armTask refuses a task whose id spells the approval bucket (RESERVED_ID)', () => {
+  it('armTask("approval") is refused with RESERVED_ID; nothing is written', async () => {
+    seed('approval');
+    const writes = vi.spyOn(db, 'putScheduledTask');
+    const result = await armTask('approval');
+    expect(result.ok).toBe(false);
+    const reserved = (acts as Record<string, unknown>).RESERVED_ID;
+    expect(typeof reserved).toBe('string');
+    expect(result).toEqual({ ok: false, reason: reserved });
+    expect(authorityOf('approval')).toBeUndefined();
+    expect(writes).not.toHaveBeenCalled();
+  });
+
+  it('the passing twin: an ordinary id arms', async () => {
+    seed('approvals-weekly');
+    expect(await armTask('approvals-weekly')).toMatchObject({ ok: true });
+  });
+});
+
+describe('PR-4 Gate-5 A2 — the user’s own builder edit disarms through the production seam (never only the walk’s belt)', () => {
+  it('createAppTargetSink(…).write on an existing app → the armed task loses its authority with the app-updated trace; it is NOT paused', async () => {
+    armedSeed('t1');
+    const sink = createAppTargetSink({ pinnedAppId: 'ledger', getDb: () => Promise.resolve(db) });
+    const written = await sink.write('<html>ledger v2</html>', 'Ledger');
+    expect(written.version).toBe(2);
+    expect(authorityOf('t1')).toBeUndefined();
+    expect((traceOf('t1') as { reason?: string } | undefined)?.reason).toBe('app-updated');
+    expect(db.getScheduledTask('t1')).toMatchObject({ enabled: true });
+    expect(db.getScheduledTask('t1')?.pausedReason).toBeUndefined();
+  });
+
+  it('a sink write that INSTALLS a new app touches no schedule', async () => {
+    armedSeed('t1');
+    const sink = createAppTargetSink({ pinnedAppId: 'brand-new', getDb: () => Promise.resolve(db) });
+    await sink.write('<html>new</html>', 'New');
+    expect(authorityOf('t1')).toEqual({ rowsPerRun: 200, armedAt: OLD_ARMED_AT, armedVersion: 1 });
+  });
+});
+
+describe('PR-4 Gate-5 A6 — a deleted app takes the consent with it', () => {
+  it('deleting the app (the library act) disarms every task naming it; a task on another app keeps its authority', async () => {
+    armedSeed('on-ledger');
+    armedSeed('on-notes', { steps: [THINK('notes')], appVersions: { notes: 1 } });
+    await createUserDbLibrary(() => Promise.resolve(db)).delete('ledger');
+    expect(authorityOf('on-ledger')).toBeUndefined();
+    expect(authorityOf('on-notes')).toEqual({ rowsPerRun: 200, armedAt: OLD_ARMED_AT, armedVersion: 1 });
+  });
+
+  it('armTask never arms an app installed after the consent’s instant (its install time ahead of now)', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(NOW + DAY);
+    db.installApp({ appId: 'later', displayName: 'Later', html: '<html>later</html>' });
+    vi.useRealTimers();
+    seed('t-later', { steps: [THINK('later')], appVersions: { later: 1 } });
+    const result = await armTask('t-later');
+    expect(result.ok).toBe(false);
+    expect(authorityOf('t-later')).toBeUndefined();
+  });
+});
+
+describe('PR-4 Gate-5 A11 — armableAppOf and widens live once, in schedule/taskShape.ts', () => {
+  const shape = taskShape as Record<string, unknown>;
+  type Widens = (before: { steps: ScheduleStep[]; spec: ScheduledTask['spec']; ownerAppId?: string }, after: Record<string, unknown>, anchor: Date) => boolean;
+
+  it('taskShape exports both; armableAppOf names the ONE app (or none)', () => {
+    expect(typeof shape.armableAppOf).toBe('function');
+    expect(typeof shape.widens).toBe('function');
+    const armableAppOf = shape.armableAppOf as (steps: readonly ScheduleStep[]) => string | undefined;
+    expect(armableAppOf([THINK('ledger')])).toBe('ledger');
+    expect(armableAppOf([THINK('ledger'), THINK('notes')])).toBeUndefined();
+    expect(armableAppOf([{ kind: 'notify', title: 'x', body: 'y' }])).toBeUndefined();
+  });
+
+  it('widens is schema-parsed: the same steps in another key order never widen; a changed prompt, owner or a shorter gap does', () => {
+    const widens = shape.widens as Widens;
+    const before = { steps: [THINK('ledger')], spec: { kind: 'daily', time: '08:00', tz: 'UTC' } as ScheduledTask['spec'] };
+    const reordered = { context: { maxRows: 50 }, prompt: 'tidy the notes', appId: 'ledger', kind: 'app-think' } as unknown as ScheduleStep;
+    const anchor = new Date(NOW);
+    expect(widens(before, { steps: [reordered] }, anchor)).toBe(false);
+    expect(widens(before, { title: 'renamed' }, anchor)).toBe(false);
+    expect(widens(before, { steps: [THINK('ledger', 'tidy AND delete')] }, anchor)).toBe(true);
+    expect(widens(before, { spec: { kind: 'every', n: 2, unit: 'hours', tz: 'UTC' } }, anchor)).toBe(true);
+    expect(widens(before, { spec: { kind: 'weekly', days: ['mon'], time: '08:00', tz: 'UTC' } }, anchor)).toBe(false);
+  });
+
+  it('acts.ts and applyArmed.ts import them from ./taskShape.js and define neither', () => {
+    for (const file of ['acts.ts', 'applyArmed.ts']) {
+      const source = readFileSync(path.resolve(__dirname, '../schedule', file), 'utf8');
+      expect(source, file).toMatch(/from\s*['"]\.\/taskShape\.js['"]/);
+      expect(source, file).not.toMatch(/function\s+armableAppOf\b/);
+      expect(source, file).not.toMatch(/function\s+widens\b/);
+    }
+    expect(readFileSync(path.resolve(__dirname, '../schedule/acts.ts'), 'utf8')).toMatch(/import\s*\{[^}]*\bwidens\b[^}]*\}\s*from\s*['"]\.\/taskShape\.js['"]/);
   });
 });

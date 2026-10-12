@@ -20,6 +20,12 @@ export const HISTORY_PARAM = 'history';
  */
 export const historyHref = (taskId: string): string => `/schedule?${new URLSearchParams({ [HISTORY_PARAM]: taskId }).toString()}`;
 
+/**
+ * `/settings` — where the brain is chosen: the one act of a step no brain here can answer (*open
+ * Settings*), from the result page and from the editor's step (TASK-20261010-host-broker PR-4 Gate 5, U1).
+ */
+export const SETTINGS_HREF = '/settings';
+
 export interface NewScheduleParams {
   /** A sentence to read ("every weekday at 8, summarise my ledger") — the create bar, the sheet, the chat offer. */
   text?: string;

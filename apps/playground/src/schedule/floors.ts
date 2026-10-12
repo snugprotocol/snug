@@ -88,6 +88,15 @@ export function stepsCost(steps: readonly ScheduleStep[]): StepCost {
   return { ai, net };
 }
 
+/**
+ * The look-ups every step together may make per occurrence — only an *ask* step that may look
+ * things up makes any (PR-4 Gate 5, U13). A *run <app>* step's one network call is the estimate's
+ * (`stepsCost`), never a look-up: the consent's cost row names the two apart.
+ */
+export function stepsLookUps(steps: readonly ScheduleStep[]): number {
+  return steps.reduce((sum, step) => sum + (step.kind === 'app-think' && step.tools === true ? LOOK_UP_STEP_COST.net : 0), 0);
+}
+
 /** The same spec with no `until` — the period of a schedule does not depend on when it stops. */
 const withoutUntil = (spec: ScheduleSpec): ScheduleSpec => (spec.until === undefined ? spec : { ...spec, until: undefined });
 

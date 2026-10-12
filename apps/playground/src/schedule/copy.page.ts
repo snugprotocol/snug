@@ -180,6 +180,18 @@ export const SETTINGS = {
   onItsOwnCount: (n: number): string => (n === 1 ? `1 ${WORDS.item} makes changes on its own` : `${n} ${WORDS.items} make changes on their own`),
   /** Spelled whole, like every sentence of the one phrase — a person searches for it as one. */
   stopAllOnItsOwn: 'stop every schedule making changes on its own',
+  /**
+   * The act, answered where its row was (PR-4 Gate 5, U7): the row goes with the authorities, so the
+   * card says how many stopped — `n` is what the act answered, never the count the row showed.
+   */
+  stoppedAll: (n: number): string =>
+    n === 0
+      ? 'none stopped — try again'
+      : n === 1
+        ? `1 ${WORDS.item} stopped making changes on its own — turn it back on from its edit`
+        : `${n} ${WORDS.items} stopped making changes on their own — turn each back on from its edit`,
+  /** The act never reached the file: nothing stopped, the act stays for another try. */
+  stopAllFailed: (reason: string): string => `nothing stopped — ${reason}`,
 } as const;
 
 // ------------------------------------------------ the running chip (U10) and the chat offer (E10)
@@ -199,3 +211,18 @@ export const OFFER = {
    */
   hostBrain: `on this brain the agent can’t suggest ${WORDS.items} itself — review is the way`,
 } as const;
+
+// ------------------------------------------------- the arming act's own refusals (PR-4 Gate 5)
+// What `armTask` answers when no surface should have offered the choice — the belts behind the
+// surfaces (TASK-20261010-host-broker A1, A6). Said in the authority's one phrase.
+
+/**
+ * A schedule whose id spells the bucket the user's own approvals are kept in (A1) — only a crafted
+ * file carries one. It never makes changes on its own: its undo would land among the approvals.
+ */
+export const RESERVED_ID = `this ${WORDS.item} can’t make changes on its own — it arrived under a name Snug keeps for itself; set it up again as a new ${WORDS.item}`;
+
+/** The app's own record says it was installed later than this device's clock says it is now (A6): a consent given now would predate the app it is for. */
+export function installedAhead(appName: string): string {
+  return `can’t make changes on its own yet — ${appName}’s install time is ahead of this device’s clock`;
+}

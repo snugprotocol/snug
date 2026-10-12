@@ -130,9 +130,13 @@ export const STEPS = {
       ? `${appName}’s AI answers from ${appName}’s data — ${appName} doesn’t need to open`
       : `${appName} itself does the job, the way it was built — in the app if it’s open, out of sight if not`,
   lookThingsUp: 'let it look things up',
-  /** Ticked, this line REPLACES *which data?* — typed queries stay, as starting context. */
+  /**
+   * Ticked, this line REPLACES *which data?* — typed queries stay, as starting context. It promises
+   * only what is true (PR-4 Gate 5, U3; ADR-0076 §9 *GET-only is not read-only*): it only ASKS a
+   * connection, never posts — never that nothing can be sent there, since what it asks can carry data.
+   */
   toolsLine: (appName: string): string =>
-    `it can choose its own questions over ${appName}’s data and what you let it read from other apps, and fetch from ${appName}’s connections — read only · up to ${aiCalls(APP_AGENT_MAX_ROUND_TRIPS)} each time`,
+    `it can choose its own questions over ${appName}’s data and what you let it read from other apps, and ask ${appName}’s connections (it only asks, never posts) · up to ${aiCalls(APP_AGENT_MAX_ROUND_TRIPS)} each time`,
   /** Said here, first, when the brain cannot use tools for this app — the result never says it first. */
   toolsUnavailable: 'this brain will answer without looking things up',
 } as const;
@@ -148,6 +152,16 @@ export const CHANGES_CONTROL = {
   onItsOwn: 'make them on its own',
   /** Above save, on an armed schedule whose steps or timing changed. */
   armedWarning: 'changing what it does stops it making changes on its own — you’ll confirm again before saving',
+  /**
+   * Above save, in the same slot, on an armed schedule this edit takes out of ONE app (PR-4 Gate 5,
+   * U5): the choice is no longer offered, so the save takes the authority away — said before it does.
+   */
+  armedLost: 'with this change it stops making changes on its own — it can only do that for one app’s data',
+  /**
+   * Under the disarm line when the editor opens a schedule an update or an import stopped (PR-4 Gate 5,
+   * U8): the way out of the attention line — a save keeps it waiting, or the choice arms it again.
+   */
+  disarmedHint: 'save to keep it waiting for your OK, or choose make them on its own',
 } as const;
 
 export const PREVIEW = {
@@ -187,16 +201,19 @@ export const CONSENT_ROWS = {
   noCalls: 'none — it only reads data',
   /**
    * The call row of a step that may look things up: the connections it may use, by name
-   * (`fetchableConnections`), never a host — and *none* when the app has none it could use.
+   * (`fetchableConnections`), never a host — and *none* when the app has none it could use. It says
+   * what the host makes true and no more (PR-4 Gate 5, U3; ADR-0076 §9): the tool only asks (GET),
+   * and what it asks can still carry the user's data to that service.
    */
   lookUps: (connectionNames: readonly string[]): string =>
-    `may look up (read only — it can’t send or change anything there; it can use them without asking you each time): ${connectionNames.length === 0 ? NO_HOSTS : connectionNames.join(', ')}`,
+    `may look things up through (it only asks, never posts — but what it asks can carry your data; it can use them without asking you each time): ${connectionNames.length === 0 ? NO_HOSTS : connectionNames.join(', ')}`,
   /** Its typed queries are where it starts, not all it may read. */
   startsFrom: (appName: string): string => `starts from these; may read more of ${appName}’s data itself`,
   /**
-   * The cost row when a step may look things up (D12): what one time may spend — `each` is the
-   * steps' cost per occurrence (`floors.stepsCost`: ten AI calls and eight look-ups a step that may
-   * look things up) — then the day's bound.
+   * The cost row when a step may look things up (D12): what one time may spend — `each.ai` is the
+   * steps' AI calls per occurrence (`floors.stepsCost`: ten a step that may look things up) and
+   * `each.net` their look-ups (`floors.stepsLookUps`: eight a step that may look things up — a *run
+   * <app>* step's network call is not a look-up, PR-4 Gate 5 U13) — then the day's bound.
    */
   lookUpBound: (perDay: number, each: { readonly ai: number; readonly net: number } = { ai: APP_AGENT_MAX_ROUND_TRIPS, net: APP_AGENT_MAX_TOOL_CALLS }): string =>
     `up to ${aiCalls(each.ai)} and ${each.net} look-ups each time — up to ${aiCalls(perDay)} a day (the daily limit is ${SCHEDULE_DAILY_CEILINGS.ai})`,
@@ -211,6 +228,11 @@ export const ACTIONS = {
   close: 'close',
   /** The sheet after its act — the one sentence every suggestion surface ends on (`copy.SCHEDULED_NEXT`). */
   scheduled: SCHEDULED_NEXT.scheduled,
+  /**
+   * The save landed but the arming after it was refused (PR-4 Gate 5, U13): the schedule IS there, and
+   * its changes wait for the user — never the refusal alone, which reads as if nothing was saved.
+   */
+  savedButWaits: (refusal: string): string => `saved — its changes wait for your OK — ${refusal}`,
 } as const;
 
 /** The editor opened from a suggestion card (`?proposal=`): where the save and cancel go back to. */

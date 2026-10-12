@@ -26,6 +26,17 @@
   outline: none;
 }
 
+/*
+ * Nor on what an act lands the focus on (PR-4 Gate 5, U6/U7): the history a result's link opened,
+ * and the line that answers a *stop* whose button went with the authority. Each is a container or a
+ * line of text, focused so a screen reader reads it — never a control to paint.
+ */
+.schedule-history:focus,
+.schedule-result-stopped:focus,
+.schedule-stopped-all:focus {
+  outline: none;
+}
+
 .schedule-section-head {
   display: flex;
   flex-wrap: wrap;

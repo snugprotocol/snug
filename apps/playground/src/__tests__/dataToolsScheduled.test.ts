@@ -13,7 +13,9 @@
 //   armed    — Proposed — this schedule may make it on its own when it finishes, within its limits; the user can undo it
 //   armed, but `ownCapturable` refuses it —
 //              Proposed — but it can’t be made on its own (<rule>) and waits for the user’s OK; to make it
-//              applicable use literal values or ?, a WHERE on UPDATE/DELETE, no functions, arithmetic or conflict clause
+//              applicable use literal values, a WHERE on UPDATE/DELETE, no functions, arithmetic or conflict clause
+//              (AMENDED by PR-4 Gate-5 J1 — the rule said "literal values or ?", which led the model to an
+//              unbound `?` that binds NULL; D-PR4-16's quoted answer is amended with it)
 //   credential — that change carries a value that looks like a credential — it was not proposed
 // and every "Proposed" answer carries D8's sentence: never say a change was made — say what you
 // proposed; the host reports what it made.
@@ -26,19 +28,24 @@
 // the chat answer comes back) and `ownCapturable` is exported from `@snugprotocol/db`.
 
 import { ownCapturable, type UserDb } from '@snugprotocol/db';
+import { getToolPrompt, type ToolPromptName } from '@snugprotocol/knowledge';
 import type { ScheduleProposalItem } from '@snugprotocol/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { CHAT_DOOR } from '../access/copy.js';
 import type { MaterialisedSet } from '../access/service.js';
 import { DATA_PROPOSE_WRITE_TOOL_NAME, buildDataTools, type SharedTablesSeat } from '../agent/dataTools.js';
+import { OWN_CAPTURE_RULE } from '../schedule/proposalGate.js';
 import { execFrame, exportFrame } from './dbFrames.js';
 import { installTestUserDb } from './userdbTestHelper.js';
 
 const UNARMED = 'Proposed — it waits for the user’s OK on the result';
 const ARMED = 'Proposed — this schedule may make it on its own when it finishes, within its limits; the user can undo it';
+// AMENDED by PR-4 Gate-5 J1 (OWN_CAPTURE_RULE loses "or ?"): was
+//   `… to make it applicable use literal values or ?, a WHERE on UPDATE/DELETE, no functions, arithmetic or conflict clause`
+const OWN_RULE = 'literal values, a WHERE on UPDATE/DELETE, no functions, arithmetic or conflict clause';
 const armedButNot = (rule: string): string =>
-  `Proposed — but it can’t be made on its own (${rule}) and waits for the user’s OK; to make it applicable use literal values or ?, a WHERE on UPDATE/DELETE, no functions, arithmetic or conflict clause`;
+  `Proposed — but it can’t be made on its own (${rule}) and waits for the user’s OK; to make it applicable use ${OWN_RULE}`;
 const CREDENTIAL = 'that change carries a value that looks like a credential — it was not proposed';
 /** D8 — the first letter may be capitalised where it opens a sentence; the rest is byte for byte. */
 const D8 = /[Nn]ever say a change was made — say what you proposed; the host reports what it made/;
@@ -266,5 +273,157 @@ describe('the chat’s variant is unchanged', () => {
     const answer = String(await tool.run({ statements: ['DELETE FROM t WHERE id = 1'], summary: 'stale' }));
     expect(answer.startsWith('Proposed (NOT applied — the user must approve it):')).toBe(true);
     expect(proposals).toHaveLength(1);
+  });
+});
+
+// =================================================================================================
+// PR-4 Gate-5 — J1 (no unbound placeholder), J2 (the scheduled tool's OWN definition), J10 (the
+// failure says SQLite's reason and the cap). The chat's definition stays byte-identical to `main`.
+// =================================================================================================
+
+/** The scheduled data_propose_write's definition as the brain is handed it. */
+function scheduledDef(armed = false): { name: string; description: string; inputSchema: Record<string, unknown> } {
+  const tools = buildDataTools({ appId, getDb: () => Promise.resolve(db), scheduled: { armed, onProposal: () => undefined } });
+  const tool = tools.find((entry) => entry.def.name === DATA_PROPOSE_WRITE_TOOL_NAME);
+  if (tool === undefined) throw new Error('the scheduled data_propose_write is missing');
+  return tool.def as unknown as { name: string; description: string; inputSchema: Record<string, unknown> };
+}
+
+const NO_PARAMS_WORDS = 'write the values into the statement itself';
+
+describe('PR-4 Gate-5 J1 — an unbound placeholder is never proposed, and nothing tells the model to write one', () => {
+  it('OWN_CAPTURE_RULE no longer offers "or ?" — literal values, a WHERE, no functions, arithmetic or conflict clause', () => {
+    expect(OWN_CAPTURE_RULE).toBe(OWN_RULE);
+    expect(OWN_CAPTURE_RULE).not.toMatch(/\?/);
+  });
+
+  for (const armed of [true, false]) {
+    it(`${armed ? 'armed' : 'unarmed'}: a \`?\` with no params → refused with the no-params sentence; nothing staged; no "Proposed"`, async () => {
+      const { propose, staged } = scheduledTools({ armed });
+      const answer = await propose({ statements: ['UPDATE t SET label = ? WHERE id = 1'], summary: 'bound' });
+      expect(answer.startsWith('Error:')).toBe(true);
+      expect(answer).toContain(NO_PARAMS_WORDS);
+      expect(answer).not.toContain('Proposed');
+      expect(staged).toEqual([]);
+    });
+  }
+
+  it.each([':v', '@v', '$v', '?1'])('armed: the placeholder %s with no params → refused, nothing staged', async (mark) => {
+    const { propose, staged } = scheduledTools({ armed: true });
+    const answer = await propose({ statements: [`UPDATE t SET label = ${mark} WHERE id = 1`], summary: 'bound' });
+    expect(answer.startsWith('Error:')).toBe(true);
+    expect(answer).toContain(NO_PARAMS_WORDS);
+    expect(staged).toEqual([]);
+  });
+
+  it('the passing twin: a `?` inside a quoted value is text — proposed and staged', async () => {
+    const { propose, staged } = scheduledTools({ armed: true });
+    const answer = await propose({ statements: ["UPDATE t SET label = 'what?' WHERE id = 1"], summary: 'quoted' });
+    expect(answer).toContain(ARMED);
+    expect(staged).toHaveLength(1);
+  });
+
+  it('no answer the scheduled tool gives — proposed, armed-but-not, or refused — contains "or ?"', async () => {
+    const answers: string[] = [];
+    for (const armed of [true, false]) {
+      const { propose } = scheduledTools({ armed });
+      answers.push(await propose({ statements: ["UPDATE t SET label = 'chai' WHERE id = 2"], summary: 'rename' }));
+      answers.push(await propose({ statements: ['UPDATE t SET cents = cents + 1 WHERE id = 1'], summary: 'bump' }));
+      answers.push(await propose({ statements: ['UPDATE t SET label = ? WHERE id = 1'], summary: 'bound' }));
+      answers.push(await propose({ statements: ['UPDATE t SET label = ? WHERE id = 1'], params: [['x']], summary: 'params' }));
+      answers.push(await propose({ statements: ['DROP TABLE t'], summary: 'gone' }));
+    }
+    for (const answer of answers) expect(answer).not.toContain('or ?');
+  });
+});
+
+describe('PR-4 Gate-5 J2 — the scheduled data_propose_write has its OWN definition', () => {
+  it('its description is the knowledge store’s `data-propose-write-scheduled` prompt — never the chat’s', () => {
+    const def = scheduledDef();
+    expect(def.name).toBe(DATA_PROPOSE_WRITE_TOOL_NAME);
+    expect(def.description).toBe(getToolPrompt('data-propose-write-scheduled' as ToolPromptName));
+    expect(def.description).not.toBe(getToolPrompt('data-propose-write'));
+  });
+
+  it('the description never offers params, and never says only the user’s approval runs a change (false under an armed schedule)', () => {
+    for (const armed of [true, false]) {
+      const def = scheduledDef(armed);
+      expect(def.description).not.toMatch(/params/);
+      expect(def.description).not.toMatch(/only the user/i);
+    }
+  });
+
+  it('its input schema: `statements` is ONE string (minItems 1, maxItems 1) beside `summary` — and there is NO `params` property', () => {
+    const schema = scheduledDef().inputSchema as { type?: string; properties?: Record<string, Record<string, unknown>>; required?: string[] };
+    expect(schema.type).toBe('object');
+    expect(Object.keys(schema.properties ?? {}).sort()).toEqual(['statements', 'summary']);
+    expect(schema.properties?.statements).toMatchObject({ type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 1 });
+    expect(schema.properties?.summary).toMatchObject({ type: 'string' });
+    expect(JSON.stringify(schema)).not.toMatch(/params/);
+  });
+
+  it('the runtime refusal of params stays (a model that sends them anyway is told, never silently dropped)', async () => {
+    const { propose, staged } = scheduledTools({ armed: true });
+    const answer = await propose({ statements: ["UPDATE t SET label = 'x' WHERE id = 1"], params: [['chai']], summary: 'bound' });
+    expect(answer.startsWith('Error:')).toBe(true);
+    expect(staged).toEqual([]);
+  });
+
+  it('the CHAT’s definition is byte-identical to main’s: the chat prompt and the {statements, params, summary} schema', () => {
+    const tools = buildDataTools({ appId, getDb: () => Promise.resolve(db), onProposal: () => undefined });
+    const chat = tools.find((entry) => entry.def.name === DATA_PROPOSE_WRITE_TOOL_NAME)!.def;
+    expect(JSON.stringify(chat)).toBe(
+      JSON.stringify({
+        name: 'data_propose_write',
+        description: getToolPrompt('data-propose-write'),
+        inputSchema: {
+          type: 'object',
+          properties: {
+            statements: { type: 'array', items: { type: 'string' } },
+            params: { type: 'array' },
+            summary: { type: 'string' },
+          },
+          required: ['statements', 'summary'],
+        },
+      }),
+    );
+  });
+});
+
+describe('PR-4 Gate-5 J10 — a failed change says SQLite’s reason; an invalid one names the cap', () => {
+  it('a NOT NULL failure on the copy: `Error: that change failed on a copy of the data — <SQLite’s words>; it was not proposed`', async () => {
+    const { propose, staged } = scheduledTools({ armed: false });
+    const answer = await propose({ statements: ["INSERT INTO t (id, label) VALUES (4, 'x')"], summary: 'add' });
+    expect(answer.startsWith('Error: that change failed on a copy of the data — ')).toBe(true);
+    expect(answer).toContain('NOT NULL constraint failed');
+    expect(answer.endsWith('; it was not proposed')).toBe(true);
+    expect(answer).not.toContain('check the table and column names');
+    expect(staged).toEqual([]);
+  });
+
+  it('an unknown column says so (SQLite’s detail), never a generic sentence', async () => {
+    const { propose } = scheduledTools({ armed: false });
+    const answer = await propose({ statements: ['UPDATE t SET nope = 1 WHERE id = 1'], summary: 'x' });
+    expect(answer).toContain('no such column');
+  });
+
+  it('the detail is scrubbed with the deliver policy: a credential-shaped value in SQLite’s words never reaches the model', async () => {
+    // The gate refuses a credential in the statement itself before any copy runs, so the copy's words are
+    // the only way one could ride the answer — they are made to carry one here.
+    const KEY = 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJ';
+    vi.spyOn(db, 'scratchRun').mockResolvedValue({ statements: [{ error: `CHECK constraint failed: label <> '${KEY}'` }] } as never);
+    const { propose, staged } = scheduledTools({ armed: false });
+    const answer = await propose({ statements: ["UPDATE t SET label = 'x' WHERE id = 1"], summary: 'x' });
+    expect(answer.startsWith('Error: that change failed on a copy of the data — ')).toBe(true);
+    expect(answer).toContain('CHECK constraint failed');
+    expect(answer).not.toContain(KEY);
+    expect(staged).toEqual([]);
+  });
+
+  it('`invalid` names the 2,048-character cap', async () => {
+    const { propose } = scheduledTools({ armed: false });
+    const answer = await propose({ statements: ['DROP TABLE t'], summary: 'gone' });
+    expect(answer.startsWith('Error:')).toBe(true);
+    expect(answer).toMatch(/2,048 characters/);
   });
 });

@@ -15,7 +15,9 @@
 //               FIRST and withheld only when it STILL looks like a credential, so the app keeps
 //               a usable answer with the token redacted ("Authorization: Bearer «redacted»").
 // Either way nothing credential-shaped reaches a `schedule-result` or a run row: the stored
-// policy runs again on whatever the app then reports.
+// policy runs again on whatever the app then reports. What a withheld text is replaced by,
+// `WITHHELD_SUMMARY`, lives here too: the executors and the scheduled agent both say it, and
+// neither imports the other for it.
 //
 // WHAT A SEND CHARGES. `calls.ai` is 1 whenever the transport was ASKED and answered anything
 // but F15's `CONSENT_REQUIRED` — the imported-endpoint confirm refused before any provider was
@@ -27,6 +29,9 @@ import type { TransportResult } from '@snugprotocol/runner';
 import { scrubCredentialProse } from '../security/credentialShapes.js';
 
 export type ScrubPolicy = 'store' | 'deliver';
+
+/** What replaces a stored summary, an alert line or a failure message that looked like a credential (`store` withheld it whole). */
+export const WITHHELD_SUMMARY = 'a result was withheld because it looked like a credential';
 
 /** The text made safe under `policy`, or `undefined` when it must be withheld whole. An empty string stays empty. */
 export function scrubOrWithhold(text: string, policy: ScrubPolicy): string | undefined {

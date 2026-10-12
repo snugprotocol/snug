@@ -31,14 +31,15 @@
 // made on its own — and nothing seeds it but the task the editor opened (`draftFromTask`): a
 // template, a sentence or a suggestion always starts at *wait for my OK*. The choice is offered
 // only for a ONE-app schedule (`onItsOwnApp`), and what widens a schedule that already makes
-// changes (`widensAuthority`) is decided here, purely, so the editor and its tests read one rule.
-// An *ask* step may look things up (`tools`), which round-trips through the drafts as a flag
-// that is ABSENT on the protocol step when off (omit-defaults), never `false`.
+// changes (`widens`) is the ENGINE's rule: both live once in `taskShape.ts` and are re-exported
+// here by identity (PR-4 Gate 5, U12), so the editor offers and warns by exactly the rule `armTask`
+// admits and `updateTask` disarms by. An *ask* step may look things up (`tools`), which round-trips
+// through the drafts as a flag that is ABSENT on the protocol step when off (omit-defaults), never
+// `false`.
 
 import { STARTER_INSTALL_SOURCE_PREFIX, type AppRecord, type UserDb } from '@snugprotocol/db';
 import {
   CONNECTION_STATUS,
-  canonicalJson,
   SCHEDULE_APP_INPUT_MAX_BYTES,
   SCHEDULE_CONTEXT_DEFAULT_ROWS,
   SCHEDULE_CONTEXT_MAX_ROWS,
@@ -66,9 +67,12 @@ import type { ByokProvider, KeyedProvider, PlaygroundMode } from '../state/mode.
 import type { Brain } from '../state/webllm.js';
 import { STEPS, TEMPLATE_TITLES } from './copy.editor.js';
 import { WEEKDAY_KEYS, compileSpec, instantInZone, occurrencesBetween, pad2, parseCron, resolveZone, specFromCron, wallClockIn } from './cron.js';
-import { defaultMissedPolicy, minIntervalMs, stepsCost } from './floors.js';
+import { defaultMissedPolicy, stepsCost } from './floors.js';
 import { readSchedule } from './parseScheduleText.js';
-import { appIdsOf } from './taskShape.js';
+import { armableAppOf } from './taskShape.js';
+
+// The engine's two arming rules, by identity — the editor never keeps a copy of either (U12).
+export { armableAppOf as onItsOwnApp, widens } from './taskShape.js';
 
 const DAY_MS = 86_400_000;
 const WEEK_MS = 7 * DAY_MS;
@@ -734,36 +738,11 @@ export function draftFromTask(
 
 // ------------------------------------------------- making changes on its own (PR-4, D-PR4-8)
 
-/**
- * The ONE app whose data a schedule could make its changes to on its own, or `undefined` when the
- * choice is not offered (N4): at least one *ask <app>'s AI* step, and every app step names that
- * same app — one seat call per run, one undo per run. A reminder names no app and never counts.
- */
-export function onItsOwnApp(steps: readonly ScheduleStep[]): string | undefined {
-  if (!steps.some((step) => step.kind === 'app-think')) return undefined;
-  const apps = appIdsOf(steps);
-  return apps.length === 1 ? apps[0] : undefined;
-}
-
-/**
- * Whether a save WIDENS what an armed schedule does, so the consent must confirm it again
- * (D-PR4-8): its steps changed — compared by canonical JSON, because the editor sends the steps
- * on every save and a prompt typed and put back is the same step — or the shortest gap between
- * its runs got SHORTER. A title, an alert or a catch-up choice never widens it.
- */
-export function widensAuthority(before: { steps: readonly ScheduleStep[]; spec: ScheduleSpec }, after: { steps: readonly ScheduleStep[]; spec: ScheduleSpec }, anchor: Date): boolean {
-  if (canonicalJson(before.steps) !== canonicalJson(after.steps)) return true;
-  const was = minIntervalMs(before.spec, anchor);
-  const now = minIntervalMs(after.spec, anchor);
-  // No measurable period (a one-off) is slower than anything; gaining one is getting faster.
-  if (now === undefined) return false;
-  return was === undefined || now < was;
-}
-
-/** `onItsOwnApp` over the editor's drafts: the live steps whose app is chosen — a step still waiting for one names none. */
+/** The one-app rule (`armableAppOf`) over the editor's drafts: the live steps whose app is chosen — a step still waiting for one names none. */
 export function onItsOwnAppOf(drafts: readonly StepDraft[]): string | undefined {
-  return onItsOwnApp(costSteps(drafts.filter((draft) => draft.kind === 'notify' || draft.appId !== '')));
+  return armableAppOf(costSteps(drafts.filter((draft) => draft.kind === 'notify' || draft.appId !== '')));
 }
+
 
 /** Library id → the connections a step that may look things up could use there, by the name the user knows each by. */
 export type LookUpNamesByApp = Readonly<Record<string, readonly string[]>>;

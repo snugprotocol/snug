@@ -81,8 +81,8 @@ import {
   stepWords,
   suggestionStrip,
 } from '../schedule/copy.js';
-import { ACTIONS, CONSENT_ROWS, STEPS } from '../schedule/copy.editor.js';
-import { HELD_WHY, needsYouTitle } from '../schedule/copy.result.js';
+import { ACTIONS, CHANGES_CONTROL, CONSENT_ROWS, STEPS } from '../schedule/copy.editor.js';
+import { CHANGES_LINK, HELD_WHY, MADE, needsYouTitle } from '../schedule/copy.result.js';
 import { PAUSE_AFTER_FAILURES, PAUSE_AFTER_UNSEEN } from '../schedule/protection.js';
 import { literalsIn, scriptKindOf } from './literalsIn.js';
 
@@ -804,10 +804,14 @@ describe('PR-4 — the tick, the chooser and the step words (D-PR4-20)', () => {
 });
 
 describe('PR-4 — the held reasons: ONE table, one sentence each (D-PR4-11, D-PR4-18)', () => {
-  /** A held sentence may name the app (busy does): read it either way. */
+  /**
+   * A held sentence may name the app (busy does): read it either way. `full` names the bucket's live
+   * count read at render (PR-4 Gate-5 U14, `HELD_WHY.full(appName, live)`) — read here at the bucket's
+   * cap, 20, the count the contract's sentence spells.
+   */
   const why = (reason: string): string => {
-    const entry = (HELD_WHY as Record<string, string | ((appName: string) => string)>)[reason];
-    return typeof entry === 'function' ? entry('Ledger') : (entry ?? '');
+    const entry = (HELD_WHY as Record<string, string | ((appName: string, live: number) => string)>)[reason];
+    return typeof entry === 'function' ? entry('Ledger', 20) : (entry ?? '');
   };
 
   it('HELD_WHY has exactly the protocol’s held reasons — a new reason is a type error, never a missing line', () => {
@@ -832,7 +836,10 @@ describe('PR-4 — every fixed sentence the surfaces print lives in a schedule c
     'off: its changes wait for your OK on the result',
     'it runs more than 20 times a week — once 20 changes are waiting to age out, the rest wait for your OK',
     // the consent's rows for an ask step (D-PR4-20)
-    'may look up (read only — it can’t send or change anything there; it can use them without asking you each time)',
+    // INVERTED by PR-4 Gate-5 U3 (ADR-0076 §9: GET-only is not read-only — the orchestrator's decision, reversal word "read-only").
+    // Was: 'may look up (read only — it can’t send or change anything there; it can use them without asking you each time)',
+    'may look things up through (it only asks, never posts — but what it asks can carry your data; it can use them without asking you each time)',
+    'it only asks, never posts',
     'it only reads data',
     'look-ups each time',
     // the editor (D-PR4-8, D-PR4-20)
@@ -843,6 +850,8 @@ describe('PR-4 — every fixed sentence the surfaces print lives in a schedule c
     'wait for my OK',
     'make them on its own',
     'changing what it does stops it making changes on its own — you’ll confirm again before saving',
+    // the editor's disarm hint (PR-4 Gate-5 U8)
+    'save to keep it waiting for your OK, or choose make them on its own',
     // the row, the menu, Settings (D-PR4-8, D-PR4-10)
     'makes changes on its own',
     'stop making changes on its own',
@@ -857,6 +866,8 @@ describe('PR-4 — every fixed sentence the surfaces print lives in a schedule c
     'you applied this',
     'undo ended after seven days',
     'can’t be undone',
+    // the result page's link to the changes list (PR-4 Gate-5 U6)
+    'this schedule’s changes you can still undo',
     'didn’t need to look anything up',
     'out of sight while it was closed',
     'you allowed it',
@@ -883,5 +894,81 @@ describe('PR-4 — every fixed sentence the surfaces print lives in a schedule c
         .filter((words) => /\bbackground\b/i.test(words) && /(out of sight|didn’t open|while it was)/.test(words)),
     );
     expect(offenders).toEqual([]);
+  });
+});
+
+// =============================================================================================
+// TASK-20261010-host-broker PR-4 Gate 5 — the UI fold's sentences (U3, U5, U6, U8, U13, U14). U3 is
+// the orchestrator's decision under the owner's delegation of copy (reversal word "read-only"): the
+// consent and the editor stop promising what ADR-0076 §9 says is false (*GET-only is not
+// read-only* — what it asks can carry the user's data). Sentences the fold record spells are pinned
+// byte for byte; a sentence it names only by its key (`armedLost`, `savedButWaits`) is pinned by
+// what it must carry.
+// =============================================================================================
+
+describe('PR-4 Gate-5 U3 — the look-up words promise only what is true (ADR-0076 §9)', () => {
+  const LOOK_UP_TRUE = 'may look things up through (it only asks, never posts — but what it asks can carry your data; it can use them without asking you each time)';
+
+  it('CONSENT_ROWS.lookUps: the fold record’s sentence, then the names — *none* for none (D-I4-10)', () => {
+    expect(CONSENT_ROWS.lookUps(['Spotify', 'Bank'])).toBe(`${LOOK_UP_TRUE}: Spotify, Bank`);
+    expect(CONSENT_ROWS.lookUps([])).toBe(`${LOOK_UP_TRUE}: none`);
+  });
+
+  it('STEPS.toolsLine: *… and ask <App>’s connections (it only asks, never posts) · up to 10 AI calls each time*', () => {
+    expect(STEPS.toolsLine('Ledger')).toBe(
+      'it can choose its own questions over Ledger’s data and what you let it read from other apps, and ask Ledger’s connections (it only asks, never posts) · up to 10 AI calls each time',
+    );
+  });
+
+  it('NEGATIVE: neither says *read only* nor *can’t send* — in any spelling', () => {
+    for (const sentence of [CONSENT_ROWS.lookUps(['Spotify']), CONSENT_ROWS.lookUps([]), STEPS.toolsLine('Ledger')]) {
+      expect(sentence, sentence).not.toMatch(/read[\s-]only/i);
+      expect(sentence, sentence).not.toMatch(/can[’']t send/i);
+      expect(sentence, sentence).not.toMatch(/cannot send/i);
+    }
+  });
+
+  it('NEGATIVE: no schedule copy module keeps the old promise anywhere', () => {
+    const text = scheduleCopyText();
+    expect(text).not.toContain('read only — it can’t send or change anything there');
+    expect(text).not.toContain('— read only');
+  });
+});
+
+describe('PR-4 Gate-5 — the editor’s and the result page’s new sentences (U5, U6, U8, U13, U14)', () => {
+  it('U6: CHANGES_LINK says what the list holds — *this schedule’s changes you can still undo*, never *every change*', () => {
+    expect(CHANGES_LINK).toBe('this schedule’s changes you can still undo');
+    expect(CHANGES_LINK).not.toMatch(/\bevery\b/);
+  });
+
+  it('U8: CHANGES_CONTROL.disarmedHint — the way out of the disarmed attention line, in the fold record’s words', () => {
+    expect(CHANGES_CONTROL.disarmedHint).toBe('save to keep it waiting for your OK, or choose make them on its own');
+  });
+
+  it('U5: CHANGES_CONTROL.armedLost — its own sentence (not the widening warning), saying it stops making changes on its own', () => {
+    expect(typeof CHANGES_CONTROL.armedLost).toBe('string');
+    expect(CHANGES_CONTROL.armedLost).toContain('on its own');
+    expect(CHANGES_CONTROL.armedLost).not.toBe(CHANGES_CONTROL.armedWarning);
+    expect(CHANGES_CONTROL.armedLost).not.toMatch(INTERNAL_WORD);
+    expect(CHANGES_CONTROL.armedLost).not.toMatch(/[A-Za-z]'[A-Za-z]/);
+  });
+
+  it('U13: ACTIONS.savedButWaits(refusal) says the schedule WAS saved, then the refusal — never the refusal alone', () => {
+    const refusal = 'app "ledger" is not installed in this file';
+    const line = ACTIONS.savedButWaits(refusal);
+    expect(line).toContain(refusal);
+    expect(line).not.toBe(refusal);
+    expect(line.replace(refusal, '')).toMatch(/sav|schedul/i);
+    expect(line.replace(refusal, '')).not.toMatch(INTERNAL_WORD);
+  });
+
+  it('U14: HELD_WHY.full(appName, live) names the LIVE count read at render — the cap is no longer spelled into it', () => {
+    const full = HELD_WHY.full as (appName: string, live: number) => string;
+    expect(full('Ledger', 3)).toBe('not made — 3 earlier changes can still be undone; it will make changes again as they age out');
+    expect(full('Ledger', 20)).toBe('not made — 20 earlier changes can still be undone; it will make changes again as they age out');
+  });
+
+  it('U2: MADE keeps *undo ended after seven days* — said only past the seven days (resultDetail.test.tsx); the neutral line has ONE home (dataWriteCard.test.tsx)', () => {
+    expect(MADE.undoEnded).toBe('undo ended after seven days');
   });
 });

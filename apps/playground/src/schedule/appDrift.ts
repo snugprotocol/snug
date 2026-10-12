@@ -62,14 +62,20 @@ export function disarmForAppUpdate(task: ScheduledTask, nowIso: string): Schedul
 /**
  * Disarm every schedule that may change `appId`'s data on its own and was armed for another
  * version of it — whoever changed the app, enabled or not, paused or not. Answers how many; bumps
- * the schedule revision once when any was.
+ * the schedule revision once when any was. NEVER THROWN AT THE UPDATE (PR-4 Gate 5, A2): it runs
+ * first in the fan-out, so a row the file refuses is warned and skipped — the reader-access pause
+ * after it still runs, and the walk's `armedVersion` belt still disarms that schedule at its seat.
  */
 export function disarmSchedulesForAppVersion(db: UserDb, appId: string, version: number, nowIso: string): number {
   let disarmed = 0;
   for (const task of db.listScheduledTasks()) {
     if (task.writeAuthority === undefined || task.writeAuthority.armedVersion === version || !appIdsOf(task.steps).includes(appId)) continue;
-    db.putScheduledTask({ ...disarmForAppUpdate(task, nowIso), updatedAt: nowIso });
-    disarmed += 1;
+    try {
+      db.putScheduledTask({ ...disarmForAppUpdate(task, nowIso), updatedAt: nowIso });
+      disarmed += 1;
+    } catch (err) {
+      console.warn('schedule: an update could not stop a schedule making changes on its own — its next write stops it instead', err);
+    }
   }
   if (disarmed > 0) bumpScheduleRevision();
   return disarmed;

@@ -443,9 +443,21 @@ describe('PR-4 — the brain gates run in the PRODUCTION executor, on BOTH paths
 
   const refusedByBrain = { status: 'refused', summary: KEYLESS_BRAIN_REFUSAL, calls: ZERO, blockedBy: 'brain' };
 
-  it('the refusal sentence exists and is its own (never the demo sentence’s twin by accident of an undefined)', () => {
+  // INVERTED by PR-4 Gate-5 J11 — there is no "demo sentence" to be a twin of any more: ONE state, ONE
+  // sentence (`DEMO_BRAIN_REFUSAL` deleted; the tool-free step's transport-less arm answers the keyless
+  // gate's outcome). Was:
+  //   it('the refusal sentence exists and is its own (never the demo sentence’s twin by accident of an undefined)', () => {
+  //     expect(typeof KEYLESS_BRAIN_REFUSAL).toBe('string');
+  //     expect(KEYLESS_BRAIN_REFUSAL.length).toBeGreaterThan(0);
+  //   });
+  it('the keyless sentence is THE one sentence for a brain that cannot answer: no demo sentence is left beside it', async () => {
     expect(typeof KEYLESS_BRAIN_REFUSAL).toBe('string');
     expect(KEYLESS_BRAIN_REFUSAL.length).toBeGreaterThan(0);
+    const appThink = await import('../schedule/appThink.js');
+    expect('DEMO_BRAIN_REFUSAL' in appThink).toBe(false);
+    // A composition with no transport (the unit seam) answers the same refusal production does.
+    const outcome = await createStepExecutor({ appRun: blockedAppRunDeps(), transportFor: () => undefined })(think, context([think]));
+    expect(outcome).toEqual(refusedByBrain);
   });
 
   const KEYLESS: Array<[string, () => void]> = [
@@ -606,5 +618,36 @@ describe('PR-4 — finalizeOutcome carries the new step seats (D-PR4-17)', () =>
 
   it('the whitelist still holds — a field no seat names is dropped', () => {
     expect(finalizeOutcome({ status: 'ok', calls: ZERO, secret: 'sk-ant-api03-0123456789abcdefghij' } as never)).toEqual({ status: 'ok', calls: ZERO });
+  });
+});
+
+// =================================================================================================
+// PR-4 Gate-5 J11 — the dead and duplicated bits: one home each, no back edge.
+// =================================================================================================
+
+describe('PR-4 Gate-5 J11 — WITHHELD_SUMMARY in scrub.ts, ONE ZERO_CALLS in protection.ts, no back edge from the agent', () => {
+  const SCHEDULE = path.resolve(__dirname, '../schedule');
+  const strip = (code: string): string => code.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:'"`\\])\/\/[^\n]*/g, '$1');
+  const source = (file: string): string => strip(readFileSync(path.join(SCHEDULE, file), 'utf8'));
+
+  it('schedule/appAgent.ts imports NOTHING from ./executors.js (the module that lazy-imports it) — static or type', () => {
+    expect(source('appAgent.ts')).not.toMatch(/from\s+['"]\.\/executors\.js['"]/);
+    expect(source('appAgent.ts')).not.toMatch(/import\(\s*['"]\.\/executors\.js['"]\s*\)/);
+  });
+
+  it('WITHHELD_SUMMARY is homed in schedule/scrub.ts — the executors re-export the same sentence', async () => {
+    const scrub = (await import('../schedule/scrub.js')) as Record<string, unknown>;
+    expect(scrub.WITHHELD_SUMMARY).toBe('a result was withheld because it looked like a credential');
+    expect(WITHHELD_SUMMARY).toBe(scrub.WITHHELD_SUMMARY);
+    expect(source('executors.ts')).not.toMatch(/(?:const|let)\s+WITHHELD_SUMMARY\s*=/);
+  });
+
+  it('ONE ZERO_CALLS, in protection.ts: the agent and the gated adapter define no zero tally of their own', async () => {
+    const protection = (await import('../schedule/protection.js')) as Record<string, unknown>;
+    expect(protection.ZERO_CALLS).toEqual({ ai: 0, net: 0 });
+    const ownZero = /(?:const|let)\s+\w+\s*(?::\s*[\w<>\s,]+)?=\s*\{\s*ai:\s*0,\s*net:\s*0\s*\}/;
+    expect(source('appAgent.ts')).not.toMatch(ownZero);
+    expect(strip(readFileSync(path.resolve(__dirname, '../agent/gatedAdapter.ts'), 'utf8'))).not.toMatch(ownZero);
+    expect(source('protection.ts')).toMatch(/export const ZERO_CALLS\b/);
   });
 });

@@ -23,8 +23,12 @@
 // making changes on its own* — `disarmAllTasks`, one task write each, no confirm (taking an
 // authority away never needs one). Nothing armed: no row at all, never a disabled control, and
 // there is no switch to turn it back on — each schedule is armed again only from its own consent.
+// The act ANSWERS IN WORDS where the focus was (PR-4 Gate 5, U7): the row goes with the
+// authorities, taking the focused button with it, so the card leaves one status line — how many
+// stopped, from the act's own count — and moves the focus to it; an act that never reached the file
+// is caught into words beside the act, which stays for another try.
 
-import { useId, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import type { ReactElement } from 'react';
 
 import { WEB_NOTIFY_OPT_IN_KEY, readWebNotifyOptIn } from '../platform/webNotify.js';
@@ -37,6 +41,7 @@ import { hostHonesty } from './honesty.js';
 import { Switch } from './ScheduleStates.js';
 import { disarmAllTasks } from './acts.js';
 import { clearHistory, setGlobalPause, useScheduler } from './scheduler.js';
+import { messageOf } from './taskShape.js';
 
 /** The opt-in flag the web seat reads (`'1'` when on) — `platform/webNotify.ts` owns the name. */
 export const NOTIFY_OPT_IN_KEY = WEB_NOTIFY_OPT_IN_KEY;
@@ -89,11 +94,23 @@ export function ScheduleSettingsCard(): ReactElement {
   /** The schedules that make changes on their own now — the act's row exists only while there are some. */
   const onItsOwn = view.tasks.filter((task) => task.writeAuthority !== undefined).length;
   const [stopping, setStopping] = useState(false);
+  /** How many the act stopped — its answer, said where its row was. */
+  const [stoppedAll, setStoppedAll] = useState<number | undefined>(undefined);
+  const [stopError, setStopError] = useState<string | undefined>(undefined);
+  const stoppedRef = useRef<HTMLParagraphElement>(null);
+
+  useEffect(() => {
+    if (stoppedAll !== undefined) stoppedRef.current?.focus();
+  }, [stoppedAll]);
 
   const stopAllOnItsOwn = async (): Promise<void> => {
     setStopping(true);
+    setStopError(undefined);
+    setStoppedAll(undefined);
     try {
-      await disarmAllTasks();
+      setStoppedAll(await disarmAllTasks());
+    } catch (err) {
+      setStopError(SETTINGS.stopAllFailed(messageOf(err)));
     } finally {
       setStopping(false);
     }
@@ -196,10 +213,22 @@ export function ScheduleSettingsCard(): ReactElement {
         <div className="settings-row schedule-settings-row" data-testid="schedule-on-its-own-row">
           <div className="schedule-settings-copy">
             <strong id={onItsOwnId}>{SETTINGS.onItsOwnCount(onItsOwn)}</strong>
+            {stopError !== undefined ? (
+              <div className="error-note" role="alert" data-testid="schedule-stop-all-error">
+                {stopError}
+              </div>
+            ) : null}
           </div>
           <Button variant="ghost" aria-describedby={onItsOwnId} onClick={() => void stopAllOnItsOwn()} disabled={stopping} data-testid="schedule-stop-all-on-its-own">
             {SETTINGS.stopAllOnItsOwn}
           </Button>
+        </div>
+      ) : null}
+      {stoppedAll !== undefined ? (
+        <div className="settings-row">
+          <p className="hint schedule-stopped-all" role="status" tabIndex={-1} ref={stoppedRef} data-testid="schedule-stopped-all">
+            {SETTINGS.stoppedAll(stoppedAll)}
+          </p>
         </div>
       ) : null}
 

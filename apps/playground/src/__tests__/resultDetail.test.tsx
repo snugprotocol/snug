@@ -17,12 +17,39 @@ import { MemoryRouter, Route, Routes, type NavigateFunction, type NavigateOption
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { UserDb } from '@snugprotocol/db';
-import { RUN_STATUSES, SCHEDULE_HELD_REASONS, SCHEDULE_PROPOSAL_TTL_MS, type OwnUndoEntry, type ScheduleProposalItem, type ScheduleRun, type ScheduleStep, type ScheduledTask } from '@snugprotocol/protocol';
+import {
+  ACCESS_UNDO_TTL_MS,
+  RUN_STATUSES,
+  SCHEDULE_HELD_REASONS,
+  SCHEDULE_PROPOSAL_TTL_MS,
+  type OwnUndoEntry,
+  type ScheduleProposalItem,
+  type ScheduleRun,
+  type ScheduleStep,
+  type ScheduledTask,
+} from '@snugprotocol/protocol';
 
 import { ACCESS_SHEET, OWN_UNDO } from '../access/copy.js';
 import type { SnugPlatform } from '../platform/platform.js';
 import { RESULT_STATUS_WORD, WORDS, capped, needsYouDeclined, needsYouUnanswered, noHandler } from '../schedule/copy.js';
-import { CAPPED_WHAT, DECLINED, DRIFTED, EXPIRED, HELD_WHY, NO_APP_FOR_CHANGES, RESULT_MISSING, applied, callsLine, hostWord, interruptedWhy, needsYouTitle, openingToRun, wouldChange } from '../schedule/copy.result.js';
+import { ROW } from '../schedule/copy.page.js';
+import {
+  CAPPED_WHAT,
+  CHANGES_LINK,
+  DECLINED,
+  DRIFTED,
+  EXPIRED,
+  HELD_WHY,
+  NO_APP_FOR_CHANGES,
+  RESULT_MISSING,
+  applied,
+  callsLine,
+  hostWord,
+  interruptedWhy,
+  needsYouTitle,
+  openingToRun,
+  wouldChange,
+} from '../schedule/copy.result.js';
 import type { StepContext, StepExecutor } from '../schedule/engine-types.js';
 import { outcomeWord } from '../schedule/MissedCard.js';
 import type { AppIndex } from '../schedule/pageModel.js';
@@ -219,6 +246,8 @@ afterEach(() => {
   container?.remove();
   container = undefined;
   __resetSchedulerForTests();
+  // PR-4 Gate-5 U2: the undo-age pins fake the Date at NOW (the page's clock and the db's agree).
+  vi.useRealTimers();
 });
 
 describe('the result, opened', () => {
@@ -674,13 +703,20 @@ describe('PR-4 — two sections, in order: changes it made, then changes waiting
     seed(armedTask(), run({ proposals: heldBatch(reason) }));
     await initScheduler(deps());
     const el = await open();
-    const entry = (HELD_WHY as Record<string, string | ((appName: string) => string)>)[reason];
-    const expected = typeof entry === 'function' ? entry('Ledger') : entry;
+    // PR-4 Gate-5 U14: `full` names the bucket's LIVE count read at render — none is seeded here, so 0.
+    // Was: const entry = (HELD_WHY as Record<string, string | ((appName: string) => string)>)[reason];
+    //      const expected = typeof entry === 'function' ? entry('Ledger') : entry;
+    const entry = (HELD_WHY as Record<string, string | ((appName: string, live: number) => string)>)[reason];
+    const expected = typeof entry === 'function' ? entry('Ledger', 0) : entry;
     expect(el.querySelectorAll('[data-testid="schedule-change-held"]')).toHaveLength(1);
     expect(el.querySelector('[data-testid="schedule-change-held"]')?.textContent).toBe(expected);
   });
 
   it('the seven held sentences, byte for byte (the busy one names the app)', async () => {
+    // PR-4 Gate-5 U14: `full` names the bucket's LIVE count read at render — the bucket is seeded at
+    // its cap (20 live entries) so the contract's sentence reads byte for byte under that rule too.
+    for (let i = 0; i < 20; i++) db.putOwnUndo('ledger', 't1', taskEntry(`00000000-0000-4000-8000-${String(i).padStart(12, '0')}`, 1));
+    expect(db.listOwnUndo('ledger', { taskId: 't1' }), 'precondition: 20 live').toHaveLength(20);
     const lines: Record<string, string> = {};
     for (const reason of SCHEDULE_HELD_REASONS) {
       seed(armedTask(), run({ proposals: heldBatch(reason) }));
@@ -718,9 +754,15 @@ describe('PR-4 — two sections, in order: changes it made, then changes waiting
   });
 
   it('past its seven days (the journal holds it no longer): *undo ended after seven days*, no undo', async () => {
-    seed(armedTask(), run({ applied: appliedGroup({ undoId: U_GONE }) } as Partial<ScheduleRun>));
+    // REBASED by PR-4 Gate-5 U2 onto a run that finished 8 days before NOW (the Date faked at NOW): the
+    // line is said only past the seven days — a recent run's gone id reads *can no longer be undone*.
+    // Was: seed(armedTask(), run({ applied: appliedGroup({ undoId: U_GONE }) } as Partial<ScheduleRun>));
+    //      await initScheduler(deps()); const el = await open();   (a run finished minutes before NOW)
+    vi.useFakeTimers({ toFake: ['Date'], now: NOW });
+    const oldDue = new Date(NOW - 8 * 86_400_000).toISOString();
+    seed(armedTask(), run({ id: 'r-old', dueAt: oldDue, startedAt: oldDue, finishedAt: new Date(Date.parse(oldDue) + 20_000).toISOString(), applied: appliedGroup({ undoId: U_GONE }) } as Partial<ScheduleRun>));
     await initScheduler(deps());
-    const el = await open();
+    const el = await open(oldDue);
     const group = el.querySelector('[data-testid="schedule-made-group"]');
     expect(group?.textContent).toBe('changed 12 rows in Ledger on its own · undo ended after seven days');
     expect(group?.querySelector('button')).toBeNull();
@@ -963,5 +1005,170 @@ describe('PR-4 — blockedBy:"brain" is its own state: *open Settings*, never *n
     expect(el.querySelector('[data-testid="schedule-result-needs-you"]')).toBeNull();
     expect(el.textContent).not.toContain('needs your OK');
     expect(button(el, 'run now and review')).toBeUndefined();
+  });
+});
+
+// =============================================================================================
+// TASK-20261010-host-broker PR-4 Gate 5 — the result page's UI folds (U2, U6, U7, U14).
+//
+// U2: the made line says what is TRUE of its undo. The page reads the journal with the undone
+// entries too (A12, `listOwnUndo(…, { includeUndone: true })`): an entry undone earlier reads
+// *undone* after a reload; an id the journal no longer holds reads *can no longer be undone* (the
+// data-write card's words, ONE home) — unless the run finished `ACCESS_UNDO_TTL_MS` or more ago,
+// when it reads *undo ended after seven days*. The Date is faked at NOW in every pin here, so the
+// page's clock, the db's liveness and the run's instants agree — no fixed instant against the wall.
+// U6: the link to the changes list shows only when the schedule makes changes on its own or the run
+// has the TASK's `applied` group (an approval lives in the approval bucket, which that list never
+// shows), and says what the list holds.
+// U7: the result page's *stop* leaves a focused `role="status"` line in place of the act.
+// U14: a held *full* names the live count read at render; the capped line names the limit's kind.
+// =============================================================================================
+
+describe('PR-4 Gate-5 U2 — the made line says what is true of its undo', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'], now: NOW });
+  });
+
+  const madeText = (el: HTMLElement): string | null | undefined => el.querySelector('[data-testid="schedule-made-group"]')?.textContent;
+
+  it('an approve undone on this page, then a reload: *you applied this — 2 rows changed · undone* — never *undo ended*', async () => {
+    seed(task(), run({ proposals: batch() }));
+    await initScheduler(deps());
+    let el = await open();
+    await act(async () => {
+      button(el, 'apply to my data')?.click();
+    });
+    await vi.waitFor(() => expect(el.querySelector('[data-testid="schedule-made-group"] button')).not.toBeNull());
+    await act(async () => {
+      el.querySelector<HTMLButtonElement>('[data-testid="schedule-made-group"] button')?.click();
+    });
+    await settle();
+    await act(async () => {
+      button(el, ACCESS_SHEET.undoYes)?.click();
+    });
+    await vi.waitFor(async () => expect(await coffeeCents()).toEqual([450, 500]));
+    await settle();
+
+    unmountNow();
+    el = await open();
+    expect(madeText(el)).toBe(`you applied this — 2 rows changed · ${ACCESS_SHEET.undone}`);
+    expect(el.querySelector('[data-testid="schedule-made-group"] button'), 'nothing more to undo').toBeNull();
+    expect(el.textContent).not.toContain('undo ended after seven days');
+  });
+
+  it('a task’s group whose entry was undone earlier (still in the journal, marked) reads *undone* on open', async () => {
+    seed(armedTask(), run({ applied: appliedGroup() } as Partial<ScheduleRun>));
+    db.putOwnUndo('ledger', 't1', { ...taskEntry(U_TASK, 12), undoneAt: new Date(NOW - 60_000).toISOString() });
+    await initScheduler(deps());
+    const el = await open();
+    expect(madeText(el)).toBe(`changed 12 rows in Ledger on its own · ${ACCESS_SHEET.undone}`);
+    expect(el.querySelector('[data-testid="schedule-made-group"] button')).toBeNull();
+  });
+
+  it('a gone id on a RECENT run (evicted early, or undone and aged out of the journal): *can no longer be undone* — the card’s words', async () => {
+    seed(armedTask(), run({ applied: appliedGroup({ undoId: U_GONE }) } as Partial<ScheduleRun>));
+    await initScheduler(deps());
+    const el = await open();
+    expect(madeText(el)).toBe('changed 12 rows in Ledger on its own · can no longer be undone');
+    expect(el.querySelector('[data-testid="schedule-made-group"] button')).toBeNull();
+    expect(madeText(el)).not.toContain('seven days');
+  });
+
+  it('…the user’s own approve whose entry the approval bucket evicted early reads the same', async () => {
+    seed(task(), run({ approved: [{ appId: 'ledger', undoId: U_GONE, summary: 'Set both coffees to 9.99', changes: 2 }] } as Partial<ScheduleRun>));
+    await initScheduler(deps());
+    const el = await open();
+    expect(madeText(el)).toBe('you applied this — 2 rows changed · can no longer be undone');
+  });
+
+  it('the boundary is the run’s finish + ACCESS_UNDO_TTL_MS: one minute short reads *can no longer be undone*; at it, *undo ended after seven days*', async () => {
+    const at = (finishedMs: number, id: string): { due: string; row: ScheduleRun } => {
+      const due = new Date(finishedMs - 20_000).toISOString();
+      return { due, row: run({ id, dueAt: due, startedAt: due, finishedAt: new Date(finishedMs).toISOString(), applied: appliedGroup({ undoId: U_GONE }) } as Partial<ScheduleRun>) };
+    };
+    const short = at(NOW - ACCESS_UNDO_TTL_MS + 60_000, 'r-short');
+    const past = at(NOW - ACCESS_UNDO_TTL_MS, 'r-past');
+    seed(armedTask(), short.row);
+    db.putScheduleRun(past.row);
+    await initScheduler(deps());
+    let el = await open(short.due);
+    expect(madeText(el)).toBe('changed 12 rows in Ledger on its own · can no longer be undone');
+    unmountNow();
+    el = await open(past.due);
+    expect(madeText(el)).toBe('changed 12 rows in Ledger on its own · undo ended after seven days');
+  });
+});
+
+describe('PR-4 Gate-5 U6 — the link to the changes list: when it shows, and what it says', () => {
+  const link = (el: HTMLElement): HTMLAnchorElement | null => el.querySelector<HTMLAnchorElement>('[data-testid="schedule-result-changes-link"]');
+
+  it('an armed schedule’s result links to its changes, in words that say what the list holds', async () => {
+    seed(armedTask(), run());
+    await initScheduler(deps());
+    const el = await open();
+    expect(link(el)?.textContent).toBe(CHANGES_LINK);
+    expect(CHANGES_LINK).toBe('this schedule’s changes you can still undo');
+  });
+
+  it('a run with the task’s own group links to them even once the schedule was stopped', async () => {
+    seed(task(), run({ applied: appliedGroup() } as Partial<ScheduleRun>));
+    db.putOwnUndo('ledger', 't1', taskEntry(U_TASK, 12));
+    await initScheduler(deps());
+    const el = await open();
+    expect(link(el)).not.toBeNull();
+  });
+
+  it('NEGATIVE: an approved-only run of an UNARMED schedule shows no link — the list never holds the user’s approvals', async () => {
+    seed(task(), run({ approved: [{ appId: 'ledger', undoId: U_GONE, summary: 'Set both coffees to 9.99', changes: 2 }] } as Partial<ScheduleRun>));
+    await initScheduler(deps());
+    const el = await open();
+    expect(el.querySelector('[data-testid="schedule-result-made"]'), 'the approval is still shown').not.toBeNull();
+    expect(link(el)).toBeNull();
+  });
+});
+
+describe('PR-4 Gate-5 U7 — the result page’s *stop* answers in words, where the focus was', () => {
+  it('after *stop*, a role="status" line reads ROW.stoppedOnItsOwn and holds the focus', async () => {
+    seed(armedTask(), run());
+    await initScheduler(deps());
+    const el = await open();
+    const stop = el.querySelector<HTMLButtonElement>('[data-testid="schedule-result-on-its-own"] button');
+    await act(async () => {
+      stop?.focus();
+      stop?.click();
+    });
+    await vi.waitFor(() => expect(db.getScheduledTask('t1')?.writeAuthority).toBeUndefined());
+    await settle();
+    const status = [...el.querySelectorAll<HTMLElement>('[role="status"]')].find((node) => node.textContent === ROW.stoppedOnItsOwn);
+    expect(status, 'the outcome line').toBeDefined();
+    expect(document.activeElement, 'focus moves to the outcome line, never to <body>').toBe(status);
+  });
+});
+
+describe('PR-4 Gate-5 U14 — the held *full* names the live count; the capped line names the limit', () => {
+  it('a *full* item reads the task bucket’s live count at render — 3, not the cap', async () => {
+    for (const id of ['00000000-0000-4000-8000-00000000000a', '00000000-0000-4000-8000-00000000000b', '00000000-0000-4000-8000-00000000000c']) db.putOwnUndo('ledger', 't1', taskEntry(id, 1));
+    seed(armedTask(), run({ proposals: heldBatch('full') }));
+    await initScheduler(deps());
+    const el = await open();
+    const full = HELD_WHY.full as (appName: string, live: number) => string;
+    expect(el.querySelector('[data-testid="schedule-change-held"]')?.textContent).toBe(full('Ledger', 3));
+    expect(el.querySelector('[data-testid="schedule-change-held"]')?.textContent).toContain('3 earlier changes');
+  });
+
+  it('a run capped by the NETWORK limit says the network limit — never the AI one', async () => {
+    seed(task(), run({ status: 'capped', reason: capped('network call'), steps: [{ status: 'refused' }] }));
+    await initScheduler(deps());
+    const el = await open();
+    const card = el.querySelector('[data-testid="schedule-result-capped"]');
+    expect(card?.textContent).toContain(capped('network call'));
+    expect(card?.textContent).not.toContain('AI call');
+  });
+
+  it('…and a run capped by the AI limit says the AI one (the twin)', async () => {
+    seed(task(), run({ status: 'capped', reason: capped('AI call'), steps: [{ status: 'refused' }] }));
+    await initScheduler(deps());
+    const el = await open();
+    expect(el.querySelector('[data-testid="schedule-result-capped"]')?.textContent).toContain(capped('AI call'));
   });
 });

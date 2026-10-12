@@ -1,7 +1,7 @@
 <!--
 layer: system
 destination: host system prompt block, injection order 50; the ONLY block after 10-host-identity on a scheduled *Ask <App>'s AI* step that may look things up (buildHostSystemPrompt({scheduledAgent: true}); ADR-0076 §9, D-PR4-15) — never with 45 or 40, and with 95 last on desktop; the app's runtime contract follows it as the END suffix
-blast-radius: what an unattended agent turn believes about its tools, its limits and the changes it proposes — too loose and it claims changes it never made, spends its look-ups on nothing, or fetches after reading another app's data (the host refuses that); it can never make a change itself (the host decides what is made, after it has finished), so the risk is a misleading result, not lost data
+blast-radius: what an unattended agent turn believes about its tools, its limits and the changes it proposes — too loose and it claims changes it never made, spends its look-ups on nothing, or fetches after reading another app's data (the host refuses that). It never makes a change itself, but under a schedule the user let make changes on its own the HOST makes what it proposed once it has finished — this app's own data only, within the schedule's rows-each-time limit, each change undoable for seven days — so a careless proposal there can change the user's own data with nobody watching (bounded and undoable; never another app's data)
 source: written for TASK-20261010-host-broker PR-4 (ADR-0076 §9, the host-native scheduled agent)
 -->
 

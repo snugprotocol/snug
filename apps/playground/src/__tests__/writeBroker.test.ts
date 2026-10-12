@@ -1185,3 +1185,209 @@ describe('PR-4 — undoOwnWrite(db, appId, bucket, undoId, { via: user }) → Un
     }
   });
 });
+
+// =========================================================================================
+// PR-4 Gate-5 — A1 (the bucket rule FIRST in the seat) and A5 (nothing after the commit turns it
+// into a refusal), on the own-write engine and the own undo.
+// =========================================================================================
+
+describe('PR-4 Gate-5 A1 — an entry that does not belong in its bucket never reaches the seat', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(T0);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const write = (over: Record<string, unknown>) =>
+    ({
+      appId: journal,
+      statements: ["UPDATE entries SET amount = 9 WHERE title = 'tea'"],
+      params: [[]],
+      expectChanges: [1],
+      maxChanges: ACCESS_WRITE_MAX_ROWS,
+      via: 'schedule',
+      runId: 'run-1',
+      stillArmed: () => true,
+      ...over,
+    }) as unknown as Parameters<WriteBrokerModule['applyOwnWrite']>[1];
+
+  it('a TASK’s write into the approval bucket (a task whose id spells it) → cannot-undo under requireUndo: the seat never reached, the row unchanged, the approval bucket empty', async () => {
+    const { applyOwnWrite } = await writeBroker();
+    const seatSpy = vi.spyOn(seat(), 'brokeredWrite');
+    const outcome = await applyOwnWrite(db, write({ bucket: 'approval', authority: 'task', taskId: 'approval', requireUndo: true }));
+    expect(outcome).toMatchObject({ ok: false, reason: 'cannot-undo' });
+    expect(seatSpy).not.toHaveBeenCalled();
+    expect(await rowsOf(journal, "SELECT amount FROM entries WHERE title = 'tea'")).toEqual([[3]]);
+    expect(ownJournal().listOwnUndo(journal, { bucket: 'approval' })).toEqual([]);
+  });
+
+  it('… and without requireUndo the same mismatch is failed — never a bare write that lands unjournaled', async () => {
+    const { applyOwnWrite } = await writeBroker();
+    const seatSpy = vi.spyOn(seat(), 'brokeredWrite');
+    const outcome = await applyOwnWrite(db, write({ bucket: 'approval', authority: 'task', taskId: 'approval', requireUndo: false }));
+    expect(outcome).toMatchObject({ ok: false, reason: 'failed' });
+    expect(seatSpy).not.toHaveBeenCalled();
+    expect(await rowsOf(journal, "SELECT amount FROM entries WHERE title = 'tea'")).toEqual([[3]]);
+  });
+
+  it.each([
+    ['a task entry naming ANOTHER task’s bucket', { bucket: 'task-2', authority: 'task', taskId: 'task-1', requireUndo: true }],
+    ['a task entry with no taskId', { bucket: 'task-1', authority: 'task', taskId: undefined, requireUndo: true }],
+    ['an approval entry in a task bucket', { bucket: 'task-1', authority: 'approval', via: 'chat', runId: undefined, taskId: undefined, requireUndo: true }],
+    ['an approval entry carrying a taskId', { bucket: 'approval', authority: 'approval', via: 'chat', taskId: 'task-1', requireUndo: true }],
+  ])('%s → refused before any seat, nothing changed', async (_label, over) => {
+    const { applyOwnWrite } = await writeBroker();
+    const seatSpy = vi.spyOn(seat(), 'brokeredWrite');
+    const outcome = await applyOwnWrite(db, write(over));
+    expect(outcome.ok).toBe(false);
+    expect(seatSpy).not.toHaveBeenCalled();
+    expect(await rowsOf(journal, "SELECT amount FROM entries WHERE title = 'tea'")).toEqual([[3]]);
+  });
+
+  it('the passing twins: a task in its OWN bucket, and the user’s approval in the approval bucket, are both journaled', async () => {
+    const { applyOwnWrite } = await writeBroker();
+    expect(await applyOwnWrite(db, write({ bucket: 'task-1', authority: 'task', taskId: 'task-1', requireUndo: true }))).toMatchObject({ ok: true, undoable: true });
+    expect(
+      await applyOwnWrite(
+        db,
+        write({ bucket: 'approval', authority: 'approval', via: 'chat', runId: undefined, taskId: undefined, stillArmed: undefined, requireUndo: false, maxChanges: Number.POSITIVE_INFINITY, statements: ["UPDATE entries SET amount = 1 WHERE title = 'cake'"] }),
+      ),
+    ).toMatchObject({ ok: true, undoable: true });
+    expect(ownJournal().listOwnUndo(journal, { taskId: 'task-1' })).toHaveLength(1);
+    expect(ownJournal().listOwnUndo(journal, { bucket: 'approval' })).toHaveLength(1);
+  });
+});
+
+describe('PR-4 Gate-5 A5 — once the seat answered ok, nothing after the commit turns the outcome into a refusal', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(T0);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** How many grants reads threw — each row asserts the fault was really injected after the commit (never vacuous). */
+  let thrown = 0;
+  /** From the moment `armed()` says so, every grants read throws — the doorbells' and the caches' read. */
+  function grantsThrowAfter(armed: () => boolean): void {
+    thrown = 0;
+    const listGrants = db.listAccessGrants.bind(db);
+    vi.spyOn(db, 'listAccessGrants').mockImplementation(((...args: Parameters<UserDb['listAccessGrants']>) => {
+      if (armed()) {
+        thrown += 1;
+        throw new Error('a grant row that will not parse');
+      }
+      return listGrants(...args);
+    }) as UserDb['listAccessGrants']);
+  }
+
+  it('applyOwnWrite: a doorbell that throws after the entry is put → still {ok:true, undoId}; the entry is in its bucket; the change stands', async () => {
+    const { applyOwnWrite } = await writeBroker();
+    const journalPut = ownJournal().putOwnUndo.bind(db);
+    let put = false;
+    vi.spyOn(db as unknown as OwnJournal, 'putOwnUndo').mockImplementation(((...args: Parameters<OwnJournal['putOwnUndo']>) => {
+      const answer = journalPut(...args);
+      put = true;
+      return answer;
+    }) as OwnJournal['putOwnUndo']);
+    grantsThrowAfter(() => put);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const outcome = await applyOwnWrite(db, {
+      appId: journal,
+      bucket: 'task-1',
+      statements: ["UPDATE entries SET amount = 9 WHERE title = 'tea'"],
+      params: [[]],
+      expectChanges: [1],
+      maxChanges: ACCESS_WRITE_MAX_ROWS,
+      requireUndo: true,
+      authority: 'task',
+      via: 'schedule',
+      runId: 'run-1',
+      taskId: 'task-1',
+      stillArmed: () => true,
+    });
+    expect(put).toBe(true);
+    expect(thrown, 'the fault landed after the commit').toBeGreaterThan(0);
+    expect(outcome).toEqual({ ok: true, changes: [1], undoId: expect.stringMatching(UUID_V4), undoable: true });
+    expect(ownJournal().listOwnUndo(journal, { taskId: 'task-1' }).map((entry) => entry.id)).toEqual([(outcome as { undoId: string }).undoId]);
+    expect(await rowsOf(journal, "SELECT amount FROM entries WHERE title = 'tea'")).toEqual([[9]]);
+    warn.mockRestore();
+  });
+
+  it('applyOwnWrite: a throwing onCommitted (the caller’s record) never turns the made change into a refusal', async () => {
+    const { applyOwnWrite } = await writeBroker();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const outcome = await applyOwnWrite(db, {
+      appId: journal,
+      bucket: 'task-1',
+      statements: ["UPDATE entries SET amount = 9 WHERE title = 'tea'"],
+      params: [[]],
+      expectChanges: [1],
+      maxChanges: ACCESS_WRITE_MAX_ROWS,
+      requireUndo: true,
+      authority: 'task',
+      via: 'schedule',
+      runId: 'run-1',
+      taskId: 'task-1',
+      stillArmed: () => true,
+      onCommitted: () => {
+        throw new Error('the claim row was refused');
+      },
+    } as Parameters<WriteBrokerModule['applyOwnWrite']>[1]);
+    expect(outcome).toMatchObject({ ok: true, undoable: true });
+    warn.mockRestore();
+  });
+
+  it('the approval: a doorbell that throws after the commit → still applied with its undo (never "nothing was changed")', async () => {
+    const { applyApprovedWrite } = await writeBroker();
+    const journalPut = ownJournal().putOwnUndo.bind(db);
+    let put = false;
+    vi.spyOn(db as unknown as OwnJournal, 'putOwnUndo').mockImplementation(((...args: Parameters<OwnJournal['putOwnUndo']>) => {
+      const answer = journalPut(...args);
+      put = true;
+      return answer;
+    }) as OwnJournal['putOwnUndo']);
+    grantsThrowAfter(() => put);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const outcome = await approve(applyApprovedWrite, { appId: journal, statements: ["UPDATE entries SET amount = 0 WHERE title = 'tea'"], params: [[]], summary: 'x', previewed: [1] }, 'chat');
+    expect(thrown, 'the fault landed after the commit').toBeGreaterThan(0);
+    expect(outcome).toMatchObject({ ok: true, executed: [1], undoable: true });
+    expect(await rowsOf(journal, "SELECT amount FROM entries WHERE title = 'tea'")).toEqual([[0]]);
+    warn.mockRestore();
+  });
+
+  it('undoOwnWrite: a retire() that throws after the undo landed → still {ok:true}; the rows are back', async () => {
+    const { applyApprovedWrite, undoOwnWrite } = await writeBroker();
+    const applied = await approve(applyApprovedWrite, { appId: journal, statements: ["UPDATE entries SET amount = 0 WHERE title = 'tea'"], params: [[]], summary: 'x', previewed: [1] }, 'chat');
+    const undoId = (applied as { undoId?: string }).undoId!;
+    const retire = vi.spyOn(db as unknown as OwnJournal, 'markOwnUndone').mockImplementation(() => {
+      throw new Error('the journal row could not be written');
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    expect(await undoOwnWrite(db, journal, 'approval', undoId, { via: 'user' })).toEqual({ ok: true });
+    expect(retire, 'the fault landed after the undo').toHaveBeenCalled();
+    expect(await rowsOf(journal, "SELECT amount FROM entries WHERE title = 'tea'")).toEqual([[3]]);
+    warn.mockRestore();
+  });
+
+  it('undoOwnWrite: a doorbell that throws after the undo landed → still {ok:true}', async () => {
+    const { applyApprovedWrite, undoOwnWrite } = await writeBroker();
+    const applied = await approve(applyApprovedWrite, { appId: journal, statements: ["UPDATE entries SET amount = 0 WHERE title = 'tea'"], params: [[]], summary: 'x', previewed: [1] }, 'chat');
+    const undoId = (applied as { undoId?: string }).undoId!;
+    const markUndone = ownJournal().markOwnUndone.bind(db);
+    let retired = false;
+    vi.spyOn(db as unknown as OwnJournal, 'markOwnUndone').mockImplementation(((...args: Parameters<OwnJournal['markOwnUndone']>) => {
+      markUndone(...args);
+      retired = true;
+    }) as OwnJournal['markOwnUndone']);
+    grantsThrowAfter(() => retired);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    expect(await undoOwnWrite(db, journal, 'approval', undoId, { via: 'user' })).toEqual({ ok: true });
+    expect(thrown, 'the fault landed after the undo').toBeGreaterThan(0);
+    expect(await rowsOf(journal, "SELECT amount FROM entries WHERE title = 'tea'")).toEqual([[3]]);
+    warn.mockRestore();
+  });
+});

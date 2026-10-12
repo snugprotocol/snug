@@ -393,10 +393,12 @@ export {
 // write's captured rows are kept under in `ownUndo:<appId>:<bucket>`, the two authorities and
 // vias spelled once, and the bucket caps. Internal draft, OUT of the json-schemas SOURCES.
 export {
+  APPROVAL_WRITE_AUTHORITY,
   OWN_UNDO_MAX_LIVE,
   OWN_UNDO_ROW_MAX_BYTES,
   OWN_UNDO_VIAS,
   OWN_WRITE_AUTHORITIES,
+  TASK_WRITE_AUTHORITY,
   ownUndoEntrySchema,
   type OwnUndoEntry,
   type OwnUndoVia,

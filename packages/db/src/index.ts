@@ -172,6 +172,10 @@ export {
 // The import/export bound a `running`/`pending` claim is retired under (TASK-20261009 C4).
 export { SCHEDULE_IMPORTED_CLAIM_MAX_AGE_MS } from './userdb/schedules.js';
 
+// The own undo journal's bucket rule (TASK-20261010-host-broker PR-4 Gate 5, A1): the accessor's,
+// and the one the Write Broker's own-write engine asks FIRST, before any seat.
+export { ownUndoBelongsIn } from './userdb/own-undo.js';
+
 // Access between apps (TASK-20261010-cross-app-access): the record types the accessors speak,
 // and the PURE scoped read the access engine's Worker runs on its own sql.js instance (AC6) —
 // and, since TASK-20261010-host-broker PR-2 (D-PR2-6), the PURE scoped dump the chat and

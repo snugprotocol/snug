@@ -598,6 +598,14 @@ export const OWN_UNDO = {
 } as const;
 
 /**
+ * The tail of an own change's line once the journal holds its undo no longer, while the change is
+ * younger than its seven days — undone and gone, or given way early in its bucket (TASK-20261010-
+ * host-broker PR-4 Gate 5, U2). ONE home: the chat's data-write card and the result page's made line
+ * both end on it. Its own export, not an `OWN_UNDO` key — those are the ⋈ sheet's words, reused.
+ */
+export const OWN_UNDO_NO_LONGER = 'can no longer be undone';
+
+/**
  * What an app's OWN change is answered with while that app is mid-change (its frame's BEGIN — the
  * driver's `inTransaction`): the app by its name, so the user and the model know what to wait for
  * (TASK-20261010-host-broker PR-4, D-PR4-5; T-A-12). ONE home: the write broker's own writes and

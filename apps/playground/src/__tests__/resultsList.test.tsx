@@ -45,6 +45,9 @@ const UNDO_ID = '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d';
 const ARMED = { rowsPerRun: 200, armedAt: '2026-10-08T09:00:00.000Z', armedVersion: 1 };
 const ask: ScheduleStep = { kind: 'app-think', appId: 'ledger', prompt: 'sum it', context: { maxRows: 50 } };
 
+/** The page's clock for the pure calls — `resultFacts` reads a batch's expiry against it (PR-4 Gate-5 U10). */
+const AT = new Date(harness.NOW);
+
 const apps: AppIndex = { bySource: new Map(), ids: new Set(['ledger']), name: (appId) => (appId === 'ledger' ? 'Ledger' : appId), emoji: () => undefined };
 
 const item = (over: Partial<ScheduledTask> = {}): ScheduledTask => harness.makeTask({ id: 't1', title: 'Spend', steps: [ask], appVersions: { ledger: 1 }, ...over });
@@ -63,29 +66,29 @@ const run = (over: Partial<ScheduleRun> & Record<string, unknown> = {}): Schedul
 
 describe('resultSummary — the AI’s words, then the host’s facts (D-PR4-18; D8)', () => {
   it('an applied group: *· changed 12 rows in Ledger on its own* follows the AI’s words', () => {
-    expect(resultSummary(run({ applied: appliedGroup }), armedItem(), apps)).toBe(`${SUMMARY} · changed 12 rows in Ledger on its own`);
+    expect(resultSummary(run({ applied: appliedGroup }), armedItem(), apps, AT)).toBe(`${SUMMARY} · changed 12 rows in Ledger on its own`);
   });
 
   it('pending items: *· 1 change waiting for your OK*; two are *changes*', () => {
-    expect(resultSummary(run({ proposals: pending(1) }), item(), apps)).toBe(`${SUMMARY} · 1 change waiting for your OK`);
-    expect(resultSummary(run({ proposals: pending(2) }), item(), apps)).toBe(`${SUMMARY} · 2 changes waiting for your OK`);
+    expect(resultSummary(run({ proposals: pending(1) }), item(), apps, AT)).toBe(`${SUMMARY} · 1 change waiting for your OK`);
+    expect(resultSummary(run({ proposals: pending(2) }), item(), apps, AT)).toBe(`${SUMMARY} · 2 changes waiting for your OK`);
   });
 
   it('both: what it made, then what waits', () => {
-    expect(resultSummary(run({ applied: appliedGroup, proposals: pending(1) }), armedItem(), apps)).toBe(`${SUMMARY} · changed 12 rows in Ledger on its own · 1 change waiting for your OK`);
+    expect(resultSummary(run({ applied: appliedGroup, proposals: pending(1) }), armedItem(), apps, AT)).toBe(`${SUMMARY} · changed 12 rows in Ledger on its own · 1 change waiting for your OK`);
   });
 
   it('the facts follow even when the AI said nothing — after the status’s own words', () => {
-    expect(resultSummary(run({ steps: [{ status: 'ok' }], applied: appliedGroup }), armedItem(), apps)).toBe(`${RESULT_STATUS_WORD.ok} · changed 12 rows in Ledger on its own`);
+    expect(resultSummary(run({ steps: [{ status: 'ok' }], applied: appliedGroup }), armedItem(), apps, AT)).toBe(`${RESULT_STATUS_WORD.ok} · changed 12 rows in Ledger on its own`);
   });
 
   it('NEGATIVE: the AI’s own claim is never taken for a fact — an AI that says it changed rows, on a run that changed none, gets no host fact', () => {
     const claim = 'I updated 40 rows in your ledger.';
-    expect(resultSummary(run({ steps: [{ status: 'ok', summary: claim }] }), item(), apps)).toBe(claim);
+    expect(resultSummary(run({ steps: [{ status: 'ok', summary: claim }] }), item(), apps, AT)).toBe(claim);
   });
 
   it('NEGATIVE: a run with neither fact reads exactly as before', () => {
-    expect(resultSummary(run(), item(), apps)).toBe(SUMMARY);
+    expect(resultSummary(run(), item(), apps, AT)).toBe(SUMMARY);
   });
 });
 
@@ -198,5 +201,123 @@ describe('the row’s history and the notification body — over the real engine
     await runNow('t1');
     await harness.settleUntil(() => env.db.listScheduleRuns('t1')[0]?.status === 'ok', 'the run finished');
     expect(notify).not.toHaveBeenCalled();
+  });
+});
+
+// =============================================================================================
+// TASK-20261010-host-broker PR-4 Gate 5 — U10: a batch counts as waiting only before its
+// `expiresAt`, read against the clock the caller hands in (`resultFacts(run, appName, now)`,
+// threaded through `resultSummary`, the row's history line and the notification). U13: the history
+// line drops an empty words segment — never a leading ' · '.
+//
+// The expiry instants are relative to the harness's NOW and the pure calls pass NOW: an
+// implementation that read the wall clock instead would call the "live" batch below expired (NOW is
+// in the past), so the pin also proves the clock is the one handed in.
+// =============================================================================================
+
+describe('PR-4 Gate-5 U10 — an expired batch is not *waiting for your OK*', () => {
+  const batchUntil = (expiresAtMs: number, n = 2): NonNullable<ScheduleRun['proposals']> => ({
+    items: Array.from({ length: n }, (_, i): ScheduleProposalItem => ({ appId: 'ledger', sql: `${SQL} AND id = ${i + 1}`, counts: { changes: 1 } })),
+    expiresAt: harness.iso(expiresAtMs),
+  });
+
+  it('expired before now: no waiting fact — the AI’s words alone', () => {
+    expect(resultSummary(run({ proposals: batchUntil(harness.NOW - harness.HOUR) }), item(), apps, AT)).toBe(SUMMARY);
+  });
+
+  it('expiring exactly now is expired', () => {
+    expect(resultSummary(run({ proposals: batchUntil(harness.NOW) }), item(), apps, AT)).toBe(SUMMARY);
+  });
+
+  it('still live at now: *· 2 changes waiting for your OK* (the clock is the one handed in, not the wall’s)', () => {
+    expect(resultSummary(run({ proposals: batchUntil(harness.NOW + harness.HOUR) }), item(), apps, AT)).toBe(`${SUMMARY} · 2 changes waiting for your OK`);
+  });
+
+  it('an expired batch beside an applied group keeps the group’s fact only', () => {
+    expect(resultSummary(run({ applied: appliedGroup, proposals: batchUntil(harness.NOW - harness.DAY) }), armedItem(), apps, AT)).toBe(`${SUMMARY} · changed 12 rows in Ledger on its own`);
+  });
+
+  describe('the feed', () => {
+    let container: HTMLDivElement | undefined;
+    let root: Root | undefined;
+
+    afterEach(() => {
+      act(() => root?.unmount());
+      container?.remove();
+      container = undefined;
+      root = undefined;
+    });
+
+    it('the feed’s line reads the expiry against the feed’s `now`: expired says nothing waits, live says it does', async () => {
+      container = document.createElement('div');
+      document.body.appendChild(container);
+      root = createRoot(container);
+      const rows = [
+        { run: run({ id: 'r-expired', proposals: batchUntil(harness.NOW - harness.HOUR), seenAt: harness.iso(harness.NOW) }), item: item(), at: harness.iso(harness.NOW - 2 * harness.HOUR) },
+        { run: run({ id: 'r-live', dueAt: harness.iso(harness.NOW - 30 * harness.MINUTE), proposals: batchUntil(harness.NOW + harness.HOUR), seenAt: harness.iso(harness.NOW) }), item: item(), at: harness.iso(harness.NOW - harness.HOUR) },
+      ];
+      await act(async () => {
+        root!.render(
+          <MemoryRouter>
+            <ResultsList rows={rows} apps={apps} now={new Date(harness.NOW)} />
+          </MemoryRouter>,
+        );
+      });
+      const lines = [...container.querySelectorAll('.schedule-result-summary')].map((el) => el.textContent);
+      expect(lines).toContain(SUMMARY);
+      expect(lines).toContain(`${SUMMARY} · 2 changes waiting for your OK`);
+      expect(lines.filter((line) => line?.includes('waiting for your OK'))).toHaveLength(1);
+    });
+  });
+});
+
+describe('PR-4 Gate-5 U10/U13 — the row’s history line, over the real engine', () => {
+  let env: harness.Env;
+
+  beforeEach(async () => {
+    env = await harness.setupEnv();
+    env.db.installApp({ appId: 'ledger', displayName: 'Ledger', iconEmoji: '📒', html: '<html>ledger</html>', installSource: 'starter:ledger' });
+  });
+
+  afterEach(() => {
+    harness.unmount();
+    harness.teardownEnv();
+  });
+
+  async function historyOf(c: HTMLElement): Promise<string[]> {
+    const row = c.querySelector<HTMLElement>('[data-schedule-id="t1"]')!;
+    await harness.click(row.querySelector('[data-testid="schedule-kebab"]'));
+    await harness.click([...row.querySelectorAll<HTMLElement>('.schedule-menu-item')].find((entry) => entry.textContent === ROW.history));
+    return harness.texts(row, '.schedule-history-summary');
+  }
+
+  function render(): HTMLDivElement {
+    return harness.mount(
+      <MemoryRouter initialEntries={['/schedule']}>
+        <Routes>
+          <Route path="/schedule" element={<ScheduleView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+  }
+
+  it('U10: a run whose batch expired (a day before NOW — past by the page’s clock and the wall’s) says nothing waits', async () => {
+    env.db.putScheduledTask(item());
+    env.db.putScheduleRun(run({ proposals: { items: [{ appId: 'ledger', sql: SQL, counts: { changes: 2 } }], expiresAt: harness.iso(harness.NOW - harness.DAY) } }));
+    await env.boot();
+    const c = render();
+    await harness.settle();
+    expect(await historyOf(c)).toEqual([SUMMARY]);
+  });
+
+  it('U13: a run whose first step said nothing (an empty summary) reads its facts with no leading “ · ”', async () => {
+    env.db.putScheduledTask(armedItem());
+    env.db.putScheduleRun(run({ steps: [{ status: 'ok', summary: '' }], applied: appliedGroup }));
+    await env.boot();
+    const c = render();
+    await harness.settle();
+    const lines = await historyOf(c);
+    expect(lines).toEqual(['changed 12 rows in Ledger on its own']);
+    expect(lines[0]?.startsWith(' · ')).toBe(false);
   });
 });

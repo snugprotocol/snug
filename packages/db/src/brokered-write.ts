@@ -1358,6 +1358,22 @@ function ownCaptureColumns(parsed: ParsedDml, live: readonly ColumnFact[]): { ok
   return { ok: true, columns };
 }
 
+/**
+ * The parser's refusals that speak to a READER writing into another app, re-worded by rule for an
+ * own capture (PR-4 Gate 5, A9): here the change is to the app's own data, and what the refusal
+ * must say is why it can't be undone. A rule absent here keeps the parser's sentence — it names
+ * the statement's own token and no other app.
+ */
+const OWN_PARSE_WORDS: Readonly<Partial<Record<BrokeredRefusalRule, string>>> = {
+  'no-where': 'a change to every row can’t be undone — it needs a WHERE',
+};
+
+/** A parser refusal in own-mode words — the rule unchanged, so the engine still switches on the token. */
+function ownWorded(refusal: BrokeredRefused): BrokeredRefused {
+  const message = OWN_PARSE_WORDS[refusal.rule];
+  return message === undefined ? refusal : { ...refusal, message };
+}
+
 /** Phase 1 of own capture: every statement planned against the live schema — or the batch refused by the first rule that bites. */
 function planOwnCapture(db: Database, own: readonly OwnStatement[]): { ok: true; plans: OwnCapturePlan[] } | BrokeredRefused {
   const plans: OwnCapturePlan[] = [];
@@ -1365,7 +1381,7 @@ function planOwnCapture(db: Database, own: readonly OwnStatement[]): { ok: true;
     const forbidden = forbiddenStatementReason(statement.sql);
     if (forbidden !== undefined) return refused('statement', `forbidden statement: ${forbidden}`);
     const parsed = parseBrokeredStatement(statement.sql);
-    if (!parsed.ok) return parsed;
+    if (!parsed.ok) return ownWorded(parsed);
     let shape: ReturnType<typeof tableShape>;
     try {
       shape = tableShape(db, parsed.parsed.table);

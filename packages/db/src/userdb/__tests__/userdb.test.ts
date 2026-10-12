@@ -814,23 +814,52 @@ describe('importUserDb — the write authority never rides an untrusted file (PR
   });
 });
 
-describe('the run row’s applied seat is stripped like proposals (PR-4 D-PR4-9)', () => {
-  it('on BOTH import paths an applied group leaves every run row; the rest of the history stays', async () => {
+// INVERTED by PR-4 Gate-5 A7 [AUTH-F7] — the T-B Q17 export-strip pins. `applied`/`approved` are
+// stripped ONLY by the untrusted import pass (`scrubScheduleRunRows(…, {stripOwnSeats: !trustedOrigin})`):
+// an export, a sync push and a trusted pull KEEP them (the device keeps its disclosure of what changed
+// across a pull; a foreign `undoId` already resolves to nothing once the untrusted import drops
+// `ownUndo:*`). The describe was 'the run row’s applied seat is stripped like proposals (PR-4 D-PR4-9)'.
+describe('the run row’s applied seat leaves only with an UNTRUSTED import (PR-4 D-PR4-9, Gate-5 A7)', () => {
+  // INVERTED by A7 — was 'on BOTH import paths an applied group leaves every run row; the rest of the history stays'
+  // with `for (const run of runs) expect(run.applied).toBeUndefined();` on BOTH paths.
+  it('an UNTRUSTED import strips the applied group from every run row; a TRUSTED pull keeps it; the rest of the history stays on both', async () => {
+    const UNDO = '3f2b8c1e-7a4d-4e5f-9b6a-1c2d3e4f5a6b';
     const exported = await donorBytes((donor) => donor.putScheduledTask(armed('t1')));
     const bytes = await plantRaw(exported, [
-      [scheduleRunsSettingKey('t1'), [scheduleRun('t1', minutesAgo(3), { status: 'ok', applied: appliedGroup('3f2b8c1e-7a4d-4e5f-9b6a-1c2d3e4f5a6b') }), scheduleRun('t1', minutesAgo(9), { status: 'ok' })]],
+      [scheduleRunsSettingKey('t1'), [scheduleRun('t1', minutesAgo(3), { status: 'ok', applied: appliedGroup(UNDO) }), scheduleRun('t1', minutesAgo(9), { status: 'ok' })]],
     ]);
-    for (const options of [undefined, { trustedOrigin: true }]) {
-      const db = await open(createMemoryBackend());
-      await db.importUserDb(bytes, options);
-      const runs = db.listScheduleRuns('t1');
-      expect(runs, `trusted=${String(options?.trustedOrigin)}`).toHaveLength(2);
-      for (const run of runs) expect(run.applied).toBeUndefined();
-      await db.close();
-    }
+    const untrusted = await open(createMemoryBackend());
+    await untrusted.importUserDb(bytes);
+    const foreign = untrusted.listScheduleRuns('t1');
+    expect(foreign, 'untrusted').toHaveLength(2);
+    for (const run of foreign) expect(run.applied).toBeUndefined();
+    await untrusted.close();
+
+    const trusted = await open(createMemoryBackend());
+    await trusted.importUserDb(bytes, { trustedOrigin: true });
+    const pulled = trusted.listScheduleRuns('t1');
+    expect(pulled, 'trusted').toHaveLength(2);
+    expect(pulled.find((run) => run.applied !== undefined)?.applied).toEqual(appliedGroup(UNDO));
+    await trusted.close();
   });
 
-  it('the export’s cheap test matches "applied" too: a file whose ONLY strippable seat is an applied group still leaves without it', async () => {
+  it('an approved entry is kept by a trusted pull and stripped by an untrusted import, the same way', async () => {
+    const approved = [{ appId: OWN_APP, undoId: '1d2c3b4a-5f6e-4d7c-8b9a-0f1e2d3c4b5a', summary: 'Tidies notes', changes: 1 }];
+    const exported = await donorBytes((donor) => donor.putScheduledTask(armed('t1')));
+    const bytes = await plantRaw(exported, [[scheduleRunsSettingKey('t1'), [scheduleRun('t1', minutesAgo(3), { status: 'ok', approved })]]]);
+    const trusted = await open(createMemoryBackend());
+    await trusted.importUserDb(bytes, { trustedOrigin: true });
+    expect((trusted.listScheduleRuns('t1')[0] as { approved?: unknown }).approved).toEqual(approved);
+    await trusted.close();
+    const untrusted = await open(createMemoryBackend());
+    await untrusted.importUserDb(bytes);
+    expect((untrusted.listScheduleRuns('t1')[0] as { approved?: unknown }).approved).toBeUndefined();
+    await untrusted.close();
+  });
+
+  // INVERTED by A7 — was 'the export’s cheap test matches "applied" too: a file whose ONLY strippable seat is an applied
+  // group still leaves without it', asserting `row.every((r) => !('applied' in r))` on both export paths.
+  it('an EXPORT (with or without secrets — the sync push and a backup) keeps the applied group: the device’s disclosure travels with its file', async () => {
     const db = await open(backend);
     db.putScheduledTask(armed('t1'));
     db.putScheduleRun(scheduleRun('t1', minutesAgo(5), { status: 'ok', applied: appliedGroup() }));
@@ -838,10 +867,20 @@ describe('the run row’s applied seat is stripped like proposals (PR-4 D-PR4-9)
       const bytes = await db.exportUserDb(opts);
       const row = (await settingFromBytes(bytes, scheduleRunsSettingKey('t1'))) as Array<Record<string, unknown>>;
       expect(row.map((r) => r.status), `includeSecrets=${String(opts?.includeSecrets)}`).toEqual(['ok']);
-      expect(row.every((r) => !('applied' in r)), `includeSecrets=${String(opts?.includeSecrets)}`).toBe(true);
+      expect(row[0]?.applied, `includeSecrets=${String(opts?.includeSecrets)}`).toEqual(appliedGroup());
     }
     // The device's own record is untouched by exporting.
     expect(db.listScheduleRuns('t1')[0]?.applied).toEqual(appliedGroup());
+    await db.close();
+  });
+
+  it('an export still strips proposals beside a kept applied group (proposals never cross the file boundary)', async () => {
+    const db = await open(backend);
+    db.putScheduledTask(armed('t1'));
+    db.putScheduleRun(scheduleRun('t1', minutesAgo(5), { status: 'ok', applied: appliedGroup(), proposals }));
+    const row = (await settingFromBytes(await db.exportUserDb(), scheduleRunsSettingKey('t1'))) as Array<Record<string, unknown>>;
+    expect(row[0]?.applied).toEqual(appliedGroup());
+    expect('proposals' in (row[0] ?? {})).toBe(false);
     await db.close();
   });
 
@@ -864,9 +903,15 @@ describe('the run row’s applied seat is stripped like proposals (PR-4 D-PR4-9)
       put(scheduleRunsSettingKey('t1'), [scheduleRun('t1', minutesAgo(3), { status: 'ok', applied: appliedGroup() })]);
       expect(schedules.hasScheduleRunSeatsToStrip(sql)).toBe(true);
       const cleanBefore = sql.select(`SELECT value FROM ${USERDB_TABLES.settings} WHERE key = ?`, [scheduleRunsSettingKey('clean')]);
+      const t1Of = (): Array<Record<string, unknown>> =>
+        JSON.parse(String(sql.select(`SELECT value FROM ${USERDB_TABLES.settings} WHERE key = ?`, [scheduleRunsSettingKey('t1')])[0]?.[0])) as Array<Record<string, unknown>>;
+      // INVERTED by PR-4 Gate-5 A7 — the pass WITHOUT `stripOwnSeats` (the export's, the trusted pull's) keeps
+      // the applied group. Was: `schedules.scrubScheduleRunRows(sql);` then `expect(after.every((r) => !('applied' in r))).toBe(true);`
       schedules.scrubScheduleRunRows(sql);
-      const after = JSON.parse(String(sql.select(`SELECT value FROM ${USERDB_TABLES.settings} WHERE key = ?`, [scheduleRunsSettingKey('t1')])[0]?.[0])) as Array<Record<string, unknown>>;
-      expect(after.every((r) => !('applied' in r))).toBe(true);
+      expect(t1Of()[0]?.applied).toEqual(appliedGroup());
+      // …and WITH it (the untrusted import's) the group leaves.
+      (schedules.scrubScheduleRunRows as unknown as (sql: unknown, opts: { stripOwnSeats: boolean }) => number)(sql, { stripOwnSeats: true });
+      expect(t1Of().every((r) => !('applied' in r))).toBe(true);
       expect(sql.select(`SELECT value FROM ${USERDB_TABLES.settings} WHERE key = ?`, [scheduleRunsSettingKey('clean')])).toEqual(cleanBefore);
       expect(schedules.hasScheduleRunSeatsToStrip(sql)).toBe(false);
       put(scheduleRunsSettingKey('t2'), [scheduleRun('t2', minutesAgo(3), { status: 'needs-you', proposals })]);

@@ -91,6 +91,7 @@ import type { StepExecutor } from './engine-types.js';
 import { executeStep } from './executors.js';
 import { createLeaderElection, pageLocks, type LeaderElection, type LeaderLocks, type LeaderState } from './leader.js';
 import { plan } from './plan.js';
+import { ZERO_CALLS } from './protection.js';
 import { DEFAULT_RUN_BOUNDS, createRunQueue, laterInstant, runBoundMs, type RunBounds, type RunHost, type RunQueue, type RunQueueState } from './queue.js';
 import { clearScheduleKey } from './scheduleKey.js';
 import { RESULT_STATUSES, messageOf, sameOccurrence } from './taskShape.js';
@@ -166,8 +167,6 @@ export interface SchedulerView {
 export const SCHEDULER_LOCK_PREFIX = 'snug-scheduler:';
 /** The lock name when the file's own id is not available (see the header). */
 export const SCHEDULER_LOCK_NAME_FALLBACK = 'snug-scheduler';
-
-const ZERO_CALLS = { ai: 0, net: 0 } as const;
 
 export function initialSchedulerView(): SchedulerView {
   return { ready: false, leader: undefined, needsReload: false, tasks: [], runsByTask: {}, state: undefined, pending: 0, unseen: 0, running: undefined, queued: 0 };

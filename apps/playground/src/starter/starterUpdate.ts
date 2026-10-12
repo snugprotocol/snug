@@ -28,6 +28,7 @@ import { STARTER_INSTALL_SOURCE_PREFIX, starterVersionSettingKey } from '@snugpr
 import { canonicalRuntimeContract, runtimeContractSchema, type RuntimeContract } from '@snugprotocol/protocol';
 
 import { isNamedLoadRefusal } from '../run/copy.js';
+import { onAppVersionChanged } from '../state/appVersionChanged.js';
 import { STARTER_PREFIX, loadStarterHtml } from './starterApps.js';
 import { installStarterConnections, normalizeStarterHtml } from './starterDeclaration.js';
 import { installStarterDocs } from './starterDocs.js';
@@ -213,10 +214,14 @@ export async function applyStarterUpdate(db: UserDb, appId: string): Promise<Sta
     return { status: 'already-current', version: meta.version };
   }
 
-  db.saveAppVersion(appId, bundle, `starter update to v${meta.version}`, undefined, {
+  const saved = db.saveAppVersion(appId, bundle, `starter update to v${meta.version}`, undefined, {
     pinned: true,
     ...(contract === undefined ? {} : { contract }),
   });
+  // New code never inherits a schedule's consent to change this app's data on its own: the one
+  // fan-out takes it away — a starter update pauses nothing and suspends nothing, so only that
+  // runs (TASK-20261010-host-broker Gate 5, A2).
+  onAppVersionChanged(db, appId, saved.version, 'starter', new Date().toISOString());
   // What the starter wrote, for `contractEdited`. A release with no contract copies the
   // user's forward — that is not the starter's word, so the record keeps the last one.
   if (contract !== undefined) recordStarterContract(db, appId, contract);

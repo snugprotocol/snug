@@ -186,7 +186,9 @@ export type ToolPromptName =
   /** TASK-20261010-host-broker PR-2 (ADR-0076 §2): the brain's ask to read another app's data — the builder's, and the data and answer lanes'. */
   | 'access-propose'
   /** TASK-20261010-host-broker PR-4 (ADR-0076 §9): the scheduled agent's GET-only, host-pinned look-up through an approved connection. */
-  | 'fetch-connection';
+  | 'fetch-connection'
+  /** TASK-20261010-host-broker PR-4 Gate 5 (D-PR4-16, JOBS-F2): the scheduled agent's own `data_propose_write` — one statement, values written in; the chat keeps `data-propose-write`. */
+  | 'data-propose-write-scheduled';
 
 export function getToolPrompt(name: ToolPromptName): string {
   return renderedFile(`tools/${name}.md`);

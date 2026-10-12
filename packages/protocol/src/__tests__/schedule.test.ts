@@ -12,7 +12,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import type { z } from 'zod';
+import { z } from 'zod';
 import { buildJsonSchemas } from '../json-schemas.js';
 import { ACCESS_WRITE_MAX_ROWS } from '../access.js';
 import * as protocolIndex from '../index.js';
@@ -1219,5 +1219,58 @@ describe('PR-4 — publication line still holds: json-schemas SOURCES unchanged 
       'access-response.json',
       'app-request-envelope.json',
     ]);
+  });
+});
+
+// =================================================================================================
+// PR-4 Gate-5 AUTH-F8 — the forward-compatibility DIRECTION, pinned against a hand-copied pre-PR-4
+// reader (main @ 76c9262, packages/protocol/src/schedule.ts). A pre-PR-4 hub parses strictly, so:
+//   - a step result carrying `inOpenApp` (a run that ran in the open app — every manual *run now* of an
+//     app-run included) or `saw` (it read another app's data) is REFUSED by it — dropped from its
+//     history, and from its next export or push;
+//   - an *Ask* step carrying `tools` is refused by it — a task holding one (or `writeAuthority`, or
+//     `disarmed`) is deleted by its untrusted import.
+// The current schema accepts each (the direction is new → old only). This records the residual the
+// threat delta names; it never asks the old reader to change.
+// =================================================================================================
+
+describe('PR-4 Gate-5 AUTH-F8 — what a pre-PR-4 reader refuses (the direction, hand-copied)', () => {
+  /** main's `stepResultSchema`, byte for byte but for the imports. */
+  const preStepResultSchema = z.strictObject({
+    status: z.enum(['ok', 'failed', 'blocked', 'refused', 'no-handler', 'skipped']),
+    summary: z.string().max(4096).optional(),
+    appMissing: z.boolean().optional(),
+  });
+  /** main's `app-think` step member: no `tools` seat. */
+  const preAppThinkStepSchema = z.strictObject({
+    kind: z.literal('app-think'),
+    appId: z.string().min(1),
+    prompt: z.string().min(1),
+    context: z.strictObject({ sql: z.array(z.string()).optional(), maxRows: z.int().min(1).optional() }),
+  });
+
+  it('a step result with inOpenApp: the current schema reads it; a pre-PR-4 reader refuses it', () => {
+    const row = { status: 'ok', inOpenApp: true };
+    expect(parses(stepResultSchema, row)).toBe(true);
+    expect(parses(preStepResultSchema, row)).toBe(false);
+  });
+
+  it('a step result with saw: read now, refused before', () => {
+    const row = { status: 'ok', saw: [{ source: 'Ledger', table: 'transactions' }] };
+    expect(parses(stepResultSchema, row)).toBe(true);
+    expect(parses(preStepResultSchema, row)).toBe(false);
+  });
+
+  it('the passing twin: a plain step result is read by both', () => {
+    expect(parses(stepResultSchema, { status: 'ok', summary: 'done' })).toBe(true);
+    expect(parses(preStepResultSchema, { status: 'ok', summary: 'done' })).toBe(true);
+  });
+
+  it('an Ask step with tools: read now, refused before', () => {
+    const step = { kind: 'app-think', appId: 'ledger', prompt: 'tidy', context: { maxRows: 50 }, tools: true };
+    expect(parses(scheduleStepSchema, step)).toBe(true);
+    expect(parses(preAppThinkStepSchema, step)).toBe(false);
+    const { tools: _t, ...plain } = step;
+    expect(parses(preAppThinkStepSchema, plain)).toBe(true);
   });
 });

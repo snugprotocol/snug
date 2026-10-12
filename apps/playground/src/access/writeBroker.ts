@@ -55,6 +55,10 @@
 // (`authority: 'task'`, the armed walk). One engine for both, in this order, every step observable:
 //  (1) `db.driver.inTransaction(app)` FIRST — the app mid-change is `busy` and its transaction is left
 //      exactly as it was (D-PR4-5);
+//  (1′) the BUCKET RULE (Gate 5, A1) — the entry this change would journal must belong in the bucket
+//      named (`ownUndoBelongsIn`: an approval in `approval`, a schedule's change in its own task's
+//      bucket, never `approval`), else nothing is made: `cannot-undo` for a schedule, `failed` for an
+//      approval. Decided before any seat, so the put after a commit can never be what refuses it;
 //  (2) ROOM in the bucket BEFORE the seat — a schedule's bucket (`ownUndo:<appId>:<taskId>`) that
 //      cannot take one more full entry answers `full` and nothing applies; the approval bucket
 //      always has room (its oldest live entry gives way on the put — the user was there for each);
@@ -62,8 +66,9 @@
 //      the seat (S7): false is `stopped`;
 //  (4) ONE seat call, the CAPTURE variant (`{ own, capture: true, caps, expectChanges, requireUndo,
 //      admit }`, D-PR4-4): `caps.maxChanges` bounds the whole call (`Infinity` for an approval),
-//      `expectChanges` are the fresh dry-run counts, and `admit` is `ownUndoEntrySchema.safeParse` of
-//      the EXACT entry this engine will write — asked inside the transaction, before `COMMIT`, so a
+//      `expectChanges` are the fresh dry-run counts, and `admit` is the bucket rule ∧
+//      `ownUndoEntrySchema.safeParse` of the EXACT entry this engine will write — asked inside the
+//      transaction, before `COMMIT`, so a
 //      change whose rows the journal could not hold (`snug_kv`, a long column name, > 200 rows a
 //      step, a credential-shaped cell, > 64 KiB) is decided before it lands. A schedule REQUIRES the
 //      undo: a no rolls back `cannot-undo`, and so does a batch the capture cannot plan (a function,
@@ -76,7 +81,10 @@
 //      writes its claim row there, so the entry and the row that names it land in ONE tick, F20),
 //      the namespace's read caches cleared, `data-changed { table }` to the app's own frame and
 //      `access-source-changed` to EVERY live reader of its data (D-PR4-5) — never a history line:
-//      an own write names no other app, so `authority: 'task'` appears on no line (D-PR4-2).
+//      an own write names no other app, so `authority: 'task'` appears on no line (D-PR4-2). Once the
+//      seat answered ok NOTHING turns the outcome into a refusal (Gate 5, A5 — PR-3's post-commit
+//      posture): the caller's record, the caches and the doorbells are each caught and warned, so a
+//      committed, journaled change is never reported as "nothing was changed".
 // The named residual: a put refused AFTER the commit (a schedule's bucket filled by a write that
 // raced it past the room check) leaves the change applied and `undoable: false` — said, never lost.
 //
@@ -93,8 +101,9 @@
 // OWN UNDO — `undoOwnWrite` (D-PR4-19): the live entry of the named bucket (an unknown, undone or
 // expired id is `gone`), then the undo's ONE core shared with strict mode below — the live schema
 // re-validated, the steps reversed through the seat's `{ undo }` — then the entry marked, the
-// caches cleared and the same doorbells as the write. No history line, no access revision: an own
-// change was never on the history.
+// caches cleared and the same doorbells as the write, each caught and warned once the rows are back
+// (A5): an undo that landed answers done. No history line, no access revision: an own change was
+// never on the history.
 //
 // UNDO — `undoBrokeredWrite` (the USER's act from the target's history, `via: 'user'`): the live
 // entry (an unknown, undone or expired id is `gone`) → every step's table and columns re-validated
@@ -128,6 +137,7 @@ import {
   ACCESS_UNDO_MAX_ROW_BYTES,
   ACCESS_UNDO_TTL_MS,
   ACCESS_WRITE_MAX_ROWS,
+  APPROVAL_WRITE_AUTHORITY,
   FRAME_TYPES,
   PROTOCOL_VERSION,
   accessUndoEntrySchema,
@@ -145,6 +155,7 @@ import {
   OWN_UNDO_APPROVAL_BUCKET,
   dmlTargetTable,
   nonDataStatementReason,
+  ownUndoBelongsIn,
   type BrokeredCaps,
   type BrokeredWriteResult,
   type ColumnFact,
@@ -503,6 +514,9 @@ function ownRefusal(applied: Exclude<BrokeredWriteResult, { ok: true }>, require
  */
 async function seatOwnWrite(db: UserDb, input: OwnWriteInput): Promise<OwnWriteOutcome> {
   const { appId, bucket, requireUndo } = input;
+  // (1′) FIRST — the bucket rule (A1): a change whose undo would land outside its own bucket is never made.
+  const belongs = ownUndoBelongsIn(bucket, input);
+  if (!belongs) return { ok: false, reason: requireUndo ? 'cannot-undo' : 'failed' };
   const own: OwnStatement[] = input.statements.map((sql, index) => ({ sql, params: input.params[index] ?? [] }));
   const bare = { own, expectChanges: [...input.expectChanges] };
   // (2) Room BEFORE the seat: a schedule never makes a change it has nowhere to keep the undo of.
@@ -522,8 +536,8 @@ async function seatOwnWrite(db: UserDb, input: OwnWriteInput): Promise<OwnWriteO
   };
   /** The entry around the captured steps — a candidate until the journal's own schema says otherwise. */
   const entry = (steps: readonly UndoStep[]): unknown => ({ ...seats, steps: [...steps] });
-  // The EXACT entry the put below writes, judged by the journal's own schema inside the transaction (D-PR4-4).
-  const admit = (steps: readonly UndoStep[]): boolean => ownUndoEntrySchema.safeParse(entry(steps)).success;
+  // The EXACT entry the put below writes, judged by the bucket rule and the journal's own schema inside the transaction (D-PR4-4, A1).
+  const admit = (steps: readonly UndoStep[]): boolean => belongs && ownUndoEntrySchema.safeParse(entry(steps)).success;
   // (3) The authority re-read after the last await — nothing is awaited between it and the seat.
   if (input.stillArmed !== undefined && !input.stillArmed()) return { ok: false, reason: 'stopped' };
   // (4) The seat.
@@ -534,14 +548,26 @@ async function seatOwnWrite(db: UserDb, input: OwnWriteInput): Promise<OwnWriteO
     applied = await db.driver.brokeredWrite(appId, bare);
   }
   if (!applied.ok) return ownRefusal(applied, requireUndo);
-  // (5) After the commit, in one synchronous run: the entry, the caller's record, the caches, the doorbells.
+  // (5) After the commit, in one synchronous run: the entry, the caller's record, the caches, the doorbells —
+  // and from here on nothing turns the outcome into a refusal (A5): each is caught and warned on its own.
   const undoId = applied.undoable ? journalOwn(db, appId, bucket, entry(applied.steps)) : undefined;
   const outcome: Extract<OwnWriteOutcome, { ok: true }> = { ok: true, changes: applied.changes, undoable: undoId !== undefined, ...(undoId !== undefined ? { undoId } : {}) };
-  input.onCommitted?.(outcome);
-  clearSourceReadCaches(db, appId);
-  for (const table of new Set(input.statements.map((sql) => dmlTargetTable(sql)))) ringDataChanged(appId, table);
-  ringSourceChanged(db, appId);
+  afterCommit('the caller’s record', () => input.onCommitted?.(outcome));
+  afterCommit('the read caches', () => clearSourceReadCaches(db, appId));
+  afterCommit('data-changed', () => {
+    for (const table of new Set(input.statements.map((sql) => dmlTargetTable(sql)))) ringDataChanged(appId, table);
+  });
+  afterCommit('access-source-changed', () => ringSourceChanged(db, appId));
   return outcome;
+}
+
+/** One effect after an own write or undo landed (A5): a throw is warned, never turned into a refusal of what already happened. */
+function afterCommit(what: string, effect: () => void): void {
+  try {
+    effect();
+  } catch (err) {
+    console.warn(`own write: ${what} failed after the commit — the change stands`, err);
+  }
 }
 
 /** The entry put in its bucket after a commit — its id, or nothing when the bucket refused or threw (the named residual). */
@@ -603,7 +629,7 @@ export async function applyApprovedWrite(db: UserDb, proposal: PendingWritePropo
       expectChanges: proposal.previewed,
       maxChanges: Number.POSITIVE_INFINITY,
       requireUndo: false,
-      authority: 'approval',
+      authority: APPROVAL_WRITE_AUTHORITY,
       via: options.via,
     });
     if (made.ok) return { ok: true, executed: made.changes, undoable: made.undoable, ...(made.undoId !== undefined ? { undoId: made.undoId } : {}) };
@@ -633,10 +659,13 @@ export async function undoOwnWrite(db: UserDb, appId: string, bucket: string, un
     const retire = (): void => db.markOwnUndone(appId, bucket, undoId, iso(now()));
     const reversed = await reverseEntry(db, appId, entry.steps, retire);
     if (!reversed.ok) return fail(reversed.reason);
-    retire();
-    clearSourceReadCaches(db, appId);
-    for (const table of new Set(entry.steps.map((step) => step.table))) ringDataChanged(appId, table);
-    ringSourceChanged(db, appId);
+    // The rows are back: nothing after this turns the undo into a failure (A5).
+    afterCommit('marking the undo done', retire);
+    afterCommit('the read caches', () => clearSourceReadCaches(db, appId));
+    afterCommit('data-changed', () => {
+      for (const table of new Set(entry.steps.map((step) => step.table))) ringDataChanged(appId, table);
+    });
+    afterCommit('access-source-changed', () => ringSourceChanged(db, appId));
     return { ok: true };
   } catch {
     return fail('failed');

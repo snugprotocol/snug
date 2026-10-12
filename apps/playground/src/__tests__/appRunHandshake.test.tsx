@@ -1158,7 +1158,10 @@ describe('a delegated run — the app is OPEN (ADR-0077)', () => {
   });
 
   describe('AC6 — counted, never refused mid-window; the ceiling is asked BEFORE dispatch', () => {
-    it('a day with no headroom for one more AI or network call → `refused`, `capped: true`, the limit named — nothing dispatched; `capped` survives `createStepExecutor`', async () => {
+    // INVERTED by PR-4 Gate-5 J6 [JOBS-F6] — `capped` carries the kind of the ceiling with no headroom
+    // (`'ai'` | `'net'`), not a bare flag; the title named `capped: true`. Was:
+    //   expect(outcome.capped, counter).toBe(true);
+    it('a day with no headroom for one more AI or network call → `refused`, `capped` naming that counter (`ai` | `net`), the limit named — nothing dispatched; `capped` survives `createStepExecutor`', async () => {
       for (const [counter, what] of [
         ['ai', 'AI call'],
         ['net', 'network call'],
@@ -1176,7 +1179,7 @@ describe('a delegated run — the app is OPEN (ADR-0077)', () => {
         const step: AppRunStep = { kind: 'app-run', appId };
         const outcome = await execute(step, ctx(step, { trigger: 'due' }).context);
         expect(outcome.status, counter).toBe('refused');
-        expect(outcome.capped, counter).toBe(true);
+        expect(outcome.capped, counter).toBe(counter);
         expect(outcome.summary, counter).toBe(capped(what));
         expect(deps.live.notified, counter).toEqual([]);
         expect(mounts, counter).toEqual([]);
@@ -1187,7 +1190,10 @@ describe('a delegated run — the app is OPEN (ADR-0077)', () => {
       }
     });
 
-    it('a tally that CROSSES the ceiling inside the window is not refused — every call goes through, and the outcome is marked `capped: true`', async () => {
+    // INVERTED by PR-4 Gate-5 J6 [JOBS-F6] — `appRun`'s `withCap` returns the kind it crossed: the tally
+    // starts one short of the NETWORK ceiling (AI at 0) and two GETs cross it, so `capped: 'net'`. Was:
+    //   expect(await pending).toMatchObject({ status: 'ok', summary: 'fetched twice', calls: { ai: 0, net: 2 }, capped: true });
+    it('a tally that CROSSES the network ceiling inside the window is not refused — every call goes through, and the outcome is marked `capped` with the kind it crossed (`net`)', async () => {
       connectWeather();
       db.setSchedulerState({ watermark: NOW, globalPause: false, daily: { date: NOW.slice(0, 10), ai: 0, net: SCHEDULE_DAILY_CEILINGS.net - 1 } });
       const deps = fakeDeps({ resultTimeoutMs: 5_000 });
@@ -1202,7 +1208,7 @@ describe('a delegated run — the app is OPEN (ADR-0077)', () => {
       expect((await live.net.handle(appId, netFrame('GET'))).ok, 'past the ceiling, still not refused mid-window').toBe(true);
       expect(fetched).toHaveLength(2);
       deps.live.emit(appId, SCHEDULE_RESULT_EVENT, { ok: true, summary: 'fetched twice' });
-      expect(await pending).toMatchObject({ status: 'ok', summary: 'fetched twice', calls: { ai: 0, net: 2 }, capped: true });
+      expect(await pending).toMatchObject({ status: 'ok', summary: 'fetched twice', calls: { ai: 0, net: 2 }, capped: 'net' });
     });
   });
 

@@ -19,9 +19,13 @@
 // is an attention line with *review*; a delete that would end live undos says so in its confirm.
 // THE HISTORY opens with the schedule's changes list (`ScheduleChanges` — read from its own undo
 // bucket, so an undo stays findable whatever was pruned), and each result's line carries the
-// host's facts after the AI's words (`resultFacts`).
+// host's facts after the AI's words (`resultFacts`, as of the page's clock — an expired batch waits
+// for nothing, U10), with no empty words before them (U13). ARRIVING FROM A RESULT'S LINK
+// (`?history=<id>`, U6) opens this row's history AND lands on it: scrolled into view and focused
+// (`tabIndex={-1}` — focusable without joining the tab order), never the top of the page with the
+// focus on <body>.
 
-import { useRef, useState, type ReactElement } from 'react';
+import { useEffect, useRef, useState, type ReactElement } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 
 import type { ScheduleRun, ScheduledTask } from '@snugprotocol/protocol';
@@ -80,6 +84,9 @@ export function ScheduleRow({ item, runs, apps, now, attention }: ScheduleRowPro
   // A result's link to the schedule's changes (`historyHref`) opens this row's history on arrival.
   const [search] = useSearchParams();
   const [historyOpen, setHistoryOpen] = useState(() => search.get(HISTORY_PARAM) === item.id);
+  /** Arrived by that link: the first commit lands on the history it opened (U6). Read once, like the open state. */
+  const landOnHistory = useRef(search.get(HISTORY_PARAM) === item.id);
+  const historyRef = useRef<HTMLUListElement>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
   /** What the row's own act just did, said in the row (*stop making changes on its own*). */
@@ -89,6 +96,16 @@ export function ScheduleRow({ item, runs, apps, now, attention }: ScheduleRowPro
   /** One confirm = one delete, even for two clicks in the same tick (the tiles' latch). */
   const deleteLatch = useRef(false);
   const onItsOwn = item.writeAuthority !== undefined;
+
+  useEffect(() => {
+    if (!landOnHistory.current) return;
+    landOnHistory.current = false;
+    const history = historyRef.current;
+    if (history === null) return;
+    // A page without layout (a test, a print) has no scrolling to do; the focus still moves.
+    if (typeof history.scrollIntoView === 'function') history.scrollIntoView({ block: 'start' });
+    history.focus();
+  }, []);
 
   const next = nextFor(item, now);
   const appIds = appIdsOf(item.steps);
@@ -317,13 +334,13 @@ export function ScheduleRow({ item, runs, apps, now, attention }: ScheduleRowPro
         </div>
       ) : null}
       {historyOpen ? (
-        <ul className="schedule-history" id={historyId} data-testid="schedule-history">
+        <ul className="schedule-history" id={historyId} ref={historyRef} tabIndex={-1} data-testid="schedule-history">
           <ScheduleChanges taskId={item.id} now={now} />
           {runsNewestFirst(runs).length === 0 ? (
             <li className="schedule-hint">{ROW.historyEmpty}</li>
           ) : (
             runsNewestFirst(runs).map((entry) => {
-              const line = historyLine(entry, apps);
+              const line = historyLine(entry, apps, now);
               return (
                 <li key={`${entry.id}:${entry.dueAt}`} className="schedule-history-entry" data-status={entry.status}>
                   <span className="schedule-history-status">{RESULT_STATUS_WORD[entry.status]}</span>
@@ -344,10 +361,9 @@ export function ScheduleRow({ item, runs, apps, now, attention }: ScheduleRowPro
   );
 }
 
-/** A result's one line in the history: the first step's words (or the run's reason), then the host's facts after them. */
-function historyLine(run: ScheduleRun, apps: AppIndex): string | undefined {
+/** A result's one line in the history: the first step's words (or the run's reason), then the host's facts as of `now` — an empty words segment is left out, never a leading ` · `. */
+function historyLine(run: ScheduleRun, apps: AppIndex, now: Date): string | undefined {
   const words = run.steps[0]?.summary ?? run.reason;
-  const facts = resultFacts(run, apps.name);
-  const parts = words === undefined ? facts : [words, ...facts];
+  const parts = [...(words === undefined || words === '' ? [] : [words]), ...resultFacts(run, apps.name, now)];
   return parts.length === 0 ? undefined : parts.join(' · ');
 }

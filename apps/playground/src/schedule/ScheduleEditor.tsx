@@ -22,11 +22,19 @@
 // *wait for my OK* / *make them on its own* — shows the task's own state and nothing else (a new
 // draft waits). The control is a CHOICE; the consent's tick is the ACT: a save that would make a
 // schedule start making changes on its own, or widen what an armed one does (its steps, compared
-// canonically, or a shorter gap between runs — `widensAuthority`), goes through `EnableConsent`
-// with the tick pre-set to the choice, and is warned about above save first. *wait for my OK*
-// disarms on save with no consent; a title, alert or catch-up edit never touches the authority.
-// The engine's acts do the writing: `updateTask` (which also disarms a widening it was not told
-// about), then `armTask` for a ticked consent or `disarmTask` for a choice to wait.
+// canonically, or a shorter gap between runs — `widens`, the engine's own rule), goes through
+// `EnableConsent` with the tick pre-set to the choice, and is warned about above save first. *wait
+// for my OK* disarms on save with no consent; a title, alert or catch-up edit never touches the
+// authority. The engine's acts do the writing: `updateTask` (which also disarms a widening it was
+// not told about), then `armTask` for a ticked consent or `disarmTask` for a choice to wait.
+//
+// SAID BEFORE THE SAVE, NEVER AFTER (PR-4 Gate 5): a brain that cannot answer an *ask* step here at
+// all is said under every such step and on the consent (U1 — `askBrainFor`); an armed schedule an
+// edit takes out of one app says, in the warning slot, that the save ends its authority (U5); a
+// schedule an update or an import stopped opens with that line and the way out (U8); an existing
+// schedule whose *ask* step GAINS *let it look things up* saves through the consent, which names the
+// connections and the cost (U9); and an arming refused after the save says the schedule was saved
+// and its changes wait (U13 — never the refusal alone).
 
 import type { ReactElement } from 'react';
 import { useId, useMemo, useRef, useState } from 'react';
@@ -34,14 +42,14 @@ import { useId, useMemo, useRef, useState } from 'react';
 import type { AppRecord, UserDb } from '@snugprotocol/db';
 import { SCHEDULE_TITLE_MAX_CHARS, type AlertKind, type MissedPolicy, type ScheduleSpec, type ScheduleStep, type ScheduledTask } from '@snugprotocol/protocol';
 
-import { chatBrainRoute, chatDoorOpen } from '../access/egress.js';
 import { useAppProvider } from '../state/appModel.js';
 import { useByokKeyPresence, useMode, useProvider } from '../state/mode.js';
 import { useBrain } from '../state/webllm.js';
 import { Button } from '../ui/Button.js';
 import { brainChipLabel } from '../views/BrainChip.js';
 import { disarmTask } from './acts.js';
-import { EMPTY, alertLabel, alertSentence, imported, missedPolicyLabel, missedPolicySentence } from './copy.js';
+import { askBrainFor, blockedAppsOf, type AskBrain } from './askBrain.js';
+import { EMPTY, alertLabel, alertSentence, disarmed, imported, missedPolicyLabel, missedPolicySentence } from './copy.js';
 import { ACTIONS, CHANGES_CONTROL, SENTENCE, TITLE } from './copy.editor.js';
 import { compileSpec, listWords, parseCron } from './cron.js';
 import {
@@ -58,7 +66,7 @@ import {
   titleFromSteps,
   remainderOf,
   titleFromText,
-  widensAuthority,
+  widens,
   type EditorDraft,
   type SpecKind,
   type StepDraft,
@@ -99,6 +107,9 @@ interface PreparedSave {
 interface PendingConsent extends PreparedSave {
   presetOnItsOwn: boolean;
 }
+
+/** An *ask* step that may look things up — absent (a step the schedule did not have) is not one. */
+const looksThingsUp = (step: ScheduleStep | undefined): boolean => step?.kind === 'app-think' && step.tools === true;
 
 export function ScheduleEditor({ initial, parseFailed: initialParseFailed, apps, db, task, onSaved, onCancel }: ScheduleEditorProps): ReactElement {
   const id = useId();
@@ -150,14 +161,18 @@ export function ScheduleEditor({ initial, parseFailed: initialParseFailed, apps,
 
   // Making changes on its own: offered for a ONE-app schedule. `existing` is the schedule this
   // form edits — the route's, or the one it already wrote when the arming after it was refused.
-  const onItsOwnApp = onItsOwnAppOf(draft.steps);
-  const wantsOnItsOwn = onItsOwnApp !== undefined && draft.onItsOwn;
+  const armableApp = onItsOwnAppOf(draft.steps);
+  const wantsOnItsOwn = armableApp !== undefined && draft.onItsOwn;
   const existing = written.current ?? task;
   const armed = existing?.writeAuthority !== undefined;
   /** An armed schedule whose steps or timing this save would widen: the consent confirms it again. */
-  const widening = existing !== undefined && armed && wantsOnItsOwn && prepared.ok && widensAuthority(existing, { steps: prepared.steps, spec: draft.spec }, now);
-  /** The brain an app's AI runs on now cannot look things up there: the chat door's own derivation. */
-  const toolsUnavailable = (appId: string): boolean => !chatDoorOpen(chatBrainRoute(db, appId));
+  const widening = existing !== undefined && armed && wantsOnItsOwn && prepared.ok && widens(existing, { steps: prepared.steps, spec: draft.spec }, now);
+  /** An armed schedule this edit takes out of ONE app: the choice is gone, and the save ends the authority (U5). */
+  const losesOnItsOwn = existing !== undefined && armed && armableApp === undefined;
+  /** An existing schedule whose *ask* step gains *let it look things up*: the consent names what it may use and what it costs (U9). */
+  const gainsLookUps = existing !== undefined && prepared.ok && prepared.steps.some((step, index) => looksThingsUp(step) && !looksThingsUp(existing.steps[index]));
+  /** What the brain an app's *ask* step runs on now can do there — the engine's own gates (U1). */
+  const brainFor = (appId: string): AskBrain => askBrainFor(db, appId);
 
   const update = (patch: Partial<EditorDraft>): void => setDraft((current) => ({ ...current, ...patch }));
 
@@ -218,7 +233,11 @@ export function ScheduleEditor({ initial, parseFailed: initialParseFailed, apps,
       if (result.ok && importedDisabled) result = await setTaskEnabled(result.task.id, true, { reviewed: true });
       if (result.ok) {
         written.current = result.task;
-        refusal = await settleAuthority(result.task.id, choice?.onItsOwn ?? wantsOnItsOwn, choice !== undefined);
+        const onItsOwn = choice?.onItsOwn ?? wantsOnItsOwn;
+        const ticked = choice !== undefined;
+        const refused = await settleAuthority(result.task.id, onItsOwn, ticked);
+        // The save landed: an ARMING refused after it says so, and that its changes wait (U13).
+        refusal = refused !== undefined && ticked && onItsOwn ? ACTIONS.savedButWaits(refused) : refused;
       }
     } catch (err) {
       result = { ok: false, reason: err instanceof Error ? err.message : String(err) };
@@ -252,7 +271,7 @@ export function ScheduleEditor({ initial, parseFailed: initialParseFailed, apps,
     // and so is a save that starts or widens making changes on its own (D-PR4-8).
     const spends = prepared.steps.some((step) => step.kind !== 'notify');
     const startsOnItsOwn = wantsOnItsOwn && !armed;
-    if ((existing === undefined && spends) || importedDisabled || (existing !== undefined && (startsOnItsOwn || widening))) {
+    if ((existing === undefined && spends) || importedDisabled || (existing !== undefined && (startsOnItsOwn || widening || gainsLookUps))) {
       setError(undefined);
       setConsent({ ...save, presetOnItsOwn: wantsOnItsOwn });
       return;
@@ -307,9 +326,16 @@ export function ScheduleEditor({ initial, parseFailed: initialParseFailed, apps,
 
       <SpecControls mode={draft.mode} spec={draft.spec} cron={draft.cron} onMode={onMode} onSpec={(spec) => update({ spec })} onCron={onCron} onCronCommit={onCronCommit} />
 
-      <StepsEditor steps={draft.steps} apps={apps} onChange={onSteps} toolsUnavailable={toolsUnavailable} />
+      <StepsEditor steps={draft.steps} apps={apps} onChange={onSteps} brainFor={brainFor} />
 
-      {onItsOwnApp !== undefined ? (
+      {existing?.disarmed !== undefined ? (
+        <div className="connection-note" role="note" data-testid="disarmed-note">
+          <p className="connection-note-title">{disarmed(existing.disarmed.reason).text}</p>
+          <p className="connection-note-body">{CHANGES_CONTROL.disarmedHint}</p>
+        </div>
+      ) : null}
+
+      {armableApp !== undefined ? (
         <fieldset className="schedule-section" data-testid="changes-it-suggests">
           <legend className="section-title">{CHANGES_CONTROL.legend}</legend>
           <div className="schedule-radio-row" role="radiogroup" aria-label={CHANGES_CONTROL.legend}>
@@ -366,6 +392,7 @@ export function ScheduleEditor({ initial, parseFailed: initialParseFailed, apps,
           appNames={appNameRecord}
           hostsByApp={approvedHostsByApp(db, appIdsOf(consent.steps))}
           connectionsByApp={lookUpNamesByApp(db, appIdsOf(consent.steps))}
+          blockedApps={blockedAppsOf(db, appIdsOf(consent.steps))}
           presetOnItsOwn={consent.presetOnItsOwn}
           busy={busy}
           {...(error !== undefined ? { error } : {})}
@@ -374,9 +401,9 @@ export function ScheduleEditor({ initial, parseFailed: initialParseFailed, apps,
         />
       ) : (
         <div className="schedule-actions" data-testid="schedule-actions">
-          {widening ? (
+          {widening || losesOnItsOwn ? (
             <p className="connection-note" role="status" data-testid="armed-warning">
-              {CHANGES_CONTROL.armedWarning}
+              {losesOnItsOwn ? CHANGES_CONTROL.armedLost : CHANGES_CONTROL.armedWarning}
             </p>
           ) : null}
           {error !== undefined ? (

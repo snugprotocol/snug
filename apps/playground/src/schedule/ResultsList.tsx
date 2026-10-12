@@ -9,7 +9,8 @@
 // HOST FACTS FOLLOW THE AI'S WORDS (TASK-20261010-host-broker PR-4, D-PR4-18; D8): the line is the
 // AI's (or the status's) words, never rewritten, then what the HOST knows — what a schedule changed
 // on its own, what the user applied, what still waits (`resultFacts`). An AI that claims a change
-// gets no fact for it; only the run row's own seats are facts.
+// gets no fact for it; only the run row's own seats are facts. The facts read the feed's clock: a
+// batch past its seven days is no longer *waiting for your OK* (PR-4 Gate 5, U10).
 
 import type { ReactElement } from 'react';
 import { Link, useNavigate } from 'react-router';
@@ -17,7 +18,7 @@ import { Link, useNavigate } from 'react-router';
 import type { ScheduleRun, ScheduledTask } from '@snugprotocol/protocol';
 
 import { Button } from '../ui/Button.js';
-import { RESULT_STATUS_WORD, capped, needsYou, noHandler } from './copy.js';
+import { RESULT_STATUS_WORD, capped, cappedWhatOf, needsYou, noHandler } from './copy.js';
 import { RESULTS } from './copy.page.js';
 import { resultFacts } from './copy.result.js';
 import { appRunAppOf, relativeTime, type AppIndex, type ResultRow } from './pageModel.js';
@@ -25,9 +26,9 @@ import { resultHref } from './routes.js';
 import { markAllSeen, runNow } from './scheduler.js';
 import { appIdsOf } from './taskShape.js';
 
-/** The one line a result reads as: its words (the first step's summary, else the status's own sentence), then the host's facts. */
-export function resultSummary(run: ScheduleRun, item: ScheduledTask, apps: AppIndex): string {
-  return [resultWords(run, item, apps), ...resultFacts(run, apps.name)].join(' · ');
+/** The one line a result reads as: its words (the first step's summary, else the status's own sentence), then the host's facts as of `now`. */
+export function resultSummary(run: ScheduleRun, item: ScheduledTask, apps: AppIndex, now: Date): string {
+  return [resultWords(run, item, apps), ...resultFacts(run, apps.name, now)].join(' · ');
 }
 
 /** The first step's summary, else the status's own sentence. */
@@ -42,7 +43,7 @@ function resultWords(run: ScheduleRun, item: ScheduledTask, apps: AppIndex): str
     case 'no-handler':
       return noHandler(appName).text;
     case 'capped':
-      return capped(run.reason?.includes('net') === true ? 'network call' : 'AI call');
+      return capped(cappedWhatOf(run.reason));
     default:
       return run.reason ?? RESULT_STATUS_WORD[run.status];
   }
@@ -101,7 +102,7 @@ export function ResultsList({ rows, apps, now }: ResultsListProps): ReactElement
                     {unseen ? <span className="schedule-dot" aria-hidden="true" /> : null}
                     <span className="schedule-result-word">{unseen ? `${RESULTS.unread} · ${word}` : word}</span>
                   </span>
-                  <span className="schedule-result-summary">{resultSummary(run, item, apps)}</span>
+                  <span className="schedule-result-summary">{resultSummary(run, item, apps, now)}</span>
                   <span className="schedule-result-meta">
                     {[item.title, ...(names.length > 0 ? [names.join(', ')] : []), relativeTime(new Date(at), now)].join(' · ')}
                   </span>

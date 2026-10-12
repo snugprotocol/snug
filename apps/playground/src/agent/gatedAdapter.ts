@@ -21,7 +21,7 @@ import type { AgentAdapter } from '@snugprotocol/adapters';
 import { ERROR_CODES } from '@snugprotocol/protocol';
 
 import { capped } from '../schedule/copy.js';
-import { countersSoFar, wouldExceedCeiling, type Calls, type SchedulerStateSeat } from '../schedule/protection.js';
+import { ZERO_CALLS, countersSoFar, wouldExceedCeiling, type Calls, type SchedulerStateSeat } from '../schedule/protection.js';
 
 /** The code a call refused at the day's AI ceiling answers with — not a wire code; the agent maps it to a capped step. */
 export const AI_CEILING_CODE = 'CAPPED';
@@ -38,13 +38,11 @@ export interface AiCallAdmission {
   now: () => Date;
 }
 
-const NOTHING: Calls = { ai: 0, net: 0 };
-
 /** `inner`, asking the day's AI ceiling before every call it passes on. */
 export function gatedAdapter(inner: AgentAdapter, admit: AiCallAdmission): AgentAdapter {
   return {
     async complete(request) {
-      const counters = countersSoFar(admit.db, admit.spent?.() ?? NOTHING, admit.soFar, admit.now().toISOString());
+      const counters = countersSoFar(admit.db, admit.spent?.() ?? ZERO_CALLS, admit.soFar, admit.now().toISOString());
       if (wouldExceedCeiling(counters, { ai: 1 }) === 'ai') {
         return { ok: false, code: AI_CEILING_CODE, message: capped('AI call'), retryable: false };
       }

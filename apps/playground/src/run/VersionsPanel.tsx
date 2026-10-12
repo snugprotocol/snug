@@ -11,6 +11,7 @@ import type { ReactElement } from 'react';
 
 import type { AppVersionMeta } from '@snugprotocol/db';
 
+import { onAppVersionChanged } from '../state/appVersionChanged.js';
 import { getUserDb } from '../state/userdb.js';
 import { Button } from '../ui/Button.js';
 import { EmptyState } from '../ui/EmptyState.js';
@@ -53,11 +54,18 @@ export function VersionsPanel({ appId, refreshToken, onReverted }: VersionsPanel
     [appId, onReverted],
   );
 
+  // A revert and a reset each write a NEW version — the user's own act, so the one fan-out runs
+  // with `own`: it pauses nothing, and takes away any schedule's consent to change this app's data
+  // on its own, which was given for the code as it was (TASK-20261010-host-broker Gate 5, A2).
   const revert = useCallback(
     (version: number): void => {
       setError(undefined);
       void getUserDb()
-        .then((db) => afterChange(db.revertApp(appId, version).version))
+        .then((db) => {
+          const meta = db.revertApp(appId, version);
+          onAppVersionChanged(db, appId, meta.version, 'own', new Date().toISOString());
+          afterChange(meta.version);
+        })
         .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
     },
     [appId, afterChange],
@@ -66,7 +74,11 @@ export function VersionsPanel({ appId, refreshToken, onReverted }: VersionsPanel
   const resetToFactory = useCallback((): void => {
     setError(undefined);
     void getUserDb()
-      .then((db) => afterChange(db.resetToFactory(appId).version))
+      .then((db) => {
+        const meta = db.resetToFactory(appId);
+        onAppVersionChanged(db, appId, meta.version, 'own', new Date().toISOString());
+        afterChange(meta.version);
+      })
       .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
   }, [appId, afterChange]);
 

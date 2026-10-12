@@ -70,11 +70,14 @@ import { appHasSidecarFact } from '../state/sidecarLive.js';
 import { defaultAppRunDeps, executeAppRun, type AppRunDeps } from './appRun.js';
 import { CANCELLED_SUMMARY, defaultTransportFor, executeAppThink, keylessBrainGate, type AppThinkDeps, type AppThinkStep } from './appThink.js';
 import type { StepContext, StepExecutor, StepOutcome } from './engine-types.js';
-import { scrubOrWithhold } from './scrub.js';
+import { ZERO_CALLS } from './protection.js';
+import { WITHHELD_SUMMARY, scrubOrWithhold } from './scrub.js';
 import { messageOf } from './taskShape.js';
 
 export { CANCELLED_SUMMARY } from './appThink.js';
 export { blockedAppRunDeps } from './appRun.js';
+/** What replaces a text that looked like a credential — its home is `scrub.ts`, which the scheduled agent reads it from too. */
+export { WITHHELD_SUMMARY } from './scrub.js';
 
 export interface StepExecutorDeps {
   /** The app's OWN transport, or `undefined` when no brain can answer (the demo brain) — see `appThink.ts`. */
@@ -94,11 +97,6 @@ export interface StepExecutorDeps {
    */
   appRun: AppRunDeps;
 }
-
-/** What replaces a summary, an alert line or a failure message that looked like a credential. */
-export const WITHHELD_SUMMARY = 'a result was withheld because it looked like a credential';
-
-const none = (): StepOutcome['calls'] => ({ ai: 0, net: 0 });
 
 /**
  * The production `sharedFor` (D-PR2-13; C-Q1): the Access Service, reached LAZILY (the cycle
@@ -142,7 +140,8 @@ function safeProposal(item: ScheduleProposalItem): ScheduleProposalItem | undefi
 /** The one place result text is made safe to store (see the module comment). Answers a NEW object. */
 export function finalizeOutcome(outcome: StepOutcome): StepOutcome {
   const out: StepOutcome = { status: outcome.status, calls: { ...outcome.calls } };
-  if (outcome.capped === true) out.capped = true; // the queue's fold reads it (D-PR1-6); never a persisted field
+  // The queue's fold reads it (D-PR1-6) — the kind as found, so the run says WHICH limit (Gate-5 JOBS-F6); never a persisted field.
+  if (outcome.capped !== undefined && outcome.capped !== false) out.capped = outcome.capped;
   if (outcome.summary !== undefined) out.summary = safeText(outcome.summary);
   if (outcome.alert !== undefined) out.alert = { title: safeText(outcome.alert.title), body: safeText(outcome.alert.body) };
   if (outcome.proposals !== undefined) {
@@ -176,7 +175,7 @@ async function executeAsk(step: AppThinkStep, ctx: StepContext, deps: StepExecut
 async function dispatch(step: ScheduleStep, ctx: StepContext, deps: StepExecutorDeps): Promise<StepOutcome> {
   switch (step.kind) {
     case 'notify':
-      return { status: 'ok', summary: step.body, calls: none(), alert: { title: step.title, body: step.body } };
+      return { status: 'ok', summary: step.body, calls: { ...ZERO_CALLS }, alert: { title: step.title, body: step.body } };
     case 'app-run':
       return executeAppRun(step, ctx, deps.appRun);
     case 'app-think':
@@ -184,7 +183,7 @@ async function dispatch(step: ScheduleStep, ctx: StepContext, deps: StepExecutor
     default: {
       // A row a newer host wrote: `failed` with the kind named, never a throw.
       const unknown: never = step;
-      return { status: 'failed', summary: `unknown step kind: ${String((unknown as { kind?: unknown }).kind)}`, calls: none() };
+      return { status: 'failed', summary: `unknown step kind: ${String((unknown as { kind?: unknown }).kind)}`, calls: { ...ZERO_CALLS } };
     }
   }
 }
@@ -193,9 +192,9 @@ export function createStepExecutor(deps: StepExecutorDeps): StepExecutor {
   return async (step, ctx) => {
     let outcome: StepOutcome;
     try {
-      outcome = ctx.signal.aborted ? { status: 'failed', summary: CANCELLED_SUMMARY, calls: none() } : await dispatch(step, ctx, deps);
+      outcome = ctx.signal.aborted ? { status: 'failed', summary: CANCELLED_SUMMARY, calls: { ...ZERO_CALLS } } : await dispatch(step, ctx, deps);
     } catch (err) {
-      outcome = { status: 'failed', summary: messageOf(err), calls: none() };
+      outcome = { status: 'failed', summary: messageOf(err), calls: { ...ZERO_CALLS } };
     }
     // Cut short while it ran: say so (what was spent stays charged); the queue records the run.
     if (ctx.signal.aborted) outcome = { status: 'failed', summary: CANCELLED_SUMMARY, calls: outcome.calls };

@@ -18,6 +18,11 @@
 //     choice (`presetOnItsOwn`), which the user just made there and can take back here. The answer
 //     reaches the host as `onEnable({ onItsOwn })`; the host arms through `armIfTicked`.
 //
+// PR-4 Gate 5: an *ask* step of an app no brain here would answer (`blockedApps` — the demo, or a
+// key not set) says so on the step, tools or not, so the first result is never the first to say it
+// (U1); the tick names the lines that explain it (`aria-describedby`, U11); the cost row counts a
+// look-up only where a step may look things up — a *run <app>* step's call is not one (U13).
+//
 // Text nodes only: a prompt or a query is rendered as text, never as markup.
 
 import type { ReactElement } from 'react';
@@ -27,10 +32,10 @@ import { OWN_UNDO_MAX_LIVE, type ScheduleSpec, type ScheduleStep } from '@snugpr
 
 import { Button } from '../ui/Button.js';
 import { armTask } from './acts.js';
-import { CONSENT, stepLabel } from './copy.js';
+import { CONSENT, brainBlocked, stepLabel } from './copy.js';
 import { CONSENT_ROWS } from './copy.editor.js';
 import { dailyAiBound, onItsOwnApp, type LookUpNamesByApp } from './editorModel.js';
-import { occurrencesPerWeek, stepsCost } from './floors.js';
+import { occurrencesPerWeek, stepsCost, stepsLookUps } from './floors.js';
 
 /** What the user answered on the consent: whether the schedule may make its changes on its own. */
 export interface EnableChoice {
@@ -47,6 +52,8 @@ export interface EnableConsentProps {
   hostsByApp: Readonly<Record<string, readonly string[]>>;
   /** Library id → the connections a step that may look things up could use, by name (`fetchableConnections`). */
   connectionsByApp?: LookUpNamesByApp;
+  /** Library ids of the apps whose *ask* steps no brain here would answer (`blockedAppsOf`) — said on each such step. */
+  blockedApps?: readonly string[];
   /**
    * The editor's own choice (*changes it suggests:*), which the user made a moment ago and confirms
    * here. Only the editor passes it; every other host leaves the tick OFF.
@@ -80,6 +87,7 @@ export function EnableConsent({
   appNames,
   hostsByApp,
   connectionsByApp = {},
+  blockedApps = [],
   presetOnItsOwn = false,
   busy = false,
   error,
@@ -94,6 +102,11 @@ export function EnableConsent({
   const ticked = armableApp !== undefined && onItsOwn;
   const looksThingsUp = steps.some((step) => step.kind === 'app-think' && step.tools === true);
   const nameOf = (appId: string): string => appNames[appId] ?? appId;
+  const often = armableApp !== undefined && occurrencesPerWeek(spec, now) > OWN_UNDO_MAX_LIVE;
+  const hintId = `${id}-on-its-own-hint`;
+  const oftenId = `${id}-on-its-own-often`;
+  /** The lines under the tick that are on screen — what a screen reader hears with it (U11). */
+  const tickDescribedBy = [...(onItsOwn ? [] : [hintId]), ...(often ? [oftenId] : [])].join(' ');
 
   return (
     <section className="schedule-consent" role="region" aria-labelledby={`${id}-heading`} data-testid="enable-consent">
@@ -169,12 +182,17 @@ export function EnableConsent({
                   {CONSENT_ROWS.lookUps(connectionsByApp[step.appId] ?? [])}
                 </p>
               ) : null}
+              {blockedApps.includes(step.appId) ? (
+                <p className="hint" role="note" data-testid={`consent-brain-blocked-${index}`}>
+                  {brainBlocked.text}
+                </p>
+              ) : null}
             </li>
           );
         })}
       </ol>
       <p className="hint" data-testid="consent-cost">
-        {CONSENT.cost}: {looksThingsUp ? CONSENT_ROWS.lookUpBound(bound, stepsCost(steps)) : CONSENT_ROWS.dailyBound(bound)}
+        {CONSENT.cost}: {looksThingsUp ? CONSENT_ROWS.lookUpBound(bound, { ai: stepsCost(steps).ai, net: stepsLookUps(steps) }) : CONSENT_ROWS.dailyBound(bound)}
       </p>
       {armableApp !== undefined ? (
         <div className="field schedule-consent-on-its-own">
@@ -184,19 +202,20 @@ export function EnableConsent({
               type="checkbox"
               checked={onItsOwn}
               disabled={busy}
+              aria-describedby={tickDescribedBy === '' ? undefined : tickDescribedBy}
               data-testid="consent-on-its-own"
               onChange={(event) => setOnItsOwn(event.target.checked)}
             />
             {CONSENT_ROWS.onItsOwn(nameOf(armableApp))}
           </label>
           {onItsOwn ? null : (
-            <span className="hint" data-testid="consent-on-its-own-hint">
+            <span className="hint" id={hintId} data-testid="consent-on-its-own-hint">
               {CONSENT_ROWS.onItsOwnOff}
             </span>
           )}
           {/* More runs a week than live undos a schedule keeps: say what happens past them. */}
-          {occurrencesPerWeek(spec, now) > OWN_UNDO_MAX_LIVE ? (
-            <span className="hint" data-testid="consent-on-its-own-often">
+          {often ? (
+            <span className="hint" id={oftenId} data-testid="consent-on-its-own-often">
               {CONSENT_ROWS.onItsOwnOften}
             </span>
           ) : null}

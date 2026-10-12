@@ -35,6 +35,8 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { scheduleRevisionStore } from '../platform/signals.js';
+import { surplusNote } from '../schedule/appThink.js';
+import { capped } from '../schedule/copy.js';
 import type { StepContext, StepExecutor, StepOutcome } from '../schedule/engine-types.js';
 import {
   DEFAULT_RUN_BOUNDS,
@@ -819,9 +821,11 @@ describe('a step outcome that says `capped` (TASK-20261010-host-broker PR-1)', (
 // ================================================================================================
 
 describe('PR-4 — an armed run applies at the pooling point (D-PR4-11)', () => {
-  const ARMED_AT = '2026-10-05T09:00:00.000Z';
+  // ADAPTED by PR-4 Gate-5 A6 — a consent never predates the app it covers (the walk refuses an app
+  // installed after `armedAt`): the authority is armed at the app's own install instant. Was the fixed
+  // `const ARMED_AT = '2026-10-05T09:00:00.000Z'`, before the app this suite installs at the wall clock.
   const armedOver = (rowsPerRun = 200): Partial<ScheduledTask> =>
-    ({ steps: [THINK], appVersions: { ledger: 1 }, writeAuthority: { rowsPerRun, armedAt: ARMED_AT, armedVersion: 1 } }) as unknown as Partial<ScheduledTask>;
+    ({ steps: [THINK], appVersions: { ledger: 1 }, writeAuthority: { rowsPerRun, armedAt: db.getApp('ledger')!.createdAt, armedVersion: 1 } }) as unknown as Partial<ScheduledTask>;
   type AppliedRow = ScheduleRun & { applied?: { appId: string; undoId?: string; undoable?: false; items: Array<{ summary?: string; changes: number }> } };
   const NOTE = (id: number) => ({ appId: 'ledger', sql: `UPDATE notes SET done = 1 WHERE id = ${id}`, summary: `mark ${id}`, counts: { changes: 1 } });
 
@@ -1032,5 +1036,206 @@ describe('PR-4 — a late outcome’s calls are folded when it settles (D-PR4-15
     late.resolve({ status: 'ok', summary: 'too late', calls: { ai: 7, net: 3 } });
     await vi.advanceTimersByTimeAsync(0);
     expect(db.getSchedulerState()?.daily, 'the calls it spent are the user’s budget all the same').toEqual({ date: '2026-10-09', ai: 7, net: 3 });
+  });
+});
+
+// =================================================================================================
+// PR-4 Gate-5 — the queue side of the jobs and authority folds: J6/A10 (the capped reason from the
+// kind), J7/A10 (`proposalsSoFar`, the surplus note), A3 (the run's abort seat live THROUGH the walk),
+// A4 (the walk's verdicts mapped by index, never "the first N of the armed app").
+// =================================================================================================
+
+describe('PR-4 Gate-5 J6 — a capped step’s KIND words the run’s reason, never its prose', () => {
+  it('capped "net" on an ok answer → the run is capped with the NETWORK sentence (the answer stays the step’s summary)', async () => {
+    const t = seed({ steps: [THINK] });
+    const q = queue(recorder(() => ({ status: 'ok', capped: 'net', summary: 'Forecast unavailable; water as usual.', calls: { ai: 2, net: 0 } }) as unknown as StepOutcome).execute);
+    q.enqueue(item(t));
+    await q.idle();
+    expect(rows()[0]).toMatchObject({ status: 'capped', reason: capped('network call'), steps: [{ status: 'ok', summary: 'Forecast unavailable; water as usual.' }] });
+    expect(capped('network call')).toBe('daily network call limit reached — resumes tomorrow');
+  });
+
+  it('capped "ai" → the AI sentence', async () => {
+    const t = seed({ steps: [THINK] });
+    const q = queue(recorder(() => ({ status: 'refused', capped: 'ai', summary: 'whatever the step said', calls: { ai: 1, net: 0 } }) as unknown as StepOutcome).execute);
+    q.enqueue(item(t));
+    await q.idle();
+    expect(rows()[0]).toMatchObject({ status: 'capped', reason: capped('AI call') });
+  });
+
+  it('a plain `capped: true` keeps today’s rule (the step’s own sentence is the reason)', async () => {
+    const t = seed({ steps: [THINK] });
+    const q = queue(recorder(() => ({ status: 'refused', capped: true, summary: capped('network call'), calls: { ai: 0, net: 0 } })).execute);
+    q.enqueue(item(t));
+    await q.idle();
+    expect(rows()[0]).toMatchObject({ status: 'capped', reason: capped('network call') });
+  });
+});
+
+describe('PR-4 Gate-5 J7 — the run’s pooled count reaches each step (`proposalsSoFar`), and a dropped surplus is said', () => {
+  const P = (id: number) => ({ appId: 'ledger', sql: `DELETE FROM t WHERE id = ${id}`, summary: `drop ${id}`, counts: { changes: 1 } });
+
+  it('the second step sees what the first pooled; a step that still proposes past three is cut AND the surplus note is on the row', async () => {
+    const t = seed({ steps: [THINK, THINK] });
+    const seen: Array<number | undefined> = [];
+    let n = 0;
+    const q = queue(
+      recorder((_step, ctx) => {
+        n += 1;
+        seen.push((ctx as StepContext & { proposalsSoFar?: () => number }).proposalsSoFar?.());
+        return n === 1 ? ok('first', { ai: 1, net: 0 }, { proposals: [P(1), P(2), P(3)] }) : ok('second', { ai: 1, net: 0 }, { proposals: [P(4)] });
+      }).execute,
+    );
+    q.enqueue(item(t));
+    await q.idle();
+    expect(seen).toEqual([0, 3]);
+    const row = rows()[0]!;
+    expect(row.proposals?.items.map((entry) => entry.sql)).toEqual([P(1).sql, P(2).sql, P(3).sql]);
+    expect(JSON.stringify(row), 'the run says some suggested changes were not kept').toContain(surplusNote(3));
+  });
+
+  it('no surplus → no note', async () => {
+    const t = seed({ steps: [THINK] });
+    const q = queue(recorder(() => ok('one', { ai: 1, net: 0 }, { proposals: [P(1)] })).execute);
+    q.enqueue(item(t));
+    await q.idle();
+    expect(JSON.stringify(rows()[0])).not.toContain(surplusNote(3));
+  });
+});
+
+describe('PR-4 Gate-5 A3/A4 — the armed walk under the run’s abort seat, and its verdicts by index', () => {
+  /** Armed at the app's own install instant — a consent never predates the app it covers (A6). */
+  const armedOver = (): Partial<ScheduledTask> =>
+    ({ steps: [THINK], appVersions: { ledger: 1 }, writeAuthority: { rowsPerRun: 200, armedAt: db.getApp('ledger')!.createdAt, armedVersion: 1 } }) as unknown as Partial<ScheduledTask>;
+  type AppliedRow = ScheduleRun & { applied?: { appId: string; undoId?: string; undoable?: false; items: Array<{ summary?: string; changes: number }> } };
+  const NOTE = (id: number) => ({ appId: 'ledger', sql: `UPDATE notes SET done = 1 WHERE id = ${id}`, summary: `mark ${id}`, counts: { changes: 1 } });
+  const UPPER = { appId: 'ledger', sql: 'UPDATE notes SET body = upper(body) WHERE id = 2', summary: 'shout 2', counts: { changes: 1 } };
+  const ownUndo = (): Array<{ id: string }> =>
+    (db as unknown as { listOwnUndo(appId: string, filter: { taskId: string }): Array<{ id: string }> }).listOwnUndo('ledger', { taskId: 't1' });
+
+  async function ledgerRows(): Promise<unknown[][]> {
+    const answer = await db.driver.handle('ledger', { v: PROTOCOL_VERSION, type: FRAME_TYPES.dbRequest, requestId: `q-${Math.random()}`, instanceId: 'check', op: 'exec', sql: 'SELECT id, body, done FROM notes ORDER BY id' } as never);
+    return answer.ok ? (answer.rows ?? []) : [];
+  }
+  const UNTOUCHED = [
+    [1, 'a', 0],
+    [2, 'b', 0],
+    [3, 'c', 0],
+  ];
+
+  beforeEach(async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(NOW_MS);
+    await db.applyAppDdl('ledger', ['CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT, done INTEGER NOT NULL DEFAULT 0)']);
+    const seeded = await db.driver.handle('ledger', {
+      v: PROTOCOL_VERSION,
+      type: FRAME_TYPES.dbRequest,
+      requestId: 'seed',
+      instanceId: 'seed',
+      op: 'exec',
+      sql: "INSERT INTO notes (id, body, done) VALUES (1, 'a', 0), (2, 'b', 0), (3, 'c', 0)",
+    } as never);
+    if (!seeded.ok) throw new Error('seed failed');
+  });
+
+  /** The walk's re-dry-run is an export: `act` fires while it is in flight. */
+  function duringTheWalk(act: () => void, never = false): void {
+    const original = db.scratchRun.bind(db);
+    vi.spyOn(db, 'scratchRun').mockImplementation(async (...args) => {
+      act();
+      if (never) return new Promise<never>(() => undefined);
+      return original(...args);
+    });
+  }
+
+  it('A3 (1): cancelCurrent WHILE the walk is in flight → nothing changes; the items wait held stopped; the run is interrupted (cancelled); no undo entry', async () => {
+    const t = seed(armedOver());
+    const q = queue(recorder(() => ok('tidied', { ai: 1, net: 0 }, { proposals: [NOTE(1), NOTE(2)] })).execute);
+    duringTheWalk(() => q.cancelCurrent());
+    q.enqueue(item(t));
+    await q.idle();
+    const final = rows()[0] as AppliedRow;
+    expect(await ledgerRows()).toEqual(UNTOUCHED);
+    expect(final).toMatchObject({ status: 'interrupted', reason: 'cancelled' });
+    expect(final.applied).toBeUndefined();
+    expect(final.proposals?.items).toEqual([
+      { ...NOTE(1), held: 'stopped' },
+      { ...NOTE(2), held: 'stopped' },
+    ]);
+    expect(ownUndo()).toEqual([]);
+  });
+
+  it('A3 (2): abortAll("file swap") WHILE the walk is in flight → the same: nothing applied, held stopped, interrupted with the reason', async () => {
+    const t = seed(armedOver());
+    const q = queue(recorder(() => ok('tidied', { ai: 1, net: 0 }, { proposals: [NOTE(1)] })).execute);
+    duringTheWalk(() => q.abortAll('file swap'));
+    q.enqueue(item(t));
+    await q.idle();
+    const final = rows()[0] as AppliedRow;
+    expect(await ledgerRows()).toEqual(UNTOUCHED);
+    expect(final).toMatchObject({ status: 'interrupted', reason: 'file swap' });
+    expect(final.applied).toBeUndefined();
+    expect(final.proposals?.items).toEqual([{ ...NOTE(1), held: 'stopped' }]);
+    expect(ownUndo()).toEqual([]);
+  });
+
+  it('A3 (3): a walk whose export NEVER answers is still cut short by abortAll — idle() settles', async () => {
+    const t = seed(armedOver());
+    const q = queue(recorder(() => ok('tidied', { ai: 1, net: 0 }, { proposals: [NOTE(1)] })).execute);
+    duringTheWalk(() => queueMicrotask(() => q.abortAll('file swap')), true);
+    q.enqueue(item(t));
+    const settled = await Promise.race([q.idle().then(() => 'idle'), new Promise<string>((resolve) => globalThis.setTimeout(() => resolve('WEDGED'), 500))]);
+    expect(settled).toBe('idle');
+    const final = rows()[0] as AppliedRow;
+    expect(final).toMatchObject({ status: 'interrupted', reason: 'file swap' });
+    expect(final.proposals?.items).toEqual([{ ...NOTE(1), held: 'stopped' }]);
+    expect(await ledgerRows()).toEqual(UNTOUCHED);
+  });
+
+  it('A4: a capturable item beside one the capture refuses → the capturable one is MADE; only the other waits, held cannot-undo', async () => {
+    const t = seed(armedOver());
+    const q = queue(recorder(() => ok('tidied', { ai: 1, net: 0 }, { proposals: [NOTE(1), UPPER] })).execute);
+    q.enqueue(item(t));
+    await q.idle();
+    const final = rows()[0] as AppliedRow;
+    expect(final.applied?.items).toEqual([{ summary: 'mark 1', changes: 1 }]);
+    expect(final.proposals?.items).toEqual([{ ...UPPER, held: 'cannot-undo' }]);
+    expect(await ledgerRows()).toEqual([
+      [1, 'a', 1],
+      [2, 'b', 0],
+      [3, 'c', 0],
+    ]);
+  });
+
+  it('A4: the made item is NOT the first of the armed app’s — mapped by index, it never waits again (a re-approve would apply it twice)', async () => {
+    const t = seed(armedOver());
+    const q = queue(recorder(() => ok('tidied', { ai: 1, net: 0 }, { proposals: [UPPER, NOTE(3)] })).execute);
+    q.enqueue(item(t));
+    await q.idle();
+    const final = rows()[0] as AppliedRow;
+    expect(final.applied?.items).toEqual([{ summary: 'mark 3', changes: 1 }]);
+    expect(final.proposals?.items).toEqual([{ ...UPPER, held: 'cannot-undo' }]);
+    expect(final.proposals?.items.map((entry) => entry.sql)).not.toContain(NOTE(3).sql);
+    expect(await ledgerRows()).toEqual([
+      [1, 'a', 0],
+      [2, 'b', 0],
+      [3, 'c', 1],
+    ]);
+  });
+
+  it('A4 with a failed step between: the ok step’s made item leaves the list; the failed step’s waits unheld, in place', async () => {
+    const t = seed({ ...armedOver(), steps: [THINK, THINK] } as Partial<ScheduledTask>);
+    let n = 0;
+    const q = queue(
+      recorder(() => {
+        n += 1;
+        return n === 1 ? { status: 'failed', summary: 'half', calls: { ai: 1, net: 0 }, proposals: [NOTE(1)] } : ok('second', { ai: 1, net: 0 }, { proposals: [UPPER, NOTE(2)] });
+      }).execute,
+    );
+    q.enqueue(item(t));
+    await q.idle();
+    const final = rows()[0] as AppliedRow;
+    expect(final.applied?.items).toEqual([{ summary: 'mark 2', changes: 1 }]);
+    expect(final.proposals?.items).toEqual([NOTE(1), { ...UPPER, held: 'cannot-undo' }]);
   });
 });

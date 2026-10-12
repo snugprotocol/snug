@@ -52,25 +52,29 @@
  * THE SCHEDULED VARIANT (TASK-20261010-host-broker PR-4, D-PR4-16, D-PR4-5). Under a `scheduled`
  * seat nobody is watching, so `data_propose_write` stages a schedule proposal item for the run's
  * result instead of a chat card — ONE statement with its values written in (an item has no params
- * seat), admitted only through the one proposal gate (`schedule/proposalGate.ts`), at most three a
- * run — and every answer says what happens to the change next: it waits for the user's OK, or, under
- * a schedule allowed to make changes on its own, whether the capture walk could make it and undo it
- * (`ownCapturable`). Every *Proposed* answer ends with D8's sentence, because the model never sees
- * what the host made. Another app's table is refused by name exactly as the chat refuses it, so a
- * cross-app change never reaches a result (D-PR4-2). `data_query` asks `inTransaction` first there:
- * its scratch copy is an export, and an export under an app's open transaction discards it. Without
- * the seat both tools are the chat's, byte for byte.
+ * seat, so a placeholder is refused too), admitted only through the one proposal gate
+ * (`schedule/proposalGate.ts`), at most three a run, under its OWN definition (one statement, no
+ * `params` property; Gate-5 JOBS-F2 — the chat's says only the user's approval runs a change, which
+ * is false under an armed schedule) — and every answer says what happens to the change next: it
+ * waits for the user's OK, or, under a schedule allowed to make changes on its own, whether the
+ * capture walk could make it and undo it (`ownCapturable`). A refusal says what to fix — a failed
+ * dry run carries SQLite's own reason (JOBS-F10). Every *Proposed* answer ends with D8's sentence,
+ * because the model never sees what the host made. Another app's table is refused by name exactly
+ * as the chat refuses it, so a cross-app change never reaches a result (D-PR4-2). `data_query` asks
+ * `inTransaction` first there: its scratch copy is an export, and an export under an app's open
+ * transaction discards it. Without the seat both tools are the chat's, byte for byte.
  */
 
-import type { AgentTool } from '@snugprotocol/adapters';
+import type { AgentTool, ToolDef } from '@snugprotocol/adapters';
 import { nonDataStatementReason, ownCapturable, type ScratchAttachTable, type UserDb, type ScratchStatementResult } from '@snugprotocol/db';
-import { SCHEDULE_PROPOSALS_PER_RUN, type ScheduleProposalItem } from '@snugprotocol/protocol';
+import { SCHEDULE_PROPOSALS_PER_RUN, SCHEDULE_PROPOSAL_SQL_MAX_CHARS, type ScheduleProposalItem } from '@snugprotocol/protocol';
 import { getToolPrompt } from '@snugprotocol/knowledge';
 
 import { CHAT_DOOR, rowsWord } from '../access/copy.js';
 import { namesTable, toAttach } from '../access/materialise.js';
 import type { MaterialisedSet, MaterialisedTable, RecordReadOutcome } from '../access/service.js';
 import { OWN_CAPTURE_RULE, appBusyAnswer, gateProposal, type ProposalRefusal } from '../schedule/proposalGate.js';
+import { scrubOrWithhold } from '../schedule/scrub.js';
 import { oneLine } from './sharedDdl.js';
 
 export const DATA_QUERY_TOOL_NAME = 'data_query';
@@ -190,15 +194,26 @@ function normalizeParams(value: unknown, statementCount: number): unknown[][] {
 /** D8 — closes every scheduled *Proposed* answer: the model reports proposals, the host reports what it made. */
 const PROPOSALS_ONLY = 'Never say a change was made — say what you proposed; the host reports what it made.';
 
-const SCHEDULED_REFUSED: Readonly<Record<Exclude<ProposalRefusal, 'busy'>, string>> = {
-  invalid: 'Error: that is not one INSERT, UPDATE or DELETE over literal values (no second statement, no schema change, no nested SELECT) — it was not proposed',
-  credential: 'Error: that change carries a value that looks like a credential — it was not proposed',
-  failed: 'Error: that change failed when it was tried on a copy of the data — check the table and column names against the schema; it was not proposed',
-};
-
 const ONE_STATEMENT = 'Error: a scheduled change is ONE statement — propose each change on its own';
 const NO_PARAMS = 'Error: a scheduled change carries no params — write the values into the statement itself';
 const RUN_FULL = `Error: this run already holds ${SCHEDULE_PROPOSALS_PER_RUN} changes for the user — no more can be staged; answer with what you have`;
+
+/**
+ * The gate's refusals as the model reads them (`busy` names the app, so it is answered beside
+ * these). A placeholder is the no-params answer: the fix is the same — write the value in
+ * (Gate-5 JOBS-F1). A failed dry run hands back SQLite's own reason, so a NOT NULL or UNIQUE
+ * miss is not sent to re-check names that are right (JOBS-F10) — scrubbed with the `deliver`
+ * policy, because the statement it quotes is the model's own and may echo a value it read.
+ */
+const SCHEDULED_REFUSED = {
+  invalid: `Error: that is not one INSERT, UPDATE or DELETE over literal values (no second statement, no schema change, no nested SELECT, at most ${SCHEDULE_PROPOSAL_SQL_MAX_CHARS.toLocaleString('en-US')} characters) — it was not proposed`,
+  placeholder: NO_PARAMS,
+  credential: 'Error: that change carries a value that looks like a credential — it was not proposed',
+  failed: (detail: string | undefined): string => {
+    const why = detail === undefined ? undefined : scrubOrWithhold(detail, 'deliver');
+    return `Error: that change failed on a copy of the data${why === undefined || why === '' ? '' : ` — ${why}`}; it was not proposed`;
+  },
+} as const satisfies Record<Exclude<ProposalRefusal, 'busy'>, string | ((detail: string | undefined) => string)>;
 
 /** Whether the model passed any bound value at all — a scheduled item has no seat for one, so it is refused, never dropped. */
 function carriesParams(value: unknown): boolean {
@@ -220,6 +235,41 @@ function proposedAnswer(armed: boolean, sql: string, changes: number): string {
         : `Proposed — but it can’t be made on its own (${capture.rule}) and waits for the user’s OK; to make it applicable use ${OWN_CAPTURE_RULE}.`;
   return [head, `On a copy of the data it changed ${rowsWord(changes)}.`, PROPOSALS_ONLY].join('\n');
 }
+
+/** The chat's `data_propose_write` as the brain reads it — byte for byte what it was before the scheduled variant. */
+const chatProposeDef = (): ToolDef => ({
+  name: DATA_PROPOSE_WRITE_TOOL_NAME,
+  description: getToolPrompt('data-propose-write'),
+  inputSchema: {
+    type: 'object',
+    properties: {
+      statements: { type: 'array', items: { type: 'string' } },
+      params: { type: 'array' },
+      summary: { type: 'string' },
+    },
+    required: ['statements', 'summary'],
+  },
+});
+
+/**
+ * The scheduled variant's OWN definition (Gate-5 JOBS-F2): the chat's says only the user's approval
+ * runs a change (false under a schedule that may make changes on its own), offers `params` (which
+ * this variant refuses) and an array of statements (it takes one). So the closest instruction the
+ * model reads agrees with the preamble: ONE statement, its values written in, no `params` seat at
+ * all — the runtime refusal of one stays, for a model that sends it anyway.
+ */
+const scheduledProposeDef = (): ToolDef => ({
+  name: DATA_PROPOSE_WRITE_TOOL_NAME,
+  description: getToolPrompt('data-propose-write-scheduled'),
+  inputSchema: {
+    type: 'object',
+    properties: {
+      statements: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 1 },
+      summary: { type: 'string' },
+    },
+    required: ['statements', 'summary'],
+  },
+});
 
 /** The app's own name as the busy answer says it — one line, its id when the row is gone. */
 const appNameIn = (db: UserDb, appId: string): string => oneLine(db.getApp(appId)?.displayName ?? appId);
@@ -288,7 +338,10 @@ export function buildDataTools(options: BuildDataToolsOptions): AgentTool[] {
     try {
       const db = await getDb();
       const verdict = await gateProposal(db, appId, { sql, summary });
-      if (!verdict.ok) return verdict.reason === 'busy' ? appBusyAnswer(appNameIn(db, appId)) : SCHEDULED_REFUSED[verdict.reason];
+      if (!verdict.ok) {
+        if (verdict.reason === 'busy') return appBusyAnswer(appNameIn(db, appId));
+        return verdict.reason === 'failed' ? SCHEDULED_REFUSED.failed(verdict.detail) : SCHEDULED_REFUSED[verdict.reason];
+      }
       if (seat.onProposal(verdict.item) === false) return RUN_FULL;
       stagedForRun += 1;
       return proposedAnswer(seat.armed, sql, verdict.item.counts?.changes ?? 0);
@@ -298,19 +351,7 @@ export function buildDataTools(options: BuildDataToolsOptions): AgentTool[] {
   }
 
   const proposeTool: AgentTool = {
-    def: {
-      name: DATA_PROPOSE_WRITE_TOOL_NAME,
-      description: getToolPrompt('data-propose-write'),
-      inputSchema: {
-        type: 'object',
-        properties: {
-          statements: { type: 'array', items: { type: 'string' } },
-          params: { type: 'array' },
-          summary: { type: 'string' },
-        },
-        required: ['statements', 'summary'],
-      },
-    },
+    def: scheduled === undefined ? chatProposeDef() : scheduledProposeDef(),
     run: async (input) => {
       const statements = asStringArray(input.statements);
       if (statements === undefined || statements.length === 0) {

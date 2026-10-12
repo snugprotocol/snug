@@ -25,7 +25,10 @@
 //  signal still reaches the executor through its context so a well-behaved one stops early.
 //  `cancelCurrent()` (the user's cancel) and `abortAll(reason)` (a file swap, the global
 //  pause) abort the same way; the run is recorded `interrupted` with the reason (`timeout` |
-//  `cancelled` | the given one).
+//  `cancelled` | the given one). The run's abort seat stays live until the run is SETTLED — through
+//  an armed schedule's walk too (PR-4 Gate 5, A3): only the bound's timer stops with the steps, so
+//  a cancel, a file swap or a pause that lands while the walk asks the app or builds its copy still
+//  stops it, and a copy that never answers can never wedge the queue.
 //
 //  THE STEP RULES. A step whose app is gone from the file is `blocked` (`appMissing`) without
 //  calling the executor. An *Ask the AI* step the day's ceiling would not admit — counting
@@ -35,15 +38,20 @@
 //
 //  THE FOLD. `interrupted` on abort; else `capped` when the ceiling refused; else `failed` when
 //  any step failed; else `needs-you` when any step was refused or blocked (with its reason);
-//  else `no-handler` when any step had none; else `ok` (every step ok or skipped).
+//  else `no-handler` when any step had none; else `ok` (every step ok or skipped). A capped step
+//  that names WHICH ceiling (`capped: 'ai' | 'net'`, PR-4 Gate 5 J6/A10) gives the run the host's
+//  sentence for that limit as its reason — never the step's prose, which may be the AI's answer.
 //
 //  AFTER THE STEPS. One final write replaces the claim: `finishedAt`, the step results (the
 //  executor scrubbed and capped them; the row is shrunk to the run's byte cap if five of them
 //  still overflow it), the summed `calls`, the *Ask the AI* proposals with one `expiresAt`
 //  (`SCHEDULE_PROPOSAL_TTL_MS`) — each item naming the app its step asked (Gate-5 S4), pooled
-//  as the steps answered them. Should that write be refused, a MINIMAL row — the claim, the
-//  status, `finishedAt`, the bare step statuses, reason `result too large` — replaces the
-//  claim instead (Gate-5 M17): the occurrence is on record either way. Then the day's
+//  as the steps answered them, the first `SCHEDULE_PROPOSALS_PER_RUN` kept. Each step is told how
+//  many the run already holds (`proposalsSoFar`, PR-4 Gate 5 J7/A10), so one that proposes as it
+//  goes refuses the one past that out loud; when a step still offered more than the run keeps, the
+//  run SAYS so — the surplus note on that step's summary. Should that write be refused, a
+//  MINIMAL row — the claim, the status, `finishedAt`, the bare step statuses, reason `result too
+//  large` — replaces the claim instead (Gate-5 M17): the occurrence is on record either way. Then the day's
 //  counters, then the task (`applyRunOutcome`, `ranThrough` = max(ranThrough, dueAt)) —
 //  re-read fresh, because the user may have edited it while the run was in flight, and
 //  WITHOUT touching `updatedAt`: that stamp is the user's edits', and a run must not change
@@ -66,11 +74,13 @@
 //  own) hands its armable items to the walk (`applyArmed.ts`): only the items of steps that answered
 //  `ok` (a failed, capped or refused step's wait, unheld), and only when the run ended with NO abort
 //  — a cancelled, timed-out, paused or swapped-out run makes nothing, its armable items waiting held
-//  `stopped`. The walk re-reads the authority from the file at its seat, rewrites the claim with the
-//  `applied` group in the tick its undo entry lands, and answers what still waits; the final row
-//  carries both. `fitRunRow` drops the waiting changes BEFORE anything it says was made — `applied`
-//  and `approved` are never dropped (the changes happened, and their undo is named there) — and the
-//  M17 row keeps them too.
+//  `stopped`; the run's signal rides into the walk, so an abort DURING it does the same (A3). The walk
+//  re-reads the authority from the file at its seat, rewrites the claim with the `applied` group in
+//  the tick its undo entry lands, and answers ONE verdict per armable item — made, held, or untouched
+//  — which the queue maps back onto its pool BY INDEX (A4): a made item never waits again, whatever
+//  its place among the armed app's. The final row carries both. `fitRunRow` drops the waiting
+//  changes BEFORE anything it says was made — `applied` and `approved` are never dropped (the
+//  changes happened, and their undo is named there) — and the M17 row keeps them too.
 //
 //  THE STEP'S HOST FACTS (D-PR4-17) ride the row as the executor finalised them, each omitted when
 //  it has nothing to say: `inOpenApp`, `saw` (only when non-empty — R-88's disclosure), `tools`,
@@ -89,6 +99,7 @@ import {
   SCHEDULE_PROPOSALS_PER_RUN,
   SCHEDULE_PROPOSAL_TTL_MS,
   SCHEDULE_RUN_REASON_MAX_CHARS,
+  SCHEDULE_STEP_SUMMARY_MAX_CHARS,
   scheduleRunSchema,
   type RunStatus,
   type RunTrigger,
@@ -104,11 +115,13 @@ import {
 import type { SchedulerSeat } from '../platform/platform.js';
 import { bumpScheduleRevision } from '../platform/signals.js';
 import { createStore, type Store } from '../state/store.js';
-import { applyArmed, armableAppOf, type ArmedWalk } from './applyArmed.js';
+import { applyArmed, type ArmedVerdict } from './applyArmed.js';
+import { surplusNote } from './appThink.js';
+import { capped as cappedSentence } from './copy.js';
 import { resultFacts } from './copy.result.js';
 import type { StepContext, StepExecutor, StepOutcome } from './engine-types.js';
-import { applyRunOutcome, dailyCounters, foldDailyCalls, wouldExceedCeiling } from './protection.js';
-import { messageOf } from './taskShape.js';
+import { ZERO_CALLS, applyRunOutcome, dailyCounters, foldDailyCalls, wouldExceedCeiling } from './protection.js';
+import { armableAppOf, messageOf } from './taskShape.js';
 
 /** The per-run bounds (E5): 120 s, or 300 s when a step asks the AI. */
 export const DEFAULT_RUN_BOUNDS: RunBounds = { runMs: 120_000, thinkMs: 300_000 };
@@ -170,8 +183,6 @@ export function runBoundMs(steps: readonly ScheduleStep[], bounds: RunBounds = D
   return steps.some((step) => step.kind === 'app-think') ? bounds.thinkMs : bounds.runMs;
 }
 
-const ZERO_CALLS = { ai: 0, net: 0 } as const;
-
 const instant = (iso: string): number => Date.parse(iso);
 
 /** The later of two instants, as the string that carried it; an absent or unreadable one loses. */
@@ -204,29 +215,54 @@ function toStepResult(outcome: StepOutcome): StepResult {
   };
 }
 
-/** One pooled change and whether its step answered `ok` — only those are armable (D-PR4-11). */
+/** One pooled change, whether its step answered `ok` — only those are armable (D-PR4-11) — and which step it came from (the surplus note's seat). */
 interface Pooled {
   item: ScheduleProposalItem;
   ok: boolean;
+  step: number;
 }
 
 /**
- * The run's waiting changes after the walk, in the order the steps proposed them: an `ok` step's
- * item is the walk's answer for it (held, or gone when it was made — the made ones are the first of
- * the armed app's, the walk's prefix), any other step's waits as it was.
+ * The run's waiting changes after the walk, in the order the steps proposed them (A4): the walk
+ * answered ONE verdict per armable item, in the order it was handed them — an `ok` step's item takes
+ * the next verdict (made → gone; held → with its reason; untouched → as it was), any other step's
+ * waits as it was. Never "the first N of the armed app".
  */
-function afterWalk(pooled: readonly Pooled[], walked: ArmedWalk): ScheduleProposalItem[] {
-  const remaining = [...walked.items];
-  let made = walked.applied?.items.length ?? 0;
+function afterWalk(pooled: readonly Pooled[], verdicts: readonly ArmedVerdict[]): ScheduleProposalItem[] {
+  let next = 0;
   return pooled.flatMap(({ item, ok }) => {
     if (!ok) return [item];
-    if (made > 0 && item.appId === walked.applied?.appId) {
-      made -= 1;
-      return [];
-    }
-    const next = remaining.shift();
-    return next === undefined ? [] : [next];
+    const verdict = verdicts[next];
+    next += 1;
+    if (verdict === undefined || 'untouched' in verdict) return [item];
+    return 'made' in verdict ? [] : [{ ...item, held: verdict.held }];
   });
+}
+
+/** The words a capped step's KIND gives the run (J6/A10) — the host's sentence for that limit; a bare `true` keeps the step's own. */
+function cappedReasonOf(outcome: StepOutcome): string | undefined {
+  switch (outcome.capped) {
+    case 'ai':
+      return cappedSentence('AI call');
+    case 'net':
+      return cappedSentence('network call');
+    default:
+      return outcome.summary;
+  }
+}
+
+/**
+ * The step's summary with the run's surplus note after it (J7/A10): the run kept only the first
+ * `SCHEDULE_PROPOSALS_PER_RUN` changes and this step offered some of the rest. Said once, and the
+ * words cut to make room — the note is the host's, never what falls off the end.
+ */
+function withSurplusNote(step: StepResult): StepResult {
+  const note = surplusNote(SCHEDULE_PROPOSALS_PER_RUN);
+  if (step.summary?.includes(note) === true) return step;
+  const words = step.summary ?? '';
+  if (words === '') return { ...step, summary: note };
+  const room = SCHEDULE_STEP_SUMMARY_MAX_CHARS - note.length - 2;
+  return { ...step, summary: `${cut(words, Math.max(room, 0))}\n\n${note}` };
 }
 
 interface Fold {
@@ -422,6 +458,8 @@ export function createRunQueue(deps: RunQueueDeps): RunQueue {
       interrupt: abort,
       spent: () => ({ ...calls }),
       boundAt,
+      // What the steps before this one already pooled — a step proposing as it goes refuses past the run's cap (J7).
+      proposalsSoFar: () => pooled.length,
     };
 
     try {
@@ -468,23 +506,37 @@ export function createRunQueue(deps: RunQueueDeps): RunQueue {
         results.push(toStepResult(outcome));
         // A step that met the ceiling itself (the *Run [app]* executor asks before a delegated dispatch
         // and marks a crossed ceiling inside the window — D-PR1-6) folds the run `capped` like the
-        // queue's own pre-check above; the first such step's summary is the reason.
-        if (outcome.capped === true) {
+        // queue's own pre-check above; the first such step gives the reason — its kind's sentence when
+        // it named the limit (J6), else its summary.
+        if (outcome.capped !== undefined && outcome.capped !== false) {
           capped = true;
-          cappedReason ??= outcome.summary;
+          cappedReason ??= cappedReasonOf(outcome);
         }
         calls.ai += outcome.calls.ai;
         calls.net += outcome.calls.net;
-        if (outcome.proposals !== undefined) pooled.push(...outcome.proposals.map((proposed) => ({ item: proposed, ok: outcome.status === 'ok' })));
+        const stepIndex = results.length - 1;
+        if (outcome.proposals !== undefined) pooled.push(...outcome.proposals.map((proposed) => ({ item: proposed, ok: outcome.status === 'ok', step: stepIndex })));
         if (alert === undefined && outcome.alert !== undefined) alert = { step, alert: outcome.alert };
       }
     } finally {
+      // Only the bound stops with the steps: the abort seat stays live through the walk (A3).
       clearTimeout(timer);
-      current = undefined;
     }
 
-    // The pooling point: at most three waiting changes a run, and an armed schedule's walk first (D-PR4-11).
-    const { applied, waiting } = await settleChanges(db, claim, task, pooled.slice(0, SCHEDULE_PROPOSALS_PER_RUN), abortReason);
+    // The pooling point: at most three waiting changes a run — the surplus said on the step that offered it (J7) —
+    // and an armed schedule's walk first (D-PR4-11), under the run's own signal (A3).
+    const surplusFrom = pooled[SCHEDULE_PROPOSALS_PER_RUN]?.step;
+    if (surplusFrom !== undefined) {
+      const step = results[surplusFrom];
+      if (step !== undefined) results[surplusFrom] = withSurplusNote(step);
+    }
+    let settled: { applied?: ScheduleRunApplied; waiting: ScheduleProposalItem[] };
+    try {
+      settled = await settleChanges(db, claim, task, pooled.slice(0, SCHEDULE_PROPOSALS_PER_RUN), controller.signal, () => abortReason);
+    } finally {
+      current = undefined;
+    }
+    const { applied, waiting } = settled;
     const finishedAt = deps.now().toISOString();
     const folded = foldRunStatus(results, abortReason, capped);
     const fold: Fold = folded.status === 'capped' && cappedReason !== undefined ? { status: 'capped', reason: cappedReason } : folded;
@@ -528,7 +580,7 @@ export function createRunQueue(deps: RunQueueDeps): RunQueue {
 
     if (fresh?.alert === 'notification' && alert !== undefined) {
       const notify = deps.notify?.();
-      const facts = resultFacts(row, (appId) => db.getApp(appId)?.displayName ?? appId);
+      const facts = resultFacts(row, (appId) => db.getApp(appId)?.displayName ?? appId, new Date(finishedAt));
       if (notify !== undefined) void notify(hostNotification(db, fresh, alert.step, alert.alert, facts)).catch(() => undefined);
     }
   }
@@ -547,19 +599,27 @@ export function createRunQueue(deps: RunQueueDeps): RunQueue {
 
   /**
    * The run's waiting changes at the pooling point (D-PR4-11): a schedule armed when its run was
-   * claimed walks its `ok` steps' items — unless the run was aborted, when they wait held `stopped`;
-   * any other run's wait as the steps proposed them.
+   * claimed walks its `ok` steps' items under the run's signal — unless the run was already aborted,
+   * when they wait held `stopped` (and an abort DURING the walk ends it the same way, A3); any other
+   * run's wait as the steps proposed them. `abortReason` is read when asked: the abort can land late.
    */
-  async function settleChanges(db: UserDb, claim: ScheduleRun, task: ScheduledTask, pool: readonly Pooled[], abortReason: string | undefined): Promise<{ applied?: ScheduleRunApplied; waiting: ScheduleProposalItem[] }> {
+  async function settleChanges(
+    db: UserDb,
+    claim: ScheduleRun,
+    task: ScheduledTask,
+    pool: readonly Pooled[],
+    signal: AbortSignal,
+    abortReason: () => string | undefined,
+  ): Promise<{ applied?: ScheduleRunApplied; waiting: ScheduleProposalItem[] }> {
     const asProposed = pool.map(({ item }) => item);
     const armable = pool.filter(({ ok }) => ok).map(({ item }) => item);
     if (task.writeAuthority === undefined || armable.length === 0) return { waiting: asProposed };
-    if (abortReason !== undefined) {
+    if (abortReason() !== undefined) {
       const appId = armableAppOf(task.steps);
       return { waiting: pool.map(({ item, ok }) => (ok && item.appId === appId ? { ...item, held: 'stopped' } : item)) };
     }
-    const walked = await applyArmed(db, claim, task, armable, { now: deps.now });
-    return { ...(walked.applied !== undefined ? { applied: walked.applied } : {}), waiting: afterWalk(pool, walked) };
+    const walked = await applyArmed(db, claim, task, armable, { now: deps.now, signal });
+    return { ...(walked.applied !== undefined ? { applied: walked.applied } : {}), waiting: afterWalk(pool, walked.verdicts) };
   }
 
   async function drain(): Promise<void> {

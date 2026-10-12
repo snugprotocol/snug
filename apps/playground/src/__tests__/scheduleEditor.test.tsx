@@ -24,9 +24,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { UserDb } from '@snugprotocol/db';
 import type { ScheduleStep, ScheduledTask } from '@snugprotocol/protocol';
 
-import { imported, nextLine } from '../schedule/copy.js';
-import { CONSENT_ROWS, FROM_SUGGESTION, SENTENCE, STEPS, TEMPLATE_TITLES, TITLE, WHEN } from '../schedule/copy.editor.js';
-import { LEDGER_QUERIES, STANDUP_QUERIES, TEMPLATE_PROMPTS, draftsFromSteps, parseRunInput, prepareSteps, proposalFill, remainderOf } from '../schedule/editorModel.js';
+import { armTask } from '../schedule/acts.js';
+import { brainBlocked, disarmed, imported, nextLine } from '../schedule/copy.js';
+import { ACTIONS, CHANGES_CONTROL, CONSENT_ROWS, FROM_SUGGESTION, SENTENCE, STEPS, TEMPLATE_TITLES, TITLE, WHEN } from '../schedule/copy.editor.js';
+import { LEDGER_QUERIES, STANDUP_QUERIES, TEMPLATE_PROMPTS, draftsFromSteps, lookUpNamesByApp, parseRunInput, prepareSteps, proposalFill, remainderOf } from '../schedule/editorModel.js';
 import { readSchedule } from '../schedule/parseScheduleText.js';
 import { newScheduleHref } from '../schedule/routes.js';
 import { ScheduleEditorView } from '../schedule/ScheduleEditorView.js';
@@ -39,6 +40,11 @@ import { installTestUserDb } from './userdbTestHelper.js';
 vi.mock('../schedule/scheduler.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../schedule/scheduler.js')>();
   return { ...actual, createTask: vi.fn(actual.createTask) };
+});
+// PR-4 Gate-5 U13: `armTask` wrapped (not replaced) so ONE test can make the arming after a create refuse.
+vi.mock('../schedule/acts.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../schedule/acts.js')>();
+  return { ...actual, armTask: vi.fn(actual.armTask) };
 });
 
 declare global {
@@ -64,6 +70,7 @@ beforeEach(async () => {
   webllmFlagStore.set(false);
   webgpuStore.set('unknown');
   vi.mocked(createTask).mockClear();
+  vi.mocked(armTask).mockClear();
   db = await installTestUserDb();
 });
 
@@ -778,7 +785,9 @@ describe('PR-4 — the chooser’s hints (D-PR4-20; D10)', () => {
 });
 
 describe('PR-4 — *let it look things up* (D-PR4-15, D-PR4-20; D10, D13)', () => {
-  const TOOLS_LINE = 'it can choose its own questions over Ledger’s data and what you let it read from other apps, and fetch from Ledger’s connections — read only · up to 10 AI calls each time';
+  // INVERTED by PR-4 Gate-5 U3 (ADR-0076 §9: GET-only is not read-only — the orchestrator's decision, reversal word "read-only").
+  // Was: const TOOLS_LINE = 'it can choose its own questions over Ledger’s data and what you let it read from other apps, and fetch from Ledger’s connections — read only · up to 10 AI calls each time';
+  const TOOLS_LINE = 'it can choose its own questions over Ledger’s data and what you let it read from other apps, and ask Ledger’s connections (it only asks, never posts) · up to 10 AI calls each time';
 
   it('an ask step offers the tick OFF; ticked, its line REPLACES *which data?*', async () => {
     const ledger = installLedger();
@@ -791,6 +800,9 @@ describe('PR-4 — *let it look things up* (D-PR4-15, D-PR4-20; D10, D13)', () =
     await click(toolsTick);
     expect(input('step-0-tools').checked).toBe(true);
     expect(must('step-0-tools-line').textContent).toBe(TOOLS_LINE);
+    // PR-4 Gate-5 U3's negative: the line never promises what the host does not make.
+    expect(must('step-0-tools-line').textContent).not.toMatch(/read[\s-]only/i);
+    expect(must('step-0-tools-line').textContent).not.toMatch(/can[’']t send/i);
     expect(must('step-0').querySelector(`[role="radiogroup"][aria-label="${STEPS.data}"]`), 'which data? is replaced by the line').toBeNull();
     expect(q('step-0-data-tables')).toBeNull();
   });
@@ -1073,5 +1085,275 @@ describe('PR-4 — an EXISTING schedule: what goes through the consent, what dis
     await mount(`/schedule/${result.task.id}`);
     expect(input('changes-wait').checked).toBe(true);
     expect(input('changes-on-its-own').checked).toBe(false);
+  });
+});
+
+// =============================================================================================
+// TASK-20261010-host-broker PR-4 Gate 5 — the editor's UI folds (U1, U5, U8, U9, U11, U13).
+//
+// U1: the editor's brain read is tri-state. `blocked` (the demo override, or BYOK with no key in the
+// FILE — `keylessBrainGate(db, appId, chatBrainRoute(db, appId)) !== undefined`): `brainBlocked.text`
+// with a link to Settings under EVERY ask step, ticked or not, and on the consent; `no-tools`
+// (subscription, …): `STEPS.toolsUnavailable` under a ticked step, as before; a keyed brain: neither.
+// U5: an armed schedule edited out of one-app says so in the warning slot (`CHANGES_CONTROL.armedLost`).
+// U8: a disarmed schedule opens with the disarm line and `CHANGES_CONTROL.disarmedHint`.
+// U9: an existing schedule whose ask step GAINS *let it look things up* saves through the consent.
+// U11: the tick and the kind select are described by the lines that explain them.
+// U13: an arming refused after a create reads `ACTIONS.savedButWaits(refusal)`.
+//
+// Assumed: the blocked line `step-<i>-brain-blocked` holding a link to `/settings`; the disarm line a
+// `role="note"` above the control.
+// =============================================================================================
+
+/** The text of every element an `aria-describedby` names, in order. */
+const describedBy = (el: HTMLElement): string[] =>
+  (el.getAttribute('aria-describedby') ?? '')
+    .split(/\s+/)
+    .filter((id) => id !== '')
+    .map((id) => document.getElementById(id)?.textContent ?? `<missing #${id}>`);
+
+describe('PR-4 Gate-5 U1 — a brain that cannot answer an ask step here is said under EVERY ask step, first', () => {
+  const blockedLine = (index: number): HTMLElement => must(`step-${index}-brain-blocked`);
+
+  async function expectBlocked(): Promise<void> {
+    // unticked: said already — a tool-free ask step is refused just the same
+    expect(input('step-0-tools').checked).toBe(false);
+    expect(blockedLine(0).textContent).toContain(brainBlocked.text);
+    const link = blockedLine(0).querySelector<HTMLAnchorElement>('a');
+    expect(link?.textContent).toBe(brainBlocked.action);
+    expect(link?.getAttribute('href')).toBe('/settings');
+    expect(q('step-0-tools-unavailable'), 'never the no-tools line: this brain does not answer at all').toBeNull();
+    // ticked: still the blocked line, still not the no-tools line
+    await click(input('step-0-tools'));
+    expect(blockedLine(0).textContent).toContain(brainBlocked.text);
+    expect(q('step-0-tools-unavailable')).toBeNull();
+  }
+
+  it('BYOK with a keyed provider and NO key in the file: blocked', async () => {
+    const ledger = installLedger();
+    modeStore.set('byok');
+    providerStore.set('anthropic');
+    await mount(`/schedule/new?app=${ledger}`);
+    await expectBlocked();
+  });
+
+  it('the demo override (the in-browser brain asked for where it cannot run): blocked', async () => {
+    const ledger = installLedger();
+    db.setSecret('byok:anthropic', 'sk-test-key');
+    providerStore.set('anthropic');
+    webllmFlagStore.set(true);
+    webgpuStore.set('no');
+    await mount(`/schedule/new?app=${ledger}`);
+    await expectBlocked();
+  });
+
+  it('every ask step of a blocked app says it — the second one too', async () => {
+    installLedger();
+    installStandup();
+    providerStore.set('anthropic');
+    await mount('/schedule/new?template=friday-review');
+    expect(blockedLine(0).textContent).toContain(brainBlocked.text);
+    expect(blockedLine(1).textContent).toContain(brainBlocked.text);
+  });
+
+  it('…and the consent says it on the step too (`blockedApps`)', async () => {
+    installLedger();
+    providerStore.set('anthropic');
+    await mount('/schedule/new?template=spend-review');
+    await click(must('schedule-save'));
+    expect(must('consent-step-0').textContent).toContain(brainBlocked.text);
+  });
+
+  it('the subscription twin keeps today’s line: *this brain will answer without looking things up* under a ticked step — never the blocked line', async () => {
+    const ledger = installLedger();
+    modeStore.set('subscription');
+    await mount(`/schedule/new?app=${ledger}`);
+    expect(q('step-0-brain-blocked')).toBeNull();
+    await click(input('step-0-tools'));
+    expect(must('step-0-tools-unavailable').textContent).toBe(STEPS.toolsUnavailable);
+    expect(q('step-0-brain-blocked')).toBeNull();
+  });
+
+  it('NEGATIVE: a keyed brain says neither, ticked or not, here or on the consent', async () => {
+    installLedger();
+    db.setSecret('byok:anthropic', 'sk-test-key');
+    byokKeyPresenceStore.set({ anthropic: true, openai: false });
+    providerStore.set('anthropic');
+    await mount('/schedule/new?template=spend-review');
+    expect(q('step-0-brain-blocked')).toBeNull();
+    await click(input('step-0-tools'));
+    expect(q('step-0-brain-blocked')).toBeNull();
+    expect(q('step-0-tools-unavailable')).toBeNull();
+    await click(must('schedule-save'));
+    expect(must('enable-consent').textContent).not.toContain(brainBlocked.text);
+  });
+});
+
+describe('PR-4 Gate-5 U11 — the new controls are described by the lines that explain them', () => {
+  it('ticked, *let it look things up* is described by its tools line', async () => {
+    const ledger = installLedger();
+    await mount(`/schedule/new?app=${ledger}`);
+    await click(input('step-0-tools'));
+    const toolsLine = must('step-0-tools-line');
+    expect(toolsLine.id, 'the line has an id to be named by').not.toBe('');
+    expect((input('step-0-tools').getAttribute('aria-describedby') ?? '').split(/\s+/)).toContain(toolsLine.id);
+    expect(describedBy(input('step-0-tools'))).toContain(toolsLine.textContent);
+  });
+
+  it('…and by the no-tools line too, where the brain cannot look things up', async () => {
+    const ledger = installLedger();
+    modeStore.set('subscription');
+    await mount(`/schedule/new?app=${ledger}`);
+    await click(input('step-0-tools'));
+    const lines = describedBy(input('step-0-tools'));
+    expect(lines).toContain(must('step-0-tools-line').textContent);
+    expect(lines).toContain(STEPS.toolsUnavailable);
+  });
+
+  it('every id the tick names resolves — unticked, it names no line that is not there', async () => {
+    const ledger = installLedger();
+    await mount(`/schedule/new?app=${ledger}`);
+    expect(describedBy(input('step-0-tools')).filter((line) => line.startsWith('<missing'))).toEqual([]);
+  });
+
+  it('the kind select is described by its one hint', async () => {
+    const ledger = installLedger();
+    await mount(`/schedule/new?app=${ledger}`);
+    expect(describedBy(select('step-0-kind'))).toContain(STEPS.kindHint('app-think', 'Ledger'));
+  });
+});
+
+describe('PR-4 Gate-5 U5, U8, U9, U13 — an existing schedule’s authority and look-ups, said and confirmed', () => {
+  const ARMED_AT = '2026-10-08T09:00:00.000Z';
+
+  async function seed(over: Partial<ScheduledTask> = {}, step: Partial<Extract<ScheduleStep, { kind: 'app-think' }>> = {}): Promise<{ task: ScheduledTask; ledger: string }> {
+    const ledger = installLedger();
+    const result = await createTask({ title: 'tidy ledger', steps: [ASK_LEDGER(ledger, step)], spec: { kind: 'daily', time: '18:00', tz: 'device' }, provenance: 'user' });
+    if (!result.ok) throw new Error(result.reason);
+    const task = { ...result.task, ...over } as ScheduledTask;
+    db.putScheduledTask(task);
+    vi.mocked(createTask).mockClear();
+    return { task, ledger };
+  }
+
+  const armedOver = (ledgerVersion: number): Partial<ScheduledTask> => ({ writeAuthority: { rowsPerRun: 200, armedAt: ARMED_AT, armedVersion: ledgerVersion } }) as Partial<ScheduledTask>;
+
+  it('U5: an armed schedule edited out of one-app (a *run* step of another app added) says it stops making changes on its own; the save leaves no authority', async () => {
+    const weather = installWeather();
+    const ledger = installLedger();
+    const result = await createTask({ title: 'tidy ledger', steps: [ASK_LEDGER(ledger)], spec: { kind: 'daily', time: '18:00', tz: 'device' }, provenance: 'user' });
+    if (!result.ok) throw new Error(result.reason);
+    db.putScheduledTask({ ...result.task, ...armedOver(db.getApp(ledger)!.currentVersion) } as ScheduledTask);
+    await mount(`/schedule/${result.task.id}`);
+    expect(q('armed-warning'), 'nothing changed yet').toBeNull();
+    await click(must('step-add'));
+    await setSelect(select('step-1-kind'), 'app-run');
+    await setSelect(select('step-1-app'), weather);
+    expect(q('changes-it-suggests'), 'two apps: the control is not offered').toBeNull();
+    const warning = must('armed-warning');
+    expect(warning.textContent).toContain(CHANGES_CONTROL.armedLost);
+    expect(warning.compareDocumentPosition(must('schedule-save')) & Node.DOCUMENT_POSITION_FOLLOWING, 'above save').toBeTruthy();
+    await click(must('schedule-save'));
+    if (q('enable-consent') !== null) await click(must('consent-enable'));
+    await settleUntil(() => q('schedule-page') !== null, 'navigation to /schedule');
+    expect(db.getScheduledTask(result.task.id)?.steps).toHaveLength(2);
+    expect(db.getScheduledTask(result.task.id)?.writeAuthority).toBeUndefined();
+  });
+
+  it('U5 NEGATIVE: an UNARMED schedule edited the same way shows no such warning', async () => {
+    const weather = installWeather();
+    const { task } = await seed();
+    await mount(`/schedule/${task.id}`);
+    await click(must('step-add'));
+    await setSelect(select('step-1-kind'), 'app-run');
+    await setSelect(select('step-1-app'), weather);
+    expect(q('armed-warning')).toBeNull();
+  });
+
+  it.each(['app-updated', 'imported'] as const)('U8: a schedule disarmed (%s) opens with the disarm line and the way out, above the control; save clears the trace', async (reason) => {
+    const { task } = await seed({ disarmed: { reason, at: '2026-10-09T10:00:00.000Z' } } as Partial<ScheduledTask>);
+    await mount(`/schedule/${task.id}`);
+    const note = [...document.body.querySelectorAll<HTMLElement>('[role="note"]')].find((el) => el.textContent?.includes(disarmed(reason).text));
+    expect(note, 'the disarm line is a role=note').toBeDefined();
+    expect(must('schedule-editor').textContent).toContain(CHANGES_CONTROL.disarmedHint);
+    expect(CHANGES_CONTROL.disarmedHint).toBe('save to keep it waiting for your OK, or choose make them on its own');
+    expect(note!.compareDocumentPosition(must('changes-it-suggests')) & Node.DOCUMENT_POSITION_FOLLOWING, 'above the control').toBeTruthy();
+    expect(input('changes-wait').checked, 'the trace never re-seeds the choice').toBe(true);
+    await click(must('schedule-save'));
+    if (q('enable-consent') !== null) await click(must('consent-enable'));
+    await settleUntil(() => q('schedule-page') !== null, 'navigation to /schedule');
+    expect(db.getScheduledTask(task.id)?.disarmed, 'the user reviewed it — the trace is gone').toBeUndefined();
+    expect(db.getScheduledTask(task.id)?.writeAuthority, 'saving at *wait for my OK* never arms').toBeUndefined();
+  });
+
+  it('U8 NEGATIVE: a schedule never disarmed opens with no disarm line', async () => {
+    const { task } = await seed();
+    await mount(`/schedule/${task.id}`);
+    expect(must('schedule-editor').textContent).not.toContain('no longer makes changes on its own');
+    expect(must('schedule-editor').textContent).not.toContain(CHANGES_CONTROL.disarmedHint);
+  });
+
+  /** An approved connection the look-up tool can reach — named *Bank* by its provider. */
+  function approveBank(appId: string): void {
+    db.putDeclaredConnection(
+      appId,
+      'bank',
+      {
+        slot: 'bank',
+        kind: 'api_key',
+        provider: { name: 'Bank' },
+        fields: [{ key: 'api_key', label: 'API key', type: 'secret' }],
+        request: { headerTemplate: { 'X-Api-Key': '{{api_key}}' } },
+        declaredApiHosts: ['api.bank.example'],
+      },
+      'inference',
+    );
+    db.approveConnection(appId, 'bank');
+  }
+
+  it('U9: an existing UNARMED schedule whose ask step GAINS *let it look things up* saves through the consent, naming the connections; *not now* writes nothing', async () => {
+    const { task, ledger } = await seed();
+    approveBank(ledger);
+    expect(lookUpNamesByApp(db, [ledger])[ledger], 'precondition: the tool can reach Bank').toEqual(['Bank']);
+    await mount(`/schedule/${task.id}`);
+    await click(input('step-0-tools'));
+    await click(must('schedule-save'));
+    expect(q('enable-consent'), 'the consent opens — the 10× cost and the connections are confirmed').not.toBeNull();
+    expect(must('consent-lookups-0').textContent).toContain('Bank');
+    expect(must('consent-cost').textContent).toContain('look-ups each time');
+    expect(db.getScheduledTask(task.id)?.steps, 'nothing saved before the consent').toEqual(task.steps);
+    await click(must('consent-not-now'));
+    expect(db.getScheduledTask(task.id)?.steps).toEqual(task.steps);
+    await click(must('schedule-save'));
+    await click(must('consent-enable'));
+    await settleUntil(() => q('schedule-page') !== null, 'navigation to /schedule');
+    expect(db.getScheduledTask(task.id)?.steps[0]).toMatchObject({ tools: true });
+  });
+
+  it('U9 NEGATIVE: a schedule that already looked things up and keeps doing so saves a title edit at once — no consent', async () => {
+    const { task } = await seed({}, { tools: true });
+    await mount(`/schedule/${task.id}`);
+    await type(input('schedule-title'), 'tidy the ledger');
+    await click(must('schedule-save'));
+    await settleUntil(() => q('schedule-page') !== null, 'navigation to /schedule');
+    expect(q('enable-consent')).toBeNull();
+    expect(db.getScheduledTask(task.id)?.title).toBe('tidy the ledger');
+  });
+
+  it('U13: an arming refused after the create says the schedule WAS saved and waits — `ACTIONS.savedButWaits(refusal)`; the schedule is there, unarmed', async () => {
+    installLedger();
+    const refusal = 'app "ledger" is not installed in this file';
+    vi.mocked(armTask).mockResolvedValueOnce({ ok: false, reason: refusal } as Awaited<ReturnType<typeof armTask>>);
+    await mount('/schedule/new?template=spend-review');
+    await click(input('changes-on-its-own'));
+    await click(must('schedule-save'));
+    await click(must('consent-enable'));
+    await settleUntil(() => q('save-error') !== null, 'the refusal line');
+    expect(vi.mocked(armTask)).toHaveBeenCalledTimes(1);
+    expect(must('save-error').textContent).toBe(ACTIONS.savedButWaits(refusal));
+    expect(must('save-error').textContent).not.toBe(refusal);
+    const saved = db.listScheduledTasks();
+    expect(saved, 'the schedule was written').toHaveLength(1);
+    expect(saved[0]?.writeAuthority).toBeUndefined();
   });
 });

@@ -45,6 +45,7 @@ prompts/
 │   ├── artifact-write.md
 │   ├── auth-spec-inferrer.md        ← D8 inference prompt, v3 hints (few-shot outputs contract-tested; retired by P4)
 │   ├── connection-requirement-inferrer.md  ← Dynamic Auth v2: FULL-requirement inference (few-shot outputs contract-tested)
+│   ├── data-propose-write-scheduled.md  ← the scheduled agent's own data_propose_write: one statement, values written in (D-PR4-16)
 │   ├── fetch-connection.md          ← the scheduled agent's GET-only, host-pinned look-up (ADR-0076 §9, D-PR4-13)
 │   └── schema-apply.md
 ├── skills/                          ← skill-builder prompts (workstream B)

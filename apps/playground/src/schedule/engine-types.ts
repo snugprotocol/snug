@@ -36,6 +36,12 @@ export interface StepContext {
    * so it answers WITH the calls it spent instead of losing them to the race.
    */
   boundAt?: number | undefined;
+  /**
+   * How many changes the steps before this one already left for the run (TASK-20261010-host-broker
+   * PR-4 Gate 5, J7): a run keeps at most `SCHEDULE_PROPOSALS_PER_RUN`, so a step that proposes as
+   * it goes refuses the one past that — out loud — instead of hearing it was kept and losing it.
+   */
+  proposalsSoFar?: (() => number) | undefined;
 }
 
 /** One step's outcome — data, never a throw (a throw is a `failed` outcome with its message). */
@@ -53,10 +59,11 @@ export interface StepOutcome {
    * The step met the day's ceiling (TASK-20261010-host-broker PR-1, D-PR1-6): refused BEFORE a
    * delegated dispatch when a counter had no headroom, or marked after the fact when a run on the
    * open app crossed a ceiling inside its window (app code is not stopped). The queue folds the run
-   * `capped` with the step's summary as the reason. In-memory only — the persisted step result
-   * keeps its shape (D-PR1-1).
+   * `capped`. WHICH ceiling, when the step knows it (PR-4 Gate 5, J6): `'ai'` or `'net'` — the
+   * run's reason then names that limit in the host's words; a bare `true` keeps the step's summary
+   * as the reason. In-memory only — the persisted step result keeps its shape (D-PR1-1).
    */
-  capped?: boolean | undefined;
+  capped?: boolean | 'ai' | 'net' | undefined;
   // PR-4's host facts (TASK-20261010-host-broker D-PR4-17), carried onto the persisted step result
   // as they are; each absent when it has nothing to say (omit-defaults).
   /** An *app-run* step ran in the app the user had open. */

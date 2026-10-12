@@ -15,7 +15,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { UserDb } from '@snugprotocol/db';
 import type { ScheduleSpec, ScheduleStep } from '@snugprotocol/protocol';
 
-import { CONSENT } from '../schedule/copy.js';
+import { CONSENT, brainBlocked } from '../schedule/copy.js';
 import { CONSENT_ROWS } from '../schedule/copy.editor.js';
 import { approvedHostsByApp, dailyAiBound } from '../schedule/editorModel.js';
 import { EnableConsent, type EnableConsentProps } from '../schedule/EnableConsent.js';
@@ -72,6 +72,7 @@ async function render(props: Partial<EnableConsentProps> & Pick<EnableConsentPro
         {...(props.error !== undefined ? { error: props.error } : {})}
         {...(props.presetOnItsOwn !== undefined ? { presetOnItsOwn: props.presetOnItsOwn } : {})}
         {...(props.connectionsByApp !== undefined ? { connectionsByApp: props.connectionsByApp } : {})}
+        {...(props.blockedApps !== undefined ? { blockedApps: props.blockedApps } : {})}
         steps={props.steps}
       />,
     );
@@ -298,7 +299,9 @@ describe('PR-4 — the tick: *make changes on its own* (D-PR4-8, D-PR4-20)', () 
 });
 
 describe('PR-4 — an ask step that may look things up: the call row, the queries line, the cost row (D-PR4-20; D11, D12)', () => {
-  const LOOK_UP = 'may look up (read only — it can’t send or change anything there; it can use them without asking you each time)';
+  // INVERTED by PR-4 Gate-5 U3 (ADR-0076 §9: GET-only is not read-only — the orchestrator's decision, reversal word "read-only").
+  // Was: const LOOK_UP = 'may look up (read only — it can’t send or change anything there; it can use them without asking you each time)';
+  const LOOK_UP = 'may look things up through (it only asks, never posts — but what it asks can carry your data; it can use them without asking you each time)';
 
   it('the call row names the connections it may use (fetchableConnections’ names), in the contract’s words — never the hosts', async () => {
     await render({
@@ -307,6 +310,9 @@ describe('PR-4 — an ask step that may look things up: the call row, the querie
       connectionsByApp: { ledger: ['Spotify', 'Bank'] },
     });
     expect(must('consent-lookups-0').textContent).toBe(`${LOOK_UP}: Spotify, Bank`);
+    // PR-4 Gate-5 U3's negative: the row never promises what the host does not make.
+    expect(must('consent-lookups-0').textContent).not.toMatch(/read[\s-]only/i);
+    expect(must('consent-lookups-0').textContent).not.toMatch(/can[’']t send/i);
     expect(must('consent-step-0').textContent).not.toContain('api.bank.example');
     expect(must('consent-step-0').textContent).not.toContain('it only reads data');
   });
@@ -340,5 +346,88 @@ describe('PR-4 — an ask step that may look things up: the call row, the querie
   it('the tick is offered on a tools step too (one app), still OFF', async () => {
     await render({ steps: [tools('ledger')] });
     expect(tick().checked).toBe(false);
+  });
+});
+
+// =============================================================================================
+// TASK-20261010-host-broker PR-4 Gate 5 — the consent's UI folds (U1, U11, U13).
+//
+// U1: a brain that cannot answer an *ask* step here at all (the demo override, or BYOK with no key —
+// `keylessBrainGate`'s own test) is said on the consent, under EVERY ask step of that app, tools or
+// not — the result is never the first to say it. The host hands the blocked apps in as `blockedApps`
+// (library ids — this pin's assumption of the prop's shape).
+// U11: the tick's explaining lines are attached to it (`aria-describedby`).
+// U13: the look-up bound counts only the steps that may look things up — a *run <app>* step's one
+// network call is not a look-up.
+// =============================================================================================
+
+describe('PR-4 Gate-5 U1 — a brain that cannot answer here is said on the consent, per ask step', () => {
+  it('a blocked app: brainBlocked.text under its ask step — with *let it look things up* and without', async () => {
+    await render({ steps: [tools('ledger'), think('ledger')], blockedApps: ['ledger'] });
+    expect(must('consent-step-0').textContent).toContain(brainBlocked.text);
+    expect(must('consent-step-1').textContent, 'a tool-free ask step is refused just the same').toContain(brainBlocked.text);
+  });
+
+  it('only the blocked app’s steps say it — another app’s ask step and a reminder do not', async () => {
+    await render({
+      steps: [think('ledger'), think('standup'), { kind: 'notify', title: 'stretch', body: 'stand up' }],
+      appNames: { ledger: 'Ledger', standup: 'Standup' },
+      blockedApps: ['ledger'],
+    });
+    expect(must('consent-step-0').textContent).toContain(brainBlocked.text);
+    expect(must('consent-step-1').textContent).not.toContain(brainBlocked.text);
+    expect(must('consent-step-2').textContent).not.toContain(brainBlocked.text);
+  });
+
+  it('NEGATIVE: nothing blocked (absent or empty) — no step says it', async () => {
+    await render({ steps: [tools('ledger'), think('ledger')] });
+    expect(must('enable-consent').textContent).not.toContain(brainBlocked.text);
+    await remount({ steps: [tools('ledger')], blockedApps: [] });
+    expect(must('enable-consent').textContent).not.toContain(brainBlocked.text);
+  });
+});
+
+describe('PR-4 Gate-5 U11 — the tick’s explaining lines are attached to it', () => {
+  /** The text of every element an `aria-describedby` names, in order. */
+  const describedBy = (el: HTMLElement): string[] =>
+    (el.getAttribute('aria-describedby') ?? '')
+      .split(/\s+/)
+      .filter((id) => id !== '')
+      .map((id) => document.getElementById(id)?.textContent ?? `<missing #${id}>`);
+
+  it('unticked: the tick is described by its off hint', async () => {
+    await render({ steps: [think('ledger')], spec: DAILY });
+    expect(describedBy(tick())).toContain('off: its changes wait for your OK on the result');
+  });
+
+  it('more than 20 a week: the tick is described by the often line too', async () => {
+    await render({ steps: [think('ledger')], spec: HOURLY });
+    const lines = describedBy(tick());
+    expect(lines).toContain('off: its changes wait for your OK on the result');
+    expect(lines).toContain('it runs more than 20 times a week — once 20 changes are waiting to age out, the rest wait for your OK');
+  });
+
+  it('every id it names resolves — ticked, the hint is gone and is no longer named', async () => {
+    await render({ steps: [think('ledger')], spec: HOURLY });
+    await act(async () => {
+      tick().click();
+    });
+    const lines = describedBy(tick());
+    expect(lines.filter((line) => line.startsWith('<missing'))).toEqual([]);
+    expect(lines).not.toContain('off: its changes wait for your OK on the result');
+  });
+});
+
+describe('PR-4 Gate-5 U13 — the look-up bound counts only the steps that may look things up', () => {
+  it('a look-things-up ask step plus a *run <app>* step: 8 look-ups each time, never 9', async () => {
+    await render({ steps: [tools('ledger'), { kind: 'app-run', appId: 'weather' }], appNames: { ledger: 'Ledger', weather: 'Weather' }, spec: WEEKLY });
+    const cost = must('consent-cost').textContent ?? '';
+    expect(cost).toContain('up to 10 AI calls and 8 look-ups each time');
+    expect(cost).not.toContain('9 look-ups');
+  });
+
+  it('two look-things-up ask steps count both: 16 look-ups', async () => {
+    await render({ steps: [tools('ledger'), tools('ledger')], spec: WEEKLY });
+    expect(must('consent-cost').textContent).toContain('up to 20 AI calls and 16 look-ups each time');
   });
 });

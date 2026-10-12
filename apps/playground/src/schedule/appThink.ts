@@ -53,12 +53,15 @@
 // (`keylessBrainGate`): the demo override or a BYOK brain with no key in the file routes a turn to
 // the demo brain silently by design (`agent/adapter.ts`), which on a schedule would answer a person
 // with a script — so the PRODUCTION executor asks it first, on both paths, and the step is refused
-// with `blockedBy: 'brain'`. Calling `executeAppThink` directly keeps today's behaviour. The offered
-// changes pass the ONE proposal gate (`proposalGate.ts`: the item schema, no credential, the app not
-// mid-change, the dry run), and what the brain is told about them follows the schedule's authority:
-// "never run automatically" is said only when it may NOT make changes on its own — otherwise it
-// would be false, and the capture rule is stated instead. The step names the shared tables it was
-// handed (`saw`), only when there were any.
+// with `blockedBy: 'brain'`. A direct call whose `transportFor` answers no transport is refused the
+// same way, in the same words (Gate-5 JOBS-F11: one state, one sentence). The offered changes pass
+// the ONE proposal gate (`proposalGate.ts`: the item schema, no unbound placeholder, no credential,
+// the app not mid-change, the dry run); one the app was too busy to check is said as that, never as
+// unsafe (JOBS-F8). What the brain is told about them follows the schedule's authority: "never run
+// automatically" is said only when it may NOT make changes on its own — otherwise it would be false,
+// and the capture rule is stated instead. The step's typed SELECTs ask `inTransaction` once before
+// any scratch copy is exported (`runContextQueries`, shared with the scheduled agent — JOBS-F9). The
+// step names the shared tables it was handed (`saw`), only when there were any.
 
 import type { AppRecord, ScratchAttachTable, ScratchStatementResult, UserDb } from '@snugprotocol/db';
 import {
@@ -74,16 +77,18 @@ import {
 } from '@snugprotocol/protocol';
 import type { AgentTransport } from '@snugprotocol/runner';
 
+import { appMidChange } from '../access/copy.js';
 import { chatBrainRoute, type ReaderBrainRoute } from '../access/egress.js';
 import { toAttach } from '../access/materialise.js';
 import type { MaterialisedSet, MaterialisedTable } from '../access/service.js';
-import { renderSharedDdl } from '../agent/sharedDdl.js';
+import { oneLine, renderSharedDdl } from '../agent/sharedDdl.js';
 import { createAppTransport } from '../agent/transport.js';
 import { modeStore, providerStore } from '../state/mode.js';
 import { currentBrain } from '../state/webllm.js';
-import { appMissing, brainBlocked } from './copy.js';
+import { appMissing, brainBlocked, busyNote } from './copy.js';
 import type { StepContext, StepOutcome } from './engine-types.js';
 import { gateProposal } from './proposalGate.js';
+import { ZERO_CALLS } from './protection.js';
 import { countsAsAiCall } from './scrub.js';
 import { messageOf } from './taskShape.js';
 
@@ -92,8 +97,8 @@ export type AppThinkStep = Extract<ScheduleStep, { kind: 'app-think' }>;
 export interface AppThinkDeps {
   /**
    * The app's OWN transport, or `undefined` when no brain can answer a scheduled question —
-   * the demo brain, which the step refuses by name. The production composition is
-   * `defaultTransportFor`; tests inject a recording fake.
+   * the demo brain, which the step refuses as the keyless gate does. The production composition
+   * is `defaultTransportFor`; tests inject a recording fake.
    */
   transportFor(appId: string): AgentTransport | undefined;
   /**
@@ -120,14 +125,15 @@ export const SCHEDULE_DATA_DELIMITER = {
 /** The summary of a step the queue's signal cut short — the queue records the run as interrupted. */
 export const CANCELLED_SUMMARY = 'cancelled';
 
-/** The refusal under the demo brain (E6: "refused by name"). */
-export const DEMO_BRAIN_REFUSAL = 'the demo brain doesn’t answer on a schedule — choose a brain in Settings';
-
 /**
  * The refusal under the demo override or a keyless BYOK brain (PR-4, D-PR4-15) — the brain-blocked
- * state's sentence, which the result page renders as its own state with *open Settings*.
+ * state's sentence, which the result page renders as its own state with *open Settings*. The one
+ * sentence for that state: the demo brain's own refusal went with Gate-5 JOBS-F11.
  */
 export const KEYLESS_BRAIN_REFUSAL = brainBlocked.text;
+
+/** No brain here may answer an *ask* step: refused, nothing sent, nothing read, nothing spent. */
+const brainBlockedOutcome = (): StepOutcome => ({ status: 'refused', summary: KEYLESS_BRAIN_REFUSAL, calls: { ...ZERO_CALLS }, blockedBy: 'brain' });
 
 /**
  * The keyless gate (D-PR4-15): `refused` with `blockedBy: 'brain'` when the brain an *Ask* step
@@ -136,7 +142,7 @@ export const KEYLESS_BRAIN_REFUSAL = brainBlocked.text;
  * nothing is read. The executors pass the route they already derived; a direct call derives it.
  */
 export function keylessBrainGate(db: UserDb, appId: string, route: Pick<ReaderBrainRoute, 'kind'> = chatBrainRoute(db, appId)): StepOutcome | undefined {
-  return route.kind === 'demo' ? { status: 'refused', summary: KEYLESS_BRAIN_REFUSAL, calls: none(), blockedBy: 'brain' } : undefined;
+  return route.kind === 'demo' ? brainBlockedOutcome() : undefined;
 }
 
 /** Appended to the summary when a suggested change failed validation or its dry run. */
@@ -184,7 +190,6 @@ function responseSchemaFor(armed: boolean) {
 
 const FENCE = '```';
 
-const none = (): StepOutcome['calls'] => ({ ai: 0, net: 0 });
 const oneAi = (): StepOutcome['calls'] => ({ ai: 1, net: 0 });
 
 /**
@@ -311,6 +316,26 @@ export async function runContextQuery(db: UserDb, appId: string, sql: string, at
   }
 }
 
+/**
+ * The step's typed SELECTs as context (Gate-5 JOBS-F9, SEC-F6), for BOTH *ask* executors: the app is
+ * asked `inTransaction` ONCE, before any scratch copy is exported — an export under its open
+ * transaction discards it (D-PR4-5) — and while it is mid-change every query answers the busy
+ * sentence, naming `appName`, instead of running. No queries, no question asked.
+ */
+export async function runContextQueries(
+  db: UserDb,
+  appId: string,
+  appName: string,
+  sqls: readonly string[],
+  attach: readonly ScratchAttachTable[],
+): Promise<ContextQuery[]> {
+  if (sqls.length === 0) return [];
+  const busy = await db.driver.inTransaction(appId);
+  const queries: ContextQuery[] = [];
+  for (const sql of sqls) queries.push({ sql, result: busy ? { error: appMidChange(appName) } : await runContextQuery(db, appId, sql, attach) });
+  return queries;
+}
+
 // ---------------------------------------------------------------------------------------------
 // The reply — text or JSON; offered changes dry-run, never executed
 // ---------------------------------------------------------------------------------------------
@@ -340,27 +365,32 @@ function toCandidate(candidate: unknown): { sql: string; summary?: string } | un
 
 interface DryRunOutcome {
   kept: ScheduleProposalItem[];
+  /** Refused by the gate's checks — malformed, a placeholder, a credential, a failed dry run. */
   dropped: number;
+  /** Never tried: the app was in the middle of a change (Gate-5 JOBS-F8) — not the change's fault. */
+  busy: number;
   surplus: boolean;
 }
 
 /**
  * At most `SCHEDULE_PROPOSALS_PER_RUN` candidates are CONSIDERED (bounded work: never more
  * dry runs than one result may hold); each passes the ONE proposal gate (`proposalGate.ts` —
- * one DML statement over literal values, no credential, the app not mid-change, a dry-run
- * count), filed under the step's app, never the reply's (Gate-5 S4). Anything else is dropped
- * and said.
+ * one DML statement over literal values, no unbound placeholder, no credential, the app not
+ * mid-change, a dry-run count), filed under the step's app, never the reply's (Gate-5 S4).
+ * Anything else is dropped and said — a busy app apart, because nothing was wrong with the change.
  */
 async function dryRunCandidates(db: UserDb, appId: string, candidates: readonly unknown[]): Promise<DryRunOutcome> {
   const kept: ScheduleProposalItem[] = [];
   let dropped = 0;
+  let busy = 0;
   for (const candidate of candidates.slice(0, SCHEDULE_PROPOSALS_PER_RUN)) {
     const offered = toCandidate(candidate);
     const verdict = offered === undefined ? undefined : await gateProposal(db, appId, offered);
     if (verdict?.ok === true) kept.push(verdict.item);
+    else if (verdict?.reason === 'busy') busy += 1;
     else dropped += 1;
   }
-  return { kept, dropped, surplus: candidates.length > SCHEDULE_PROPOSALS_PER_RUN };
+  return { kept, dropped, busy, surplus: candidates.length > SCHEDULE_PROPOSALS_PER_RUN };
 }
 
 /** The shared tables a step was handed, by the source's name and its own table name — once each, in the set's order (R-88). */
@@ -390,11 +420,12 @@ function stepIndexOf(ctx: StepContext, step: ScheduleStep): number {
 // ---------------------------------------------------------------------------------------------
 
 export async function executeAppThink(step: AppThinkStep, ctx: StepContext, deps: AppThinkDeps): Promise<StepOutcome> {
-  if (ctx.signal.aborted) return { status: 'failed', summary: CANCELLED_SUMMARY, calls: none() };
+  if (ctx.signal.aborted) return { status: 'failed', summary: CANCELLED_SUMMARY, calls: { ...ZERO_CALLS } };
   const app = ctx.db.getApp(step.appId);
-  if (app === undefined) return { status: 'blocked', summary: appMissing.text, calls: none() };
+  if (app === undefined) return { status: 'blocked', summary: appMissing.text, calls: { ...ZERO_CALLS } };
   const transport = deps.transportFor(step.appId);
-  if (transport === undefined) return { status: 'refused', summary: DEMO_BRAIN_REFUSAL, calls: none() };
+  if (transport === undefined) return brainBlockedOutcome();
+  const appName = oneLine(app.displayName);
 
   // The scheduler door (C-Q2): asked only now that a brain will be sent something.
   const shared = deps.sharedFor !== undefined ? await deps.sharedFor(step.appId, ctx) : undefined;
@@ -403,10 +434,7 @@ export async function executeAppThink(step: AppThinkStep, ctx: StepContext, deps
   const saw = sawOf(shared?.tables ?? []);
   const sawSeat = saw.length > 0 ? { saw } : {};
   const schema = ctx.db.getAppSchema(step.appId);
-  const queries: ContextQuery[] = [];
-  for (const sql of step.context.sql ?? []) {
-    queries.push({ sql, result: await runContextQuery(ctx.db, step.appId, sql, attach) });
-  }
+  const queries = await runContextQueries(ctx.db, step.appId, appName, step.context.sql ?? [], attach);
   const context = renderThinkContext({ app, schema, queries, maxRows: step.context.maxRows, ...(shared !== undefined ? { shared, now: ctx.now().getTime() } : {}) });
 
   const wire = buildAppRequest({
@@ -419,16 +447,17 @@ export async function executeAppThink(step: AppThinkStep, ctx: StepContext, deps
   });
   const reply = await transport.send(wire, { signal: ctx.signal });
   if (!reply.ok) {
-    const calls = countsAsAiCall(reply) ? oneAi() : none(); // one rule with the hidden frame's transport (`scrub.ts`, M15)
+    const calls = countsAsAiCall(reply) ? oneAi() : { ...ZERO_CALLS }; // one rule with the hidden frame's transport (`scrub.ts`, M15)
     if (reply.code === ERROR_CODES.CONSENT_REQUIRED) return { status: 'refused', summary: reply.message, calls, ...sawSeat };
     if (reply.code === ERROR_CODES.CANCELLED) return { status: 'failed', summary: CANCELLED_SUMMARY, calls, ...sawSeat };
     return { status: 'failed', summary: reply.message, calls, ...sawSeat };
   }
 
   const { answer, candidates } = readReply(reply.text);
-  const { kept, dropped, surplus } = await dryRunCandidates(ctx.db, step.appId, candidates);
+  const { kept, dropped, busy, surplus } = await dryRunCandidates(ctx.db, step.appId, candidates);
   const notes: string[] = [];
   if (dropped > 0) notes.push(droppedNote(dropped));
+  if (busy > 0) notes.push(busyNote(busy, appName));
   if (surplus) notes.push(surplusNote(SCHEDULE_PROPOSALS_PER_RUN));
   const summary = [answer, ...notes].filter((text) => text !== '').join('\n\n');
   return {

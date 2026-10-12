@@ -22,6 +22,7 @@ import type { ScheduleStep } from '@snugprotocol/protocol';
 import { getUserDb } from '../state/userdb.js';
 import { useStore } from '../state/store.js';
 import { Button } from '../ui/Button.js';
+import { blockedAppsOf } from './askBrain.js';
 import { SUGGESTION_ACTIONS, SUGGESTION_OUTCOME, stepWords, suggestionStrip } from './copy.js';
 import { describeSpec } from './cron.js';
 import { approvedHostsByApp, lookUpNamesByApp, type LookUpNamesByApp } from './editorModel.js';
@@ -43,7 +44,7 @@ type Outcome = { kind: 'scheduled'; whenWords: string; taskId: string; refusal?:
 
 export function SuggestionStrip({ appId }: SuggestionStripProps): ReactElement | null {
   const pending = useStore(suggestionStore)[appId];
-  const [consent, setConsent] = useState<{ hosts: Record<string, string[]>; lookUps: LookUpNamesByApp } | undefined>(undefined);
+  const [consent, setConsent] = useState<{ hosts: Record<string, string[]>; lookUps: LookUpNamesByApp; blocked: readonly string[] } | undefined>(undefined);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
   const [outcome, setOutcome] = useState<Outcome | undefined>(undefined);
@@ -91,7 +92,7 @@ export function SuggestionStrip({ appId }: SuggestionStripProps): ReactElement |
   const openConsent = async (): Promise<void> => {
     const db = await getUserDb();
     setError(undefined);
-    setConsent({ hosts: approvedHostsByApp(db, [appId]), lookUps: lookUpNamesByApp(db, [appId]) });
+    setConsent({ hosts: approvedHostsByApp(db, [appId]), lookUps: lookUpNamesByApp(db, [appId]), blocked: blockedAppsOf(db, [appId]) });
   };
   const enable = async (choice: EnableChoice): Promise<void> => {
     setBusy(true);
@@ -139,6 +140,7 @@ export function SuggestionStrip({ appId }: SuggestionStripProps): ReactElement |
           appNames={{ [appId]: appName }}
           hostsByApp={consent.hosts}
           connectionsByApp={consent.lookUps}
+          blockedApps={consent.blocked}
           busy={busy}
           {...(error !== undefined ? { error } : {})}
           onEnable={(choice) => void enable(choice)}

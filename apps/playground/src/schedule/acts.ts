@@ -33,7 +33,11 @@
 // shape, first armed here). `writeAuthority` is written by ONE act, `armTask` — the consent's tick
 // and the editor's control — and only for a schedule whose *Ask <App>'s AI* steps and every other
 // app step name ONE app (v2.1 N4: one seat call, one undo bucket, one app's data a run); it records
-// the app's CURRENT version, so new code never inherits the consent. Nothing else writes it:
+// the app's CURRENT version, so new code never inherits the consent. It refuses (Gate 5) a schedule
+// whose id spells the approvals' own undo bucket (A1 — only a crafted file carries one) and an app
+// whose install time is ahead of now (A6 — the consent would predate it, and the walk refuses a
+// consent older than its app). The rules it admits and widens by live once, in `taskShape.ts`, where
+// the editor reads them too (A11). Nothing else writes it:
 // `createTask` builds its row field by field and `updateTask` copies a patch's fields one by one, so
 // a smuggled authority is never read. It goes away by the user's acts — `disarmTask` (the row's
 // *stop making changes on its own*), `disarmAllTasks` (Settings' act over every schedule) — which
@@ -45,11 +49,9 @@
 // disarms; neither does off/on or a pause and its resume (the walk refuses while either holds).
 // Every save through `updateTask` clears the `disarmed` trace: the user has looked (v2.1 N3).
 
-import type { UserDb } from '@snugprotocol/db';
+import { OWN_UNDO_APPROVAL_BUCKET, type UserDb } from '@snugprotocol/db';
 import {
   ACCESS_WRITE_MAX_ROWS,
-  canonicalJson,
-  scheduleStepSchema,
   scheduledTaskSchema,
   type AlertKind,
   type MissedPolicy,
@@ -63,13 +65,13 @@ import {
 import { bumpScheduleRevision } from '../platform/signals.js';
 import { onAppVersionChanged } from '../state/appVersionChanged.js';
 import type { AppVersionSource } from './appDrift.js';
-import { armableAppOf } from './applyArmed.js';
 import { globalPaused } from './copy.js';
+import { RESERVED_ID, installedAhead } from './copy.page.js';
 import { compileSpec } from './cron.js';
-import { defaultMissedPolicy, frequencyFloorRefusal, freshnessWindowMs, minIntervalMs } from './floors.js';
+import { defaultMissedPolicy, frequencyFloorRefusal, freshnessWindowMs } from './floors.js';
 import { markSeen as markTaskSeen, resumeTask } from './protection.js';
 import { currentDeps, engine, freshSchedulerState, reconcile } from './scheduler.js';
-import { RESULT_STATUSES, appIdsOf, messageOf, sameOccurrence } from './taskShape.js';
+import { RESULT_STATUSES, appIdsOf, armableAppOf, installedAfterArming, messageOf, sameOccurrence, widens } from './taskShape.js';
 
 // ------------------------------------------------------------------------- types
 
@@ -116,6 +118,9 @@ export const scheduleOff = (title: string): string => `“${title}” is off —
 /** `armTask` on a schedule whose steps name no app's AI, or more than one app (D-PR4-8, v2.1 N4) — the editor never offers it; this is the belt. */
 export const NOT_ONE_APP = 'only a schedule that asks one app’s AI, and uses no other app, can make changes on its own';
 
+/** `armTask` on a schedule whose id spells the approvals' own undo bucket (A1) — the words live in `copy.page.ts`; re-exported beside `NOT_ONE_APP`. */
+export { RESERVED_ID } from './copy.page.js';
+
 // ------------------------------------------------------------------------- helpers
 
 const refuse = (reason: string): { ok: false; reason: string } => ({ ok: false, reason });
@@ -148,22 +153,6 @@ function commitTask(db: UserDb, draft: ScheduledTask): TaskResult {
   }
   bumpScheduleRevision();
   return { ok: true, task: parsed.data };
-}
-
-/** Steps as the file compares them: each through its schema (defaults filled) and canonical JSON — key order is not a change. */
-const canonicalSteps = (steps: readonly ScheduleStep[]): string => canonicalJson(steps.map((step) => scheduleStepSchema.safeParse(step).data ?? step));
-
-/** The shortest gap between occurrences; a one-off (or a spec with no measurable period) never comes closer than itself. */
-const shortestGapMs = (spec: ScheduleSpec, anchor: Date): number => minIntervalMs(spec, anchor) ?? Number.POSITIVE_INFINITY;
-
-/**
- * Whether an edit WIDENS what an armed schedule may do (D-PR4-8): its steps changed, its owning app
- * changed, or its occurrences came closer together. Each widening needs the consent again.
- */
-function widens(task: ScheduledTask, patch: TaskPatch, anchor: Date): boolean {
-  if (patch.steps !== undefined && canonicalSteps(patch.steps) !== canonicalSteps(task.steps)) return true;
-  if (patch.ownerAppId !== undefined && patch.ownerAppId !== task.ownerAppId) return true;
-  return patch.spec !== undefined && shortestGapMs(patch.spec, anchor) < shortestGapMs(task.spec, anchor);
 }
 
 /** The task as it is without its authority — the user's own disarm, so no trace (D-PR4-10). */
@@ -270,19 +259,25 @@ export async function updateTask(taskId: string, patch: TaskPatch): Promise<Task
 /**
  * The consent's tick (D-PR4-8): this schedule may make its changes to its ONE app's data on its
  * own — at most `ACCESS_WRITE_MAX_ROWS` rows a run, from now, for the app's CURRENT version. Clears
- * a `disarmed` trace. Refused for a schedule that names no app's AI or more than one app.
+ * a `disarmed` trace. Refused for a schedule that names no app's AI or more than one app, for one
+ * whose id spells the approvals' undo bucket (A1), and while the app's install time is ahead of now
+ * (A6 — the walk never honours a consent older than its app).
  */
 export async function armTask(taskId: string): Promise<TaskResult> {
   const deps = currentDeps();
   const db = await deps.db();
   const task = db.getScheduledTask(taskId);
   if (task === undefined) return refuse('no such schedule');
+  // Its changes would be journaled among the user's own approvals — the bucket that never refuses (A1).
+  if (task.id === OWN_UNDO_APPROVAL_BUCKET) return refuse(RESERVED_ID);
   const appId = armableAppOf(task.steps);
   if (appId === undefined) return refuse(NOT_ONE_APP);
   const app = db.getApp(appId);
   if (app === undefined) return refuse(`app "${appId}" is not installed in this file`);
   const nowIso = deps.now().toISOString();
-  const next: ScheduledTask = { ...task, writeAuthority: { rowsPerRun: ACCESS_WRITE_MAX_ROWS, armedAt: nowIso, armedVersion: app.currentVersion }, updatedAt: nowIso };
+  const writeAuthority = { rowsPerRun: ACCESS_WRITE_MAX_ROWS, armedAt: nowIso, armedVersion: app.currentVersion };
+  if (installedAfterArming(app, writeAuthority)) return refuse(installedAhead(app.displayName));
+  const next: ScheduledTask = { ...task, writeAuthority, updatedAt: nowIso };
   delete next.disarmed;
   return commitTask(db, next);
 }

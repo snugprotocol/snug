@@ -12,7 +12,7 @@
  * change that was never previewed.
  */
 
-import { readFileSync as readSource } from 'node:fs';
+import { readdirSync, readFileSync as readSource } from 'node:fs';
 import nodePath from 'node:path';
 
 import { act } from 'react';
@@ -22,7 +22,7 @@ import { MemoryRouter } from 'react-router';
 
 import { ChatLog } from '../views/ChatLog.js';
 import type { ChatMessage } from '../agent/useBuilderChat.js';
-import { literalsIn } from './literalsIn.js';
+import { literalsIn, scriptKindOf } from './literalsIn.js';
 
 declare global {
   // eslint-disable-next-line no-var
@@ -278,5 +278,46 @@ describe('PR-4 — the card’s words have ONE home, agent/copy.dataWrite.ts (D-
     const source = readSource(nodePath.resolve(__dirname, '..', 'views', 'ChatLog.tsx'), 'utf8');
     const words = literalsIn(source).map((literal) => literal.words);
     expect(words.filter((text) => /apply to my data|row\(s\)|nothing was changed|could not be applied/.test(text))).toEqual([]);
+  });
+});
+
+// =============================================================================================
+// TASK-20261010-host-broker PR-4 Gate 5 — U2: *can no longer be undone* has ONE home, shared by the
+// card's `ended` line and the result page's line for an undo id the journal no longer holds (the
+// result page's behaviour is pinned in resultDetail.test.tsx). The scan reads every source the
+// two surfaces and their copy draw on — `agent/copy.dataWrite.ts`, `schedule/*`, `access/*` — by
+// the parser (`literalsIn`), and finds the phrase spelled in AT MOST ONE literal. The ⋈ sheet's own
+// sentence *the change is gone — it can no longer be undone* is a different sentence and is not
+// counted.
+// =============================================================================================
+
+describe('PR-4 Gate-5 U2 — *can no longer be undone* has ONE home (the card’s and the result page’s)', () => {
+  const PHRASE = /(?<!it )can no longer be undone/;
+  const sources = (): string[] => {
+    const src = nodePath.resolve(__dirname, '..');
+    const dir = (name: string): string[] =>
+      readdirSync(nodePath.join(src, name))
+        .filter((file) => /\.tsx?$/.test(file) && !file.includes('.test.'))
+        .map((file) => nodePath.join(src, name, file));
+    return [nodePath.join(src, 'agent', 'copy.dataWrite.ts'), ...dir('schedule'), ...dir('access')];
+  };
+
+  it('the scan sees the card’s spelling (it can fail)', () => {
+    expect(literalsIn('const a = `${line} · can no longer be undone`;').filter((literal) => PHRASE.test(literal.words))).toHaveLength(1);
+    expect(literalsIn("const b = 'the change is gone — it can no longer be undone';").filter((literal) => PHRASE.test(literal.words))).toHaveLength(0);
+  });
+
+  it('spelled in at most one literal across the card’s copy, schedule/ and access/', () => {
+    const homes = sources().flatMap((file) =>
+      literalsIn(readSource(file, 'utf8'), scriptKindOf(file))
+        .filter((literal) => PHRASE.test(literal.words))
+        .map((literal) => `${nodePath.basename(file)}: ${literal.words}`),
+    );
+    expect(homes.length, homes.join('\n')).toBeLessThanOrEqual(1);
+  });
+
+  it('the card still ends its line with it — the shared words, unchanged', async () => {
+    const mod = (await import(/* @vite-ignore */ COPY_MODULE)) as { DATA_WRITE_CARD: { appliedLine: (n: number, undo: 'offered' | 'ended' | 'none') => string } };
+    expect(mod.DATA_WRITE_CARD.appliedLine(2, 'ended')).toBe('applied — 2 rows changed · can no longer be undone');
   });
 });

@@ -22,9 +22,15 @@
  *
  * THE TWO SPELLINGS. `'approval'` and `'task'` are spelled ONCE, here, as a subset of the access
  * journal's authorities (`satisfies` — a spelling the access record does not know is a type
- * error); the vias likewise over `AccessLogVia`, without `app` (an app never writes its own data
- * through the Broker — its own SQL is its own). The playground imports these; it never writes
- * the literal under `schedule/`.
+ * error), and each is exported by NAME (`APPROVAL_WRITE_AUTHORITY`, `TASK_WRITE_AUTHORITY`) so a
+ * caller never picks one by its position in the tuple; the vias likewise over `AccessLogVia`,
+ * without `app` (an app never writes its own data through the Broker — its own SQL is its own).
+ * The playground imports these; it never writes the literal under `schedule/`.
+ *
+ * WHICH BUCKET (PR-4 Gate 5, A1). A `task` entry carries the `taskId` that names its bucket and an
+ * `approval` entry carries none — the schema refuses either the other way round — so whether an
+ * entry belongs in the bucket it is put in or read from is decidable from the entry alone
+ * (`ownUndoBelongsIn`, `@snugprotocol/db`).
  */
 
 import { z } from 'zod';
@@ -42,6 +48,14 @@ import { SCHEDULE_ID_MAX_CHARS } from './schedule.js';
 export const OWN_WRITE_AUTHORITIES = ['approval', 'task'] as const satisfies readonly AccessWriteAuthority[];
 export type OwnWriteAuthority = (typeof OWN_WRITE_AUTHORITIES)[number];
 
+/**
+ * Each authority by NAME (PR-4 Gate 5, A1/AUTH-F10): a caller imports the one it means, never a
+ * position in the tuple above — a reorder there must never turn a schedule's change into an
+ * approval's (or back) while still type-checking.
+ */
+export const APPROVAL_WRITE_AUTHORITY = 'approval' as const satisfies OwnWriteAuthority;
+export const TASK_WRITE_AUTHORITY = 'task' as const satisfies OwnWriteAuthority;
+
 /** Which door the change came through — the chat's card, a schedule's run, or the user's act on a result page. */
 export const OWN_UNDO_VIAS = ['chat', 'schedule', 'user'] as const satisfies readonly AccessLogVia[];
 export type OwnUndoVia = (typeof OWN_UNDO_VIAS)[number];
@@ -58,6 +72,20 @@ export const OWN_UNDO_ROW_MAX_BYTES = 256 * 1024;
 /** A run or task id, under the scheduler's own id bound. */
 const scheduleIdSchema = z.string().min(1).max(SCHEDULE_ID_MAX_CHARS);
 const isoInstant = z.iso.datetime();
+
+/**
+ * A schedule's change names the task whose authority made it — its bucket's name — and the user's
+ * approval names none (PR-4 Gate 5, A1): the entry says which bucket it belongs in, so the
+ * accessor's bucket rule and the engine's `admit` can both hold it to that.
+ */
+function refuseAuthorityWithoutItsTask(entry: { readonly authority: OwnWriteAuthority; readonly taskId?: string | undefined }, ctx: z.RefinementCtx): void {
+  if ((entry.authority === TASK_WRITE_AUTHORITY) === (entry.taskId !== undefined)) return;
+  ctx.addIssue({
+    code: 'custom',
+    path: ['taskId'],
+    message: entry.authority === TASK_WRITE_AUTHORITY ? 'a schedule’s change names its schedule' : 'an approval names no schedule',
+  });
+}
 
 /**
  * One entry of an `ownUndo:<appId>:<bucket>` row (D-PR4-3): when, until when, on whose authority
@@ -78,5 +106,6 @@ export const ownUndoEntrySchema = z
     steps: z.array(accessUndoStepSchema).min(1).max(ACCESS_UNDO_MAX_STEPS),
     undoneAt: isoInstant.optional(),
   })
-  .superRefine(refuseUndoOversizeOrCredential);
+  .superRefine(refuseUndoOversizeOrCredential)
+  .superRefine(refuseAuthorityWithoutItsTask);
 export type OwnUndoEntry = z.infer<typeof ownUndoEntrySchema>;

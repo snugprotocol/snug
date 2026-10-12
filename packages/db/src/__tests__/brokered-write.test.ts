@@ -1363,8 +1363,12 @@ function admitSpy(db: Database, verdict: boolean | Admit = true): { admit: Admit
   return { admit, calls, inTransaction, notes };
 }
 
-/** The own-mode words: nothing about another app or a share (the reader's oracle words). */
-const READER_WORDS = /another app|isn.t shared|shared/i;
+/**
+ * The own-mode words: nothing about another app or a share (the reader's oracle words).
+ * WIDENED by PR-4 Gate-5 A9 [AUTH-F11] — the parser's no-WHERE sentence says "the other app", which the
+ * old pattern could not catch. Was: `const READER_WORDS = /another app|isn.t shared|shared/i;`
+ */
+const READER_WORDS = /other app|another app|isn.t shared|shared/i;
 
 describe('PR-4 — the capture variant: whole-batch, captured, admitted before COMMIT (D-PR4-4)', () => {
   it('an UPDATE and an INSERT in ONE call: changes per statement, one captured step each, undoable — admit asked ONCE, after the last statement, inside the open transaction', async () => {
@@ -1467,8 +1471,24 @@ describe('PR-4 — the capture variant: whole-batch, captured, admitted before C
       expect(parsed.ok, sql).toBe(false);
       const result = applyBrokeredBatch(db, capture([{ sql }]));
       expect(result, sql).toMatchObject({ ok: false, reason: 'refused', rule: parsed.ok ? 'statement' : parsed.rule });
+      // PR-4 Gate-5 A9: every parser refusal of an OWN capture is in own-mode words — never the reader's.
+      if (!result.ok) expect(result.message, sql).not.toMatch(READER_WORDS);
     }
     expect(dump(db, 'transactions')).toEqual(before);
+    db.close();
+  });
+
+  it('PR-4 Gate-5 A9 — a no-WHERE own capture is re-worded by its rule: it can’t be undone and needs a WHERE (the rule token unchanged)', async () => {
+    const { applyBrokeredBatch } = await brokered();
+    const db = handle(OWN_TABLES);
+    for (const sql of ["UPDATE transactions SET note = 'x'", 'DELETE FROM transactions']) {
+      const result = applyBrokeredBatch(db, capture([{ sql }]));
+      expect(result, sql).toMatchObject({ ok: false, reason: 'refused', rule: 'no-where' });
+      if (result.ok) continue;
+      expect(result.message, sql).not.toMatch(READER_WORDS);
+      expect(result.message, sql).toMatch(/can.t be undone/i);
+      expect(result.message, sql).toMatch(/\bWHERE\b/);
+    }
     db.close();
   });
 

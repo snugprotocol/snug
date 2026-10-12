@@ -11,7 +11,7 @@
 // The real memory user db; the instant is a passed-in string (no wall clock is read here).
 
 import type { UserDb } from '@snugprotocol/db';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { resetAccessSession } from '../access/grants.js';
 import { onAppVersionChanged } from '../state/appVersionChanged.js';
@@ -63,6 +63,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   resetAccessSession();
+  vi.restoreAllMocks();
 });
 
 describe('onAppVersionChanged disarms on EVERY source (D-PR4-8)', () => {
@@ -126,5 +127,38 @@ describe('onAppVersionChanged disarms on EVERY source (D-PR4-8)', () => {
     const { updatedAt: _was, ...expectedRest } = expected as typeof expected & { updatedAt: string };
     expect(rest).toEqual(expectedRest);
     expect(disarmed).toEqual({ reason: 'app-updated', at: NOW });
+  });
+});
+
+// PR-4 Gate-5 A2 [AUTH-F12] — the disarm runs FIRST in the fan-out, so it must never throw at the
+// update: each task's write is its own try/catch (warned), the other tasks are still disarmed, and the
+// rest of the fan-out (the pause; the reader-access pause — pinned in accessDrift.test.ts) still runs.
+describe('disarmSchedulesForAppVersion never throws at the update (A2)', () => {
+  it('one armed task’s row refused by the file: the call returns, the OTHER armed task is still disarmed, the refused one stays as it was', () => {
+    db.putScheduledTask(taskOn('refused', ledger));
+    db.putScheduledTask(taskOn('fine', ledger));
+    const put = db.putScheduledTask.bind(db);
+    vi.spyOn(db, 'putScheduledTask').mockImplementation((task) => {
+      if (task.id === 'refused') throw new Error('the file refused the row');
+      put(task);
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    expect(() => onAppVersionChanged(db, ledger, 2, 'own', NOW)).not.toThrow();
+    expect(armed(db.getScheduledTask('fine'))).toBe(false);
+    expect(db.getScheduledTask('fine')?.disarmed).toEqual({ reason: 'app-updated', at: NOW });
+    expect(armed(db.getScheduledTask('refused')), 'the walk’s armedVersion belt stops it at its seat instead').toBe(true);
+    expect(warn).toHaveBeenCalled();
+  });
+
+  it('an agent update with the disarm refused still pauses the schedules it names (the fan-out goes on)', () => {
+    db.putScheduledTask(taskOn('t1', ledger));
+    const put = db.putScheduledTask.bind(db);
+    vi.spyOn(db, 'putScheduledTask').mockImplementation((task) => {
+      if ((task as { disarmed?: unknown }).disarmed !== undefined && (task as { pausedReason?: unknown }).pausedReason === undefined) throw new Error('refused');
+      put(task);
+    });
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    expect(() => onAppVersionChanged(db, ledger, 2, 'agent', NOW)).not.toThrow();
+    expect(db.getScheduledTask('t1')).toMatchObject({ enabled: false, pausedReason: 'app-updated' });
   });
 });

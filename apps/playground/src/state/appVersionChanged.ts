@@ -18,7 +18,15 @@
 // it was, so it goes on EVERY source — the user's own edit and a starter update too, which pause
 // nothing — and FIRST, before the pause and whatever it returns early for: the pause then reads
 // the disarmed task fresh. The outcome is unchanged (the disarm is the file's state, its trace
-// the row's to show).
+// the row's to show), and the disarm is never thrown at the update (a refused row is warned; the
+// access pause after it still runs).
+//
+// So the places a NEW VERSION is written under the user call this too (Gate 5, A2) — with `own`
+// or `starter`, which pause nothing and suspend nothing, so only the disarm runs: the builder's
+// artifact write on an existing app (`agent/artifactSink.ts`), the versions panel's revert and
+// reset to factory (`run/VersionsPanel.tsx`), and the starter update (`starter/starterUpdate.ts`).
+// A source scan in accessDrift.test.ts pins every `saveAppVersion(`, `revertApp(` and
+// `resetToFactory(` call site to reach this fan-out.
 
 import type { UserDb } from '@snugprotocol/db';
 

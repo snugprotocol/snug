@@ -600,7 +600,11 @@ const namesApp = (step: ScheduleStep, appId: string): boolean => step.kind !== '
  *  - a task whose EVERY step names the app goes with its runs row — there is nothing left
  *    of it to run; a task that names another app too (or carries a reminder) is left
  *    byte-identical, and the engine marks the dead step's RESULT `appMissing` at run
- *    time from the missing app, so no task row is rewritten behind the user's back;
+ *    time from the missing app, so no task row is rewritten behind the user's back —
+ *    with ONE exception (TASK-20261010-host-broker PR-4 Gate 5, A6): a surviving task that
+ *    may change this app's data on its own loses that authority, with the `app-updated`
+ *    trace. The consent was given for the app that is going; an app installed later under
+ *    the same id must never inherit it (the walk's `createdAt` belt says the same at the seat);
  *  - a task row that does not parse is left alone: the cascade cannot know whose it is;
  *  - the app's `scheduleDeclined:<appId>:*` rows by escaped prefix and its
  *    `scheduleMuted:<appId>` row by equality — the per-app-row-in-a-shared-namespace
@@ -608,14 +612,21 @@ const namesApp = (step: ScheduleStep, appId: string): boolean => step.kind !== '
  *    REUSED app id. Known limit, as for the `auth:` prefix: an app id containing a literal
  *    colon would over-match a sibling sharing that prefix — unreachable with UUID ids.
  */
-export function sweepSchedulesForDeletedApp(sql: SettingsSql, appId: string): void {
+export function sweepSchedulesForDeletedApp(sql: SettingsSql, appId: string, nowIso: string = new Date().toISOString()): void {
   for (const [key, raw] of rowsUnder(sql, SCHEDULE_SETTING_PREFIX)) {
     const taskId = taskIdFromScheduleSettingKey(key);
     if (taskId === undefined) continue;
     const task = readTask(raw, taskId);
-    if (task === undefined || !task.steps.every((step) => namesApp(step, appId))) continue;
-    deleteKey(sql, key);
-    deleteKey(sql, scheduleRunsSettingKey(taskId));
+    if (task === undefined) continue;
+    if (task.steps.every((step) => namesApp(step, appId))) {
+      deleteKey(sql, key);
+      deleteKey(sql, scheduleRunsSettingKey(taskId));
+      continue;
+    }
+    if (task.writeAuthority !== undefined && task.steps.some((step) => namesApp(step, appId))) {
+      const { writeAuthority: _taken, ...rest } = task;
+      writeRaw(sql, key, { ...rest, disarmed: { reason: 'app-updated', at: nowIso } });
+    }
   }
   sql.run(`DELETE FROM ${SETTINGS} WHERE ${PREFIX_WHERE}`, [likePrefix(scheduleDeclinedSettingPrefixFor(appId))]);
   deleteKey(sql, scheduleMutedSettingKey(appId));
@@ -653,9 +664,13 @@ export function snapshotLocalSchedules(sql: SettingsSql): LocalScheduleSnapshot 
  *  - `proposals` LEAVES every entry — a pending data change is this device's own
  *    dry-run against its own scratch copy, and a foreign file must never be able to
  *    plant an approval card (security F1), so the bytes never cross the file boundary in
- *    either direction — and with it what this device MADE of them (PR-4, D-PR4-9): the
- *    `applied` group and the `approved` entries point into this device's own undo journal,
- *    which an untrusted import drops, so a group from another file never offers an *undo* here;
+ *    either direction;
+ *  - with `stripOwnSeats` (the UNTRUSTED import alone — PR-4 Gate 5, A7) what was MADE of
+ *    them leaves too: the `applied` group and the `approved` entries name entries of an undo
+ *    journal the untrusted import drops, so a foreign file's record claims nothing here. An
+ *    export, a sync push and a trusted pull KEEP them — the device keeps its disclosure of
+ *    what changed across a pull, and an `undoId` the journal no longer holds already
+ *    resolves to nothing;
  *  - with `importedAt` (import only, both paths — S1/S7): an entry whose `dueAt` is AFTER
  *    that instant is DROPPED (nothing can have run for a time that has not come; a planted
  *    one would dedupe the real occurrence and, as `pending`, sit on the missed card), and a
@@ -666,7 +681,7 @@ export function snapshotLocalSchedules(sql: SettingsSql): LocalScheduleSnapshot 
  * Only rows that changed are rewritten, so a trusted pull keeps clean bytes stable.
  * Returns how many proposals were stripped.
  */
-export function scrubScheduleRunRows(sql: SettingsSql, opts: { importedAt?: string } = {}): number {
+export function scrubScheduleRunRows(sql: SettingsSql, opts: { importedAt?: string; stripOwnSeats?: boolean } = {}): number {
   let stripped = 0;
   const importedAt = opts.importedAt === undefined ? undefined : instant(opts.importedAt);
   const oldest = importedAt === undefined ? undefined : importedAt - SCHEDULE_IMPORTED_CLAIM_MAX_AGE_MS;
@@ -691,7 +706,7 @@ export function scrubScheduleRunRows(sql: SettingsSql, opts: { importedAt?: stri
         stripped += 1;
         changed = true;
       }
-      if (next.applied !== undefined || next.approved !== undefined) {
+      if (opts.stripOwnSeats === true && (next.applied !== undefined || next.approved !== undefined)) {
         const { applied: _applied, approved: _approved, ...rest } = next;
         next = rest;
         changed = true;
@@ -728,8 +743,10 @@ function disarmHistory(sql: SettingsSql, taskId: string): void {
 }
 
 /**
- * True when any history row could carry a seat `scrubScheduleRunRows` strips — `proposals`,
+ * True when any history row could carry a seat `scrubScheduleRunRows` may strip — `proposals`,
  * `applied` or `approved` (PR-4, F17) — the export's cheap test before it bothers with a copy.
+ * Conservative since A7 (an export keeps `applied`/`approved`): a row carrying only those takes
+ * the copy path and leaves it unchanged, never the other way round.
  */
 export function hasScheduleRunSeatsToStrip(sql: SettingsSql): boolean {
   return (
@@ -792,7 +809,7 @@ export function reconcileImportedSchedules(
   trustedOrigin: boolean,
   now: string = new Date().toISOString(),
 ): { demotedTasks: number; strippedProposals: number; disarmedTasks: number } {
-  const strippedProposals = scrubScheduleRunRows(sql, { importedAt: now });
+  const strippedProposals = scrubScheduleRunRows(sql, { importedAt: now, stripOwnSeats: !trustedOrigin });
 
   let demotedTasks = 0;
   let disarmedTasks = 0;

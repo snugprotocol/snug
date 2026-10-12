@@ -12,7 +12,6 @@
 
 import {
   ACCESS_WRITE_MAX_ROWS,
-  OWN_UNDO_MAX_LIVE,
   type RunStatus,
   type ScheduleHeldReason,
   type ScheduleRun,
@@ -23,7 +22,7 @@ import {
   type StepToolsUnavailableReason,
 } from '@snugprotocol/protocol';
 
-import { listWords, rowsWord } from '../access/copy.js';
+import { OWN_UNDO_NO_LONGER, listWords, rowsWord } from '../access/copy.js';
 import { WORDS, aiCalls, changedOnItsOwn, changedRows } from './copy.js';
 
 // ---------------------------------------------------------------------------------------------
@@ -225,13 +224,15 @@ export const RESULT_LOADING = 'opening…';
 /**
  * Why an armed schedule did not make a change it suggested — ONE line per held item, above its
  * acts, keyed by the protocol's held reasons so a new reason is a type error here, never a missing
- * line. Each is a function of the app's name (the busy one says it).
+ * line. Each is a function of the app's name (the busy one says it) and of the schedule's undo
+ * bucket's LIVE count, read when the page renders (`full` says it — PR-4 Gate 5, U14: the bucket
+ * refused at its cap, but entries age out, so the cap would overstate what is still waiting).
  */
-export const HELD_WHY: Readonly<Record<ScheduleHeldReason, (appName: string) => string>> = {
+export const HELD_WHY: Readonly<Record<ScheduleHeldReason, (appName: string, live: number) => string>> = {
   busy: (appName) => `not made — ${appName} was in the middle of a change`,
   changed: () => 'not made — the data moved since the AI looked',
   'cannot-undo': () => 'not made — it couldn’t be undone, so it waits for you (applying it here can’t be undone either)',
-  full: () => `not made — ${OWN_UNDO_MAX_LIVE} earlier changes can still be undone; it will make changes again as they age out`,
+  full: (_appName, live) => `not made — ${live} earlier ${live === 1 ? 'change' : 'changes'} can still be undone; it will make changes again as they age out`,
   failed: () => 'not made — something went wrong; nothing was changed',
   'over-limit': () => `not made — it would pass the ${ACCESS_WRITE_MAX_ROWS} rows this schedule may change each time`,
   stopped: () => 'not made — it was stopped from making changes on its own',
@@ -248,8 +249,13 @@ export const MADE = {
   /** "you applied this — 2 rows changed" — persisted, so a reload keeps it. */
   youApplied: (n: number): string => `you applied this — ${rowsWord(n)} changed`,
   cannotUndo: 'can’t be undone',
-  /** The journal holds it no longer. */
+  /** The journal holds it no longer, and the change is past its seven days. */
   undoEnded: 'undo ended after seven days',
+  /**
+   * The journal holds it no longer, though the change is younger than seven days — undone and gone,
+   * or given way early in its bucket (PR-4 Gate 5, U2). The chat card's words, ONE home.
+   */
+  noLonger: OWN_UNDO_NO_LONGER,
 } as const;
 
 /** ONCE, under the header's when-line, on a schedule that makes changes on its own — with its one act. */
@@ -258,8 +264,12 @@ export const RESULT_ON_ITS_OWN = {
   stop: 'stop',
 } as const;
 
-/** The link from a result to its schedule's changes list, where an undo stays findable for seven days. */
-export const CHANGES_LINK = 'every change this schedule made';
+/**
+ * The link from a result to its schedule's changes list, where an undo stays findable for seven days —
+ * named by what the list HOLDS (PR-4 Gate 5, U6): the schedule's own changes still undoable, never
+ * the user's approvals, an undone one or one past its seven days.
+ */
+export const CHANGES_LINK = 'this schedule’s changes you can still undo';
 
 // ---------------------------------------------------------------------------------------------
 // The host's facts (D-PR4-18; D8, D18, R-88) — what the host knows, said after the AI's words
@@ -318,10 +328,12 @@ export function stepFacts(step: ScheduleStep, result: StepResult, names: StepFac
 /**
  * The host's facts about a result, in order — what it made on its own, what the user applied, what
  * still waits — for wherever the result's one line is printed (the feed, the row's history, a
- * notification the host composes): `[summary, ...resultFacts(run, name)].join(' · ')`. The AI's
- * words come first and are never rewritten; an AI's claim is never a fact.
+ * notification the host composes): `[summary, ...resultFacts(run, name, now)].join(' · ')`. The AI's
+ * words come first and are never rewritten; an AI's claim is never a fact. A batch waits only before
+ * its `expiresAt`, read against the caller's clock (PR-4 Gate 5, U10): an expired batch stays on the
+ * row, but nothing in it is waiting any more.
  */
-export function resultFacts(run: ScheduleRun, appName: (appId: string) => string): string[] {
+export function resultFacts(run: ScheduleRun, appName: (appId: string) => string, now: Date): string[] {
   const facts: string[] = [];
   if (run.applied !== undefined) {
     facts.push(changedOnItsOwn(run.applied.items.reduce((sum, item) => sum + item.changes, 0), appName(run.applied.appId)));
@@ -329,7 +341,7 @@ export function resultFacts(run: ScheduleRun, appName: (appId: string) => string
   const approvedByApp = new Map<string, number>();
   for (const entry of run.approved ?? []) approvedByApp.set(entry.appId, (approvedByApp.get(entry.appId) ?? 0) + entry.changes);
   for (const [appId, changes] of approvedByApp) facts.push(`you ${changedRows(changes, appName(appId))}`);
-  const waiting = run.proposals?.items.length ?? 0;
+  const waiting = run.proposals !== undefined && Date.parse(run.proposals.expiresAt) > now.getTime() ? run.proposals.items.length : 0;
   if (waiting > 0) facts.push(waiting === 1 ? '1 change waiting for your OK' : `${waiting} ${WORDS.changesWaiting}`);
   return facts;
 }

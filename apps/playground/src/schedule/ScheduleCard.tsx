@@ -32,6 +32,7 @@ import { readScheduleCardRow, type ScheduleCardState } from '../agent/scheduleCa
 import { getUserDb } from '../state/userdb.js';
 import { Button } from '../ui/Button.js';
 import { Card } from '../ui/Card.js';
+import { blockedAppsOf } from './askBrain.js';
 import { SCHEDULE_CARD, stepWords } from './copy.js';
 import { describeSpec, nextOccurrence, resolveZone } from './cron.js';
 import { approvedHostsByApp, lookUpNamesByApp, type LookUpNamesByApp } from './editorModel.js';
@@ -66,7 +67,7 @@ export function ScheduleCard({ card, messageId, busy, onResolve }: ScheduleCardP
   const [appNames, setAppNames] = useState<Record<string, string>>({});
   const [appMissing, setAppMissing] = useState(false);
   /** The consent panel is open: the hosts each app's approved connections may call, and the connections a step may look things up through. */
-  const [consent, setConsent] = useState<{ hosts: Record<string, string[]>; lookUps: LookUpNamesByApp } | undefined>(undefined);
+  const [consent, setConsent] = useState<{ hosts: Record<string, string[]>; lookUps: LookUpNamesByApp; blocked: readonly string[] } | undefined>(undefined);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
 
@@ -122,7 +123,7 @@ export function ScheduleCard({ card, messageId, busy, onResolve }: ScheduleCardP
     const db = await getUserDb();
     const appIds = state.appId !== undefined ? [state.appId] : [];
     setError(undefined);
-    setConsent({ hosts: approvedHostsByApp(db, appIds), lookUps: lookUpNamesByApp(db, appIds) });
+    setConsent({ hosts: approvedHostsByApp(db, appIds), lookUps: lookUpNamesByApp(db, appIds), blocked: blockedAppsOf(db, appIds) });
   };
   const enable = async (choice: EnableChoice): Promise<void> => {
     setWorking(true);
@@ -169,6 +170,7 @@ export function ScheduleCard({ card, messageId, busy, onResolve }: ScheduleCardP
             appNames={appNames}
             hostsByApp={consent.hosts}
             connectionsByApp={consent.lookUps}
+            blockedApps={consent.blocked}
             busy={working}
             {...(error !== undefined ? { error } : {})}
             onEnable={(choice) => void enable(choice)}

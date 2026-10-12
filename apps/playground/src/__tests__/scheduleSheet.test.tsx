@@ -18,6 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { UserDb } from '@snugprotocol/db';
 
+import { armTask } from '../schedule/acts.js';
 import { CONSENT } from '../schedule/copy.js';
 import { ACTIONS, SENTENCE } from '../schedule/copy.editor.js';
 import { remainderOf } from '../schedule/editorModel.js';
@@ -25,6 +26,12 @@ import { readSchedule } from '../schedule/parseScheduleText.js';
 import { newScheduleHref } from '../schedule/routes.js';
 import { ScheduleSheet } from '../schedule/ScheduleSheet.js';
 import { installTestUserDb } from './userdbTestHelper.js';
+
+// PR-4 Gate-5 U4: `armTask` wrapped (not replaced) so ONE test can make the arming refuse.
+vi.mock('../schedule/acts.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../schedule/acts.js')>();
+  return { ...actual, armTask: vi.fn(actual.armTask) };
+});
 
 declare global {
   // eslint-disable-next-line no-var
@@ -42,6 +49,7 @@ let closes = 0;
 
 beforeEach(async () => {
   vi.useFakeTimers({ toFake: ['Date'], now: NOW });
+  vi.mocked(armTask).mockClear();
   closes = 0;
   db = await installTestUserDb();
   appId = db.installApp({ displayName: 'Ledger', html: '<!doctype html><title>Ledger</title>', usesDb: true }).appId;
@@ -233,5 +241,61 @@ describe('the sheet', () => {
     expect(q('enable-consent')).toBeNull();
     expect(q('sheet-schedule-it')).not.toBeNull();
     expect(db.listScheduledTasks()).toHaveLength(0);
+  });
+});
+
+// =============================================================================================
+// TASK-20261010-host-broker PR-4 Gate 5 — U4: the sheet's consent and the task write authority
+// (D-PR4-8, AC31 — "all four hosts"). The sheet arms only through the user's tick on the consent
+// (`armIfTicked`): the tick mounts OFF, off creates NO authority, on arms the schedule the writer
+// created; a refused arming leaves it written, unarmed, and the done line SAYS so — *scheduled — …
+// — <refusal>*. Pins only — no code change.
+// =============================================================================================
+
+describe('PR-4 Gate-5 U4 — the sheet’s consent: the tick mounts off, off arms nothing, on arms, a refusal is said', () => {
+  async function toConsent(): Promise<HTMLInputElement> {
+    await mount();
+    await type(must('sheet-text'), 'every friday at 5pm');
+    await type(must('sheet-prompt'), 'How did the week go?');
+    await click(must('sheet-schedule-it'));
+    return must('consent-on-its-own') as HTMLInputElement;
+  }
+
+  it('the tick mounts OFF', async () => {
+    const tick = await toConsent();
+    expect(tick.type).toBe('checkbox');
+    expect(tick.checked).toBe(false);
+  });
+
+  it('left off: the schedule is written with NO authority, and the arming act is never asked', async () => {
+    await toConsent();
+    await click(must('consent-enable'));
+    await settleUntil(() => q('sheet-done') !== null, 'the scheduled line');
+    expect(db.listScheduledTasks()).toHaveLength(1);
+    expect(db.listScheduledTasks()[0]?.writeAuthority).toBeUndefined();
+    expect(vi.mocked(armTask)).not.toHaveBeenCalled();
+  });
+
+  it('ticked: the schedule is armed — 200 rows a run, for the app’s current version — and the done line is the plain one', async () => {
+    const tick = await toConsent();
+    await click(tick);
+    await click(must('consent-enable'));
+    await settleUntil(() => q('sheet-done') !== null, 'the scheduled line');
+    expect(db.listScheduledTasks()[0]?.writeAuthority).toMatchObject({ rowsPerRun: 200, armedVersion: db.getApp(appId)?.currentVersion });
+    expect(must('sheet-done').textContent).toMatch(/^scheduled — next /);
+  });
+
+  it('a refused arming: written, unarmed, and the done line ends *— <refusal>*', async () => {
+    const refusal = 'that schedule can’t make changes on its own';
+    vi.mocked(armTask).mockResolvedValueOnce({ ok: false, reason: refusal } as Awaited<ReturnType<typeof armTask>>);
+    const tick = await toConsent();
+    await click(tick);
+    await click(must('consent-enable'));
+    await settleUntil(() => q('sheet-done') !== null, 'the scheduled line');
+    expect(vi.mocked(armTask)).toHaveBeenCalledTimes(1);
+    expect(db.listScheduledTasks()).toHaveLength(1);
+    expect(db.listScheduledTasks()[0]?.writeAuthority).toBeUndefined();
+    expect(must('sheet-done').textContent).toMatch(/^scheduled — next /);
+    expect(must('sheet-done').textContent?.endsWith(` — ${refusal}`)).toBe(true);
   });
 });

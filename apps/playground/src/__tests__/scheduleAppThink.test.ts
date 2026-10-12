@@ -45,11 +45,14 @@ import type { AgentTransport } from '@snugprotocol/runner';
 import type { UserDb } from '@snugprotocol/db';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+
 import { webgpuStore, webllmFlagStore } from '../state/webllm.js';
 import { appMissing } from '../schedule/copy.js';
 import type { StepContext } from '../schedule/engine-types.js';
+import * as appThinkModule from '../schedule/appThink.js';
 import {
-  DEMO_BRAIN_REFUSAL,
   KEYLESS_BRAIN_REFUSAL,
   SCHEDULE_DATA_DELIMITER,
   SCHEDULED_THINK_ACTION,
@@ -61,7 +64,7 @@ import {
 } from '../schedule/appThink.js';
 import { modeStore, providerStore } from '../state/mode.js';
 import { CANCELLED_SUMMARY } from '../schedule/executors.js';
-import { CHAT_DOOR } from '../access/copy.js';
+import { CHAT_DOOR, appMidChange } from '../access/copy.js';
 import type { MaterialisedSet, MaterialisedTable } from '../access/service.js';
 import { execFrame, exportFrame } from './dbFrames.js';
 import { installTestUserDb } from './userdbTestHelper.js';
@@ -431,11 +434,14 @@ describe('refusals and failures', () => {
     expect(transportFor).not.toHaveBeenCalled();
   });
 
-  it('the demo brain (no transport) → refused by name, nothing spent, no scratch run', async () => {
+  // INVERTED by PR-4 Gate-5 J11 — ONE state, ONE sentence: the transport-less arm answers the keyless
+  // gate's outcome (`KEYLESS_BRAIN_REFUSAL` + `blockedBy: 'brain'`); `DEMO_BRAIN_REFUSAL` is deleted. Was:
+  //   expect(outcome).toEqual({ status: 'refused', summary: DEMO_BRAIN_REFUSAL, calls: { ai: 0, net: 0 } });
+  it('the demo brain (no transport) → the keyless gate’s refusal, blockedBy brain; nothing spent, no scratch run', async () => {
     const scratchRun = vi.spyOn(db, 'scratchRun');
     const step = thinkStep();
     const outcome = await executeAppThink(step, context([step]), { transportFor: () => undefined });
-    expect(outcome).toEqual({ status: 'refused', summary: DEMO_BRAIN_REFUSAL, calls: { ai: 0, net: 0 } });
+    expect(outcome).toEqual({ status: 'refused', summary: KEYLESS_BRAIN_REFUSAL, calls: { ai: 0, net: 0 }, blockedBy: 'brain' });
     expect(scratchRun).not.toHaveBeenCalled();
   });
 
@@ -529,8 +535,11 @@ describe('defaultTransportFor — the production composition reads the brain per
     expect(defaultTransportFor(appId)).toBeDefined();
   });
 
-  it('the refusal sentence names the demo brain', () => {
-    expect(DEMO_BRAIN_REFUSAL).toBe('the demo brain doesn’t answer on a schedule — choose a brain in Settings');
+  // INVERTED by PR-4 Gate-5 J11 — the demo sentence is gone (one state, one sentence). Was:
+  //   expect(DEMO_BRAIN_REFUSAL).toBe('the demo brain doesn’t answer on a schedule — choose a brain in Settings');
+  it('there is no separate demo sentence any more — the keyless gate’s is the one', () => {
+    expect('DEMO_BRAIN_REFUSAL' in appThinkModule).toBe(false);
+    expect(readFileSync(path.resolve(__dirname, '../schedule/appThink.ts'), 'utf8')).not.toContain('the demo brain doesn’t answer on a schedule');
   });
 });
 
@@ -949,6 +958,8 @@ describe('PR-4 — RESPONSE_SCHEMA’s proposals wording follows the task’s ar
     const description = proposalsDescription(transport.wires[0] ?? '');
     expect(description).not.toContain('never run automatically');
     expect(description).toContain('no functions, arithmetic or conflict clause');
+    // PR-4 Gate-5 J1: the rule no longer offers a placeholder.
+    expect(description).not.toContain('or ?');
   });
 });
 
@@ -983,5 +994,97 @@ describe('PR-4 — the offered changes go through the ONE proposal gate (D-PR4-1
     const outcome = await executeAppThink(step, context([step]), { transportFor: () => transport });
     expect(outcome.proposals).toBeUndefined();
     expect(busy).not.toHaveBeenCalled();
+  });
+});
+
+// =================================================================================================
+// PR-4 Gate-5 — J1 (a placeholder candidate is dropped), J8 (busy is said as busy), J9 (the typed
+// context queries ask inTransaction once, through ONE helper both executors use).
+// =================================================================================================
+
+describe('PR-4 Gate-5 J1 — a reply candidate carrying an unbound placeholder is dropped', () => {
+  it.each(['UPDATE t SET label = ? WHERE id = 1', 'DELETE FROM t WHERE id = :id', 'UPDATE t SET cents = $v WHERE id = 2'])('%s → never kept, never dry-run', async (sql) => {
+    const scratchRun = vi.spyOn(db, 'scratchRun');
+    const transport = fakeTransport(json({ answer: 'x', proposals: [{ sql }] }));
+    const step = thinkStep({ context: { maxRows: 50 } });
+    const outcome = await executeAppThink(step, context([step]), { transportFor: () => transport });
+    expect(outcome.status).toBe('ok');
+    expect(outcome.proposals).toBeUndefined();
+    expect(scratchRun).not.toHaveBeenCalled();
+  });
+
+  it('the passing twin: a `?` inside quoted text is kept with its count', async () => {
+    const transport = fakeTransport(json({ answer: 'x', proposals: [{ sql: "UPDATE t SET label = 'why?' WHERE id = 1" }] }));
+    const step = thinkStep({ context: { maxRows: 50 } });
+    const outcome = await executeAppThink(step, context([step]), { transportFor: () => transport });
+    expect(outcome.proposals).toEqual([{ appId, sql: "UPDATE t SET label = 'why?' WHERE id = 1", counts: { changes: 1 } }]);
+  });
+});
+
+describe('PR-4 Gate-5 J8 — a change not kept because the app was busy is said as busy, never “not safe to keep”', () => {
+  it('the app mid-change: the summary carries “1 suggested change … not kept — <the app is mid-change>”', async () => {
+    vi.spyOn(db.driver, 'inTransaction').mockResolvedValue(true);
+    const transport = fakeTransport(json({ answer: 'the answer', proposals: [{ sql: 'DELETE FROM t WHERE id = 1' }] }));
+    const step = thinkStep({ context: { maxRows: 50 } });
+    const outcome = await executeAppThink(step, context([step]), { transportFor: () => transport });
+    expect(outcome.proposals).toBeUndefined();
+    expect(outcome.summary).toContain('the answer');
+    expect(outcome.summary).toContain(appMidChange('Ledger'));
+    expect(outcome.summary).toMatch(/1 suggested change\b[^\n]*not kept/);
+    expect(outcome.summary).not.toContain('not safe to keep');
+  });
+
+  it('two busy candidates are counted together, in the plural', async () => {
+    vi.spyOn(db.driver, 'inTransaction').mockResolvedValue(true);
+    const transport = fakeTransport(json({ answer: 'a', proposals: [{ sql: 'DELETE FROM t WHERE id = 1' }, { sql: 'DELETE FROM t WHERE id = 3' }] }));
+    const step = thinkStep({ context: { maxRows: 50 } });
+    const outcome = await executeAppThink(step, context([step]), { transportFor: () => transport });
+    expect(outcome.summary).toMatch(/2 suggested changes\b[^\n]*not kept/);
+    expect(outcome.summary).toContain(appMidChange('Ledger'));
+  });
+
+  it('the passing twin: a change that FAILED validation still reads “not safe to keep” (the dropped note is unchanged)', async () => {
+    const transport = fakeTransport(json({ answer: 'a', proposals: [{ sql: 'DROP TABLE t' }] }));
+    const step = thinkStep({ context: { maxRows: 50 } });
+    const outcome = await executeAppThink(step, context([step]), { transportFor: () => transport });
+    expect(outcome.summary).toContain(droppedNote(1));
+    expect(outcome.summary).not.toContain(appMidChange('Ledger'));
+  });
+});
+
+describe('PR-4 Gate-5 J9 — the typed context queries ask inTransaction first (D-PR4-5), through ONE helper', () => {
+  it('the app mid-change with one typed SELECT: no scratch export runs, and the wire’s context carries the busy sentence', async () => {
+    vi.spyOn(db.driver, 'inTransaction').mockImplementation((namespace) => Promise.resolve(namespace === appId));
+    const scratchRun = vi.spyOn(db, 'scratchRun');
+    const transport = fakeTransport(json({ answer: 'ok' }));
+    const step = thinkStep();
+    await executeAppThink(step, context([step]), { transportFor: () => transport });
+    expect(scratchRun).not.toHaveBeenCalled();
+    const ctx = envelopeOf(transport.wires[0] ?? '').payload.context;
+    expect(ctx).toContain(appMidChange('Ledger'));
+    expect(ctx).not.toContain('"coffee"');
+  });
+
+  it('inTransaction is asked ONCE for all the typed queries, and only when there are any', async () => {
+    const busy = vi.spyOn(db.driver, 'inTransaction');
+    const step = thinkStep({ context: { sql: ['SELECT id FROM t', 'SELECT label FROM t'], maxRows: 50 } });
+    await executeAppThink(step, context([step]), { transportFor: () => fakeTransport(json({ answer: 'ok' })) });
+    expect(busy.mock.calls.filter(([namespace]) => namespace === appId)).toHaveLength(1);
+    busy.mockClear();
+    const bare = thinkStep({ context: { maxRows: 50 } });
+    await executeAppThink(bare, context([bare]), { transportFor: () => fakeTransport(json({ answer: 'ok' })) });
+    expect(busy).not.toHaveBeenCalled();
+  });
+
+  it('ONE helper, `runContextQueries`, serves BOTH executors — neither loops runContextQuery itself', () => {
+    const strip = (code: string): string => code.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:'"`\\])\/\/[^\n]*/g, '$1');
+    const think = strip(readFileSync(path.resolve(__dirname, '../schedule/appThink.ts'), 'utf8'));
+    const agent = strip(readFileSync(path.resolve(__dirname, '../schedule/appAgent.ts'), 'utf8'));
+    expect(think).toMatch(/\brunContextQueries\s*\(/);
+    expect(agent).toMatch(/\brunContextQueries\s*\(/);
+    expect(agent, 'the agent never calls the one-query helper itself').not.toMatch(/\brunContextQuery\s*\(/);
+    // In appThink.ts the one-query helper is reached only from inside runContextQueries (its definition and that one call).
+    const executor = think.slice(think.indexOf('export async function executeAppThink'));
+    expect(executor, 'executeAppThink never loops runContextQuery itself').not.toMatch(/\brunContextQuery\s*\(/);
   });
 });

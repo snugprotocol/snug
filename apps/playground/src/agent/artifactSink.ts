@@ -11,6 +11,7 @@
 
 import type { UserDb } from '@snugprotocol/db';
 
+import { onAppVersionChanged } from '../state/appVersionChanged.js';
 import { deriveDisplayName } from '../state/library.js';
 import { getUserDb } from '../state/userdb.js';
 
@@ -93,6 +94,9 @@ export function createAppTargetSink(options: CreateAppTargetSinkOptions = {}): A
       const existing = db.getApp(targetId);
       if (existing !== undefined) {
         const meta = db.saveAppVersion(targetId, html, title);
+        // The user's own edit: new code never inherits a schedule's consent to change this app's
+        // data on its own — the one fan-out takes it away (TASK-20261010-host-broker Gate 5, A2).
+        onAppVersionChanged(db, targetId, meta.version, 'own', new Date().toISOString());
         const record = db.getApp(targetId);
         return { id: targetId, displayName: record?.displayName ?? existing.displayName, version: meta.version };
       }

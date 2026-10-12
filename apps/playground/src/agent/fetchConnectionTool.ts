@@ -31,6 +31,11 @@
  * recorded a grant), every call answers the taint sentence for the rest of the turn: shared rows
  * never ride a query string to the app's own hosts. Fetch-then-read stays allowed.
  *
+ * THE TURN'S SIGNAL REACHES THE REQUEST (Gate-5 JOBS-F5). The agent's own deadline stops the turn
+ * 30 s before the queue's bound; a request already out is stopped with it, beside the executor's own
+ * timeout — and that timeout is 20 s, under the margin, so even a transport that cannot hear an
+ * abort answers before the queue's race.
+ *
  * WHAT RE-ENTERS THE CONTEXT. Every string returned — the status line's content type, the body,
  * each `Error: <code> — <message>` — passes the scheduler's `deliver` scrub BEFORE the cut: R-54's
  * exact-substring scrub inside the executor cannot see an injected value the service echoed
@@ -53,6 +58,7 @@ import {
   type NetErrorCode,
 } from '@snugprotocol/protocol';
 
+import { getPlatform } from '../platform/platform.js';
 import { appMayReachNetwork } from '../run/appCapabilityRules.js';
 import { createScheduledConfirmGate } from '../schedule/scheduledConfirmGate.js';
 import { scrubOrWithhold } from '../schedule/scrub.js';
@@ -62,8 +68,12 @@ import { oneLine } from './sharedDdl.js';
 
 export const FETCH_CONNECTION_TOOL_NAME = 'fetch_connection';
 
-/** A scheduled run's request bound — the executor's own default is the attended one. */
-const REQUEST_TIMEOUT_MS = 30_000;
+/**
+ * A scheduled run's request bound — the executor's own default is the attended one. Under the agent's
+ * deadline margin (`APP_AGENT_DEADLINE_MARGIN_MS`, 30 s), so a request the turn's signal cannot
+ * reach still settles before the queue's bound (Gate-5 JOBS-F5).
+ */
+const REQUEST_TIMEOUT_MS = 20_000;
 
 /** `path`: one leading `/`, then visible ASCII only — no whitespace, no C0, nothing the parser strips. */
 const PATH_RULE = /^\/(?!\/)[!-~]*$/;
@@ -78,6 +88,8 @@ const NO_NETWORK = 'Error: this app may not reach the network here — answer fr
 const BAD_PATH = `Error: "path" must start with one / and hold visible characters only — no spaces, no ?, # or \\ (put parameters in "query"), at most ${PATH_MAX_CHARS} characters`;
 const BAD_QUERY = 'Error: "query" must be an object of text, number or true/false values';
 
+type FetchImpl = (input: string, init?: RequestInit) => Promise<Response>;
+
 export interface BuildFetchConnectionToolOptions {
   appId: string;
   getDb: () => Promise<UserDb>;
@@ -91,7 +103,35 @@ export interface BuildFetchConnectionToolOptions {
   /** The turn's signal — an aborted turn sends nothing. */
   signal?: AbortSignal;
   /** Injectable transport for tests; defaults to the platform's fetch seam. */
-  fetchImpl?: (input: string, init?: RequestInit) => Promise<Response>;
+  fetchImpl?: FetchImpl;
+}
+
+/** The platform's fetch seam, read at the call — `state/net.ts`'s own default. */
+const platformFetch: FetchImpl = (input, init) => {
+  const fetchImpl = getPlatform().fetchImpl;
+  return fetchImpl !== undefined ? fetchImpl(input, init) : globalThis.fetch(input, init);
+};
+
+/**
+ * `base`, with every request ALSO stopped by the turn's signal: the executor arms its own timeout
+ * signal on each request and both are honoured, whichever fires first. Relayed by hand rather than
+ * with `AbortSignal.any`, which an older desktop webview lacks; the listeners go when it settles.
+ */
+function stoppedWithTurn(base: FetchImpl, turn: AbortSignal): FetchImpl {
+  return (input, init) => {
+    const own = init?.signal ?? undefined;
+    if (own === undefined) return base(input, { ...init, signal: turn });
+    const either = new AbortController();
+    const stop = (): void => either.abort();
+    for (const signal of [own, turn]) {
+      if (signal.aborted) either.abort();
+      else signal.addEventListener('abort', stop, { once: true });
+    }
+    return base(input, { ...init, signal: either.signal }).finally(() => {
+      own.removeEventListener('abort', stop);
+      turn.removeEventListener('abort', stop);
+    });
+  };
 }
 
 /** A connection the agent may fetch through, as the consent and the agent name it. */
@@ -194,7 +234,9 @@ function searchOf(query: unknown): string | undefined {
 // ---------------------------------------------------------------------------------------------
 
 export function buildFetchConnectionTool(options: BuildFetchConnectionToolOptions): AgentTool {
-  const { appId, getDb, taint, onNetCall, signal, fetchImpl } = options;
+  const { appId, getDb, taint, onNetCall, signal } = options;
+  const base = options.fetchImpl ?? platformFetch;
+  const transport = signal === undefined ? base : stoppedWithTurn(base, signal);
   // One refusing gate for the turn (the scheduler's rule: a gate's record belongs to its run). A GET
   // never reaches a confirm gate; it is here so nothing mutating could ever be asked of a person.
   const confirmGate = createScheduledConfirmGate();
@@ -242,7 +284,7 @@ export function buildFetchConnectionTool(options: BuildFetchConnectionToolOption
 
     const { sidecarFetch: _noSidecar, lanFetch: _noLan, transportPolicy: _noPrivateHttp, ...deps } = connectedFetchDepsFor(
       db,
-      fetchImpl,
+      transport,
       (failedSlot, status, detail) =>
         authShapedFailureStore.set({ appId, slot: failedSlot, status, ...(detail !== undefined ? { detail } : {}), via: 'scheduled-run' }),
       confirmGate,

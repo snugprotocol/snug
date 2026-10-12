@@ -26,17 +26,27 @@
 // expires, and never offered again. "Oldest" is by `at`, and among equal instants the one further
 // back in the row (the row is newest first).
 //
+// EVERY ENTRY IN ITS OWN BUCKET (PR-4 Gate 5, A1). `ownUndoBelongsIn` is the one rule — an approval
+// (no task) in `approval`, a schedule's change in the bucket its task id names, and never a task's in
+// `approval` (a task whose id spells it included) — and it is asked everywhere a bucket is touched:
+// the put refuses an entry outside it, every read leaves out an element outside it (so a planted
+// one is never listed, never counted as live and never kept on the next put), and the engine asks
+// it FIRST, before any seat, so a change is never made into a bucket that would then refuse its undo.
+//
 // HOMED BESIDE userdb.ts, like `schedules.ts` and `access.ts`: the seams are injected because
 // userdb.ts imports this module; the sweeps and the import pass take a bare `SettingsSql`.
 
 import {
   ACCESS_UNDO_MAX_BYTES,
+  APPROVAL_WRITE_AUTHORITY,
   OWN_UNDO_MAX_LIVE,
   OWN_UNDO_ROW_MAX_BYTES,
+  TASK_WRITE_AUTHORITY,
   USERDB_TABLES,
   ownUndoEntrySchema,
   utf8ByteLength,
   type OwnUndoEntry,
+  type OwnWriteAuthority,
 } from '@snugprotocol/protocol';
 import { OWN_UNDO_APPROVAL_BUCKET, OWN_UNDO_SETTING_PREFIX, ownUndoKey, ownUndoPrefixFor } from './app-settings-keys.js';
 import type { SettingsSql } from './schedules.js';
@@ -64,6 +74,18 @@ export type OwnUndoAccessors = Pick<UserDb, 'listOwnUndo' | 'putOwnUndo' | 'mark
 
 /** Which bucket a listing reads: a schedule's (by its task id) or the user's approvals. */
 export type OwnUndoListing = { taskId: string } | { bucket: typeof OWN_UNDO_APPROVAL_BUCKET };
+
+// ------------------------------------------------------------------- the bucket rule
+
+/**
+ * Whether an entry with this authority and task belongs in `bucket` (PR-4 Gate 5, A1): the user's
+ * approval — no task — in `approval`; a schedule's change in the bucket its own task id names, which
+ * is never `approval`. The put, every read and the engine's seat ask this one rule.
+ */
+export function ownUndoBelongsIn(bucket: string, entry: { readonly authority: OwnWriteAuthority; readonly taskId?: string | undefined }): boolean {
+  if (bucket === OWN_UNDO_APPROVAL_BUCKET) return entry.authority === APPROVAL_WRITE_AUTHORITY && entry.taskId === undefined;
+  return entry.authority === TASK_WRITE_AUTHORITY && entry.taskId === bucket;
+}
 
 // ----------------------------------------------------------------------- helpers
 
@@ -99,12 +121,12 @@ function looseEntries(raw: string | undefined): unknown[] {
   }
 }
 
-/** The STRICT read: every element the own-undo schema accepts, in row order (newest first). */
-function readOwnUndo(raw: string | undefined): OwnUndoEntry[] {
+/** The STRICT read of one bucket: every element the own-undo schema accepts AND that belongs in it (A1), in row order (newest first). */
+function readOwnUndo(raw: string | undefined, bucket: string): OwnUndoEntry[] {
   const entries: OwnUndoEntry[] = [];
   for (const item of looseEntries(raw)) {
     const parsed = ownUndoEntrySchema.safeParse(item);
-    if (parsed.success) entries.push(parsed.data);
+    if (parsed.success && ownUndoBelongsIn(bucket, parsed.data)) entries.push(parsed.data);
   }
   return entries;
 }
@@ -125,8 +147,9 @@ function oldestWhere(entries: readonly OwnUndoEntry[], pick: (entry: OwnUndoEntr
   return victim;
 }
 
-/** What a bucket keeps when it is next written: its readable entries that have not expired. */
-const keptIn = (sql: SettingsSql, key: string, now: number): OwnUndoEntry[] => readOwnUndo(rawValue(sql, key)).filter((entry) => !isExpired(entry, now));
+/** What a bucket keeps when it is next written: its readable entries, in it by the bucket rule, that have not expired. */
+const keptIn = (sql: SettingsSql, appId: string, bucket: string, now: number): OwnUndoEntry[] =>
+  readOwnUndo(rawValue(sql, ownUndoKey(appId, bucket)), bucket).filter((entry) => !isExpired(entry, now));
 
 /** Room for one more FULL entry beside the live ones: the separating comma and the schema's whole-entry cap. */
 const roomForOneMore = (live: readonly OwnUndoEntry[]): boolean => (live.length === 0 ? 2 : bytesOf(live) + 1) + ACCESS_UNDO_MAX_BYTES <= OWN_UNDO_ROW_MAX_BYTES;
@@ -147,12 +170,14 @@ export function createOwnUndoAccessors(seams: OwnUndoSeams): OwnUndoAccessors {
   }
 
   return {
-    listOwnUndo(appId, which) {
+    listOwnUndo(appId, which, options = {}) {
       assertOpen();
       const bucket = 'taskId' in which ? which.taskId : which.bucket;
       if (appId.length === 0 || bucket.length === 0) return [];
       const now = seams.now();
-      return readOwnUndo(rawValue(seams, ownUndoKey(appId, bucket))).filter((entry) => isLive(entry, now));
+      // An undone entry is kept, marked, until it expires: listed only when asked for — a page saying *undone* after a reload (A12).
+      const shown = options.includeUndone === true ? (entry: OwnUndoEntry): boolean => !isExpired(entry, now) : (entry: OwnUndoEntry): boolean => isLive(entry, now);
+      return keptIn(seams, appId, bucket, now).filter(shown);
     },
 
     putOwnUndo(appId, bucket, entry) {
@@ -160,16 +185,14 @@ export function createOwnUndoAccessors(seams: OwnUndoSeams): OwnUndoAccessors {
       const parsed = ownUndoEntrySchema.safeParse(entry);
       if (!parsed.success) invalid(`own undo entry failed validation: ${issuesOf(parsed.error)}`);
       const approval = bucket === OWN_UNDO_APPROVAL_BUCKET;
-      // An entry goes to its own bucket only — the user's approvals to `approval`, a schedule's change
-      // to the bucket its task id names — so a schedule's entry can never ride the bucket that never
-      // refuses (a task whose id spells `approval` included).
-      const ownBucket = approval ? parsed.data.authority === 'approval' && parsed.data.taskId === undefined : parsed.data.authority === 'task' && parsed.data.taskId === bucket;
-      if (!ownBucket) invalid(`an own undo entry belongs in its own bucket, not "${bucket}"`);
+      // An entry goes to its own bucket only (A1) — so a schedule's entry can never ride the bucket
+      // that never refuses (a task whose id spells `approval` included).
+      if (!ownUndoBelongsIn(bucket, parsed.data)) invalid(`an own undo entry belongs in its own bucket, not "${bucket}"`);
       if (!seams.hasApp(appId)) notFound(`no app "${appId}" to keep this journal`);
       const key = ownUndoKey(appId, bucket);
       const now = seams.now();
-      // Rebuilt from the STRICT read: the expired and the unreadable are dropped; an undone entry stays, marked.
-      const kept = keptIn(seams, key, now);
+      // Rebuilt from the STRICT read: the expired, the unreadable and the out-of-bucket are dropped; an undone entry stays, marked.
+      const kept = keptIn(seams, appId, bucket, now);
       // The count rule: a schedule's bucket refuses; the user's approvals give their oldest live entry way.
       while (kept.filter((other) => isLive(other, now)).length >= OWN_UNDO_MAX_LIVE) {
         if (!approval) return 'full';
@@ -211,7 +234,7 @@ export function createOwnUndoAccessors(seams: OwnUndoSeams): OwnUndoAccessors {
       // The approval bucket never refuses a put, so it always has room.
       if (bucket === OWN_UNDO_APPROVAL_BUCKET) return true;
       const now = seams.now();
-      const live = keptIn(seams, ownUndoKey(appId, bucket), now).filter((entry) => isLive(entry, now));
+      const live = keptIn(seams, appId, bucket, now).filter((entry) => isLive(entry, now));
       return live.length < OWN_UNDO_MAX_LIVE && roomForOneMore(live);
     },
   };
@@ -226,7 +249,7 @@ export function createOwnUndoAccessors(seams: OwnUndoSeams): OwnUndoAccessors {
 export function liveOwnUndoIds(sql: SettingsSql, appId: string, bucket: string, now: number): ReadonlySet<string> {
   if (appId.length === 0 || bucket.length === 0) return new Set();
   return new Set(
-    readOwnUndo(rawValue(sql, ownUndoKey(appId, bucket)))
+    keptIn(sql, appId, bucket, now)
       .filter((entry) => isLive(entry, now))
       .map((entry) => entry.id),
   );

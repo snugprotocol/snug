@@ -9,7 +9,7 @@
 // The voice is the chat's: lowercase-leading, plain words; a new sentence takes the typographic
 // apostrophe.
 
-import { OWN_UNDO, rowsWord } from '../access/copy.js';
+import { OWN_UNDO, OWN_UNDO_NO_LONGER, rowsWord } from '../access/copy.js';
 
 /** What an applied card says about its undo: offered (the act follows), no longer live (undone elsewhere, or aged out), or never possible. */
 export type DataWriteUndoState = 'offered' | 'ended' | 'none';
@@ -26,7 +26,7 @@ export const DATA_WRITE_CARD = {
       case 'offered':
         return line;
       case 'ended':
-        return `${line} · can no longer be undone`;
+        return `${line} · ${OWN_UNDO_NO_LONGER}`;
       case 'none':
         return `${line} · this one can’t be undone`;
       default: {

@@ -28,7 +28,12 @@ import { FRAME_TYPES, PROTOCOL_VERSION, SCHEDULE_HELD_REASONS, type ScheduleProp
 
 import { __setAccessDepsForTests, resetAccessSession } from '../access/grants.js';
 import { resetScopedReadForTests } from '../access/scopedRead.js';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import * as protocol from '@snugprotocol/protocol';
+
 import { applyArmed } from '../schedule/applyArmed.js';
+import { createUserDbLibrary } from '../state/library.js';
 import { installTestUserDb } from './userdbTestHelper.js';
 
 const NOW = Date.parse('2026-10-11T09:00:00.000Z');
@@ -130,7 +135,12 @@ beforeEach(async () => {
   clock = NOW;
   db = await installTestUserDb();
   __setAccessDepsForTests({ getDb: () => Promise.resolve(db), now: () => clock });
+  // ADAPTED by PR-4 Gate-5 A6 — a consent never predates the app it covers: the app is installed at
+  // CREATED, before ARMED_AT (the walk refuses an app installed after `armedAt` — a reinstall under the
+  // same id). Was installed at NOW, after the fixture's ARMED_AT.
+  vi.setSystemTime(Date.parse(CREATED));
   db.installApp({ appId: 'ledger', displayName: 'Ledger', html: '<html>ledger</html>' });
+  vi.setSystemTime(NOW);
   await db.applyAppDdl('ledger', ['CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT, done INTEGER NOT NULL DEFAULT 0)']);
   await exec("INSERT INTO notes (id, body, done) VALUES (1, 'a', 0), (2, 'b', 0), (3, 'c', 0)");
 });
@@ -338,15 +348,26 @@ describe('the held reasons — ONE table (SCHEDULE_HELD_REASONS)', () => {
     expect(await rowsOf(NOTES)).toEqual(UNTOUCHED);
   });
 
+  // INVERTED by PR-4 Gate-5 A4 [AUTH-F3] — the walk partitions by `ownCapturable` BEFORE the dry run:
+  // the item that cannot be captured is held `cannot-undo` alone, and the capturable one beside it is
+  // MADE (it was never unundoable — approving it captures fine). Was:
+  //   expect(result.applied).toBeUndefined();
+  //   expect(result.items.map((held) => held.held)).toEqual(['cannot-undo', 'cannot-undo']);
+  //   expect(await rowsOf(NOTES)).toEqual(UNTOUCHED);
   it.each([
     ['a function', "UPDATE notes SET body = upper('a') WHERE id = 1"],
     ['arithmetic', 'UPDATE notes SET done = done + 1 WHERE id = 1'],
     ['no WHERE', 'UPDATE notes SET done = 1'],
-  ])('cannot-undo (%s): an item that cannot be captured is never applied under the authority — the whole prefix held, nothing committed', async (_label, sql) => {
-    const result = await walk(armedTask(), [item('UPDATE notes SET done = 1 WHERE id = 2'), item(sql, sql.includes('WHERE') ? 1 : 3)]);
-    expect(result.applied).toBeUndefined();
-    expect(result.items.map((held) => held.held)).toEqual(['cannot-undo', 'cannot-undo']);
-    expect(await rowsOf(NOTES)).toEqual(UNTOUCHED);
+  ])('cannot-undo (%s): an item that cannot be captured is never applied under the authority — it alone is held; the capturable one is made', async (_label, sql) => {
+    const uncapturable = item(sql, sql.includes('WHERE') ? 1 : 3);
+    const result = await walk(armedTask(), [item('UPDATE notes SET done = 1 WHERE id = 2'), uncapturable]);
+    expect(result.applied?.items).toEqual([{ changes: 1 }]);
+    expect(result.items).toEqual([{ ...uncapturable, held: 'cannot-undo' }]);
+    expect(await rowsOf(NOTES)).toEqual([
+      [1, 'a', 0],
+      [2, 'b', 1],
+      [3, 'c', 0],
+    ]);
   });
 
   it('cannot-undo: the kv table is never captured (admit refuses snug_kv) — the item stays pending, held', async () => {
@@ -386,5 +407,218 @@ describe('the authority covers its OWN app only (D-PR4-2)', () => {
     for (const call of seat.mock.calls) expect(call[0]).toBe('ledger');
     expect(result.items.map((pending) => pending.appId)).toContain('pantry');
     expect(result.applied?.appId ?? 'ledger').toBe('ledger');
+  });
+});
+
+// =================================================================================================
+// PR-4 Gate-5 — the authority folds on the walk: A1 (the bucket rule before any seat; the authority
+// by NAME), A3 (the run's abort through the walk), A4 (the partition and the verdicts by index), A5
+// (nothing after the commit turns it into a refusal), A6 (a reinstall never inherits the consent),
+// A8 (a prefix of zeros never reaches the seat), A11 (the shape facts' one home).
+// =================================================================================================
+
+type Verdict = { made: true } | { held: string } | { untouched: true };
+const verdictsOf = (result: WalkResult): Verdict[] | undefined => (result as WalkResult & { verdicts?: Verdict[] }).verdicts;
+const walkWith = async (task: ArmedTask, items: ScheduleProposalItem[], options: { signal?: AbortSignal }): Promise<WalkResult> => {
+  db.putScheduledTask(task);
+  const run = claim(task);
+  return (await applyArmed(db, run, task, items, { now, ...options } as Parameters<typeof applyArmed>[4])) as unknown as WalkResult;
+};
+const named = (key: string): unknown => (protocol as Record<string, unknown>)[key];
+
+describe('PR-4 Gate-5 A1 — a task whose id spells the approval bucket never writes into it', () => {
+  it('an armed task with id "approval": its item is held cannot-undo, the seat never commits, no applied group, the approval bucket untouched', async () => {
+    const task = armedTask({ id: 'approval' });
+    const seat = vi.spyOn(db.driver, 'brokeredWrite');
+    db.putScheduledTask(task);
+    const run: ScheduleRun = { ...claim(task) };
+    const result = (await applyArmed(db, run, task, [item('UPDATE notes SET done = 1 WHERE id = 1')], { now })) as unknown as WalkResult;
+    expect(result.applied).toBeUndefined();
+    expect(result.items.map((held) => held.held)).toEqual(['cannot-undo']);
+    expect(seat).not.toHaveBeenCalled();
+    expect(await rowsOf(NOTES)).toEqual(UNTOUCHED);
+    expect(own().listOwnUndo('ledger', { bucket: 'approval' })).toEqual([]);
+  });
+
+  it('the journaled entry’s authority is the protocol’s named TASK_WRITE_AUTHORITY', async () => {
+    expect(named('TASK_WRITE_AUTHORITY')).toBe('task');
+    await walk(armedTask(), [item('UPDATE notes SET done = 1 WHERE id = 1')]);
+    const [entry] = own().listOwnUndo('ledger', { taskId: 't1' });
+    expect(entry?.authority).toBe(named('TASK_WRITE_AUTHORITY'));
+  });
+
+  it('applyArmed.ts imports the authority BY NAME — never by a tuple position of OWN_WRITE_AUTHORITIES', () => {
+    const source = readFileSync(path.resolve(__dirname, '../schedule/applyArmed.ts'), 'utf8');
+    expect(source).toMatch(/\bTASK_WRITE_AUTHORITY\b/);
+    expect(source).not.toMatch(/\[[^\]]*\]\s*=\s*OWN_WRITE_AUTHORITIES/);
+  });
+});
+
+describe('PR-4 Gate-5 A3 — the run’s abort reaches the walk', () => {
+  it('a signal already aborted: every item held stopped — no export, no seat', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const scratch = vi.spyOn(db, 'scratchRun');
+    const seat = vi.spyOn(db.driver, 'brokeredWrite');
+    const result = await walkWith(armedTask(), [item('UPDATE notes SET done = 1 WHERE id = 1'), item('UPDATE notes SET done = 1 WHERE id = 2')], { signal: controller.signal });
+    expect(result.items.map((held) => held.held)).toEqual(['stopped', 'stopped']);
+    expect(result.applied).toBeUndefined();
+    expect(scratch).not.toHaveBeenCalled();
+    expect(seat).not.toHaveBeenCalled();
+  });
+
+  it('aborted WHILE the re-dry-run is in flight: held stopped, the seat never reached, nothing changed, no entry', async () => {
+    const controller = new AbortController();
+    const original = db.scratchRun.bind(db);
+    vi.spyOn(db, 'scratchRun').mockImplementation(async (...args) => {
+      const answer = await original(...args);
+      controller.abort();
+      return answer;
+    });
+    const seat = vi.spyOn(db.driver, 'brokeredWrite');
+    const result = await walkWith(armedTask(), [item('UPDATE notes SET done = 1 WHERE id = 1')], { signal: controller.signal });
+    expect(seat).not.toHaveBeenCalled();
+    expect(result.items.map((held) => held.held)).toEqual(['stopped']);
+    expect(await rowsOf(NOTES)).toEqual(UNTOUCHED);
+    expect(own().listOwnUndo('ledger', { taskId: 't1' })).toEqual([]);
+  });
+
+  it('a copy that never comes back cannot wedge the walk: the abort answers it, held stopped', async () => {
+    const controller = new AbortController();
+    vi.spyOn(db, 'scratchRun').mockImplementation(() => {
+      queueMicrotask(() => controller.abort());
+      return new Promise<never>(() => undefined);
+    });
+    const pending = walkWith(armedTask(), [item('UPDATE notes SET done = 1 WHERE id = 1')], { signal: controller.signal });
+    const settled = await Promise.race([pending, new Promise<'WEDGED'>((resolve) => globalThis.setTimeout(() => resolve('WEDGED'), 500))]);
+    expect(settled).not.toBe('WEDGED');
+    expect((settled as WalkResult).items.map((held) => held.held)).toEqual(['stopped']);
+  });
+});
+
+describe('PR-4 Gate-5 A4 — the partition before the dry run, and ONE verdict per input index', () => {
+  it('[capturable, upper()] → item 0 MADE and journaled, item 1 held cannot-undo; the dry run and the seat see ONLY the capturable one', async () => {
+    const scratch = vi.spyOn(db, 'scratchRun');
+    const seat = vi.spyOn(db.driver, 'brokeredWrite');
+    const result = await walk(armedTask(), [item('UPDATE notes SET done = 1 WHERE id = 1', 1, 'marks a'), item('UPDATE notes SET body = upper(body) WHERE id = 2', 1, 'shouts b')]);
+    expect(scratch.mock.calls[0]![1].map((statement) => statement.sql)).toEqual(['UPDATE notes SET done = 1 WHERE id = 1']);
+    expect(seat).toHaveBeenCalledTimes(1);
+    expect(seat.mock.calls[0]![1]).toMatchObject({ own: [{ sql: 'UPDATE notes SET done = 1 WHERE id = 1' }], expectChanges: [1] });
+    expect(result.applied).toMatchObject({ appId: 'ledger', items: [{ summary: 'marks a', changes: 1 }] });
+    expect(verdictsOf(result)).toEqual([{ made: true }, { held: 'cannot-undo' }]);
+    expect(result.items).toEqual([{ ...item('UPDATE notes SET body = upper(body) WHERE id = 2', 1, 'shouts b'), held: 'cannot-undo' }]);
+    expect(own().listOwnUndo('ledger', { taskId: 't1' })).toHaveLength(1);
+    expect(await rowsOf(NOTES)).toEqual([
+      [1, 'a', 1],
+      [2, 'b', 0],
+      [3, 'c', 0],
+    ]);
+  });
+
+  it('[upper(), capturable] → the made one is index 1, not "the first of the app’s": verdicts [held, made]', async () => {
+    const result = await walk(armedTask(), [item('UPDATE notes SET body = upper(body) WHERE id = 2'), item('UPDATE notes SET done = 1 WHERE id = 3')]);
+    expect(verdictsOf(result)).toEqual([{ held: 'cannot-undo' }, { made: true }]);
+    expect(await rowsOf('SELECT done FROM notes WHERE id = 3')).toEqual([[1]]);
+  });
+
+  it('another app’s item is untouched, at its own index', async () => {
+    db.installApp({ appId: 'pantry', displayName: 'Pantry', html: '<html>pantry</html>' });
+    const cross: ScheduleProposalItem = { appId: 'pantry', sql: 'UPDATE items SET qty = 0 WHERE id = 1', counts: { changes: 0 } };
+    const result = await walk(armedTask(), [cross, item('UPDATE notes SET done = 1 WHERE id = 1')]);
+    expect(verdictsOf(result)).toEqual([{ untouched: true }, { made: true }]);
+  });
+
+  it('every walk answers exactly one verdict per input item', async () => {
+    const items = [item('UPDATE notes SET done = 1 WHERE id = 1'), item('UPDATE notes SET done = 1 WHERE id IN (2, 3)', 2), item('UPDATE notes SET done = done + 1 WHERE id = 1')];
+    const result = await walk(armedTask({ writeAuthority: { rowsPerRun: 1, armedAt: ARMED_AT, armedVersion: 1 } }), items);
+    expect(verdictsOf(result)).toHaveLength(items.length);
+    expect(verdictsOf(result)).toEqual([{ made: true }, { held: 'over-limit' }, { held: 'cannot-undo' }]);
+  });
+});
+
+describe('PR-4 Gate-5 A5 — once the seat answered ok, nothing after the commit turns it into a refusal', () => {
+  it('a doorbell that throws after the entry is put: the applied group is still there, nothing held, the entry journaled', async () => {
+    const journal = db as unknown as OwnJournal;
+    const putOwnUndo = journal.putOwnUndo.bind(db);
+    let committed = false;
+    vi.spyOn(journal, 'putOwnUndo').mockImplementation(((...args: Parameters<OwnJournal['putOwnUndo']>) => {
+      const answer = putOwnUndo(...args);
+      committed = true;
+      return answer;
+    }) as OwnJournal['putOwnUndo']);
+    const listGrants = db.listAccessGrants.bind(db);
+    let thrown = 0;
+    vi.spyOn(db, 'listAccessGrants').mockImplementation(((...args: Parameters<UserDb['listAccessGrants']>) => {
+      if (committed) {
+        thrown += 1;
+        throw new Error('a grant row that will not parse');
+      }
+      return listGrants(...args);
+    }) as UserDb['listAccessGrants']);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const result = await walk(armedTask(), [item('UPDATE notes SET done = 1 WHERE id = 1', 1, 'marks a')]);
+    expect(committed).toBe(true);
+    expect(thrown, 'the fault landed after the commit').toBeGreaterThan(0);
+    expect(result.applied).toMatchObject({ appId: 'ledger', items: [{ summary: 'marks a', changes: 1 }] });
+    expect(result.applied?.undoId).toBeDefined();
+    expect(result.items).toEqual([]);
+    expect(own().listOwnUndo('ledger', { taskId: 't1' })).toHaveLength(1);
+    warn.mockRestore();
+  });
+});
+
+describe('PR-4 Gate-5 A6 — a reinstall under the same id never inherits the consent', () => {
+  /** A NEW app row under the old id, at v1 (its data namespace is the file's business — the walk must stop before it). */
+  function reinstallLedger(): void {
+    db.installApp({ appId: 'ledger', displayName: 'Ledger', html: '<html>a new ledger</html>' });
+  }
+
+  it('the app deleted (by the file, under the task) and a new one installed under its id at v1: held stopped, the seat never reached, nothing changed', async () => {
+    db.putScheduledTask(armedTask());
+    await db.deleteApp('ledger');
+    reinstallLedger();
+    expect(db.getApp('ledger')?.currentVersion).toBe(1);
+    expect(Date.parse(db.getApp('ledger')!.createdAt)).toBeGreaterThan(Date.parse(ARMED_AT));
+    const scratch = vi.spyOn(db, 'scratchRun');
+    const seat = vi.spyOn(db.driver, 'brokeredWrite');
+    const result = await walk(armedTask(), [item('UPDATE notes SET done = 1 WHERE id = 1')]);
+    expect(scratch, 'stopped before anything reads the new app').not.toHaveBeenCalled();
+    expect(seat).not.toHaveBeenCalled();
+    expect(result.items.map((held) => held.held)).toEqual(['stopped']);
+    expect(result.applied).toBeUndefined();
+    expect((db.getScheduledTask('t1') as ArmedTask).writeAuthority).toBeUndefined();
+  });
+
+  it('deleting the app through the library disarms every task naming it — before any reinstall', async () => {
+    db.putScheduledTask(armedTask());
+    await createUserDbLibrary(() => Promise.resolve(db)).delete('ledger');
+    expect((db.getScheduledTask('t1') as ArmedTask | undefined)?.writeAuthority).toBeUndefined();
+  });
+});
+
+describe('PR-4 Gate-5 A8 — a prefix whose fresh counts are all 0 never reaches the seat', () => {
+  it('UPDATE … WHERE id = 99 (no such row): no seat call, no applied group, the item leaves the waiting list', async () => {
+    const seat = vi.spyOn(db.driver, 'brokeredWrite');
+    const result = await walk(armedTask(), [item('UPDATE notes SET done = 1 WHERE id = 99', 0)]);
+    expect(seat).not.toHaveBeenCalled();
+    expect(result.applied).toBeUndefined();
+    expect(result.items).toEqual([]);
+    expect(own().listOwnUndo('ledger', { taskId: 't1' })).toEqual([]);
+    expect(claimRow().applied).toBeUndefined();
+  });
+
+  it('the passing twin: a prefix with ANY non-zero count still applies as one batch', async () => {
+    const seat = vi.spyOn(db.driver, 'brokeredWrite');
+    const result = await walk(armedTask(), [item('UPDATE notes SET done = 1 WHERE id = 99', 0), item('UPDATE notes SET done = 1 WHERE id = 1')]);
+    expect(seat).toHaveBeenCalledTimes(1);
+    expect(result.applied?.items.map((applied) => applied.changes)).toEqual([0, 1]);
+  });
+});
+
+describe('PR-4 Gate-5 A11 — the task’s shape facts have one pure home (schedule/taskShape.ts)', () => {
+  it('applyArmed.ts takes armableAppOf from ./taskShape.js and no longer defines it', () => {
+    const source = readFileSync(path.resolve(__dirname, '../schedule/applyArmed.ts'), 'utf8');
+    expect(source).toMatch(/import\s*\{[^}]*\barmableAppOf\b[^}]*\}\s*from\s*['"]\.\/taskShape\.js['"]/);
+    expect(source).not.toMatch(/export function armableAppOf\b/);
   });
 });
