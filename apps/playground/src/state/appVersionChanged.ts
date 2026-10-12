@@ -12,11 +12,18 @@
 //
 // At the db altitude, synchronous, holding the db the caller wrote to — the hand-in runs in the
 // kit at boot, before or without an engine.
+//
+// A third thing trusted the old code (TASK-20261010-host-broker PR-4, D-PR4-8): a schedule the
+// user let make its changes to this app's data on its own. That consent was given for the code as
+// it was, so it goes on EVERY source — the user's own edit and a starter update too, which pause
+// nothing — and FIRST, before the pause and whatever it returns early for: the pause then reads
+// the disarmed task fresh. The outcome is unchanged (the disarm is the file's state, its trace
+// the row's to show).
 
 import type { UserDb } from '@snugprotocol/db';
 
 import { suspendAccessForAppVersion, type ReaderVersionSource } from '../access/appDrift.js';
-import { pauseSchedulesForAppVersion } from '../schedule/appDrift.js';
+import { disarmSchedulesForAppVersion, pauseSchedulesForAppVersion } from '../schedule/appDrift.js';
 
 /** Who changed the app: the user (`own`), a shared bundle, the agent's hand-in, or a starter update. */
 export type AppChangeSource = ReaderVersionSource;
@@ -30,6 +37,7 @@ export interface AppVersionChangeOutcome {
 
 /** `appId` is now at `version` because of `source`: pause what trusted the old code. */
 export function onAppVersionChanged(db: UserDb, appId: string, version: number, source: AppChangeSource, nowIso: string): AppVersionChangeOutcome {
+  disarmSchedulesForAppVersion(db, appId, version, nowIso);
   // The schedules' rule predates the starter source; a starter update pauses nothing there either.
   const schedulesPaused = source === 'starter' ? 0 : pauseSchedulesForAppVersion(db, appId, version, source, nowIso);
   const accessSuspended = suspendAccessForAppVersion(db, appId, version, source, nowIso);

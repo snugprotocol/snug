@@ -9,6 +9,13 @@
 //
 // Internals stay hidden until asked for: the data choice defaults to the tables, and the query
 // fields appear only under "specific queries (advanced)".
+//
+// TASK-20261010-host-broker PR-4 (D-PR4-15, D-PR4-20; D10, D13): the kind `<select>` and its labels
+// stay as they were and gain ONE hint per kind, naming the app — what *ask* and *run* each do. An
+// *ask* step gains the tick *let it look things up*: ticked, its line REPLACES *which data?* (the
+// step chooses its own questions), while any typed queries stay, as where it starts. When the brain
+// cannot use tools for the step's app the editor says so HERE, under the tick, before the first
+// result ever has to (`toolsUnavailable`, the chat door's own derivation, handed in by the editor).
 
 import type { ReactElement } from 'react';
 import { useId } from 'react';
@@ -34,9 +41,14 @@ export interface StepsEditorProps {
   steps: StepDraft[];
   apps: readonly AppRecord[];
   onChange: (steps: StepDraft[]) => void;
+  /** True when the brain an app's AI runs on now cannot look things up for that app. Absent: it can. */
+  toolsUnavailable?: (appId: string) => boolean;
 }
 
-export function StepsEditor({ steps, apps, onChange }: StepsEditorProps): ReactElement {
+/** The app a hint names: the step's app, the template's missing one, or "this app" before one is chosen. */
+const HINT_APP_FALLBACK = 'this app';
+
+export function StepsEditor({ steps, apps, onChange, toolsUnavailable }: StepsEditorProps): ReactElement {
   const id = useId();
   const appName = (appId: string): string | undefined => apps.find((app) => app.appId === appId)?.displayName;
   const replace = (index: number, step: StepDraft): void => onChange(steps.map((s, i) => (i === index ? step : s)));
@@ -71,6 +83,11 @@ export function StepsEditor({ steps, apps, onChange }: StepsEditorProps): ReactE
                     <option value="app-think">{STEPS.ask()}</option>
                     <option value="app-run">{STEPS.run()}</option>
                   </select>
+                  {step.kind !== 'notify' ? (
+                    <span className="hint" data-testid={`step-${index}-kind-hint`}>
+                      {STEPS.kindHint(step.kind, missing ?? appName(step.appId) ?? HINT_APP_FALLBACK)}
+                    </span>
+                  ) : null}
                 </div>
                 {steps.length > 1 ? (
                   <Button variant="ghost" onClick={() => remove(index)} aria-label={`${STEPS.remove} ${index + 1}`} data-testid={`step-${index}-remove`}>
@@ -190,31 +207,54 @@ export function StepsEditor({ steps, apps, onChange }: StepsEditorProps): ReactE
                       onChange={(event) => replace(index, { ...step, prompt: event.target.value })}
                     />
                   </div>
-                  <div className="field" role="radiogroup" aria-label={STEPS.data}>
-                    <span className="schedule-radio-legend">{STEPS.data}</span>
-                    <label className="check-label">
-                      <input
-                        type="radio"
-                        name={`${key}-data`}
-                        value="tables"
-                        checked={step.dataMode === 'tables'}
-                        data-testid={`step-${index}-data-tables`}
-                        onChange={() => replace(index, { ...step, dataMode: 'tables' })}
-                      />
-                      {STEPS.dataTables}
-                    </label>
-                    <label className="check-label">
-                      <input
-                        type="radio"
-                        name={`${key}-data`}
-                        value="queries"
-                        checked={step.dataMode === 'queries'}
-                        data-testid={`step-${index}-data-queries`}
-                        onChange={() => replace(index, { ...step, dataMode: 'queries' })}
-                      />
-                      {STEPS.dataQueries}
-                    </label>
-                  </div>
+                  <label className="check-label">
+                    <input
+                      type="checkbox"
+                      checked={step.tools}
+                      data-testid={`step-${index}-tools`}
+                      onChange={(event) => replace(index, { ...step, tools: event.target.checked })}
+                    />
+                    {STEPS.lookThingsUp}
+                  </label>
+                  {step.tools ? (
+                    <>
+                      <p className="hint" data-testid={`step-${index}-tools-line`}>
+                        {STEPS.toolsLine(missing ?? appName(step.appId) ?? HINT_APP_FALLBACK)}
+                      </p>
+                      {step.appId !== '' && toolsUnavailable?.(step.appId) === true ? (
+                        <p className="hint" role="note" data-testid={`step-${index}-tools-unavailable`}>
+                          {STEPS.toolsUnavailable}
+                        </p>
+                      ) : null}
+                    </>
+                  ) : (
+                    <div className="field" role="radiogroup" aria-label={STEPS.data}>
+                      <span className="schedule-radio-legend">{STEPS.data}</span>
+                      <label className="check-label">
+                        <input
+                          type="radio"
+                          name={`${key}-data`}
+                          value="tables"
+                          checked={step.dataMode === 'tables'}
+                          data-testid={`step-${index}-data-tables`}
+                          onChange={() => replace(index, { ...step, dataMode: 'tables' })}
+                        />
+                        {STEPS.dataTables}
+                      </label>
+                      <label className="check-label">
+                        <input
+                          type="radio"
+                          name={`${key}-data`}
+                          value="queries"
+                          checked={step.dataMode === 'queries'}
+                          data-testid={`step-${index}-data-queries`}
+                          onChange={() => replace(index, { ...step, dataMode: 'queries' })}
+                        />
+                        {STEPS.dataQueries}
+                      </label>
+                    </div>
+                  )}
+                  {/* Typed queries stay under the line of a step that may look things up: they are where it starts. */}
                   {step.dataMode === 'queries' ? (
                     <div className="schedule-queries" data-testid={`step-${index}-queries`}>
                       <span className="hint">{STEPS.queryHint}</span>

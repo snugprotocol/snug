@@ -278,6 +278,47 @@
   color: var(--fg-muted);
 }
 
+/* *makes changes on its own* (TASK-20261010-host-broker PR-4, D-PR4-8): the app chips' shape —
+   the glyph always, the words where there is room (the aria-label carries them). */
+.schedule-on-its-own-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: 28px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  background: var(--surface-2);
+  font-size: var(--text-xs);
+  color: var(--fg);
+}
+
+/* The row's own act said in the row (*stop making changes on its own*). */
+.schedule-row-outcome {
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+}
+
+/* The schedule's changes list: the history's first entry, each change on one wrapping line. */
+.schedule-history-changes {
+  list-style: none;
+  margin-bottom: var(--space-2);
+}
+
+.schedule-changes {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.schedule-changes-entry {
+  margin-top: 0;
+  color: var(--fg);
+}
+
 /* The kebab and its menu — the identity menu's shape, scoped to the row. */
 .schedule-menu-wrap {
   position: relative;
@@ -503,6 +544,7 @@
 
 @media (max-width: 760px) {
   .schedule-app-name,
+  .schedule-on-its-own-words,
   .schedule-switch-word {
     display: none;
   }

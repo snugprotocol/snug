@@ -29,4 +29,20 @@ describe('updatePausesSentence', () => {
     expect(updatePausesSentence(['A', 'B', 'C', 'D', 'E'])).toContain('5 schedules that run this app — “A”, “B”, “C” and 2 more —');
     for (const s of [updatePausesSentence(['A']), updatePausesSentence(['A', 'B'])]) expect(s).not.toMatch(/\btask\b/i);
   });
+
+  // TASK-20261010-host-broker PR-4 (contract v2 D-PR4-8; v2.1 N5): an update disarms every schedule
+  // that makes changes on its own, from ANY source — so when one of the named schedules is armed the
+  // sentence says so, the tail *and stops it making changes on its own* before *until you turn it back
+  // on…*. The number agrees with the count; unarmed (or the option absent) the sentence is today's.
+  it('an ARMED schedule among them adds the tail *and stops it making changes on its own* before *until you turn it back on…*', () => {
+    expect(updatePausesSentence(['Nightly'], { armed: true })).toBe(
+      'Updating pauses the schedule that runs this app — “Nightly” — and stops it making changes on its own until you turn it back on from the Schedule page.',
+    );
+    expect(updatePausesSentence(['Nightly', 'Weekly review'], { armed: true })).toBe(
+      'Updating pauses 2 schedules that run this app — “Nightly” and “Weekly review” — and stops them making changes on their own until you turn them back on from the Schedule page.',
+    );
+    expect(updatePausesSentence(['Nightly'], { armed: false })).toBe(updatePausesSentence(['Nightly']));
+    expect(updatePausesSentence([], { armed: true })).toBeUndefined();
+    for (const s of [updatePausesSentence(['A'], { armed: true }), updatePausesSentence(['A', 'B'], { armed: true })]) expect(s).not.toMatch(/\btask\b/i);
+  });
 });

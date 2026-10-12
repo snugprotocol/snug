@@ -27,29 +27,55 @@
 //
 // OPENING IS A GESTURE (E7): `markSeen(taskId, dueAt)` once per open — the only thing that
 // ever stamps `seenAt`.
+//
+// TASK-20261010-host-broker PR-4 (ADR-0076 §9; D-PR4-6, D-PR4-15, D-PR4-18; D2, D7, D8, D13, D18,
+// D19; contract v2.1 N1):
+//   - TWO SECTIONS, IN ORDER. *changes it made* first: the schedule's own group (the run's
+//     `applied` — *changed 12 rows in Ledger on its own*) and each change the user applied here
+//     (the run's `approved` — *you applied this — 2 rows changed*), each with its undo while the
+//     journal holds it live (`listOwnUndo`, the task's bucket or the approval bucket), *can't be
+//     undone* when it was never captured, *undo ended after seven days* once the journal holds it
+//     no longer. Then *changes waiting for your OK*, an item the schedule held carrying ONE line
+//     (`HELD_WHY`) above its acts. *apply to my data* goes through `executeApprovedWrite(…, { via:
+//     'user' })` and is PERSISTED as an `approved` entry (no SQL), so a reload keeps it; the
+//     in-session settled line stays beside it.
+//   - THE ONE *stop*, under the when-line, on a schedule that makes changes on its own; and a link
+//     to the schedule's changes list, where an undo stays findable for its whole seven days.
+//   - EACH STEP'S ONE HOST LINE (`stepFacts`): where it ran (never the word *background*), what it
+//     read with the user's leave (R-88), what it looked up and through which connection.
+//   - A step no brain could answer here (`blockedBy: 'brain'` — the demo, or a key not set) is its
+//     own state with the one act *open Settings*, never *needs your OK*.
 
 import { useEffect, useRef, useState } from 'react';
 import type { ReactElement } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 
-import type { ScheduleProposalItem, ScheduleRun, ScheduledTask, StepResult } from '@snugprotocol/protocol';
+import { OWN_UNDO_APPROVAL_BUCKET, type UserDb } from '@snugprotocol/db';
+import { SCHEDULE_PROPOSALS_PER_RUN, type ScheduleProposalItem, type ScheduleRun, type ScheduleRunApproved, type ScheduledTask, type StepResult } from '@snugprotocol/protocol';
 
+import { OwnUndoAct } from '../access/OwnUndoAct.js';
+import type { UndoOutcome } from '../access/writeBroker.js';
 import { sanitizeCardText } from '../agent/cards.js';
 import { executeApprovedWrite, type PendingWriteProposal } from '../agent/dataTools.js';
-import { bumpScheduleRevision, useLibraryRevision } from '../platform/signals.js';
+import { bumpScheduleRevision, useLibraryRevision, useScheduleRevision } from '../platform/signals.js';
 import { getUserDb } from '../state/userdb.js';
 import { Button } from '../ui/Button.js';
 import { Card } from '../ui/Card.js';
 import { EmptyState } from '../ui/EmptyState.js';
 import { Skeleton } from '../ui/Skeleton.js';
-import { WORDS, capped, needsYou, noHandler, stepLabel } from './copy.js';
+import { disarmTask } from './acts.js';
+import { WORDS, brainBlocked, capped, needsYou, noHandler, stepLabel } from './copy.js';
 import {
   AI_WROTE,
   CAPPED_WHAT,
   CHANGE_ACTIONS,
+  CHANGES_LINK,
   DECLINED,
   DRIFTED,
   EXPIRED,
+  HELD_WHY,
+  MADE,
+  RESULT_ON_ITS_OWN,
   NEEDS_YOU_FALLBACK_VERB,
   needsYouTitle,
   NO_APP_FOR_CHANGES,
@@ -65,10 +91,11 @@ import {
   openApp,
   openingToRun,
   ranLine,
+  stepFacts,
   wouldChange,
 } from './copy.result.js';
 import { absoluteTime, appRunAppOf, relativeTime, useNow } from './pageModel.js';
-import { editHref } from './routes.js';
+import { editHref, historyHref } from './routes.js';
 import { ResultStatus, StepStatus, appNameOf, type AppName } from './ScheduleStates.js';
 import { markSeen, runNow, useScheduler } from './scheduler.js';
 import { sameOccurrence } from './taskShape.js';
@@ -105,6 +132,28 @@ export function proposalFor(appId: string, item: ScheduleProposalItem): PendingW
 
 type Settled = { key: string; sql: string; summary: string | undefined; line: string };
 
+/** Where *open Settings* goes for a step no brain could answer here — the brain is chosen there. */
+const SETTINGS_ROUTE = '/settings';
+
+/** Each app's approved connections by slot → the name the user knows it by (a step's look-ups name them). */
+type ConnectionNames = ReadonlyMap<string, ReadonlyMap<string, string>>;
+
+/** The journal's live undo ids this result's changes could name: a schedule's group lives in its task's bucket, the user's own applies in the app's approval bucket. */
+function liveUndoIds(db: UserDb, taskId: string, run: ScheduleRun | undefined): Set<string> {
+  const live = new Set<string>();
+  if (run?.applied !== undefined) for (const entry of db.listOwnUndo(run.applied.appId, { taskId })) live.add(entry.id);
+  for (const appId of new Set((run?.approved ?? []).map((entry) => entry.appId))) {
+    for (const entry of db.listOwnUndo(appId, { bucket: OWN_UNDO_APPROVAL_BUCKET })) live.add(entry.id);
+  }
+  return live;
+}
+
+/** The user's undo of one own change — through the bucket that holds it, as the user's act (the lazy edge keeps the engine out of this view's graph, F13). */
+async function undoOwnChange(appId: string, bucket: string, undoId: string): Promise<UndoOutcome> {
+  const [db, { undoOwnWrite }] = await Promise.all([getUserDb(), import('../access/writeBroker.js')]);
+  return undoOwnWrite(db, appId, bucket, undoId, { via: 'user' });
+}
+
 export function ResultDetail(): ReactElement {
   const params = useParams<{ id: string; dueAt: string }>();
   const taskId = params.id ?? '';
@@ -117,19 +166,26 @@ export function ResultDetail(): ReactElement {
   const task = view.tasks.find((entry) => entry.id === taskId);
   const run = (view.runsByTask[taskId] ?? []).find((row) => sameOccurrence(row, dueAt));
 
+  const scheduleRevision = useScheduleRevision();
   const [apps, setApps] = useState<readonly AppName[]>([]);
+  const [connections, setConnections] = useState<ConnectionNames>(new Map());
+  /** The live undo ids among this result's changes — `undefined` until the journal was read, so nothing flickers as ended. */
+  const [live, setLive] = useState<ReadonlySet<string> | undefined>(undefined);
   const [notes, setNotes] = useState<Readonly<Record<string, string>>>({});
   const [settled, setSettled] = useState<readonly Settled[]>([]);
   const [busyKey, setBusyKey] = useState<string | undefined>(undefined);
   const [error, setError] = useState<string | undefined>(undefined);
   const [runNowNote, setRunNowNote] = useState<string | undefined>(undefined);
 
-  // The app names, read once per library revision — the one db read of this view.
+  // The app names and their connections' names, read once per library revision.
   useEffect(() => {
     let cancelled = false;
     void getUserDb()
       .then((db) => {
-        if (!cancelled) setApps(db.listApps().map(({ appId, displayName }) => ({ appId, displayName })));
+        if (cancelled) return;
+        const listed = db.listApps();
+        setApps(listed.map(({ appId, displayName }) => ({ appId, displayName })));
+        setConnections(new Map(listed.map(({ appId }) => [appId, new Map(db.listConnections(appId).map((row) => [row.slot, row.requirement.provider.name] as const))] as const)));
       })
       .catch(() => {
         // Names are garnish on a result that renders without them ("this app").
@@ -138,6 +194,25 @@ export function ResultDetail(): ReactElement {
       cancelled = true;
     };
   }, [libraryRevision]);
+
+  // Which of this result's changes can still be undone — re-read whenever a schedule write lands
+  // (an approve, an undo, a walk), so a change undone elsewhere stops offering its undo here.
+  const journalKey = JSON.stringify([run?.applied?.undoId, (run?.approved ?? []).map((entry) => entry.undoId)]);
+  useEffect(() => {
+    let cancelled = false;
+    void getUserDb()
+      .then((db) => {
+        if (!cancelled) setLive(liveUndoIds(db, taskId, run));
+      })
+      .catch(() => {
+        if (!cancelled) setLive(new Set());
+      });
+    return () => {
+      cancelled = true;
+    };
+    // The run object changes identity on every view publish; its undo ids are what the read depends on.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [taskId, journalKey, scheduleRevision]);
 
   // Opening the detail is the gesture that stamps `seenAt` — once per (schedule, occurrence).
   const seenFor = useRef<string | undefined>(undefined);
@@ -182,15 +257,22 @@ export function ResultDetail(): ReactElement {
   const proposals = run.proposals;
   const expired = proposals !== undefined && Date.parse(proposals.expiresAt) <= now.getTime();
 
-  /** Rewrite the row with the given items (none → no batch at all) and tell every view. */
-  const writeItems = async (items: readonly ScheduleProposalItem[]): Promise<void> => {
+  /**
+   * Rewrite the row with the given items (none → no batch at all) and, for an apply, the user's
+   * `approved` entry beside what was there — then tell every view.
+   */
+  const writeItems = async (items: readonly ScheduleProposalItem[], approvedEntry?: ScheduleRunApproved): Promise<void> => {
     const db = await getUserDb();
     const current = db.listScheduleRuns(taskId).find((row) => sameOccurrence(row, dueAt));
     if (current === undefined) throw new Error('this result is gone');
-    const { proposals: _batch, ...rest } = current;
-    db.putScheduleRun(
-      items.length === 0 || current.proposals === undefined ? rest : { ...rest, proposals: { items: [...items], expiresAt: current.proposals.expiresAt } },
-    );
+    const { proposals: _batch, approved: earlier, ...rest } = current;
+    // At most one entry per item a run can hold, so the seat's bound is the batch's; the newest win.
+    const approved = approvedEntry === undefined ? earlier : [...(earlier ?? []), approvedEntry].slice(-SCHEDULE_PROPOSALS_PER_RUN);
+    db.putScheduleRun({
+      ...rest,
+      ...(items.length === 0 || current.proposals === undefined ? {} : { proposals: { items: [...items], expiresAt: current.proposals.expiresAt } }),
+      ...(approved !== undefined ? { approved } : {}),
+    });
     bumpScheduleRevision();
   };
 
@@ -204,9 +286,17 @@ export function ResultDetail(): ReactElement {
     setError(undefined);
     try {
       const db = await getUserDb();
-      const outcome = await executeApprovedWrite(db, proposalFor(appId, item));
+      const outcome = await executeApprovedWrite(db, proposalFor(appId, item), { via: 'user' });
       if (outcome.ok) {
-        await writeItems(without(key));
+        // PERSISTED, no SQL: what was applied, and the entry its undo lives under — or that it has none.
+        const approvedEntry: ScheduleRunApproved = {
+          appId,
+          ...(outcome.undoId !== undefined ? { undoId: outcome.undoId } : {}),
+          ...(outcome.undoable ? {} : { undoable: false as const }),
+          ...(item.summary !== undefined && item.summary !== '' ? { summary: item.summary } : {}),
+          changes: outcome.executed.reduce((sum, n) => sum + n, 0),
+        };
+        await writeItems(without(key), approvedEntry);
         setSettled((list) => [...list, { key, sql: item.sql, summary: item.summary, line: applied(outcome.executed) }]);
       } else if (outcome.reason === 'drifted') {
         const current = outcome.current[0] ?? 0;
@@ -261,6 +351,18 @@ export function ResultDetail(): ReactElement {
   const noHandlerAt = run.steps.findIndex((step) => step.status === 'no-handler');
   const noHandlerApp = appOfStep(task, noHandlerAt === -1 ? task.steps.findIndex((step) => step.kind !== 'notify') : noHandlerAt);
   const noHandlerCopy = noHandler(noHandlerApp === undefined ? task.title : (appNameOf(noHandlerApp, apps) ?? 'this app'));
+  // No brain may answer here (the demo, or a key not set): its own state — never *needs your OK*.
+  const brainBlockedHere = run.steps.some((step) => step.blockedBy === 'brain');
+
+  // Making changes on its own: the schedule's state, what this run made, and the one *stop*.
+  const onItsOwn = task.writeAuthority !== undefined;
+  const madeHere = run.applied !== undefined || (run.approved ?? []).length > 0;
+  const appliedRows = run.applied?.items.reduce((sum, item) => sum + item.changes, 0) ?? 0;
+  const stopOnItsOwn = async (): Promise<void> => {
+    setError(undefined);
+    const result = await disarmTask(taskId);
+    if (!result.ok) setError(result.reason);
+  };
 
   return (
     <div className="schedule-result" data-testid="schedule-result-detail">
@@ -274,9 +376,34 @@ export function ResultDetail(): ReactElement {
         <p className="hint" data-testid="schedule-result-when">
           {whenLine} · {onHost(run.host)} · {callsLine(run.calls)}
         </p>
+        {onItsOwn ? (
+          <p className="hint schedule-result-on-its-own" data-testid="schedule-result-on-its-own">
+            {RESULT_ON_ITS_OWN.line} ·{' '}
+            <Button variant="ghost" onClick={() => void stopOnItsOwn()}>
+              {RESULT_ON_ITS_OWN.stop}
+            </Button>
+          </p>
+        ) : null}
+        {onItsOwn || madeHere ? (
+          <p className="hint">
+            <Link to={historyHref(taskId)} data-testid="schedule-result-changes-link">
+              {CHANGES_LINK}
+            </Link>
+          </p>
+        ) : null}
       </header>
 
-      {run.status === 'needs-you' ? (
+      {brainBlockedHere ? (
+        <StateCard
+          text={brainBlocked.text}
+          testId="schedule-result-brain"
+          action={
+            <Link to={SETTINGS_ROUTE} className="btn btn-primary">
+              {brainBlocked.action}
+            </Link>
+          }
+        />
+      ) : run.status === 'needs-you' ? (
         <StateCard
           text={needsYouCopy.text}
           detail={run.reason}
@@ -316,9 +443,42 @@ export function ResultDetail(): ReactElement {
           </h2>
           <ol className="schedule-result-step-list">
             {run.steps.map((result, index) => (
-              <StepRow key={`${run.id}-step-${index}`} task={task} index={index} result={result} apps={apps} />
+              <StepRow key={`${run.id}-step-${index}`} task={task} index={index} result={result} apps={apps} connections={connections} />
             ))}
           </ol>
+        </section>
+      ) : null}
+
+      {madeHere ? (
+        <section className="schedule-result-made" aria-labelledby="schedule-result-made-heading" data-testid="schedule-result-made">
+          <h2 id="schedule-result-made-heading" className="settings-section-label">
+            {WORDS.changesMade}
+          </h2>
+          {run.applied !== undefined ? (
+            <MadeLine
+              line={MADE.onItsOwn(appliedRows, appNameOf(run.applied.appId, apps) ?? 'this app')}
+              rows={appliedRows}
+              appName={appNameOf(run.applied.appId, apps) ?? 'this app'}
+              undoId={run.applied.undoId}
+              captured={run.applied.undoable !== false}
+              live={live}
+              onUndo={(appId, undoId) => undoOwnChange(appId, taskId, undoId)}
+              appId={run.applied.appId}
+            />
+          ) : null}
+          {(run.approved ?? []).map((entry, index) => (
+            <MadeLine
+              key={`${entry.undoId ?? 'approved'}-${index}`}
+              line={MADE.youApplied(entry.changes)}
+              rows={entry.changes}
+              appName={appNameOf(entry.appId, apps) ?? 'this app'}
+              undoId={entry.undoId}
+              captured={entry.undoable !== false}
+              live={live}
+              onUndo={(appId, undoId) => undoOwnChange(appId, OWN_UNDO_APPROVAL_BUCKET, undoId)}
+              appId={entry.appId}
+            />
+          ))}
         </section>
       ) : null}
 
@@ -345,6 +505,11 @@ export function ResultDetail(): ReactElement {
                       {wouldChange(item.counts?.changes)}
                       {appName !== undefined ? ` in ${appName}` : ''} · {AI_WROTE}
                     </span>
+                    {item.held !== undefined ? (
+                      <p className="hint schedule-change-held" role="note" data-testid="schedule-change-held">
+                        {HELD_WHY[item.held](appName ?? 'this app')}
+                      </p>
+                    ) : null}
                     {appId === undefined ? (
                       <span className="hint" role="status" data-testid="schedule-change-no-app">
                         {NO_APP_FOR_CHANGES}
@@ -389,11 +554,54 @@ export function ResultDetail(): ReactElement {
   );
 }
 
-function StepRow({ task, index, result, apps }: { task: ScheduledTask; index: number; result: StepResult; apps: readonly AppName[] }): ReactElement {
+/**
+ * One made change's line (`schedule-made-group`): what was changed, then its undo while the journal
+ * holds `undoId` live — or why there is none. Nothing is said of the undo until the journal was read.
+ */
+function MadeLine({
+  line,
+  rows,
+  appId,
+  appName,
+  undoId,
+  captured,
+  live,
+  onUndo,
+}: {
+  line: string;
+  rows: number;
+  appId: string;
+  appName: string;
+  undoId: string | undefined;
+  /** False: the change was applied uncaptured — it never had an undo. */
+  captured: boolean;
+  live: ReadonlySet<string> | undefined;
+  onUndo: (appId: string, undoId: string) => Promise<UndoOutcome>;
+}): ReactElement {
+  const offered = captured && undoId !== undefined && live?.has(undoId) === true;
+  const ended = !captured ? MADE.cannotUndo : live === undefined ? undefined : MADE.undoEnded;
+  return (
+    <p className="field-row field-row-wrap schedule-made-group" data-testid="schedule-made-group">
+      <span>{line}</span>
+      {ended !== undefined || offered ? ' · ' : null}
+      <OwnUndoAct rows={rows} appName={appName} offered={offered} onUndo={undoId === undefined ? undefined : () => onUndo(appId, undoId)} ended={ended} />
+    </p>
+  );
+}
+
+function StepRow({ task, index, result, apps, connections }: { task: ScheduledTask; index: number; result: StepResult; apps: readonly AppName[]; connections: ConnectionNames }): ReactElement {
   const step = task.steps[index];
   const appId = step === undefined || step.kind === 'notify' ? undefined : step.appId;
   const appName = appId === undefined ? undefined : appNameOf(appId, apps);
   const label = step === undefined ? stepLabel('app-run') : stepLabel(step.kind, appName);
+  // The host's one line about this step: where it ran, what it read with leave, what it looked up.
+  const facts =
+    step === undefined
+      ? undefined
+      : stepFacts(step, result, {
+          app: appName ?? 'this app',
+          connection: (slot) => (appId === undefined ? undefined : connections.get(appId)?.get(slot)) ?? slot,
+        });
   return (
     <li className="schedule-result-step" data-testid="schedule-result-step">
       <div className="schedule-result-step-head">
@@ -407,6 +615,11 @@ function StepRow({ task, index, result, apps }: { task: ScheduledTask; index: nu
       </div>
       {result.summary !== undefined && result.summary !== '' ? <p className="schedule-result-step-summary">{sanitizeCardText(result.summary)}</p> : null}
       {result.appMissing === true ? <span className="hint">{stepLabel(step?.kind ?? 'app-run')} — this app was deleted</span> : null}
+      {facts !== undefined ? (
+        <p className="hint schedule-result-step-facts" data-testid="schedule-result-step-facts">
+          {facts}
+        </p>
+      ) : null}
     </li>
   );
 }

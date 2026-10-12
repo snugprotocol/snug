@@ -25,8 +25,9 @@ two ways, and only two —
 2. it may SUGGEST a schedule for itself, once, after the user has done something.
 
 Everything else — when, how often, what happens after Snug was closed, whether the user
-is notified — is the host's and the user's. Never write a schedule into app state, never
-build a "remind me" feature on `setInterval`, and never poll the agent "in case".
+is notified — is the host's and the user's. A schedule may make changes on its own — only the
+user turns that on, for its own app's data, with an undo. Never write a schedule into app
+state, never build a "remind me" feature on `setInterval`, and never poll the agent "in case".
 
 ## The Scheduled-Run Handshake
 
@@ -203,3 +204,10 @@ the title, never your handler — and reads "<your app>: <your title> — <your 
 it. An app without the listener is still a complete Snug app; a schedule that names it
 records *failed* after 90 s until the listener ships (it announces, so it is never *not
 supported*).
+
+A schedule that asks your app's AI can also leave changes to your app's data behind:
+
+- *changes it made* — when the user let that schedule make changes on its own, the host
+  applies them to your app's own tables after the run and lists them on the result, each with
+  an *undo* for seven days; every other change waits there for the user's OK. Your data can
+  change while your app is closed, so show what is stored rather than a copy you kept.

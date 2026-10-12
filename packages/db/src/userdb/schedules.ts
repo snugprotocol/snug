@@ -56,11 +56,13 @@ import {
   type ScheduledTask,
 } from '@snugprotocol/protocol';
 import {
+  OWN_UNDO_APPROVAL_BUCKET,
   SCHEDULER_STATE_SETTING_KEY,
   SCHEDULE_DECLINED_SETTING_PREFIX,
   SCHEDULE_MUTED_SETTING_PREFIX,
   SCHEDULE_RUNS_SETTING_PREFIX,
   SCHEDULE_SETTING_PREFIX,
+  ownUndoKey,
   scheduleDeclinedSettingKey,
   scheduleDeclinedSettingPrefixFor,
   scheduleMutedSettingKey,
@@ -69,6 +71,7 @@ import {
   taskIdFromScheduleRunsSettingKey,
   taskIdFromScheduleSettingKey,
 } from './app-settings-keys.js';
+import { liveOwnUndoIds, sweepOwnUndoForDeletedTask } from './own-undo.js';
 import type { UserDb } from './userdb.js';
 
 // ------------------------------------------------------------------------- seams
@@ -89,6 +92,8 @@ export interface ScheduleSeams extends SettingsSql {
   setSetting(key: string, value: unknown): void;
   /** Throws the factory's `UserDbError` with the named code. */
   refuse(code: ScheduleRefusal, message: string): never;
+  /** Epoch milliseconds — what *clear history* measures an expiry and an undo's liveness against. */
+  now(): number;
 }
 
 export type ScheduleAccessors = Pick<
@@ -209,8 +214,22 @@ const PRUNE_TIERS: ReadonlyArray<(entry: EntryView) => boolean> = [
   ({ status, seen }) => status === 'failed' || status === 'capped' || status === 'no-handler' || status === 'interrupted' || (status === 'needs-you' && seen),
 ];
 
-/** Survives `clearScheduleHistory`: everything the user has not yet dealt with — a seen `needs-you` has been (S5). */
-const keptOnClear = (run: ScheduleRun): boolean => run.status === 'pending' || run.status === 'running' || (run.status === 'needs-you' && run.seenAt === undefined);
+/** Whether a bucket's journal still holds this undo LIVE — the ONE read *clear history* asks, memoised per call. */
+type UndoLiveness = (appId: string, bucket: string, undoId: string) => boolean;
+
+/**
+ * Survives `clearScheduleHistory`: everything the user has not yet dealt with — a seen `needs-you`
+ * has been (S5) — and, since PR-4 (D-PR4-18), everything the user can still ACT on from the result:
+ * unexpired waiting changes, and a change it made (`applied`, the schedule's bucket) or the user
+ * applied (`approved`, the approval bucket) whose undo is still live. *What is still waiting for you
+ * stays* is then true of the changes too.
+ */
+function keptOnClear(run: ScheduleRun, now: number, live: UndoLiveness): boolean {
+  if (run.status === 'pending' || run.status === 'running' || (run.status === 'needs-you' && run.seenAt === undefined)) return true;
+  if (run.proposals !== undefined && run.proposals.items.length > 0 && instant(run.proposals.expiresAt) > now) return true;
+  if (run.applied?.undoId !== undefined && live(run.applied.appId, run.taskId, run.applied.undoId)) return true;
+  return (run.approved ?? []).some((entry) => entry.undoId !== undefined && live(entry.appId, OWN_UNDO_APPROVAL_BUCKET, entry.undoId));
+}
 
 const strictView = (run: ScheduleRun): EntryView => ({ status: run.status, dueAt: instant(run.dueAt), seen: run.seenAt !== undefined });
 
@@ -390,6 +409,8 @@ export function createScheduleAccessors(seams: ScheduleSeams): ScheduleAccessors
       assertOpen();
       deleteKey(seams, scheduleSettingKey(taskId));
       deleteKey(seams, scheduleRunsSettingKey(taskId));
+      // Its own undo bucket goes with it (PR-4, D-PR4-3) — the delete confirm says so first.
+      sweepOwnUndoForDeletedTask(seams, taskId);
       parsedRuns.delete(taskId);
     },
 
@@ -503,9 +524,21 @@ export function createScheduleAccessors(seams: ScheduleSeams): ScheduleAccessors
               return id === undefined ? [] : [{ key, taskId: id, raw }];
             })
           : [{ key: scheduleRunsSettingKey(taskId), taskId, raw: rawValue(seams, scheduleRunsSettingKey(taskId)) }];
+      const now = seams.now();
+      const journals = new Map<string, ReadonlySet<string>>();
+      const live: UndoLiveness = (appId, bucket, undoId) => {
+        const key = ownUndoKey(appId, bucket);
+        let ids = journals.get(key);
+        if (ids === undefined) journals.set(key, (ids = liveOwnUndoIds(seams, appId, bucket, now)));
+        return ids.has(undoId);
+      };
       for (const target of targets) {
         if (target.raw === undefined) continue;
-        const kept = runsOf(target.taskId, target.raw).filter(keptOnClear);
+        // What stays is written newest first by OCCURRENCE — the order every surface reads a history in
+        // (`pageModel.ts`); a catch-up recorded late for an old occurrence no longer heads the row.
+        const kept = runsOf(target.taskId, target.raw)
+          .filter((run) => keptOnClear(run, now, live))
+          .sort((a, b) => instant(b.dueAt) - instant(a.dueAt));
         if (kept.length === 0) deleteKey(seams, target.key);
         else seams.setSetting(target.key, kept);
       }
@@ -620,7 +653,9 @@ export function snapshotLocalSchedules(sql: SettingsSql): LocalScheduleSnapshot 
  *  - `proposals` LEAVES every entry — a pending data change is this device's own
  *    dry-run against its own scratch copy, and a foreign file must never be able to
  *    plant an approval card (security F1), so the bytes never cross the file boundary in
- *    either direction;
+ *    either direction — and with it what this device MADE of them (PR-4, D-PR4-9): the
+ *    `applied` group and the `approved` entries point into this device's own undo journal,
+ *    which an untrusted import drops, so a group from another file never offers an *undo* here;
  *  - with `importedAt` (import only, both paths — S1/S7): an entry whose `dueAt` is AFTER
  *    that instant is DROPPED (nothing can have run for a time that has not come; a planted
  *    one would dedupe the real occurrence and, as `pending`, sit on the missed card), and a
@@ -656,6 +691,11 @@ export function scrubScheduleRunRows(sql: SettingsSql, opts: { importedAt?: stri
         stripped += 1;
         changed = true;
       }
+      if (next.applied !== undefined || next.approved !== undefined) {
+        const { applied: _applied, approved: _approved, ...rest } = next;
+        next = rest;
+        changed = true;
+      }
       if (importedAt !== undefined && oldest !== undefined && (next.status === 'running' || next.status === 'pending')) {
         const since = instant(next.status === 'running' ? (next.startedAt ?? next.dueAt) : next.dueAt);
         if (since < oldest || since > importedAt) {
@@ -687,13 +727,27 @@ function disarmHistory(sql: SettingsSql, taskId: string): void {
   else writeRaw(sql, key, kept);
 }
 
-/** True when any history row could carry a proposal — the export's cheap test before it bothers with a copy. */
-export function hasScheduleRunProposals(sql: SettingsSql): boolean {
+/**
+ * True when any history row could carry a seat `scrubScheduleRunRows` strips — `proposals`,
+ * `applied` or `approved` (PR-4, F17) — the export's cheap test before it bothers with a copy.
+ */
+export function hasScheduleRunSeatsToStrip(sql: SettingsSql): boolean {
   return (
-    sql.select(`SELECT 1 FROM ${SETTINGS} WHERE ${PREFIX_WHERE} AND value LIKE '%"proposals"%' LIMIT 1`, [
-      likePrefix(SCHEDULE_RUNS_SETTING_PREFIX),
-    ]).length > 0
+    sql.select(
+      `SELECT 1 FROM ${SETTINGS} WHERE ${PREFIX_WHERE} AND (value LIKE '%"proposals"%' OR value LIKE '%"applied"%' OR value LIKE '%"approved"%') LIMIT 1`,
+      [likePrefix(SCHEDULE_RUNS_SETTING_PREFIX)],
+    ).length > 0
   );
+}
+
+/**
+ * An untrusted file arms nothing (PR-4, D-PR4-9): the task without its write authority, with the
+ * `imported` trace the user sees until they review it — or the task as it was when it carried none.
+ */
+function disarmedOnImport(task: ScheduledTask, at: string): ScheduledTask {
+  if (task.writeAuthority === undefined) return task;
+  const { writeAuthority: _authority, ...rest } = task;
+  return { ...rest, disarmed: { reason: 'imported', at } };
 }
 
 /**
@@ -720,9 +774,16 @@ export function hasScheduleRunProposals(sql: SettingsSql): boolean {
  * Declines and mutes are dropped: they are the user's own answers to THEIR apps'
  * suggestions, not something a file carries in.
  *
+ * EVERY untrusted task loses its write authority (PR-4, D-PR4-9) — the intent-equal ones too:
+ * the authority is consent state outside the intent bytes (`canonicalScheduleIntent`), so a
+ * backup round trip keeps the schedule but never the standing permission to change data on its
+ * own; where one was stripped the task carries `disarmed: { reason: 'imported' }` and is counted
+ * in `disarmedTasks`.
+ *
  * TRUSTED (the user's own configured origin — the sync pull and the recovery restore):
- * tasks stay as they are, unreadable rows included; the watermark is max(local,
- * imported) so a pull never rewinds a device behind the runs it already recorded.
+ * tasks stay as they are, unreadable rows included — an authority too (the named residual: a
+ * trusted pull carries the user's own consent); the watermark is max(local, imported) so a pull
+ * never rewinds a device behind the runs it already recorded.
  */
 export function reconcileImportedSchedules(
   sql: SettingsSql,
@@ -730,10 +791,11 @@ export function reconcileImportedSchedules(
   localWatermark: string | undefined,
   trustedOrigin: boolean,
   now: string = new Date().toISOString(),
-): { demotedTasks: number; strippedProposals: number } {
+): { demotedTasks: number; strippedProposals: number; disarmedTasks: number } {
   const strippedProposals = scrubScheduleRunRows(sql, { importedAt: now });
 
   let demotedTasks = 0;
+  let disarmedTasks = 0;
   let sawScheduleRows = false;
   for (const [key, raw] of rowsUnder(sql, SCHEDULE_SETTING_PREFIX)) {
     sawScheduleRows = true;
@@ -744,7 +806,9 @@ export function reconcileImportedSchedules(
       deleteKey(sql, key);
       continue;
     }
-    const clamped = task.ranThrough !== undefined && instant(task.ranThrough) > instant(now) ? { ...task, ranThrough: now } : task;
+    const disarmed = disarmedOnImport(task, now);
+    if (disarmed !== task) disarmedTasks += 1;
+    const clamped = disarmed.ranThrough !== undefined && instant(disarmed.ranThrough) > instant(now) ? { ...disarmed, ranThrough: now } : disarmed;
     if (localTasks.get(task.id) === canonicalScheduleIntent(task)) {
       if (clamped !== task) writeRaw(sql, key, clamped);
       continue;
@@ -789,5 +853,5 @@ export function reconcileImportedSchedules(
     sql.run(`DELETE FROM ${SETTINGS} WHERE ${PREFIX_WHERE}`, [likePrefix(SCHEDULE_MUTED_SETTING_PREFIX)]);
   }
 
-  return { demotedTasks, strippedProposals };
+  return { demotedTasks, strippedProposals, disarmedTasks };
 }

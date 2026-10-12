@@ -25,7 +25,7 @@ import {
 } from '../platform/availability.js';
 import type { UserDb } from '@snugprotocol/db';
 import { Button } from '../ui/Button.js';
-import { RESULT_STATUS_WORD, STEP_STATUS_WORD, appMissing, blockedHere, imported, paused, type StateCopy } from './copy.js';
+import { RESULT_STATUS_WORD, STEP_STATUS_WORD, appMissing, blockedHere, imported, paused, pausedAfterDisarm, type StateCopy } from './copy.js';
 import { RELOAD } from './copy.page.js';
 import { resultTone, stepTone, type StatusTone } from './copy.result.js';
 
@@ -95,9 +95,11 @@ export function appMissingNote(step: ScheduleStep, apps: readonly AppName[]): St
 /**
  * Why the ENGINE paused this schedule, with the count it actually hit, and *resume* as the one
  * act — or nothing when it is not paused by the engine (off by the user's hand is not a state
- * line; the switch says it).
+ * line; the switch says it). Paused by an app update on a schedule that made changes on its own
+ * (TASK-20261010-host-broker PR-4, D-PR4-8), the line says resuming does not give that back.
  */
-export function pausedRow(task: Pick<ScheduledTask, 'pausedReason' | 'consecutiveFailures' | 'unseenResults'>): StateCopy | undefined {
+export function pausedRow(task: Pick<ScheduledTask, 'pausedReason' | 'consecutiveFailures' | 'unseenResults'> & Partial<Pick<ScheduledTask, 'disarmed' | 'writeAuthority'>>): StateCopy | undefined {
+  if (task.pausedReason === 'app-updated' && (task.disarmed?.reason === 'app-updated' || task.writeAuthority !== undefined)) return pausedAfterDisarm;
   switch (task.pausedReason) {
     case 'failures':
       return paused('failures', task.consecutiveFailures > 0 ? task.consecutiveFailures : undefined);

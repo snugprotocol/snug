@@ -27,8 +27,14 @@
 // asks. THE WEEKLY ESTIMATE is occurrences in the next seven days × the steps that spend —
 // `app-think` one brain call, `app-run` ONE network call as an estimate (an app's own code may
 // make none or several; the counting transport records the truth at run time), `notify` none.
+// An *ask* step that may look things up (`tools: true`, TASK-20261010-host-broker PR-4, D-PR4-20)
+// is counted at what its bounds ALLOW — every round trip a brain call, every tool call a look-up —
+// so the weekly line, the daily bound and the catch-up default never promise less than it may
+// spend.
 
 import {
+  APP_AGENT_MAX_ROUND_TRIPS,
+  APP_AGENT_MAX_TOOL_CALLS,
   SCHEDULE_MIN_INTERVAL_MS,
   SCHEDULE_STALE_AFTER_MS,
   type MissedPolicy,
@@ -61,6 +67,26 @@ const STEP_COST: Record<ScheduleStep['kind'], StepCost> = {
   'app-think': { ai: 1, net: 0 },
   'app-run': { ai: 0, net: 1 },
 };
+
+/** An *ask* step that may look things up spends up to its bounds: one brain call a round trip, one look-up a tool call. */
+const LOOK_UP_STEP_COST: StepCost = { ai: APP_AGENT_MAX_ROUND_TRIPS, net: APP_AGENT_MAX_TOOL_CALLS };
+
+/** What ONE step may spend per occurrence — the one rule the estimate, the daily bound and the consent's cost row read. */
+export function stepCost(step: ScheduleStep): StepCost {
+  return step.kind === 'app-think' && step.tools === true ? LOOK_UP_STEP_COST : STEP_COST[step.kind];
+}
+
+/** What every step together may spend per occurrence. */
+export function stepsCost(steps: readonly ScheduleStep[]): StepCost {
+  let ai = 0;
+  let net = 0;
+  for (const step of steps) {
+    const cost = stepCost(step);
+    ai += cost.ai;
+    net += cost.net;
+  }
+  return { ai, net };
+}
 
 /** The same spec with no `until` — the period of a schedule does not depend on when it stops. */
 const withoutUntil = (spec: ScheduleSpec): ScheduleSpec => (spec.until === undefined ? spec : { ...spec, until: undefined });
@@ -137,14 +163,14 @@ export function defaultMissedPolicy(steps: readonly ScheduleStep[]): MissedPolic
  * touching the engine.
  */
 export function estimatedCallsPerWeek(spec: ScheduleSpec, steps: readonly ScheduleStep[], anchor: Date): { ai: number; net: number } {
-  let ai = 0;
-  let net = 0;
-  for (const step of steps) {
-    ai += STEP_COST[step.kind].ai;
-    net += STEP_COST[step.kind].net;
-  }
+  const { ai, net } = stepsCost(steps);
   if (ai === 0 && net === 0) return { ai: 0, net: 0 };
-  const to = new Date(anchor.getTime() + WEEK_MS);
-  const occurrences = occurrencesBetween(spec, anchor, to, { limit: WEEK_OCCURRENCE_LIMIT, anchor }).length;
+  const occurrences = occurrencesPerWeek(spec, anchor);
   return { ai: occurrences * ai, net: occurrences * net };
+}
+
+/** How many times the schedule fires in `(anchor, anchor + 7 days]` — the weekly estimate's multiplier, and what the consent's undo note reads. */
+export function occurrencesPerWeek(spec: ScheduleSpec, anchor: Date): number {
+  const to = new Date(anchor.getTime() + WEEK_MS);
+  return occurrencesBetween(spec, anchor, to, { limit: WEEK_OCCURRENCE_LIMIT, anchor }).length;
 }

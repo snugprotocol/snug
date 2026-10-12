@@ -18,6 +18,11 @@
 //
 // MOUNTED BY `ChatLog` under the agent's message, in both chats (the builder view and the run
 // rail); `ChatLog` threads the message id and the hook's resolve path through.
+//
+// A SUGGESTION NEVER ARMS (TASK-20261010-host-broker PR-4, D-PR4-8): the consent's tick *make
+// changes on its own* mounts OFF here, every time — a proposal cannot carry an authority (the
+// writer re-parses it strictly) and nothing on the card seeds one. Only the user's tick arms, after
+// the one writer created the schedule (`armIfTicked`).
 
 import { useEffect, useState } from 'react';
 import type { ReactElement } from 'react';
@@ -29,8 +34,8 @@ import { Button } from '../ui/Button.js';
 import { Card } from '../ui/Card.js';
 import { SCHEDULE_CARD, stepWords } from './copy.js';
 import { describeSpec, nextOccurrence, resolveZone } from './cron.js';
-import { approvedHostsByApp } from './editorModel.js';
-import { EnableConsent } from './EnableConsent.js';
+import { approvedHostsByApp, lookUpNamesByApp, type LookUpNamesByApp } from './editorModel.js';
+import { EnableConsent, armIfTicked, type EnableChoice } from './EnableConsent.js';
 import { enableProposedTask } from './enableProposedTask.js';
 import { formatOccurrence, nextWords, pageClock } from './pageModel.js';
 import { editHref, newScheduleHref } from './routes.js';
@@ -60,8 +65,8 @@ export function ScheduleCard({ card, messageId, busy, onResolve }: ScheduleCardP
   const [state, setState] = useState<ScheduleCardState>(card);
   const [appNames, setAppNames] = useState<Record<string, string>>({});
   const [appMissing, setAppMissing] = useState(false);
-  /** The consent panel is open: the hosts each app's approved connections may call. */
-  const [consent, setConsent] = useState<Record<string, string[]> | undefined>(undefined);
+  /** The consent panel is open: the hosts each app's approved connections may call, and the connections a step may look things up through. */
+  const [consent, setConsent] = useState<{ hosts: Record<string, string[]>; lookUps: LookUpNamesByApp } | undefined>(undefined);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
 
@@ -115,19 +120,23 @@ export function ScheduleCard({ card, messageId, busy, onResolve }: ScheduleCardP
   };
   const openConsent = async (): Promise<void> => {
     const db = await getUserDb();
+    const appIds = state.appId !== undefined ? [state.appId] : [];
     setError(undefined);
-    setConsent(approvedHostsByApp(db, state.appId !== undefined ? [state.appId] : []));
+    setConsent({ hosts: approvedHostsByApp(db, appIds), lookUps: lookUpNamesByApp(db, appIds) });
   };
-  const enable = async (): Promise<void> => {
+  const enable = async (choice: EnableChoice): Promise<void> => {
     setWorking(true);
     setError(undefined);
     const result = await enableProposedTask({ proposal, provenance: state.channel, ...(state.appId !== undefined ? { ownerAppId: state.appId } : {}) });
+    // The schedule exists from here on: a refused arming leaves it waiting for the user's OK — said, never retried.
+    const refusal = result.ok ? await armIfTicked(result.task.id, choice) : undefined;
     setWorking(false);
     if (!result.ok) {
       setError(result.reason);
       return;
     }
     setConsent(undefined);
+    if (refusal !== undefined) setError(refusal);
     answer('scheduled', result.task.id);
   };
   const editTo = newScheduleHref({
@@ -158,10 +167,11 @@ export function ScheduleCard({ card, messageId, busy, onResolve }: ScheduleCardP
             spec={proposal.spec}
             now={now}
             appNames={appNames}
-            hostsByApp={consent}
+            hostsByApp={consent.hosts}
+            connectionsByApp={consent.lookUps}
             busy={working}
             {...(error !== undefined ? { error } : {})}
-            onEnable={() => void enable()}
+            onEnable={(choice) => void enable(choice)}
             onNotNow={() => setConsent(undefined)}
           />
         ) : resolution === undefined ? (
@@ -194,6 +204,11 @@ export function ScheduleCard({ card, messageId, busy, onResolve }: ScheduleCardP
             )}
           </span>
         )}
+        {consent === undefined && error !== undefined ? (
+          <div className="error-note" role="alert" data-testid="schedule-card-error">
+            {error}
+          </div>
+        ) : null}
       </div>
     </Card>
   );

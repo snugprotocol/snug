@@ -103,6 +103,7 @@ export function buildScheduleProposeTool(options: BuildScheduleProposeToolOption
                 title: { type: 'string' },
                 body: { type: 'string' },
                 prompt: { type: 'string' },
+                tools: { type: 'boolean' },
                 input: {},
               },
               required: ['kind'],
@@ -139,7 +140,15 @@ export function buildScheduleProposeTool(options: BuildScheduleProposeToolOption
             const context = step.context;
             if (typeof context === 'object' && context !== null && (context as Record<string, unknown>).sql !== undefined) return NO_SQL;
             if (step.sql !== undefined || step.queries !== undefined) return NO_SQL;
-            steps.push({ kind: 'app-think', appId, prompt: String(step.prompt ?? ''), context: { maxRows: SCHEDULE_CONTEXT_DEFAULT_ROWS } });
+            // A step that may look things up rides as the literal `true` only (TASK-20261010-host-broker
+            // PR-4, D-PR4-20); no proposal channel can carry an authority — nothing else is read here.
+            steps.push({
+              kind: 'app-think',
+              appId,
+              prompt: String(step.prompt ?? ''),
+              context: { maxRows: SCHEDULE_CONTEXT_DEFAULT_ROWS },
+              ...(step.tools === true ? { tools: true as const } : {}),
+            });
             break;
           }
           case 'app-run':

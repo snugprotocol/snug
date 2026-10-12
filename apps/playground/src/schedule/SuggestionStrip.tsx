@@ -9,6 +9,9 @@
 //
 // `.connection-note.is-strip`, like "your agent updated this app" (K6), which it is ranked
 // after in `RunView`: the strip costs the app a strip of height and none of its width.
+//
+// An app's suggestion never arms (TASK-20261010-host-broker PR-4, D-PR4-8): the consent's tick
+// mounts OFF, and only the user's tick there arms the schedule the writer created (`armIfTicked`).
 
 import type { ReactElement } from 'react';
 import { useEffect, useState } from 'react';
@@ -21,8 +24,8 @@ import { useStore } from '../state/store.js';
 import { Button } from '../ui/Button.js';
 import { SUGGESTION_ACTIONS, SUGGESTION_OUTCOME, stepWords, suggestionStrip } from './copy.js';
 import { describeSpec } from './cron.js';
-import { approvedHostsByApp } from './editorModel.js';
-import { EnableConsent } from './EnableConsent.js';
+import { approvedHostsByApp, lookUpNamesByApp, type LookUpNamesByApp } from './editorModel.js';
+import { EnableConsent, armIfTicked, type EnableChoice } from './EnableConsent.js';
 import { nextWords, pageClock, useNow } from './pageModel.js';
 import { editHref } from './routes.js';
 import { acceptSuggestion, declineSuggestion, muteSuggestions, suggestionStore } from './scheduleRequest.js';
@@ -36,11 +39,11 @@ export function suggestionStepsLine(steps: readonly ScheduleStep[], appName: str
   return steps.map((step) => stepWords(step, appName)).join(' · ');
 }
 
-type Outcome = { kind: 'scheduled'; whenWords: string; taskId: string } | { kind: 'declined' } | { kind: 'muted'; appName: string };
+type Outcome = { kind: 'scheduled'; whenWords: string; taskId: string; refusal?: string } | { kind: 'declined' } | { kind: 'muted'; appName: string };
 
 export function SuggestionStrip({ appId }: SuggestionStripProps): ReactElement | null {
   const pending = useStore(suggestionStore)[appId];
-  const [consent, setConsent] = useState<Record<string, string[]> | undefined>(undefined);
+  const [consent, setConsent] = useState<{ hosts: Record<string, string[]>; lookUps: LookUpNamesByApp } | undefined>(undefined);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
   const [outcome, setOutcome] = useState<Outcome | undefined>(undefined);
@@ -74,6 +77,11 @@ export function SuggestionStrip({ appId }: SuggestionStripProps): ReactElement |
               SUGGESTION_OUTCOME.muted(outcome.appName)
             )}
           </p>
+          {outcome.kind === 'scheduled' && outcome.refusal !== undefined ? (
+            <p className="connection-note-body" role="alert">
+              {outcome.refusal}
+            </p>
+          ) : null}
         </div>
       </div>
     );
@@ -83,19 +91,26 @@ export function SuggestionStrip({ appId }: SuggestionStripProps): ReactElement |
   const openConsent = async (): Promise<void> => {
     const db = await getUserDb();
     setError(undefined);
-    setConsent(approvedHostsByApp(db, [appId]));
+    setConsent({ hosts: approvedHostsByApp(db, [appId]), lookUps: lookUpNamesByApp(db, [appId]) });
   };
-  const enable = async (): Promise<void> => {
+  const enable = async (choice: EnableChoice): Promise<void> => {
     setBusy(true);
     setError(undefined);
     const result = await acceptSuggestion(appId);
+    // The schedule exists from here on: a refused arming leaves it waiting for the user's OK — said, never retried.
+    const refusal = result.ok ? await armIfTicked(result.task.id, choice) : undefined;
     setBusy(false);
     if (!result.ok) {
       setError(result.reason);
       return;
     }
     setConsent(undefined);
-    setOutcome({ kind: 'scheduled', whenWords: nextWords(result.task.spec, pageClock.now(), new Date(result.task.createdAt)), taskId: result.task.id });
+    setOutcome({
+      kind: 'scheduled',
+      whenWords: nextWords(result.task.spec, pageClock.now(), new Date(result.task.createdAt)),
+      taskId: result.task.id,
+      ...(refusal !== undefined ? { refusal } : {}),
+    });
   };
   const decline = async (): Promise<void> => {
     const answer = await declineSuggestion(appId);
@@ -122,10 +137,11 @@ export function SuggestionStrip({ appId }: SuggestionStripProps): ReactElement |
           spec={proposal.spec}
           now={now}
           appNames={{ [appId]: appName }}
-          hostsByApp={consent}
+          hostsByApp={consent.hosts}
+          connectionsByApp={consent.lookUps}
           busy={busy}
           {...(error !== undefined ? { error } : {})}
-          onEnable={() => void enable()}
+          onEnable={(choice) => void enable(choice)}
           onNotNow={() => setConsent(undefined)}
         />
       ) : (

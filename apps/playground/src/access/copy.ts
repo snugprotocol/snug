@@ -578,6 +578,25 @@ export const ACCESS_SHEET = {
   you: 'you',
 } as const;
 
+/**
+ * The undo of an app's OWN change (TASK-20261010-host-broker PR-4, D-PR4-19; D16, D20) — a change
+ * the user applied from the chat or a result, or one a schedule made on its own. ONE home: the
+ * chat card, the result page and the schedule's changes list compose it from here. Only the
+ * question is its own (no other app to name — the rows are this app's, so the app is the place);
+ * every other word is the ⋈ sheet's, reused, never respelled.
+ */
+export const OWN_UNDO = {
+  undo: ACCESS_SHEET.undo,
+  /** The armed question: the count in `rowsWord`'s words, the app, and that nothing happens when the rows changed since; it agrees in number with the count. */
+  arm: (n: number, appName: string): string =>
+    `put ${rowsWord(n)} in ${appName} back as ${n === 1 ? 'it was' : 'they were'} before this change? (if ${n === 1 ? 'it' : 'they'} changed since, nothing happens)`,
+  yes: ACCESS_SHEET.undoYes,
+  keep: ACCESS_SHEET.undoKeep,
+  undone: ACCESS_SHEET.undone,
+  /** The outcome line when it could not be done — the engine's reason token (`busy` · `changed` · `gone` · `failed`). */
+  failed: ACCESS_SHEET.undoFailed,
+} as const;
+
 const SUSPEND_HISTORY_WORDS: Readonly<Record<AccessSuspendReason, string>> = {
   'reader-updated': 'it was updated',
   imported: 'arrived with an imported file',

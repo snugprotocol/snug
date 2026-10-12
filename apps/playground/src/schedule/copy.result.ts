@@ -10,9 +10,21 @@
 // `pageModel.ts`'s (`relativeTime`, `absoluteTime`), one clock for every surface. The
 // vocabulary scan in `scheduleCopy.test.ts` reads this file too.
 
-import type { ScheduleRun, RunStatus, StepResultStatus } from '@snugprotocol/protocol';
+import {
+  ACCESS_WRITE_MAX_ROWS,
+  OWN_UNDO_MAX_LIVE,
+  type RunStatus,
+  type ScheduleHeldReason,
+  type ScheduleRun,
+  type ScheduleStep,
+  type StepResult,
+  type StepResultStatus,
+  type StepTools,
+  type StepToolsUnavailableReason,
+} from '@snugprotocol/protocol';
 
-import { aiCalls } from './copy.js';
+import { listWords, rowsWord } from '../access/copy.js';
+import { WORDS, aiCalls, changedOnItsOwn, changedRows } from './copy.js';
 
 // ---------------------------------------------------------------------------------------------
 // The dot's tone (U9) — the class the CSS colours; the word (`copy.ts`) carries the meaning
@@ -205,3 +217,119 @@ export const RESULT_MISSING = {
 } as const;
 
 export const RESULT_LOADING = 'opening…';
+
+// ---------------------------------------------------------------------------------------------
+// What it made, and what it held (TASK-20261010-host-broker PR-4; ADR-0076 §9; D-PR4-11, D-PR4-18)
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * Why an armed schedule did not make a change it suggested — ONE line per held item, above its
+ * acts, keyed by the protocol's held reasons so a new reason is a type error here, never a missing
+ * line. Each is a function of the app's name (the busy one says it).
+ */
+export const HELD_WHY: Readonly<Record<ScheduleHeldReason, (appName: string) => string>> = {
+  busy: (appName) => `not made — ${appName} was in the middle of a change`,
+  changed: () => 'not made — the data moved since the AI looked',
+  'cannot-undo': () => 'not made — it couldn’t be undone, so it waits for you (applying it here can’t be undone either)',
+  full: () => `not made — ${OWN_UNDO_MAX_LIVE} earlier changes can still be undone; it will make changes again as they age out`,
+  failed: () => 'not made — something went wrong; nothing was changed',
+  'over-limit': () => `not made — it would pass the ${ACCESS_WRITE_MAX_ROWS} rows this schedule may change each time`,
+  stopped: () => 'not made — it was stopped from making changes on its own',
+};
+
+/**
+ * The first section's lines (`WORDS.changesMade`): a schedule's group, or the user's own apply —
+ * each followed by ` · ` and its undo, or by what says there is none. The undo's words are
+ * `access/copy.ts`'s `OWN_UNDO` (the ⋈ sheet's, reused).
+ */
+export const MADE = {
+  /** "changed 12 rows in Ledger on its own" */
+  onItsOwn: changedOnItsOwn,
+  /** "you applied this — 2 rows changed" — persisted, so a reload keeps it. */
+  youApplied: (n: number): string => `you applied this — ${rowsWord(n)} changed`,
+  cannotUndo: 'can’t be undone',
+  /** The journal holds it no longer. */
+  undoEnded: 'undo ended after seven days',
+} as const;
+
+/** ONCE, under the header's when-line, on a schedule that makes changes on its own — with its one act. */
+export const RESULT_ON_ITS_OWN = {
+  line: 'this schedule makes changes on its own',
+  stop: 'stop',
+} as const;
+
+/** The link from a result to its schedule's changes list, where an undo stays findable for seven days. */
+export const CHANGES_LINK = 'every change this schedule made';
+
+// ---------------------------------------------------------------------------------------------
+// The host's facts (D-PR4-18; D8, D18, R-88) — what the host knows, said after the AI's words
+// ---------------------------------------------------------------------------------------------
+
+/** What a step's facts name besides the step: its app, and a connection slot by the name the user knows it by. */
+export interface StepFactNames {
+  app: string;
+  connection: (slot: string) => string;
+}
+
+/** Up to this many shared tables are named; more fold into a count. */
+const SAW_NAMED_MAX = 2;
+
+const TOOLS_UNAVAILABLE: Readonly<Record<StepToolsUnavailableReason, (appName: string) => string>> = {
+  brain: () => 'answered without looking things up — this brain can’t use them',
+  sidecar: (appName) => `answered without looking things up — ${appName} talks to a helper on this device`,
+};
+
+/** Where the step ran — nothing for a reminder, or for a step that never ran here. */
+function whereFact(step: ScheduleStep, result: StepResult, app: string): string | undefined {
+  if (step.kind === 'notify' || result.appMissing === true || result.blockedBy !== undefined) return undefined;
+  if (result.status === 'blocked' || result.status === 'skipped') return undefined;
+  if (step.kind === 'app-think') return `Snug did this itself — ${app} didn’t open`;
+  return result.inOpenApp === true ? `ran in ${app} while it was open` : `ran ${app} out of sight while it was closed`;
+}
+
+/** What it read that another app let it read (R-88): each table by its app's name, or a count past two. */
+function sawFact(saw: StepResult['saw']): string | undefined {
+  if (saw === undefined || saw.length === 0) return undefined;
+  if (saw.length <= SAW_NAMED_MAX) return `read ${listWords(saw.map((seen) => `${seen.source}’s ${seen.table}`))} (you allowed it)`;
+  const apps = new Set(saw.map((seen) => seen.source)).size;
+  return `read ${saw.length} tables from ${apps} ${apps === 1 ? 'app' : 'apps'} you allowed`;
+}
+
+/** What a step that may look things up did with its tools — slot names worded, never a path. */
+function toolsFact(tools: StepTools | undefined, names: StepFactNames): string | undefined {
+  if (tools === undefined) return undefined;
+  if ('unavailable' in tools) return TOOLS_UNAVAILABLE[tools.unavailable](names.app);
+  if (tools.used === 0) return 'didn’t need to look anything up';
+  const times = tools.used === 1 ? 'once' : `${tools.used} times`;
+  const through = tools.fetched === undefined ? '' : ` through ${listWords(tools.fetched.map((entry) => names.connection(entry.connection)))}`;
+  return `looked things up ${times}${through}`;
+}
+
+/**
+ * Each step's ONE host line on the result page, its facts joined by a middle dot: where it ran
+ * (the word *background* is never shown), what it read with the user's leave, what it looked up.
+ * `undefined` when there is nothing the host can say.
+ */
+export function stepFacts(step: ScheduleStep, result: StepResult, names: StepFactNames): string | undefined {
+  const facts = [whereFact(step, result, names.app), sawFact(result.saw), toolsFact(result.tools, names)].filter((fact): fact is string => fact !== undefined);
+  return facts.length === 0 ? undefined : facts.join(' · ');
+}
+
+/**
+ * The host's facts about a result, in order — what it made on its own, what the user applied, what
+ * still waits — for wherever the result's one line is printed (the feed, the row's history, a
+ * notification the host composes): `[summary, ...resultFacts(run, name)].join(' · ')`. The AI's
+ * words come first and are never rewritten; an AI's claim is never a fact.
+ */
+export function resultFacts(run: ScheduleRun, appName: (appId: string) => string): string[] {
+  const facts: string[] = [];
+  if (run.applied !== undefined) {
+    facts.push(changedOnItsOwn(run.applied.items.reduce((sum, item) => sum + item.changes, 0), appName(run.applied.appId)));
+  }
+  const approvedByApp = new Map<string, number>();
+  for (const entry of run.approved ?? []) approvedByApp.set(entry.appId, (approvedByApp.get(entry.appId) ?? 0) + entry.changes);
+  for (const [appId, changes] of approvedByApp) facts.push(`you ${changedRows(changes, appName(appId))}`);
+  const waiting = run.proposals?.items.length ?? 0;
+  if (waiting > 0) facts.push(waiting === 1 ? '1 change waiting for your OK' : `${waiting} ${WORDS.changesWaiting}`);
+  return facts;
+}

@@ -48,15 +48,29 @@
  * of the real database, which holds no alias table. A source's name in either answer is folded
  * to ONE line first (`oneLine`, the renderer's own rule — Gate-5 SEC-1): another app's name is
  * its author's text and never adds a line to what the brain reads.
+ *
+ * THE SCHEDULED VARIANT (TASK-20261010-host-broker PR-4, D-PR4-16, D-PR4-5). Under a `scheduled`
+ * seat nobody is watching, so `data_propose_write` stages a schedule proposal item for the run's
+ * result instead of a chat card — ONE statement with its values written in (an item has no params
+ * seat), admitted only through the one proposal gate (`schedule/proposalGate.ts`), at most three a
+ * run — and every answer says what happens to the change next: it waits for the user's OK, or, under
+ * a schedule allowed to make changes on its own, whether the capture walk could make it and undo it
+ * (`ownCapturable`). Every *Proposed* answer ends with D8's sentence, because the model never sees
+ * what the host made. Another app's table is refused by name exactly as the chat refuses it, so a
+ * cross-app change never reaches a result (D-PR4-2). `data_query` asks `inTransaction` first there:
+ * its scratch copy is an export, and an export under an app's open transaction discards it. Without
+ * the seat both tools are the chat's, byte for byte.
  */
 
 import type { AgentTool } from '@snugprotocol/adapters';
-import { nonDataStatementReason, type ScratchAttachTable, type UserDb, type ScratchStatementResult } from '@snugprotocol/db';
+import { nonDataStatementReason, ownCapturable, type ScratchAttachTable, type UserDb, type ScratchStatementResult } from '@snugprotocol/db';
+import { SCHEDULE_PROPOSALS_PER_RUN, type ScheduleProposalItem } from '@snugprotocol/protocol';
 import { getToolPrompt } from '@snugprotocol/knowledge';
 
-import { CHAT_DOOR } from '../access/copy.js';
+import { CHAT_DOOR, rowsWord } from '../access/copy.js';
 import { namesTable, toAttach } from '../access/materialise.js';
 import type { MaterialisedSet, MaterialisedTable, RecordReadOutcome } from '../access/service.js';
+import { OWN_CAPTURE_RULE, appBusyAnswer, gateProposal, type ProposalRefusal } from '../schedule/proposalGate.js';
 import { oneLine } from './sharedDdl.js';
 
 export const DATA_QUERY_TOOL_NAME = 'data_query';
@@ -87,6 +101,18 @@ export interface SharedTablesSeat {
   recordRead(grantIds: readonly string[], sql: string): Promise<RecordReadOutcome>;
 }
 
+/**
+ * The SCHEDULED variant of `data_propose_write` (TASK-20261010-host-broker PR-4, D-PR4-16): nobody is
+ * watching, so a proposal is a schedule proposal item for the run's result — admitted only through
+ * the proposal gate, at most three a run — instead of a chat card. `armed` is whether this schedule
+ * may make its changes on its own, which decides what the model is told about each one.
+ */
+export interface ScheduledProposalSeat {
+  armed: boolean;
+  /** Stage one admitted item for the run's result; FALSE when the run has no room left for it. */
+  onProposal(item: ScheduleProposalItem): boolean | void;
+}
+
 export interface BuildDataToolsOptions {
   appId: string;
   getDb: () => Promise<UserDb>;
@@ -102,6 +128,8 @@ export interface BuildDataToolsOptions {
   allowWrites?: boolean;
   /** Another app's tables the user let this chat read (PR-2) — absent ⇒ the tools are exactly today's. */
   shared?: SharedTablesSeat;
+  /** A scheduled run's seat (PR-4) — present, it REPLACES the chat's `onProposal`; absent ⇒ the chat's tools. */
+  scheduled?: ScheduledProposalSeat;
 }
 
 /**
@@ -155,8 +183,49 @@ function normalizeParams(value: unknown, statementCount: number): unknown[][] {
   return Array.from({ length: statementCount }, (_, i) => (i === 0 ? (value as unknown[]) : []));
 }
 
+// ---------------------------------------------------------------------------------------------
+// The scheduled variant's answers (D-PR4-16) — what the model reads back, never a user surface
+// ---------------------------------------------------------------------------------------------
+
+/** D8 — closes every scheduled *Proposed* answer: the model reports proposals, the host reports what it made. */
+const PROPOSALS_ONLY = 'Never say a change was made — say what you proposed; the host reports what it made.';
+
+const SCHEDULED_REFUSED: Readonly<Record<Exclude<ProposalRefusal, 'busy'>, string>> = {
+  invalid: 'Error: that is not one INSERT, UPDATE or DELETE over literal values (no second statement, no schema change, no nested SELECT) — it was not proposed',
+  credential: 'Error: that change carries a value that looks like a credential — it was not proposed',
+  failed: 'Error: that change failed when it was tried on a copy of the data — check the table and column names against the schema; it was not proposed',
+};
+
+const ONE_STATEMENT = 'Error: a scheduled change is ONE statement — propose each change on its own';
+const NO_PARAMS = 'Error: a scheduled change carries no params — write the values into the statement itself';
+const RUN_FULL = `Error: this run already holds ${SCHEDULE_PROPOSALS_PER_RUN} changes for the user — no more can be staged; answer with what you have`;
+
+/** Whether the model passed any bound value at all — a scheduled item has no seat for one, so it is refused, never dropped. */
+function carriesParams(value: unknown): boolean {
+  return Array.isArray(value) && value.some((entry) => !Array.isArray(entry) || entry.length > 0);
+}
+
+/**
+ * What happens to an admitted change next. Unarmed, it waits for the user's OK. Armed, the capture
+ * walk decides: a change it can make and undo may be made when the run finishes; one it cannot
+ * names the rule and how to write it so it could. The dry run's count rides along either way.
+ */
+function proposedAnswer(armed: boolean, sql: string, changes: number): string {
+  const capture = armed ? ownCapturable(sql) : undefined;
+  const head =
+    capture === undefined
+      ? 'Proposed — it waits for the user’s OK on the result.'
+      : capture.ok
+        ? 'Proposed — this schedule may make it on its own when it finishes, within its limits; the user can undo it.'
+        : `Proposed — but it can’t be made on its own (${capture.rule}) and waits for the user’s OK; to make it applicable use ${OWN_CAPTURE_RULE}.`;
+  return [head, `On a copy of the data it changed ${rowsWord(changes)}.`, PROPOSALS_ONLY].join('\n');
+}
+
+/** The app's own name as the busy answer says it — one line, its id when the row is gone. */
+const appNameIn = (db: UserDb, appId: string): string => oneLine(db.getApp(appId)?.displayName ?? appId);
+
 export function buildDataTools(options: BuildDataToolsOptions): AgentTool[] {
-  const { appId, getDb, onProposal, shared } = options;
+  const { appId, getDb, onProposal, shared, scheduled } = options;
 
   /** The shared tables a statement names (D-PR2-10) — none ⇒ no attach, nothing written. */
   const namedBy = (sql: string): MaterialisedTable[] => (shared === undefined ? [] : shared.set.tables.filter((table) => namesTable(sql, table.name)));
@@ -178,6 +247,8 @@ export function buildDataTools(options: BuildDataToolsOptions): AgentTool[] {
       const params = Array.isArray(input.params) ? (input.params as unknown[]) : undefined;
       try {
         const db = await getDb();
+        // A scheduled run asks first (D-PR4-5): nothing exports the app while it is mid-change.
+        if (scheduled !== undefined && (await db.driver.inTransaction(appId))) return appBusyAnswer(appNameIn(db, appId));
         const statement = { sql: input.sql, ...(params !== undefined ? { params } : {}) };
         const named = namedBy(input.sql);
         let attach: ScratchAttachTable[] | undefined;
@@ -200,6 +271,31 @@ export function buildDataTools(options: BuildDataToolsOptions): AgentTool[] {
       }
     },
   };
+
+  /** What this tool set staged for the run — a refused change never uses one up. */
+  let stagedForRun = 0;
+
+  /**
+   * The scheduled `data_propose_write` past the checks it shares with the chat's (D-PR4-16): one
+   * statement, no params, room on the run, then the gate — and the answer that says what happens
+   * to the change next.
+   */
+  async function proposeScheduled(seat: ScheduledProposalSeat, statements: readonly string[], params: unknown, summary: string): Promise<string> {
+    const [sql] = statements;
+    if (sql === undefined || statements.length !== 1) return ONE_STATEMENT;
+    if (carriesParams(params)) return NO_PARAMS;
+    if (stagedForRun >= SCHEDULE_PROPOSALS_PER_RUN) return RUN_FULL;
+    try {
+      const db = await getDb();
+      const verdict = await gateProposal(db, appId, { sql, summary });
+      if (!verdict.ok) return verdict.reason === 'busy' ? appBusyAnswer(appNameIn(db, appId)) : SCHEDULED_REFUSED[verdict.reason];
+      if (seat.onProposal(verdict.item) === false) return RUN_FULL;
+      stagedForRun += 1;
+      return proposedAnswer(seat.armed, sql, verdict.item.counts?.changes ?? 0);
+    } catch (err) {
+      return `Error: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
 
   const proposeTool: AgentTool = {
     def: {
@@ -231,6 +327,7 @@ export function buildDataTools(options: BuildDataToolsOptions): AgentTool[] {
        */
       const sharedNamed = statements.map(namedBy).find((named) => named.length > 0)?.[0];
       if (sharedNamed !== undefined) return `Error: ${CHAT_DOOR.readOnly(oneLine(sharedNamed.sourceName))}`;
+      if (scheduled !== undefined) return proposeScheduled(scheduled, statements, input.params, input.summary);
       /**
        * DML ONLY, checked BEFORE the dry run (R-B1).
        *
@@ -287,8 +384,37 @@ export function buildDataTools(options: BuildDataToolsOptions): AgentTool[] {
   return options.allowWrites === false ? [queryTool] : [queryTool, proposeTool];
 }
 
+/** What a tool call past the run's cap answers — the model reads it as the tool's result (D-PR4-14). */
+export const toolCapAnswer = (max: number): string => `Error: this run may make at most ${max} tool calls — answer now with what you have`;
+
+/**
+ * Bound a tool loop by CALLS, not round trips (TASK-20261010-host-broker PR-4, D-PR4-14): ONE counter
+ * shared by every tool wrapped together, so eight queries and one fetch are nine calls. A call past
+ * `max` never reaches its tool and answers `toolCapAnswer(max)`; a call that throws still counts —
+ * the counter is the attempt. Without a cap this is the identity: the SAME array comes back, so a
+ * caller that sets none (the chat) offers exactly the tools it built. One wrapping is one run.
+ */
+export function capToolCalls(tools: AgentTool[], max?: number): AgentTool[] {
+  if (max === undefined) return tools;
+  let calls = 0;
+  return tools.map(
+    (tool): AgentTool => ({
+      def: tool.def,
+      run: (input) => {
+        calls += 1;
+        return calls > max ? toolCapAnswer(max) : tool.run(input);
+      },
+    }),
+  );
+}
+
+/**
+ * The approved write's outcome (PR-2's three shapes). Since PR-4 (D-PR4-6) an applied change says
+ * whether it can be undone: `undoId` names its entry in the app's approval bucket, and `undoable:
+ * false` is an applied change the user was told cannot be undone.
+ */
 export type ExecuteApprovedWriteOutcome =
-  | { ok: true; executed: number[] }
+  | { ok: true; executed: number[]; undoable: boolean; undoId?: string }
   | { ok: false; reason: 'drifted'; previewed: number[]; current: number[] }
   | { ok: false; reason: 'failed'; message: string };
 
@@ -296,9 +422,11 @@ export type ExecuteApprovedWriteOutcome =
  * Execute a proposal the user approved. The ONLY path from the data lane to real data —
  * the Write Broker's own mode (PR-3, D-PR3-8): the class guard, the dry run's drift halt
  * (fold F-Sm1), the one synchronous seat (all or nothing, R-M4), `data-changed` to the
- * app's own frame. The lazy edge keeps the engine out of this module's graph (F13).
+ * app's own frame. The lazy edge keeps the engine out of this module's graph (F13). `via`
+ * is the door the user approved it at (PR-4, D-PR4-6): the chat card or a result page —
+ * absent, the chat card, which is where every caller before PR-4 approved.
  */
-export async function executeApprovedWrite(db: UserDb, proposal: PendingWriteProposal): Promise<ExecuteApprovedWriteOutcome> {
+export async function executeApprovedWrite(db: UserDb, proposal: PendingWriteProposal, options: { via: 'chat' | 'user' } = { via: 'chat' }): Promise<ExecuteApprovedWriteOutcome> {
   const { applyApprovedWrite } = await import('../access/writeBroker.js');
-  return applyApprovedWrite(db, proposal);
+  return applyApprovedWrite(db, proposal, options);
 }

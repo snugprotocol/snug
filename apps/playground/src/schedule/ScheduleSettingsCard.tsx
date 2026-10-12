@@ -17,6 +17,12 @@
 // reader (PR-A withheld it — a control that changes nothing would be a lie on a Settings page).
 // The sentences stay in `copy.page.SETTINGS`. Both flags are per browser on purpose: they are
 // about THIS browser's notifications and THIS person's patience, not facts of the file.
+//
+// THE KILL SWITCH IS AN ACT, NOT A ROW (TASK-20261010-host-broker PR-4, D-PR4-10; SC6). While
+// some schedule makes changes on its own, one row names how many and offers *stop every schedule
+// making changes on its own* — `disarmAllTasks`, one task write each, no confirm (taking an
+// authority away never needs one). Nothing armed: no row at all, never a disabled control, and
+// there is no switch to turn it back on — each schedule is armed again only from its own consent.
 
 import { useId, useState } from 'react';
 import type { ReactElement } from 'react';
@@ -29,6 +35,7 @@ import { followerTab, globalPaused } from './copy.js';
 import { SETTINGS } from './copy.page.js';
 import { hostHonesty } from './honesty.js';
 import { Switch } from './ScheduleStates.js';
+import { disarmAllTasks } from './acts.js';
 import { clearHistory, setGlobalPause, useScheduler } from './scheduler.js';
 
 /** The opt-in flag the web seat reads (`'1'` when on) — `platform/webNotify.ts` owns the name. */
@@ -78,6 +85,19 @@ export function ScheduleSettingsCard(): ReactElement {
 
   const pauseId = useId();
   const suggestionsId = useId();
+  const onItsOwnId = useId();
+  /** The schedules that make changes on their own now — the act's row exists only while there are some. */
+  const onItsOwn = view.tasks.filter((task) => task.writeAuthority !== undefined).length;
+  const [stopping, setStopping] = useState(false);
+
+  const stopAllOnItsOwn = async (): Promise<void> => {
+    setStopping(true);
+    try {
+      await disarmAllTasks();
+    } finally {
+      setStopping(false);
+    }
+  };
 
   const toggleSuggestions = (next: boolean): void => {
     writeFlag(NO_SUGGESTIONS_KEY, next);
@@ -171,6 +191,17 @@ export function ScheduleSettingsCard(): ReactElement {
           ) : null}
         </div>
       </div>
+
+      {onItsOwn > 0 ? (
+        <div className="settings-row schedule-settings-row" data-testid="schedule-on-its-own-row">
+          <div className="schedule-settings-copy">
+            <strong id={onItsOwnId}>{SETTINGS.onItsOwnCount(onItsOwn)}</strong>
+          </div>
+          <Button variant="ghost" aria-describedby={onItsOwnId} onClick={() => void stopAllOnItsOwn()} disabled={stopping} data-testid="schedule-stop-all-on-its-own">
+            {SETTINGS.stopAllOnItsOwn}
+          </Button>
+        </div>
+      ) : null}
 
       <div className="settings-row schedule-settings-row">
         <div className="schedule-settings-copy">

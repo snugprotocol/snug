@@ -72,6 +72,17 @@ export interface HostSystemPromptOptions {
    */
   appRuntime?: boolean;
   /**
+   * A SCHEDULED *Ask <App>'s AI* turn that may look things up (TASK-20261010-host-broker PR-4,
+   * D-PR4-15) — assembles 10-host-identity + 50-scheduled-agent and NOTHING else (95 on desktop).
+   *
+   * It WINS over every other seat, `appRuntime` included: nobody is watching that turn, it holds
+   * tools, and it answers a person later in words — so 45's "answer the app's request and nothing
+   * else" and 40's JSON-only reply would both be false there, and an authoring layer would hand an
+   * unattended turn instructions it can never act on. The caller appends the app's runtime
+   * contract as the END suffix, exactly as the app transport does (ADR-0012).
+   */
+  scheduledAgent?: boolean;
+  /**
    * The shell this assembly serves (TASK-20260812-desktop-auth-awareness P2, AC1).
    * Absent or 'web' assembles BYTE-IDENTICALLY to before the seat existed — AC10's
    * no-regression rests on that default. 'desktop' appends the 95-platform-desktop
@@ -102,7 +113,14 @@ export interface HostSystemPromptOptions {
  * block (so 35's "the sections that follow" is literally true), or 36 alone.
  */
 export function buildHostSystemPrompt(opts: HostSystemPromptOptions): string {
-  // The runtime branch is checked FIRST and returns: an app's own turn must never carry
+  // The scheduled agent is checked before everything (see the seat): an unattended turn with
+  // tools must carry neither the runtime branch's JSON doctrine nor any authoring layer.
+  if (opts.scheduledAgent === true) {
+    const layers = [getSystemLayer('host-identity'), getSystemLayer('scheduled-agent')];
+    if (opts.platform === 'desktop') layers.push(getSystemLayer('platform-desktop'));
+    return layers.join(SEPARATOR);
+  }
+  // The runtime branch is checked next and returns: an app's own turn must never carry
   // authoring layers, whatever else the caller asked for (ADR-0018 D1).
   if (opts.appRuntime === true) {
     const layers = [getSystemLayer('host-identity'), getSystemLayer('app-runtime'), getSystemLayer('app-response-format')];

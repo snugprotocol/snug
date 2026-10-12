@@ -5,6 +5,11 @@
 // the same table the detail and the missed card read). The row is a link to the result detail
 // (`routes.resultHref`; `ResultDetail` renders it); a *needs you* row carries its one act
 // beside the link. *Mark all read* is one gesture.
+//
+// HOST FACTS FOLLOW THE AI'S WORDS (TASK-20261010-host-broker PR-4, D-PR4-18; D8): the line is the
+// AI's (or the status's) words, never rewritten, then what the HOST knows — what a schedule changed
+// on its own, what the user applied, what still waits (`resultFacts`). An AI that claims a change
+// gets no fact for it; only the run row's own seats are facts.
 
 import type { ReactElement } from 'react';
 import { Link, useNavigate } from 'react-router';
@@ -14,13 +19,19 @@ import type { ScheduleRun, ScheduledTask } from '@snugprotocol/protocol';
 import { Button } from '../ui/Button.js';
 import { RESULT_STATUS_WORD, capped, needsYou, noHandler } from './copy.js';
 import { RESULTS } from './copy.page.js';
+import { resultFacts } from './copy.result.js';
 import { appRunAppOf, relativeTime, type AppIndex, type ResultRow } from './pageModel.js';
 import { resultHref } from './routes.js';
 import { markAllSeen, runNow } from './scheduler.js';
 import { appIdsOf } from './taskShape.js';
 
-/** The one line a result reads as: the first step's summary, else the status's own sentence. */
+/** The one line a result reads as: its words (the first step's summary, else the status's own sentence), then the host's facts. */
 export function resultSummary(run: ScheduleRun, item: ScheduledTask, apps: AppIndex): string {
+  return [resultWords(run, item, apps), ...resultFacts(run, apps.name)].join(' · ');
+}
+
+/** The first step's summary, else the status's own sentence. */
+function resultWords(run: ScheduleRun, item: ScheduledTask, apps: AppIndex): string {
   const fromStep = run.steps.find((step) => step.summary !== undefined && step.summary !== '')?.summary;
   if (fromStep !== undefined) return fromStep;
   const firstApp = appIdsOf(item.steps)[0];

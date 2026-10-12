@@ -29,6 +29,8 @@
  */
 
 import { z } from 'zod';
+import { ACCESS_WRITE_MAX_ROWS, uuidV4Schema } from './access.js';
+import { CONNECTION_SLOT_RULE } from './connection-requirement.js';
 import {
   DML_PREFIX_RULE,
   FORBIDDEN_TOKEN_RULE,
@@ -147,6 +149,41 @@ export const SCHEDULE_TZ_MAX_CHARS = 64;
 export const SCHEDULE_MAX_APP_VERSIONS = 5;
 /** A missed occurrence's freshness window: one minute to seven days. */
 export const SCHEDULE_STALE_AFTER_MS = { min: 60_000, max: 604_800_000 } as const;
+
+// TASK-20261010-host-broker PR-4 (ADR-0076 §9; D-PR4-11, D-PR4-15, D-PR4-17) — host-native jobs and
+// the task write authority. Every seat below is INTERNAL and OMITTED when absent (D-PR3-2's rule),
+// so a task or a run that never used one is byte-identical to its pre-PR-4 form.
+
+/**
+ * Why an armed schedule's change was NOT made at the end of its run — ONE table the walk writes
+ * and the result page words (`HELD_WHY`): the app was mid-change (`busy`), the data moved inside
+ * the write (`changed`), the change could not be captured for an undo (`cannot-undo`), the
+ * schedule's undo bucket is full (`full`), the write failed (`failed`), it would pass the
+ * schedule's rows-per-run (`over-limit`), or the authority no longer held when the write was
+ * reached (`stopped`). A held item stays pending — it waits for the user's OK.
+ */
+export const SCHEDULE_HELD_REASONS = ['busy', 'changed', 'cannot-undo', 'full', 'failed', 'over-limit', 'stopped'] as const;
+export type ScheduleHeldReason = (typeof SCHEDULE_HELD_REASONS)[number];
+
+/** Why the authority went away without the user's act — the trace on the task until it is armed again or saved. */
+export const SCHEDULE_DISARMED_REASONS = ['imported', 'app-updated'] as const;
+export type ScheduleDisarmedReason = (typeof SCHEDULE_DISARMED_REASONS)[number];
+
+/** Why an *ask* step that may look things up answered without its tools: this brain cannot use them for the app, or the app holds a live sidecar. */
+export const STEP_TOOLS_UNAVAILABLE_REASONS = ['brain', 'sidecar'] as const;
+export type StepToolsUnavailableReason = (typeof STEP_TOOLS_UNAVAILABLE_REASONS)[number];
+
+/** An *ask* step that may look things up makes at most this many tool calls a run; the next one is answered with the cap sentence. */
+export const APP_AGENT_MAX_TOOL_CALLS = 8;
+/** …and at most this many round trips with its brain — each one an AI call against the daily ceiling. */
+export const APP_AGENT_MAX_ROUND_TRIPS = 10;
+/** One `fetch_connection` answer is cut to this many characters before the model reads it. */
+export const FETCH_CONNECTION_MAX_CHARS = 16_000;
+/** The step stops itself this long before the run's bound, so it answers WITH the calls it spent rather than losing them to the queue's race. */
+export const APP_AGENT_DEADLINE_MARGIN_MS = 30_000;
+/** A step result names at most this many tables it read, each name at most this long. */
+export const STEP_SAW_MAX_ENTRIES = 8;
+export const STEP_SAW_NAME_MAX_CHARS = 64;
 
 // ------------------------------------------------------------- building blocks
 
@@ -310,7 +347,13 @@ const thinkContextSchema = z.strictObject({
  * app's vendor (security F3). A multi-app task is several steps on one result page.
  *  - `notify` — *Remind me*: an inbox result, and a host-decided notification when the task's `alert` says so.
  *  - `app-run` — *Run [app]*: the app's own code in a hidden frame, fed `input` over the kv handshake (PR-B).
- *  - `app-think` — *Ask [app]'s AI*: the app's OWN transport, no tools, no connected calls; the reply is text.
+ *  - `app-think` — *Ask [app]'s AI*, run by the host itself (the app never opens). Absent `tools`,
+ *    the tool-free answer: the app's OWN transport over the typed context, the reply is text.
+ *    `tools: true` (TASK-20261010-host-broker PR-4, D-PR4-15) lets it look things up: ONE agent
+ *    turn of at most `APP_AGENT_MAX_ROUND_TRIPS` round trips and `APP_AGENT_MAX_TOOL_CALLS` tool
+ *    calls over the app's data, what the user let it read from other apps, and GET-only fetches
+ *    through the app's approved connections; its changes are proposals like the tool-free
+ *    step's. The literal `true` only — omit-defaults: `false` is never written.
  */
 export const scheduleStepSchema = z.discriminatedUnion('kind', [
   z.strictObject({
@@ -328,17 +371,55 @@ export const scheduleStepSchema = z.discriminatedUnion('kind', [
     appId,
     prompt: z.string().min(1).max(SCHEDULE_PROMPT_MAX_CHARS),
     context: thinkContextSchema,
+    tools: z.literal(true).optional(),
   }),
 ]);
 export type ScheduleStep = z.infer<typeof scheduleStepSchema>;
 
 const stepsSchema = z.array(scheduleStepSchema).min(1).max(SCHEDULE_MAX_STEPS);
 
+/**
+ * What a step that may look things up did with its tools (D-PR4-17): how many calls it made and,
+ * per connection SLOT, how many fetches — never a path, a query or a host, so the result page can
+ * say *looked things up 3 times through Spotify* and nothing a fetch carried. Or why it answered
+ * without them. Written only on a `tools: true` step.
+ */
+const stepToolsSchema = z.union([
+  z.strictObject({
+    used: z.int().min(0).max(APP_AGENT_MAX_TOOL_CALLS),
+    fetched: z
+      .array(z.strictObject({ connection: z.string().regex(CONNECTION_SLOT_RULE), calls: z.int().min(1).max(APP_AGENT_MAX_TOOL_CALLS) }))
+      .min(1)
+      .max(APP_AGENT_MAX_TOOL_CALLS)
+      .optional(),
+  }),
+  z.strictObject({ unavailable: z.enum(STEP_TOOLS_UNAVAILABLE_REASONS) }),
+]);
+export type StepTools = z.infer<typeof stepToolsSchema>;
+
+/** One table another app let this step read (R-88): the source as the user knows it and the source's own table name — never a column or a statement. */
+const stepSawSchema = z.strictObject({
+  source: z.string().min(1).max(STEP_SAW_NAME_MAX_CHARS),
+  table: z.string().min(1).max(STEP_SAW_NAME_MAX_CHARS),
+});
+export type StepSaw = z.infer<typeof stepSawSchema>;
+
+/**
+ * One step's outcome inside a run. PR-4's host facts (D-PR4-17), each omitted when absent: where an
+ * *app-run* ran (`inOpenApp` — absent is out of sight; an *ask* step is host-native by kind), the
+ * shared tables it read (`saw`, written only when non-empty), what it did with its tools, and
+ * `blockedBy` when no brain may answer it.
+ */
 export const stepResultSchema = z.strictObject({
   status: z.enum(STEP_RESULT_STATUSES),
   summary: z.string().max(SCHEDULE_STEP_SUMMARY_MAX_CHARS).optional(),
   /** The named app is gone from this file — the step cannot run here. */
   appMissing: z.boolean().optional(),
+  inOpenApp: z.literal(true).optional(),
+  saw: z.array(stepSawSchema).min(1).max(STEP_SAW_MAX_ENTRIES).optional(),
+  tools: stepToolsSchema.optional(),
+  /** No brain may answer this step here — the demo override or a keyless BYOK (D-PR4-15); the page offers *open Settings*. */
+  blockedBy: z.literal('brain').optional(),
 });
 export type StepResult = z.infer<typeof stepResultSchema>;
 
@@ -347,6 +428,27 @@ export type StepResult = z.infer<typeof stepResultSchema>;
 const appVersionsSchema = z
   .record(appId, z.int().min(1))
   .refine((versions) => Object.keys(versions).length <= SCHEDULE_MAX_APP_VERSIONS, `appVersions accepts at most ${SCHEDULE_MAX_APP_VERSIONS} entries`);
+
+/**
+ * The task write authority (ADR-0076 §9; ADR-0033's shape, first armed here; D-PR4-7): the user
+ * let this schedule make its changes to its ONE app's own data on its own — at most `rowsPerRun`
+ * rows a run, from the moment `armedAt`, for the app's version `armedVersion` (a later version
+ * disarms it). STRICT: no seat names another app, a table list or a standing approval. Written by
+ * the user's act alone; every untrusted import strips it.
+ */
+const writeAuthoritySchema = z.strictObject({
+  rowsPerRun: z.int().min(1).max(ACCESS_WRITE_MAX_ROWS),
+  armedAt: isoInstant,
+  armedVersion: z.int().min(1),
+});
+export type ScheduleWriteAuthority = z.infer<typeof writeAuthoritySchema>;
+
+/** The trace of a disarm the user did not perform — shown until the next arming or save clears it. */
+const disarmedSchema = z.strictObject({
+  reason: z.enum(SCHEDULE_DISARMED_REASONS),
+  at: isoInstant,
+});
+export type ScheduleDisarmed = z.infer<typeof disarmedSchema>;
 
 /**
  * A task — the `schedule:<taskId>` settings row. `enabled` is set by nothing but the
@@ -381,6 +483,10 @@ export const scheduledTaskSchema = z
     consecutiveFailures: z.int().min(0).default(0),
     /** Results nobody opened — `seenAt` is set only by a user gesture (E7). */
     unseenResults: z.int().min(0).default(0),
+    /** The user let it make its changes on its own (PR-4) — consent state, outside the intent like `enabled`. */
+    writeAuthority: writeAuthoritySchema.optional(),
+    /** The authority went away without the user's act. */
+    disarmed: disarmedSchema.optional(),
   })
   .superRefine(refuseOversizeOrCredential('task', SCHEDULED_TASK_MAX_BYTES));
 export type ScheduledTask = z.infer<typeof scheduledTaskSchema>;
@@ -398,13 +504,17 @@ export const scheduleProposalItemSchema = z.strictObject({
   sql: z.string().min(1).max(SCHEDULE_PROPOSAL_SQL_MAX_CHARS).refine(isSingleDmlStatement, 'a proposal is one INSERT, UPDATE or DELETE statement over literal values'),
   summary: z.string().max(SCHEDULE_PROPOSAL_SUMMARY_MAX_CHARS).optional(),
   counts: z.strictObject({ changes: z.int().min(0) }).optional(),
+  /** An armed schedule's walk did not make this one (PR-4, D-PR4-11) — it waits for the user like any other. */
+  held: z.enum(SCHEDULE_HELD_REASONS).optional(),
 });
 export type ScheduleProposalItem = z.infer<typeof scheduleProposalItemSchema>;
 
 /**
  * The run's pending *changes waiting for your OK* — one expiry for the batch (one reply
- * produced them). NEVER executed by the engine; stripped on every import, pull and export
- * so a foreign file can never plant an approval card (ADR-0074 §6).
+ * produced them). Never run by the engine on its own EXCEPT through an armed schedule's walk
+ * (PR-4, D-PR4-11), which applies what it may through the Write Broker's capture seat and leaves
+ * the rest here, `held`. Stripped on every import, pull and export so a foreign file can never
+ * plant an approval card (ADR-0074 §6).
  */
 const runProposalsSchema = z.strictObject({
   items: z.array(scheduleProposalItemSchema).max(SCHEDULE_PROPOSALS_PER_RUN),
@@ -412,6 +522,40 @@ const runProposalsSchema = z.strictObject({
 });
 
 const callsSchema = z.strictObject({ ai: z.int().min(0), net: z.int().min(0) });
+
+/** One applied change's line: the AI's reason and the rows it changed — no statement text (the undo is the journal's). */
+const appliedItemSchema = z.strictObject({
+  summary: z.string().max(SCHEDULE_PROPOSAL_SUMMARY_MAX_CHARS).optional(),
+  changes: z.int().min(0),
+});
+
+/**
+ * What an armed schedule's walk MADE at the end of this run (PR-4, D-PR4-17): ONE group — one app
+ * (the authority covers one), one seat call, one undo entry `undoId` in `ownUndo:<appId>:<taskId>`
+ * — or `undoable: false`. Never SQL.
+ */
+const runAppliedSchema = z.strictObject({
+  appId,
+  undoId: uuidV4Schema.optional(),
+  undoable: z.literal(false).optional(),
+  items: z.array(appliedItemSchema).min(1).max(SCHEDULE_PROPOSALS_PER_RUN),
+});
+export type ScheduleRunApplied = z.infer<typeof runAppliedSchema>;
+
+/**
+ * What the USER applied from this run's waiting changes (PR-4 contract v2.1 N1): one entry per
+ * approved item, its undo in `ownUndo:<appId>:approval` — persisted, so a reload keeps *you
+ * applied this · undo*. Beside `applied`, never inside it: a walk that made a prefix and a later
+ * approve of a held item sit on one run.
+ */
+const runApprovedSchema = z.strictObject({
+  appId,
+  undoId: uuidV4Schema.optional(),
+  undoable: z.literal(false).optional(),
+  summary: z.string().max(SCHEDULE_PROPOSAL_SUMMARY_MAX_CHARS).optional(),
+  changes: z.int().min(0),
+});
+export type ScheduleRunApproved = z.infer<typeof runApprovedSchema>;
 
 /**
  * A run — one entry in the `scheduleRuns:<taskId>` row, keyed `(taskId, dueAt)`. It is
@@ -435,6 +579,8 @@ export const scheduleRunSchema = z
     }),
     steps: z.array(stepResultSchema).max(SCHEDULE_MAX_STEPS),
     proposals: runProposalsSchema.optional(),
+    applied: runAppliedSchema.optional(),
+    approved: z.array(runApprovedSchema).min(1).max(SCHEDULE_PROPOSALS_PER_RUN).optional(),
     calls: callsSchema.default({ ai: 0, net: 0 }),
     /** Set only by a user gesture — never by an app-derived signal (E7). */
     seenAt: isoInstant.optional(),
@@ -512,7 +658,10 @@ export function canonicalScheduledTask(task: ScheduledTask): string {
  * `appVersions` and `staleAfterMs` all move with ordinary use, so comparing the whole row
  * would demote every task of a backup taken before its next run. `enabled` is deliberately
  * out too: a backup restored over a task the user paused meanwhile restores the backup's
- * state, which is the same intent they consented to.
+ * state, which is the same intent they consented to. So are `writeAuthority` and `disarmed`
+ * (PR-4, D-PR4-7): consent state like `enabled` — every untrusted import strips the authority,
+ * so counting it here would only demote an unarmed backup of an armed task. A step's `tools`
+ * IS intent: it is inside `steps`.
  */
 export function canonicalScheduleIntent(task: ScheduledTask): string {
   const { steps, spec, cron, startsAt, endsAt, missedPolicy, alert, ownerAppId, provenance, title } = task;

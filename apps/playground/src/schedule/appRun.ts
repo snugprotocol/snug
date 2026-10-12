@@ -519,6 +519,13 @@ function outcomeOf(app: AppRecord, attempt: Attempt, resultTimeoutMs: number): S
   }
 }
 
+/**
+ * Where the step ran, as the result says it (TASK-20261010-host-broker PR-4, D-PR4-17): an outcome
+ * the OPEN app's frame settled carries `inOpenApp`; one the hidden frame settled carries nothing —
+ * absent is "out of sight while it was closed". A manual *run now* only ever runs in the open app.
+ */
+const inOpenApp = (outcome: StepOutcome): StepOutcome => ({ ...outcome, inOpenApp: true });
+
 export async function executeAppRun(step: AppRunStep, ctx: StepContext, deps: AppRunDeps): Promise<StepOutcome> {
   if (ctx.signal.aborted) return { status: 'failed', summary: CANCELLED_SUMMARY, calls: none() };
   const app = ctx.db.getApp(step.appId);
@@ -551,7 +558,7 @@ export async function executeAppRun(step: AppRunStep, ctx: StepContext, deps: Ap
     if (!deps.live.has(appId)) return { status: 'refused', summary: openAndRunAgain(app.displayName), calls: none() };
     try {
       const attempt = await dispatchLive({ ...shared, mode: 'manual', deadline: Date.now() + deps.resultTimeoutMs, spent: none(), afterHandover: false });
-      return outcomeOf(app, { ...attempt, calls: none() }, deps.resultTimeoutMs);
+      return inOpenApp(outcomeOf(app, { ...attempt, calls: none() }, deps.resultTimeoutMs));
     } finally {
       await ctx.db.driver.kvSet(appId, key, null);
     }
@@ -573,7 +580,8 @@ export async function executeAppRun(step: AppRunStep, ctx: StepContext, deps: Ap
       }
       const before = spentByRun();
       const dispatch: Dispatch = { ...shared, mode: 'unattended', deadline, spent: { ai: before.ai + calls.ai, net: before.net + calls.net }, afterHandover: handovers > 0 };
-      const attempt = placement === 'live' ? await dispatchLive(dispatch) : await dispatchHidden(dispatch, createScheduledConfirmGate());
+      const placedLive = placement === 'live';
+      const attempt = placedLive ? await dispatchLive(dispatch) : await dispatchHidden(dispatch, createScheduledConfirmGate());
       calls.ai += attempt.calls.ai;
       calls.net += attempt.calls.net;
       if (attempt.end.kind === 'handover') {
@@ -582,7 +590,8 @@ export async function executeAppRun(step: AppRunStep, ctx: StepContext, deps: Ap
         placement = attempt.end.to;
         continue;
       }
-      return withCap(outcomeOf(app, { ...attempt, calls: { ...calls } }, deps.resultTimeoutMs));
+      const outcome = withCap(outcomeOf(app, { ...attempt, calls: { ...calls } }, deps.resultTimeoutMs));
+      return placedLive ? inOpenApp(outcome) : outcome;
     }
   } finally {
     await ctx.db.driver.kvSet(appId, key, null);

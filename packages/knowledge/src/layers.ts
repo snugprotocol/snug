@@ -42,6 +42,7 @@ export type SystemLayerName =
   | 'app-builder-unaided'
   | 'app-runtime'
   | 'app-response-format'
+  | 'scheduled-agent'
   | 'platform-desktop';
 
 const SYSTEM_LAYER_FILES: Readonly<Record<SystemLayerName, string>> = {
@@ -58,6 +59,10 @@ const SYSTEM_LAYER_FILES: Readonly<Record<SystemLayerName, string>> = {
   // is mutually exclusive with 30: a turn is either authoring an app or running one.
   'app-runtime': 'system/45-app-runtime.md',
   'app-response-format': 'system/40-app-response-format.md',
+  // 50 is the scheduled agent's preamble (TASK-20261010-host-broker PR-4, D-PR4-15): the ONE
+  // block after identity on an unattended *Ask <App>'s AI* turn that may look things up — a
+  // sibling of 45, never with it or with 40, because that turn answers a person later, in words.
+  'scheduled-agent': 'system/50-scheduled-agent.md',
   // 95 is appended LAST, only when the assembly is told it serves the desktop shell
   // (TASK-20260812-desktop-auth-awareness P2). Web assemblies never include it.
   'platform-desktop': 'system/95-platform-desktop.md',
@@ -179,7 +184,9 @@ export type ToolPromptName =
   /** TASK-20261009 (ADR-0074 §4): the propose-only schedule tool — the builder's and the schedule lane's. */
   | 'schedule-propose'
   /** TASK-20261010-host-broker PR-2 (ADR-0076 §2): the brain's ask to read another app's data — the builder's, and the data and answer lanes'. */
-  | 'access-propose';
+  | 'access-propose'
+  /** TASK-20261010-host-broker PR-4 (ADR-0076 §9): the scheduled agent's GET-only, host-pinned look-up through an approved connection. */
+  | 'fetch-connection';
 
 export function getToolPrompt(name: ToolPromptName): string {
   return renderedFile(`tools/${name}.md`);

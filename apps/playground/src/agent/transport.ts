@@ -7,7 +7,7 @@
 // re-confirms endpoint settings — an imported DB is executable config.
 
 import { createHttpTransport, runAgentTurn, type AgentTurnEvent } from '@snugprotocol/adapters';
-import { buildHostSystemPrompt, renderRuntimeContract, SYSTEM_BLOCK_SEPARATOR } from '@snugprotocol/knowledge';
+import { buildHostSystemPrompt, renderRuntimeContract, SYSTEM_BLOCK_SEPARATOR, type HostPlatform } from '@snugprotocol/knowledge';
 import { ERROR_CODES, parseAppRequest, type RuntimeContract } from '@snugprotocol/protocol';
 import type { AgentTransport } from '@snugprotocol/runner';
 
@@ -95,6 +95,16 @@ async function readRuntimeContract(appId: string): Promise<RuntimeContract | und
   }
 }
 
+/**
+ * The shell an app-side prompt assembly serves (TASK-20260812 P2): the ONE read of the platform's
+ * kind on this path — a prompt layer telling the model where it is, never a capability. The
+ * scheduled agent assembles through it too (TASK-20261010-host-broker PR-4), so a second turn
+ * shape adds no second read.
+ */
+export function promptPlatform(): HostPlatform {
+  return getPlatform().kind;
+}
+
 export function createDirectAppTransport(options: DirectTransportOptions): AgentTransport {
   const readKey = options.getKey ?? getByokKey;
   const needsConfirm = options.needsConfirm ?? endpointsNeedConfirm;
@@ -109,7 +119,7 @@ export function createDirectAppTransport(options: DirectTransportOptions): Agent
     appBuilder: false,
     artifacts: false,
     appRuntime: true,
-    platform: getPlatform().kind,
+    platform: promptPlatform(),
   });
   return {
     async send(wire, { signal, onDelta }) {
