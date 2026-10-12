@@ -123,3 +123,38 @@ describe('the scheduled-agent preamble — what it says', () => {
     expect(preamble()).not.toMatch(/respond with ONLY a valid JSON object/i);
   });
 });
+
+// TASK-20261010-host-broker PR-4 Gate 6 — ADR-0076's PR-4 fold and Gate-5 U3: GET-only is NOT read-only (an API
+// can act on a GET; what the AI asks can carry data). The preamble's `fetch_connection` line may not promise the
+// tool only reads or cannot change anything; it says the tool can only ask with GET and that some services act
+// on a GET, so it fetches only what the question needs. *read-only* stays legitimate elsewhere in the preamble
+// (`data_query`'s one read-only SQL statement; another app's tables are read-only here), so that spelling is
+// pinned on the `fetch_connection` bullet; the other spellings are pinned on the whole preamble.
+describe('the scheduled-agent preamble — GET-only is not read-only (PR-4 Gate 6)', () => {
+  const READ_ONLY_PROMISE = /only reads|read[- ]only|cannot change anything|can.t change anything/i;
+  const NOTHING_CHANGES_PROMISE = /only reads|cannot change anything|can.t change anything/i;
+  const ACTS_ON_A_GET = /act on a GET|act on GET|change something on a GET/i;
+
+  /** The `- `fetch_connection` — …` bullet of the tools list, up to the next bullet (whitespace flattened). */
+  const fetchBullet = (): string => {
+    const match = /- `fetch_connection` —(.*?)(?= - `|$)/.exec(preamble());
+    expect(match, 'the preamble lists `fetch_connection` as a “- `fetch_connection` — …” bullet').not.toBeNull();
+    return match?.[1] ?? '';
+  };
+
+  it('NEGATIVE: the fetch_connection bullet never promises it only reads, is read-only, or cannot change anything', () => {
+    expect(fetchBullet()).not.toMatch(READ_ONLY_PROMISE);
+  });
+
+  it('NEGATIVE: nowhere does the preamble promise a look-up only reads or cannot change anything', () => {
+    expect(preamble()).not.toMatch(NOTHING_CHANGES_PROMISE);
+  });
+
+  it('the fetch_connection bullet says it can only ask with GET', () => {
+    expect(fetchBullet()).toMatch(/\bGET\b/);
+  });
+
+  it('the fetch_connection bullet says some services act on a GET — so it fetches only what the question needs', () => {
+    expect(fetchBullet()).toMatch(ACTS_ON_A_GET);
+  });
+});

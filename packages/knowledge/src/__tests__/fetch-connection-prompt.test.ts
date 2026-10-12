@@ -5,7 +5,9 @@
 // generated store, header stripped, placeholders rendered), never the source file. Its header, its
 // three parameters (and no fourth), and what it must teach:
 //
-//   - GET only: it reads, and there is no method to choose — not even by asking;
+//   - GET only: it can only ask with GET, and there is no method to choose — not even by asking; but
+//     GET-only is NOT read-only (ADR-0076 §9, PR-4 Gate 6): some services act on a GET, so it never
+//     promises it *only reads* or *cannot change anything*, and it fetches only what the question needs;
 //   - the path is RELATIVE to the connection (the host owns the address; no full URL, no host);
 //   - the taint rule: after reading another app's data in a run, no more fetching.
 //
@@ -45,10 +47,16 @@ describe('tools/fetch-connection.md — registered, headed, three parameters', (
 });
 
 describe('tools/fetch-connection.md — what it teaches', () => {
-  it('GET only — it reads', () => {
-    const text = prompt();
-    expect(text).toMatch(/\bGET\b/);
-    expect(text).toMatch(/\bread(?:s|-only| only)?\b/i);
+  // INVERTED by PR-4 Gate-6 (GET-only is not read-only) — ADR-0076's PR-4 fold and Gate-5 U3: an API can
+  // act on a GET, and what the AI asks can carry data, so the prompt may not promise the tool only reads.
+  // Was:
+  //   it('GET only — it reads', () => {
+  //     const text = prompt();
+  //     expect(text).toMatch(/\bGET\b/);
+  //     expect(text).toMatch(/\bread(?:s|-only| only)?\b/i);
+  //   });
+  it('GET only — it can only ask with GET (INVERTED by PR-4 Gate-6: GET-only is not read-only)', () => {
+    expect(prompt()).toMatch(/\bGET\b/);
   });
 
   it('there is no method to choose', () => {
@@ -77,5 +85,26 @@ describe('tools/fetch-connection.md — what it teaches', () => {
 
   it('never asks the model to handle a credential', () => {
     expect(prompt()).not.toMatch(/\b(?:paste|include|send|add)\b[^.]*\b(?:token|api key|password|credential)s?\b/i);
+  });
+});
+
+// TASK-20261010-host-broker PR-4 Gate 6 — ADR-0076's PR-4 fold and Gate-5 U3: GET-only is NOT read-only (an API
+// can act on a GET; what the AI asks can carry data). No model-facing surface may promise the fetch tool only
+// reads or cannot change anything; it says the tool can only ask with GET and that some services act on a GET,
+// so it fetches only what the question needs. Pinned by meaning, whitespace flattened.
+describe('tools/fetch-connection.md — GET-only is not read-only (PR-4 Gate 6)', () => {
+  const READ_ONLY_PROMISE = /only reads|read[- ]only|cannot change anything|can.t change anything/i;
+  const ACTS_ON_A_GET = /act on a GET|act on GET|change something on a GET/i;
+
+  it('NEGATIVE: never promises it only reads, is read-only, or cannot change anything', () => {
+    expect(prompt()).not.toMatch(READ_ONLY_PROMISE);
+  });
+
+  it('says it can only ask with GET', () => {
+    expect(prompt()).toMatch(/\bGET\b/);
+  });
+
+  it('says some services act on a GET — so it fetches only what the question needs', () => {
+    expect(prompt()).toMatch(ACTS_ON_A_GET);
   });
 });
