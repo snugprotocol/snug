@@ -200,9 +200,9 @@ export function RunHeaderActions({
         like its neighbours; the accessible name is "access". On an owned app where the host allows
         access, rendered when the app has access state (access either way, a pending ask, or a
         declined ask) OR the file holds another app that may use access — PR-5 (D-PR5-5) reversed
-        D20's "no empty door": the creation act and a source's offer live behind it, so an app
-        with nothing yet still has a door to start from. A one-app file still shows none. Opens the
-        ⋈ sheet (portaled).
+        D20, which hid the door on an app with nothing behind it: the creation act and a source's
+        offer live behind it, so an app with nothing yet still has a door to start from. A one-app
+        file still shows none. Opens the ⋈ sheet (portaled).
       */}
       {accessState ? (
         <Button

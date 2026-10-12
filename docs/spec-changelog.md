@@ -4,6 +4,125 @@ Every change pushed to `snugprotocol/spec`, newest first. Format: `## YYYY-MM-DD
 
 ---
 
+## 2026-10-12 — spec 1.3 — **STAGED, not yet pushed** — TASK-20261010-host-broker (PR-4 + PR-5) — the host's own surfaces of access between apps: the declaration written, a grant started from the source's side, the chat's change applied per card, the host doors' *fetch first*, the access history carried across a sync with a stop winning, the imported marker; PR-4's own-app writes absorbed
+**The third post-1.0 minor, additive — 1.3, not a 1.2 editorial revision, because it changes
+conformance text (the spec's own rule: post-1.0, an additive change bumps the minor).** No
+frame, op, schema byte, capability flag or Appendix B constant changes; `PROTOCOL_VERSION`
+stays 1. PR-4's staged editorial revision (the entry below, left as written) is absorbed: the
+header's ONE *Revision 1.3 (2026-10-12, TASK-20261010-host-broker PR-4 and PR-5)* note carries
+its text with "STAGED, not pushed" and "pushed with the next revision's" gone, and §8.1's
+`ownUndo:` sentence now reads "the 1.3 revision". In the draft: the header is Specification /
+Version 1.3, dated 2026-10-12, "stable at 1.3", superseding 1.2 with the compatibility note
+below; the stability table's Part II and Part VI rows and the paragraph under it name 1.3.
+**§8.1** — the declaration is WRITTEN: the host derives `accessWants:<appId>` from the app's
+own `<head>` — ONE `<meta name="snug:access-wants" content='…'>` before any `<script>`,
+`<style>` or `<body>`, its quoted content decoded only for the five references — at every
+admission of HTML (a build saved, a revert or reset, a starter installed or updated, a shared
+bundle installed or updated, an agent's hand-in), deletes it when the meta goes, and on EVERY
+import, whatever its origin, deletes every such row and re-derives it from the imported HTML; it
+is never a bundle field; an unreadable head is no declaration (nothing shown, the install never
+refused); it proposes and never grants, a pre-filled sheet ticking only a table its hints name —
+a hint table, or a table one of whose `_`-separated words is a hint word — never `write`, `kv`,
+`refresh`, `unattended` or a duration; `appProvenance:<appId>` (`{
+imported: true, at }`) is named host-internal — an untrusted import drops every incoming
+marker and marks every app whose install source or any version row (number, pin, HTML digest)
+differs from this hub's copy; an app identical to this hub's keeps this hub's marker, or its
+absence; kept on a trusted pull; swept on delete; unparseable reads as imported. **§9 item 4** —
+the access history crosses a resolution, data never merges: on a pull from the sync origin (*use
+the origin copy* included) and on *keep this device's copy*, a hub MAY carry the losing copy's
+`accessLog:*` lines into the winning one (natural key `(at, kind, grantId, readerAppId)`, a
+match merging rather than repeating; on a pull, only the lines this device wrote after it and
+the origin last agreed (an older line's absence from the winner is a prune or a *clear history*
+there), and any line the winner also holds, whose counts merge; on *keep this device's copy*,
+every origin line the winning copy lacks; a carried `wrote` line without its `undoId`; only for
+a source app the winner holds; carried lines give way first to the caps) and MUST let a
+revocation on either side win, wherever it can open both copies (a protected image sealed for
+another key carries nothing and blocks nothing); the undo journals follow the winning copy; the
+declaration is re-derived; a copy changed this way is pushed.
+**§21** — the chat may PROPOSE one change to a table the grant lets the reader change, applied
+only by the user per card; a schedule reads and never writes another app's data; the chat and a
+ticked scheduled step may fetch first; a grant may start from either side — the reader's ask,
+the user's act on the reader's side (from nothing or from a declaration), or the source's side,
+where the user offers the source's data to a reader — only the user creates one, and one started
+from the source's side is created read-only; a later *allow again* is a reader-side renewal and
+may add `write` like any renewal. **§22.1 rule 5** — an untrusted import marks the apps it
+brings in or changes; the `accessWants:*` rows are taken from NO import (dropped and
+re-derived); a trusted pull keeps every row exactly save those rows and, on a pull from the sync
+origin (never the recovery restore), the history carry and this device's revocations put back
+over the pulled rows, parseable or not. **§24.1 item 3** — an app the marker names gets a
+provenance line that says it arrived with a file the user imported and that the host cannot tell
+who made it, over any install source the file recorded. **§24.2 item 6** — a grant started from
+the source's side carries no `write` when it is created (a decision carrying one refused, fail
+closed; *allow again* on it later is the reader's side's renewal); one started from a
+declaration is the user's, its purpose in the host's words.
+**§24.5** — item 18's scheduled step "never at 1.3"; a new paragraph: a host MAY let the chat
+beside a reader propose a change to another app; one that does MUST stage ONE statement, values
+written in, the one ticked table, no key-value store, no invisible formatting character, renamed
+to the source's table only through a bounded grammar, planned on a scoped copy (the plan's
+`read` line names the table, never the statement), shown on a card with the host's count, and
+applied only on the user's act there — the grant re-checked by id AND `grantedAt`, the verdict
+re-asked, re-planned, nothing changed when the count moved — through items 19–23 with
+`via: 'chat'`, `authority: 'approval'`; a change too large to undo refused before anything changes.
+**§24.6** — a new paragraph: the host's own doors may *fetch new data first* under items 25–27
+(a grant with `refresh: true` the door's caller may use, a schedule's only with `unattended`;
+one source after another, at most two in the reference host; each refresh a door starts logged
+`refreshed` with `via: 'chat' | 'schedule'` (a source inside its cooldown answers from what it
+has, item 26; a door that joins a running refresh adds no line); a door joins a refresh already
+running and its own stop abandons only its wait; a refresh that does not finish never fails the
+turn or the step); a step's fetch-first is set only by the user's act in the editor; a stopped
+refresh is logged as not finished and keeps the source's open frame refusing every mutating call
+until its result or its original deadline; the source's own *fetch now* is deferred. **§25** —
+rewritten: grants in shared bundles, linked-device sources, write offered from the source's
+side, a scheduled task's authority over ANOTHER app's data ("a later minor" — PR-4's entry below
+calls it "a spec 1.3 matter"; it is not in 1.3), the per-op grid, step chaining across apps, the
+source's *fetch now*; the 1.2 "taken" list kept; a "taken at 1.3" list in place of PR-4's staged
+one. **Part VII** — the hubs' Part II list gains the sync resolution of §9 item 4; the Part VI
+list gains the declaration, the imported marker, the user-only creation from either side with no
+`write` in the decision that starts a grant from the source's side, the chat's change only on
+the user's act per card, and the host doors' fetch with a stopped refresh's posture.
+**MUST changes, honestly.** New obligations for a hub implementing Part VI at 1.3: a revocation
+on either side of a sync resolution wins (§9 item 4, §22.1 rule 5 — scoped to copies the hub
+can open); the imported provenance line over any install source (§24.1 item 3); no `write` in the
+decision that starts a grant from the source's side, and a declaration never writes a grant
+nor ticks a table its hints do not name (§24.2 item 6, §8.1); the declaration derived only from
+the app's own HTML, at every admission and on every import (§8.1, §22.1 rule 5); the chat's
+change applied only on the user's act on its card, re-checked and re-planned (§24.5); a stopped
+refresh keeps the source's frame under the refresh posture until its result or its deadline
+(§24.6). New permissions (MAY): the history carry (§9 item 4); the host doors' *fetch first*
+(§24.6); the chat's change to another app (§24.5); a grant started from the source's side (§21).
+Narrowed: §22.1 rule 5's "a trusted pull keeps every row exactly" now has its two stated
+exceptions. A hub implementing Part VI at 1.2 is conforming at 1.2. Each lands in Part VII.
+**Schemas:** none — `packages/protocol/schemas/` is byte-identical to the 1.2 publication:
+sixteen files, `git diff main --stat -- packages/protocol/schemas` is empty, and so is
+`diff -rq` against the spec clone at `133b16c`. Every new shape is internal, outside
+`json-schemas.ts` SOURCES: `packages/protocol/src/app-provenance.ts` (the marker),
+`packages/protocol/src/chat-cards.ts` (the chat cards' answer vocabularies and the chat's fetch
+facts) and the new seats of `schedule.ts` (`refreshFirst`, a step result's `fetched`,
+`REFRESH_FIRST_MAX_SOURCES`, `FETCHED_OUTCOMES`). `PROTOCOL_VERSION` stays 1.
+**Compatibility.** A 1.2 host never reads an app's head, so the meta is inert there — an app
+that declares still asks at runtime, as it must anyway. The scheduling shapes are strict, so the
+direction is fail closed: a task carrying `refreshFirst` is no task to a 1.2 hub (removed by its
+untrusted import), and a run entry carrying a step's `fetched` facts is dropped from its history.
+The lines a 1.3 host carried are ordinary history lines (a carried `wrote` line without its
+`undoId`), which a 1.2 hub holds as it holds its own. A 1.2 hub carries `appProvenance:` rows
+untouched and marks nothing on its own imports, so an app imported there reads by its install
+source, as at 1.2; and a 1.2 hub that resolves a sync keeps every row exactly (its rule 5), so a
+stop wins only where a 1.3 host resolves. The grant record, the history line and the undo
+journal gain no seat; a task and a run that never used a new seat are byte-identical to their
+1.2 form.
+The whitepaper moves to edition 6 FINAL — `1.3 · edition 6` on the cover, no "(draft)" — §10
+and Figure 11's caption covering the declaration, the source's offer, the chat's approved change,
+*fetch first* and the carried history; rebuilt (A4, 36 pages, 11 figures), its contents page
+re-derived from the PDF, and checked — `pnpm run check-whitepaper` 116/116 against the staged
+spec; the checker now pins edition 6 / specification 1.3, requires the declaration and a grant
+started from the source's side, refuses a "(draft)" cover in `--spec` mode (the publish check)
+and checks that the spec's header version equals the newest versioned entry here. The website's
+spec banner reads "Specification 1.3 — normative".
+**Owner act, not performed:** the push to `snugprotocol/spec` needs an explicit ask in the
+session (PROCESS.md release rules) and happens ONCE, after PR-5 merges, carrying PR-4's text and
+PR-5's together as two commits (the spec + README; the whitepaper edition 6 PDF); on push THIS
+entry and PR-4's below are rewritten `**PUSHED**` with the SHAs by a docs PR here.
+
 ## 2026-10-12 — spec 1.2 editorial revision — **STAGED, not yet pushed** — TASK-20261010-host-broker (PR-4) — an app's OWN writes: the task write authority over its own app's data and the own-app undo, host-internal
 **Prose only, version held at 1.2; pushed together with PR-5's revision by the owner, never on
 its own.** ADR-0076 §9 lands its own-app half: a schedule whose app steps all name ONE app may

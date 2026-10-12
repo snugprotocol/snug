@@ -34,11 +34,12 @@
 // meets another app's registered table) and the creation act, always; under *what reads Budget* —
 // its rows and the offer (`AccessOffer`, when this app has a registered table, holds no WhatsApp
 // fact, and some other app could read it). Both acts open the person's ask, never an app's, and
-// close this sheet only once the review is sure to open. The ⋈ itself WIDENS (D20's "no empty door"
-// reversed): it shows on an owned app with access state OR whenever the file holds another app that
-// may use access — the offer and the creation act live behind it — and re-reads on the library
-// revision too. The chat's cross-app card opens this sheet IN PLACE on the change's source with
-// `focus="history"`: focus moves to the history, where the change and its undo are listed.
+// close this sheet only once the review is sure to open. The ⋈ itself WIDENS (reversing D20, which
+// hid the door on an app with nothing behind it): it shows on an owned app with access state OR
+// whenever the file holds another app that may use access — the offer and the creation act live
+// behind it — and re-reads on the library revision too. The chat's cross-app card opens this sheet
+// IN PLACE on the change's source with `focus="history"`: focus moves to the history, where the
+// change and its undo are listed.
 //
 // Gate-5 fold (G5-13…G5-15). One app's registry row this file cannot read never empties the sheet
 // (its grants and their *stop* are what matter most here): the pair and the offer each drop only the

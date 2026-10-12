@@ -1073,7 +1073,7 @@ export interface UserDb {
 
   // The access declaration `accessWants:<appId>` (TASK-20261010-host-broker PR-5, D-PR5-2): a
   // host-derived mirror of the app's current html head — written at every admission, re-derived on
-  // every import; read-only here.
+  // every import; this facade offers reads only (no caller may write the row).
 
   /** The app's declaration, or `undefined` — none, an unknown app, or a row that does not parse. */
   getAccessWants(appId: string): AccessWants | undefined;

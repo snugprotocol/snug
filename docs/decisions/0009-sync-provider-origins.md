@@ -1,6 +1,6 @@
 # 0009 — User-DB sync: OPFS runtime copy, pluggable origin via SyncProvider, last-writer-wins v1
 
-- **Status:** accepted — **amended 2026-08-20 by [ADR-0042](0042-snug-file-extension.md)** (the canonical export is `.snug`, with the legacy `.sqlite` still read on input) and **[ADR-0043](0043-passphrase-encryption-at-rest.md)** (a personal origin may carry a protected container; a hub origin keeps receiving secrets-stripped plaintext).
+- **Status:** accepted — **amended 2026-08-20 by [ADR-0042](0042-snug-file-extension.md)** (the canonical export is `.snug`, with the legacy `.sqlite` still read on input) and **[ADR-0043](0043-passphrase-encryption-at-rest.md)** (a personal origin may carry a protected container; a hub origin keeps receiving secrets-stripped plaintext). **Amended 2026-10-12 by [ADR-0076](0076-host-as-broker-access-everywhere.md)** (TASK-20261010-host-broker PR-5): the access history is carried and a stop wins across a sync; data is never merged — on either resolution of a divergence the losing copy's `accessLog:*` lines are carried into the winning image by their natural key and a grant revoked on either side ends revoked, while the data, the run rows and the undo journals follow the winning image as before.
 - **Date:** 2026-08-03
 - **Task:** TASK-20260803-portable-hub
 

@@ -1,21 +1,23 @@
 # The Snug Protocol whitepaper
 
 Source for **"The Snug Protocol: An Open Protocol for Agent-Backed Personal Software"**
-(Jeetu Maker), **edition 6 — the 1.2 edition, an UNPUBLISHED DRAFT** — the design rationale,
-threat model, and security argument behind **Specification 1.2** (wire protocol · portable user
-database · connected applications · runtime contracts · linked-device connections · access
-between apps, read or write with an undo). Edition 6 is staged across TASK-20261010-host-broker
-PR-4 (a schedule may look things up, and may make its own application's changes on its own,
-with an undo) and PR-5, and is published ONCE with the staged spec revision by the owner; its
-cover reads `1.2 · edition 6 (draft)` until then — drop `(draft)` in the publishing change.
-Edition 5 is the published one.
+(Jeetu Maker), **edition 6 — the 1.3 edition, final** — the design rationale, threat model, and
+security argument behind **Specification 1.3** (wire protocol · portable user database ·
+connected applications · runtime contracts · linked-device connections · access between apps,
+read or write with an undo, carried to the host's own surfaces). Edition 6 was written across
+TASK-20261010-host-broker PR-4 (a schedule may look things up, and may make its own
+application's changes on its own, with an undo) and PR-5 (§10 and Figure 11's caption: the
+declaration an app writes in its own head, a grant started from the source's side, the chat's
+change applied per card, *fetch new data first*, the access history carried across a sync with
+a stop winning; §6.4's sync clause). Its cover reads `1.3 · edition 6`; it is published ONCE,
+with specification 1.3, by the owner — until that push, edition 5 is the published one.
 
 | | |
 |---|---|
 | **Source** | [`src/paper.html`](src/paper.html) · [`src/paper.css`](src/paper.css) · [`src/figures/`](src/figures/) |
 | **Output** | [`dist/snug-protocol-whitepaper.pdf`](dist/) — A4, 36 pages, 11 figures |
 | **Spec fixture** | [`../spec-drafts/SPEC.md`](../spec-drafts/SPEC.md) + `packages/protocol/schemas/` |
-| **Tasks** | edition 6 (unpublished draft): `TASK-20261010-host-broker` (PR-4, PR-5) · edition 5: `TASK-20261010-host-broker` (PR-3) · edition 4: `TASK-20261010-cross-app-access` · edition 3: `TASK-20260822-spec-10-final` · edition 2: `TASK-20260820-spec-v03-whitepaper` · edition 1: `TASK-20260807-protocol-whitepaper` |
+| **Tasks** | edition 6 (final; unpublished until the 1.3 push): `TASK-20261010-host-broker` (PR-4, PR-5) · edition 5: `TASK-20261010-host-broker` (PR-3) · edition 4: `TASK-20261010-cross-app-access` · edition 3: `TASK-20260822-spec-10-final` · edition 2: `TASK-20260820-spec-v03-whitepaper` · edition 1: `TASK-20260807-protocol-whitepaper` |
 
 ## Build
 
@@ -32,7 +34,8 @@ assembled single-file HTML in `dist/` for debugging.
 pipeline apply shrink-to-fit to the ENTIRE document (every font scales ×~0.91, the page
 count drops ~12%, and every hand-authored TOC hint goes stale) — found 2026-08-22 when an
 Edition cell briefly rode as a fourth item. Fold new facts into an existing cell
-(`1.2 · edition 6 (draft)`); a page-count change on rebuild is the tell.
+(`1.3 · edition 6`; a staged edition may carry ` (draft)` there, which the publish check
+refuses); a page-count change on rebuild is the tell.
 
 **Let the build finish.** It renders through Chrome and then rewrites the PDF's `/Info`
 dictionary; killing it midway leaves a PDF with no author metadata. The checker catches
@@ -52,16 +55,19 @@ The spec is normative; this paper only explains it. `scripts/check-whitepaper.mj
 treats the spec as a **fixture** and fails when the two disagree — so a constant or frame
 name cannot silently drift here as the protocol moves. Pre-publication the fixture is
 `docs/spec-drafts/SPEC.md` plus the schemas in `packages/protocol/schemas/` (the
-monorepo is the master, per SPEC_SYNC); after the 1.2 push, point it at a
-`snugprotocol/spec` clone with `--spec <path>` — there it reads `SPEC.md` (the 1.2
-document; the historical draft filenames are pointer stubs, never fixtures).
+monorepo is the master, per SPEC_SYNC); for the publish, point it at a `snugprotocol/spec`
+clone with `--spec <path>` — there it reads `SPEC.md` (the 1.3 document; the historical
+draft filenames are pointer stubs, never fixtures) and refuses a `(draft)` cover. The
+version the paper documents is pinned once in the checker (`EXPECTED_SPEC_VERSION`,
+`EXPECTED_EDITION`) and must match the spec's header, the newest versioned entry of
+[`../spec-changelog.md`](../spec-changelog.md), the cover and the running head.
 
 | | Enforces |
 |---|---|
 | **AC1/AC2** | PDF builds; embedded `/Title` and `/Author` are correct (metadata, not just the cover) |
 | **AC3** | Every protocol constant matches the spec draft, including the seven-kind set |
 | **AC4** | Frame inventory matches `schemas/*.json` (fifteen frames); all R5 codes documented |
-| **AC5** | 1.2 surfaces COVERED (access between apps included); the paper claims 1.2 and carries no draft/RC self-description; superseded facts (dropped tables, old counts) absent |
+| **AC5** | 1.3 surfaces COVERED (access between apps, the declaration, a grant started from the source's side); the spec header, the newest changelog entry and the cover all name 1.3 · edition 6; no RC/not-normative self-description, and no `(draft)` cover under `--spec`; superseded facts (dropped tables, old counts) absent |
 | **AC6** | No anti-positioning language; `host-blind`/`zero-knowledge`/`end-to-end` disclaimed, never claimed; ADR-0040's honest class statement and ADR-0043's bounded claim travel with their features |
 | **AC7** | Figures are inline vector, numbered, and each cited in prose (≥11) |
 | **AC8** | Structural completeness; section numbering cannot drift |

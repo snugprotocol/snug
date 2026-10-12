@@ -1,11 +1,12 @@
 <!--
-  paper.html — The Snug Protocol whitepaper, edition 6 — the 1.2 edition, an UNPUBLISHED
-  DRAFT: TASK-20261010-host-broker PR-4 staged it (the scheduled-work paragraph of §13 — a
-  schedule may look things up, and may make its own application's changes on its own, with an
-  undo), PR-5 completes it, and the owner publishes it ONCE with the staged spec revision; the
-  cover says "draft" until then (edition 5 was TASK-20261010-host-broker PR-3; edition 4
-  TASK-20261010-cross-app-access, edition 3 TASK-20260822-spec-10-final, edition 2
-  TASK-20260820, edition 1 TASK-20260807).
+  paper.html — The Snug Protocol whitepaper, edition 6 — the 1.3 edition, FINAL:
+  TASK-20261010-host-broker PR-4 began it (the scheduled-work paragraph of §13 — a schedule may
+  look things up, and may make its own application's changes on its own, with an undo) and PR-5
+  completed it (§10 and Figure 11's caption — the declaration, the source's offer, the chat's
+  approved change, fetch first, the access history carried across a sync; §6.4's sync clause;
+  the 1.3 labels). The owner publishes it ONCE with specification 1.3 (edition 5 was
+  TASK-20261010-host-broker PR-3; edition 4 TASK-20261010-cross-app-access, edition 3
+  TASK-20260822-spec-10-final, edition 2 TASK-20260820, edition 1 TASK-20260807).
 
   Source of truth for every normative claim below is the specification:
   docs/spec-drafts/SPEC.md, plus the published schemas exported from
@@ -50,7 +51,7 @@
     </div>
     <div>
       <div class="k">Specification · Edition</div>
-      <div class="v">1.2 · edition 6 (draft)</div>
+      <div class="v">1.3 · edition 6</div>
     </div>
     <div>
       <div class="k">Date</div>
@@ -101,10 +102,10 @@
     <li><span class="num">9</span><span class="ttl">Runtime contracts and the data surface<span class="sub">Turns cheap enough for any brain; data that answers to its owner</span></span><span class="pg">27</span></li>
     <li><span class="num">10</span><span class="ttl">Access between apps<span class="sub">The one sanctioned crossing — read, or write with an undo — under an access grant the user gives</span></span><span class="pg">28</span></li>
     <li><span class="num">11</span><span class="ttl">Conformance<span class="sub">What an implementation must do to claim the name</span></span><span class="pg">30</span></li>
-    <li><span class="num">12</span><span class="ttl">Related work<span class="sub">MCP, vendor application platforms, local-first software</span></span><span class="pg">31</span></li>
-    <li><span class="num">13</span><span class="ttl">Limitations and future work<span class="sub">What is unsolved, stated plainly</span></span><span class="pg">32</span></li>
+    <li><span class="num">12</span><span class="ttl">Related work<span class="sub">MCP, vendor application platforms, local-first software</span></span><span class="pg">32</span></li>
+    <li><span class="num">13</span><span class="ttl">Limitations and future work<span class="sub">What is unsolved, stated plainly</span></span><span class="pg">33</span></li>
     <li><span class="num">14</span><span class="ttl">Conclusion</span><span class="pg">34</span></li>
-    <li><span class="num">—</span><span class="ttl">Normative references</span><span class="pg">34</span></li>
+    <li><span class="num">—</span><span class="ttl">Normative references</span><span class="pg">35</span></li>
     <li><span class="num">A</span><span class="ttl">Appendix: message schema summary</span><span class="pg">35</span></li>
   </ol>
 </section>
@@ -186,7 +187,8 @@ layer exists to preserve.</p>
   normative and published since spec v0.1; the storage layer, the connected-application
   surface, runtime contracts, and linked-device connections are normative as of
   specification 1.0, and access between applications (§10) as of specification 1.1, widened
-  at 1.2 to writes with an undo, refresh on demand and discovery. One
+  at 1.2 to writes with an undo, refresh on demand and discovery, and at 1.3 to the host's own
+  surfaces. One
   surface — standing approvals — is explicitly
   <span class="badge draft">Provisional</span> and so marked where it appears. Where this
   paper and the specification differ, the specification governs.</p>
@@ -335,7 +337,7 @@ pairs with v0.3, the access pair with 1.1. All fifteen are published as JSON Sch
 exported byte-identically from the reference implementation.</p>
 
 <table>
-  <caption>The fifteen frame types of specification 1.2. Published schemas are input shapes:
+  <caption>The fifteen frame types of specification 1.3. Published schemas are input shapes:
   validators MUST accept unknown fields (R2). The net and open-url frames are the stated
   exception — strict, because their fields become real-world effects.</caption>
   <thead>
@@ -819,7 +821,7 @@ their own cost model.</p>
 
 <div class="callout">
   <div class="callout-title">Scope</div>
-  <p>This section describes the storage and host-behaviour layer of specification 1.2;
+  <p>This section describes the storage and host-behaviour layer of specification 1.3;
   the wire protocol of §4 is unchanged by it. Storage schema version 6 is described; the
   source of truth for constants and DDL is the reference implementation, locked by a
   snapshot test.</p>
@@ -945,7 +947,9 @@ portable in practice rather than in principle.</p>
   <li><strong>Support pluggable origins</strong> through an information/pull/push contract, so
   that a user may keep their file in storage they control. Conflicts are resolved by
   compare-and-swap on the revision token; divergence is surfaced to the user, and
-  last-writer-wins occurs only on explicit user action.</li>
+  last-writer-wins occurs only on explicit user action. Since specification 1.3 either
+  resolution may carry the access history across (§10), and a stop made on either device
+  wins; the data itself is never merged.</li>
 </ol>
 
 <p>The third obligation's final clause is small and load-bearing. A host that provisions an
@@ -1348,17 +1352,17 @@ delimiter spellings defanged in the data.</p>
 </section>
 
 <!-- ============================================================ 10 -->
-<!-- Access between apps — specification 1.2 Part VI (ADR-0075, TASK-20261010-cross-app-access; widened by ADR-0076, TASK-20261010-host-broker). -->
+<!-- Access between apps — specification 1.3 Part VI (ADR-0075, TASK-20261010-cross-app-access; widened by ADR-0076, TASK-20261010-host-broker — 1.2 by its PR-3, 1.3 by its PR-4 and PR-5). -->
 <section>
 <h2>Access between apps</h2>
 
 <p>Every application's data is its own. That isolation is the guarantee the threat table
 rests on, and it is also a limit a user feels the first time two of their own applications
 should cooperate: a budget that cannot see the ledger, a planner that cannot see the pantry.
-Specification 1.1 added the one sanctioned crossing and 1.2 widened it — a read, or a write
-with an undo — and it is shaped by the same doctrine as every other capability here — the
-model proposes, the human approves, the host enforces and freezes. Figure 11 traces the
-crossing from the ask to the rows.</p>
+Specification 1.1 added the one sanctioned crossing, 1.2 widened it — a read, or a write
+with an undo — and 1.3 carried it to the host's own surfaces; it is shaped by the same
+doctrine as every other capability here — the model proposes, the human approves, the host
+enforces and freezes. Figure 11 traces the crossing from the ask to the rows.</p>
 
 
 <p>A reader application asks, after a user act, with one plain sentence of purpose. The
@@ -1404,8 +1408,33 @@ new data first — at most once every five minutes, where the source lives, unde
 unattended posture as a scheduled run, counted on the day's limits and logged — and the host
 rings every open reader, with an id and nothing else, when a source changes. The chat beside
 an application sees what the application may read through the same grant and the same
-history, and proposes changes it never applies itself.</p>
-<!--FIGURE:fig11-access-grant|Figure 11|<span class="fignum">Figure 11.</span> Access between apps. The reader asks; the user reviews on host chrome and picks the source and tables; the host writes the grant, copies the source into a scoped scratch database in its own worker, drops everything outside the grant, runs the one read under a wall clock, masks credential columns, logs the read on the source and hands the rows to the reader — and, where the user ticked it, dry-runs a write on the same copy before applying it to the source's live database with its undo journaled first. The reader never sees the user's inventory; the source's live database is never queried for a read.-->
+history; it proposes, and never applies a change itself.</p>
+
+<p>Specification 1.3 carries the crossing to the host's own surfaces without a new frame. An
+application may say in advance what it would like to read — one
+<code>&lt;meta name="snug:access-wants"&gt;</code> in its own HTML head, a plain purpose and a
+few hints — and the host derives that <strong>declaration</strong> from the application's
+current code each time it is given new code and on every import, never from a row or a field a
+file or a bundle carries — only from the application's own code. The host shows it before the
+application has asked anything — on a shared application's install preview, and among the
+applications that could work together — and may open the consent sheet pre-filled from it,
+ticking only a table its hints name — a hint table, or a table one of whose
+<code>_</code>-separated words is a hint word. A declaration grants nothing; the application
+still asks after a user act. A grant may also start from the source's side, where the user
+offers one application's data to another — read-only when it starts, and still the user's act on
+host chrome. The chat beside an application may propose one change to a table of another
+application that the user let it change: the host plans it on a scoped copy, shows a card with
+its own count of the rows it would change, and applies it only when the user does — re-checking
+the grant and re-planning first — with the same undo as any other write. The chat, and a
+scheduled question the user ticked, may ask the sources they may read to <em>fetch new data
+first</em>, under the same rules as an application's own refresh; a fetch that does not finish
+never fails the turn or the run, and a fetch the user stops in an open source leaves that source
+refusing every change it tries until its run ends. When two devices resolve a synchronisation
+divergence, the access history of the copy that loses is carried into the copy that wins and a
+stop made on either device wins — the data itself is never merged. And an application that
+arrived in a file the user imported says so on the consent sheet whenever it asks, in place of
+any origin the file could have forged.</p>
+<!--FIGURE:fig11-access-grant|Figure 11|<span class="fignum">Figure 11.</span> Access between apps. The reader asks; the user reviews on host chrome and picks the source and tables; the host writes the grant, copies the source into a scoped scratch database in its own worker, drops everything outside the grant, runs the one read under a wall clock, masks credential columns, logs the read on the source and hands the rows to the reader — and, where the user ticked it, dry-runs a write on the same copy before applying it to the source's live database with its undo journaled first. The reader never sees the user's inventory; the source's live database is never queried for a read. Not drawn, since specification 1.3: a grant may also start from what the reader declared it would like to read, or from the source's side; the chat may propose a change the user applies on its card; the host's own doors may ask the source to fetch new data first; and the access history — never the data — crosses a sync, a stop on either device winning.-->
 </section>
 
 <!-- ============================================================ 11 -->
@@ -1566,7 +1595,8 @@ protocol layer, so that the answer is not one vendor's implementation detail.</p
 
 <p><strong>Single-host at a time.</strong> The file is authoritative and synchronisation is
 compare-and-swap on a revision token, which detects divergence but does not merge it. Two
-devices editing concurrently produce a conflict the user resolves. Convergent replicated data
+devices editing concurrently produce a conflict the user resolves; only the access history and
+a stop cross the resolution (§10), never the data. Convergent replicated data
 types would allow genuine multi-device concurrency and are the natural next step; they are a
 substantial addition to a format whose present virtue is that any SQLite tool can read
 it.</p>
@@ -1604,7 +1634,9 @@ application in view. A question to an application's agent may be allowed to look
 the host then runs one bounded agent turn itself — the application never opens — over the
 application's own data, the tables the user let it read from other applications, and requests
 that only ask, never post, through the application's approved connections: counted, scrubbed,
-and refused for the rest of any turn that has read another application's data. A scheduled
+and refused for the rest of any turn that has read another application's data. Where the user
+ticked it, a scheduled question first asks the applications it may read while the user is away
+to fetch new data (§10), counted in the same run. A scheduled
 answer stays inside the data surface of §9.2: the agent proposes changes to the application's
 data, with the verbatim statements and an affected-row preview, and never applies one itself.
 They wait for the user — unless the user let that schedule make its changes on its own, a
@@ -1658,7 +1690,7 @@ let it reach the world only through a wall a human froze and a gate a human answ
 put everything the user accumulates into one file they can carry away — and seal, if they
 choose, with a passphrase only they hold. The whole surface — wire, storage, connected
 applications, runtime contracts, linked-device connections, access between applications — is
-normative as of specification 1.2. All of it is MIT licensed, all of it is specified by schemas and contracts exported
+normative as of specification 1.3. All of it is MIT licensed, all of it is specified by schemas and contracts exported
 from a working implementation, and all of it is offered in the expectation that other
 implementations will find it wanting in specific, correctable ways.</p>
 
@@ -1673,7 +1705,7 @@ later, on a device and a provider nobody has chosen yet.</p>
 <h2 class="nonum">Normative references</h2>
 
 <ol>
-  <li><strong>Snug Protocol Specification, 1.2.</strong> The complete specification:
+  <li><strong>Snug Protocol Specification, 1.3.</strong> The complete specification:
   wire protocol, portable user database, connected applications, runtime contracts,
   linked-device connections, access between apps (read, or write with an undo). <span class="src">snugprotocol/spec —
   <code>SPEC.md</code></span></li>
@@ -1710,7 +1742,7 @@ later, on a device and a provider nobody has chosen yet.</p>
     <div class="k">Security contact</div>
     <p>security@snugprotocol.org</p>
     <div class="k" style="margin-top:4mm">Status</div>
-    <p>Specification 1.2 is normative: the wire protocol (published since v0.1), the
+    <p>Specification 1.3 is normative: the wire protocol (published since v0.1), the
     storage layer at schema 6, the connected-application surface, runtime contracts,
     linked-device connections, and access between applications. One surface — standing approvals — is explicitly
     provisional and so marked.</p>

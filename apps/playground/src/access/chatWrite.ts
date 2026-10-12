@@ -18,13 +18,14 @@
 //
 // THE APPROVAL IS THE CARD'S, re-checked against the access AS IT IS NOW (`writeChatApproved`):
 // the same id AND the same `grantedAt` (a renewal keeps the id — S9), the same source, a statement
-// whose verb still names the card's table, a count of at least one row — an applied change always
-// names its undo (S17), and a change of no rows has none — then the verdict, then the core with the
-// count the user saw. Every outcome carries `why`, D-PR5-12's table, which is all the card words;
-// `message` is the sentence an app would hear for the same refusal (never shown on the card). An
-// access no longer found is `gone` only when its SOURCE app is gone; otherwise it ENDED — a "while
-// it's open" access goes with its reader's view and with a reload, and one of another generation
-// was the view before's (Gate-5 G5-16 ii-2): the card says to allow it again, never that Ledger is gone.
+// whose verb still names the card's table, a count of at least one row — `ok` ⇒ applied;
+// `undoable`/`undoId` when its journal entry was written (S17), and a change of no rows has none —
+// then the verdict, then the core with the count the user saw. Every outcome carries `why`,
+// D-PR5-12's table, which is all the card words; `message` is the sentence an app would hear for
+// the same refusal (never shown on the card). An access no longer found is `gone` only when its
+// SOURCE app is gone; otherwise it ENDED — a "while it's open" access goes with its reader's view
+// and with a reload, and one of another generation was the view before's (Gate-5 G5-16 ii-2): the
+// card says to allow it again, never that Ledger is gone.
 //
 // THE PLAN answers the `grantedAt` of the access it was planned under (G5-16 ii-7, SB-8): the card
 // binds to THAT instant, never to the access as it is after the plan's awaits.
@@ -66,7 +67,7 @@ export interface ChatWriteApprovedInput {
   expectChanges: number;
 }
 
-/** The own card's outcome shape, with the why of a refusal. `ok` ⇒ `undoable: true` and an `undoId` (S17). */
+/** The own card's outcome shape, with the why of a refusal. `ok` ⇒ applied; `undoable`/`undoId` when its journal entry was written (S17). */
 export type ChatWriteApprovedOutcome = ExecuteApprovedWriteOutcome & { why?: AccessWriteFailedWhy };
 
 const C = ACCESS_ERROR_CODES;
@@ -160,7 +161,7 @@ export async function writeChatApproved(db: UserDb, caller: ChatAccessCaller, in
     // The statement still changes the card's table — the one the user read on it.
     const target = dmlTargetTable(input.sql);
     if (target === undefined || !sameName(target, input.table)) return failedWith('gone', M.notGranted);
-    // An applied change always names its undo (S17): a change of no rows has nothing to put back.
+    // `ok` ⇒ applied; `undoable`/`undoId` when its journal entry was written (S17). A change of no rows has nothing to put back.
     if (!Number.isSafeInteger(input.expectChanges) || input.expectChanges < 1) return failedWith('refused', M.writeRefused('statement'));
     const verdict = writeVerdict(db, caller, input.grantId, target);
     if (!verdict.ok) return failedWith(whyOfVerdict(verdict), verdict.message);
