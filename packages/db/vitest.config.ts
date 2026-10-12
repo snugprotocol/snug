@@ -31,5 +31,10 @@ export default defineConfig({
     // no async race — straight-line CPU work that got starved. Same symptom, opposite
     // cause. Check which you have before copying either fix.
     testTimeout: 30_000,
+
+    // One event-loop turn after every test, so vitest's 60 s worker RPC never waits on a whole
+    // file of synchronous sql.js tests (the CI `onTaskUpdate` timeout, 2026-10-11). The reasons
+    // and the measurement are in the file.
+    setupFiles: ['./src/__tests__/yield-between-tests.ts'],
   },
 });
