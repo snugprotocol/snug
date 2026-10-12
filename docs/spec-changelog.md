@@ -4,7 +4,7 @@ Every change pushed to `snugprotocol/spec`, newest first. Format: `## YYYY-MM-DD
 
 ---
 
-## 2026-10-11 — spec 1.2 — **STAGED, not yet pushed** — TASK-20261010-host-broker (PR-3; the push is the owner's own act after the merge, one line, wait for a yes — the 1.1 precedent)
+## 2026-10-11 — spec 1.2 — **PUSHED** `761a406` (spec + schemas + README) · `133b16c` (whitepaper edition 5) via snugprotocol/spec#3, rebase-merged so the two commits landed as two — TASK-20261010-host-broker (PR-3, merged as snug#202; owner's ask, same day)
 **Writes with an undo, refresh on demand and discovery between apps (ADR-0076 §4–§8, §10) —
 the second post-1.0 minor, additive.** No new frame and no new capability flag: the
 `snug:access-request` frame gains three ops (`write {grantId, sql, params?}` ·
@@ -55,10 +55,11 @@ a backup taken before the upgrade restores unsuspended. A 1.1 app on a 1.2 host 
 four ops it knows answered as before and ignores the keys it does not know.
 `schemas/` regenerated in the second pass (16 files; `access-request.json` 4 → 7 `oneOf`
 variants, `access-response.json` 5 → 8; no other schema's bytes change). The whitepaper moves
-to edition 5. Lands as TWO commits on the spec clone after the owner's ask, the 1.1
-precedent: (1) `spec 1.2: …` — `SPEC.md` + `schemas/` + README; (2) `whitepaper: edition 5 —
-…` — the PDF; the `**PUSHED**` rewrite with the two SHAs is added by a docs PR here after the
-push.
+to edition 5. Landed as TWO commits on `snugprotocol/spec` main: (1) `761a406` — `SPEC.md` +
+`schemas/` + README; (2) `133b16c` — the whitepaper edition 5 PDF (A4, 36 pages) + its README.
+Pushed 2026-10-11 on the owner's ask (the repo's `main` requires a pull request —
+snugprotocol/spec#3); `SPEC.md` and the sixteen schemas byte-identical to snug `main` @
+`e9a8840`; `check-whitepaper --spec <clone>` 110/110; `check-public-scrub` OK.
 
 ## 2026-10-10 — spec 1.1 — **PUSHED** `23654a6` (spec + schemas + README) · `1756de5` (whitepaper edition 4) via snugprotocol/spec#2, rebase-merged so the two staged commits landed as two — TASK-20261010-cross-app-access (owner's ask, same day)
 **Access between apps (ADR-0075) — the first post-1.0 minor, additive.** Two frames join the
