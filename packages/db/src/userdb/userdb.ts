@@ -25,12 +25,16 @@ import {
 } from '../crypto/container.js';
 import type { BindParams, Database, SqlJsStatic } from 'sql.js';
 import {
+  ACCESS_CARD_RESOLUTIONS,
+  ACCESS_WRITE_OUTCOMES,
   APP_KV_TABLE,
   AUTH_MAX_SLOTS_PER_APP,
   CONNECTION_PROVENANCES,
   CONNECTION_STATUS,
+  DATA_WRITE_OUTCOMES,
   FRAME_TYPES,
   PROTOCOL_VERSION,
+  SCHEDULE_CARD_RESOLUTIONS,
   SIDECAR_SYMBOLIC_HOST,
   USERDB_CONNECTIONS_TABLE,
   USERDB_DDL,
@@ -105,7 +109,7 @@ import {
   type AccessDecline,
   type AccessImportReport,
 } from './access.js';
-import { markImportedApps, snapshotLocalAppIdentity } from './app-provenance.js';
+import { hashAppIdentities, markImportedApps } from './app-provenance.js';
 import { applyTombstones, carryAccessHistory, snapshotLocalAccessHistory } from './history-carry.js';
 import { createOwnUndoAccessors, dropImportedOwnUndo, sweepOwnUndoForDeletedApp } from './own-undo.js';
 import type { OWN_UNDO_APPROVAL_BUCKET } from './app-settings-keys.js';
@@ -585,9 +589,10 @@ export interface UserDbImportReport {
   /**
    * The history carry (PR-5, D-PR5-8) — present ONLY when `carryHistorySince` was passed (`null`
    * included): local lines carried into the image, local candidates not carried (an absent source,
-   * a cap), and pulled grant rows replaced by this device's stop.
+   * a cap), pulled grant rows replaced by this device's stop, and the image's history ROWS the carry
+   * wrote (G5-7: a count-only merge is a write — the image then holds what the origin does not).
    */
-  history?: { carried: number; dropped: number; restopped: number };
+  history?: { carried: number; dropped: number; restopped: number; rewritten: number };
 }
 
 /** One column of an app's table, as the consent sheet shows it (TASK-20261010 AC7). */
@@ -1120,9 +1125,11 @@ export interface UserDb {
   /**
    * *Keep this device's copy* without losing the origin's history (TASK-20261010-host-broker PR-5,
    * D-PR5-8): open a pulled image through the SAME decode `importUserDb` uses, and carry ITS access
-   * lines newer than `since` (every line when `null`) and ITS revocations into this live file —
-   * nothing else moves. An image it cannot open (sealed for another key, not a database) carries
-   * nothing: it answers zeros and never throws, so the user's choice is never blocked.
+   * lines newer than `since` (every line when `null` — what the sync loop passes, G5-4), the larger
+   * count of every line both sides hold, and ITS revocations into this live file — nothing else
+   * moves; any row it writes marks the file dirty (G5-7). An image it cannot open (sealed for
+   * another key, not a database) carries nothing: it answers zeros and never throws, so the user's
+   * choice is never blocked.
    */
   carryFromImage(bytes: Uint8Array, options: { since: string | null }): Promise<{ carried: number; restopped: number }>;
 
@@ -1432,53 +1439,84 @@ function sqlOn(target: Database): SettingsSql {
   };
 }
 
+const SCHEDULE_CARD_ANSWERS: ReadonlySet<unknown> = new Set(SCHEDULE_CARD_RESOLUTIONS);
+const DATA_WRITE_ANSWERS: ReadonlySet<unknown> = new Set(DATA_WRITE_OUTCOMES);
+const ACCESS_WRITE_ANSWERS: ReadonlySet<unknown> = new Set(ACCESS_WRITE_OUTCOMES);
+const ACCESS_CARD_ANSWERS: ReadonlySet<unknown> = new Set(ACCESS_CARD_RESOLUTIONS);
+
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
+
 /**
- * The chat cards an untrusted import must not carry live (D-PR5-10), each with the seat that marks
- * it ANSWERED: a staged schedule suggestion (`meta.schedule`, TASK-20261009 PR-B S9; ADR-0074 §4)
- * answered by its `resolution`; the app's own change (`meta.dataWrite`) and the chat's change to
- * another app's data (`meta.accessWrite`, PR-5) settled by their `outcome`.
+ * The chat cards an untrusted import must not carry live (D-PR5-10), each with what ANSWERS it — a
+ * VALUE its reader accepts, never a key that is merely present (G5-1: a planted `outcome: null`
+ * would otherwise keep an *apply* the import believed settled). The vocabularies are the
+ * protocol's, the same lists the playground's readers judge by: a staged schedule suggestion
+ * (`meta.schedule`, TASK-20261009 PR-B S9; ADR-0074 §4) answered by its `resolution`; the app's own
+ * change (`meta.dataWrite`) and the chat's change to another app's data (`meta.accessWrite`, PR-5)
+ * settled by their `outcome`; the chat's ASK card (`meta.access`, G5-2) by its `resolution`'s
+ * `kind` — since D-PR5-15 it can ask to CHANGE rows.
  */
-const IMPORTED_CARD_RESOLUTION = { schedule: 'resolution', dataWrite: 'outcome', accessWrite: 'outcome' } as const;
-type ImportedCardKey = keyof typeof IMPORTED_CARD_RESOLUTION;
+const IMPORTED_CARD_ANSWERED = {
+  schedule: (card: Record<string, unknown>) => SCHEDULE_CARD_ANSWERS.has(card.resolution),
+  dataWrite: (card: Record<string, unknown>) => DATA_WRITE_ANSWERS.has(card.outcome),
+  accessWrite: (card: Record<string, unknown>) => ACCESS_WRITE_ANSWERS.has(card.outcome),
+  access: (card: Record<string, unknown>) => isRecord(card.resolution) && ACCESS_CARD_ANSWERS.has(card.resolution.kind),
+} as const;
+type ImportedCardKey = keyof typeof IMPORTED_CARD_ANSWERED;
+
+/**
+ * The seats of a chat meta that speak in the HOST's voice (G5-2 [SB-5]): the fetch facts on a user
+ * row (`fetched`, G5-17 — re-worded on read as the host's own words) and the retired free-text
+ * `fetchNote` they replaced (an older hub still renders it). A foreign file never speaks for this
+ * host, so an untrusted import drops them wherever they sit.
+ */
+const IMPORTED_HOST_SEATS: readonly string[] = ['fetched', 'fetchNote'];
 
 /**
  * An UNTRUSTED import's chat messages lose every UNANSWERED card named in `keys` (TASK-20261010-
- * host-broker PR-5, D-PR5-10; S1). An unanswered card is a proposal the user has not answered,
- * rendered as if this hub's own brain had made it — in a foreign file it is a planted card with
- * an act on it (*schedule it*, *apply*), so it goes, like the run rows' proposals do. An answered
- * card carries no act and stays; the rest of the meta (the artifact card, the brain stamp) stays,
- * and a message whose meta held nothing else ends with no meta at all.
+ * host-broker PR-5, D-PR5-10; S1) and every host-voiced seat (`IMPORTED_HOST_SEATS`, G5-2). An
+ * unanswered card is a proposal the user has not answered, rendered as if this hub's own brain had
+ * made it — in a foreign file it is a planted card with an act on it (*schedule it*, *apply*,
+ * *review…*), so it goes, like the run rows' proposals do. A card is answered only by a value its
+ * reader accepts (`IMPORTED_CARD_ANSWERED`); a card value that is not an object answers nothing.
+ * An answered card carries no act and stays; the rest of the meta (the artifact card, the brain
+ * stamp) stays, and a message whose meta held nothing else ends with no meta at all.
  *
  * By the PARSED key: EVERY message row with a meta is `JSON.parse`d — a pre-filter on the stored
  * text (the old `meta LIKE '%"schedule"%'`) is what a JSON escape (`"\u0073chedule"`) walks past,
- * while the reader's `JSON.parse` sees the key. A meta that does not parse renders no card (the
- * tolerant reader ignores it) and is kept verbatim. A card value that is not an object answers
- * nothing, so it is unanswered. Answers how many cards were dropped.
+ * while the reader's `JSON.parse` sees the key. A meta that does not parse is CLEARED (G5-3): the
+ * thread's reader parses every meta and throws on that row, so one planted unparseable meta would
+ * make the whole thread unreadable. Answers how many seats and metas it dropped.
  */
 function dropImportedCards(target: Database, keys: readonly ImportedCardKey[], options: { unresolvedOnly: boolean }): number {
   let dropped = 0;
+  const clear = (id: unknown, next: string | null): void => {
+    target.run(`UPDATE ${USERDB_TABLES.chatMessages} SET meta = ? WHERE id = ?`, [next, id] as never);
+  };
   for (const row of selectRows(target, `SELECT id, meta FROM ${USERDB_TABLES.chatMessages} WHERE meta IS NOT NULL`)) {
     let meta: unknown;
     try {
       meta = JSON.parse(String(row[1]));
     } catch {
-      continue; // an unreadable meta renders no card; the tolerant reader already ignores it
+      clear(row[0], null); // an unreadable meta would stop the whole thread from loading
+      dropped += 1;
+      continue;
     }
-    if (typeof meta !== 'object' || meta === null || Array.isArray(meta)) continue;
-    const record = meta as Record<string, unknown>;
-    const gone: ReadonlySet<string> = new Set(
-      keys.filter((key) => {
+    if (!isRecord(meta)) continue;
+    const record = meta;
+    const gone: ReadonlySet<string> = new Set([
+      ...keys.filter((key) => {
         if (!Object.hasOwn(record, key)) return false;
         const card = record[key];
-        const answered = typeof card === 'object' && card !== null && Object.hasOwn(card, IMPORTED_CARD_RESOLUTION[key]);
+        const answered = isRecord(card) && IMPORTED_CARD_ANSWERED[key](card);
         return !(options.unresolvedOnly && answered);
       }),
-    );
+      ...IMPORTED_HOST_SEATS.filter((seat) => Object.hasOwn(record, seat)),
+    ]);
     if (gone.size === 0) continue;
     dropped += gone.size;
     const rest = Object.fromEntries(Object.entries(record).filter(([key]) => !gone.has(key)));
-    const next = Object.keys(rest).length === 0 ? null : JSON.stringify(rest);
-    target.run(`UPDATE ${USERDB_TABLES.chatMessages} SET meta = ? WHERE id = ?`, [next, row[0]] as never);
+    clear(row[0], Object.keys(rest).length === 0 ? null : JSON.stringify(rest));
   }
   return dropped;
 }
@@ -3971,6 +4009,12 @@ function construct(
         next.run(`DELETE FROM ${USERDB_TABLES.secrets}`);
         next.run('VACUUM'); // deleted rows would otherwise linger in free pages (the exportUserDb rule)
       }
+      // The imported marker (PR-5, D-PR5-9): an untrusted file's apps are compared against the apps
+      // THIS hub holds, by identity. The hashing is the import's one await before the swap besides
+      // closing the driver, so it runs HERE, before every snapshot below (G5-6): from the first
+      // snapshot to the swap nothing awaits but `inner.close()`, as before PR-5 — a stop the user
+      // makes while the import hashes is in the snapshots, never silently undone by the swap.
+      const appIdentities = options?.trustedOrigin === true ? undefined : await hashAppIdentities(sqlOn(db), sqlOn(next));
       // Auth reconciliation (plan D5/N1 + fold T-M5): snapshot the locally-APPROVED rows
       // from the still-open handle, then run the delta-aware passes on the candidate
       // BEFORE it becomes live. Every import path (pull-merge, applyRemote, recovery
@@ -4011,9 +4055,6 @@ function construct(
       // access history, read before the swap, is what it carries into the image.
       const carrySince = options?.carryHistorySince;
       const localHistory = carrySince === undefined ? undefined : snapshotLocalAccessHistory(sqlOn(db));
-      // The imported marker (PR-5, D-PR5-9): an untrusted file's apps are compared against the
-      // apps THIS hub holds — their identity and their marker, read before the swap.
-      const localApps = options?.trustedOrigin === true ? undefined : await snapshotLocalAppIdentity(sqlOn(db));
       /**
        * TRUSTED RESTORE (R-M2, 2026-08-11). Keying "known" off the open DB's contracts made
        * an EMPTY hub mean "nothing is known", so every contract was nulled — and an empty
@@ -4048,10 +4089,11 @@ function construct(
         // intent-identical; trusted → kept. Unparseable grant rows go on both paths.
         access: reconcileImportedAccessGrants(sqlOn(next), localAccessGrants, options?.trustedOrigin === true),
       };
-      // An unanswered card on a chat message is a proposal too (S9; PR-5 D-PR5-10): an untrusted
-      // file's staged schedule suggestions and changes go, by their parsed key; a trusted pull
-      // keeps the user's own.
-      const droppedCards = options?.trustedOrigin === true ? 0 : dropImportedCards(next, ['schedule', 'dataWrite', 'accessWrite'], { unresolvedOnly: true });
+      // An unanswered card on a chat message is a proposal too (S9; PR-5 D-PR5-10, G5-1/G5-2): an
+      // untrusted file's staged schedule suggestions, changes and access asks go, by their parsed
+      // key and judged by value, with every host-voiced seat; a trusted pull keeps the user's own.
+      const droppedCards =
+        options?.trustedOrigin === true ? 0 : dropImportedCards(next, ['schedule', 'dataWrite', 'accessWrite', 'access'], { unresolvedOnly: true });
       // The own undo journal names rows to write back into an app (PR-4, D-PR4-3): an untrusted
       // file's buckets go; a trusted pull keeps the user's own.
       if (options?.trustedOrigin !== true) dropImportedOwnUndo(sqlOn(next));
@@ -4059,14 +4101,15 @@ function construct(
       // import, whatever its origin, derives it afresh.
       rederiveAccessWants(sqlOn(next));
       // An untrusted file's apps that are not this hub's own, byte for byte, are marked as having
-      // arrived with it (PR-5, D-PR5-9); a trusted pull keeps the markers it carries.
-      if (localApps !== undefined) await markImportedApps(sqlOn(next), localApps);
+      // arrived with it (PR-5, D-PR5-9) — over the identities hashed up front; a trusted pull keeps
+      // the markers it carries.
+      if (appIdentities !== undefined) markImportedApps(sqlOn(next), sqlOn(db), appIdentities);
       // The history carry (PR-5, D-PR5-8): this device's lines into the image, then this device's
       // stops over whatever the image says — only when the caller asked.
       if (carrySince !== undefined && localHistory !== undefined) {
-        const { carried, dropped } = carryAccessHistory(sqlOn(next), localHistory, { since: carrySince });
+        const { carried, dropped, rewritten } = carryAccessHistory(sqlOn(next), localHistory, { since: carrySince });
         const restopped = applyTombstones(sqlOn(next), localAccessGrants.revoked);
-        report.history = { carried, dropped, restopped };
+        report.history = { carried, dropped, restopped, rewritten };
       }
       // A stripped proposal's or card's statement would otherwise linger in the candidate's free
       // pages and ride the next secrets-included export raw — the `stripSecrets` rule.
@@ -4112,10 +4155,11 @@ function construct(
         // One transaction on the live file: the carry and the stops land together or not at all.
         db.run('BEGIN IMMEDIATE');
         try {
-          const { carried } = carryAccessHistory(sqlOn(db), history, { since });
+          const { carried, rewritten } = carryAccessHistory(sqlOn(db), history, { since });
           const restopped = applyTombstones(sqlOn(db), revoked);
           db.run('COMMIT');
-          if (carried > 0 || restopped > 0) markDirty();
+          // Any row written is a change to persist — a count-only merge included (G5-7).
+          if (rewritten > 0 || restopped > 0) markDirty();
           return { carried, restopped };
         } catch {
           try {

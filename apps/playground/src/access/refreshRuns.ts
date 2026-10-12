@@ -22,6 +22,15 @@
 // writes NOTHING (the old file is gone — S6), while a cancel, an abandoned run or a deleted app's
 // run is the engine's to word. Each of the four verbs takes the entry away at once, so the chip
 // drops it in the same tick; the engine's own end is then a no-op here.
+//
+// THE RESET EPOCH AND THE SWAP LATCH (Gate-5 fold G5-18; P3-1, SB-3). A file swap is not only the
+// flights in the air: the cooldowns, the remembered outcomes and a held record's late calls belong
+// to the old file too. Most resets find NOTHING in flight, so no flight's abort could carry them —
+// the epoch lives HERE, moved by every `abortAllRefreshes('reset')` before anything else (an empty
+// store included), and the engine reads it at the top of every ask and after every await. A swap
+// that takes awaits — a pull's import, a file's import — LATCHES first (`latchRefreshSwap`: the same
+// reset, then the latch): until the file that replaces this one is there (`unlatchRefreshSwap`, in
+// `afterForeignBytes`), every refresh asked answers stopped and nothing is dispatched or written.
 
 import { createStore, useStore } from '../state/store.js';
 
@@ -56,6 +65,10 @@ export interface BeginRefreshRunInput {
 
 /** Oldest first: the order the refreshes began in. */
 const runs = createStore<readonly RefreshRun[]>([]);
+/** Moves at every reset — what the engine compares to know the file it remembers is still the one there (G5-18). */
+let resetEpoch = 0;
+/** A swap is under way: nothing may start until the file that replaces this one is there (SB-3). */
+let swapLatched = false;
 
 const replace = (runId: string, next: (run: RefreshRun) => RefreshRun): void => {
   runs.set(runs.get().map((run) => (run.runId === runId ? next(run) : run)));
@@ -123,9 +136,39 @@ export function cancelRefresh(runId: string): boolean {
   return target.length > 0;
 }
 
-/** A file swap: every refresh aborts — the engine writes nothing for it — and the store empties. */
+/**
+ * A file swap: the epoch moves FIRST — with nothing in flight too, so the engine forgets the old
+ * file's cooldowns and outcomes on its next read (P3-1) — then every refresh aborts (the engine
+ * writes nothing for it, and an abort listener already reads the new epoch) and the store empties.
+ */
 export function abortAllRefreshes(reason: 'reset'): void {
+  resetEpoch += 1;
   abortRuns(runs.get(), reason);
+}
+
+/** The reset epoch: moved by every `abortAllRefreshes('reset')` (and so every latch), never by a cancel, a delete or an abandoned wait. */
+export function refreshResetEpoch(): number {
+  return resetEpoch;
+}
+
+/**
+ * A swap begins (a pull's `beforeSwap`, a file's import): the reset, then the latch — every refresh
+ * asked from here answers stopped until `unlatchRefreshSwap`, so none starts against the file being
+ * replaced and lands in the one replacing it (SB-3).
+ */
+export function latchRefreshSwap(): void {
+  swapLatched = true;
+  abortAllRefreshes('reset');
+}
+
+/** The file that replaced the old one is there (`afterForeignBytes`), or the swap swapped nothing: refreshes may start again. */
+export function unlatchRefreshSwap(): void {
+  swapLatched = false;
+}
+
+/** Whether a swap is under way — the engine answers every ask `stopped` while it is. */
+export function refreshSwapLatched(): boolean {
+  return swapLatched;
 }
 
 /** An app delete: only the refreshes whose source OR requester is that app (S6). */

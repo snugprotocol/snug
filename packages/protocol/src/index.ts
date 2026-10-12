@@ -413,6 +413,26 @@ export {
 // app arrived with a file the user imported. Internal draft, OUT of the json-schemas SOURCES.
 export { appProvenanceSchema, type AppProvenance } from './app-provenance.js';
 
+// The chat cards' answer vocabularies and the chat's fetch facts (TASK-20261010-host-broker PR-5
+// Gate 5, G5-1/G5-17): "answered" is a value both the playground's readers and the db's untrusted
+// import accept, spelled once. Internal draft, OUT of the json-schemas SOURCES.
+export {
+  ACCESS_CARD_RESOLUTIONS,
+  ACCESS_WRITE_OUTCOMES,
+  CHAT_FETCH_FACTS_MAX,
+  CHAT_FETCH_OUTCOMES,
+  CHAT_FETCH_SOURCE_MAX_CHARS,
+  DATA_WRITE_OUTCOMES,
+  SCHEDULE_CARD_RESOLUTIONS,
+  chatFetchFactsSchema,
+  type AccessCardResolutionKind,
+  type AccessWriteOutcome,
+  type ChatFetchFact,
+  type ChatFetchOutcome,
+  type DataWriteOutcome,
+  type ScheduleCardResolution,
+} from './chat-cards.js';
+
 // The guards every persisted record shares (TASK-20261010-cross-app-access D8): the SQL
 // statement rules, the ONE credential walk, and the record-identity helpers. `isReadOnlySelect`
 // is exported above through schedule.ts's re-export (the same function).

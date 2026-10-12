@@ -150,7 +150,8 @@
 //
 // `renameDmlTarget` (TASK-20261010-host-broker PR-5, D-PR5-11) renames the chat's cross-app change
 // from the shared alias it was written against to the source's own table — a narrow head grammar
-// and a double re-parse (`parseBrokeredStatement` AND `dmlTargetTable`), refusing by rule.
+// and a double re-parse (`parseBrokeredStatement` AND `dmlTargetTable`), refusing by rule; a parser
+// refusal of the renamed text passes the PARSER's rule out (`rule: 'parse'`, `parseRule`; G5-10).
 //
 // REFUSALS NAME THEIR RULE. Beside `reason: 'refused'` every refusal of the parser, the facts,
 // the column rule or the value walk carries `rule` — `statement` · `no-where` · `table` ·
@@ -782,14 +783,22 @@ export function dmlTargetTable(sql: string): string | undefined {
 
 // ------------------------------------------------------------------------------- renameDmlTarget
 
-/** Why `renameDmlTarget` refused: the statement's shape, its target is not the alias, a code point SQL names have no use for, or the alias named again past the head. */
-export type RenameRefusalRule = 'statement' | 'target' | 'text' | 'qualified';
-export type RenameDmlTargetResult = { ok: true; sql: string } | { ok: false; rule: RenameRefusalRule };
+/**
+ * Why `renameDmlTarget` refused: the statement's shape, its target is not the alias, a code point SQL
+ * names have no use for, the alias named again past the head — or `parse`, the renamed text failing
+ * the parser on one of the PARSER's rules, carried as `parseRule` (PR-5 Gate 5, G5-10).
+ */
+export type RenameRefusalRule = 'statement' | 'target' | 'text' | 'qualified' | 'parse';
+export type RenameDmlTargetResult =
+  | { ok: true; sql: string }
+  | { ok: false; rule: Exclude<RenameRefusalRule, 'parse'> }
+  | { ok: false; rule: 'parse'; parseRule: BrokeredRefusalRule };
 
 /** The ONE head a renamed statement may open with — ASCII whitespace only (the tokenizer's `\s` would admit NBSP), no comment before it, no `OR …`, no `REPLACE`. */
 const RENAME_HEAD = /^[ \t\n\f\r]*(?:INSERT[ \t\n\f\r]+INTO|UPDATE|DELETE[ \t\n\f\r]+FROM)[ \t\n\f\r]+/i;
 const BARE_NAME = /[A-Za-z_][A-Za-z0-9_$]*/y;
-const AFTER_TARGET = /^(?:[ \t\n\f\r(]|\/\*|--)/;
+/** What may follow the target's name: ASCII whitespace, `(`, a comment opener — or the end of the text (the parser then words what is missing). */
+const AFTER_TARGET = /^(?:[ \t\n\f\r(]|\/\*|--|$)/;
 const NON_ASCII = /[^\x00-\x7F]/;
 
 const asciiLower = (text: string): string => text.replace(/[A-Z]/g, (ch) => ch.toLowerCase());
@@ -870,18 +879,20 @@ function namesOf(sql: string): Array<{ at: number; value: string }> | 'text' {
 /**
  * The chat's cross-app change renamed from the SHARED ALIAS it was written against (`ledger__tx`)
  * to the source's own table (TASK-20261010-host-broker PR-5, contract v2 D-PR5-11 step 4; S8,
- * F18). PURE, and narrow on purpose — a refusal is a plain *one plain change* answer, never a
- * repair:
+ * F18). PURE, and narrow on purpose — a refusal is an answer (*one plain change* for the rename's
+ * own rules, the parser's words for `parse`), never a repair:
  *  - the head is `INSERT INTO`, `UPDATE` or `DELETE FROM` (ASCII-case-insensitive) at the very
  *    start after ASCII whitespace, then ONE name — bare, or one quoted form whose unescaped value
  *    is `from` (ASCII-case-insensitive) — else `statement` / `target`;
- *  - the character after that name is ASCII whitespace, `(` or a comment opener — else
- *    `statement` (a `.` would make it a qualifier, a quote a second name);
+ *  - the character after that name is ASCII whitespace, `(` or a comment opener, or the text ends
+ *    there — else `statement` (a `.` would make it a qualifier, a quote a second name);
  *  - no code point ≥ U+0080 outside a string literal — else `text`;
  *  - `from` named nowhere past the head (`ledger__tx.id`, a subquery over it) — else `qualified`;
  *  - the name is replaced by `"to"` and nothing else moves; the result must parse as a brokered
- *    statement on `to` AND say `to` to `dmlTargetTable` (the two readers the write path asks) —
- *    else `statement`.
+ *    statement — else `parse`, with the parser's own rule as `parseRule` (`no-where`, `computed`,
+ *    `value`, its `statement` for a second statement or a function …), so the caller words the
+ *    fault the parser found rather than the rename's (G5-10) — on `to`, AND say `to` to
+ *    `dmlTargetTable` (the two readers the write path asks) — else `statement`.
  */
 export function renameDmlTarget(sql: string, from: string, to: string): RenameDmlTargetResult {
   const head = RENAME_HEAD.exec(sql);
@@ -908,7 +919,8 @@ export function renameDmlTarget(sql: string, from: string, to: string): RenameDm
   if (names.some(({ at, value }) => at >= end && asciiLower(value) === asciiLower(from))) return { ok: false, rule: 'qualified' };
   const renamed = `${sql.slice(0, start)}"${to.replace(/"/g, '""')}"${sql.slice(end)}`;
   const parsed = parseBrokeredStatement(renamed);
-  if (!parsed.ok || parsed.parsed.table !== to || dmlTargetTable(renamed) !== to) return { ok: false, rule: 'statement' };
+  if (!parsed.ok) return { ok: false, rule: 'parse', parseRule: parsed.rule };
+  if (parsed.parsed.table !== to || dmlTargetTable(renamed) !== to) return { ok: false, rule: 'statement' };
   return { ok: true, sql: renamed };
 }
 

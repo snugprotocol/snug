@@ -530,8 +530,12 @@ describe('AC24 retrieval delivery — build-time queries reach the teaching', ()
 // the declaration is taught in 87, retrieved, never inlined).
 // =========================================================================================
 
-/** The KB 87 example's purpose — the one the consent sheet's declared says-line is pinned with (D4). */
-const KB_EXAMPLE_PURPOSE = 'to show spending by category';
+/**
+ * The KB 87 example's purpose — the one the consent sheet's declared says-line is pinned with (D4).
+ * G5-16 (ii-3): the example now CARRIES an apostrophe, written `&apos;` inside the single-quoted
+ * content, so the trap it teaches is in the example itself (was 'to show spending by category').
+ */
+const KB_EXAMPLE_PURPOSE = "to show this month's spending by category";
 /** sha256 of KB 20's ```html fence as of PR-4's merge (main @ a133978) — unchanged by PR-5. */
 const KB20_FENCE_SHA256 = '1cb4a5028c11c965e797cb1ecf19b4791dc6edf8c8ddd3a536b03b76a647840f';
 
@@ -559,7 +563,7 @@ describe('PR-5 — KB 87’s section "Saying what your app would like to read" (
     expect(lines.filter((line) => /snug:access-wants/.test(line))).toHaveLength(1);
   });
 
-  it('the content attribute is SINGLE-quoted JSON that parses under the protocol’s own schema — the example purpose is "to show spending by category"', () => {
+  it('the content attribute is SINGLE-quoted JSON that parses under the protocol’s own schema — the example purpose is KB_EXAMPLE_PURPOSE (G5-16 ii-3: it carries an apostrophe)', () => {
     const text = section(source(KB_FILE), PR5_HEADING);
     const fence = /```html\r?\n([\s\S]*?)\r?\n```/.exec(text)?.[1] ?? '';
     const metaLine = fence.split(/\r?\n/).find((line) => /snug:access-wants/.test(line)) ?? '';
@@ -655,5 +659,55 @@ describe('PR-5 — KB 85 and KB 20 (AC39; D-PR5-19)', () => {
     expect(fences).toHaveLength(1);
     expect(createHash('sha256').update(fences[0]!, 'utf8').digest('hex')).toBe(KB20_FENCE_SHA256);
     expect(fences[0]).not.toContain('snug:access-wants');
+  });
+});
+
+// =========================================================================================
+// TASK-20261010-host-broker PR-5 — Gate-5 fold G5-16 (ii-3, ii-11): what KB 87 and the skill
+// teach about the declaration's TEXT.
+//
+//  ii-3  The content is single-quoted, so an ASCII apostrophe inside the purpose ends the value and
+//        the meta silently becomes no declaration ("to show this month's spending" → undefined). KB 87
+//        says, in ONE sentence, that an apostrophe is written `&apos;` (or ’), the KB example carries
+//        one (pinned above through KB_EXAMPLE_PURPOSE), and SKILL's mention says the same.
+//  ii-11 The declined-ask carry keys on the HINTS (`accessRequestHash` never hashes the purpose), so
+//        "declare AND ask, with the same purpose words" sends an author to the wrong half: the KB says
+//        "declare AND ask, with the same purpose and the same hints".
+// =========================================================================================
+
+/** G5-16 (ii-3): the one sentence KB 87's section gains — the lane writes it as is. */
+const APOSTROPHE_SENTENCE =
+  "An apostrophe inside the content is written `&apos;` (or ’): a plain `'` would end the single-quoted value, and the meta would be no declaration.";
+
+describe('G5-16 (ii-3) — an apostrophe in the purpose is written &apos; (or ’)', () => {
+  it('G5-16 (ii-3) KB 87’s section says it, in one sentence', () => {
+    expect(prose(section(source(KB_FILE), PR5_HEADING))).toContain(prose(APOSTROPHE_SENTENCE));
+    expect(prose(section(rendered(KB_FILE), PR5_HEADING))).toContain(prose(APOSTROPHE_SENTENCE));
+  });
+
+  it('G5-16 (ii-3) the KB example writes its apostrophe as &apos; in the meta — never a raw one, which would end the value', () => {
+    const fence = /```html\r?\n([\s\S]*?)\r?\n```/.exec(section(source(KB_FILE), PR5_HEADING))?.[1] ?? '';
+    const metaLine = fence.split(/\r?\n/).find((line) => /snug:access-wants/.test(line)) ?? '';
+    const content = /\bcontent='([^']*)'/.exec(metaLine)?.[1] ?? '';
+    expect(content).toContain('&apos;');
+    // The value runs to the closing quote of the attribute: nothing of the JSON is left after it.
+    expect(metaLine.slice(metaLine.indexOf(content) + content.length)).toMatch(/^'>\s*$/);
+    expect(decodeEntities(content)).toContain("month's");
+  });
+
+  it('G5-16 (ii-3) SKILL’s mention of the meta says it too', () => {
+    const access = prose(source(SKILL_FILE).split('## Access between apps')[1]?.split('## Schedules')[0] ?? '');
+    expect(access).toMatch(/apostrophe[^.]*`&apos;` \(or ’\)/);
+  });
+});
+
+describe('G5-16 (ii-11) — declare AND ask, with the same purpose and the same hints', () => {
+  it('G5-16 (ii-11) KB 87 says the hints must match too (the declined ask is recognised by its hints)', () => {
+    const words = prose(section(rendered(KB_FILE), PR5_HEADING));
+    expect(words).toContain('declare AND ask, with the same purpose and the same hints');
+  });
+
+  it('G5-16 (ii-11) the purpose-only sentence is gone', () => {
+    expect(prose(source(KB_FILE))).not.toContain('with the same purpose words');
   });
 });

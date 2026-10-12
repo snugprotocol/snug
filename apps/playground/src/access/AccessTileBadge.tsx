@@ -16,8 +16,11 @@
 //
 // THE DATA is read ONCE per shelf, in `HubHome`, through `useHubAccess` — gated by the host's
 // access surface, refreshed on the access and library revisions and by ONE timer at the nearest
-// expiry (at most a day, re-armed when it fires, cleared on unmount), never per tile. The clock is
-// the wall clock read at the call: an expiry is a moment on it, like every date on the shelf.
+// expiry (at most a day, re-armed when it fires, cleared on unmount), never per tile; the file's
+// grants are read once per refresh and shared by the counts, the pairs and the timer (Gate-5 IB-7).
+// The clock is the wall clock read at the call: an expiry is a moment on it, like every date on
+// the shelf. A pair whose access is paused or expired is no *could read* (G5-14): *allow again* on
+// that row is the act. The sibling is disabled while its ask is in flight (IB-5).
 
 import { useEffect, useState, type ReactElement } from 'react';
 
@@ -67,16 +70,18 @@ export function useHubAccess(enabled: boolean): HubAccess {
       .then((db) => {
         if (cancelled) return;
         const now = Date.now();
+        // The file's grants read ONCE (IB-7): the counts, the pairs and the timer share them.
+        const found = foundGrants(db);
         const couldRead = new Map<string, TileCouldRead>();
         // Best first (pairs.ts's order): each reader's FIRST pair is its best.
-        for (const pair of listPairSuggestions(db, now)) {
+        for (const pair of listPairSuggestions(db, now, { found })) {
           if (!couldRead.has(pair.readerAppId)) couldRead.set(pair.readerAppId, { sourceAppId: pair.sourceAppId, sourceName: pair.sourceName, want: pair.want });
         }
-        setData({ counts: accessCountsByApp(db, now), couldRead });
+        setData({ counts: accessCountsByApp(db, now, found), couldRead });
         // ONE timer: the nearest end of a live access, never more than a day away (F16).
-        const ends = foundGrants(db)
-          .filter((found) => isLive(found.grant, now, db))
-          .map((found) => expiresAtOf(found.grant))
+        const ends = found
+          .filter((entry) => isLive(entry.grant, now, db))
+          .map((entry) => expiresAtOf(entry.grant))
           .flatMap((at) => (at === undefined ? [] : [Date.parse(at) - now]))
           .filter((left) => left > 0);
         timer = setTimeout(() => setTick((value) => value + 1), Math.min(RECHECK_MAX_MS, ...ends));
@@ -129,6 +134,7 @@ export function AccessTileCouldRead({ readerAppId, readerName, pair }: AccessTil
           className="btn btn-ghost tile-could-read"
           data-testid="tile-could-read"
           aria-label={HUB_TILE.couldReadName(readerName, pair.sourceName)}
+          disabled={act.busy}
           onClick={(event) => void act.start(readerAppId, { declared: pair.want, source: pair.sourceAppId }, pair.sourceName, event.currentTarget)}
         >
           {isolateNames(HUB_TILE.couldRead, pair.sourceName)}

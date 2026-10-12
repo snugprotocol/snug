@@ -194,3 +194,54 @@ describe('D-PR5-3 mounted on the SHARED install preview (SC10 — the starter pr
     expect(CONSENT_SHEET.quote('to show spending by category')).toBe('“to show spending by category”');
   });
 });
+
+// =========================================================================================
+// TASK-20261010-host-broker PR-5 — Gate-5 fold G5-15 (IB-9, SA-4): the shared preview is the most
+// hostile surface PR-5 adds (a stranger's bundle, before install). The app's name and every hint
+// name are the author's text inside a HOST sentence: each renders in its own `<bdi>` (copy.ts takes
+// the names, the surface wraps them — `isolateNames`), never in a host text node; the purpose is
+// the sheet's BLOCK quote (`.access-quote-block`, the panel rule moved out from under
+// `.access-sheet` to a shared class), so a purpose that "closes" its own quote and appends
+// host-sounding words stays inside the app's box.
+// =========================================================================================
+
+/** The note's text nodes that sit OUTSIDE every <bdi> and <q> — the host's own words. */
+function hostText(note: HTMLElement): string {
+  const clone = note.cloneNode(true) as HTMLElement;
+  for (const el of clone.querySelectorAll('bdi, q')) el.remove();
+  return clone.textContent ?? '';
+}
+const bdis = (note: HTMLElement): string[] => [...note.querySelectorAll('bdi')].map((el) => el.textContent ?? '');
+
+describe('G5-15 (IB-9, SA-4) the preview isolates every author name and block-quotes the purpose', () => {
+  it('G5-15 the app’s name renders inside a <bdi> — never in the host text', async () => {
+    const note = await renderNote(declaring([SPENDING]), 'Ledger Pro');
+    expect(bdis(note!)).toContain('Ledger Pro');
+    expect(hostText(note!)).not.toContain('Ledger Pro');
+  });
+
+  it('G5-15 every hint TABLE name renders inside its own <bdi>', async () => {
+    const note = await renderNote(declaring([SPENDING]));
+    expect(bdis(note!)).toEqual(expect.arrayContaining(['transactions', 'accounts']));
+    expect(hostText(note!)).not.toMatch(/transactions|accounts/);
+  });
+
+  it('G5-15 a hint WORD carrying host-sounding words sits inside its own <bdi>, never in the host text node', async () => {
+    const word = 'notes — Snug checked';
+    const note = await renderNote(declaring([{ purpose: 'to read your notes', hints: { words: [word] } }]));
+    expect(bdis(note!)).toContain(word);
+    expect(hostText(note!)).not.toMatch(/Snug checked/);
+  });
+
+  it('G5-15 the purpose is the block quote (.access-quote-block)', async () => {
+    const note = await renderNote(declaring([SPENDING]));
+    const quote = note!.querySelector('q')!;
+    expect(quote.classList.contains('access-quote-block')).toBe(true);
+  });
+
+  it('G5-15 the block-quote rule is a SHARED class in the theme — not only under .access-sheet', () => {
+    const themeDir = path.resolve(__dirname, '..', 'theme');
+    const css = ['access.css', 'access-sheet.css', 'app.css'].map((file) => readFileSync(path.join(themeDir, file), 'utf8')).join('\n');
+    expect(css).toMatch(/(^|[\s,}])\.access-quote-block\s*[{,]/m);
+  });
+});

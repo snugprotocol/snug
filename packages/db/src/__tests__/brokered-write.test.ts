@@ -1847,3 +1847,64 @@ describe('renameDmlTarget — every refusal (D-PR5-11 step 4; S8, F18)', () => {
     expect(typeof index.renameDmlTarget).toBe('function');
   });
 });
+
+// =================================================================================================
+// TASK-20261010-host-broker PR-5 Gate 5 — G5-10 [ii-1, the db half]: when the rename itself is fine
+// but the DOUBLE RE-PARSE fails with a PARSER rule, `renameDmlTarget` passes that rule out —
+// `{ok: false, rule: 'parse', parseRule}` — so the chat's tool answers the parser's own words
+// (`ACCESS_APP_MESSAGES.writeRefused(parseRule)`) instead of *one plain change*, which points at the
+// wrong fault. The rename keeps `statement | target | text | qualified` for ITS OWN rules (the head,
+// the target, the code points, the alias past the head) and for a re-parse that succeeds on the
+// wrong table. `parseRule` is EXACTLY what `parseBrokeredStatement` answers for the renamed text —
+// whatever it is (a parser `statement`, e.g. a second statement or a function, included).
+// =================================================================================================
+
+type RenameWithParse = { ok: true; sql: string } | { ok: false; rule: string; parseRule?: string };
+
+describe('G5-10 — renameDmlTarget answers rule \'parse\' with the parser\'s own rule (ii-1)', () => {
+  /** What the parser answers for the renamed text — the rule the rename must pass out. */
+  async function parserRuleOf(renamed: string): Promise<string> {
+    const { parseBrokeredStatement } = await brokered();
+    const parsed = parseBrokeredStatement(renamed);
+    if (parsed.ok) throw new Error(`fixture: the parser admits ${renamed}`);
+    return parsed.rule;
+  }
+
+  it('G5-10 a DELETE with no WHERE → {rule: parse, parseRule: no-where} (never the rename\'s statement)', async () => {
+    const rename = (await renameDmlTarget()) as unknown as (sql: string, from: string, to: string) => RenameWithParse;
+    expect(rename('DELETE FROM ledger__tx', ALIAS, TABLE)).toEqual({ ok: false, rule: 'parse', parseRule: 'no-where' });
+  });
+
+  it('G5-10 an UPDATE with no WHERE → {rule: parse, parseRule: no-where}', async () => {
+    const rename = (await renameDmlTarget()) as unknown as (sql: string, from: string, to: string) => RenameWithParse;
+    expect(rename('UPDATE ledger__tx SET amount = 1', ALIAS, TABLE)).toEqual({ ok: false, rule: 'parse', parseRule: 'no-where' });
+  });
+
+  it('G5-10 arithmetic, a function, a conflict clause, a second statement → rule parse with the PARSER\'s rule for the renamed text', async () => {
+    const rename = (await renameDmlTarget()) as unknown as (sql: string, from: string, to: string) => RenameWithParse;
+    for (const [sql, renamed] of [
+      ['UPDATE ledger__tx SET amount = amount + 5 WHERE id = 3', 'UPDATE "transactions" SET amount = amount + 5 WHERE id = 3'],
+      ["UPDATE ledger__tx SET at = datetime('now') WHERE id = 3", `UPDATE "transactions" SET at = datetime('now') WHERE id = 3`],
+      ["INSERT INTO ledger__tx (note) VALUES ('x') ON CONFLICT DO NOTHING", `INSERT INTO "transactions" (note) VALUES ('x') ON CONFLICT DO NOTHING`],
+      ["UPDATE ledger__tx SET note = 'x' WHERE id = 1; SELECT 1", `UPDATE "transactions" SET note = 'x' WHERE id = 1; SELECT 1`],
+      ['INSERT INTO ledger__tx (note) SELECT note FROM accounts', 'INSERT INTO "transactions" (note) SELECT note FROM accounts'],
+    ] as const) {
+      expect(rename(sql, ALIAS, TABLE), sql).toEqual({ ok: false, rule: 'parse', parseRule: await parserRuleOf(renamed) });
+    }
+  });
+
+  it('G5-10 guard: the rename\'s OWN refusals keep their rule and carry no parseRule', async () => {
+    const rename = (await renameDmlTarget()) as unknown as (sql: string, from: string, to: string) => RenameWithParse;
+    expect(rename('SELECT * FROM ledger__tx', ALIAS, TABLE)).toEqual({ ok: false, rule: 'statement' });
+    expect(rename("/* hi */ UPDATE ledger__tx SET note = 'x' WHERE id = 1", ALIAS, TABLE)).toEqual({ ok: false, rule: 'statement' });
+    expect(rename(`UPDATE ledger__tx.note SET note = 'x' WHERE id = 1`, ALIAS, TABLE)).toEqual({ ok: false, rule: 'statement' });
+    expect(rename("UPDATE other__tx SET note = 'x' WHERE id = 1", ALIAS, TABLE)).toEqual({ ok: false, rule: 'target' });
+    expect(rename(`UPDATE ledger__tx SET café = 'x' WHERE id = 1`, ALIAS, TABLE)).toEqual({ ok: false, rule: 'text' });
+    expect(rename("UPDATE ledger__tx SET note = 'x' WHERE ledger__tx.id = 1", ALIAS, TABLE)).toEqual({ ok: false, rule: 'qualified' });
+  });
+
+  it('G5-10 guard: a statement the parser admits is still renamed as before', async () => {
+    const rename = (await renameDmlTarget()) as unknown as (sql: string, from: string, to: string) => RenameWithParse;
+    expect(rename("UPDATE ledger__tx SET note = 'lunch' WHERE id = 7", ALIAS, TABLE)).toEqual({ ok: true, sql: `UPDATE "transactions" SET note = 'lunch' WHERE id = 7` });
+  });
+});

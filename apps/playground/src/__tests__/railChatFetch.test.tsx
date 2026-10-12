@@ -13,7 +13,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
-import { act } from 'react';
+import { act, type ReactElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -149,13 +149,24 @@ describe('D-PR5-20 the toggle — shown, its state, its act', () => {
     expect(text).toContain('Pantry');
   });
 
-  it('three sources: *fetch new data from 3 apps first*, the names in `title`', async () => {
+  // G5-19 (P3-6): RE-PINNED to the orchestrator's copy edit — the label names only the sources a fetch
+  // asks (REFRESH_FIRST_MAX_SOURCES = 2, in order) and counts the rest as not asked; was
+  // 'fetch new data from 3 apps first'. The title still names every source.
+  it('three sources: *fetch new data from Ledger and Pantry first (+1 not asked)*, the names in `title` (G5-19 P3-6)', async () => {
     grant(ledger);
     grant(pantry);
     grant(notes);
     const el = await render();
     const button = toggle(el)!;
-    expect(button.textContent).toBe('fetch new data from 3 apps first');
+    // The two asked are the first two in the fetch's (grant) order — the file's order, not the install
+    // order — so the pin names the shape: two of the three by name, then the third as not asked.
+    const label = /^fetch new data from (\w+) and (\w+) first \(\+1 not asked\)$/.exec(button.textContent ?? '');
+    expect(label, button.textContent ?? '').not.toBeNull();
+    const asked = [label![1]!, label![2]!];
+    const rest = ['Ledger', 'Pantry', 'Notes'].filter((name) => !asked.includes(name));
+    expect(rest).toHaveLength(1);
+    expect(button.textContent).toBe(CHAT_FETCH.first([...asked, ...rest]));
+    expect(button.getAttribute('title')).toBe(CHAT_FETCH.firstNamed([...asked, ...rest]));
     for (const name of ['Ledger', 'Pantry', 'Notes']) expect(button.getAttribute('title')).toContain(name);
   });
 
@@ -243,13 +254,14 @@ describe('D-PR5-20 its data hook re-reads on the access revision and on brain ch
 });
 
 describe('D-PR5-20 the words — `access/copy.ts` CHAT_FETCH (straight apostrophes; *new data*, never *look up*)', () => {
-  it('first(names): names ≤ 2 sources; three or more → *fetch new data from 3 apps first*', () => {
+  // G5-19 (P3-6): RE-PINNED — three or more name the two asked and count the rest (was '… from 3 apps first').
+  it('first(names): names ≤ 2 sources; three or more → the two asked by name, *(+N not asked)* (G5-19 P3-6)', () => {
     expect(CHAT_FETCH.first(['Ledger'])).toContain('Ledger');
     expect(CHAT_FETCH.first(['Ledger'])).toMatch(/new data/);
     const two = CHAT_FETCH.first(['Ledger', 'Pantry']);
     expect(two).toContain('Ledger');
     expect(two).toContain('Pantry');
-    expect(CHAT_FETCH.first(['Ledger', 'Pantry', 'Notes'])).toBe('fetch new data from 3 apps first');
+    expect(CHAT_FETCH.first(['Ledger', 'Pantry', 'Notes'])).toBe('fetch new data from Ledger and Pantry first (+1 not asked)');
     for (const words of [CHAT_FETCH.first(['Ledger']), two]) {
       expect(words).not.toMatch(/look(ed|ing)?[\s-]?up/i);
       expect(words).not.toContain('’');
@@ -264,5 +276,120 @@ describe('D-PR5-20 the mount — RailChat’s composer row, before *send* (struc
     const rail = source.slice(source.indexOf('function RailChat('));
     expect(rail.indexOf('<ChatFetchToggle'), 'mounted in RailChat').toBeGreaterThan(0);
     expect(rail.indexOf('<ChatFetchToggle')).toBeLessThan(rail.indexOf('onClick={submit}'));
+  });
+});
+
+// =========================================================================================
+// TASK-20261010-host-broker PR-5 — Gate-5 fold G5-19 (P3-10) and G5-20 (P3-11) on the toggle.
+//
+// P3-10 the toggle re-reads at the nearest `expiresAt` of the rows it read (one timer, cleared on
+//       cleanup): expiry is a clock event that bumps no revision, so a grant that ended while the
+//       rail was open left the toggle naming a source the fetch would never ask.
+// P3-11 RailChat's press → `onConsumed` → unpress, and its reset on a thread change, RENDERED (they
+//       were pinned only structurally). RailChat is EXPORTED from `run/RunView.tsx` for this (this
+//       lane's choice — the code lane adds the `export`); loaded through a variable specifier so its
+//       absence reds these rows alone.
+// =========================================================================================
+
+describe('G5-19 (P3-10) the toggle re-reads when a grant it named expires', () => {
+  it('G5-19 an access expiring while the rail is open: the toggle goes at its expiresAt — no revision moved', async () => {
+    // It ends 400 ms from now.
+    grant(ledger, { duration: { kind: 'until', at: new Date(Date.now() + 400).toISOString() } });
+    const el = await render();
+    expect(toggle(el), 'named while the access is live').not.toBeNull();
+    for (let i = 0; i < 20 && toggle(el) !== null; i++) {
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 60));
+      });
+    }
+    expect(toggle(el), 'gone once the access expired').toBeNull();
+  });
+});
+
+interface RailChatTestProps {
+  appId: string;
+  threadId: string;
+  messages: never[];
+  steps: never[];
+  activity: string | undefined;
+  busy: boolean;
+  onSend: (text: string, wireText?: string, options?: { fetchFirst?: boolean; onConsumed?: () => void }) => void;
+  onStop: () => void;
+}
+const RUN_VIEW = '../run/RunView.js';
+async function railChat(): Promise<(props: RailChatTestProps) => ReactElement> {
+  const mod = (await import(/* @vite-ignore */ RUN_VIEW)) as { RailChat?: (props: RailChatTestProps) => ReactElement };
+  if (typeof mod.RailChat !== 'function') throw new Error('run/RunView.tsx does not export RailChat');
+  return mod.RailChat;
+}
+
+describe('G5-20 (P3-11) RailChat — press, consume, reset (rendered)', () => {
+  type SendCall = [string, string | undefined, { fetchFirst?: boolean; onConsumed?: () => void } | undefined];
+  let sent: SendCall[];
+
+  async function renderRail(threadId: string): Promise<HTMLDivElement> {
+    const RailChat = await railChat();
+    if (container === undefined) {
+      container = document.createElement('div');
+      document.body.appendChild(container);
+      root = createRoot(container);
+    }
+    await act(async () => {
+      root!.render(
+        <RailChat appId={budget} threadId={threadId} messages={[]} steps={[]} activity={undefined} busy={false} onSend={(...args) => sent.push(args as SendCall)} onStop={() => undefined} />,
+      );
+    });
+    await settle();
+    return container;
+  }
+
+  async function typeAndSend(el: HTMLElement, text: string): Promise<void> {
+    const box = el.querySelector<HTMLTextAreaElement>('textarea')!;
+    const setValue = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!;
+    await act(async () => {
+      setValue.call(box, text);
+      box.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    const send = [...el.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'send')!;
+    await act(async () => send.click());
+  }
+
+  const pressed = (el: HTMLElement): string | null => toggle(el)?.getAttribute('aria-pressed') ?? null;
+
+  beforeEach(() => {
+    sent = [];
+    grant(ledger);
+  });
+
+  it('G5-20 pressed, then a send that is NOT a data turn (onConsumed never called): it stays pressed', async () => {
+    const el = await renderRail('t-1');
+    await act(async () => toggle(el)!.click());
+    expect(pressed(el)).toBe('true');
+    await typeAndSend(el, 'make the header blue');
+    expect(sent).toHaveLength(1);
+    expect(sent[0]![2]?.fetchFirst).toBe(true);
+    expect(pressed(el)).toBe('true');
+  });
+
+  it('G5-20 pressed, then a data turn consumes it (onConsumed): it unpresses', async () => {
+    const el = await renderRail('t-1');
+    await act(async () => toggle(el)!.click());
+    await typeAndSend(el, 'what did I spend on food?');
+    await act(async () => sent[0]![2]!.onConsumed!());
+    expect(pressed(el)).toBe('false');
+  });
+
+  it('G5-20 an unpressed send carries no fetch option', async () => {
+    const el = await renderRail('t-1');
+    await typeAndSend(el, 'what did I spend?');
+    expect(sent[0]![2]?.fetchFirst).toBeUndefined();
+  });
+
+  it('G5-20 a thread change resets it: pressed on t-1, the rail moves to t-2 → unpressed', async () => {
+    const el = await renderRail('t-1');
+    await act(async () => toggle(el)!.click());
+    expect(pressed(el)).toBe('true');
+    await renderRail('t-2');
+    expect(pressed(el)).toBe('false');
   });
 });

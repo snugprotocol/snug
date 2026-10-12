@@ -10,6 +10,7 @@
 // (`kitDeadLanes.test.ts` checks them with `expectTypeOf`).
 
 import type { UserDb } from '@snugprotocol/db';
+import type { AccessWriteOutcome } from '@snugprotocol/protocol';
 
 import { noDataLane } from './noDataLane.js';
 
@@ -22,7 +23,8 @@ export interface AccessWriteTarget {
   table: string;
 }
 
-export type AccessWriteOutcome = 'applied' | 'declined' | 'drifted' | 'failed';
+/** The protocol's `ACCESS_WRITE_OUTCOMES`, spelled once there (Gate-5 G5-1) — the real module re-exports the same type. */
+export type { AccessWriteOutcome };
 
 export interface AccessWriteCardState {
   appId: string;

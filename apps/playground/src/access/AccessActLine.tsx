@@ -15,7 +15,15 @@
 // go — and the line must outlive it. The surface keeps the settle where the act's removal cannot
 // take it (the tile, the Settings section, the sheet's reads direction) and hands it to the line.
 // The settle is heard through the ask's own `settle` (userAsk.ts), never the strip's outcome
-// store: the strip records no line for a person's *don't allow* (outcome.ts `worthALine`).
+// store: the strip records a person's *don't allow* only for the declared form (outcome.ts
+// `worthALine`, G5-12 — the ⋈ sheet's pair act closes with its sheet, so the reader's strip says it).
+//
+// Gate-5 fold (G5-15). ONE ASK PER TAP (IB-5): `useAccessAct` ignores a `start` while one is in
+// flight and says `busy`, which every act renders as `disabled` — a second tap used to park a second
+// ask that dismissed the first and restarted the review's arming under the person's finger. FOCUS
+// AFTER *stop* (IB-4): the focused *stop* goes with the allowed line, so the line catches focus that
+// fell to the page then too — also when the surface remounts it elsewhere (Settings' row, once the
+// pair is back).
 //
 // THE PAIR ACT (`AccessPairAct`): the reader's best pair on its own ⋈ sheet, under *Budget reads*,
 // above the creation act — the declared ask pinned to that source. The sheet closes only once the
@@ -68,14 +76,23 @@ export interface AccessAct {
   setSettle: (next: AccessActSettle) => void;
   /**
    * Start the person's ask for `readerAppId` (a PR-5 form). `sourceName` names a source the sheet
-   * could not offer; `trigger` gets focus back when the answer is *not now* or a dismissal.
+   * could not offer; `trigger` gets focus back when the answer is *not now* or a dismissal. Ignored
+   * while an earlier start is still in flight (IB-5).
    */
   start: (readerAppId: string, opts: Omit<UserAskOptions, 'settle'>, sourceName: string, trigger: HTMLElement | null) => Promise<void>;
+  /** A start is in flight — from the tap until the review opens or the ask answers why not. The act renders `disabled`. */
+  busy: boolean;
 }
 
 export function useAccessAct(): AccessAct {
   const [settle, setSettle] = useState<AccessActSettle | undefined>(undefined);
+  const [busy, setBusy] = useState(false);
+  // The guard itself is a ref: two taps in one frame both see the state from before either.
+  const inFlight = useRef(false);
   const start = useCallback(async (readerAppId: string, opts: Omit<UserAskOptions, 'settle'>, sourceName: string, trigger: HTMLElement | null): Promise<void> => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setBusy(true);
     setSettle(undefined);
     const heard = (outcome: ConsentOutcome): void => {
       switch (outcome.kind) {
@@ -96,7 +113,13 @@ export function useAccessAct(): AccessAct {
           return;
       }
     };
-    const answer = await startUserAsk(readerAppId, { ...opts, settle: heard });
+    let answer: Awaited<ReturnType<typeof startUserAsk>>;
+    try {
+      answer = await startUserAsk(readerAppId, { ...opts, settle: heard });
+    } finally {
+      inFlight.current = false;
+      setBusy(false);
+    }
     if (answer === 'opened') return;
     if (answer === 'answer-other-first' || (typeof answer === 'object' && answer.kind === 'answer-other-first')) {
       setSettle({ kind: 'answer-other-first' });
@@ -105,7 +128,7 @@ export function useAccessAct(): AccessAct {
     // `'no-app'`: the app that would read is gone — nothing could be offered.
     setSettle({ kind: 'not-offered', sourceName, reason: answer === 'no-app' ? 'gone' : answer.reason });
   }, []);
-  return { settle, setSettle, start };
+  return { settle, setSettle, start, busy };
 }
 
 // ------------------------------------------------------------------------------- the line
@@ -124,13 +147,16 @@ export interface AccessActLineProps {
 export function AccessActLine({ readerName, settle, onSettle, triggerGone = false }: AccessActLineProps): ReactElement | null {
   const lineRef = useRef<HTMLDivElement>(null);
   const [stopping, setStopping] = useState(false);
-  const shown = settle !== undefined;
+  const kind = settle?.kind;
 
+  // Focus that fell to the page is caught when the act that started the ask is gone — or when
+  // *stop* ended the access: the focused *stop* went with the allowed line (IB-4), and a line the
+  // surface remounts in its stopped state catches it too. Focus held anywhere else is never taken.
   useEffect(() => {
-    if (!shown || !triggerGone) return;
+    if (kind === undefined || (!triggerGone && kind !== 'stopped')) return;
     const active = document.activeElement;
     if (active === null || active === document.body) lineRef.current?.focus();
-  }, [shown, triggerGone]);
+  }, [kind, triggerGone]);
 
   if (settle === undefined) return null;
 
@@ -200,6 +226,7 @@ export function AccessPairAct({ readerAppId, readerName, pair, onBeforeAsk }: Ac
           variant="ghost"
           data-testid="access-pair"
           aria-label={ACCESS_SHEET.pairName(readerName, pair.sourceName, pair.matchedTables)}
+          disabled={act.busy}
           onClick={(event) =>
             void act.start(
               readerAppId,

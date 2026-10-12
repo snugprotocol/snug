@@ -67,10 +67,16 @@
 // answer (T-D Q18); a delete writes no line (its history is going, or names an app that is gone). A
 // RESET writes NOTHING — no line, no fold, no kv clear in the file that is now there (S6): the
 // engine captures a file epoch when a flight starts and re-checks it after every await, and the
-// reset clears the cooldowns and the remembered outcomes with it. A flight stopped while the
-// source's LIVE frame held it does not end its delegated record (S2): the handler may still be
-// running, so the record is HELD — refusing every mutating call, counting — until the handler's
-// result arrives, the dispatch's original deadline passes or the frame goes away (`keepRefusing`).
+// reset clears the cooldowns and the remembered outcomes with it. The epoch is the LEAF's
+// (`refreshResetEpoch`, Gate-5 fold G5-18): most resets find nothing in flight, so the engine reads
+// it at the top of every ask (and of `lastRefreshOf`) as well as after every await. While a swap is
+// LATCHED (`refreshSwapLatched`, SB-3) every ask answers stopped at once — nothing dispatched, no
+// line, no fold. A flight stopped while the source's LIVE frame held it does not end its delegated
+// record (S2): the handler may still be running, so the record is HELD — refusing every mutating
+// call, counting — until the handler's result arrives, the dispatch's original deadline passes or
+// the frame goes away (`keepRefusing`); a change refused under the hold is written as one more line,
+// `refused`, when it ends (SB-7a). A stop that lands before the source was rung holds nothing: no
+// handler of that run can be running (P3-7).
 //
 // WHO LOADS THIS. The access service reaches this module and `defaultAppRunDeps` through ONE lazy
 // edge (F8): `appRun.ts` imports `composeAppRuntime` → the access handler → the service, so a
@@ -92,7 +98,17 @@ import { createScheduledConfirmGate } from '../schedule/scheduledConfirmGate.js'
 import { ACCESS_APP_MESSAGES } from './copy.js';
 import type { AnyAccessGrant } from './grantFacts.js';
 import { accessDeps, iso, readerNameOf } from './grants.js';
-import { beginRefreshRun, endRefreshRun, joinRefreshRun, refreshAbortReason, setRefreshPlacement, type RefreshPlacement, type RefreshRun } from './refreshRuns.js';
+import {
+  beginRefreshRun,
+  endRefreshRun,
+  joinRefreshRun,
+  refreshAbortReason,
+  refreshResetEpoch,
+  refreshSwapLatched,
+  setRefreshPlacement,
+  type RefreshPlacement,
+  type RefreshRun,
+} from './refreshRuns.js';
 import * as writeBroker from './writeBroker.js';
 
 /** The `taskId` a refresh rides the handshake under — the ONE signal beside `input.kind` that this is no schedule (D-PR3-17). */
@@ -193,11 +209,14 @@ const inFlight = new Map<string, Flight>();
 const holds = new Set<() => void>();
 /**
  * Moves at every reset (S6): a flight captures it when it starts and re-checks it after every await —
- * a mismatch means the file it was writing to is gone, and nothing more is written.
+ * a mismatch means the file it was writing to is gone, and nothing more is written. Read through
+ * `currentFileEpoch`, which follows the leaf's reset epoch first.
  */
 let fileEpoch = 0;
+/** The leaf's reset epoch as this engine last read it (G5-18) — the leaf's starts at 0 too. */
+let seenResetEpoch = 0;
 
-/** A file swap (`abortAllRefreshes('reset')`): the old file's cooldowns, outcomes and flights go with it. */
+/** A file swap: the old file's cooldowns, outcomes and flights go with it. */
 function forgetFile(): void {
   fileEpoch += 1;
   lastDispatchAt.clear();
@@ -205,13 +224,27 @@ function forgetFile(): void {
   inFlight.clear();
 }
 
+/**
+ * The file this engine writes to, the leaf read FIRST (G5-18, P3-1): a reset since the last read —
+ * one that found nothing in flight too — forgets the old file here, before anything is answered from it.
+ */
+function currentFileEpoch(): number {
+  const reset = refreshResetEpoch();
+  if (reset !== seenResetEpoch) {
+    seenResetEpoch = reset;
+    forgetFile();
+  }
+  return fileEpoch;
+}
+
 export function __resetRefreshForTests(): void {
   for (const release of [...holds]) release();
   forgetFile();
 }
 
-/** When `sourceAppId` was last dispatched and how that went — `undefined` when it was not, this session. */
+/** When `sourceAppId` was last dispatched and how that went — `undefined` when it was not, this session (nor since the file was swapped). */
 export function lastRefreshOf(sourceAppId: string): LastRefresh | undefined {
+  currentFileEpoch();
   const at = lastDispatchAt.get(sourceAppId);
   if (at === undefined) return undefined;
   const ok = lastDelivered.get(sourceAppId);
@@ -309,18 +342,36 @@ async function runRefresh(
   }
 }
 
+/** What a held record needs to end as its flight would have: the run, its bounds, and what its line names. */
+interface HeldRun {
+  sourceAppId: string;
+  runId: string;
+  /** The dispatch's ORIGINAL deadline. */
+  deadline: number;
+  /** The file epoch the flight started in. */
+  epoch: number;
+  grant: AnyAccessGrant;
+  via: RefreshVia;
+}
+
 /**
  * S2: a flight stopped while the source's OPEN frame held it. Its handler may still be running, so
  * the delegated record is held — refusing every mutating call, the access door closed, counting —
  * until the handler's result arrives (from the generation that was hinted, bound to this run), the
  * dispatch's ORIGINAL deadline passes or the frame goes away. Then the record ends, the sticky
  * after-run ask applies, and what it counted after its attempt reported is folded into the day —
- * unless the file was swapped meanwhile (S6).
+ * and a change it REFUSED after the stop is written as one more `refreshed` line, `refused` (SB-7a:
+ * a record holding a refusal outranks the app's own `ok`, so the person sees it) — unless the file
+ * was swapped meanwhile (S6). Answers the release, or `undefined` when nothing was held.
  */
-function keepRefusing(db: UserDb, deps: AppRunDeps, sourceAppId: string, runId: string, deadline: number, epoch: number): void {
+function keepRefusing(db: UserDb, deps: AppRunDeps, held: HeldRun): (() => void) | undefined {
+  const { sourceAppId, runId, deadline, epoch, grant, via } = held;
   const record = delegatedRunFor(sourceAppId);
-  if (record === undefined || record.runId !== runId || !holdDelegatedRun(sourceAppId, runId)) return;
+  if (record === undefined || record.runId !== runId || !holdDelegatedRun(sourceAppId, runId)) return undefined;
   const { generation } = record;
+  // What the record had refused when the stop landed — what the stop's own line already says (its
+  // attempt reads this same record within the same task).
+  const refusedAtHold = record.refused.length;
   let stopEvents: () => void = () => undefined;
   let stopHosts: () => void = () => undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -330,7 +381,11 @@ function keepRefusing(db: UserDb, deps: AppRunDeps, sourceAppId: string, runId: 
     stopEvents();
     stopHosts();
     const ended = releaseDelegatedRun(sourceAppId, runId);
-    if (ended !== undefined && epoch === fileEpoch) foldDailyCalls(db, ended.late, iso(accessDeps().now()));
+    // The record ended by its attempt (never rung), or a file swapped in since: nothing is folded or written.
+    if (ended === undefined || epoch !== currentFileEpoch()) return;
+    const at = accessDeps().now();
+    foldDailyCalls(db, ended.late, iso(at));
+    if (ended.refused.length > refusedAtHold) logQuietly(db, sourceAppId, refreshedLine(db, grant, via, at, 'refused'));
   };
   holds.add(release);
   stopEvents = deps.live.subscribeEvents(sourceAppId, (event, data, from) => {
@@ -340,6 +395,7 @@ function keepRefusing(db: UserDb, deps: AppRunDeps, sourceAppId: string, runId: 
     if (appId === sourceAppId && !live) release();
   });
   timer = setTimeout(release, Math.max(0, deadline - Date.now()));
+  return release;
 }
 
 /** Everything a flight needs to fly. */
@@ -365,7 +421,7 @@ function startFlight({ db, deps, input, app, previous, opts }: FlightInput): Fli
   const placement = placeRun(deps.live, source);
   const run = beginRefreshRun({ runId, sourceAppId: source, sourceName: app.displayName, requestedBy: grant.readerAppId, placement: placementOf(placement) });
   const starter: Starter = { fold: opts?.fold !== false, waiting: true };
-  const epoch = fileEpoch;
+  const epoch = currentFileEpoch();
   const { signal } = run.controller;
   // (5) `requestedBy` folded to ONE line at the one place the input is built (S17); the record's title reads it too.
   const requestedBy = oneLine(input.requestedBy);
@@ -391,15 +447,17 @@ function startFlight({ db, deps, input, app, previous, opts }: FlightInput): Fli
   };
 
   let flight: Flight | undefined;
-  // What each stop does AT ONCE, before the dispatch even hears it: a reset forgets the file; any
-  // other stop takes the flight out of reach (a later door reads the kept stamp, never a stopped
-  // run); and a stop on the open frame holds its record (S2).
+  /** The held record's release (S2), once a stop held one. */
+  let hold: (() => void) | undefined;
+  // What each stop does AT ONCE, before the dispatch even hears it: a reset forgets the file (the
+  // leaf moved its epoch before aborting); any other stop takes the flight out of reach (a later door
+  // reads the kept stamp, never a stopped run); and a stop on the open frame holds its record (S2).
   signal.addEventListener(
     'abort',
     () => {
-      if (refreshAbortReason(signal) === 'reset') forgetFile();
+      if (refreshAbortReason(signal) === 'reset') currentFileEpoch();
       else if (flight !== undefined && inFlight.get(source) === flight) inFlight.delete(source);
-      keepRefusing(db, deps, source, runId, deadline, epoch);
+      hold = keepRefusing(db, deps, { sourceAppId: source, runId, deadline, epoch, grant, via });
     },
     { once: true },
   );
@@ -409,11 +467,14 @@ function startFlight({ db, deps, input, app, previous, opts }: FlightInput): Fli
     try {
       ran = await runRefresh(base, placement, opts?.spent ?? NONE, (to) => setRefreshPlacement(runId, placementOf(to)));
     } finally {
+      // A stop that landed before the source was rung (P3-7): the attempt ended the record itself — no
+      // handler of this run can be running, so the hold has nothing left to wait for.
+      if (hold !== undefined && delegatedRunFor(source)?.runId !== runId) hold();
       // The kv input, cleared — in the file it was written to only (S6), and only while its app is there.
-      if (epoch === fileEpoch && db.getApp(source) !== undefined) await db.driver.kvSet(source, key, null);
+      if (epoch === currentFileEpoch() && db.getApp(source) !== undefined) await db.driver.kvSet(source, key, null);
     }
     // A reset landed somewhere above: the file this flight wrote to is gone — nothing more is written.
-    if (epoch !== fileEpoch) return { outcome: stopped(), calls: nothing() };
+    if (epoch !== currentFileEpoch()) return { outcome: stopped(), calls: nothing() };
 
     // (7) The attempt's calls on the file's day — unless the run that started this is still waiting to carry them.
     const endedAt = accessDeps().now();
@@ -517,6 +578,9 @@ export async function refreshSource(db: UserDb, deps: AppRunDeps, input: Refresh
   const { grant, via } = input;
   const source = grant.sourceAppId;
 
+  // A reset since the last ask forgets the old file first (P3-1); while a swap is under way nothing starts (SB-3).
+  currentFileEpoch();
+  if (refreshSwapLatched()) return now(stopped());
   // A door that stopped before it asked asks nothing; one with no time left, likewise.
   if (opts?.signal?.aborted === true) return now(stopped());
   if (opts?.deadline !== undefined && opts.deadline <= Date.now()) return now(failed('timeout'));

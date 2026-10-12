@@ -634,6 +634,35 @@ describe('PR-5 D-PR5-17 — after cancelRefresh on a LIVE refresh, the gate keep
     expect(await call).toBe(false);
   });
 
+  // TASK-20261010-host-broker PR-5 — Gate-5 fold G5-19 (SB-7a): a refusal the gate records DURING the
+  // hold is no longer lost — on release the engine writes ONE `refreshed` line with reason `refused` on
+  // the source's history (epoch-guarded), so PR-3's rule "a record holding any refusal outranks the app's
+  // own ok — the person should see it" holds for the late window S2 created.
+  it('G5-19 a POST the gate REFUSED during the hold → on the result, the source’s history gains a `refused` line', async () => {
+    await cancelledLiveRefresh();
+    const placement = await import('../schedule/runPlacement.js');
+    const hosts = await import('../state/appHosts.js');
+    const { SCHEDULE_RESULT_EVENT } = await import('../schedule/scheduleKey.js');
+    const refreshedReasons = (): unknown[] => db.listAccessLog(source).filter((entry) => entry.kind === 'refreshed').map((entry) => (entry as { reason?: unknown }).reason);
+    expect(refreshedReasons(), 'the cancel wrote its own line').toEqual(['failed']);
+    const h = await realGate();
+    expect(await h.gate.confirm(post({ appId: source }))).toBe(false);
+    hosts.publishAppEvent(source, SCHEDULE_RESULT_EVENT, { ok: true }, GENERATION);
+    await vi.waitFor(() => expect(placement.delegatedRunFor(source)).toBeUndefined(), { timeout: RESULT_BOUND_MS / 2 });
+    await vi.waitFor(() => expect(refreshedReasons()).toEqual(['refused', 'failed']), { timeout: 500 });
+  });
+
+  it('G5-19 guard: a hold with NO refusal writes no second line on release', async () => {
+    await cancelledLiveRefresh();
+    const placement = await import('../schedule/runPlacement.js');
+    const hosts = await import('../state/appHosts.js');
+    const { SCHEDULE_RESULT_EVENT } = await import('../schedule/scheduleKey.js');
+    hosts.publishAppEvent(source, SCHEDULE_RESULT_EVENT, { ok: true }, GENERATION);
+    await vi.waitFor(() => expect(placement.delegatedRunFor(source)).toBeUndefined(), { timeout: RESULT_BOUND_MS / 2 });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(db.listAccessLog(source).filter((entry) => entry.kind === 'refreshed')).toHaveLength(1);
+  });
+
   it('after the handler’s RESULT arrives (before the deadline), the record ends at once and the sticky ask applies', async () => {
     const runId = await cancelledLiveRefresh();
     const placement = await import('../schedule/runPlacement.js');

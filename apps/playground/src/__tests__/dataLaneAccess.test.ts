@@ -408,7 +408,32 @@ describe('PR-5 D-PR5-11 — writable-first: a READ-ONLY grant’s table is still
 
   it('on the WRITABLE grant the AC11 DELETE is no longer refused by name: the counting line and the plan are asked with the source-named statement', async () => {
     const h = await budget();
-    const planWrite = vi.fn(async () => ({ ok: true as const, changes: 1, table: 'transactions' }));
+    // Gate-5 fold G5-16 [ii-7, SB-8]: staging now re-checks that the access the plan ran under is still
+    // there, live, at the plan's `grantedAt` — so a REAL access stands behind the writable table (as
+    // chatCrossAppWrite.test.ts's harness persists one), and the fake plan answers its grantedAt. The
+    // file keys a grant by a uuid v4 only, so the live access carries one in place of 'g-ledger'.
+    const LIVE_LEDGER_GRANT = '22222222-2222-4222-8222-222222222222';
+    const GRANTED_AT = '2026-10-12T08:00:00.000Z';
+    const ledger = h.db.installApp({ displayName: 'Ledger', html: '<!doctype html><title>l</title>', usesDb: true }).appId;
+    h.db.putAccessGrant({
+      id: LIVE_LEDGER_GRANT,
+      readerAppId: h.appId,
+      sourceAppId: ledger,
+      scope: { tables: [{ name: 'transactions', columns: ['id', 'amount', 'category'], write: true }] },
+      access: 'write',
+      purpose: 'to tidy my spending',
+      duration: { kind: 'always' },
+      unattended: false,
+      status: 'active',
+      provenance: 'chat',
+      readerVersion: 1,
+      grantedAt: GRANTED_AT,
+      updatedAt: GRANTED_AT,
+      reads: 0,
+      timeouts: 0,
+    } as unknown as Parameters<Db['putAccessGrant']>[0]);
+    const liveTx = { ...WRITABLE_TX, grantId: LIVE_LEDGER_GRANT, sourceAppId: ledger } as MaterialisedTable;
+    const planWrite = vi.fn(async () => ({ ok: true as const, changes: 1, table: 'transactions', grantedAt: GRANTED_AT }));
     const recordRead = vi.fn(async (grantIds: readonly string[]) => ({ recorded: [...grantIds], refused: [] }));
     const staged: unknown[] = [];
     const tools = buildDataTools({
@@ -422,13 +447,14 @@ describe('PR-5 D-PR5-11 — writable-first: a READ-ONLY grant’s table is still
         staged.push(card);
         return true;
       },
-      shared: { set: setOf(WRITABLE_TX), recordRead, planWrite },
+      shared: { set: setOf(liveTx), recordRead, planWrite },
     } as unknown as Parameters<typeof buildDataTools>[0]);
     const out = await run(tools, DATA_PROPOSE_WRITE_TOOL_NAME, { statements: ['DELETE FROM "ledger__transactions" WHERE id = 1'], summary: 'drop the first one' });
     expect(out).not.toContain(CHAT_DOOR.readOnly('Ledger'));
-    expect(recordRead).toHaveBeenCalledWith(['g-ledger'], 'DELETE FROM "transactions" WHERE id = 1', { counting: true });
-    expect(planWrite).toHaveBeenCalledWith('g-ledger', 'DELETE FROM "transactions" WHERE id = 1');
+    expect(recordRead).toHaveBeenCalledWith([LIVE_LEDGER_GRANT], 'DELETE FROM "transactions" WHERE id = 1', { counting: true });
+    expect(planWrite).toHaveBeenCalledWith(LIVE_LEDGER_GRANT, 'DELETE FROM "transactions" WHERE id = 1');
     expect(staged).toHaveLength(1);
+    expect((staged[0] as { target: { grantId: string; grantedAt: string } }).target).toMatchObject({ grantId: LIVE_LEDGER_GRANT, grantedAt: GRANTED_AT });
     expect(h.proposals, 'never the own card').toHaveLength(0);
   });
 });

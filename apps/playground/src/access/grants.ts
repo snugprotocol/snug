@@ -315,9 +315,8 @@ export function foundGrants(db: UserDb): FoundAccessGrant[] {
   ].filter((entry) => db.getApp(entry.grant.readerAppId) !== undefined && db.getApp(entry.grant.sourceAppId) !== undefined);
 }
 
-/** Every grant the app is part of, both directions, with the derived facts (`foundGrants`' rows). */
-export function grantsForApp(db: UserDb, appId: string, now: number): { reads: LiveGrantRow[]; readBy: LiveGrantRow[] } {
-  const found = foundGrants(db);
+/** Every grant the app is part of, both directions, with the derived facts (`foundGrants`' rows — or the caller's, already read: IB-7). */
+export function grantsForApp(db: UserDb, appId: string, now: number, found: readonly FoundAccessGrant[] = foundGrants(db)): { reads: LiveGrantRow[]; readBy: LiveGrantRow[] } {
   const nameOf = (id: string): string => db.getApp(id)?.displayName ?? '';
   const row = (entry: FoundAccessGrant): LiveGrantRow => {
     const expiresAt = expiresAtOf(entry.grant);
@@ -347,9 +346,10 @@ export interface AccessCounts {
  * For every app with LIVE access either way (active, not expired, its source holding no WhatsApp
  * fact — persisted and this tab's session grants alike): how many DISTINCT other apps it reads,
  * and is read by. Two accesses for the same pair count once. An app absent from the map has none
- * (`{0, 0}`). One `foundGrants` read for the whole file — never one per app (D-PR5-6).
+ * (`{0, 0}`). One `foundGrants` read for the whole file — never one per app (D-PR5-6) — or none,
+ * when the caller hands in the grants it already read (IB-7: the Hub's one read).
  */
-export function accessCountsByApp(db: UserDb, now: number): ReadonlyMap<string, AccessCounts> {
+export function accessCountsByApp(db: UserDb, now: number, found: readonly FoundAccessGrant[] = foundGrants(db)): ReadonlyMap<string, AccessCounts> {
   const reads = new Map<string, Set<string>>();
   const readBy = new Map<string, Set<string>>();
   const join = (into: Map<string, Set<string>>, appId: string, other: string): void => {
@@ -357,7 +357,7 @@ export function accessCountsByApp(db: UserDb, now: number): ReadonlyMap<string, 
     if (set === undefined) into.set(appId, new Set([other]));
     else set.add(other);
   };
-  for (const { grant } of foundGrants(db)) {
+  for (const { grant } of found) {
     if (!isLive(grant, now, db)) continue;
     join(reads, grant.readerAppId, grant.sourceAppId);
     join(readBy, grant.sourceAppId, grant.readerAppId);

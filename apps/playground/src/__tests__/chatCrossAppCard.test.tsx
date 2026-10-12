@@ -39,7 +39,7 @@ import { FRAME_TYPES, PROTOCOL_VERSION, type AccessUndoEntry } from '@snugprotoc
 
 import { NO_ACCESS_ASKS_KEY, collectSources } from '../access/consent.js';
 import { ACCESS_SHEET, OWN_UNDO_NO_LONGER } from '../access/copy.js';
-import { __setAccessDepsForTests, createGrantFromDecision, findAccessGrant, resetAccessSession, type AnyAccessGrant, type CreateGrantInput } from '../access/grants.js';
+import { __setAccessDepsForTests, bumpAccessRevision, createGrantFromDecision, findAccessGrant, resetAccessSession, type AnyAccessGrant, type CreateGrantInput } from '../access/grants.js';
 import { configureScopedRead, resetScopedReadForTests, type WorkerLike } from '../access/scopedRead.js';
 import { createScopedReadResponder } from '../access/scopedRead.worker.js';
 import { DATA_WRITE_CARD } from '../agent/copy.dataWrite.js';
@@ -565,6 +565,11 @@ describe('D-PR5-10 — metaToAccessWrite is strict: any invalid, missing or UNKN
     ['an unknown outcome', () => withSeat({ outcome: 'approved-by-the-app' })],
     ['an unknown failedWhy', () => withSeat({ outcome: 'failed', failedWhy: 'because' })],
     ['an undoId that is no uuid', () => withSeat({ outcome: 'applied', undoId: "'; DROP TABLE x; --" })],
+    // G5-16 (SB-6): the separators and blank fillers the summary rule refuses are refused in the sql too.
+    ['G5-16 a LINE SEPARATOR (U+2028) in the sql', () => withSeat({ sql: `UPDATE "transactions" SET category = 'a\u2028b' WHERE id = 1` })],
+    ['G5-16 a PARAGRAPH SEPARATOR (U+2029) in the sql', () => withSeat({ sql: `UPDATE "transactions" SET category = 'a\u2029b' WHERE id = 1` })],
+    ['G5-16 a HANGUL FILLER (U+3164) run in the sql', () => withSeat({ sql: `UPDATE "transactions" SET category = 'ok${'\u3164'.repeat(40)}' WHERE id = 1` })],
+    ['G5-16 a BRAILLE BLANK (U+2800) in the sql', () => withSeat({ sql: `UPDATE "transactions" SET category = 'a\u2800b' WHERE id = 1` })],
   ])('%s → the WHOLE card is dropped', async (_label, meta) => {
     const { metaToAccessWrite } = await stateModule();
     expect(metaToAccessWrite(meta())).toBeUndefined();
@@ -741,5 +746,166 @@ describe('D-PR5-10/14 — the hook: rehydrate strictly, approve once, persist to
     expect(seatSpy).not.toHaveBeenCalled();
     expect((stored(rowId).accessWrite as Record<string, unknown> | undefined)?.outcome).toBe('declined');
     expect(await rowsOf(ledger, "SELECT count(*) FROM transactions WHERE category = 'food'")).toEqual([[3]]);
+  });
+});
+
+// =========================================================================================
+// TASK-20261010-host-broker PR-5 — Gate-5 fold G5-16 on the cross-app card.
+//
+// ii-9  the lead's undo clause ("— you can undo it for seven days") renders only while the card is
+//       pending or applied-with-a-live-undo; every other state uses the clause-less lead
+//       `DATA_WRITE_CARD.crossLeadPlain(source, table)` (this lane's key name); the days are derived
+//       from `ACCESS_UNDO_TTL_MS`, never a literal.
+// ii-12 undoing from the in-place sheet unmounts the act `closeSheet` focuses: focus falls back to the
+//       card itself, never <body>.
+// SB-6  the statement renders `<code dir="ltr">` bidi-isolated (`unicode-bidi: isolate`).
+// ii-5  `persistAccessWrite` with a thread that does not hold the row writes NOTHING (never merges
+//       onto `{}`, which replaced the row's meta and dropped its co-existing cards).
+// ii-6  approve and decline re-read the CURRENT message: a cancel dispatched with the click-time
+//       (pending) card after the apply landed never overwrites `applied`, live or persisted.
+// =========================================================================================
+
+describe('G5-16 (ii-9) the lead promises an undo only where one is live', () => {
+  const plain = (): ((sourceName: string, table: string) => string) => {
+    const fn = (DATA_WRITE_CARD as unknown as { crossLeadPlain?: (s: string, t: string) => string }).crossLeadPlain;
+    if (typeof fn !== 'function') throw new Error('DATA_WRITE_CARD.crossLeadPlain is not in agent/copy.dataWrite.ts yet (G5-16 ii-9)');
+    return fn;
+  };
+  const UNDO_CLAUSE = 'you can undo it';
+
+  it('G5-16 the words: crossLeadPlain is the lead without its clause; crossLead keeps its bytes', () => {
+    expect(plain()('Ledger', 'transactions')).toBe('a change to Ledger’s transactions');
+    expect(word('crossLead')('Ledger', 'transactions')).toBe(`${plain()('Ledger', 'transactions')} — you can undo it for seven days`);
+  });
+
+  it('G5-16 the days are derived from ACCESS_UNDO_TTL_MS — no literal "seven days" in the lead', async () => {
+    const { readFileSync } = await import('node:fs');
+    const path = await import('node:path');
+    const source = readFileSync(path.resolve(__dirname, '..', 'agent', 'copy.dataWrite.ts'), 'utf8');
+    const lead = /crossLead:[^\n]*/.exec(source)?.[0] ?? '';
+    expect(lead, 'the crossLead line').not.toBe('');
+    expect(lead).not.toContain('seven days');
+    expect(source).toContain('ACCESS_UNDO_TTL_MS');
+  });
+
+  it('G5-16 pending and applied-with-a-live-undo: the clause is said', async () => {
+    const grant = await writeGrant();
+    const live = plantUndo(grant);
+    for (const card of [cardFor(grant), cardFor(grant, { outcome: 'applied', undoId: live.id })]) {
+      await renderCard(card);
+      expect(text(), card.outcome ?? 'pending').toContain(UNDO_CLAUSE);
+      await act(async () => {
+        root?.unmount();
+      });
+      root = undefined;
+      container?.remove();
+      container = undefined;
+    }
+  });
+
+  it('G5-16 applied with NO undoId, applied with an ended undo, declined, drifted and failed: no undo promise — the plain lead', async () => {
+    const grant = await writeGrant();
+    const cards = [
+      cardFor(grant, { outcome: 'applied' }),
+      cardFor(grant, { outcome: 'applied', undoId: crypto.randomUUID() }),
+      cardFor(grant, { outcome: 'declined' }),
+      cardFor(grant, { outcome: 'drifted' }),
+      cardFor(grant, { outcome: 'failed', failedWhy: 'ended' }),
+    ];
+    for (const card of cards) {
+      await renderCard(card);
+      const label = `${card.outcome}${card.undoId !== undefined ? ' (ended undo)' : ''}`;
+      expect(text(), label).not.toContain(UNDO_CLAUSE);
+      expect(text(), label).toContain(plain()('Ledger', 'transactions'));
+      await act(async () => {
+        root?.unmount();
+      });
+      root = undefined;
+      container?.remove();
+      container = undefined;
+    }
+  });
+});
+
+describe('G5-16 (ii-12) undo from the in-place sheet: focus falls back to the card', () => {
+  it('G5-16 open the sheet, the change is undone there, close: focus is inside the card, never <body>', async () => {
+    const grant = await writeGrant();
+    const entry = plantUndo(grant);
+    await renderCard(cardFor(grant, { outcome: 'applied', undoId: entry.id }));
+    await click(mustButton(`open ${ACCESS_SHEET.title('Ledger')}`));
+    const sheet = document.body.querySelector<HTMLElement>('[data-testid="access-sheet"]');
+    expect(sheet).not.toBeNull();
+    await act(async () => {
+      db.markAccessUndone(ledger, entry.id, iso(Date.now()));
+      bumpAccessRevision();
+    });
+    await settle();
+    expect(buttonNamed(`open ${ACCESS_SHEET.title('Ledger')}`), 'the act went with the live undo').toBeUndefined();
+    const close = document.body.querySelector<HTMLElement>('[data-testid="access-sheet-close"]')!;
+    await click(close);
+    expect(document.body.querySelector('[data-testid="access-sheet"]')).toBeNull();
+    expect(document.activeElement).not.toBe(document.body);
+    const card = container!.querySelector<HTMLElement>('[data-testid="access-write-card"]')!;
+    expect(card.contains(document.activeElement)).toBe(true);
+  });
+});
+
+describe('G5-16 (SB-6) the statement is shown left-to-right and bidi-isolated', () => {
+  it('G5-16 <code dir="ltr"> with unicode-bidi: isolate', async () => {
+    const grant = await writeGrant();
+    const card = cardFor(grant);
+    await renderCard(card);
+    const code = [...container!.querySelectorAll<HTMLElement>('code')].find((el) => el.textContent === card.sql)!;
+    expect(code.getAttribute('dir')).toBe('ltr');
+    expect(code.style.unicodeBidi).toBe('isolate');
+  });
+});
+
+describe('G5-16 (ii-5, ii-6) the persist never lands on the wrong row; a settled card is never overwritten', () => {
+  const persistedMeta = (card: AccessWriteCardState): Record<string, unknown> => {
+    const { messageRowId: _row, ...rest } = card;
+    return { accessWrite: rest };
+  };
+
+  it('G5-16 (ii-5) persistAccessWrite with a thread that does not hold the row leaves the row’s meta byte-identical', async () => {
+    const grant = await writeGrant();
+    const card = cardFor(grant);
+    const row = db.appendChatMessage(THREAD, 'assistant', 'I proposed a change to your ledger.', { meta: { artifact: { appId: budget, displayName: 'Budget', version: 1 }, ...persistedMeta(card) } });
+    const before = JSON.stringify(db.listChatMessages(THREAD).find((m) => m.id === row.id)?.meta);
+    const { persistAccessWrite } = (await stateModule()) as unknown as {
+      persistAccessWrite(db: UserDb, threadId: string, card: AccessWriteCardState): void;
+    };
+    persistAccessWrite(db, 'app:another-thread', { ...card, outcome: 'applied', undoId: crypto.randomUUID(), messageRowId: row.id });
+    expect(JSON.stringify(db.listChatMessages(THREAD).find((m) => m.id === row.id)?.meta)).toBe(before);
+  });
+
+  it('G5-16 (ii-6) apply lands, then a cancel with the ORIGINAL pending card: the card and its row stay applied', async () => {
+    const grant = await writeGrant();
+    resetThreadSessions({ threadId: THREAD });
+    const row = db.appendChatMessage(THREAD, 'assistant', 'I proposed a change to your ledger.', { meta: persistedMeta(cardFor(grant)) });
+    const holder: { current: ChatWithCrossApp | null } = { current: null };
+    function Harness(): ReactElement {
+      holder.current = useBuilderChat(THREAD) as ChatWithCrossApp;
+      return <span />;
+    }
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() => {
+      root!.render(<Harness />);
+    });
+    await settle();
+    const message = holder.current!.messages.find((m) => accessWriteOf(m) !== undefined);
+    if (message === undefined) throw new Error('the hook rehydrated no card');
+    const pendingCard = accessWriteOf(message)!;
+    act(() => holder.current!.approveAccessWrite!(pendingCard, message.id));
+    await settle(20);
+    expect(accessWriteOf(holder.current!.messages.find((m) => m.id === message.id))?.outcome).toBe('applied');
+    act(() => holder.current!.declineAccessWrite!(pendingCard, message.id));
+    await settle();
+    expect(accessWriteOf(holder.current!.messages.find((m) => m.id === message.id))?.outcome).toBe('applied');
+    const stored = db.listChatMessages(THREAD).find((m) => m.id === row.id)?.meta as { accessWrite?: { outcome?: string; undoId?: string } } | undefined;
+    expect(stored?.accessWrite?.outcome).toBe('applied');
+    expect(stored?.accessWrite?.undoId).toBe(db.listAccessUndo(ledger)[0]?.id);
   });
 });

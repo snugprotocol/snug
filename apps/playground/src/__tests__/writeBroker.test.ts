@@ -1547,3 +1547,54 @@ describe('PR-5 D-PR5-12 — the frame’s write op: wire bytes UNCHANGED for eve
     expect(await write(mine.id, "UPDATE entries SET amount = 9 WHERE title = 'tea'")).toEqual({ ok: true, op: 'write', changes: 1 });
   });
 });
+
+// =========================================================================================
+// TASK-20261010-host-broker PR-5 — Gate-5 fold G5-16 (ii-4): D-PR5-10's second belt. The read-seam
+// allow-list (`metaToDataWrite`) closes S4; `applyApprovedWrite` ALSO refuses a proposal carrying any
+// key outside `PendingWriteProposal` (`appId`, `statements`, `params`, `summary`, `previewed`) — at
+// least a cross-app `target`, `sourceAppId`, `grantId` — `failed`, nothing dry-run, nothing written.
+// Any future path that builds a card without the reader (a result page, a sync merge) would
+// otherwise apply a cross-app-shaped proposal against the reader's OWN data.
+// =========================================================================================
+
+describe('G5-16 (ii-4) applyApprovedWrite refuses a proposal carrying a key outside PendingWriteProposal', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(T0);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+  const proposal = (statements: string[], previewed: number[]): PendingWriteProposal => ({ appId: journal, statements, params: statements.map(() => []), summary: 'a change the user approved', previewed });
+  const TEA = "UPDATE entries SET amount = 9 WHERE title = 'tea'";
+
+  it.each([
+    ['target', { target: { grantId: '11111111-1111-4111-8111-111111111111', grantedAt: '2026-10-12T08:00:00.000Z', sourceAppId: 'app-ledger', table: 'transactions' } }],
+    ['sourceAppId', { sourceAppId: 'app-ledger' }],
+    ['grantId', { grantId: '11111111-1111-4111-8111-111111111111' }],
+    ['an unknown key', { extra: true }],
+  ] as const)('G5-16 a proposal carrying %s → ok false; no dry run, no seat, rows unchanged', async (_label, extra) => {
+    const { applyApprovedWrite } = await writeBroker();
+    const scratch = vi.spyOn(db, 'scratchRun');
+    const seatSpy = vi.spyOn(seat(), 'brokeredWrite');
+    const before = await db.driver.handle(journal, { v: PROTOCOL_VERSION, type: FRAME_TYPES.dbRequest, requestId: 'g5-ii4-before', instanceId: 'check', op: 'exec', sql: 'SELECT * FROM entries ORDER BY rowid' });
+    const outcome = await approve(applyApprovedWrite, { ...proposal([TEA], [1]), ...extra } as unknown as PendingWriteProposal, 'chat');
+    expect(outcome).toMatchObject({ ok: false });
+    expect(scratch).not.toHaveBeenCalled();
+    expect(seatSpy).not.toHaveBeenCalled();
+    const after = await db.driver.handle(journal, { v: PROTOCOL_VERSION, type: FRAME_TYPES.dbRequest, requestId: 'g5-ii4-after', instanceId: 'check', op: 'exec', sql: 'SELECT * FROM entries ORDER BY rowid' });
+    expect(after).toEqual(before);
+  });
+
+  it('G5-16 executeApprovedWrite (the thin caller) refuses it too', async () => {
+    const scratch = vi.spyOn(db, 'scratchRun');
+    const outcome = await (executeApprovedWrite as unknown as ApproveFn)(db, { ...proposal([TEA], [1]), target: { table: 'transactions' } } as unknown as PendingWriteProposal, { via: 'chat' });
+    expect(outcome).toMatchObject({ ok: false });
+    expect(scratch).not.toHaveBeenCalled();
+  });
+
+  it('G5-16 guard: the exact PendingWriteProposal shape still applies', async () => {
+    const { applyApprovedWrite } = await writeBroker();
+    expect(await approve(applyApprovedWrite, proposal([TEA], [1]), 'chat')).toMatchObject({ ok: true });
+  });
+});

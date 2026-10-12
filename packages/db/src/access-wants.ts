@@ -10,9 +10,11 @@
 //
 // A SMALL GRAMMAR, NOT AN HTML PARSER. Any ambiguity is NO declaration — never a refusal of the
 // install: the app works as before and simply shows nothing before its first ask.
-//  - The scan reads at most `ACCESS_WANTS_SCAN_MAX_UNITS` UTF-16 code units from offset 0 and
-//    stops at the FIRST `<script`, `<style`, `<body` or `</head` (ASCII-case-insensitive) that is
-//    not inside a `<!-- … -->` comment; a comment is skipped whole, and an unterminated one
+//  - The scan reads at most `ACCESS_WANTS_SCAN_MAX_UNITS` UTF-16 code units from offset 0, ENDS at
+//    the first U+0000 (G5-9: sql.js stores the html whole but its text read stops at a NUL, so the
+//    row is derived from the prefix before it — the in-memory preview must read that prefix too),
+//    and stops at the FIRST `<script`, `<style`, `<body` or `</head` (ASCII-case-insensitive) that
+//    is not inside a `<!-- … -->` comment; a comment is skipped whole, and an unterminated one
 //    swallows the rest.
 //  - EXACTLY one `<meta>` names `snug:access-wants` (the `name` attribute, ASCII-case-
 //    insensitive); it carries exactly one QUOTED `content` (`"…"` or `'…'`). Two such metas, a
@@ -115,12 +117,23 @@ function decodeContent(raw: string): string | undefined {
 }
 
 /**
+ * What the scan reads: at most `ACCESS_WANTS_SCAN_MAX_UNITS` code units, cut at the first U+0000 —
+ * the prefix the STORED html reads back as (sql.js's text read stops at a NUL), so the row and the
+ * preview see the same head whatever follows the NUL.
+ */
+function scannedText(html: string): string {
+  const capped = html.length > ACCESS_WANTS_SCAN_MAX_UNITS ? html.slice(0, ACCESS_WANTS_SCAN_MAX_UNITS) : html;
+  const nul = capped.indexOf('\u0000');
+  return nul === -1 ? capped : capped.slice(0, nul);
+}
+
+/**
  * The DECODED `content` of the ONE head meta whose `name` is `name` (ASCII-case-insensitive), or
  * `undefined` — none, two, a doubled `name` or `content`, an unquoted or missing `content`, or a
  * reference outside the five. Attribute order is free. Total.
  */
 export function findHeadMeta(html: string, name: string): string | undefined {
-  const text = html.length > ACCESS_WANTS_SCAN_MAX_UNITS ? html.slice(0, ACCESS_WANTS_SCAN_MAX_UNITS) : html;
+  const text = scannedText(html);
   const wanted = asciiLower(name);
   let found: string | undefined;
   let matches = 0;

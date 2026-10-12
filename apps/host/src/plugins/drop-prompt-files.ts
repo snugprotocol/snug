@@ -8,9 +8,17 @@
 // through the six skill loaders (`buildSkillBuilderPrompt`, `getSkillBuilderPreamble`,
 // `listSkillModes`, `getSkillMode`, `listSkillCreatorFiles`, `getSkillCreatorFile`), which no
 // app, server, host or script calls; and `README.md`, the store's own map, a repo document.
-// This pre-transform rewrites the content module to the kept files (−253,454 B measured) —
-// KIT ONLY: the playground and the desktop are not built from this config and keep the
-// whole store.
+// TASK-20261010-host-broker PR-5 (Gate-5 fold, D-PR5-16 — the next-steps kit-dead prompt cut,
+// ≈ 9 KB, taken because PR-5 crossed its 60 KB budget; the same owner's pattern) adds a third:
+// the scheduled agent's three prompt files, `system/50-scheduled-agent.md`,
+// `tools/fetch-connection.md` and `tools/data-propose-write-scheduled.md`. They are read only on
+// `schedule/appAgent.ts`'s path (`buildHostSystemPrompt({ scheduledAgent })`,
+// `buildFetchConnectionTool`, `buildDataTools({ scheduled })`), and the kit swaps that module for
+// a stub — `kitDeadPrompts.test.ts` pins that no source the kit compiles makes those calls. The
+// chat's own `tools/data-propose-write.md` stays.
+// This pre-transform rewrites the content module to the kept files (−253,454 B measured at
+// PR-3, before the scheduled agent's three) — KIT ONLY: the playground and the desktop are not
+// built from this config and keep the whole store.
 // Three guards fail the BUILD rather than ship a silent loss: a content module with any
 // export beyond `PROMPT_FILES` (the rewrite would drop it), a rule that matches nothing (a
 // renamed folder means the bytes are back in the page and only the ceiling would notice),
@@ -25,7 +33,13 @@ import type { Plugin } from 'vite';
 /** The files the kit drops: every key under a prefix, and each exact name. */
 export const KIT_DEAD_PROMPTS: { prefixes: readonly string[]; exact: readonly string[] } = {
   prefixes: ['skills/'],
-  exact: ['README.md'],
+  exact: [
+    'README.md',
+    // The scheduled agent's (D-PR5-16): its system layer, its fetch tool and its seat's propose tool.
+    'system/50-scheduled-agent.md',
+    'tools/fetch-connection.md',
+    'tools/data-propose-write-scheduled.md',
+  ],
 };
 
 export function isKitDeadPrompt(file: string): boolean {

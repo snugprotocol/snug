@@ -33,7 +33,7 @@ import type { UserDb } from '@snugprotocol/db';
 import { collectSources, pendingAccessStore, reviewStore } from '../access/consent.js';
 import * as copy from '../access/copy.js';
 import { CONSENT_UI, STRIP_OUTCOME } from '../access/copy.js';
-import { createGrantFromDecision, noteReaderGeneration, resetAccessSession } from '../access/grants.js';
+import { bumpAccessRevision, createGrantFromDecision, noteReaderGeneration, resetAccessSession, suspendAccess } from '../access/grants.js';
 import { answerAccess } from '../access/outcome.js';
 import { netConfirmStore, type PendingNetConfirm } from '../state/net.js';
 import { HubView } from '../views/HubView.js';
@@ -462,5 +462,73 @@ describe('D-PR5-6a the sibling’s act and its act line', () => {
     await settle();
     expect(actLine(tileOf('Budget'))?.textContent).toContain(CONSENT_UI.answerOtherFirst);
     expect(pendingAccessStore.get()[budget]).toBeUndefined();
+  });
+});
+
+// =========================================================================================
+// TASK-20261010-host-broker PR-5 — Gate-5 fold on the Hub tile.
+//
+// G5-14 (IB-3) a PAUSED pair shows no *could read* sibling: *allow again* on that access's row is
+//       the act — a new ask would leave a duplicate beside the paused row.
+// G5-15 (IB-4) keyboard *stop* on the sibling's act line keeps focus on the line; (IB-7) the Hub's
+//       one read computes `foundGrants` ONCE — the counts, the pairs and the timer share it (it was
+//       three passes, each reading every grant).
+// =========================================================================================
+
+describe('G5-14 a paused pair shows no *could read* sibling', () => {
+  beforeEach(() => {
+    db.saveAppVersion(budget, declaring('Budget', [SPENDING]));
+  });
+
+  it('G5-14 Budget’s access to Ledger paused by reader-updated: no sibling on Budget’s tile', async () => {
+    await allow(budget, ledger, ['transactions']);
+    const grant = db.listAccessGrants()[0]!;
+    await suspendAccess(db, grant.id, 'reader-updated', new Date().toISOString());
+    await renderHub();
+    expect(tileOf('Budget').querySelector('[data-testid="tile-could-read"]')).toBeNull();
+  });
+});
+
+describe('G5-15 the sibling’s act line and the Hub’s one read', () => {
+  beforeEach(() => {
+    db.saveAppVersion(budget, declaring('Budget', [SPENDING]));
+  });
+
+  it('G5-15 (IB-4) keyboard *stop* on the allowed line: focus lands on the act line, never <body>', async () => {
+    await renderHub();
+    await act(async () => tileOf('Budget').querySelector<HTMLElement>('[data-testid="tile-could-read"]')!.click());
+    await settle();
+    const pending = pendingAccessStore.get()[budget]!;
+    await act(async () => {
+      await answerAccess(pending, {
+        kind: 'allow',
+        sourceAppId: ledger,
+        tables: [{ name: 'transactions', withheld: [], write: false }],
+        duration: 'day',
+        unattended: false,
+        kv: false,
+        refresh: false,
+      } as Parameters<typeof answerAccess>[1]);
+    });
+    await settle();
+    const lineEl = (): HTMLElement | null => container!.querySelector<HTMLElement>('[data-testid="access-act-line"]');
+    const stop = [...lineEl()!.querySelectorAll('button')].find((button) => button.textContent === STRIP_OUTCOME.undo)!;
+    stop.focus();
+    await act(async () => stop.click());
+    await settle(8);
+    expect(lineEl()?.getAttribute('data-outcome')).toBe('stopped');
+    expect(document.activeElement).not.toBe(document.body);
+    expect(document.activeElement).toBe(lineEl());
+  });
+
+  it('G5-15 (IB-7) one Hub read reads the file’s grants ONCE (counts, pairs and timer share foundGrants)', async () => {
+    await allow(budget, pantry, ['items']);
+    await renderHub();
+    const reads = vi.spyOn(db, 'listAccessGrants');
+    await act(async () => {
+      bumpAccessRevision();
+    });
+    await settle();
+    expect(reads).toHaveBeenCalledTimes(1);
   });
 });

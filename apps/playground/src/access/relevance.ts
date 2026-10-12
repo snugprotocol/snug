@@ -34,12 +34,22 @@
 // rule `intentContext.ts`'s `tableSummaries` uses, credential-named columns sensitive, no row
 // count — so a pair is found with no runtime export and no `describeAppData`. `rankPairs` ranks
 // every source for each reader's DECLARED want with `rankSources`' own tiers, but ADMITS a pair
-// only on a TABLE-tier match (an exact hint table, or a hint word inside an offerable table's
-// name): a column or a name match ranks a pair, it never makes one (S10 — the declaration is the
-// app's text, so it may point at a table, never pre-tick a guess). `tableTierTables` is that tier
-// alone, which is also what the declared ask pre-ticks.
+// only on a TABLE-tier match (an exact hint table, or a hint word that IS a whole `_`-token of an
+// offerable table's name — G5-15 below): a column or a name match ranks a pair, it never makes
+// one (S10 — the declaration is the app's text, so it may point at a table, never pre-tick a
+// guess). `tableTierTables` is that tier alone, which is also what the declared ask pre-ticks.
+//
+// Gate-5 fold (G5-13, G5-15). The registry is `JSON.parse(…)` with nothing checked and no import
+// cleans it, so `registryTables` is TOTAL over a planted row: `objects` must be an array, each
+// object a `table` with string `name` and `ddl`, the name passing `APP_OBJECT_NAME_RULE` (it reaches
+// host sentences); the column list is split at paren depth 0 outside string literals, quoted names
+// and comments (`DECIMAL(10,2)` is one column, never a non-sensitive `2)` that would make an
+// all-credential table offerable — AC34), with one level of name quoting stripped before the
+// credential test. And the TABLE tier is stricter than the ranking (SA-5): a hint word must EQUAL a
+// whole `_`-token of the table's name, at least 3 characters — 16 bigrams would otherwise pre-tick
+// most of a source. `rankSources` keeps its looser word tier for ORDER only.
 
-import { ACCESS_HINT_TABLES_MAX, ACCESS_HINT_WORDS_MAX, isCredentialKeyName, type AccessWants, type AppSchemaJson } from '@snugprotocol/protocol';
+import { ACCESS_HINT_TABLES_MAX, ACCESS_HINT_WORDS_MAX, APP_OBJECT_NAME_RULE, isCredentialKeyName, type AccessWants, type AppSchemaJson } from '@snugprotocol/protocol';
 
 export interface SourceColumn {
   name: string;
@@ -118,9 +128,20 @@ const isDescribed = (input: SourceInput): input is SourceApp => !('excluded' in 
 /** A table a grant could hold: at least one column that is not credential-named (D23). */
 export const isOfferable = (table: SourceTable): boolean => table.columns.some((column) => !column.sensitive);
 
-/** The TABLE tier's test on one folded table name: a hint names it exactly, or a hint word sits inside it. */
-const inTableTier = (name: string, hintTables: readonly string[], words: readonly string[]): boolean =>
+/** The RANKING's table test on one folded table name: a hint names it exactly, or a hint word sits anywhere inside it. Orders sources; never admits a pair or ticks a table. */
+const holdsHint = (name: string, hintTables: readonly string[], words: readonly string[]): boolean =>
   hintTables.includes(name) || words.some((word) => name.includes(word));
+
+/** The least a hint word must be to put a table in the TABLE tier (G5-15, SA-5): "es" is a guess, "notes" a name. */
+const TABLE_TIER_MIN_WORD_CHARS = 3;
+
+/**
+ * The TABLE tier's test on one folded table name (S10; G5-15): a hint names it exactly, or a hint
+ * word IS one of its `_`-separated tokens ("category" finds `category_totals`, "expense" never finds
+ * `expenses`) — what a pair is admitted on and all a declared ask may pre-tick.
+ */
+const inTableTier = (name: string, hintTables: readonly string[], words: readonly string[]): boolean =>
+  hintTables.includes(name) || words.some((word) => word.length >= TABLE_TIER_MIN_WORD_CHARS && name.split('_').includes(word));
 
 function score(app: SourceApp, hintTables: readonly string[], words: readonly string[]): RankedSource {
   // Only offerable tables can match: a table with nothing readable is never a reason to rank an app.
@@ -135,7 +156,7 @@ function score(app: SourceApp, hintTables: readonly string[], words: readonly st
 
   const matchedTables = offerable
     .filter((table) => {
-      return inTableTier(fold(table.name), hintTables, words) || words.some((word) => shareable(table).some((column) => column.includes(word)));
+      return holdsHint(fold(table.name), hintTables, words) || words.some((word) => shareable(table).some((column) => column.includes(word)));
     })
     .map((table) => table.name);
 
@@ -184,25 +205,117 @@ export function preselectedTables(source: RankedSource): string[] {
 /** A constraint clause inside `CREATE TABLE (…)` — never a column. */
 const CONSTRAINT_CLAUSE = /^(primary|foreign|unique|check|constraint)$/i;
 
+/** The closing mark of each quoted run SQLite reads: a string literal, and the three ways to quote a name. */
+const QUOTE_CLOSE: Readonly<Record<string, string>> = { "'": "'", '"': '"', '`': '`', '[': ']' };
+
+/** The index just past the quoted run that opens at `start` — a doubled closing mark is an escaped one, except inside `[…]` — or -1 when it never closes. */
+function quotedEnd(text: string, start: number, close: string): number {
+  let at = start + 1;
+  while (at < text.length) {
+    if (text[at] === close) {
+      if (close !== ']' && text[at + 1] === close) {
+        at += 2;
+        continue;
+      }
+      return at + 1;
+    }
+    at += 1;
+  }
+  return -1;
+}
+
+/**
+ * The top-level items of a `CREATE TABLE` column list (G5-13): the text inside the FIRST parenthesis,
+ * split at the commas at that depth only — never one inside nested parentheses (`DECIMAL(10,2)`,
+ * `CHECK (x IN (1, 2))`), a string literal or a quoted name; a line or block comment reads as a
+ * space. A list, literal or comment that never closes is no list: a planted DDL reads as no columns.
+ */
+function columnItems(ddl: string): string[] {
+  const items: string[] = [];
+  let item = '';
+  let depth = 0;
+  let at = 0;
+  while (at < ddl.length) {
+    const char = ddl[at]!;
+    const next = ddl[at + 1];
+    if (char === '-' && next === '-') {
+      const end = ddl.indexOf('\n', at);
+      at = end === -1 ? ddl.length : end + 1;
+      if (depth > 0) item += ' ';
+      continue;
+    }
+    if (char === '/' && next === '*') {
+      const end = ddl.indexOf('*/', at + 2);
+      if (end === -1) return [];
+      at = end + 2;
+      if (depth > 0) item += ' ';
+      continue;
+    }
+    const close = QUOTE_CLOSE[char];
+    if (close !== undefined) {
+      // Copied whole: nothing inside a literal or a quoted name opens, closes or splits anything.
+      const end = quotedEnd(ddl, at, close);
+      if (end === -1) return [];
+      if (depth > 0) item += ddl.slice(at, end);
+      at = end;
+      continue;
+    }
+    if (char === '(') {
+      depth += 1;
+      if (depth > 1) item += char;
+    } else if (char === ')') {
+      if (depth === 0) return [];
+      depth -= 1;
+      if (depth === 0) {
+        items.push(item);
+        return items;
+      }
+      item += char;
+    } else if (char === ',' && depth === 1) {
+      items.push(item);
+      item = '';
+    } else if (depth > 0) {
+      item += char;
+    }
+    at += 1;
+  }
+  return [];
+}
+
+/** An item's leading name: one level of `"…"`, `` `…` ``, `[…]` (or `'…'`) quoting stripped, else the bare word before a space or a parenthesis. */
+function leadingName(item: string): string {
+  const text = item.trimStart();
+  const close = QUOTE_CLOSE[text[0] ?? ''];
+  if (close === undefined) return /^[^\s(]*/.exec(text)?.[0] ?? '';
+  const end = quotedEnd(text, 0, close);
+  if (end === -1) return '';
+  const inner = text.slice(1, end - 1);
+  return close === ']' ? inner : inner.split(close + close).join(close);
+}
+
 /**
  * An app's REGISTERED tables as the sheet's `SourceTable`s (D-PR5-4, F3): every `table` object of
  * its `getAppSchema` value, its column names parsed from the verbatim DDL — the registry is the
  * schema of record (ADR-0010) — credential-named ones `sensitive`, and no row count (nothing is
  * read to count). No schema → no tables.
+ *
+ * TOTAL over a planted row (G5-13): the value is `JSON.parse(…)` with nothing checked, so `objects`
+ * that is not an array reads as no tables, and an object that is not a `table` with a string `name`
+ * passing `APP_OBJECT_NAME_RULE` and a string `ddl` is skipped — its siblings are kept.
  */
 export function registryTables(schema: Pick<AppSchemaJson, 'objects'> | undefined): SourceTable[] {
-  if (schema === undefined) return [];
-  return schema.objects
-    .filter((object) => object.type === 'table')
-    .map((object) => {
-      const body = /\(([\s\S]*)\)/.exec(object.ddl)?.[1] ?? '';
-      const columns = body
-        .split(',')
-        .map((part) => part.trim().split(/\s+/)[0] ?? '')
-        .filter((name) => name !== '' && !CONSTRAINT_CLAUSE.test(name))
-        .map((name) => ({ name, sensitive: isCredentialKeyName(name) }));
-      return { name: object.name, columns, rowCount: 0 };
-    });
+  const objects: unknown = (schema as { objects?: unknown } | null | undefined)?.objects;
+  if (!Array.isArray(objects)) return [];
+  return objects.flatMap((object: unknown): SourceTable[] => {
+    if (typeof object !== 'object' || object === null) return [];
+    const { type, name, ddl } = object as Record<string, unknown>;
+    if (type !== 'table' || typeof name !== 'string' || typeof ddl !== 'string' || !APP_OBJECT_NAME_RULE.test(name)) return [];
+    const columns = columnItems(ddl)
+      .map(leadingName)
+      .filter((column) => column !== '' && !CONSTRAINT_CLAUSE.test(column))
+      .map((column) => ({ name: column, sensitive: isCredentialKeyName(column) }));
+    return [{ name, columns, rowCount: 0 }];
+  });
 }
 
 /** Whether a want carries anything to match: a hint table, or a hint word long enough to rank. */
@@ -212,8 +325,8 @@ export function hasHints(hints: HintLists | undefined): boolean {
 
 /**
  * The TABLE tier alone (S10), in the source's own order: the offerable tables a hint names
- * exactly, or whose name holds a hint word. What a pair is admitted on, and all a declared ask
- * may pre-tick — never a column match, never the every-table fallback.
+ * exactly, or one of whose `_`-tokens a hint word IS (G5-15). What a pair is admitted on, and all a
+ * declared ask may pre-tick — never a column match, never a substring, never the every-table fallback.
  */
 export function tableTierTables(source: SourceApp, hints: HintLists | undefined): string[] {
   const hintTables = normalise(hints?.tables, ACCESS_HINT_TABLES_MAX, 1);

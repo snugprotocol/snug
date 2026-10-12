@@ -20,7 +20,8 @@
 // The knowledge package's content module is rewritten without the prompt files nothing
 // shipped reads — everything under `skills/` and the store's `README.md` (`dropPromptFiles`,
 // whose dead-rule guard fails the build the same way; TASK-20261010-host-broker PR-3,
-// `kitDeadPrompts.test.ts`).
+// `kitDeadPrompts.test.ts`), and since PR-5 (D-PR5-16) the scheduled agent's three prompt files,
+// read only on the swapped `schedule/appAgent` path.
 // The playground and the desktop keep the real modules and the whole prompt store — they are
 // not built from this config.
 // WebLLM is aliased to a stub so the lazily imported 6 MB engine never enters the bundle.
@@ -79,8 +80,9 @@ export default defineConfig({
       [`${playgroundSrc}/agent/accessWriteCard.ts`]: here('./src/stubs/accessWriteCard.ts'),
       [`${playgroundSrc}/access/AccessWriteCard.tsx`]: here('./src/stubs/AccessWriteCard.tsx'),
     }),
-    // The prompt files nothing shipped reads (everything under `skills/`, the store's README)
-    // → out of the page (the header; TASK-20261010-host-broker PR-3, `kitDeadPrompts.test.ts`).
+    // The prompt files nothing shipped reads (everything under `skills/`, the store's README, and
+    // the scheduled agent's three — PR-5, D-PR5-16) → out of the page (the header;
+    // TASK-20261010-host-broker PR-3, `kitDeadPrompts.test.ts`).
     dropPromptFiles({ contentModule: here('../../packages/knowledge/dist/generated/content.js') }),
     startersIndexPlugin(here('./starters-pkg/index.json')),
     react(),

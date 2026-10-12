@@ -33,7 +33,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
-import { act, type ReactElement } from 'react';
+import { act, useState, type ReactElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -42,11 +42,14 @@ import { FRAME_TYPES, PROTOCOL_VERSION, SIDECAR_SYMBOLIC_HOST, accessRequestHash
 
 import { ACCESS_ARM_MS, AccessConsentSheet } from '../access/AccessConsentSheet.js';
 import { AccessHistory } from '../access/AccessHistory.js';
-import { AccessSheet } from '../access/AccessSheet.js';
+import { AccessSheet, useHasAccessState } from '../access/AccessSheet.js';
+import { AccessStrip } from '../access/AccessStrip.js';
+import { answerAccess } from '../access/outcome.js';
 import { collectSources, pendingAccessStore, reviewStore, type ConsentOutcome } from '../access/consent.js';
-import { ACCESS_SHEET, CONSENT_SHEET, allowLabel, excludedFooter, grantStateCopy, historyLine } from '../access/copy.js';
+import { ACCESS_SHEET, CONSENT_SHEET, STRIP_OUTCOME, allowLabel, excludedFooter, grantStateCopy, historyLine } from '../access/copy.js';
 import {
   __setAccessDepsForTests,
+  bumpAccessRevision,
   createGrantFromDecision,
   grantsForApp,
   noteRead,
@@ -1128,6 +1131,41 @@ describe('PR-5 — the source’s offer block (D-PR5-5; AC35)', () => {
   });
 });
 
+/**
+ * G5-12 (IB-1): the header as RunHeaderActions mounts it — `{accessOpen ? <AccessSheet onClose={() =>
+ * setAccessOpen(false)} /> : null}` — so the sheet's `onClose` UNMOUNTS it, with the reader's strip
+ * beside it (RunView's strip above the frame). A `vi.fn()` onClose that never unmounts tests a state
+ * production never reaches.
+ */
+function HeaderLike({ appId, onClose }: { appId: string; onClose: () => void }): ReactElement {
+  const [open, setOpen] = useState(true);
+  return (
+    <>
+      <AccessStrip appId={appId} />
+      {open ? (
+        <AccessSheet
+          appId={appId}
+          onClose={() => {
+            onClose();
+            setOpen(false);
+          }}
+        />
+      ) : null}
+    </>
+  );
+}
+
+/** G5-12: mount the sheet through `HeaderLike` — its close unmounts it. */
+async function renderHeaderSheet(appId: string, onClose: () => void = () => undefined): Promise<void> {
+  container = document.createElement('div');
+  document.body.appendChild(container);
+  root = createRoot(container);
+  await act(async () => {
+    root!.render(<HeaderLike appId={appId} onClose={onClose} />);
+  });
+  await settle();
+}
+
 describe('PR-5 — the reader’s pair act on its own sheet (D-PR5-4, D-PR5-5; D6)', () => {
   beforeEach(() => {
     db.saveAppVersion(budget, declaringHtml('Budget', [SPENDING5]));
@@ -1142,23 +1180,26 @@ describe('PR-5 — the reader’s pair act on its own sheet (D-PR5-4, D-PR5-5; D
     expect(pair!.textContent).toContain('Ledger');
   });
 
-  it('the act closes this sheet and starts the DECLARED ask pinned to that source', async () => {
+  // G5-12: re-mounted through HeaderLike — the close UNMOUNTS the sheet, as RunHeaderActions does.
+  it('the act closes this sheet and starts the DECLARED ask pinned to that source (G5-12: mounted as the header mounts it)', async () => {
     const onClose = vi.fn();
-    await renderSheet(budget, onClose);
+    await renderHeaderSheet(budget, onClose);
     await click(one('access-pair'));
     await until(() => reviewStore.get() === budget, 'the review opens');
     expect(onClose).toHaveBeenCalled();
+    expect(sheet(), 'the close unmounted the sheet').toBeNull();
     const pending = pendingAccessStore.get()[budget] as ReturnType<typeof pendingAccessStore.get>[string] & { askedIn?: string };
     expect(pending.askedIn).toBe('declared');
     expect(pending.purpose).toBe(SPENDING5.purpose);
     expect(pending.preselect).toEqual({ appId: ledger, tables: ['transactions'] });
   });
 
-  it('D-PR5-6a a not-offered answer keeps the sheet up and says why in the act line (role status)', async () => {
+  // G5-12: re-mounted through HeaderLike.
+  it('D-PR5-6a a not-offered answer keeps the sheet up and says why in the act line (role status) (G5-12: mounted as the header mounts it)', async () => {
     const onClose = vi.fn();
     const real = db.exportAppRuntime.bind(db);
     vi.spyOn(db, 'exportAppRuntime').mockImplementation(async (appId: string) => (appId === ledger ? new Uint8Array(32 * 1024 * 1024) : real(appId)));
-    await renderSheet(budget, onClose);
+    await renderHeaderSheet(budget, onClose);
     await click(one('access-pair'));
     await until(() => one('access-act-line') !== null, 'the act line');
     const line = one('access-act-line')!;
@@ -1179,5 +1220,142 @@ describe('PR-5 — the reader’s pair act on its own sheet (D-PR5-4, D-PR5-5; D
     await allow({ reader: budget, source: ledger });
     await renderSheet(budget);
     expect(one('access-pair')).toBeNull();
+  });
+});
+
+// =========================================================================================
+// TASK-20261010-host-broker PR-5 — Gate-5 fold on the ⋈ sheet.
+//
+// G5-12 (IB-1) the pair act's outcome survives the sheet's close: mounted as the header mounts it
+//       (`HeaderLike` — the close unmounts the sheet), a DECLARED-form *don't allow* leaves a visible
+//       `wontAskAgain(reader)` line on the reader's strip, and an allow leaves the allowed line.
+// G5-13 (SA-2) one app's malformed registry row never empties a sheet: before the fold
+//       `listPairSuggestions` / `offerReaders` threw inside `useSheetData` and every grant and *stop*
+//       vanished with it.
+// G5-14 (IB-3) a reader joined by a PAUSED grant gets no pair act, and is not offered by the source.
+// G5-15 (IB-7) `useHasAccessState` answers the cheap widening first: with another app that may use
+//       access, an access-revision bump reads no grants.
+// =========================================================================================
+
+describe('G5-12 the pair act’s outcome outlives the sheet (mounted as the header mounts it)', () => {
+  beforeEach(() => {
+    db.saveAppVersion(budget, declaringHtml('Budget', [SPENDING5]));
+  });
+
+  const stripLine = (): HTMLElement | null => document.querySelector<HTMLElement>(`[data-testid="access-ask-outcome"][data-app="${budget}"]`);
+
+  it('G5-12 don’t allow on the declared review: the sheet is gone, and the reader’s strip says "Budget won’t ask this again…"', async () => {
+    await renderHeaderSheet(budget);
+    await click(one('access-pair'));
+    await until(() => reviewStore.get() === budget, 'the review opens');
+    expect(sheet(), 'the sheet closed').toBeNull();
+    const pending = pendingAccessStore.get()[budget]!;
+    await act(async () => {
+      await answerAccess(pending, { kind: 'dont-allow' });
+    });
+    await settle();
+    expect(db.listAccessDeclines(budget), 'the decline is recorded').toHaveLength(1);
+    const line = stripLine();
+    expect(line, 'a visible line somewhere').not.toBeNull();
+    expect(line!.getAttribute('data-outcome')).toBe('declined');
+    expect(line!.textContent).toContain(STRIP_OUTCOME.wontAskAgain('Budget'));
+  });
+
+  it('G5-12 an allow on the declared review: the sheet is gone, and the allowed line is visible', async () => {
+    await renderHeaderSheet(budget);
+    await click(one('access-pair'));
+    await until(() => reviewStore.get() === budget, 'the review opens');
+    const pending = pendingAccessStore.get()[budget]!;
+    await act(async () => {
+      await answerAccess(pending, {
+        kind: 'allow',
+        sourceAppId: ledger,
+        tables: [{ name: 'transactions', withheld: [], write: false }],
+        duration: 'day',
+        unattended: false,
+        kv: false,
+        refresh: false,
+      } as unknown as Parameters<typeof answerAccess>[1]);
+    });
+    await settle();
+    expect(stripLine()?.getAttribute('data-outcome')).toBe('allowed');
+    expect(stripLine()?.textContent).toContain(STRIP_OUTCOME.allowed('Budget', 'Ledger', ['transactions'], 'day'));
+  });
+});
+
+describe('G5-13 (SA-2) another app’s malformed registry row never empties a sheet', () => {
+  function plantSchema(appId: string, planted: unknown): void {
+    const real = db.getAppSchema.bind(db);
+    vi.spyOn(db, 'getAppSchema').mockImplementation((id: string) => (id === appId ? (planted as ReturnType<UserDb['getAppSchema']>) : real(id)));
+  }
+
+  it('G5-13 the reader’s sheet still lists its access with *stop* when ANOTHER app’s registry row is {objects: null}', async () => {
+    db.saveAppVersion(budget, declaringHtml('Budget', [SPENDING5]));
+    await allow({ reader: budget, source: ledger });
+    plantSchema(pantry, { objects: null });
+    await renderSheet(budget);
+    const rows = rowsIn('access-reads');
+    expect(rows, 'the access row').toHaveLength(1);
+    expect(rows[0]!.textContent).toContain('Ledger');
+    expect(all('access-row-act', rows[0]!)).toHaveLength(1);
+  });
+
+  it('G5-13 the malformed app’s OWN sheet still renders its access (the offer is simply absent)', async () => {
+    await allow({ reader: budget, source: ledger });
+    plantSchema(ledger, { objects: null });
+    await renderSheet(ledger);
+    expect(rowsIn('access-read-by'), 'the read-by row').toHaveLength(1);
+    expect(one('access-offer')).toBeNull();
+  });
+});
+
+describe('G5-14 (IB-3) a PAUSED grant joins the pair — no pair act, no offer to that reader', () => {
+  it('G5-14 the reader’s sheet: a pair whose access is paused (reader-updated) has no pair act — *allow again* on the row is the act', async () => {
+    db.saveAppVersion(budget, declaringHtml('Budget', [SPENDING5]));
+    const grant = await allow({ reader: budget, source: ledger });
+    await suspendAccess(db, grant.id, 'reader-updated', new Date(clock.now).toISOString());
+    await renderSheet(budget);
+    expect(one('access-pair')).toBeNull();
+  });
+
+  it('G5-14 the source’s offer: a reader whose access from this source is paused is not offered', async () => {
+    const grant = await allow({ reader: budget, source: ledger });
+    await suspendAccess(db, grant.id, 'reader-updated', new Date(clock.now).toISOString());
+    await renderSheet(ledger);
+    const names = [...(one('access-offer-pick') as HTMLSelectElement).options].map((option) => option.textContent);
+    expect(names).toEqual(['Pantry']);
+  });
+
+  it('G5-14 the source’s offer: a reader whose access EXPIRED is not offered either', async () => {
+    await allow({ reader: budget, source: ledger, duration: 'day' });
+    clock.now = T0 + 2 * 86_400_000;
+    await renderSheet(ledger);
+    const names = [...(one('access-offer-pick') as HTMLSelectElement).options].map((option) => option.textContent);
+    expect(names).toEqual(['Pantry']);
+  });
+});
+
+describe('G5-15 (IB-7) useHasAccessState answers the cheap widening first', () => {
+  function Probe({ appId }: { appId: string }): ReactElement {
+    const has = useHasAccessState(appId, true);
+    return <span data-testid="probe">{has ? 'yes' : 'no'}</span>;
+  }
+
+  it('G5-15 with another app that may use access, an access-revision bump reads no grants', async () => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    await act(async () => {
+      root!.render(<Probe appId={budget} />);
+    });
+    await settle();
+    expect(one('probe')?.textContent).toBe('yes');
+    const spy = vi.spyOn(db, 'listAccessGrants');
+    await act(async () => {
+      bumpAccessRevision();
+    });
+    await settle();
+    expect(one('probe')?.textContent).toBe('yes');
+    expect(spy).toHaveBeenCalledTimes(0);
   });
 });

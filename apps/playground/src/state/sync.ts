@@ -21,7 +21,7 @@ import { allows, getPlatform, secretsUsable } from '../platform/platform.js';
 import { refreshAppMeta } from './appMeta.js';
 import { hydrateSettings, markEndpointsNeedConfirm } from './mode.js';
 import { bumpAccessRevision, resetAccessSession } from '../access/grants.js';
-import { abortAllRefreshes } from '../access/refreshRuns.js';
+import { abortAllRefreshes, latchRefreshSwap, unlatchRefreshSwap } from '../access/refreshRuns.js';
 import { resetThreadSessions } from '../agent/threadSessions.js';
 import { hydrateSharedInbox, resetSharedInbox } from '../share/sharedInbox.js';
 import { resetSidecarIdentitySession } from './sidecarIdentity.js';
@@ -58,6 +58,23 @@ export const DROPBOX_TOKEN_SECRET = 'dropbox:token';
 
 let loop: SyncLoop | undefined;
 
+/**
+ * The loop's pull latched the swap (`beforeSwap`) and has not yet said how it ended — a pull that
+ * then fails says so by an error event alone, and the latch must not outlive it.
+ */
+let pullLatched = false;
+
+/**
+ * The loop's `beforeSwap` (TASK-20261010-host-broker PR-5, Gate-5 fold G5-18 / SB-3): right before a
+ * pull swaps the origin's image in — the auto pull and *use the origin copy* alike — every fetch
+ * another app asked for stops and none may start until the pulled file is the one there
+ * (`afterForeignBytes`), so nothing of the old file's lands in the new one during the swap's awaits.
+ */
+function latchForPull(): void {
+  pullLatched = true;
+  latchRefreshSwap();
+}
+
 /** Foreign bytes just became local state: arm F15 and re-mirror stores from the DB. */
 async function afterForeignBytes(): Promise<void> {
   // The sidecar identity harvest is scoped to ONE user-file identity: without this
@@ -73,6 +90,9 @@ async function afterForeignBytes(): Promise<void> {
   // PR-5, S6: no line, no fold, no kv clear; the cooldowns go with the old file).
   resetAccessSession();
   abortAllRefreshes('reset');
+  // The swap the latch held refreshes for is done (SB-3): what is local now is the file they may fetch into.
+  pullLatched = false;
+  unlatchRefreshSwap();
   markEndpointsNeedConfirm();
   const db = await getUserDb();
   hydrateSettings(db);
@@ -100,6 +120,12 @@ function onSyncEvent(event: SyncEvent): void {
           : 'the origin has a different copy',
     });
   } else if (event.kind === 'error') {
+    // A pull that failed after its latch (SB-3): the latch already stopped every fetch of the old file,
+    // and whatever file is there now is the one fetches may write into — never a latch left standing.
+    if (pullLatched) {
+      pullLatched = false;
+      unlatchRefreshSwap();
+    }
     syncStatusStore.set({ ...current, state: 'error', detail: event.message });
   } else {
     if (event.kind === 'pulled') void afterForeignBytes(); // auto pull-merge (F15 + rehydrate)
@@ -170,6 +196,7 @@ async function startLoop(kind: SyncOriginKind): Promise<void> {
     // Read through the getter at loop-construction time, and `resyncAfterProtection`
     // rebuilds the loop when protection is toggled — a captured value would go stale.
     ...(userDb.sealForOrigin !== undefined ? { sealForOrigin: userDb.sealForOrigin } : {}),
+    beforeSwap: latchForPull,
     onEvent: onSyncEvent,
   });
   syncStatusStore.set({ origin: kind, state: 'syncing' });
@@ -309,13 +336,21 @@ export async function importUserFile(file: { arrayBuffer(): Promise<ArrayBuffer>
   // `afterForeignBytes` resets again afterwards — that call also serves the pull path.
   resetThreadSessions();
   resetAccessSession(); // the same seam (TASK-20261010-cross-app-access AC14)
-  abortAllRefreshes('reset'); // …and a fetch in flight writes nothing into the imported file (TASK-20261010-host-broker PR-5, S6)
+  // …and a fetch in flight writes nothing into the imported file, nor may one START during the
+  // import's own awaits (TASK-20261010-host-broker PR-5, S6; Gate-5 fold SB-3): latched until
+  // `afterForeignBytes` — or until the import refuses, which swaps nothing.
+  latchRefreshSwap();
   // The shelf mirrors rows of the file being replaced (ADR-0063 §4); drop it before the
   // swap so a memory entry cannot be "kept" into the wrong file mid-import, then
   // `afterForeignBytes` re-hydrates from the file that is now local.
   resetSharedInbox();
   // C1 (TASK-20260905-host-kit AC9): where no credential can be used, the candidate loses
   // `snug_secrets` BEFORE it becomes live — the same rule that hides the export checkbox.
-  await db.importUserDb(bytes, secretsUsable() ? undefined : { stripSecrets: true });
+  try {
+    await db.importUserDb(bytes, secretsUsable() ? undefined : { stripSecrets: true });
+  } catch (err) {
+    unlatchRefreshSwap();
+    throw err;
+  }
   await afterForeignBytes();
 }

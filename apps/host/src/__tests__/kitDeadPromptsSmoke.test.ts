@@ -8,6 +8,11 @@
 // the runtime branch, both platforms), every tool description (the DEMO brain builds the full
 // tool list against the mock adapter), the knowledge base and its search, the inline core and
 // the summary, the ui and template layers, and the four dedicated-turn assemblers.
+//
+// Gate-5 fold (D-PR5-16, the kit-dead prompt cut): the cut store has also lost the scheduled agent's
+// three prompt files. Nothing above reads them — `TOOL_PROMPTS` names neither `fetch-connection` nor
+// `data-propose-write-scheduled`, and no assembly here passes `scheduledAgent` — and the first test
+// proves the mock really cut them: each of their readers now throws by name.
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../../../packages/knowledge/dist/generated/content.js', async (importOriginal) => {
@@ -19,6 +24,9 @@ vi.mock('../../../../packages/knowledge/dist/generated/content.js', async (impor
 });
 
 import * as knowledge from '@snugprotocol/knowledge';
+
+// The UNCUT store (the mock above replaces the module everyone else sees), for enumerating it.
+const real = (await vi.importActual('../../../../packages/knowledge/dist/generated/content.js')) as { PROMPT_FILES: Record<string, string> };
 
 const TOOL_PROMPTS = [
   'app-builder',
@@ -44,6 +52,12 @@ describe('the kit runs on the cut store', () => {
     expect(() => knowledge.getSkillCreatorFile('SKILL.md')).toThrow(/Unknown vendored skill-creator file/);
     expect(() => knowledge.getSkillBuilderPreamble()).toThrow(/not in the generated store/);
     expect(knowledge.listSkillModes()).toEqual([]);
+    // Gate-5 fold D-PR5-16: the scheduled agent's three files are gone from the cut store too.
+    expect(() => knowledge.getToolPrompt('fetch-connection')).toThrow(/tools\/fetch-connection\.md" is not in the generated store/);
+    expect(() => knowledge.getToolPrompt('data-propose-write-scheduled')).toThrow(/tools\/data-propose-write-scheduled\.md" is not in the generated store/);
+    for (const platform of ['web', 'desktop'] as const) {
+      expect(() => knowledge.buildHostSystemPrompt({ appBuilder: false, artifacts: false, scheduledAgent: true, platform }), platform).toThrow(/system\/50-scheduled-agent\.md" is not in the generated store/);
+    }
   });
 
   it('assembles the host system prompt for every delivery, the runtime branch and both platforms', () => {
@@ -62,6 +76,15 @@ describe('the kit runs on the cut store', () => {
 
   it('renders every tool description the demo brain or any lane can build', () => {
     for (const name of TOOL_PROMPTS) expect(knowledge.getToolPrompt(name).length, name).toBeGreaterThan(50);
+  });
+
+  it('Gate-5 fold D-PR5-16: the chat’s data_propose_write survives the cut, and TOOL_PROMPTS is every tool prompt but the scheduled agent’s two', () => {
+    expect(knowledge.getToolPrompt('data-propose-write')).toContain('data propose write');
+    const tools = Object.keys(real.PROMPT_FILES)
+      .filter((file) => file.startsWith('tools/'))
+      .map((file) => file.slice('tools/'.length, -'.md'.length))
+      .sort();
+    expect([...TOOL_PROMPTS, 'data-propose-write-scheduled', 'fetch-connection'].sort()).toEqual(tools);
   });
 
   it('serves the knowledge base, its search, the inline core and the summary', () => {

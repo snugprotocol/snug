@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
-import type { ReactElement } from 'react';
+import type { ReactElement, ReactNode } from 'react';
 import { Link } from 'react-router';
+
+import type { ChatFetchFact } from '@snugprotocol/protocol';
 
 import { AccessCard, type ResolveAccessCard } from '../access/AccessCard.js';
 import { AccessWriteCard } from '../access/AccessWriteCard.js';
@@ -8,7 +10,7 @@ import { OwnUndoAct } from '../access/OwnUndoAct.js';
 import type { UndoOutcome } from '../access/writeBroker.js';
 import type { AccessWriteCardState } from '../agent/accessWriteCard.js';
 import { sanitizeCardText, type ChatCardState } from '../agent/cards.js';
-import { DATA_WRITE_CARD } from '../agent/copy.dataWrite.js';
+import { DATA_WRITE_CARD, FETCH_FACTS } from '../agent/copy.dataWrite.js';
 import type { BuildStepView, ChatMessage, DataWriteCardState } from '../agent/useBuilderChat.js';
 import { CONNECTIONS_UNAVAILABLE } from '../platform/availability.js';
 import { allows } from '../platform/platform.js';
@@ -115,6 +117,20 @@ export interface ChatLogProps {
  */
 export const DEMO_TURN_TAG = 'scripted demo — not an AI response';
 
+/**
+ * What *fetch new data first* came to (TASK-20261010-host-broker PR-5, D-PR5-20; Gate-5 G5-17), from
+ * the message's FACTS — never a sentence a row carried: the one wording (`FETCH_FACTS.note`,
+ * `FETCH_FIRST`'s words), composed with a NUL-fenced index in place of each fact's name — no copy
+ * sentence holds a NUL, and no fact's name can — and each name put back in its own `<bdi>`, so a
+ * right-to-left name can never reorder the host's words.
+ */
+function fetchNoteFrom(facts: readonly ChatFetchFact[], now: number): ReactNode[] {
+  const marked = facts.map((fact, index) => ({ ...fact, source: `\u0000${index}\u0000` }));
+  return FETCH_FACTS.note(marked, now)
+    .split(/\u0000(\d+)\u0000/)
+    .map((part, index) => (index % 2 === 1 ? <bdi key={index}>{facts[Number(part)]?.source}</bdi> : part));
+}
+
 /** The streamed conversation: user bubbles, streaming agent text with a soft caret,
     error notes as data, and the artifact card with its "run it" CTA. */
 export function ChatLog({
@@ -157,10 +173,10 @@ export function ChatLog({
               </div>
             ) : null}
             {message.directiveNote !== undefined ? <div className="hint">{message.directiveNote}</div> : null}
-            {/* TASK-20261010-host-broker PR-5 (D-PR5-20): what *fetch new data first* came to — the host's words, on the person's own message. */}
-            {message.role === 'user' && message.fetchNote !== undefined ? (
+            {/* TASK-20261010-host-broker PR-5 (D-PR5-20; G5-17): what *fetch new data first* came to — the host's words, from the facts, on the person's own message. */}
+            {message.role === 'user' && message.fetched !== undefined ? (
               <div className="hint" data-testid="chat-fetch-note">
-                {message.fetchNote}
+                {fetchNoteFrom(message.fetched, Date.now())}
               </div>
             ) : null}
             {message.role === 'agent' && message.brainKind === 'demo' ? (

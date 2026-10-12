@@ -142,8 +142,9 @@ user allowed and reads it with one read-only query. Never promise the user that 
 already reads another, and never put another app's data into the bundle: the runner holds
 the access, not the app. An app that will want another app's data may also say so in its
 `<head>`, right after the viewport meta, with `<meta name="snug:access-wants" content='…'>`
-(its shape is in the reference) — the runner shows it to the user up front; it allows nothing,
-and the app still asks.
+(its shape is in the reference; an apostrophe inside it is written `&apos;` (or ’), since a plain
+one ends the value) — the runner shows it to the user up front; it allows nothing, and the app
+still asks.
 The chat beside an app — the runner's own AI — can read what the user allowed that app to
 read, may ask for it on the app's behalf, and may propose a change to a table the user let that
 app change, which the user applies on its card; your app's code is not involved, and the other

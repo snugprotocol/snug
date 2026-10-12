@@ -29,6 +29,7 @@
 import {
   ACCESS_LOG_MAX_BYTES,
   ACCESS_LOG_MAX_ENTRIES,
+  ACCESS_LOG_TOTAL_MAX_BYTES,
   USERDB_TABLES,
   accessGrantSchema,
   accessLogEntrySchema,
@@ -159,7 +160,7 @@ describe('carryAccessHistory — what is carried, and in what order (D-PR5-8, AC
 
     const report = carryAccessHistory(winner.sql, snapshotLocalAccessHistory(loser.sql), { since: null });
 
-    expect(report).toEqual({ carried: 2, dropped: 0 });
+    expect(report).toEqual({ carried: 2, dropped: 0, rewritten: 1 }); // Gate-5 fold G5-7: the carry reports rewritten (rows written)
     expect(ats(winner.log(LEDGER))).toEqual([at(10, 3), at(10, 2), at(10, 1), at(10, 0)]);
     expect((winner.log(LEDGER) ?? []).map((entry) => (entry as { sql?: string }).sql)).toEqual(['SELECT b', 'SELECT a', 'SELECT c', undefined]);
     for (const entry of winner.log(LEDGER) ?? []) expect(accessLogEntrySchema.safeParse(entry).success).toBe(true);
@@ -204,7 +205,7 @@ describe('carryAccessHistory — what is carried, and in what order (D-PR5-8, AC
 
     const report = carryAccessHistory(winner.sql, snapshotLocalAccessHistory(loser.sql), { since: at(10, 2) });
 
-    expect(report).toEqual({ carried: 1, dropped: 0 });
+    expect(report).toEqual({ carried: 1, dropped: 0, rewritten: 1 }); // Gate-5 fold G5-7: the carry reports rewritten (rows written)
     expect(ats(winner.log(LEDGER))).toEqual([at(10, 3), at(9, 0)]);
   });
 
@@ -249,7 +250,7 @@ describe('carryAccessHistory — what is carried, and in what order (D-PR5-8, AC
 
     const report = carryAccessHistory(winner.sql, snapshotLocalAccessHistory(loser.sql), { since: null });
 
-    expect(report).toEqual({ carried: 1, dropped: 2 });
+    expect(report).toEqual({ carried: 1, dropped: 2, rewritten: 1 }); // Gate-5 fold G5-7: the carry reports rewritten (rows written)
     expect(winner.raw(accessLogSettingKey(SPARE))).toBeUndefined();
     expect(ats(winner.log(LEDGER))).toEqual([at(10, 2)]);
   });
@@ -307,7 +308,7 @@ describe('carryAccessHistory — the caps never throw (D-PR5-8, AC37)', () => {
     const merged = winner.log(LEDGER) ?? [];
     expect(merged).toHaveLength(ACCESS_LOG_MAX_ENTRIES);
     for (const kept of winnerLines) expect(merged).toContainEqual(kept);
-    expect(report).toEqual({ carried: 5, dropped: 5 });
+    expect(report).toEqual({ carried: 5, dropped: 5, rewritten: 1 }); // Gate-5 fold G5-7: the carry reports rewritten (rows written)
   });
 
   it('D-PR5-8 the byte cap: the row stays within ACCESS_LOG_MAX_BYTES and the winner keeps its line', async () => {
@@ -342,7 +343,7 @@ describe('carryAccessHistory — the caps never throw (D-PR5-8, AC37)', () => {
       report = carryAccessHistory(winner.sql, snapshotLocalAccessHistory(loser.sql), { since: null });
     }).not.toThrow();
 
-    expect(report).toEqual({ carried: 0, dropped: 3 });
+    expect(report).toEqual({ carried: 0, dropped: 3, rewritten: 0 }); // Gate-5 fold G5-7: the carry reports rewritten (rows written)
     expect(JSON.parse(winner.raw(accessLogSettingKey(LEDGER)) ?? '[]')).toEqual(JSON.parse(before ?? '[]'));
   });
 
@@ -407,5 +408,137 @@ describe('applyTombstones — a stop wins across a sync (D-PR5-8, AC37)', () => 
 
     expect(applyTombstones(pulled.sql, snapshotLocalAccessGrants(local.sql).revoked)).toBe(0);
     expect(pulled.raw(accessGrantSettingKey(G2))).toBe(before);
+  });
+});
+
+// =================================================================================================
+// TASK-20261010-host-broker PR-5 Gate 5 — G5-7 [DB-7] and G5-8 [DB-8].
+//
+// G5-7: `carryAccessHistory` reports `rewritten` — the history ROWS it wrote (a count-only merge is a
+// write) — so its callers mark the file dirty and move the loop on any write; and a loser line whose
+// NATURAL KEY exists on both sides is a candidate whatever its `at`: a coalesced group that began
+// before `since` and grew after it keeps the larger count (only the max-merge applies — a line the
+// winner LACKS still obeys `since`).
+// G5-8 (pins only): the carry's cross-source CEILING pass (ACCESS_LOG_TOTAL_MAX_BYTES).
+// =================================================================================================
+
+describe('G5-7 — rewritten, and a natural key on both sides is a candidate whatever its at (DB-7)', () => {
+  it('G5-7 a recount-only carry reports rewritten 1 and carried 0 — the row was written', async () => {
+    const { snapshotLocalAccessHistory, carryAccessHistory } = await carryModule();
+    const winner = await image(withHistory({ [LEDGER]: [line({ at: at(10, 0), sql: 'SELECT g', count: 2 })] }));
+    const loser = await image(withHistory({ [LEDGER]: [line({ at: at(10, 0), sql: 'SELECT g', count: 5 })] }));
+
+    const report = carryAccessHistory(winner.sql, snapshotLocalAccessHistory(loser.sql), { since: null });
+
+    expect(report).toEqual({ carried: 0, dropped: 0, rewritten: 1 });
+    expect(winner.log(LEDGER)).toEqual([line({ at: at(10, 0), sql: 'SELECT g', count: 5 })]);
+  });
+
+  it('G5-7 a carry that changes nothing reports rewritten 0 and leaves the row byte-identical', async () => {
+    const { snapshotLocalAccessHistory, carryAccessHistory } = await carryModule();
+    const rows = { [LEDGER]: [line({ at: at(10, 0), sql: 'SELECT g', count: 5 })] };
+    const winner = await image(withHistory(rows));
+    const loser = await image(withHistory({ [LEDGER]: [line({ at: at(10, 0), sql: 'SELECT g', count: 2 })] }));
+    const before = winner.raw(accessLogSettingKey(LEDGER));
+
+    const report = carryAccessHistory(winner.sql, snapshotLocalAccessHistory(loser.sql), { since: null });
+
+    expect(report).toEqual({ carried: 0, dropped: 0, rewritten: 0 });
+    expect(winner.raw(accessLogSettingKey(LEDGER))).toBe(before);
+  });
+
+  it('G5-7 rewritten counts ROWS, not lines — lines carried into two sources are 2', async () => {
+    const { snapshotLocalAccessHistory, carryAccessHistory } = await carryModule();
+    const winner = await image(withHistory({ [LEDGER]: [line({ at: at(9, 0), kind: 'granted' })], [BUDGET]: [line({ at: at(9, 0), kind: 'granted', grantId: G2 })] }));
+    const loser = await image(
+      withHistory({
+        [LEDGER]: [line({ at: at(10, 2), sql: 'SELECT b' }), line({ at: at(10, 1), sql: 'SELECT a' })],
+        [BUDGET]: [line({ at: at(10, 3), grantId: G2, sql: 'SELECT c' })],
+      }),
+    );
+
+    const report = carryAccessHistory(winner.sql, snapshotLocalAccessHistory(loser.sql), { since: null });
+
+    expect(report).toEqual({ carried: 3, dropped: 0, rewritten: 2 });
+  });
+
+  it('G5-7 a group that began BEFORE since and grew after it keeps the larger count; a line the winner lacks still obeys since', async () => {
+    const { snapshotLocalAccessHistory, carryAccessHistory } = await carryModule();
+    const winner = await image(withHistory({ [LEDGER]: [line({ at: at(10, 0), sql: 'SELECT g', count: 2, rows: 1 })] }));
+    const loser = await image(
+      withHistory({
+        [LEDGER]: [
+          line({ at: at(10, 0, 20), sql: 'SELECT old' }), // ≤ since and the winner lacks it: not a candidate
+          line({ at: at(10, 0), sql: 'SELECT g', count: 6, rows: 3 }), // the same group, grown past since
+        ],
+      }),
+    );
+
+    const report = carryAccessHistory(winner.sql, snapshotLocalAccessHistory(loser.sql), { since: at(10, 0, 30) });
+
+    expect(winner.log(LEDGER)).toEqual([line({ at: at(10, 0), sql: 'SELECT g', count: 6, rows: 3 })]);
+    expect(report).toEqual({ carried: 0, dropped: 0, rewritten: 1 });
+  });
+});
+
+describe('G5-8 — the carry\'s cross-source ceiling pass (ACCESS_LOG_TOTAL_MAX_BYTES; DB-8)', () => {
+  /** A full-ish history row for some other source: schema-valid reads, serialized just under ACCESS_LOG_MAX_BYTES. */
+  function fullRow(grantId: string, budget: number): unknown[] {
+    const entries: unknown[] = [];
+    for (let i = 0; ; i += 1) {
+      const next = line({ at: at(7, Math.floor(i / 60) % 60, i % 60), grantId, sql: `SELECT ${String(i).padStart(3, '0')} ${'f'.repeat(189)}` });
+      if (utf8ByteLength(JSON.stringify([...entries, next])) > budget || entries.length === ACCESS_LOG_MAX_ENTRIES) return entries;
+      entries.push(next);
+    }
+  }
+
+  it('G5-8 sixteen near-full sources: the carry adds nothing beyond the ceiling, the oldest carried lines give way first, every winner line is byte-identical, nothing throws, and a source whose carried lines all gave way gets no write', async () => {
+    const { snapshotLocalAccessHistory, carryAccessHistory } = await carryModule();
+    const fillers = Array.from({ length: 16 }, () => crypto.randomUUID());
+    const ledgerGranted = line({ at: at(9, 0), kind: 'granted' });
+    const budgetGranted = line({ at: at(9, 0), kind: 'granted', grantId: G2 });
+    const winner = await image(
+      withHistory({ [LEDGER]: [ledgerGranted], [BUDGET]: [budgetGranted] }, (db) => {
+        for (const source of fillers) db.setSetting(accessLogSettingKey(source), fullRow(G1, ACCESS_LOG_MAX_BYTES - 300));
+      }),
+    );
+    // BUDGET's carried lines are the OLDEST reads, so they give way first; LEDGER's newer ones keep what room is left.
+    const budgetReads = Array.from({ length: 5 }, (_, i) => line({ at: at(9, 10 + i), grantId: G2, sql: `SELECT b${i} ${'b'.repeat(180)}` }));
+    const ledgerReads = Array.from({ length: 30 }, (_, i) => line({ at: at(11, i), sql: `SELECT l${i} ${'l'.repeat(180)}` }));
+    const loser = await image(withHistory({ [LEDGER]: [...ledgerReads].reverse(), [BUDGET]: [...budgetReads].reverse() }));
+
+    const rowsBefore = new Map([...fillers, LEDGER, BUDGET].map((source) => [source, winner.raw(accessLogSettingKey(source))]));
+    const totalOf = (): number => [...fillers, LEDGER, BUDGET].reduce((sum, source) => sum + utf8ByteLength(winner.raw(accessLogSettingKey(source)) ?? ''), 0);
+    for (const source of fillers) {
+      const row = JSON.parse(winner.raw(accessLogSettingKey(source)) ?? '[]') as unknown[];
+      expect(row.length).toBeLessThanOrEqual(ACCESS_LOG_MAX_ENTRIES); // each filler is a row the caps admit …
+      expect(utf8ByteLength(JSON.stringify(row))).toBeGreaterThan(ACCESS_LOG_MAX_BYTES - 700); // … and near-full
+    }
+    // The fixture really binds on the CEILING, not on a per-source cap: the winner is under it, the carry would cross it, and LEDGER alone stays far under its own cap.
+    expect(totalOf()).toBeLessThan(ACCESS_LOG_TOTAL_MAX_BYTES);
+    expect(totalOf() + utf8ByteLength(JSON.stringify([...ledgerReads, ...budgetReads]))).toBeGreaterThan(ACCESS_LOG_TOTAL_MAX_BYTES);
+    expect(utf8ByteLength(JSON.stringify([...ledgerReads, ledgerGranted]))).toBeLessThan(ACCESS_LOG_MAX_BYTES);
+
+    let report: { carried: number; dropped: number } | undefined;
+    expect(() => {
+      report = carryAccessHistory(winner.sql, snapshotLocalAccessHistory(loser.sql), { since: null });
+    }).not.toThrow();
+
+    // Nothing beyond the ceiling.
+    expect(totalOf()).toBeLessThanOrEqual(ACCESS_LOG_TOTAL_MAX_BYTES);
+    // Every candidate is carried or dropped; some gave way, some were carried.
+    expect((report?.carried ?? 0) + (report?.dropped ?? 0)).toBe(35);
+    expect(report?.dropped).toBeGreaterThanOrEqual(5);
+    expect(report?.carried).toBeGreaterThan(0);
+    // The fillers are untouched, byte for byte.
+    for (const source of fillers) expect(winner.raw(accessLogSettingKey(source)), source).toBe(rowsBefore.get(source));
+    // BUDGET's carried lines all gave way: its row is not written at all.
+    expect(winner.raw(accessLogSettingKey(BUDGET))).toBe(rowsBefore.get(BUDGET));
+    // LEDGER keeps its own line and exactly `carried` of the loser's — the NEWEST ones.
+    const ledger = winner.log(LEDGER) ?? [];
+    expect(ledger).toContainEqual(ledgerGranted);
+    expect(ledger).toHaveLength((report?.carried ?? 0) + 1);
+    const kept = ledger.filter((entry) => (entry as { kind?: string }).kind === 'read');
+    expect(ats(kept)).toEqual(ats([...ledgerReads].reverse().slice(0, report?.carried ?? 0)));
   });
 });

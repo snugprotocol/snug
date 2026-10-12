@@ -23,7 +23,8 @@
 // in host words with the app's purpose quoted below it, and *review…*, which starts the declared
 // ask pinned to that source. The section keeps the act's settle, so its act line outlives the row
 // an allow removes (the pair is no pair once Budget reads Ledger); re-read on the access and
-// library revisions.
+// library revisions. Gate-5 G5-15: each re-read reads the file's grants once (IB-7), and every
+// *review…* is disabled while the ask it started is in flight (IB-5).
 
 import { useEffect, useId, useState, type ReactElement } from 'react';
 
@@ -41,7 +42,7 @@ import { AccessActLine, isolateNames, useAccessAct } from './AccessActLine.js';
 import { NO_ACCESS_ASKS_KEY, accessAsksOff } from './consent.js';
 import { CONSENT_SHEET, SETTINGS_CARD } from './copy.js';
 import { GrantRow } from './GrantRow.js';
-import { accessDeps, bumpAccessRevision, grantsForApp, useAccessRevision, type LiveGrantRow } from './grants.js';
+import { accessDeps, bumpAccessRevision, foundGrants, grantsForApp, useAccessRevision, type LiveGrantRow } from './grants.js';
 import { PAIRS_MAX, listPairSuggestions, type PairSuggestion } from './pairs.js';
 import { startUserAsk } from './userAsk.js';
 
@@ -66,9 +67,11 @@ function useCardData(): CardData | undefined {
         if (cancelled) return;
         const now = accessDeps().now();
         const apps = db.listApps();
+        // The file's grants read ONCE per revision (IB-7) — every app's rows and the pairs share them.
+        const found = foundGrants(db);
         // Every access has exactly one app that reads: the union of each app's `reads` is every access, once.
-        const rows = apps.flatMap((app) => grantsForApp(db, app.appId, now).reads);
-        setData({ apps, rows, muted: apps.filter((app) => db.isAccessMuted(app.appId)), pairs: listPairSuggestions(db, now).slice(0, PAIRS_MAX), now });
+        const rows = apps.flatMap((app) => grantsForApp(db, app.appId, now, found).reads);
+        setData({ apps, rows, muted: apps.filter((app) => db.isAccessMuted(app.appId)), pairs: listPairSuggestions(db, now, { found }).slice(0, PAIRS_MAX), now });
       })
       .catch(() => {
         // the file is not open (a swap in flight): the card shows what it last read
@@ -120,6 +123,7 @@ function PairsSection({ pairs }: { pairs: readonly PairSuggestion[] }): ReactEle
                   className="access-row-act"
                   data-testid="access-pair-review"
                   aria-label={SETTINGS_CARD.pairReviewName(pair.readerName, pair.sourceName, pair.matchedTables)}
+                  disabled={act.busy}
                   onClick={(event) => {
                     setAsked({ key, readerName: pair.readerName });
                     void act.start(pair.readerAppId, { declared: pair.want, source: pair.sourceAppId }, pair.sourceName, event.currentTarget);

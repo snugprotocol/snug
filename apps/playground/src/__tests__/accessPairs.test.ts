@@ -29,7 +29,7 @@ import type { UserDb } from '@snugprotocol/db';
 import { ACCESS_SOURCE_MAX_BYTES, SIDECAR_SYMBOLIC_HOST, accessRequestHash, type AccessWants } from '@snugprotocol/protocol';
 
 import { NO_ACCESS_ASKS_KEY, collectSources, pendingAccessStore } from '../access/consent.js';
-import { __setAccessDepsForTests, createGrantFromDecision, resetAccessSession, revokeAccess, type AnyAccessGrant } from '../access/grants.js';
+import { __setAccessDepsForTests, createGrantFromDecision, foundGrants, resetAccessSession, revokeAccess, suspendAccess, type AnyAccessGrant, type FoundAccessGrant } from '../access/grants.js';
 import { startUserAsk } from '../access/userAsk.js';
 import { bumpLibraryRevision } from '../platform/signals.js';
 import { installTestUserDb } from './userdbTestHelper.js';
@@ -211,8 +211,10 @@ describe('D-PR5-4 a TABLE-tier match only (S10)', () => {
     expect(named(await pairs())).toEqual(['Budget→Ledger']);
   });
 
-  it('a hint word inside a table name pairs ("transaction" finds transactions)', async () => {
-    await app('Sums', { wants: [{ purpose: 'to add things up', hints: { words: ['transaction'] } }] });
+  // G5-15 (SA-5): the table tier takes a hint word EQUAL to a whole `_`-token (≥ 3 chars) — the word is now
+  // the table's own token ('transactions'); was 'transaction', a substring the fold no longer admits.
+  it('a hint word that is a whole token of a table name pairs ("transactions" finds transactions) (G5-15)', async () => {
+    await app('Sums', { wants: [{ purpose: 'to add things up', hints: { words: ['transactions'] } }] });
     expect(named(await pairs()).sort()).toEqual(['Budget→Ledger', 'Sums→Ledger']);
   });
 
@@ -280,10 +282,13 @@ describe('D-PR5-4 the exclusions', () => {
     expect(await pairs()).toEqual([]);
   });
 
-  it('an access that EXPIRED no longer excludes the pair', async () => {
+  // G5-14 (IB-3): INVERTED — a pair joined by ANY non-revoked grant is excluded, expired included (*allow
+  // again* on that row is the act; a new ask would leave a duplicate beside it). Was: "an access that
+  // EXPIRED no longer excludes the pair".
+  it('an access that EXPIRED still excludes the pair (G5-14: allow again on its row is the act)', async () => {
     await allow(budget, ledger, 'day');
     clock.now = T0 + 2 * 86_400_000;
-    expect(named(await pairs())).toEqual(['Budget→Ledger']);
+    expect(await pairs()).toEqual([]);
   });
 
   it('a declined want (its accessRequestHash on the reader’s declines) is excluded', async () => {
@@ -322,5 +327,114 @@ describe('D-PR5-4 deterministic; at most PAIRS_MAX shown', () => {
   it('two derivations over the same file answer the same list, value for value', async () => {
     await app('Bank', { ddl: ['CREATE TABLE transactions (id INTEGER PRIMARY KEY, amount INTEGER)'] });
     expect(await pairs()).toEqual(await pairs());
+  });
+});
+
+// =========================================================================================
+// TASK-20261010-host-broker PR-5 — Gate-5 fold (G5-13, G5-14, G5-15) on the file-wide derivation.
+//
+// G5-13 (IB-2, SA-2) one planted registry row never takes the surface down: each app is read in
+//       try/catch, so a malformed row drops THAT app only (before the fold `schema.objects.filter`
+//       threw inside `listPairSuggestions` and the ⋈ sheet, Settings and the Hub got nothing); an
+//       all-credential table with a nested-paren constraint never pairs (AC34's negative).
+// G5-14 (IB-3) a pair is excluded while ANY non-revoked grant joins the two apps — paused
+//       (`reader-updated`) or expired included: *allow again* on that row is the act, and a new
+//       ask would leave a duplicate beside the paused row.
+// G5-15 (SA-5) bigram words admit no pair; (SA-7) an imported or share-installed app is never a
+//       SOURCE; (IB-7) `listPairSuggestions(db, now, {readerAppId?, found?})` — one reader's pairs
+//       only, and a caller's precomputed `foundGrants` list is used instead of re-reading the file.
+// =========================================================================================
+
+type PairsOpts = { readerAppId?: string; found?: readonly FoundAccessGrant[] };
+async function pairsWith(opts: PairsOpts): Promise<readonly PairSuggestion[]> {
+  const mod = (await pairsModule()) as unknown as { listPairSuggestions(db: UserDb, now: number, opts?: PairsOpts): readonly PairSuggestion[] };
+  return mod.listPairSuggestions(db, clock.now, opts);
+}
+
+/** `getAppSchema` answers the planted value for one app (it is `JSON.parse(…) as AppSchemaJson`, unchecked). */
+function plantSchema(appId: string, planted: unknown): void {
+  const real = db.getAppSchema.bind(db);
+  vi.spyOn(db, 'getAppSchema').mockImplementation((id: string) => (id === appId ? (planted as ReturnType<UserDb['getAppSchema']>) : real(id)));
+}
+
+describe('G5-13 one malformed registry row drops that app only — never the derivation', () => {
+  for (const planted of [{ objects: null }, {}, { objects: [{ type: 'table', name: 5, ddl: 'CREATE TABLE five (a TEXT)' }] }]) {
+    it(`G5-13 a source whose registry reads ${JSON.stringify(planted)} is skipped; the other pairs still list`, async () => {
+      const bank = await app('Bank', { ddl: ['CREATE TABLE transactions (id INTEGER PRIMARY KEY, amount INTEGER)'] });
+      plantSchema(bank, planted);
+      expect(named(await pairs())).toEqual(['Budget→Ledger']);
+    });
+  }
+
+  it('G5-13 a READER whose own registry row is malformed still pairs with a good source', async () => {
+    plantSchema(budget, { objects: null });
+    expect(named(await pairs())).toEqual(['Budget→Ledger']);
+  });
+
+  it('G5-13 NEGATIVE (AC34): an all-credential table with a nested-paren constraint never pairs, even named exactly', async () => {
+    await app('Vault', { ddl: ['CREATE TABLE tokens (token TEXT, secret TEXT CHECK (length(secret) IN (32, 64)))'] });
+    await app('Signer', { wants: [{ purpose: 'to sign you in', hints: { tables: ['tokens'] } }] });
+    expect(named(await pairs())).toEqual(['Budget→Ledger']);
+  });
+});
+
+describe('G5-14 a pair joined by ANY non-revoked grant is excluded — paused or expired included', () => {
+  it('G5-14 a grant PAUSED by reader-updated excludes the pair (allow again on that row is the act)', async () => {
+    const grant = await allow(budget, ledger, 'day');
+    expect(await suspendAccess(db, grant.id, 'reader-updated', new Date(clock.now).toISOString())).toBe(true);
+    expect(await pairs()).toEqual([]);
+  });
+
+  it('G5-14 an EXPIRED grant still excludes the pair', async () => {
+    await allow(budget, ledger, 'day');
+    clock.now = T0 + 2 * 86_400_000;
+    expect(await pairs()).toEqual([]);
+  });
+
+  it('G5-14 guard: a REVOKED grant does not exclude the pair', async () => {
+    const grant = await allow(budget, ledger, 'day');
+    await revokeAccess(grant.id);
+    expect(named(await pairs())).toEqual(['Budget→Ledger']);
+  });
+});
+
+describe('G5-15 (SA-5) bigram hint words admit no pair', () => {
+  it('G5-15 a want with words ["es"] over a source holding expenses and notes admits no pair', async () => {
+    await app('Books', { ddl: ['CREATE TABLE expenses (amount INTEGER)', 'CREATE TABLE notes (body TEXT)'] });
+    await app('Spree', { wants: [{ purpose: 'to read everything', hints: { words: ['es'] } }] });
+    expect((await pairs()).filter((pair) => pair.readerName === 'Spree')).toEqual([]);
+  });
+});
+
+describe('G5-15 (SA-7) an imported or share-installed app is never suggested as a SOURCE', () => {
+  it('G5-15 an IMPORTED source (the appProvenance marker) with a matching table is never paired', async () => {
+    const bank = await app('Bank', { ddl: ['CREATE TABLE transactions (id INTEGER PRIMARY KEY, amount INTEGER)'] });
+    expect(named(await pairs()), 'a local source pairs').toContain('Budget→Bank');
+    db.setSetting(`appProvenance:${bank}`, { imported: true, at: new Date(T0).toISOString() });
+    expect(named(await pairs())).toEqual(['Budget→Ledger']);
+  });
+
+  it('G5-15 a SHARE-installed source with a matching table is never paired', async () => {
+    await app('Bank', { ddl: ['CREATE TABLE transactions (id INTEGER PRIMARY KEY, amount INTEGER)'], installSource: 'share:7e2d' });
+    expect(named(await pairs())).toEqual(['Budget→Ledger']);
+  });
+});
+
+describe('G5-15 (IB-7) listPairSuggestions(db, now, {readerAppId?, found?})', () => {
+  it('G5-15 readerAppId: only that reader’s pairs', async () => {
+    const accounts = await app('Accounts', { wants: [{ purpose: 'to show balances', hints: { tables: ['transactions'] } }] });
+    expect(named(await pairs()).sort()).toEqual(['Accounts→Ledger', 'Budget→Ledger']);
+    expect((await pairsWith({ readerAppId: accounts })).map((pair) => pair.readerAppId)).toEqual([accounts]);
+    expect(named(await pairsWith({ readerAppId: budget }))).toEqual(['Budget→Ledger']);
+  });
+
+  it('G5-15 found: the caller’s precomputed grants are used — the file’s grants are not read again', async () => {
+    await allow(budget, ledger, 'day');
+    const found = foundGrants(db);
+    const spy = vi.spyOn(db, 'listAccessGrants');
+    expect(await pairsWith({ found })).toEqual([]);
+    expect(spy).not.toHaveBeenCalled();
+    // An empty precomputed list is believed: nothing excludes the pair.
+    expect(named(await pairsWith({ found: [] }))).toEqual(['Budget→Ledger']);
   });
 });

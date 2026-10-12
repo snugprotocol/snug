@@ -42,8 +42,14 @@ import type { MaterialisedSet, MaterialisedTable } from '../access/service.js';
 
 const PLAIN_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
-/** What a name may not carry into a line: C0 controls and DEL, the C1 controls (U+0080–U+009F — NEL among them, a line break to some tokenizers), U+2028/9, the bidi marks (U+200E/F), embeddings and overrides (U+202A–E) and isolates (U+2066–9). */
-const FOLDED = /[\u0000-\u001f\u007f\u0080-\u009f\u2028\u2029\u200e\u200f\u202a-\u202e\u2066-\u2069]+/g;
+/**
+ * What a name may not carry into a line: C0 controls and DEL, the C1 controls (U+0080–U+009F — NEL
+ * among them, a line break to some tokenizers), U+2028/9, the bidi marks (U+061C ALM, U+200E/F),
+ * embeddings and overrides (U+202A–E) and isolates (U+2066–9) — exactly what the protocol's fetch-fact
+ * rule refuses in a source name (`chat-cards.ts`, Gate-5 G5-17), so every name a brain or a fact reads
+ * is folded the same way.
+ */
+const FOLDED = /[\u0000-\u001f\u007f\u0080-\u009f\u2028\u2029\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]+/g;
 const UNNAMED = '(unnamed app)';
 
 /** Another app's display name as ONE line of host text (the header): folded, trimmed, capped, never empty. */

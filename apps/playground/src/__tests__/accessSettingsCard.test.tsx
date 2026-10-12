@@ -468,3 +468,86 @@ describe('PR-5 — the act line: every ask from host chrome has a visible outcom
     expect(document.activeElement).toBe(one('access-pair-review'));
   });
 });
+
+// =========================================================================================
+// TASK-20261010-host-broker PR-5 — Gate-5 fold G5-15 on Settings' act line.
+//
+// IB-4 *stop* on the act line keeps focus on the line: the focused *stop* unmounts with the allowed
+//      settle, and (Settings) the pair reappears and the line remounts in the row — focus fell to
+//      <body> on every surface.
+// IB-5 `useAccessAct` ignores a second `start` in flight (a ref) and exposes `busy` (the act renders
+//      `disabled`): two rapid taps parked twice, the second dismissing the first (T1) and restarting
+//      the review's arming under the person's finger.
+// =========================================================================================
+
+/** Every distinct pending parked for `reader` while `run` runs. */
+async function distinctPendings(reader: string, run: () => Promise<void>): Promise<number> {
+  const seen = new Set<unknown>();
+  const off = pendingAccessStore.subscribe(() => {
+    const pending = pendingAccessStore.get()[reader];
+    if (pending !== undefined) seen.add(pending);
+  });
+  try {
+    await run();
+  } finally {
+    off();
+  }
+  return seen.size;
+}
+
+describe('G5-15 Settings’ act line: focus after *stop*, and one ask per tap in flight', () => {
+  beforeEach(() => {
+    db.saveAppVersion(budget, declaringPage('Budget', [SPENDING_WANT]));
+  });
+
+  const line = (): HTMLElement | null => one('access-act-line');
+
+  it('G5-15 (IB-4) keyboard *stop* on the allowed line: focus lands on the act line, never <body>', async () => {
+    await renderCard();
+    await click(one('access-pair-review'));
+    await until(() => pendingAccessStore.get()[budget] !== undefined, 'the ask is parked');
+    await answerPending(budget, { ...ALLOW_DAY, sourceAppId: ledger });
+    await until(() => line() !== null, 'the act line');
+    const stop = [...line()!.querySelectorAll('button')].find((button) => button.textContent === STRIP_OUTCOME.undo)!;
+    stop.focus();
+    expect(document.activeElement).toBe(stop);
+    await click(stop);
+    await until(() => line()?.getAttribute('data-outcome') === 'stopped', 'the line says stopped');
+    expect(document.activeElement).not.toBe(document.body);
+    expect(document.activeElement).toBe(line());
+  });
+
+  it('G5-15 (IB-5) two rapid taps on *review…* park exactly ONE ask', async () => {
+    await renderCard();
+    const review = one('access-pair-review')!;
+    const parked = await distinctPendings(budget, async () => {
+      await act(async () => {
+        review.click();
+        review.click();
+      });
+      await until(() => reviewStore.get() === budget, 'the review opens');
+      await settle();
+    });
+    expect(parked).toBe(1);
+  });
+
+  it('G5-15 (IB-5) while the ask is in flight the act is disabled', async () => {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const real = db.exportAppRuntime.bind(db);
+    vi.spyOn(db, 'exportAppRuntime').mockImplementation(async (appId: string) => {
+      await gate;
+      return real(appId);
+    });
+    await renderCard();
+    await act(async () => {
+      one('access-pair-review')!.click();
+    });
+    await settle();
+    expect((one('access-pair-review') as HTMLButtonElement | null)?.disabled, 'busy while the ask is collected').toBe(true);
+    release();
+    await until(() => reviewStore.get() === budget, 'the review opens');
+  });
+});

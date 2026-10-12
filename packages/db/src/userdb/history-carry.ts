@@ -3,7 +3,7 @@
 // and lets a stop win, while the DATA stays a divergence the user resolves — never a merge.
 //
 //   snapshotLocalAccessHistory(sql)                 → the LOSER's history, read before the swap
-//   carryAccessHistory(target, snapshot, {since})   → {carried, dropped} — `target` is the WINNER
+//   carryAccessHistory(target, snapshot, {since})   → {carried, dropped, rewritten} — `target` is the WINNER
 //   applyTombstones(target, revokedRows)            → how many rows were replaced
 //
 // Both directions run through here: *use the origin copy* (the pull — the import candidate wins,
@@ -16,13 +16,21 @@
 //
 // WHICH LINES. A line has no id, so identity is its NATURAL KEY `(at, kind, grantId, readerAppId)`
 // (`at` by instant — the schema admits `…:00Z` beside `…:00.000Z`). A loser line is a candidate
-// only when it parses strictly and is NEWER than `since` (the sidecar's `lastSyncAt`: what is older
-// was already in the origin, so its absence from the winner is a prune or a *Clear history*, and
-// carrying it back would undo that). A candidate whose source app the winner does not hold is
-// dropped; one the winner already has MERGES into the winner's line (count and rows become the max,
-// every other seat the winner's) and is not counted; the rest are CARRIED — a `wrote` line without
-// its `undoId`, since the winner's journal holds no such entry. The row is merged newest first, a
-// tie putting the winner's line first, and the winner's unreadable elements stay verbatim.
+// when it parses strictly and is NEWER than `since`. The PULL passes the sidecar's `lastSyncAt`:
+// this device's lines older than that were already in the origin, so their absence from the winner
+// is a prune or a *Clear history*, and carrying them back would undo that. *Keep this device's
+// copy* passes `null` (G5-4): an origin line older than THIS device's last sync need not be one this
+// device ever held — the natural-key match keeps that carry idempotent, and a *Clear history* made
+// here since the last sync can come back as true records. A loser line the winner ALSO holds is a
+// candidate whatever its `at` (G5-7): a coalesced group keeps its FIRST `at` while its count grows
+// for up to a minute, so a group that began before `since` and grew after it still merges. A
+// candidate whose source app the winner does not hold is dropped; one the winner already has
+// MERGES into the winner's line (count and rows become the max, every other seat the winner's) and
+// is not counted; the rest are CARRIED — a `wrote` line without its `undoId`, since the winner's
+// journal holds no such entry. The row is merged newest first, a tie putting the winner's line
+// first, and the winner's unreadable elements stay verbatim. A row a carry or a merge changed is
+// written — and counted (`rewritten`), so the caller knows the file moved even when no line was
+// added.
 //
 // THE CAPS NEVER THROW. The carried lines give way first — and ONLY they: the per-source caps, then
 // the ceiling across every source, by the prune core `appendAccessLog` uses (`access-log-prune.ts`)
@@ -55,10 +63,11 @@ export interface AccessHistorySnapshot {
   readonly rows: ReadonlyMap<string, readonly unknown[]>;
 }
 
-/** What a carry did: lines ADDED to the winner, and the loser's candidates that were not (an absent source, or a line that gave way to a cap). A natural-key match is neither. */
+/** What a carry did: lines ADDED to the winner, the loser's candidates that were not (an absent source, or a line that gave way to a cap) — a natural-key match is neither — and the history ROWS it wrote (a count-only merge is a write). */
 export interface AccessHistoryCarry {
   carried: number;
   dropped: number;
+  rewritten: number;
 }
 
 // ----------------------------------------------------------------------- helpers
@@ -91,20 +100,66 @@ function heldApps(sql: SettingsSql): ReadonlySet<string> {
   return new Set(sql.select(`SELECT app_id FROM ${USERDB_TABLES.apps}`).map((row) => String(row[0])));
 }
 
-/** The natural key of a line — it carries no id (an older strict hub would skip a line that did). */
-const naturalKey = (entry: AccessLogEntry): string => `${Date.parse(entry.at)}\u0000${entry.kind}\u0000${entry.grantId}\u0000${entry.readerAppId}`;
+const keyOf = (instant: number, kind: string, grantId: string, readerAppId: string): string => `${instant}\u0000${kind}\u0000${grantId}\u0000${readerAppId}`;
 
-/** The loser's lines a carry may consider: strictly readable and newer than `since` (−∞: every line). */
-function candidatesOf(elements: readonly unknown[], since: number): AccessLogEntry[] {
-  const candidates: AccessLogEntry[] = [];
+/** The natural key of a line — it carries no id (an older strict hub would skip a line that did). */
+const naturalKey = (entry: AccessLogEntry): string => keyOf(Date.parse(entry.at), entry.kind, entry.grantId, entry.readerAppId);
+
+/** A stored element's natural key read LOOSELY — no strict parse; `undefined` when a seat is missing. Equal to `naturalKey` of the element's strict parse. */
+function looseKey(item: unknown): string | undefined {
+  if (typeof item !== 'object' || item === null || Array.isArray(item)) return undefined;
+  const { at, kind, grantId, readerAppId } = item as Record<string, unknown>;
+  if (typeof at !== 'string' || typeof kind !== 'string' || typeof grantId !== 'string' || typeof readerAppId !== 'string') return undefined;
+  const instant = Date.parse(at);
+  return Number.isNaN(instant) ? undefined : keyOf(instant, kind, grantId, readerAppId);
+}
+
+/** Whether a loser element would raise the winner element's count or rows — read loosely; `mergeCounts` decides on the strict parse. */
+function wouldRaise(loser: unknown, winner: unknown): boolean {
+  const { count, rows } = loser as { count?: unknown; rows?: unknown };
+  const there = winner as { count?: unknown; rows?: unknown };
+  const thereCount = typeof there.count === 'number' ? there.count : 1;
+  return (typeof count === 'number' && count > thereCount) || (typeof rows === 'number' && (typeof there.rows !== 'number' || rows > there.rows));
+}
+
+/** A loser line the carry considers; `newer` — past `since` — may be carried, an older one may only merge into the winner's twin. */
+interface Candidate {
+  entry: AccessLogEntry;
+  newer: boolean;
+}
+
+/**
+ * The loser's lines a carry may consider, strictly readable: every line newer than `since` (−∞: every
+ * line), and an older line whose natural key the winner's row holds (`twins`, keyed loosely) and
+ * whose count or rows would raise the twin's. The loose checks first: an old line costs no strict
+ * parse unless it can change the winner (the credential walk is the dear half).
+ */
+function candidatesOf(elements: readonly unknown[], since: number, twins: ReadonlyMap<string, unknown>): Candidate[] {
+  const candidates: Candidate[] = [];
   for (const item of elements) {
-    // The loose instant first: an old line costs no strict parse (the credential walk is the dear half).
-    if (!(looseView(item).at > since)) continue;
+    const newer = looseView(item).at > since;
+    if (!newer) {
+      const key = twins.size === 0 ? undefined : looseKey(item);
+      const twin = key === undefined ? undefined : twins.get(key);
+      if (twin === undefined || !wouldRaise(item, twin)) continue;
+    }
     const parsed = accessLogEntrySchema.safeParse(item);
-    if (parsed.success) candidates.push(parsed.data);
+    if (parsed.success) candidates.push({ entry: parsed.data, newer });
   }
   return candidates;
 }
+
+/** The winner's elements by their loose natural key — the first element of a key, as `byKey` keeps the first. */
+function twinsOf(stored: readonly unknown[]): Map<string, unknown> {
+  const twins = new Map<string, unknown>();
+  for (const item of stored) {
+    const key = looseKey(item);
+    if (key !== undefined && !twins.has(key)) twins.set(key, item);
+  }
+  return twins;
+}
+
+const NO_TWINS: ReadonlyMap<string, unknown> = new Map();
 
 /** A carried line as the winner may hold it: a `wrote` line loses its `undoId` (the winner's journal has no such entry). */
 function carriedForm(entry: AccessLogEntry): Record<string, unknown> {
@@ -172,11 +227,12 @@ export function snapshotLocalAccessHistory(sql: SettingsSql): AccessHistorySnaps
 
 /**
  * Carry the loser's history lines newer than `since` (every line when `null`, or when `since` is not
- * an instant — losing a line is what the carry exists to prevent) into the WINNER `target`. Total
- * over the data: a malformed row or a full history never throws — the carried lines give way
- * instead; only an engine failure of the write itself propagates, as every import pass's does
- * (`carryFromImage` rolls it back). Only rows that changed are written, so a pull with nothing to
- * carry is byte-identical.
+ * an instant — losing a line is what the carry exists to prevent) into the WINNER `target`, and merge
+ * the count of every loser line the winner also holds, whatever its `at`. Total over the data: a
+ * malformed row or a full history never throws — the carried lines give way instead; only an engine
+ * failure of the write itself propagates, as every import pass's does (`carryFromImage` rolls it
+ * back). Only rows that changed are written — and counted as `rewritten` — so a pull with nothing
+ * to carry is byte-identical.
  */
 export function carryAccessHistory(target: SettingsSql, snapshot: AccessHistorySnapshot, options: { since: string | null }): AccessHistoryCarry {
   const parsedSince = options.since === null ? Number.NaN : Date.parse(options.since);
@@ -191,15 +247,16 @@ export function carryAccessHistory(target: SettingsSql, snapshot: AccessHistoryS
   const recounted = new Set<string>();
 
   for (const [source, elements] of snapshot.rows) {
-    const candidates = candidatesOf(elements, since);
-    if (candidates.length === 0) continue;
+    if (elements.length === 0) continue;
     held ??= heldApps(target);
     if (!held.has(source)) {
-      dropped += candidates.length; // a history never names an app the file does not hold
+      dropped += candidatesOf(elements, since, NO_TWINS).length; // a history never names an app the file does not hold
       continue;
     }
     winnerRows ??= historyRows(target);
     const stored = looseEntries(winnerRows.get(source));
+    const candidates = candidatesOf(elements, since, twinsOf(stored));
+    if (candidates.length === 0) continue;
     const byKey = new Map<string, Record<string, unknown>>();
     for (const item of stored) {
       const parsed = accessLogEntrySchema.safeParse(item);
@@ -207,13 +264,14 @@ export function carryAccessHistory(target: SettingsSql, snapshot: AccessHistoryS
       if (key !== undefined && !byKey.has(key)) byKey.set(key, item as Record<string, unknown>);
     }
     const added: Record<string, unknown>[] = [];
-    for (const candidate of candidates) {
+    for (const { entry: candidate, newer } of candidates) {
       const key = naturalKey(candidate);
       const match = byKey.get(key);
       if (match !== undefined) {
         if (mergeCounts(match, candidate)) recounted.add(source);
         continue;
       }
+      if (!newer) continue; // an older line only merges: one the winner lacks obeys `since`
       const line = carriedForm(candidate);
       byKey.set(key, line);
       added.push(line);
@@ -259,10 +317,13 @@ export function carryAccessHistory(target: SettingsSql, snapshot: AccessHistoryS
     }
   }
 
+  let rewritten = 0;
   for (const [source, entries] of touched) {
-    if (recounted.has(source) || entries.some((item) => carried.has(item))) writeRow(target, accessLogSettingKey(source), entries);
+    if (!recounted.has(source) && !entries.some((item) => carried.has(item))) continue;
+    writeRow(target, accessLogSettingKey(source), entries);
+    rewritten += 1;
   }
-  return { carried: carried.size, dropped };
+  return { carried: carried.size, dropped, rewritten };
 }
 
 // ----------------------------------------------------------------------- the stops

@@ -1334,3 +1334,290 @@ describe('PR-5 D-PR5-17 an app delete aborts ONLY its own refreshes (abortRefres
     expect(await pending).toEqual({ ok: true, op: 'refresh', fresh: true });
   });
 });
+
+// =============================================================================================
+// TASK-20261010-host-broker PR-5 — Gate-5 fold G5-18, G5-19 (P3-7, SB-7a) and G5-20 (P3-11) on the
+// refresh engine.
+//
+// G5-18 (P3-1) the reset epoch lives in the LEAF: `abortAllRefreshes('reset')` bumps
+//       `refreshResetEpoch()` BEFORE its early return, and the engine compares it at the top of
+//       `refreshSource` / `lastRefreshOf` (`forgetFile()` on a change). Before the fold a reset with
+//       NOTHING in flight (the common case — sync's `afterForeignBytes`, the import) reached no flight's
+//       abort listener: the cooldowns, the remembered outcomes and the file epoch survived the swap,
+//       and a held record's late release folded its calls into the NEW file's day.
+//       (SB-3) the swap LATCH — `latchRefreshSwap()` (aborts every refresh with `reset`, bumps the
+//       epoch, latches) … `unlatchRefreshSwap()` (afterForeignBytes) — `refreshSource` honours it:
+//       `stopped`, nothing dispatched, nothing written. Names are this lane's choice.
+// G5-19 (P3-7, SB-7b) both dispatchers re-check the abort AFTER the kv write: a cancel landing during
+//       the write never rings the source. (SB-7a) a refusal recorded during an S2 hold writes ONE
+//       `refreshed` line with reason `refused` on release — epoch-guarded.
+// G5-20 (P3-11) pins only: the S2 release on frame close; the late calls folded exactly once.
+// =============================================================================================
+
+type SwapLatch = { latchRefreshSwap(): void; unlatchRefreshSwap(): void; refreshSwapLatched(): boolean; refreshResetEpoch(): number };
+const latchOf = async (): Promise<Partial<SwapLatch>> => (await loadRefreshRuns()) as unknown as Partial<SwapLatch>;
+function need<K extends keyof SwapLatch>(mod: Partial<SwapLatch>, key: K): SwapLatch[K] {
+  const fn = mod[key];
+  if (typeof fn !== 'function') throw new Error(`access/refreshRuns.ts does not export ${key} yet (G5-18)`);
+  return fn as SwapLatch[K];
+}
+
+describe('G5-18 (P3-1) a reset with NOTHING in flight still reaches the engine', () => {
+  it('G5-18 after a finished refresh, an empty-store reset clears the cooldown: lastRefreshOf is undefined and the next ask DISPATCHES', async () => {
+    const runs = await loadRefreshRuns();
+    const grant = refreshGrant();
+    schedulesOn();
+    const deps = fakeDeps();
+    deps.live.open(source);
+    const first = refresh.refreshSource(db, deps, { grant, requestedBy: 'Budget', via: 'app' });
+    await liveHint(deps);
+    deps.live.emit(source, SCHEDULE_RESULT_EVENT, { ok: true });
+    expect(await first).toEqual({ ok: true, op: 'refresh', fresh: true });
+    expect(refresh.lastRefreshOf(source), 'remembered').toBeDefined();
+    expect(runs.listRefreshRuns(), 'nothing in flight').toEqual([]);
+    runs.abortAllRefreshes('reset');
+    expect(refresh.lastRefreshOf(source), 'forgotten with the file').toBeUndefined();
+    const next = refresh.refreshSource(db, deps, { grant, requestedBy: 'Budget', via: 'app' });
+    await vi.waitFor(() => expect(deps.live.notified).toHaveLength(2));
+    deps.live.emit(source, SCHEDULE_RESULT_EVENT, { ok: true });
+    expect(await next).toEqual({ ok: true, op: 'refresh', fresh: true });
+  });
+
+  it('G5-18 a LIVE cancel’s hold released AFTER an empty-store reset folds NOTHING into the (new) file’s day — and writes no refused line', async () => {
+    const runs = await loadRefreshRuns();
+    connectSource();
+    const grant = refreshGrant();
+    schedulesOn({ ai: 3, net: 7 });
+    const deps = fakeDeps();
+    deps.live.open(source);
+    const { fetchImpl } = recordingFetch();
+    const live = liveRuntime(source, fetchImpl);
+    const pending = refresh.refreshSource(db, deps, { grant, requestedBy: 'Budget', via: 'app' });
+    const runId = await liveHint(deps);
+    runs.cancelRefresh(runId);
+    expect(await pending).toEqual(STOPPED());
+    const linesAtCancel = refreshedLines().length;
+    expect((await live.net.handle(source, netFrame('GET'))).ok, 'a late GET under the hold').toBe(true);
+    expect(await live.net.handle(source, netFrame('POST')), 'a late POST refused under the hold').toMatchObject({ ok: false });
+    const dayBefore = { ...db.getSchedulerState()!.daily };
+    expect(runs.listRefreshRuns(), 'the store is empty').toEqual([]);
+    runs.abortAllRefreshes('reset');
+    deps.live.emit(source, SCHEDULE_RESULT_EVENT, { ok: true });
+    await vi.waitFor(() => expect(delegatedRunFor(source)).toBeUndefined());
+    await sleep(20);
+    expect(db.getSchedulerState()?.daily, 'nothing folded into the new file').toMatchObject({ ai: dayBefore.ai, net: dayBefore.net });
+    expect(refreshedLines(), 'no line written after the reset').toHaveLength(linesAtCancel);
+  });
+});
+
+describe('G5-18 (SB-3) the swap latch — a refresh asked mid-swap answers stopped and writes nothing', () => {
+  afterEach(async () => {
+    const mod = await latchOf();
+    mod.unlatchRefreshSwap?.();
+  });
+
+  it('G5-18 the leaf: latchRefreshSwap aborts every refresh with reset, bumps the epoch, and latches until unlatchRefreshSwap', async () => {
+    const runs = await loadRefreshRuns();
+    const mod = await latchOf();
+    const epoch = need(mod, 'refreshResetEpoch')();
+    const run = runs.beginRefreshRun({ runId: 'run-x', sourceAppId: source, sourceName: 'Ledger', requestedBy: reader, placement: 'headless' });
+    need(mod, 'latchRefreshSwap')();
+    expect(run.controller.signal.aborted).toBe(true);
+    expect(runs.refreshAbortReason(run.controller.signal)).toBe('reset');
+    expect(need(mod, 'refreshResetEpoch')()).toBeGreaterThan(epoch);
+    expect(need(mod, 'refreshSwapLatched')()).toBe(true);
+    need(mod, 'unlatchRefreshSwap')();
+    expect(need(mod, 'refreshSwapLatched')()).toBe(false);
+  });
+
+  it('G5-18 the FRAME op asked while latched: stopped at once — nothing dispatched, no line, no fold; after the unlatch it dispatches', async () => {
+    const mod = await latchOf();
+    const grant = refreshGrant();
+    schedulesOn({ ai: 3, net: 7 });
+    const deps = fakeDeps({ resultTimeoutMs: 300 });
+    const mounts = watchMounts(deps);
+    const kvSet = spyKv();
+    deps.live.open(source);
+    need(mod, 'latchRefreshSwap')();
+    const answer = await Promise.race([refresh.refreshSource(db, deps, { grant, requestedBy: 'Budget', via: 'app' }), sleep(500).then(() => 'still waiting' as const)]);
+    expect(answer).toEqual(STOPPED());
+    expectNothingDispatched(deps, mounts, kvSet);
+    expect(refreshedLines()).toEqual([]);
+    expect(db.getSchedulerState()?.daily).toMatchObject({ ai: 3, net: 7 });
+    need(mod, 'unlatchRefreshSwap')();
+    const next = refresh.refreshSource(db, deps, { grant, requestedBy: 'Budget', via: 'app' });
+    await liveHint(deps);
+    deps.live.emit(source, SCHEDULE_RESULT_EVENT, { ok: true });
+    expect(await next).toEqual({ ok: true, op: 'refresh', fresh: true });
+  });
+
+  it('G5-18 a HOST door asked while latched: { outcome: stopped, calls: zero }, nothing dispatched', async () => {
+    const mod = await latchOf();
+    const grant = refreshGrant();
+    schedulesOn();
+    const deps = fakeDeps({ resultTimeoutMs: 300 });
+    const mounts = watchMounts(deps);
+    const kvSet = spyKv();
+    need(mod, 'latchRefreshSwap')();
+    const answer = await Promise.race([hostDoor()(db, deps, { grant, requestedBy: 'Budget', via: 'chat' }, {}), sleep(500).then(() => 'still waiting' as const)]);
+    expect(answer).toEqual({ outcome: STOPPED(), calls: { ai: 0, net: 0 } });
+    expectNothingDispatched(deps, mounts, kvSet);
+  });
+
+  it('G5-18 a flight IN the air when the latch closes writes nothing — no line, no fold', async () => {
+    const mod = await latchOf();
+    const grant = refreshGrant();
+    schedulesOn({ ai: 3, net: 7 });
+    const deps = fakeDeps();
+    const pending = refresh.refreshSource(db, deps, { grant, requestedBy: 'Budget', via: 'app' });
+    const { mount } = await hinted(deps);
+    expect((await send(mount.transport)).ok).toBe(true);
+    need(mod, 'latchRefreshSwap')();
+    const settled = await Promise.race([pending, sleep(1_000).then(() => 'still waiting' as const)]);
+    expect(settled).not.toBe('still waiting');
+    await sleep(20);
+    expect(refreshedLines()).toEqual([]);
+    expect(db.getSchedulerState()?.daily).toMatchObject({ ai: 3, net: 7 });
+  });
+});
+
+describe('G5-19 (P3-7, SB-7b) a cancel during the kv write never rings the source', () => {
+  /** The source's kv write for the run input waits on the returned gate. */
+  function deferSourceKv(): { written: Promise<void>; open: () => void } {
+    const real = db.driver.kvSet.bind(db.driver);
+    let open!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    let reached!: () => void;
+    const written = new Promise<void>((resolve) => {
+      reached = resolve;
+    });
+    vi.spyOn(db.driver, 'kvSet').mockImplementation(async (appId, key, value) => {
+      if (appId === source && value !== null) {
+        reached();
+        await gate;
+      }
+      return real(appId, key, value);
+    });
+    return { written, open };
+  }
+
+  it('G5-19 LIVE: cancelRefresh while the kv input is being written → notify is never called; no hold is left behind', async () => {
+    const runs = await loadRefreshRuns();
+    const grant = refreshGrant();
+    schedulesOn();
+    const deps = fakeDeps();
+    deps.live.open(source);
+    const kv = deferSourceKv();
+    const pending = refresh.refreshSource(db, deps, { grant, requestedBy: 'Budget', via: 'app' });
+    await kv.written;
+    const [run] = runs.listRefreshRuns();
+    expect(run, 'the run is in flight').toBeDefined();
+    runs.cancelRefresh(run!.runId);
+    kv.open();
+    expect(await pending).toEqual(STOPPED());
+    await sleep(30);
+    expect(deps.live.notified, 'the source was never rung').toEqual([]);
+    expect(delegatedRunFor(source), 'no hold left behind').toBeUndefined();
+  });
+
+  it('G5-19 HEADLESS: cancelRefresh while the kv input is being written → the hidden frame is never rung', async () => {
+    const runs = await loadRefreshRuns();
+    const grant = refreshGrant();
+    schedulesOn();
+    const deps = fakeDeps();
+    const kv = deferSourceKv();
+    const pending = refresh.refreshSource(db, deps, { grant, requestedBy: 'Budget', via: 'app' });
+    const { mount, host } = await mounted(deps);
+    mount.onAnnounce();
+    await kv.written;
+    const [run] = runs.listRefreshRuns();
+    runs.cancelRefresh(run!.runId);
+    kv.open();
+    expect(await pending).toEqual(STOPPED());
+    await sleep(30);
+    expect(host.notifyEvent, 'the hidden handler was never started').not.toHaveBeenCalled();
+  });
+});
+
+describe('G5-19 (SB-7a) a refusal recorded during the S2 hold writes a refused line on release', () => {
+  it('G5-19 cancel (line: failed), then a POST refused under the hold, then the result: ONE more line, reason refused', async () => {
+    const runs = await loadRefreshRuns();
+    connectSource();
+    const grant = refreshGrant();
+    schedulesOn();
+    const deps = fakeDeps();
+    deps.live.open(source);
+    const { fetchImpl } = recordingFetch();
+    const live = liveRuntime(source, fetchImpl);
+    const pending = refresh.refreshSource(db, deps, { grant, requestedBy: 'Budget', via: 'app' });
+    const runId = await liveHint(deps);
+    runs.cancelRefresh(runId);
+    await pending;
+    expect(refreshedLines().map((line) => line.reason)).toEqual(['failed']);
+    expect(await live.net.handle(source, netFrame('POST'))).toMatchObject({ ok: false });
+    deps.live.emit(source, SCHEDULE_RESULT_EVENT, { ok: true });
+    await vi.waitFor(() => expect(delegatedRunFor(source)).toBeUndefined());
+    await vi.waitFor(() => expect(refreshedLines()).toHaveLength(2));
+    expect(refreshedLines()[0]).toMatchObject({ kind: 'refreshed', grantId: grant.id, readerAppId: reader, reason: 'refused' });
+  });
+
+  it('G5-19 guard: a hold with NO late refusal writes no second line', async () => {
+    const runs = await loadRefreshRuns();
+    const grant = refreshGrant();
+    schedulesOn();
+    const deps = fakeDeps();
+    deps.live.open(source);
+    const pending = refresh.refreshSource(db, deps, { grant, requestedBy: 'Budget', via: 'app' });
+    const runId = await liveHint(deps);
+    runs.cancelRefresh(runId);
+    await pending;
+    deps.live.emit(source, SCHEDULE_RESULT_EVENT, { ok: true });
+    await vi.waitFor(() => expect(delegatedRunFor(source)).toBeUndefined());
+    await sleep(20);
+    expect(refreshedLines()).toHaveLength(1);
+  });
+});
+
+describe('G5-20 (P3-11) the S2 hold — its third release, and the late calls folded exactly once', () => {
+  it('G5-20 the source’s frame closing releases the hold: the record ends', async () => {
+    const runs = await loadRefreshRuns();
+    const grant = refreshGrant();
+    schedulesOn();
+    const deps = fakeDeps();
+    deps.live.open(source);
+    const pending = refresh.refreshSource(db, deps, { grant, requestedBy: 'Budget', via: 'app' });
+    const runId = await liveHint(deps);
+    runs.cancelRefresh(runId);
+    await pending;
+    expect(delegatedRunFor(source), 'held').toBeDefined();
+    deps.live.close(source);
+    await vi.waitFor(() => expect(delegatedRunFor(source)).toBeUndefined());
+  });
+
+  it('G5-20 one GET after the cancel: on release the day gains exactly that call — once, whatever arrives after', async () => {
+    const runs = await loadRefreshRuns();
+    connectSource();
+    const grant = refreshGrant();
+    schedulesOn({ ai: 3, net: 7 });
+    const deps = fakeDeps();
+    deps.live.open(source);
+    const { fetchImpl } = recordingFetch();
+    const live = liveRuntime(source, fetchImpl);
+    const pending = refresh.refreshSource(db, deps, { grant, requestedBy: 'Budget', via: 'app' });
+    const runId = await liveHint(deps);
+    runs.cancelRefresh(runId);
+    await pending;
+    const atCancel = { ...db.getSchedulerState()!.daily };
+    expect((await live.net.handle(source, netFrame('GET'))).ok).toBe(true);
+    deps.live.emit(source, SCHEDULE_RESULT_EVENT, { ok: true });
+    await vi.waitFor(() => expect(delegatedRunFor(source)).toBeUndefined());
+    expect(db.getSchedulerState()?.daily).toMatchObject({ ai: atCancel.ai, net: atCancel.net + 1 });
+    // A second result, then the frame closing: nothing more is folded.
+    deps.live.emit(source, SCHEDULE_RESULT_EVENT, { ok: true });
+    deps.live.close(source);
+    await sleep(20);
+    expect(db.getSchedulerState()?.daily).toMatchObject({ ai: atCancel.ai, net: atCancel.net + 1 });
+  });
+});

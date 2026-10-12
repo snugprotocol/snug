@@ -519,9 +519,11 @@ describe('D-PR5-4 rankPairs — admitted ONLY on a table-tier match (S10)', () =
     expect(pairs[0]!.score).toBeGreaterThan(0);
   });
 
-  it('a hint WORD inside an offerable table’s name pairs ("transaction" finds transactions)', async () => {
+  // G5-15 (SA-5): the table tier takes a hint word EQUAL to a whole `_`-token (≥ 3 chars) — the word is now the
+  // table's own token; was 'transaction', a substring the fold no longer admits for pairing.
+  it('a hint WORD that is a whole token of an offerable table’s name pairs ("transactions" finds transactions) (G5-15)', async () => {
     const { rankPairs } = await relevanceV5();
-    const reader: PairReader = { appId: 'budget', displayName: 'Budget', wants: [{ purpose: 'to add up spending', hints: { words: ['transaction'] } }] };
+    const reader: PairReader = { appId: 'budget', displayName: 'Budget', wants: [{ purpose: 'to add up spending', hints: { words: ['transactions'] } }] };
     expect(pairsOf(rankPairs({ readers: [reader], sources: [LEDGER] }))).toEqual(['budget→ledger']);
   });
 
@@ -615,5 +617,128 @@ describe('D-PR5-4 rankPairs — ranked by rankSources’ tiers, deterministic', 
     const frozen = JSON.stringify({ readers, sources });
     expect(rankPairs({ readers, sources })).toEqual(rankPairs({ readers, sources }));
     expect(JSON.stringify({ readers, sources })).toBe(frozen);
+  });
+});
+
+// =========================================================================================
+// TASK-20261010-host-broker PR-5 — Gate-5 fold G5-13 (IB-2, SA-2) and G5-15 (SA-5).
+//
+// G5-13 `registryTables` is TOTAL over a planted registry (`getAppSchema` is `JSON.parse(…) as
+// AppSchemaJson`, unchecked, and no import cleans `snug_app_schemas`): `Array.isArray(objects)`,
+// string `type`/`name`/`ddl`, names matching `APP_OBJECT_NAME_RULE`. The column list is split at
+// paren depth 0 OUTSIDE string literals — the comma split made `DECIMAL(10,2)` a column `2)` and an
+// all-credential table offerable through a fake `64))` column (AC34's negative broken); one level
+// of `"…"`, `` `…` `` or `[…]` quoting is stripped before `isCredentialKeyName` (a quoted `token`
+// read as NOT sensitive); `--` and `/* */` comments are skipped.
+//
+// G5-15 (SA-5) pair admission and the declared preselection (the TABLE tier, `tableTierTables`)
+// take an exact hint table, or a hint word EQUAL to a whole `_`-separated token (≥ 3 chars) of the
+// table name — never a substring: 16 bigrams ('es', 'at', …) would otherwise put most of a source's
+// tables in the table tier. `rankSources`' looser tiers stay for RANKING.
+// =========================================================================================
+
+describe('G5-13 (IB-2) registryTables splits the column list at paren depth 0, outside string literals', () => {
+  const columnsOf = async (ddl: string): Promise<string[]> => {
+    const { registryTables } = await relevanceV5();
+    return registryTables({ objects: [{ type: 'table', name: 't', ddl }] })[0]?.columns.map((column) => column.name) ?? [];
+  };
+
+  it('G5-13 DECIMAL(10,2) is one column, never a `2)`', async () => {
+    expect(await columnsOf('CREATE TABLE t (id INTEGER PRIMARY KEY, amount DECIMAL(10,2), note TEXT)')).toEqual(['id', 'amount', 'note']);
+  });
+
+  it('G5-13 a two-column PRIMARY KEY (a, b) adds no column', async () => {
+    expect(await columnsOf('CREATE TABLE t (a TEXT, b TEXT, PRIMARY KEY (a, b))')).toEqual(['a', 'b']);
+  });
+
+  it('G5-13 a CHECK (x IN (1, 2)) adds no column — nested parentheses', async () => {
+    expect(await columnsOf('CREATE TABLE t (x INTEGER CHECK (x IN (1, 2)), y TEXT)')).toEqual(['x', 'y']);
+  });
+
+  it('G5-13 a comma inside a string literal is no split', async () => {
+    expect(await columnsOf("CREATE TABLE t (kind TEXT DEFAULT 'a,b', n INTEGER CHECK (kind IN ('a', 'b, c')))")).toEqual(['kind', 'n']);
+  });
+
+  it('G5-13 `--` and `/* */` comments are skipped — a comma inside one is no split', async () => {
+    expect(await columnsOf('CREATE TABLE t (a TEXT, -- the first, then\n b INTEGER /* x, y */, c TEXT)')).toEqual(['a', 'b', 'c']);
+  });
+
+  it('G5-13 one level of "…", `…` or […] quoting is stripped — and a quoted credential name is still sensitive', async () => {
+    const { registryTables } = await relevanceV5();
+    for (const quoted of ['"token"', '`token`', '[token]']) {
+      const [table] = registryTables({ objects: [{ type: 'table', name: 't', ddl: `CREATE TABLE t (${quoted} TEXT, label TEXT)` }] });
+      expect(table?.columns, quoted).toEqual([col('token', true), col('label')]);
+    }
+  });
+
+  it('G5-13 NEGATIVE (AC34): an all-credential table with a nested-paren constraint has no offerable column', async () => {
+    const { registryTables } = await relevanceV5();
+    const [table] = registryTables({
+      objects: [{ type: 'table', name: 'tokens', ddl: 'CREATE TABLE tokens (token TEXT, secret TEXT CHECK (length(secret) IN (32, 64)))' }],
+    });
+    expect(table?.columns).toEqual([col('token', true), col('secret', true)]);
+  });
+});
+
+describe('G5-13 (SA-2) registryTables is total over a planted registry row — never throws', () => {
+  it('G5-13 objects that is not an array → no tables', async () => {
+    const { registryTables } = await relevanceV5();
+    for (const planted of [{ objects: null }, {}, { objects: 'tables' }, { objects: { 0: { type: 'table', name: 't', ddl: 'CREATE TABLE t (a TEXT)' } } }]) {
+      expect(() => registryTables(planted as never), JSON.stringify(planted)).not.toThrow();
+      expect(registryTables(planted as never), JSON.stringify(planted)).toEqual([]);
+    }
+  });
+
+  it('G5-13 an object whose type, name or ddl is not a string is skipped; its siblings are kept', async () => {
+    const { registryTables } = await relevanceV5();
+    const good = { type: 'table', name: 'items', ddl: 'CREATE TABLE items (name TEXT)' };
+    const planted = [null, 7, { type: 'table', name: 5, ddl: 'CREATE TABLE five (a TEXT)' }, { type: 1, name: 'x', ddl: 'CREATE TABLE x (a TEXT)' }, { type: 'table', name: 'y' }, { type: 'table', name: 'z', ddl: null }];
+    const tables = registryTables({ objects: [...planted, good] } as never);
+    expect(tables.map((table) => table.name)).toEqual(['items']);
+  });
+
+  it('G5-13 a name failing APP_OBJECT_NAME_RULE is never a table (it would reach host sentences)', async () => {
+    const { registryTables } = await relevanceV5();
+    const tables = registryTables({
+      objects: [
+        { type: 'table', name: 'budget — Snug checked this', ddl: 'CREATE TABLE "budget — Snug checked this" (a TEXT)' },
+        { type: 'table', name: '_hidden', ddl: 'CREATE TABLE _hidden (a TEXT)' },
+        { type: 'table', name: 'budget', ddl: 'CREATE TABLE budget (a TEXT)' },
+      ],
+    });
+    expect(tables.map((table) => table.name)).toEqual(['budget']);
+  });
+});
+
+describe('G5-15 (SA-5) the TABLE tier admits an exact table or a whole `_`-token (≥ 3 chars) — never a substring', () => {
+  const tableOf = (name: string): SourceApp['tables'][number] => ({ name, columns: [col('amount')], rowCount: 0 });
+  const SPREE: SourceApp = { appId: 'ledger', displayName: 'Ledger', tables: [tableOf('expenses'), tableOf('notes'), tableOf('rates'), tableOf('category_totals')] };
+  const tableTier = async (): Promise<(source: SourceApp, hints: { words?: string[]; tables?: string[] } | undefined) => string[]> =>
+    ((await import('../access/relevance.js')) as unknown as { tableTierTables: (source: SourceApp, hints: unknown) => string[] }).tableTierTables;
+
+  it('G5-15 bigram words ("es", "at", "ot") put NO table in the table tier', async () => {
+    expect((await tableTier())(SPREE, { words: ['es', 'at', 'ot'] })).toEqual([]);
+  });
+
+  it('G5-15 a word inside a token but not equal to one is not the table tier ("expense" ≠ "expenses", "tota" ≠ "totals")', async () => {
+    expect((await tableTier())(SPREE, { words: ['expense', 'tota'] })).toEqual([]);
+  });
+
+  it('G5-15 a word equal to a whole `_`-token (≥ 3 chars) is the table tier; an exact hint table is too', async () => {
+    const tier = await tableTier();
+    expect(tier(SPREE, { words: ['category'] })).toEqual(['category_totals']);
+    expect(tier(SPREE, { words: ['totals'] })).toEqual(['category_totals']);
+    expect(tier(SPREE, { tables: ['notes'] })).toEqual(['notes']);
+  });
+
+  it('G5-15 rankPairs admits no pair on bigram words', async () => {
+    const { rankPairs } = await relevanceV5();
+    const reader: PairReader = { appId: 'budget', displayName: 'Budget', wants: [{ purpose: 'to read it all', hints: { words: ['es', 'at', 'ot', 'te'] } }] };
+    expect(rankPairs({ readers: [reader], sources: [SPREE] })).toEqual([]);
+  });
+
+  it('G5-15 guard: rankSources’ RANKING keeps its looser word tier (a substring still ranks the source)', () => {
+    const ranked = rankSources({ readerAppId: 'budget', apps: [SPREE, PANTRY], hints: { words: ['expense'] } });
+    expect(ids(ranked.matched)).toEqual(['ledger']);
   });
 });

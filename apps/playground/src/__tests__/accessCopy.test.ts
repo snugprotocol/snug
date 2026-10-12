@@ -1430,8 +1430,10 @@ describe('PR-5 — the fetch’s words: FETCH_FIRST, CHAT_FETCH, refreshStopped 
     expect((wordsOf(V5.FETCH_FIRST.stopped) ?? '').length).toBeGreaterThan(0);
   });
 
-  it('D-PR5-20 CHAT_FETCH.first: up to two names; three or more apps by count (Q: the one- and two-name forms are proposed)', () => {
-    expect(V5.CHAT_FETCH.first(['Ledger', 'Pantry', 'Notes'])).toBe('fetch new data from 3 apps first');
+  // G5-19 (P3-6): RE-PINNED to the orchestrator's copy edit — three or more name the asked prefix
+  // (REFRESH_FIRST_MAX_SOURCES) and count the rest as not asked (was 'fetch new data from 3 apps first').
+  it('D-PR5-20 CHAT_FETCH.first: up to two names; three or more → the asked two by name (+N not asked) (G5-19 P3-6)', () => {
+    expect(V5.CHAT_FETCH.first(['Ledger', 'Pantry', 'Notes'])).toBe('fetch new data from Ledger and Pantry first (+1 not asked)');
     expect(V5.CHAT_FETCH.first(['Ledger'])).toBe('fetch new data from Ledger first');
     expect(V5.CHAT_FETCH.first(['Ledger', 'Pantry'])).toBe('fetch new data from Ledger and Pantry first');
   });
@@ -1570,6 +1572,45 @@ describe('PR-5 — the vocabulary scan sees and bites on every new access/ modul
       const file = path.join(ACCESS_DIR, name);
       expect(existsSync(file), `${name} exists`).toBe(true);
       expect(internalWordsIn(readFileSync(file, 'utf8'), scriptKindOf(file)), name).toEqual([]);
+    }
+  });
+});
+
+// =========================================================================================
+// TASK-20261010-host-broker PR-5 — Gate-5 fold (IB-8; G5-12…G5-15's copy): the pair sentence is
+// spelled ONCE. `SETTINGS_CARD.pairRow` is the row sentence; every review act's accessible name is
+// that sentence + ' — review' (D-PR5-4) and the sheet's act its clause + ' — review…'; the Hub's
+// `couldReadName` is the app's name + `couldRead`'s clause + ' — review'. Identities, over twisted
+// inputs, so an edit to one spelling can never leave another behind. (Guards: the orchestrator's
+// copy edit composes them already — these stay green.)
+// =========================================================================================
+
+describe('IB-8 the pair sentence is single-homed — identities', () => {
+  const CASES: Array<[string, string, string[]]> = [
+    ['Budget', 'Ledger', ['transactions']],
+    ['Budget', 'Ledger', ['transactions', 'accounts']],
+    ['B — r', "Ledger's", ['a_b', 'c', 'd']],
+  ];
+  const SHEET = ACCESS_SHEET as unknown as { pair(s: string, t: readonly string[]): string; pairName(r: string, s: string, t: readonly string[]): string };
+  const CARD = SETTINGS_CARD as unknown as { pairRow(r: string, s: string, t: readonly string[]): string; pairReviewName(r: string, s: string, t: readonly string[]): string };
+
+  it('IB-8 SETTINGS_CARD.pairReviewName(r, s, t) === pairRow(r, s, t) + " — review"', () => {
+    for (const [r, s, t] of CASES) expect(CARD.pairReviewName(r, s, t)).toBe(`${CARD.pairRow(r, s, t)} — review`);
+  });
+
+  it('IB-8 ACCESS_SHEET.pairName(r, s, t) === pairRow(r, s, t) + " — review"', () => {
+    for (const [r, s, t] of CASES) expect(SHEET.pairName(r, s, t)).toBe(`${CARD.pairRow(r, s, t)} — review`);
+  });
+
+  it('IB-8 ACCESS_SHEET.pair(s, t) is pairRow’s clause (without the reader) + " — review…"', () => {
+    for (const [r, s, t] of CASES) expect(`${r} ${SHEET.pair(s, t)}`).toBe(`${CARD.pairRow(r, s, t)} — review…`);
+  });
+
+  it('IB-8 HUB_TILE.couldReadName(a, s) === a + " " + couldRead(s) without its trailing "…"', () => {
+    for (const [a, s] of CASES) {
+      const visible = V5.HUB_TILE.couldRead(s);
+      expect(visible.endsWith('…')).toBe(true);
+      expect(V5.HUB_TILE.couldReadName(a, s)).toBe(`${a} ${visible.slice(0, -1)}`);
     }
   });
 });

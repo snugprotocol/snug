@@ -54,16 +54,21 @@
  * written in (`oneChange`, `valuesIn`), whose DML target is the ONE shared table it names
  * (`readOnly` again — an `INSERT … SELECT` into the reader's own table included), a table marked
  * `write` (`readOnlyTable` — the kv table never is); (3) the RAW statement passes the access SQL
- * rule with no invisible format character (`unsafeText`); (4) `renameDmlTarget` names the source's
+ * rule with no invisible format character, line or paragraph separator or blank filler — the card
+ * shows it (`unsafeText`; Gate-5 G5-16 SB-6); (4) `renameDmlTarget` names the source's
  * own table — a comment before the head, `OR …`, `REPLACE`, a code point SQL names have no use for,
- * the alias qualified past the head: `plainChange` — and the renamed statement is checked again;
+ * the alias qualified past the head: `plainChange`; a renamed text the strict parser refuses (no
+ * WHERE, arithmetic, a function, `ON CONFLICT` — Gate-5 G5-16 ii-1): that rule's own words,
+ * `writeRefused(rule)` — and the renamed statement is checked again;
  * (5) the source mid-change is `busy`; (6) the seat's COUNTING line — one `read` line, the one
  * table, no statement, no rows (S18) — so a declined card still leaves an honest *read*; (7) the
  * seat's `planWrite` on a fresh copy (its refusal in the app's words; no rows → `noRows`; a change
  * too large to undo is refused here, so no card offers what strict mode would refuse — S17); (8)
- * ONE card per turn, own or cross-app (`onAccessWriteProposal`); (9) the brain hears the statement
- * it wrote, under the alias, and the host's *Proposed* sentence. A seat without `planWrite` (a
- * scheduled step's) may change nothing: every shared name is `readOnly` there.
+ * ONE card per turn, own or cross-app (`onAccessWriteProposal`), bound to the `grantedAt` the plan
+ * ran under — an access stopped, ended or renewed since answers `ended` and nothing is staged
+ * (ii-7, SB-8); (9) the brain hears the statement it wrote, under the alias, and the host's
+ * *Proposed* sentence. A chat seat built without `planWrite` (`laneTools` binds it only with the
+ * turn's caller) may change nothing: every shared name is `readOnly` there — a belt, never a path.
  *
  * THE SCHEDULED VARIANT (TASK-20261010-host-broker PR-4, D-PR4-16, D-PR4-5). Under a `scheduled`
  * seat nobody is watching, so `data_propose_write` stages a schedule proposal item for the run's
@@ -86,7 +91,7 @@ import { dmlTargetTable, nonDataStatementReason, ownCapturable, renameDmlTarget,
 import { SCHEDULE_PROPOSALS_PER_RUN, SCHEDULE_PROPOSAL_SQL_MAX_CHARS, accessSqlSchema, findRecordCredential, type ScheduleProposalItem } from '@snugprotocol/protocol';
 import { getToolPrompt } from '@snugprotocol/knowledge';
 
-import { CHAT_DOOR, rowsWord } from '../access/copy.js';
+import { ACCESS_APP_MESSAGES, CHAT_DOOR, rowsWord } from '../access/copy.js';
 import { namesTable, toAttach } from '../access/materialise.js';
 import type { MaterialisedSet, MaterialisedTable, RecordReadOutcome } from '../access/service.js';
 import { OWN_CAPTURE_RULE, appBusyAnswer, gateProposal, type ProposalRefusal } from '../schedule/proposalGate.js';
@@ -113,8 +118,12 @@ export interface PendingWriteProposal {
   previewed: number[];
 }
 
-/** What the plan of one change to another app's table comes to (PR-5, D-PR5-11 (7)): its count and table, or the app-facing refusal. */
-export type SharedWritePlan = { ok: true; changes: number; table: string } | { ok: false; code: string; message: string; retryable: boolean };
+/**
+ * What the plan of one change to another app's table comes to (PR-5, D-PR5-11 (7)): its count and
+ * table, and the `grantedAt` of the access it was planned under — the instant the card binds to
+ * (G5-16 ii-7, SB-8) — or the app-facing refusal.
+ */
+export type SharedWritePlan = { ok: true; changes: number; table: string; grantedAt?: string } | { ok: false; code: string; message: string; retryable: boolean };
 
 /**
  * The chat door's seat (PR-2): the materialised set this turn may read, and the service's
@@ -133,6 +142,13 @@ export interface SharedTablesSeat {
 export const ACCESS_WRITE_SUMMARY_MAX_CHARS = 240;
 
 /**
+ * What text shown on host chrome may not carry beyond the control characters (D-PR5-10, S7; Gate-5
+ * G5-16 SB-6): a format character, the line and paragraph separators, or a blank filler (U+034F,
+ * U+2800, U+3164, U+115F, U+1160, U+FFA0) — each invisible, or a break, where the user reads the change.
+ */
+const UNSHOWABLE_CHAR = /[\p{Cf}\u034F\u2028\u2029\u2800\u3164\u115F\u1160\uFFA0]/u;
+
+/**
  * The display rule a summary quoted on host chrome must pass (D-PR5-10, S7) — the protocol's own for
  * a shown line (no control, format, line-separator or blank-filler character; no leading or trailing
  * space; not blank) — and never credential-shaped. Staging and the card's strict reader share it.
@@ -143,13 +159,19 @@ export function isCardSummary(value: unknown): value is string {
     value.length <= ACCESS_WRITE_SUMMARY_MAX_CHARS &&
     value.trim() !== '' &&
     value.trim() === value &&
-    !/[\p{Cc}\p{Cf}\u034F\u2028\u2029\u2800\u3164\u115F\u1160\uFFA0]/u.test(value) &&
+    !/\p{Cc}/u.test(value) &&
+    !UNSHOWABLE_CHAR.test(value) &&
     findRecordCredential({ summary: value }) === undefined
   );
 }
 
-/** A statement another app's data may carry (D-PR5-11 (3), S7): the access SQL rule, and no invisible format character anywhere — a literal included. */
-const isPlainSqlText = (sql: string): boolean => accessSqlSchema.safeParse(sql).success && !/\p{Cf}/u.test(sql);
+/**
+ * A statement another app's data may carry (D-PR5-11 (3), S7): the access SQL rule, and — a literal
+ * included — none of the characters the summary rule refuses beyond the controls (G5-16 SB-6): the
+ * card shows this text as the change the user applies, so nothing in it may hide or split a clause.
+ * Staging and the card's strict reader share it.
+ */
+export const isPlainSqlText = (sql: string): boolean => accessSqlSchema.safeParse(sql).success && !UNSHOWABLE_CHAR.test(sql);
 
 /**
  * The SCHEDULED variant of `data_propose_write` (TASK-20261010-host-broker PR-4, D-PR4-16): nobody is
@@ -334,10 +356,20 @@ const NOT_STAGED = [
 /** SQLite's names compare without case, ASCII only. */
 const sameName = (a: string, b: string): boolean => a.replace(/[A-Z]/g, (ch) => ch.toLowerCase()) === b.replace(/[A-Z]/g, (ch) => ch.toLowerCase());
 
-/** The live access's `grantedAt` — the instant the card's approval is bound to (S9); '' when the access is gone, which no apply ever matches. */
-async function grantedAtOf(db: UserDb, grantId: string): Promise<string> {
-  const { findAccessGrant } = await import('../access/grants.js');
-  return findAccessGrant(db, grantId)?.grant.grantedAt ?? '';
+/** An ISO instant, as the card's strict reader re-admits `grantedAt` (`z.iso.datetime()`). */
+const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
+
+/**
+ * Whether the access the plan ran under is STILL the one a card may bind to (G5-16 ii-7, SB-8): there,
+ * live, and allowed at the same instant (a renewal keeps the id, so `grantedAt` too — S9). A stop, a
+ * pause, an expiry, a dropped "while it's open" access or a renewal between the plan and staging leaves
+ * a card that could only answer *ended* — and, with no instant, one the strict reader drops on reload.
+ */
+async function stillPlannedUnder(db: UserDb, grantId: string, grantedAt: string): Promise<boolean> {
+  if (!ISO_INSTANT.test(grantedAt) || Number.isNaN(Date.parse(grantedAt))) return false;
+  const { accessDeps, findAccessGrant, isLive } = await import('../access/grants.js');
+  const found = findAccessGrant(db, grantId);
+  return found !== undefined && found.grant.grantedAt === grantedAt && isLive(found.grant, accessDeps().now(), db);
 }
 
 export function buildDataTools(options: BuildDataToolsOptions): AgentTool[] {
@@ -422,7 +454,7 @@ export function buildDataTools(options: BuildDataToolsOptions): AgentTool[] {
    */
   async function proposeCrossApp(seat: SharedTablesSeat, first: MaterialisedTable, statements: readonly string[], params: unknown, summary: string): Promise<string> {
     const refused = (sentence: string): string => `Error: ${sentence}`;
-    // A seat that cannot plan a change (a scheduled step's) may change nothing.
+    // A defensive belt: a chat seat built without `planWrite` (no turn caller to bind it to) may change nothing.
     const planWrite = seat.planWrite?.bind(seat);
     if (planWrite === undefined) return refused(CHAT_DOOR.readOnly(oneLine(first.sourceName)));
     // (2) WRITABLE-FIRST, per access: a table of an access that lets this chat change nothing answers as before PR-5 (AC11).
@@ -438,15 +470,17 @@ export function buildDataTools(options: BuildDataToolsOptions): AgentTool[] {
     const target = only !== undefined && more.length === 0 && verb !== undefined && sameName(verb, only.name) ? only : undefined;
     if (target === undefined) return refused(CHAT_DOOR.readOnly(source));
     if (target.write !== true) return refused(CHAT_DOOR.readOnlyTable(source, target.table));
-    // (3) The RAW text — past the history's cut too: a format character in a literal is shown on the card.
+    // (3) The RAW text — past the history's cut too: a format character, a separator or a blank filler in a literal is shown on the card.
     if (!isPlainSqlText(sql)) return refused(CHAT_DOOR.unsafeText);
     const quoted = summary.trim();
     if (!isCardSummary(quoted)) {
       return refused(`"summary" must be one plain line of at most ${ACCESS_WRITE_SUMMARY_MAX_CHARS} characters, written for the user, with nothing credential-shaped`);
     }
-    // (4) The source's own name for the table, by the one rename the host trusts.
+    // (4) The source's own name for the table, by the one rename the host trusts. A text the strict
+    // parser refuses is said in that rule's words — the statement may already be one plain change of
+    // the one table, and *plainChange* would point at a fault it does not have (G5-16 ii-1).
     const renamed = renameDmlTarget(sql, target.name, target.table);
-    if (!renamed.ok) return refused(CHAT_DOOR.plainChange(source));
+    if (!renamed.ok) return refused(renamed.rule === 'parse' ? ACCESS_APP_MESSAGES.writeRefused(renamed.parseRule) : CHAT_DOOR.plainChange(source));
     if (!isPlainSqlText(renamed.sql)) return refused(CHAT_DOOR.unsafeText);
     try {
       const db = await getDb();
@@ -459,10 +493,12 @@ export function buildDataTools(options: BuildDataToolsOptions): AgentTool[] {
       const plan = await planWrite(target.grantId, renamed.sql);
       if (!plan.ok) return refused(plan.message);
       if (plan.changes === 0) return refused(CHAT_DOOR.noRows(source));
-      // (8) ONE card per turn, own or cross-app.
+      // (8) ONE card per turn, own or cross-app — bound to the access the plan ran under, while it still stands.
+      const { grantedAt } = plan;
+      if (grantedAt === undefined || !(await stillPlannedUnder(db, target.grantId, grantedAt))) return refused(CHAT_DOOR.ended(source));
       const card: AccessWriteCardState = {
         appId,
-        target: { grantId: target.grantId, grantedAt: await grantedAtOf(db, target.grantId), sourceAppId: target.sourceAppId, table: target.table },
+        target: { grantId: target.grantId, grantedAt, sourceAppId: target.sourceAppId, table: target.table },
         sql: renamed.sql,
         summary: quoted,
         previewed: plan.changes,
@@ -491,10 +527,13 @@ export function buildDataTools(options: BuildDataToolsOptions): AgentTool[] {
        * reaches a result. The chat goes down its own path (PR-5, D-PR5-11), which refuses by name
        * every batch it cannot turn into ONE change the user applies on its card.
        */
-      const sharedNamed = statements.map(namedBy).find((named) => named.length > 0)?.[0];
-      if (sharedNamed !== undefined && (scheduled !== undefined || shared === undefined)) return `Error: ${CHAT_DOOR.readOnly(oneLine(sharedNamed.sourceName))}`;
+      if (shared !== undefined) {
+        const sharedNamed = statements.map(namedBy).find((named) => named.length > 0)?.[0];
+        if (sharedNamed !== undefined) {
+          return scheduled !== undefined ? `Error: ${CHAT_DOOR.readOnly(oneLine(sharedNamed.sourceName))}` : proposeCrossApp(shared, sharedNamed, statements, input.params, input.summary);
+        }
+      }
       if (scheduled !== undefined) return proposeScheduled(scheduled, statements, input.params, input.summary);
-      if (sharedNamed !== undefined && shared !== undefined) return proposeCrossApp(shared, sharedNamed, statements, input.params, input.summary);
       /**
        * DML ONLY, checked BEFORE the dry run (R-B1).
        *

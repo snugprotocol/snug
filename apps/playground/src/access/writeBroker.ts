@@ -175,6 +175,7 @@ import {
 } from '@snugprotocol/db';
 import type { AccessHandlerResult } from '@snugprotocol/runner';
 
+import { DATA_WRITE_CARD } from '../agent/copy.dataWrite.js';
 import type { ExecuteApprovedWriteOutcome, PendingWriteProposal } from '../agent/dataTools.js';
 import { ACCESS_APP_MESSAGES, ACCESS_SHEET, OWN_UNDO, appMidChange, type UndoFailureReason, type WriteRefusalRule } from './copy.js';
 import { ringDataChanged, ringSourceChanged } from './doorbell.js';
@@ -213,11 +214,13 @@ export type BrokeredCoreRefusal =
   | { ok: false; reason: 'refused'; rule: WriteRefusalRule }
   | { ok: false; reason: 'failed'; retryable?: true };
 
+/** The strict core's plan: how many rows of which table, nothing seated. */
+export type BrokeredCorePlanned = { ok: true; phase: 'plan'; changes: number; table: string };
+/** The strict core's change made, with the undo it can be put back by. */
+export type BrokeredCoreApplied = { ok: true; phase: 'applied'; changes: number; undoable: boolean; undoId?: string };
+
 /** What the strict core answers: the plan alone, the change made (with the undo it can be put back by), or the refusal. */
-export type BrokeredCoreAnswer =
-  | { ok: true; phase: 'plan'; changes: number; table: string }
-  | { ok: true; phase: 'applied'; changes: number; undoable: boolean; undoId?: string }
-  | BrokeredCoreRefusal;
+export type BrokeredCoreAnswer = BrokeredCorePlanned | BrokeredCoreApplied | BrokeredCoreRefusal;
 
 /** `plan` stops before the seat; `apply` with `expectChanges` halts when the fresh plan's count is not the one the user saw. */
 export interface BrokeredCoreOptions {
@@ -493,6 +496,8 @@ function journalHasRoom(db: UserDb, targetAppId: string, readerAppId: string): b
  * and, in `apply` mode, applied through the seat, journaled, logged and rung — see the header. Never
  * reached without the policy's write verdict; every refusal's effect is performed here.
  */
+export function brokeredWriteCore(db: UserDb, input: BrokeredWriteRequest, options: BrokeredCoreOptions & { mode: 'plan' }): Promise<BrokeredCorePlanned | BrokeredCoreRefusal>;
+export function brokeredWriteCore(db: UserDb, input: BrokeredWriteRequest, options: BrokeredCoreOptions & { mode: 'apply' }): Promise<BrokeredCoreApplied | BrokeredCoreRefusal>;
 export async function brokeredWriteCore(db: UserDb, input: BrokeredWriteRequest, options: BrokeredCoreOptions): Promise<BrokeredCoreAnswer> {
   const { grant } = input.grant;
   const { table } = input;
@@ -685,12 +690,20 @@ export async function applyOwnWrite(db: UserDb, input: OwnWriteInput): Promise<O
 
 const failed = (message: string): ExecuteApprovedWriteOutcome => ({ ok: false, reason: 'failed', message });
 
+/** Every seat an approval of the app's OWN change carries (`PendingWriteProposal`) — and nothing else. */
+const OWN_APPROVAL_KEYS: ReadonlySet<string> = new Set<keyof PendingWriteProposal>(['appId', 'statements', 'params', 'summary', 'previewed']);
+
 /**
  * The user's approval of a change to the app's OWN data — see THE APPROVAL in the header. Never
  * throws: every outcome is one of PR-2's three shapes, an applied one saying whether it can be
  * undone. `via` is the door the user approved it at (D-PR4-6): the chat card or a result page.
  */
 export async function applyApprovedWrite(db: UserDb, proposal: PendingWriteProposal, options: { via: 'chat' | 'user' }): Promise<ExecuteApprovedWriteOutcome> {
+  // D-PR5-10's SECOND belt (Gate-5 G5-16 ii-4), behind the read seam's allow-list: a proposal carrying
+  // any seat outside the own change's — another app's `target`, `sourceAppId`, `grantId`, anything
+  // unknown — is refused before anything is dry-run, so no path that built a card without the reader
+  // can apply a cross-app-shaped change to this app's own data.
+  if (Object.keys(proposal).some((key) => !OWN_APPROVAL_KEYS.has(key))) return failed(DATA_WRITE_CARD.notOwn);
   // The class guard again, at the gate that touches data (R-B1): a DDL here means the proposal was changed after approval.
   const outOfClass = proposal.statements.map((sql) => nonDataStatementReason(sql)).find((reason) => reason !== undefined);
   if (outOfClass !== undefined) return failed(outOfClass);

@@ -64,11 +64,18 @@
 // another question is up → `answer-other-first`. Only then does `beforeOpen` run (the ⋈ sheet
 // closes there, so a refusal leaves it up with its act line), the ask park and the review open.
 // `settle` hears the person's answer, for the act line that started it.
+//
+// Gate-5 fold (G5-15). A pinned ask describes ONLY its source (`collectSource`, IB-5 — exporting
+// every app to offer one froze the tap); a declared ask's preselection is consent.ts's one rule (the
+// TABLE tier of the pinned or best-ranked source, IB-6/SA-5); and an offer is an offer on every
+// branch (SA-8): `{declared, source, offer}` parks with `offeredBy: 'source'` too, so the sheet draws
+// no write toggle and the consent writer refuses one.
 
 import { accessRequestHash, canonicalJson, type AccessDuration, type AccessHints, type AccessScope, type AccessWants } from '@snugprotocol/protocol';
 import type { AccessDecline, AppRecord, UserDb } from '@snugprotocol/db';
 
 import {
+  collectSource,
   collectSources,
   mayOpenReview,
   openReview,
@@ -82,7 +89,7 @@ import { ACCESS_SHEET } from './copy.js';
 import { accessDeps, bumpAccessRevision, readerGeneration, type AnyAccessGrant } from './grants.js';
 import { answerAccess } from './outcome.js';
 import { rememberNotOffered } from './pairs.js';
-import { hasHints, tableTierTables, type ExcludedReason, type RankedSource, type RankedSources } from './relevance.js';
+import { hasHints, type ExcludedReason, type RankedSource, type RankedSources } from './relevance.js';
 
 /**
  * What the sheet starts on when an ask carries a seed: a duration and the away box — and, for a
@@ -279,8 +286,8 @@ function stillDeclared(db: UserDb, readerAppId: string, want: AccessWant): boole
 
 /**
  * The candidates cut to ONE source — the sheet is pinned to it (TB-Q10) — or why the sheet could not
- * offer it: not in the file (`gone`), or the reason `collectSources` put it in the footer. The
- * footer about the other apps is dropped: they were never on offer.
+ * offer it: not in the file (`gone`), or the reason `collectSource` put it in the footer. The
+ * footer is dropped: no other app was ever on offer.
  */
 function pinTo(db: UserDb, ranked: RankedSources, sourceAppId: string): { candidates: RankedSources; source: RankedSource } | { reason: ExcludedReason | 'gone' } {
   if (db.getApp(sourceAppId) === undefined) return { reason: 'gone' };
@@ -291,15 +298,6 @@ function pinTo(db: UserDb, ranked: RankedSources, sourceAppId: string): { candid
   // Described a moment ago and not now (deleted under us, unreadable): nothing to offer.
   if (source === undefined) return { reason: 'gone' };
   return { candidates: { matched: matched !== undefined ? [source] : [], rest: matched !== undefined ? [] : [source], excluded: [] }, source };
-}
-
-/**
- * Where a declared ask starts (S10): the pinned source — or, unpinned, the best-ranked one — with
- * only its TABLE-tier tables ticked; none matched in that tier → the source chosen, nothing ticked.
- */
-function declaredPreselect(candidates: RankedSources, hints: AccessHints | undefined, pinned: RankedSource | undefined): { appId: string; tables: string[] } | undefined {
-  const first = pinned ?? candidates.matched[0] ?? (candidates.matched.length === 0 && candidates.rest.length === 1 ? candidates.rest[0] : undefined);
-  return first === undefined ? undefined : { appId: first.appId, tables: tableTierTables(first, hints) };
 }
 
 /**
@@ -314,7 +312,8 @@ async function startPinnedAsk(readerAppId: string, opts: UserAskOptions): Promis
   const want = opts.declared;
   if (want !== undefined && !stillDeclared(db, readerAppId, want)) return { kind: 'not-offered', reason: 'gone' };
   const hints = want?.hints;
-  let candidates = await collectSources(db, readerAppId, hints);
+  // IB-5: pinned, only the source is described — the other apps were never on offer.
+  let candidates = opts.source !== undefined ? await collectSource(db, readerAppId, opts.source, hints) : await collectSources(db, readerAppId, hints);
   let pinned: RankedSource | undefined;
   if (opts.source !== undefined) {
     const pin = pinTo(db, candidates, opts.source);
@@ -334,7 +333,12 @@ async function startPinnedAsk(readerAppId: string, opts: UserAskOptions): Promis
   return { kind: 'answer-other-first' };
 }
 
-/** The park for a PR-5 form: always the person's ask, in the host's words unless the app's are quoted (declared). */
+/**
+ * The park for a PR-5 form: always the person's ask, in the host's words unless the app's are
+ * quoted (declared), and an offer on every branch that carries one (SA-8). A declared ask starts
+ * where consent.ts's one rule puts it — the TABLE tier of the pinned (or best-ranked) source, none
+ * matched → the source chosen, nothing ticked (S10).
+ */
 function pinnedParkInput(
   db: UserDb,
   reader: AppRecord,
@@ -343,9 +347,16 @@ function pinnedParkInput(
   pinned: RankedSource | undefined,
 ): ParkAccessRequestInput {
   const want = opts.declared;
-  const base = { db, reader, generation: readerGeneration(reader.appId) ?? -1, provenance: 'user' as const, candidates, ...(opts.settle !== undefined ? { settle: opts.settle } : {}) };
+  const base = {
+    db,
+    reader,
+    generation: readerGeneration(reader.appId) ?? -1,
+    provenance: 'user' as const,
+    candidates,
+    ...(opts.offer === true ? { offeredBy: 'source' as const } : {}),
+    ...(opts.settle !== undefined ? { settle: opts.settle } : {}),
+  };
   if (want !== undefined) {
-    const preselect = declaredPreselect(candidates, want.hints, pinned);
     return {
       ...base,
       askedIn: 'declared',
@@ -355,13 +366,11 @@ function pinnedParkInput(
       ...(want.hints !== undefined ? { hints: want.hints } : {}),
       // *don't allow* records the want's own hash — the app's identical runtime ask then answers declined.
       ...(hasHints(want.hints) ? { hash: accessRequestHash({ hints: want.hints ?? {} }) } : {}),
-      ...(preselect !== undefined ? { preselect } : {}),
     };
   }
   return {
     ...base,
     purpose: ACCESS_SHEET.userPurpose(reader.displayName),
-    ...(opts.offer === true ? { offeredBy: 'source' as const } : {}),
     // Nothing named, nothing ticked: the person picks the tables of the source they came from.
     ...(pinned !== undefined ? { preselect: { appId: pinned.appId, tables: [] } } : {}),
   };

@@ -135,3 +135,37 @@ describe('tools/access-propose.md — ask with access: write when the user wants
     expect(prompt('access-propose')).not.toMatch(/\byou (?:can|may) (?:grant|allow)\b/i);
   });
 });
+
+// =========================================================================================
+// TASK-20261010-host-broker PR-5 — Gate-5 fold G5-16 (ii-1): the strict grammar a change to
+// another app's table must meet is TAUGHT, and "bind values with ?" is scoped to the app's own
+// tables. Before the fold the general bullet ("Bind values with `?` and pass them in `params`")
+// contradicted the cross-app rule, and nothing said: one INSERT/UPDATE/DELETE naming the table once
+// at the start, plain values (no ?, no arithmetic, functions or ON CONFLICT), a WHERE on every
+// UPDATE/DELETE — the same words `CHAT_DOOR.changes` now carries.
+// =========================================================================================
+
+describe('G5-16 (ii-1) — tools/data-propose-write.md teaches the strict grammar; ? is for this app’s own tables', () => {
+  /** The grammar sentence, right after ONE_CHANGE (the lane writes it as is). */
+  const GRAMMAR = flat(
+    'That one statement is an INSERT, UPDATE or DELETE naming the table once, at the start, with plain values written in (no `?`, no arithmetic, functions or ON CONFLICT) and a WHERE on every UPDATE or DELETE.',
+  );
+  const ONE_CHANGE = flat(
+    'A table marked *can be changed* takes ONE change per proposal: one statement on its own, naming the table exactly as shown (`ledger__transactions`), with its values written into the statement — no `params`.',
+  );
+  const SCOPED_BIND = flat("- On this app's own tables, bind values with `?` and pass them in `params`; never paste user text into SQL.");
+  const UNSCOPED_BIND = flat('- Bind values with `?` and pass them in `params`; never paste user text into SQL.');
+
+  it('G5-16 (ii-1) carries the grammar sentence, right after the one-change sentence', () => {
+    const text = prompt('data-propose-write');
+    expect(text).toContain(GRAMMAR);
+    expect(text.indexOf(GRAMMAR)).toBeGreaterThan(text.indexOf(ONE_CHANGE));
+    expect(text.indexOf(GRAMMAR)).toBeLessThan(text.indexOf('Write the smallest set of statements'));
+  });
+
+  it('G5-16 (ii-1) the "bind values with ?" bullet is scoped to this app’s own tables; the unscoped one is gone', () => {
+    const text = prompt('data-propose-write');
+    expect(text).toContain(SCOPED_BIND);
+    expect(text).not.toContain(UNSCOPED_BIND);
+  });
+});

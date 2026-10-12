@@ -37,8 +37,10 @@ const AGENT_LAYER_SOURCE = path.join(promptsDir, 'system', '50-scheduled-agent.m
  * TASK-20261010-host-broker PR-5 (v2.2 note (e)): D-PR5-15 amends the chat's prompt (a From table
  * marked *can be changed* takes one statement); `access-doors-prompts.test.ts` pins the amendment.
  * Was main @ 76c9262's '8cb20d464ef50d973d32376ad12a68e271105084e0706d236b82fe977d162791'.
+ * Gate-5 fold G5-16 [ii-1] re-pinned it again: the prompt now teaches the strict grammar and scopes
+ * "bind values with `?`" to the app's own tables (was PR-5's '8a28e853e59c445876bb474ad2664f0412248ed51183d7c9faae5a22f378d89d').
  */
-const CHAT_PROMPT_SHA256_ON_MAIN = '8a28e853e59c445876bb474ad2664f0412248ed51183d7c9faae5a22f378d89d';
+const CHAT_PROMPT_SHA256_ON_MAIN = '66f6c1b67e3a3c23bfcac051fb89d4c833e7f9cf4bda70d8b18499465dc9949c';
 
 /** One space for every run of whitespace — prompt files wrap their lines. */
 const flat = (text: string): string => text.replace(/\s+/g, ' ').trim();

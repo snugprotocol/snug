@@ -60,12 +60,15 @@
 // (`ctx.now`, `ctx.boundAt`) — what is left before the queue's bound, less the agent's margin and the
 // time the answer itself still needs — and handed over on the dispatchers' clock (`Date.now()`), no
 // longer than one app run's own bound; nothing left → nothing dispatched. THE AI RE-CHECK (F7): the
-// queue asked the day's ceiling for one AI call before the step; when the fetch spent AI calls of its
-// own, it is asked again with them before the brain is — none left → `refused`, `capped: 'ai'`. The
-// fetch's calls ride EVERY outcome (a branch that throws, an abort, a refusal) and the step's
+// queue asked the day's ceiling for one AI call before the step; whenever the fetch ASKED a source,
+// the day is read again with the fetch's own calls before the brain is — none left → `refused`,
+// `capped: 'ai'`. Whenever, not only when the fetch spent AI calls itself (Gate-5 fold P3-4, SB-4): a
+// step that JOINED another door's fetch hears no calls while that fetch folded its own into the day.
+// The fetch's calls ride EVERY outcome (a branch that throws, an abort, a refusal) and the step's
 // `ctx.spent` counts them, so the agent's own ceiling sees them too. A fetch that failed never fails
-// the step: what it came to rides the `fetched` seat (`none` when no app lets it ask any more), and
-// `summary` stays exactly the AI's text.
+// the step: what it came to rides the `fetched` seat (`none` when no app lets it ask any more; a
+// `recent` fetch that had itself failed is `failed` — P3-3 — so the result never says new data came
+// when it did not), and `summary` stays exactly the AI's text.
 
 import type { UserDb } from '@snugprotocol/db';
 import {
@@ -190,8 +193,13 @@ export function finalizeOutcome(outcome: StepOutcome): StepOutcome {
 
 const plus = (a: Calls, b: Calls): Calls => ({ ai: a.ai + b.ai, net: a.net + b.net });
 
-/** One source's answer as the step result says it — a door's own stop is a fetch that did not finish. */
-const fetchedOutcome = (source: FetchedSource): StepFetched['outcome'] => (source.outcome === 'stopped' ? 'failed' : source.outcome);
+/**
+ * One source's answer as the step result says it — a door's own stop is a fetch that did not finish,
+ * and so is a fetch inside the cooldown whose last dispatch did not deliver (P3-3): the step's words
+ * for `recent` say new data was used, which would be false.
+ */
+const fetchedOutcome = (source: FetchedSource): StepFetched['outcome'] =>
+  source.outcome === 'stopped' || (source.outcome === 'recent' && source.lastOk === false) ? 'failed' : source.outcome;
 
 /** The `fetched` seat: one entry per source asked — or `none`, under the step's own app, when no app lets it ask any more. */
 function fetchedSeat(asked: readonly FetchedSource[], appName: string): StepFetched[] {
@@ -243,8 +251,10 @@ async function executeAsk(step: AppThinkStep, ctx: StepContext, deps: StepExecut
   const seat: Pick<StepOutcome, 'fetched'> = fetched === undefined ? {} : { fetched: fetchedSeat(fetched.asked, ctx.db.getApp(step.appId)?.displayName ?? step.appId) };
   if (ctx.signal.aborted) return { status: 'failed', summary: CANCELLED_SUMMARY, calls, ...seat };
   const spent = (): Calls => plus(ctx.spent?.() ?? ZERO_CALLS, calls);
-  // F7: the queue asked for one AI call's headroom before the step; a fetch that spent AI calls asks again with them.
-  if (calls.ai > 0 && wouldExceedCeiling(countersSoFar(ctx.db, spent(), ZERO_CALLS, ctx.now().toISOString()), { ai: 1 }) === 'ai') {
+  // F7: the queue asked for one AI call's headroom before the step; a fetch that asked any source asks
+  // again, the day read fresh — a flight it joined folded its own calls there (P3-4).
+  const asked = fetched?.asked.some((source) => source.outcome !== 'skipped') === true;
+  if (asked && wouldExceedCeiling(countersSoFar(ctx.db, spent(), ZERO_CALLS, ctx.now().toISOString()), { ai: 1 }) === 'ai') {
     return { status: 'refused', capped: 'ai', summary: capped('AI call'), calls, ...seat };
   }
   let outcome: StepOutcome;

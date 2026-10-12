@@ -16,6 +16,12 @@
 // the access and library revisions. A card whose source or reader left the library says nothing:
 // no name is guessed. *busy* and *waiting* sit above the acts, which stay (D-PR5-14a); *waiting*
 // also offers the access act, where the waiting changes can be undone.
+//
+// Gate-5 fold G5-16: the lead promises an undo only while one is live — pending, or applied with
+// its undo still live — and opens on the plain lead otherwise (ii-9); the statement is shown
+// left-to-right and bidi-isolated, so no literal in it can reorder what the user reads (SB-6); and
+// closing the sheet hands focus back to the access act, or — when an undo made there took the act
+// away — to the card's own line, never to the page (ii-12).
 
 import type { ReactElement, ReactNode } from 'react';
 import { useEffect, useRef, useState } from 'react';
@@ -84,6 +90,8 @@ export function AccessWriteCard({ card, messageId, busy, onApply, onCancel }: Ac
   const [facts, setFacts] = useState<LiveFacts | null | undefined>(undefined);
   const [sheetOpen, setSheetOpen] = useState(false);
   const accessActRef = useRef<HTMLButtonElement>(null);
+  /** The card's count line — where focus lands when the sheet closes and the access act is gone. */
+  const lineRef = useRef<HTMLSpanElement>(null);
   const { appId, undoId, outcome } = card;
   const { sourceAppId } = card.target;
 
@@ -115,7 +123,7 @@ export function AccessWriteCard({ card, messageId, busy, onApply, onCancel }: Ac
     withNames(({ source, reader }) => DATA_WRITE_CARD.crossFailed(why, { readerName: reader, sourceName: source, table }), names);
   const closeSheet = (): void => {
     setSheetOpen(false);
-    accessActRef.current?.focus();
+    (accessActRef.current ?? lineRef.current)?.focus();
   };
   const accessAct = (
     <button type="button" className="btn" ref={accessActRef} onClick={() => setSheetOpen(true)}>
@@ -124,6 +132,8 @@ export function AccessWriteCard({ card, messageId, busy, onApply, onCancel }: Ac
   );
 
   const pending = outcome === undefined;
+  /** An undo the user can still reach: the change is waiting, or applied with its undo live in the source's journal. */
+  const undoLive = pending || (outcome === 'applied' && facts.undo === 'live');
   /** The line under the statement: what became of it, or — busy, waiting — why the last apply did not land. */
   const settled = ((): ReactNode[] | undefined => {
     switch (outcome) {
@@ -147,16 +157,20 @@ export function AccessWriteCard({ card, messageId, busy, onApply, onCancel }: Ac
   return (
     <Card className="artifact-card access-write-card" data-testid="access-write-card" data-outcome={outcome ?? 'staged'}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)', width: '100%' }}>
-        <span className="hint">{withNames(({ source }) => DATA_WRITE_CARD.crossLead(source, table), names)}</span>
+        <span className="hint">{withNames(({ source }) => (undoLive ? DATA_WRITE_CARD.crossLead(source, table) : DATA_WRITE_CARD.crossLeadPlain(source, table)), names)}</span>
         {outcome === 'applied' ? (
-          <span className="artifact-name" role="status">
+          <span className="artifact-name" role="status" ref={lineRef} tabIndex={-1}>
             {withNames(({ source }) => DATA_WRITE_CARD.crossAppliedLine(card.previewed, source, facts.undo), names)}
           </span>
         ) : (
-          <span className="artifact-name">{withNames(({ source }) => DATA_WRITE_CARD.crossWould(card.previewed, source), names)}</span>
+          <span className="artifact-name" ref={lineRef} tabIndex={-1}>
+            {withNames(({ source }) => DATA_WRITE_CARD.crossWould(card.previewed, source), names)}
+          </span>
         )}
         {card.summary !== undefined ? <q className="access-quote">{CONSENT_SHEET.quote(card.summary)}</q> : null}
-        <code style={{ wordBreak: 'break-word' }}>{card.sql}</code>
+        <code dir="ltr" style={{ wordBreak: 'break-word', unicodeBidi: 'isolate' }}>
+          {card.sql}
+        </code>
         {settled !== undefined ? (
           <span className="hint" role="status" data-testid="access-write-card-note">
             {settled}

@@ -9,14 +9,19 @@
 // host-only `refreshFor` — never the engine directly. A door joins a refresh already in flight; its
 // own signal abandons only its own wait (`stopped`), and nothing after it is asked. In a schedule's
 // run (`run`), the ceiling counts what the run spent so far plus the earlier sources' calls, nothing
-// is folded into the day, the calls come back to the run, and a source with no time left before the
-// run's bound is not asked. It never throws: a source that could not be asked reads `failed`.
+// is folded into the day, the calls come back to the run, and a source is not asked when less of the
+// run's budget is left than a frame is given to announce itself (`SCHEDULE_ANNOUNCE_TIMEOUT_MS`,
+// Gate-5 fold P3-5) — a dispatch that could never be answered in time would only burn the source's
+// cooldown and write a `timeout` line. It never throws: a source that could not be asked reads `failed`.
+// Every source's name is folded to ONE line here (`oneLine`, P3-2), so both doors — the chat's note
+// and its line for the brain, the schedule's step fact — say the same name and no name adds a line.
 // The words for each outcome are `access/copy.ts`'s `FETCH_FIRST` — the caller says them.
 
 import type { UserDb } from '@snugprotocol/db';
 import { REFRESH_FIRST_MAX_SOURCES } from '@snugprotocol/protocol';
 
-import type { AppRunDeps } from '../schedule/appRun.js';
+import { oneLine } from '../agent/sharedDdl.js';
+import { SCHEDULE_ANNOUNCE_TIMEOUT_MS, type AppRunDeps } from '../schedule/appRun.js';
 import type { Calls } from '../schedule/protection.js';
 import { accessDeps } from './grants.js';
 import type { AccessCaller } from './policy.js';
@@ -30,7 +35,7 @@ export type FetchedSourceOutcome = 'fresh' | 'recent' | 'failed' | 'skipped' | '
 
 export interface FetchedSource {
   sourceAppId: string;
-  /** The source's library name — what the words say. */
+  /** The source's library name, folded to one line (`oneLine`) — what the words say. */
   sourceName: string;
   outcome: FetchedSourceOutcome;
   /** `recent`: when the fetch it used happened (ISO). */
@@ -71,7 +76,7 @@ export async function fetchFirst(db: UserDb, deps: AppRunDeps, caller: FetchFirs
   const sources = new Map<string, { grantId: string; sourceName: string }>();
   try {
     for (const row of refreshableReads(db, caller, accessDeps().now())) {
-      if (!sources.has(row.grant.sourceAppId)) sources.set(row.grant.sourceAppId, { grantId: row.grant.id, sourceName: row.sourceName });
+      if (!sources.has(row.grant.sourceAppId)) sources.set(row.grant.sourceAppId, { grantId: row.grant.id, sourceName: oneLine(row.sourceName) });
     }
   } catch {
     return { asked: [], calls }; // the file could not be read — nothing was asked
@@ -82,8 +87,8 @@ export async function fetchFirst(db: UserDb, deps: AppRunDeps, caller: FetchFirs
   let tried = 0;
   let stopped = false;
   for (const [sourceAppId, { grantId, sourceName }] of sources) {
-    // Past the cap, after the door's stop, or with no time left before the run's bound: not asked.
-    const outOfTime = run !== undefined && run.deadline <= Date.now();
+    // Past the cap, after the door's stop, or with too little of the run's budget left to be answered: not asked.
+    const outOfTime = run !== undefined && run.deadline - Date.now() < SCHEDULE_ANNOUNCE_TIMEOUT_MS;
     if (stopped || signal.aborted || outOfTime || tried >= REFRESH_FIRST_MAX_SOURCES) {
       asked.push({ sourceAppId, sourceName, outcome: 'skipped' });
       continue;

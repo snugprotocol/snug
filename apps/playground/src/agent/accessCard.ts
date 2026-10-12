@@ -34,7 +34,15 @@
  * anything else is drift: no card. *Review* hands it to the sheet, which then wants write.
  */
 
-import { ACCESS_DURATIONS, accessHintsSchema, accessPurposeSchema, type AccessDuration, type AccessHints } from '@snugprotocol/protocol';
+import {
+  ACCESS_CARD_RESOLUTIONS,
+  ACCESS_DURATIONS,
+  accessHintsSchema,
+  accessPurposeSchema,
+  type AccessCardResolutionKind,
+  type AccessDuration,
+  type AccessHints,
+} from '@snugprotocol/protocol';
 import type { UserDb } from '@snugprotocol/db';
 
 import type { AccessProposal } from './accessProposeTool.js';
@@ -65,7 +73,13 @@ export interface AccessCardState {
 /** The persisted shape — the row's `meta.access`; the row id is the row's own address and is never written into it. */
 export type PersistedAccessCard = Omit<AccessCardState, 'messageRowId'>;
 
-const RESOLUTION_KINDS: ReadonlySet<string> = new Set<AccessCardResolution['kind']>(['allowed', 'not-now', 'declined', 'failed']);
+/**
+ * The kinds a persisted resolution may name — the protocol's list, spelled ONCE there (Gate-5 G5-1): the
+ * list the db's untrusted import reads a row's answer by too. `Exactly` fails the typecheck when this
+ * module's union and the protocol's list ever name different kinds, either way.
+ */
+type Exactly<A, B> = [A] extends [B] ? ([B] extends [A] ? A : never) : never;
+const RESOLUTION_KINDS: ReadonlySet<string> = new Set<Exactly<AccessCardResolution['kind'], AccessCardResolutionKind>>(ACCESS_CARD_RESOLUTIONS);
 const DURATIONS: ReadonlySet<string> = new Set<string>(ACCESS_DURATIONS);
 
 /** A fresh staged card for a proposal the hook accepted — for the THREAD's app. */
@@ -93,7 +107,7 @@ function readResolution(stored: unknown): AccessCardResolution | undefined {
   if (typeof stored !== 'object' || stored === null) return undefined;
   const { kind } = stored as { kind?: unknown };
   if (typeof kind !== 'string' || !RESOLUTION_KINDS.has(kind)) return undefined;
-  if (kind !== 'allowed') return { kind: kind as Exclude<AccessCardResolution['kind'], 'allowed'> };
+  if (kind !== 'allowed') return { kind: kind as Exclude<AccessCardResolutionKind, 'allowed'> };
   const { sourceName, tables, duration, write } = stored as { sourceName?: unknown; tables?: unknown; duration?: unknown; write?: unknown };
   if (!nonEmptyString(sourceName)) return undefined;
   if (!isStringList(tables)) return undefined;

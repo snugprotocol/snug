@@ -16,7 +16,7 @@ import { getPlatform } from '../platform/platform.js';
 import { sqlJsEngineOptions } from '../run/sqlJsEngine.js';
 import { armDoorbell } from '../access/doorbell.js';
 import { resetAccessSession } from '../access/grants.js';
-import { abortAllRefreshes } from '../access/refreshRuns.js';
+import { abortAllRefreshes, unlatchRefreshSwap } from '../access/refreshRuns.js';
 import { resetThreadSessions } from '../agent/threadSessions.js';
 import { initScheduler } from '../schedule/scheduler.js';
 
@@ -286,6 +286,7 @@ export function resetUserDbForTests(): void {
   resetThreadSessions();
   resetAccessSession();
   abortAllRefreshes('reset');
+  unlatchRefreshSwap(); // a swap a suite began and never finished holds no later suite's fetches (Gate-5 fold SB-3)
   opened = false;
   corruptResult = undefined;
   readyPromise = undefined;

@@ -32,7 +32,7 @@ import type { UserDb } from '@snugprotocol/db';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
-import { SCHEDULE_STEP_SUMMARY_MAX_CHARS, SIDECAR_SYMBOLIC_HOST, parseAppRequest, type ScheduleStep, type ScheduledTask } from '@snugprotocol/protocol';
+import { SCHEDULE_DAILY_CEILINGS, SCHEDULE_STEP_SUMMARY_MAX_CHARS, SIDECAR_SYMBOLIC_HOST, parseAppRequest, type ScheduleStep, type ScheduledTask } from '@snugprotocol/protocol';
 import type { AgentTransport } from '@snugprotocol/runner';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -130,6 +130,8 @@ function fakeDb(overrides: Partial<UserDb> = {}): UserDb {
     // The production gates (PR-4) read the brain route — key rows from the file — and the app's connection rows.
     getSecret: () => undefined,
     listConnections: () => [],
+    // Gate-5 fold G5-19 [P3-4]: the executor reads the scheduler's state (the fetch's own seat); none by default.
+    getSchedulerState: () => undefined,
     ...overrides,
   };
   return db as UserDb;
@@ -778,6 +780,53 @@ describe('PR-5 D-PR5-19 — *fetch new data first* in executeAsk', () => {
     expect(outcome.capped).toBe('ai');
     expect(transport.wires).toEqual([]);
     expect(outcome.calls).toEqual({ ai: 1, net: 0 });
+  });
+
+  // ---------------------------------------------------------------------------------------------
+  // TASK-20261010-host-broker PR-5 — Gate-5 fold G5-19 (P3-3, P3-4/SB-4).
+  //   P3-3 a `recent` whose last fetch FAILED (`lastOk: false`) is stored `failed` on the step's seat —
+  //        before the fold the result page said "Ledger had fetched new data just before — used that"
+  //        about a fetch that failed. (`stopped` → `failed` already.)
+  //   P3-4 the F7 AI re-check runs whenever the fetch ASKED anything (a source not `skipped`), reading the
+  //        day fresh — a step that JOINED another door's flight hears `calls: nothing()` while that
+  //        flight folded its AI call into the day itself; before the fold the re-check was skipped and
+  //        the tool-free brain call ran past the ceiling.
+  // ---------------------------------------------------------------------------------------------
+
+  it('G5-19 (P3-3) a `recent` whose last fetch FAILED is stored `failed` on the seat', async () => {
+    ff.impl = () => Promise.resolve({ asked: [{ sourceAppId: 'src-ledger', sourceName: 'Ledger', outcome: 'recent', at: NOW, lastOk: false }], calls: { ai: 0, net: 0 } });
+    const outcome = await createStepExecutor({ appRun: appRunWithBound(), transportFor: () => orderedTransport() })(fetchThink, context([fetchThink]));
+    expect(outcome.status).toBe('ok');
+    expect((outcome as { fetched?: unknown }).fetched).toEqual([{ source: 'Ledger', outcome: 'failed' }]);
+  });
+
+  it('G5-19 (P3-3) guard: a `recent` whose last fetch delivered stays `recent`', async () => {
+    ff.impl = () => Promise.resolve({ asked: [{ sourceAppId: 'src-ledger', sourceName: 'Ledger', outcome: 'recent', at: NOW, lastOk: true }], calls: { ai: 0, net: 0 } });
+    const outcome = await createStepExecutor({ appRun: appRunWithBound(), transportFor: () => orderedTransport() })(fetchThink, context([fetchThink]));
+    expect(((outcome as { fetched?: Array<{ outcome: string }> }).fetched ?? []).map((entry) => entry.outcome)).toEqual(['recent']);
+  });
+
+  it('G5-19 (P3-4) the fetch JOINED a flight that folded the day’s last AI call (calls.ai 0) → still re-checked: `refused`, capped `ai`, the transport NEVER called', async () => {
+    const day = { watermark: NOW, globalPause: false, daily: { date: NOW.slice(0, 10), ai: SCHEDULE_DAILY_CEILINGS.ai - 1, net: 0 } };
+    ff.impl = () => {
+      // The flight this step joined folded ITS OWN AI call into the day before answering the joiner.
+      day.daily = { ...day.daily, ai: SCHEDULE_DAILY_CEILINGS.ai };
+      return Promise.resolve({ asked: [{ sourceAppId: 'src-ledger', sourceName: 'Ledger', outcome: 'fresh' }], calls: { ai: 0, net: 0 } });
+    };
+    const transport = orderedTransport();
+    const db = fakeDb({ getSchedulerState: () => day } as Partial<UserDb>);
+    const outcome = await createStepExecutor({ appRun: appRunWithBound(), transportFor: () => transport })(fetchThink, context([fetchThink], { db }));
+    expect(outcome.status).toBe('refused');
+    expect(outcome.capped).toBe('ai');
+    expect(transport.wires).toEqual([]);
+  });
+
+  it('G5-19 (P3-4) guard: every source SKIPPED (nothing asked) and the day under the ceiling → the step answers', async () => {
+    ff.impl = () => Promise.resolve({ asked: [{ sourceAppId: 'src-ledger', sourceName: 'Ledger', outcome: 'skipped' }], calls: { ai: 0, net: 0 } });
+    const transport = orderedTransport();
+    const outcome = await createStepExecutor({ appRun: appRunWithBound(), transportFor: () => transport })(fetchThink, context([fetchThink]));
+    expect(outcome.status).toBe('ok');
+    expect(transport.wires).toHaveLength(1);
   });
 
   it('a THROWING branch still carries the fetch’s calls (the transport could not even be built)', async () => {

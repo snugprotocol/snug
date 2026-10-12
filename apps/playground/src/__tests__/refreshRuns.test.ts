@@ -198,3 +198,83 @@ describe('D-PR5-24 the leaf rule — refreshRuns.ts imports nothing from the eng
     expect(source).not.toMatch(/from\s+['"]\.\/service\.js['"]/);
   });
 });
+
+// =========================================================================================
+// TASK-20261010-host-broker PR-5 — Gate-5 fold G5-18 (P3-1, SB-3): the reset epoch and the swap latch
+// live in the LEAF (the engine reads the leaf; the leaf reads nothing).
+//   refreshResetEpoch(): number — bumped by EVERY `abortAllRefreshes('reset')`, BEFORE its early
+//     return (an empty store included); never by a cancel, a delete or an abandoned wait.
+//   latchRefreshSwap() — aborts every refresh with `reset` (so the epoch moves) and LATCHES;
+//   unlatchRefreshSwap() — `afterForeignBytes`; refreshSwapLatched(): boolean.
+// Names are this lane's choice (the fold leaves them open).
+// =========================================================================================
+
+type LeafG5 = { refreshResetEpoch(): number; latchRefreshSwap(): void; unlatchRefreshSwap(): void; refreshSwapLatched(): boolean };
+async function leafG5(): Promise<LeafG5> {
+  const mod = (await import('../access/refreshRuns.js')) as unknown as Partial<LeafG5>;
+  for (const key of ['refreshResetEpoch', 'latchRefreshSwap', 'unlatchRefreshSwap', 'refreshSwapLatched'] as const) {
+    if (typeof mod[key] !== 'function') throw new Error(`access/refreshRuns.ts does not export ${key} yet (G5-18)`);
+  }
+  return mod as LeafG5;
+}
+
+describe('G5-18 the reset epoch — in the leaf, moved by every reset', () => {
+  afterEach(async () => {
+    try {
+      (await leafG5()).unlatchRefreshSwap();
+    } catch {
+      // not there yet
+    }
+  });
+
+  it('G5-18 an EMPTY-store reset still bumps the epoch (before the early return)', async () => {
+    const leaf = await leafG5();
+    expect(listRefreshRuns()).toEqual([]);
+    const before = leaf.refreshResetEpoch();
+    abortAllRefreshes('reset');
+    expect(leaf.refreshResetEpoch()).toBe(before + 1);
+  });
+
+  it('G5-18 a reset with runs in flight bumps it too — once per reset', async () => {
+    const leaf = await leafG5();
+    begin('run-1');
+    begin('run-2', { sourceAppId: 'pantry', sourceName: 'Pantry' });
+    const before = leaf.refreshResetEpoch();
+    abortAllRefreshes('reset');
+    expect(leaf.refreshResetEpoch()).toBe(before + 1);
+  });
+
+  it('G5-18 a cancel, an app delete and the last waiter leaving never move it', async () => {
+    const leaf = await leafG5();
+    const before = leaf.refreshResetEpoch();
+    begin('run-1');
+    cancelRefresh('run-1');
+    begin('run-2', { requestedBy: 'meals' });
+    abortRefreshesFor('meals');
+    begin('run-3');
+    joinRefreshRun('run-3')();
+    expect(leaf.refreshResetEpoch()).toBe(before);
+  });
+
+  it('G5-18 the latch: latchRefreshSwap aborts every run with reset, moves the epoch, and holds until unlatchRefreshSwap', async () => {
+    const leaf = await leafG5();
+    const run = begin('run-1');
+    const before = leaf.refreshResetEpoch();
+    expect(leaf.refreshSwapLatched()).toBe(false);
+    leaf.latchRefreshSwap();
+    expect(run.controller.signal.aborted).toBe(true);
+    expect(run.controller.signal.reason).toBe('reset');
+    expect(listRefreshRuns()).toEqual([]);
+    expect(leaf.refreshResetEpoch()).toBeGreaterThan(before);
+    expect(leaf.refreshSwapLatched()).toBe(true);
+    leaf.unlatchRefreshSwap();
+    expect(leaf.refreshSwapLatched()).toBe(false);
+  });
+
+  it('G5-18 an empty-store latch moves the epoch too', async () => {
+    const leaf = await leafG5();
+    const before = leaf.refreshResetEpoch();
+    leaf.latchRefreshSwap();
+    expect(leaf.refreshResetEpoch()).toBeGreaterThan(before);
+  });
+});

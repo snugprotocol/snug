@@ -132,7 +132,7 @@ import {
 } from './copy.js';
 import type { StepContext, StepOutcome } from './engine-types.js';
 import { ZERO_CALLS, countersSoFar, wouldExceedCeiling, type Calls, type CeilingKind } from './protection.js';
-import { MAX_HANDOVERS, beginDelegatedRun, endDelegatedRun, placeRun, type DelegatedRun, type DelegatedRunPosture, type Placement, type ScheduledRefusal } from './runPlacement.js';
+import { MAX_HANDOVERS, beginDelegatedRun, endDelegatedRun, placeRun, releaseDelegatedRun, type DelegatedRun, type DelegatedRunPosture, type Placement, type ScheduledRefusal } from './runPlacement.js';
 import { SCHEDULE_RESULT_EVENT, SCHEDULE_RUN_EVENT, scheduleKvKey } from './scheduleKey.js';
 import { scheduledDbDriver } from './scheduledDbDriver.js';
 import { createScheduledConfirmGate, scheduledRefusalVerb, type ScheduledConfirmGate } from './scheduledConfirmGate.js';
@@ -611,10 +611,13 @@ export async function executeAppRun(step: AppRunStep, ctx: StepContext, deps: Ap
  * the hinted generation's only. The app closing mid-run: `manual` → `failed` (M18); unattended → a
  * handover to the hidden frame, unless the user ANSWERED in this attempt (F-7) — an ALLOWED change
  * → `failed` by name, never a re-run; a DECISIVE refusal → `failed`, and the record carries the
- * user's answer for `outcomeOf`. The record is ended in `finally`, whatever happened, and is what
- * the attempt reports — a refresh's record the engine HELD on a stop keeps refusing until the
- * engine releases it (`holdDelegatedRun`/`releaseDelegatedRun`, PR-5 S2; `endDelegatedRun` honours
- * the hold).
+ * user's answer for `outcomeOf`. A stop that lands while the key is written ends the attempt
+ * `aborted` before the ring (Gate-5 fold P3-7): the app's handler never starts for a run nobody
+ * waits on. The record is ended in `finally`, whatever happened, and is what the attempt reports — a
+ * refresh's record the engine HELD on a stop keeps refusing until the engine releases it
+ * (`holdDelegatedRun`/`releaseDelegatedRun`, PR-5 S2; `endDelegatedRun` honours the hold) — once the
+ * app was RUNG; a record never rung ends with its attempt, held or not, since no handler of the run
+ * can be running.
  */
 export async function dispatchLive(d: Dispatch): Promise<Attempt> {
   const { appId } = d.step;
@@ -676,9 +679,11 @@ export async function dispatchLive(d: Dispatch): Promise<Attempt> {
   try {
     const wrote = await d.db.driver.kvSet(appId, d.key, d.payload);
     // The write took time: the app may have closed meanwhile (F-3). A retracted frame is never hinted —
-    // the attempt ends as the retraction decided, not `could not be reached`.
+    // the attempt ends as the retraction decided, not `could not be reached`. A stop that landed
+    // meanwhile outranks both: nothing is rung for a run that was stopped (P3-7).
     const cut = interruption ?? (live.has(appId) ? undefined : retractionEnd());
-    if (!wrote.ok) end = { kind: 'failed', message: wrote.message };
+    if (d.signal.aborted) end = { kind: 'aborted' };
+    else if (!wrote.ok) end = { kind: 'failed', message: wrote.message };
     else if (cut !== undefined) end = cut;
     else {
       hinted = true; // before the ring: an app may answer in the same tick
@@ -688,8 +693,9 @@ export async function dispatchLive(d: Dispatch): Promise<Attempt> {
   } finally {
     unwatch();
     unsubscribeEvents();
-    // The run ends with the attempt (result, bound, cancel, handover): every parked scheduled confirm withdraws.
-    if (run !== undefined) record = endDelegatedRun(appId, runId);
+    // The run ends with the attempt (result, bound, cancel, handover): every parked scheduled confirm
+    // withdraws. Never rung, a held record ends too — its hold waits for a handler that never started.
+    if (run !== undefined) record = hinted ? endDelegatedRun(appId, runId) : releaseDelegatedRun(appId, runId);
   }
   return { end, calls: record === undefined ? none() : { ...record.calls }, refused: record?.refused ?? [] };
 }
@@ -805,9 +811,11 @@ export async function dispatchHidden(d: Dispatch, gate: ScheduledConfirmGate): P
       const host = controls.current;
       // The write took time: the app may have OPENED meanwhile (F-3) — its handover is decided, and a
       // hidden handler must never start after that, so the frame is not rung. (Any other cut that
-      // landed during the write — the frame left its sandbox — is honoured the same way.)
+      // landed during the write — the frame left its sandbox — is honoured the same way.) A stop that
+      // landed meanwhile outranks them all: the hidden handler never starts for it (P3-7).
       const cutMeanwhile = interruption ?? (d.mode === 'unattended' && d.deps.live.has(appId) ? toLive : undefined);
-      if (!wrote.ok) end = { kind: 'failed', message: wrote.message };
+      if (d.signal.aborted) end = { kind: 'aborted' };
+      else if (!wrote.ok) end = { kind: 'failed', message: wrote.message };
       else if (cutMeanwhile !== undefined) end = cutMeanwhile;
       else if (host === null) end = { kind: 'failed', message: 'the hidden frame has no host' };
       else {

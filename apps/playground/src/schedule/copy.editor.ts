@@ -12,6 +12,7 @@ import {
   APP_AGENT_MAX_ROUND_TRIPS,
   APP_AGENT_MAX_TOOL_CALLS,
   OWN_UNDO_MAX_LIVE,
+  REFRESH_FIRST_MAX_SOURCES,
   SCHEDULE_APP_INPUT_MAX_BYTES,
   SCHEDULE_DAILY_CEILINGS,
   SCHEDULE_MAX_STEPS,
@@ -20,6 +21,16 @@ import {
 
 import { listWords } from '../access/copy.js';
 import { CONSENT, SCHEDULED_NEXT, aiCalls, stepLabel } from './copy.js';
+
+/**
+ * The sources a fetch first actually asks — at most `REFRESH_FIRST_MAX_SOURCES`, in the order given
+ * (the fetch's own) — and how many it never asks (Gate-5 fold P3-6): the editor and the consent name
+ * only those, as the chat's toggle does, and count the rest.
+ */
+function askedFirst(sourceNames: readonly string[]): { asked: readonly string[]; notAsked: number } {
+  const asked = sourceNames.slice(0, REFRESH_FIRST_MAX_SOURCES);
+  return { asked, notAsked: sourceNames.length - asked.length };
+}
 
 /** The route's heading, by mode. */
 export const EDITOR_HEADING = { new: 'new schedule', edit: 'edit schedule' } as const;
@@ -145,11 +156,14 @@ export const STEPS = {
   // now or later — and its hint names the ones that do now and what each fetch costs.
   /** The tick, offered when the app may ask at least one other app for new data while the person is away. */
   fetchFirst: (appName: string): string => `fetch new data first from the apps ${appName} may read while you’re away`,
-  /** Under the ticked box: the sources now, whose own code runs through their own connections. */
-  fetchFirstHint: (sourceNames: readonly string[]): string =>
-    sourceNames.length === 1
-      ? `now: ${sourceNames[0]} — runs ${sourceNames[0]}’s own fetch just before, through ${sourceNames[0]}’s connections, counted on your daily limits`
-      : `now: ${listWords(sourceNames)} — runs each one’s own fetch just before, through its own connections, counted on your daily limits`,
+  /** Under the ticked box: the sources it asks now (the rest counted as not asked — P3-6), whose own code runs through their own connections. */
+  fetchFirstHint: (sourceNames: readonly string[]): string => {
+    const { asked, notAsked } = askedFirst(sourceNames);
+    const now = `now: ${listWords(asked)}${notAsked > 0 ? ` (+${notAsked} not asked)` : ''}`;
+    return asked.length === 1
+      ? `${now} — runs ${asked[0]}’s own fetch just before, through ${asked[0]}’s connections, counted on your daily limits`
+      : `${now} — runs each one’s own fetch just before, through its own connections, counted on your daily limits`;
+  },
   /** A step that carries the tick when no app lets it ask any more: the tick stays, and says it does nothing. */
   fetchFirstStale: (appName: string): string => `no app lets ${appName} ask for new data now — this does nothing until one does`,
 } as const;
@@ -224,12 +238,14 @@ export const CONSENT_ROWS = {
   startsFrom: (appName: string): string => `starts from these; may read more of ${appName}’s data itself`,
   /**
    * TASK-20261010-host-broker PR-5 (D-PR5-19): the row under an *ask* step that fetches new data
-   * first — the sources now, by name; none now, and the row says the tick does nothing until one does.
+   * first — the sources it asks now, by name, the rest counted as not asked (Gate-5 fold P3-6); none
+   * now, and the row says the tick does nothing until one does.
    */
-  fetchFirst: (appName: string, sourceNames: readonly string[]): string =>
-    sourceNames.length > 0
-      ? `first asks the apps ${appName} may read while you’re away to fetch new data (now: ${listWords(sourceNames)})`
-      : `first asks the apps ${appName} may read while you’re away to fetch new data — ${STEPS.fetchFirstStale(appName)}`,
+  fetchFirst: (appName: string, sourceNames: readonly string[]): string => {
+    if (sourceNames.length === 0) return `first asks the apps ${appName} may read while you’re away to fetch new data — ${STEPS.fetchFirstStale(appName)}`;
+    const { asked, notAsked } = askedFirst(sourceNames);
+    return `first asks the apps ${appName} may read while you’re away to fetch new data (now: ${listWords(asked)}${notAsked > 0 ? `, +${notAsked} not asked` : ''})`;
+  },
   /**
    * The cost row when a step may look things up (D12): what one time may spend — `each.ai` is the
    * steps' AI calls per occurrence (`floors.stepsCost`: ten a step that may look things up) and

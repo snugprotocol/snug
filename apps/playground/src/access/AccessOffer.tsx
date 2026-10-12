@@ -61,6 +61,7 @@ export function AccessOffer({ sourceAppId, sourceName, readers, onBeforeAsk }: A
         </select>
         <Button
           data-testid="access-offer"
+          disabled={act.busy}
           onClick={(event) =>
             void act.start(reader.appId, { source: sourceAppId, offer: true, beforeOpen: () => flushSync(onBeforeAsk) }, sourceName, event.currentTarget)
           }

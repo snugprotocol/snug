@@ -382,3 +382,105 @@ describe('D-PR5-15 the chat’s ask carries access: write', () => {
     expect(db.listAccessDeclines(budget).map((decline) => decline.hash)).toEqual([accessRequestHash({ hints: HINTS })]);
   });
 });
+
+// =========================================================================================
+// TASK-20261010-host-broker PR-5 — Gate-5 fold G5-15 on the user's ask.
+//
+// IB-5 a PINNED ask describes only the pinned source (`collectSource(db, reader, sourceId)`, the
+//      same sidecar, too-large and no-tables rules — pinned above, still green after it): before the
+//      fold `collectSources` exported EVERY app on the main thread to offer one.
+// IB-6 a declared ask carries `tableTierOnly: true` on the pending (the seat name is this lane's
+//      choice) and `parkAccessRequest` never falls back to `preselectionFor` (the every-table rule)
+//      for `askedIn: 'declared'`.
+// SA-5 the declared preselection takes an exact hint table or a hint word EQUAL to a whole
+//      `_`-token (≥ 3 chars): words ['es'] over expenses + notes ticks nothing.
+// SA-8 `offeredBy: 'source'` is set on EVERY pinned branch — `{declared, source, offer: true}`
+//      dropped it, and the sheet then drew the write toggle the offer must never show.
+// =========================================================================================
+
+type PendingG5 = PendingV5 & { tableTierOnly?: true };
+
+describe('G5-15 (IB-5) a pinned ask describes and exports ONLY the pinned source', () => {
+  it('G5-15 the pair form in a 4-app file exports at most the pinned source — never the others', async () => {
+    const exportSpy = vi.spyOn(db, 'exportAppRuntime');
+    const describeSpy = vi.spyOn(db, 'describeAppData');
+    expect(await ask(budget, { declared: SPENDING, source: ledger })).toBe('opened');
+    const exported = exportSpy.mock.calls.map((call) => call[0]);
+    expect(exported.length, exported.join(',')).toBeLessThanOrEqual(1);
+    expect(exported.filter((id) => id !== ledger)).toEqual([]);
+    expect(describeSpy.mock.calls.map((call) => call[0]).filter((id) => id !== ledger)).toEqual([]);
+  });
+
+  it('G5-15 the offer form in a 4-app file exports at most the pinned source', async () => {
+    const exportSpy = vi.spyOn(db, 'exportAppRuntime');
+    expect(await ask(budget, { source: ledger, offer: true })).toBe('opened');
+    expect(exportSpy.mock.calls.map((call) => call[0]).filter((id) => id !== ledger)).toEqual([]);
+  });
+});
+
+describe('G5-15 (IB-6) a declared ask is table-tier only, wherever it is parked', () => {
+  it('G5-15 the unpinned declared ask carries tableTierOnly on its pending', async () => {
+    await ask(budget, { declared: SPENDING });
+    expect((pendingOf(budget) as PendingG5).tableTierOnly).toBe(true);
+  });
+
+  it('G5-15 the pinned declared ask carries it too; the offer and the bare form do not', async () => {
+    await ask(budget, { declared: SPENDING, source: ledger });
+    expect((pendingOf(budget) as PendingG5).tableTierOnly).toBe(true);
+    pendingAccessStore.set({});
+    reviewStore.set(undefined);
+    await ask(budget, { source: ledger, offer: true });
+    expect((pendingOf(budget) as PendingG5).tableTierOnly).toBeUndefined();
+  });
+
+  it('G5-15 parkAccessRequest never falls back to the every-table rule for askedIn declared', async () => {
+    // A COLUMN-tier match only (Ledger's `category` columns): preselectionFor would tick both of Ledger's tables.
+    const hints = { words: ['category'] };
+    const candidates = await collectSources(db, budget, hints);
+    const pending = parkAccessRequest({
+      db,
+      reader: db.getApp(budget)!,
+      generation: -1,
+      provenance: 'user',
+      purpose: 'to show spending',
+      askedIn: 'declared',
+      hints,
+      candidates,
+    } as Parameters<typeof parkAccessRequest>[0]);
+    expect(pending.preselect?.tables ?? []).toEqual([]);
+  });
+});
+
+describe('G5-15 (SA-5) the declared preselection: a whole `_`-token (≥ 3 chars), never a substring', () => {
+  it('G5-15 a want with words ["es"] over a source holding expenses and notes pins nothing ticked', async () => {
+    const want: Want = { purpose: 'to read everything', hints: { words: ['es'] } };
+    const spree = db.installApp({ displayName: 'Spree', html: declaring('Spree', [want]) }).appId;
+    const books = db.installApp({ displayName: 'Books', html: '<!doctype html><title>b</title>' }).appId;
+    await db.applyAppDdl(books, ['CREATE TABLE expenses (amount INTEGER)', 'CREATE TABLE notes (body TEXT)']);
+    expect(await ask(spree, { declared: want, source: books })).toBe('opened');
+    expect(pendingOf(spree)!.preselect).toEqual({ appId: books, tables: [] });
+  });
+});
+
+describe('G5-15 (SA-8) offeredBy is set on every pinned branch', () => {
+  it('G5-15 {declared, source, offer: true} parks with offeredBy source', async () => {
+    expect(await ask(budget, { declared: SPENDING, source: ledger, offer: true })).toBe('opened');
+    expect(pendingOf(budget)!.offeredBy).toBe('source');
+  });
+
+  it('G5-15 a forged WRITE decision on that pending answers failed — no grant written', async () => {
+    await ask(budget, { declared: SPENDING, source: ledger, offer: true });
+    expect(pendingOf(budget)?.offeredBy, 'the mixed form parked as an offer').toBe('source');
+    const outcome = await resolveV2(pendingOf(budget)!, {
+      kind: 'allow',
+      sourceAppId: ledger,
+      tables: [{ name: 'transactions', withheld: [], write: true }],
+      duration: 'day',
+      unattended: false,
+      kv: false,
+      refresh: false,
+    });
+    expect(outcome.kind).toBe('failed');
+    expect(db.listAccessGrants()).toEqual([]);
+  });
+});

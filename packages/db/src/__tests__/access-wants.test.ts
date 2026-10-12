@@ -584,3 +584,67 @@ describe('the astral prefix: admission and a round trip agree with the pure func
     });
   }
 });
+
+// =================================================================================================
+// TASK-20261010-host-broker PR-5 Gate 5 — G5-9 [SA-6]: `extractAccessWants` ends its scan at the
+// FIRST U+0000 — what sql.js stores (its text read stops at a NUL), so the shared preview (the pure
+// function over the bundle's html in memory) and the installed row (derived from the STORED html)
+// can never disagree. And ii-3's db half: KB 87 teaches a SINGLE-quoted `content`, so an apostrophe
+// in the purpose is written `&apos;` (or ’) — the KB-shaped example with one still parses, and the
+// raw-apostrophe form is NO declaration (the trap, documented).
+// =================================================================================================
+
+describe('G5-9 — the scan ends at the first U+0000, so the preview and the row agree (SA-6)', () => {
+  const nulBeforeMeta = page(`<meta name="description" content="a\u0000b">\n${metaTag(json(WANTS))}`);
+  const nulBetweenMetas = page(`${metaTag(json(WANTS))}\n<!-- a\u0000b -->\n${metaTag(json(OTHER_WANTS))}`);
+
+  it('G5-9 a NUL BEFORE the meta: the pure reader sees no declaration (the scan ended at the NUL)', async () => {
+    expect(await extract(nulBeforeMeta)).toBeUndefined();
+  });
+
+  it('G5-9 a NUL BETWEEN two metas: the pure reader sees ONLY the first (one meta before the NUL)', async () => {
+    expect(await extract(nulBetweenMetas)).toEqual(WANTS);
+  });
+
+  it('G5-9 findHeadMeta ends at the NUL too (the one scan both readers share)', async () => {
+    const { findHeadMeta } = await wantsModule();
+    expect(findHeadMeta(nulBeforeMeta, 'snug:access-wants')).toBeUndefined();
+    expect(findHeadMeta(nulBetweenMetas, 'snug:access-wants')).toBe(json(WANTS));
+  });
+
+  it('G5-9 the pure answer equals the installed row\'s — before AND between, the preview never shows what the row does not hold', async () => {
+    for (const [label, html] of [
+      ['before', nulBeforeMeta],
+      ['between', nulBetweenMetas],
+    ] as const) {
+      const fresh = await open();
+      const app = fresh.installApp({ appId: READER, displayName: 'Budget', html });
+      expect(await extract(html), label).toEqual(fresh.getAccessWants(app.appId));
+      await fresh.close();
+    }
+  });
+
+  it('G5-9 guard: a page with no NUL reads as before', async () => {
+    expect(await extract(DECLARING)).toEqual(WANTS);
+    expect(await extract(page(`${metaTag(json(WANTS))}\n${metaTag(json(OTHER_WANTS))}`))).toBeUndefined();
+  });
+});
+
+describe('ii-3 — an apostrophe in the purpose, inside the KB\'s single-quoted content', () => {
+  const kbExampleWith = (purposeAsWritten: string): string =>
+    KB_EXAMPLE.replace('"purpose":"to show your spending by category"', `"purpose":"${purposeAsWritten}"`);
+
+  it('ii-3 the KB example written with &apos; still parses — the purpose reads with its apostrophe', async () => {
+    expect(await extract(kbExampleWith('to show this month&apos;s spending'))).toEqual([
+      { purpose: 'to show this month\'s spending', hints: { tables: ['transactions', 'accounts'], words: ['spending', 'budget'] } },
+    ]);
+  });
+
+  it('ii-3 the typographic apostrophe (’) needs no escape and parses too', async () => {
+    expect((await extract(kbExampleWith('to show this month’s spending')))?.[0]?.purpose).toBe('to show this month’s spending');
+  });
+
+  it('ii-3 the trap: a RAW apostrophe inside the single-quoted content ends the attribute — no declaration, silently', async () => {
+    expect(await extract(kbExampleWith('to show this month\'s spending'))).toBeUndefined();
+  });
+});

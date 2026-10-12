@@ -21,7 +21,13 @@
 // whose verb still names the card's table, a count of at least one row — an applied change always
 // names its undo (S17), and a change of no rows has none — then the verdict, then the core with the
 // count the user saw. Every outcome carries `why`, D-PR5-12's table, which is all the card words;
-// `message` is the sentence an app would hear for the same refusal (never shown on the card).
+// `message` is the sentence an app would hear for the same refusal (never shown on the card). An
+// access no longer found is `gone` only when its SOURCE app is gone; otherwise it ENDED — a "while
+// it's open" access goes with its reader's view and with a reload, and one of another generation
+// was the view before's (Gate-5 G5-16 ii-2): the card says to allow it again, never that Ledger is gone.
+//
+// THE PLAN answers the `grantedAt` of the access it was planned under (G5-16 ii-7, SB-8): the card
+// binds to THAT instant, never to the access as it is after the plan's awaits.
 
 import { ACCESS_ERROR_CODES, APPROVAL_WRITE_AUTHORITY } from '@snugprotocol/protocol';
 import { dmlTargetTable, type UserDb } from '@snugprotocol/db';
@@ -44,8 +50,8 @@ export type ChatAccessCaller = Extract<AccessCaller, { kind: 'chat' }>;
 /** A refusal in the frame's shape — its message is `ACCESS_APP_MESSAGES`' words. */
 export type ChatWriteRefusal = Extract<AccessHandlerResult, { ok: false }>;
 
-/** What the plan of one statement comes to: how many rows of which of the source's tables it would change, or why not. */
-export type ChatWritePlan = { ok: true; changes: number; table: string } | ChatWriteRefusal;
+/** What the plan of one statement comes to: how many rows of which of the source's tables it would change, under the access allowed at `grantedAt` — or why not. */
+export type ChatWritePlan = { ok: true; changes: number; table: string; grantedAt: string } | ChatWriteRefusal;
 
 /** The card's target, re-checked at approve time: the live access under the same id AND `grantedAt` (a renewal keeps the id — S9). */
 export interface ChatWriteApprovedInput {
@@ -94,8 +100,7 @@ export async function planChatWrite(db: UserDb, caller: ChatAccessCaller, input:
     const verdict = writeVerdict(db, caller, input.grantId, table);
     if (!verdict.ok) return verdict;
     const answer = await brokeredWriteCore(db, requestFor(verdict.found, caller, input.sql, table), { mode: 'plan' });
-    if (!answer.ok) return wireRefusal(answer);
-    return answer.phase === 'plan' ? { ok: true, changes: answer.changes, table: answer.table } : { ok: false, code: C.ACCESS_QUERY_FAILED, message: M.queryFailed, retryable: false };
+    return answer.ok ? { ok: true, changes: answer.changes, table: answer.table, grantedAt: verdict.found.grant.grantedAt } : wireRefusal(answer);
   } catch {
     return { ok: false, code: C.ACCESS_QUERY_FAILED, message: M.queryFailed, retryable: false };
   }
@@ -146,8 +151,10 @@ const failedWith = (why: AccessWriteFailedWhy, message: string): ChatWriteApprov
 export async function writeChatApproved(db: UserDb, caller: ChatAccessCaller, input: ChatWriteApprovedInput): Promise<ChatWriteApprovedOutcome> {
   try {
     // The card's access as it is NOW: still there and the caller's, the same instant it was allowed at, the same source.
+    // Not found, it is gone only with its source; a session access of another view ended with that view (ii-2).
     const found = findAccessGrant(db, input.grantId);
-    if (found === undefined || !ownsGrant(caller, found)) return failedWith('gone', M.notGranted);
+    if (found === undefined) return db.getApp(input.sourceAppId) === undefined ? failedWith('gone', M.notGranted) : failedWith('ended', M.revoked);
+    if (!ownsGrant(caller, found)) return found.session && found.grant.readerAppId === caller.appId ? failedWith('ended', M.revoked) : failedWith('gone', M.notGranted);
     if (found.grant.grantedAt !== input.grantedAt) return failedWith('ended', M.revoked);
     if (found.grant.sourceAppId !== input.sourceAppId) return failedWith('gone', M.notGranted);
     // The statement still changes the card's table — the one the user read on it.
@@ -158,10 +165,7 @@ export async function writeChatApproved(db: UserDb, caller: ChatAccessCaller, in
     const verdict = writeVerdict(db, caller, input.grantId, target);
     if (!verdict.ok) return failedWith(whyOfVerdict(verdict), verdict.message);
     const answer = await brokeredWriteCore(db, requestFor(verdict.found, caller, input.sql, target), { mode: 'apply', expectChanges: input.expectChanges });
-    if (answer.ok) {
-      if (answer.phase !== 'applied') return failedWith('failed', M.queryFailed);
-      return { ok: true, executed: [answer.changes], undoable: answer.undoId !== undefined, ...(answer.undoId !== undefined ? { undoId: answer.undoId } : {}) };
-    }
+    if (answer.ok) return { ok: true, executed: [answer.changes], undoable: answer.undoId !== undefined, ...(answer.undoId !== undefined ? { undoId: answer.undoId } : {}) };
     if (answer.reason === 'drifted') return { ok: false, reason: 'drifted', previewed: [input.expectChanges], current: answer.current !== undefined ? [answer.current] : [], why: 'drifted' };
     return failedWith(whyOf(answer), wireRefusal(answer).message);
   } catch {

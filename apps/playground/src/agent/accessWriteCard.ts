@@ -5,9 +5,12 @@
 //
 // STRICT BOTH WAYS (D-PR5-10): `metaToAccessWrite` re-admits a persisted card only whole — any
 // invalid, missing or UNKNOWN seat drops the card — and never with a statement that fails the
-// access SQL rule or carries an invisible format character. The rehydrate also drops a card whose
-// `appId` is not the thread's pinned app. Swapped out of the kit with `access/AccessWriteCard.tsx`
-// (D-PR5-16): no kit turn stages one, and a persisted one renders as no card there.
+// access SQL rule or carries an invisible format character, a line or paragraph separator or a blank
+// filler (staging's own rule, `isPlainSqlText` — Gate-5 G5-16 SB-6); its `outcome` is one of the
+// protocol's `ACCESS_WRITE_OUTCOMES`, the list the untrusted import reads too (G5-1). The rehydrate
+// also drops a card whose `appId` is not the thread's pinned app. Swapped out of the kit with
+// `access/AccessWriteCard.tsx` (D-PR5-16): no kit turn stages one, and a persisted one renders as no
+// card there.
 //
 // THE SEATS HANG TOGETHER, or there is no card: an `undoId` only on an applied card; a `failedWhy`
 // either beside `outcome: 'failed'` (a settled failure — never *busy* or *waiting*) or alone as one
@@ -22,13 +25,15 @@
 import { z } from 'zod';
 
 import type { UserDb } from '@snugprotocol/db';
-import { LIMITS, accessSqlSchema, accessTableNameSchema } from '@snugprotocol/protocol';
+import { ACCESS_WRITE_OUTCOMES, LIMITS, accessSqlSchema, accessTableNameSchema, type AccessWriteOutcome } from '@snugprotocol/protocol';
 
 import { ACCESS_WRITE_FAILED_WHYS, writeChatApproved, type AccessWriteFailedWhy, type ChatAccessCaller } from '../access/chatWrite.js';
 import { readerGeneration } from '../access/grants.js';
-import { isCardSummary } from './dataTools.js';
+import { isCardSummary, isPlainSqlText } from './dataTools.js';
 
 export type { AccessWriteFailedWhy };
+/** How the card was settled — the protocol's list (G5-1). `busy` and `waiting` are not settlements: they set `failedWhy` and leave the acts (D-PR5-14a). */
+export type { AccessWriteOutcome };
 
 /** The live access the change runs under, as it was when the card was staged — re-checked at apply (a renewal keeps the id, so `grantedAt` too — S9). */
 export interface AccessWriteTarget {
@@ -38,9 +43,6 @@ export interface AccessWriteTarget {
   /** The source's own table. */
   table: string;
 }
-
-/** How the card was settled. `busy` and `waiting` are not settlements: they set `failedWhy` and leave the acts (D-PR5-14a). */
-export type AccessWriteOutcome = 'applied' | 'declined' | 'drifted' | 'failed';
 
 export interface AccessWriteCardState {
   /** The reader — the thread's pinned app. */
@@ -78,12 +80,12 @@ const persistedSchema = z
       sourceAppId: appIdSchema,
       table: accessTableNameSchema,
     }),
-    // The access SQL rule, and no invisible format character anywhere — a literal included (S7).
-    sql: accessSqlSchema.refine((sql) => !/\p{Cf}/u.test(sql)),
+    // The access SQL rule, and nothing that hides or splits what the user reads — a literal included (S7, SB-6).
+    sql: accessSqlSchema.refine(isPlainSqlText),
     summary: z.string().refine(isCardSummary).optional(),
     // A staged card changes at least one row: a plan of none is never staged (D-PR5-11 (7)).
     previewed: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
-    outcome: z.enum(['applied', 'declined', 'drifted', 'failed']).optional(),
+    outcome: z.enum(ACCESS_WRITE_OUTCOMES).optional(),
     failedWhy: z.enum(ACCESS_WRITE_FAILED_WHYS).optional(),
     undoId: z.uuid().optional(),
   })
@@ -114,8 +116,10 @@ export function accessWriteToMeta(card: AccessWriteCardState): { accessWrite: Pe
 /**
  * Persist a card's answer onto its row by MERGING the row's meta (the ask card's rule): the same
  * message may carry an artifact card or the brain stamp. The thread is the CARD's — the one the hook
- * read when the act began, never the thread on screen when it ended (SC14). Best-effort: a card with
- * no row yet keeps its answer in memory, and an unwritable audit field never throws.
+ * read when the act began, never the thread on screen when it ended (SC14) — and a row that thread
+ * does not hold is never written: merging onto nothing would REPLACE that row's meta, dropping what
+ * else it carries (Gate-5 G5-16 ii-5). Best-effort: a card with no row yet keeps its answer in
+ * memory, and an unwritable audit field never throws.
  */
 export function persistAccessWrite(
   db: {
@@ -128,8 +132,9 @@ export function persistAccessWrite(
   const rowId = card.messageRowId;
   if (rowId === undefined) return;
   try {
-    const existing = db.listChatMessages(threadId).find((m) => m.id === rowId)?.meta;
-    const base = typeof existing === 'object' && existing !== null ? (existing as Record<string, unknown>) : {};
+    const row = db.listChatMessages(threadId).find((m) => m.id === rowId);
+    if (row === undefined) return;
+    const base = typeof row.meta === 'object' && row.meta !== null ? (row.meta as Record<string, unknown>) : {};
     db.updateChatMessageMeta(rowId, { ...base, ...accessWriteToMeta(card) });
   } catch {
     // The change itself already landed (or never did); an unwritable audit field is not worth a throw.

@@ -15,6 +15,12 @@
 // holds no local app, so every incoming app is marked; an app deleted here and revived by the file
 // is marked. A TRUSTED pull (the user's own origin) keeps the markers as they are; no edit clears
 // one; `deleteApp` sweeps it. Host-internal (named in spec §8.1 for transparency).
+//
+// HASH FIRST, MARK LATER (PR-5 Gate 5, G5-6). Hashing is the import's only await besides closing
+// the driver, so it runs BEFORE the import's synchronous snapshots: `hashAppIdentities` reads both
+// sides (the local apps only for ids the candidate holds) up front, and `markImportedApps` is a
+// synchronous pass over those maps. A stop the user makes while the import hashes is then seen by
+// the grant snapshot, never silently undone by the swap.
 
 import { USERDB_TABLES, appProvenanceSchema } from '@snugprotocol/protocol';
 import { sha256Hex } from '../sync/sidecar.js';
@@ -35,10 +41,10 @@ export function readAppProvenance(value: unknown): { imported: true; at?: string
   return parsed.success ? parsed.data : { imported: true };
 }
 
-/** What the untrusted import compares an incoming app against: its identity here, and its marker row as stored (verbatim, or absent). */
-export interface LocalAppIdentity {
-  identity: string;
-  marker: string | undefined;
+/** Both sides' app identities, by id, hashed before an untrusted import's snapshots: the candidate's apps, and this hub's apps that the candidate also holds. */
+export interface AppIdentities {
+  incoming: ReadonlyMap<string, string>;
+  local: ReadonlyMap<string, string>;
 }
 
 /** A version's html as bytes to hash — the storage class is part of the identity, so a BLOB twin of a TEXT cell differs. */
@@ -67,32 +73,43 @@ function rawSetting(sql: SettingsSql, key: string): string | undefined {
   return raw === undefined || raw === null ? undefined : String(raw);
 }
 
-/** Every app this handle holds, by id: its identity and its marker row. Read from the OPEN handle before an import's candidate goes live. */
-export async function snapshotLocalAppIdentity(sql: SettingsSql): Promise<Map<string, LocalAppIdentity>> {
-  const snapshot = new Map<string, LocalAppIdentity>();
+/** The identity of every app the handle `sql` holds, by id — only the ids in `only`, when given. */
+async function identitiesOf(sql: SettingsSql, only?: ReadonlySet<string>): Promise<Map<string, string>> {
+  const identities = new Map<string, string>();
   for (const row of sql.select(`SELECT app_id, install_source FROM ${USERDB_TABLES.apps} ORDER BY app_id`)) {
     const appId = String(row[0]);
-    snapshot.set(appId, { identity: await identityOf(sql, appId, row[1]), marker: rawSetting(sql, appProvenanceKey(appId)) });
+    if (only === undefined || only.has(appId)) identities.set(appId, await identityOf(sql, appId, row[1]));
   }
-  return snapshot;
+  return identities;
 }
 
 /**
- * The UNTRUSTED import's pass, on the CANDIDATE before it goes live: drop every incoming marker,
- * then write `{imported: true, at}` for each incoming app whose identity differs from (or is
- * absent in) `local`; an identical app gets the local marker row back verbatim, or none. Answers
- * how many apps are marked now.
+ * Hash both sides of an untrusted import, BEFORE its synchronous snapshots (G5-6): the CANDIDATE's
+ * apps, which no import pass changes the identity of, and the apps of the OPEN handle `local` that
+ * the candidate also holds — an app it does not hold is never compared, so it is never hashed.
  */
-export async function markImportedApps(sql: SettingsSql, local: ReadonlyMap<string, LocalAppIdentity>, at: string = new Date().toISOString()): Promise<number> {
+export async function hashAppIdentities(local: SettingsSql, candidate: SettingsSql): Promise<AppIdentities> {
+  const incoming = await identitiesOf(candidate);
+  return { incoming, local: await identitiesOf(local, new Set(incoming.keys())) };
+}
+
+/**
+ * The UNTRUSTED import's pass, on the CANDIDATE before it goes live — synchronous, over the
+ * identities `hashAppIdentities` read: drop every incoming marker, then write `{imported: true, at}`
+ * for each incoming app whose identity differs from (or is absent in) this hub's; an identical app
+ * gets this hub's marker row back verbatim (read from the open handle `local` now), or none. An
+ * incoming app the hashing did not see is marked (fail closed). Answers how many apps are marked now.
+ */
+export function markImportedApps(sql: SettingsSql, local: SettingsSql, identities: AppIdentities, at: string = new Date().toISOString()): number {
   const escaped = `${APP_PROVENANCE_SETTING_PREFIX.replace(/([!%_])/g, '!$1')}%`;
   sql.run(`DELETE FROM ${USERDB_TABLES.settings} WHERE key LIKE ? ESCAPE '!'`, [escaped]);
   const marker = JSON.stringify(appProvenanceSchema.parse({ imported: true, at }));
   let marked = 0;
-  for (const row of sql.select(`SELECT app_id, install_source FROM ${USERDB_TABLES.apps} ORDER BY app_id`)) {
+  for (const row of sql.select(`SELECT app_id FROM ${USERDB_TABLES.apps} ORDER BY app_id`)) {
     const appId = String(row[0]);
-    const here = local.get(appId);
-    const same = here !== undefined && here.identity === (await identityOf(sql, appId, row[1]));
-    const value = same ? here.marker : marker;
+    const incoming = identities.incoming.get(appId);
+    const same = incoming !== undefined && identities.local.get(appId) === incoming;
+    const value = same ? rawSetting(local, appProvenanceKey(appId)) : marker;
     if (value === undefined) continue;
     sql.run(`INSERT OR REPLACE INTO ${USERDB_TABLES.settings} (key, value) VALUES (?, ?)`, [appProvenanceKey(appId), value]);
     marked += 1;

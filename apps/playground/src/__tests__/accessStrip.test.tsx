@@ -658,3 +658,44 @@ describe('PR-5 — the source’s offer: its outcome on BOTH strips (D-PR5-5)', 
     expect(outcomeIn(ledger)).toBeNull();
   });
 });
+
+// =========================================================================================
+// TASK-20261010-host-broker PR-5 — Gate-5 fold G5-12 (IB-1): a DECLARED-form *don't allow* is
+// recorded as a strip outcome on the reader. The ⋈ sheet's pair act closes the sheet before the
+// review opens (`beforeOpen`), so the act's own settle is unmounted with it; `worthALine` dropped
+// every user-provenance `declined`, so the person saw no line anywhere. `worthALine` now admits
+// `declined` when `askedIn: 'declared'`, and the reader's strip says `wontAskAgain(reader)`.
+// =========================================================================================
+
+describe('G5-12 a declared-form decline leaves the reader’s strip a line', () => {
+  type PendingDeclared = PendingAccessRequest & { askedIn?: 'chat' | 'declared' };
+
+  it('G5-12 askedIn declared + don’t allow → the strip says "Budget won’t ask this again…" (data-outcome declined)', async () => {
+    mount();
+    const pending = fakePending({ provenance: 'user', askedIn: 'declared' } as Partial<PendingDeclared>);
+    await act(async () => {
+      await answerAccess(pending, { kind: 'dont-allow' });
+    });
+    const line = q('access-ask-outcome');
+    expect(line?.getAttribute('data-outcome')).toBe('declined');
+    expect(line?.textContent).toContain(STRIP_OUTCOME.wontAskAgain('Budget'));
+  });
+
+  it('G5-12 guard: a BARE user ask declined still leaves no line (only the declared form is admitted)', async () => {
+    mount();
+    const pending = fakePending({ provenance: 'user' });
+    await act(async () => {
+      await answerAccess(pending, { kind: 'dont-allow' });
+    });
+    expect(q('access-ask-outcome')).toBeNull();
+  });
+
+  it('G5-12 guard: a declared-form NOT NOW leaves no line (only the decline is admitted)', async () => {
+    mount();
+    const pending = fakePending({ provenance: 'user', askedIn: 'declared' } as Partial<PendingDeclared>);
+    await act(async () => {
+      await answerAccess(pending, { kind: 'not-now' });
+    });
+    expect(q('access-ask-outcome')).toBeNull();
+  });
+});

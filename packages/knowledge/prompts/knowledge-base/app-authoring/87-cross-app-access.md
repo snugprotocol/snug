@@ -76,12 +76,13 @@ An app that will want another app's data can say so up front, in its own HTML: O
 `<script>` or `<style>` — the host stops looking at the first script, style or body. Its
 `content` is a JSON list of one to four wants, each a `purpose` (one plain line, like an ask's)
 with optional `hints` (`words`, `tables`), at most 2 KiB in all — in SINGLE quotes, so the JSON's
-double quotes need no escaping:
+double quotes need no escaping. An apostrophe inside the content is written `&apos;` (or ’): a plain
+`'` would end the single-quoted value, and the meta would be no declaration.
 
 ```html
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="snug:access-wants" content='[{"purpose":"to show spending by category","hints":{"tables":["transactions","accounts"],"words":["spending","budget"]}}]'>
+<meta name="snug:access-wants" content='[{"purpose":"to show this month&apos;s spending by category","hints":{"tables":["transactions","accounts"],"words":["spending","budget"]}}]'>
 <title>Budget</title>
 ```
 
@@ -91,9 +92,9 @@ like to read data like transactions and accounts from your other apps — nothin
 you allow it"), and among the apps that could work together, where the user may start the
 access themselves. Declaring allows nothing and reads nothing: your app still ASKS at runtime,
 through the helper below, after the user has done something that needs the other app's data —
-declare AND ask, with the same purpose words. It lives in the app's HTML, never in the bundle;
-a meta the host cannot read — two of them, an unquoted value, JSON the schema refuses, past the
-limits — is simply no declaration, and the app installs all the same.
+declare AND ask, with the same purpose and the same hints. It lives in the app's HTML, never in
+the bundle; a meta the host cannot read — two of them, an unquoted value, JSON the schema refuses,
+past the limits — is simply no declaration, and the app installs all the same.
 
 ## The Two Frames and Their Seven Ops
 

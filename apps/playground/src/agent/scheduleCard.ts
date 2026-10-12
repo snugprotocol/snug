@@ -21,12 +21,15 @@
  * it the thread.
  */
 
-import { parseScheduleProposal, proposalHash, type ScheduleProposal } from '@snugprotocol/protocol';
+import { SCHEDULE_CARD_RESOLUTIONS, parseScheduleProposal, proposalHash, type ScheduleCardResolution, type ScheduleProposal } from '@snugprotocol/protocol';
 
 import type { ProposalChannel } from '../schedule/enableProposedTask.js';
 
-/** How the user answered the card; absent while it is staged. */
-export type ScheduleCardResolution = 'scheduled' | 'declined' | 'stale';
+/**
+ * How the user answered the card (`scheduled`, `declined` or `stale`); absent while it is staged. Spelled
+ * ONCE in the protocol (Gate-5 G5-1) — the list the db's untrusted import reads a row's answer by too.
+ */
+export type { ScheduleCardResolution };
 
 /** The channel a card can come from — the builder's tool set or the chat's `schedule` lane (an app suggests on the strip, never in the rail). */
 export type ScheduleCardChannel = Exclude<ProposalChannel, 'app'>;
@@ -53,7 +56,7 @@ export interface ScheduleCardState {
 export type PersistedScheduleCard = Omit<ScheduleCardState, 'messageRowId'>;
 
 const CHANNELS: ReadonlySet<string> = new Set<ScheduleCardChannel>(['builder', 'chat']);
-const RESOLUTIONS: ReadonlySet<string> = new Set<ScheduleCardResolution>(['scheduled', 'declined', 'stale']);
+const RESOLUTIONS: ReadonlySet<string> = new Set<ScheduleCardResolution>(SCHEDULE_CARD_RESOLUTIONS);
 
 /** A fresh staged card for a proposal the sink accepted. */
 export function stageScheduleCard(proposal: ScheduleProposal, options: { appId?: string; channel: ScheduleCardChannel; threadId: string }): ScheduleCardState {

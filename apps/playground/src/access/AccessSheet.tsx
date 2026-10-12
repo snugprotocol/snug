@@ -39,6 +39,12 @@
 // may use access — the offer and the creation act live behind it — and re-reads on the library
 // revision too. The chat's cross-app card opens this sheet IN PLACE on the change's source with
 // `focus="history"`: focus moves to the history, where the change and its undo are listed.
+//
+// Gate-5 fold (G5-13…G5-15). One app's registry row this file cannot read never empties the sheet
+// (its grants and their *stop* are what matter most here): the pair and the offer each drop only the
+// app they cannot read. A reader joined to this source by ANY access not stopped — paused or expired
+// included — is not offered (*allow again* on its row is the act). The ⋈'s own rule answers the
+// cheap widening first, so a brokered read's revision bump reads no grants in a file of several apps.
 
 import { useEffect, useId, useRef, useState, type ReactElement } from 'react';
 
@@ -59,7 +65,7 @@ import { AccessOffer, type OfferReader } from './AccessOffer.js';
 import { pendingAccessStore } from './consent.js';
 import { ACCESS_SHEET, CONSENT_SHEET } from './copy.js';
 import { GrantRow } from './GrantRow.js';
-import { accessDeps, grantsForApp, useAccessRevision, type LiveGrantRow } from './grants.js';
+import { accessDeps, foundGrants, grantsForApp, useAccessRevision, type LiveGrantRow } from './grants.js';
 import { listPairSuggestions, type PairSuggestion } from './pairs.js';
 import { isOfferable, registryTables } from './relevance.js';
 import { startUserAsk } from './userAsk.js';
@@ -81,20 +87,24 @@ interface SheetData {
   now: number;
 }
 
+/** Whether this app has a registered table it could share — no when its registry row cannot be read (G5-13: never the sheet). */
+function hasOfferableTable(db: UserDb, appId: string): boolean {
+  try {
+    return registryTables(db.getAppSchema(appId)).some(isOfferable);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Who this app could offer itself to (D-PR5-5): nobody unless it has a registered table it could
- * share and holds no WhatsApp fact; otherwise every other app that may use access and does not
- * already read it live — by name.
+ * share and holds no WhatsApp fact; otherwise every other app that may use access and holds no
+ * access from it that is not stopped — live, paused or expired (G5-14: *allow again* on that row is
+ * the act) — by name.
  */
 function offerReaders(db: UserDb, appId: string, readBy: readonly LiveGrantRow[]): OfferReader[] {
-  let schema: ReturnType<UserDb['getAppSchema']>;
-  try {
-    schema = db.getAppSchema(appId);
-  } catch {
-    return [];
-  }
-  if (!registryTables(schema).some(isOfferable) || appHasSidecarFact(db, appId)) return [];
-  const reading = new Set(readBy.filter((row) => row.live).map((row) => row.grant.readerAppId));
+  if (!hasOfferableTable(db, appId) || appHasSidecarFact(db, appId)) return [];
+  const reading = new Set(readBy.filter((row) => row.grant.status !== 'revoked').map((row) => row.grant.readerAppId));
   return db
     .listApps()
     .filter((app) => app.appId !== appId && appMayUseAccess(app.appId) && !reading.has(app.appId))
@@ -114,7 +124,9 @@ function useSheetData(appId: string): SheetData | undefined {
       .then((db) => {
         if (cancelled) return;
         const now = accessDeps().now();
-        const { reads, readBy } = grantsForApp(db, appId, now);
+        // The file's grants read once (IB-7): this app's rows and its pair share them.
+        const found = foundGrants(db);
+        const { reads, readBy } = grantsForApp(db, appId, now, found);
         setData({
           name: db.getApp(appId)?.displayName ?? '',
           reads,
@@ -122,7 +134,7 @@ function useSheetData(appId: string): SheetData | undefined {
           history: db.listAccessLog(appId),
           undoable: new Set(db.listAccessUndo(appId).map((entry) => entry.id)),
           declines: db.listAccessDeclines(appId),
-          pair: listPairSuggestions(db, now).find((pair) => pair.readerAppId === appId),
+          pair: listPairSuggestions(db, now, { readerAppId: appId, found })[0],
           offerTo: offerReaders(db, appId, readBy),
           now,
         });
@@ -142,7 +154,9 @@ function useSheetData(appId: string): SheetData | undefined {
  * or a declined ask — or, since PR-5 (D-PR5-5), the file holds ANOTHER app that may use access, so
  * the creation act and the offer have someone to name. Re-read on the access AND library revisions
  * (F17: an app installed or deleted while the header is up opens or shuts the door). `enabled:
- * false` reads nothing (a starter, a host without access).
+ * false` reads nothing (a starter, a host without access). The cheap widening is answered FIRST
+ * (IB-7): every brokered read bumps the access revision, and in a file of several apps the library
+ * alone already says yes — the grants and declines are read only when it says no.
  */
 export function useHasAccessState(appId: string, enabled: boolean): boolean {
   const revision = useAccessRevision();
@@ -164,9 +178,12 @@ export function useHasAccessState(appId: string, enabled: boolean): boolean {
       .getDb()
       .then((db) => {
         if (cancelled) return;
+        if (db.listApps().some((app) => app.appId !== appId && appMayUseAccess(app.appId))) {
+          settle(true);
+          return;
+        }
         const { reads, readBy } = grantsForApp(db, appId, accessDeps().now());
-        const state = reads.length > 0 || readBy.length > 0 || db.listAccessDeclines(appId).length > 0;
-        settle(state || db.listApps().some((app) => app.appId !== appId && appMayUseAccess(app.appId)));
+        settle(reads.length > 0 || readBy.length > 0 || db.listAccessDeclines(appId).length > 0);
       })
       .catch(() => settle(false));
     return () => {

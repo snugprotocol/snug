@@ -11,6 +11,13 @@
 // THE NAMES are the data the wants point at: the union of their hint TABLES in declaration order,
 // each once — or, when no want names a table, their hint WORDS — the first three, then how many
 // more. No hint anywhere: the may-ask form, which names nothing.
+//
+// A STRANGER'S WORDS STAY IN THEIR BOX (Gate-5 G5-15; IB-9, SA-4). This is the most hostile surface
+// PR-5 adds — a bundle nobody here built, before it is installed — so the bundle's name and every
+// hint name sit in a `<bdi>` of their own (`isolateNames`: copy.ts takes the names, this surface
+// wraps them), never in the host's text, and the purpose is the consent sheet's BLOCK quote
+// (`.access-quote-block`): a purpose that "closes" its own quote and goes on in host-sounding words
+// stays inside the app's panel.
 
 import { useMemo, type ReactElement } from 'react';
 
@@ -18,6 +25,7 @@ import { extractAccessWants } from '@snugprotocol/db';
 import type { AccessWants } from '@snugprotocol/protocol';
 
 import '../theme/access.css';
+import { isolateNames } from './AccessActLine.js';
 import { ACCESS_WANTS, CONSENT_SHEET } from './copy.js';
 
 /** How many names the sentence says before *and N more*. */
@@ -44,14 +52,16 @@ export function AccessWantsNote({ appName, html }: AccessWantsNoteProps): ReactE
   if (wants === undefined) return null;
   const [first] = wants;
   const names = namesOf(wants);
+  const shown = names.slice(0, NAMES_SHOWN);
+  const more = Math.max(0, names.length - NAMES_SHOWN);
   return (
     // Spaced like the preview's own disclosure line it sits under (RunView's inline margin).
     <div className="hint access-wants-note" data-testid="access-wants-note" style={{ margin: 'var(--space-2) var(--space-4) 0' }}>
-      <p className="access-says">{ACCESS_WANTS.preview(appName, names.slice(0, NAMES_SHOWN), Math.max(0, names.length - NAMES_SHOWN))}</p>
+      <p className="access-says">{isolateNames((app, ...hinted) => ACCESS_WANTS.preview(app, hinted, more), appName, ...shown)}</p>
       {first !== undefined ? (
         <p className="access-says">
-          {ACCESS_WANTS.forWhat(appName)}{' '}
-          <q className="access-quote">{CONSENT_SHEET.quote(first.purpose)}</q>
+          {isolateNames(ACCESS_WANTS.forWhat, appName)}{' '}
+          <q className="access-quote access-quote-block">{CONSENT_SHEET.quote(first.purpose)}</q>
         </p>
       ) : null}
     </div>

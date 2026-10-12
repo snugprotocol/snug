@@ -1423,3 +1423,46 @@ describe('PR-5 — through the real recipe: the declared form and the imported l
     expect(q('access-sheet-provenance')!.textContent).toBe('built here · v1');
   });
 });
+
+// =========================================================================================
+// TASK-20261010-host-broker PR-5 — Gate-5 fold G5-15 (IB-6): an UNPINNED declared ask (`startUserAsk
+// (reader, {declared})`, every candidate listed) carries `tableTierOnly: true` (this lane's seat
+// name) with its hints; when the person picks ANOTHER candidate, `choose()` ticks only that
+// source's TABLE-tier tables (`tableTierTables(source, hints)`) — none → nothing ticked. Before the
+// fold it ticked `preselectedTables(source)`: the column tier, or EVERY offerable table (S10).
+// =========================================================================================
+
+describe('G5-15 (IB-6) an unpinned declared sheet ticks only table-tier tables on another candidate', () => {
+  const HINTS = { tables: ['transactions'], words: ['spending'] };
+  const declaredUnpinned = (): PendingAccessRequest =>
+    fakePending({ provenance: 'user', askedIn: 'declared', tableTierOnly: true, hints: HINTS } as unknown as Partial<PendingAccessRequest>);
+
+  it('G5-15 choosing a candidate with NO table-tier match ticks nothing (never the every-table fallback)', async () => {
+    openSheet(declaredUnpinned());
+    await act(async () => q<HTMLButtonElement>('access-more-apps')!.click());
+    const wide = q<HTMLInputElement>('access-source-app-wide')!;
+    await act(async () => wide.click());
+    expect(wide.checked).toBe(true);
+    expect(q<HTMLInputElement>('access-table-app-wide-wide')!.checked).toBe(false);
+  });
+
+  it('G5-15 choosing a candidate matched only in the COLUMN tier ticks nothing', async () => {
+    // Pantry's `qty` column is a column-tier hit for the word; its table `items` is not table-tier.
+    const hints = { words: ['qty'] };
+    const candidates = rankSources({ readerAppId: READER, apps: APPS, hints });
+    // Nothing chosen at open (an unpinned declared ask with no table-tier match preselects no source).
+    openSheet(fakePending({ provenance: 'user', askedIn: 'declared', tableTierOnly: true, hints, candidates, preselect: undefined } as unknown as Partial<PendingAccessRequest>));
+    expect(q<HTMLInputElement>('access-source-app-pantry')?.checked ?? false, 'nothing chosen at open').toBe(false);
+    const pantry = q<HTMLInputElement>('access-source-app-pantry');
+    if (pantry === null) await act(async () => q<HTMLButtonElement>('access-more-apps')!.click());
+    await act(async () => q<HTMLInputElement>('access-source-app-pantry')!.click());
+    expect(q<HTMLInputElement>('access-table-app-pantry-items')!.checked).toBe(false);
+  });
+
+  it('G5-15 guard: a NON-declared sheet keeps its rule — another candidate with no match has every offerable table ticked', async () => {
+    openSheet();
+    await act(async () => q<HTMLButtonElement>('access-more-apps')!.click());
+    await act(async () => q<HTMLInputElement>('access-source-app-wide')!.click());
+    expect(q<HTMLInputElement>('access-table-app-wide-wide')!.checked).toBe(true);
+  });
+});

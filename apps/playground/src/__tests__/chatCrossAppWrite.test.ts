@@ -50,6 +50,7 @@ import {
   __setAccessDepsForTests,
   createGrantFromDecision,
   findAccessGrant,
+  noteReaderGeneration,
   resetAccessSession,
   revokeAccess,
   suspendAccess,
@@ -81,7 +82,8 @@ interface StagedAccessWrite {
 
 /** A frame-shaped refusal (`AccessHandlerResult`'s failure) — what `planChatWrite` answers when it refuses. */
 type WireRefusal = { ok: false; code: string; message: string; retryable: boolean };
-type PlanAnswer = { ok: true; changes: number; table: string } | WireRefusal;
+/** G5-16 (ii-7, SB-8): the plan answers the `grantedAt` of the access it planned under — staging binds the card to it. */
+type PlanAnswer = { ok: true; changes: number; table: string; grantedAt?: string } | WireRefusal;
 
 /** The seat as D-PR5-11 widens it: `recordRead(grantIds, sql, opts?)` and `planWrite(grantId, sql)`. */
 interface WritableSeat {
@@ -298,7 +300,35 @@ interface FakeHarness {
   events: string[];
 }
 
-function fakeHarness(options: { plan?: PlanAnswer; stage?: boolean; scheduled?: boolean; recordRefused?: boolean; set?: MaterialisedSet } = {}): FakeHarness {
+/**
+ * G5-16 (ii-7, SB-8): a REAL persisted access behind the fake seat's G_LEDGER — staging now checks the
+ * access is still there and binds the card to the plan's `grantedAt` (before the fold a card staged
+ * with `grantedAt: ''` when the id was unknown, and vanished on reload).
+ */
+const FAKE_GRANTED_AT = '2026-10-12T08:00:00.000Z';
+function putFakeLedgerGrant(): void {
+  if (db.getAccessGrant(G_LEDGER) !== undefined) return;
+  db.putAccessGrant({
+    id: G_LEDGER,
+    readerAppId: budget,
+    sourceAppId: ledger,
+    scope: { tables: [{ name: 'transactions', columns: ['id', 'amount', 'category'], write: true }, { name: 'accounts', columns: ['name', 'balance'] }] },
+    access: 'write',
+    purpose: 'to tidy my spending',
+    duration: { kind: 'always' },
+    unattended: false,
+    status: 'active',
+    provenance: 'chat',
+    readerVersion: 1,
+    grantedAt: FAKE_GRANTED_AT,
+    updatedAt: FAKE_GRANTED_AT,
+    reads: 0,
+    timeouts: 0,
+  } as unknown as Parameters<UserDb['putAccessGrant']>[0]);
+}
+
+function fakeHarness(options: { plan?: PlanAnswer; stage?: boolean; scheduled?: boolean; recordRefused?: boolean; set?: MaterialisedSet; onPlan?: () => Promise<void> } = {}): FakeHarness {
+  putFakeLedgerGrant();
   const events: string[] = [];
   const staged: StagedAccessWrite[] = [];
   const own: PendingWriteProposal[] = [];
@@ -311,7 +341,8 @@ function fakeHarness(options: { plan?: PlanAnswer; stage?: boolean; scheduled?: 
   });
   const planWrite = vi.fn(async () => {
     events.push('plan');
-    return options.plan ?? { ok: true as const, changes: 1, table: 'transactions' };
+    await options.onPlan?.();
+    return options.plan ?? { ok: true as const, changes: 1, table: 'transactions', grantedAt: FAKE_GRANTED_AT };
   });
   const scratch = vi.spyOn(db, 'scratchRun');
   const seat: WritableSeat = { set, recordRead, planWrite };
@@ -502,7 +533,8 @@ describe('D-PR5-11 (5)–(9) — busy, the counting line, the plan, the one card
   });
 
   it('(8)(9) ONE card through onAccessWriteProposal — the source-named statement, its count, the summary; the brain hears the ALIAS statement and the host’s proposed sentence', async () => {
-    const h = fakeHarness({ plan: { ok: true, changes: 3, table: 'transactions' } });
+    // G5-16 (ii-7): the fake plan answers the grantedAt it planned under, as planChatWrite now does.
+    const h = fakeHarness({ plan: { ok: true, changes: 3, table: 'transactions', grantedAt: FAKE_GRANTED_AT } });
     const out = await propose(h, { statements: ['UPDATE ledger__transactions SET category = \'groceries\' WHERE amount > 0'], summary: 'call every purchase groceries' });
     expect(h.staged).toHaveLength(1);
     expect(h.staged[0]).toMatchObject({
@@ -605,7 +637,13 @@ describe('D-PR5-11/12 — the tool over the REAL engine: the counting line, plan
     const { planChatWrite } = await chatWrite();
     const grant = await grantOn(['transactions'], ['transactions']);
     const seatSpy = vi.spyOn(db.driver, 'brokeredWrite');
-    expect(await planChatWrite(db, chat(), { grantId: grant.id, sql: `UPDATE "transactions" SET amount = 0 WHERE category = 'food'` })).toEqual({ ok: true, changes: 2, table: 'transactions' });
+    // G5-16 (ii-7, SB-8): RE-PINNED — the plan answers the grantedAt of the access it planned under.
+    expect(await planChatWrite(db, chat(), { grantId: grant.id, sql: `UPDATE "transactions" SET amount = 0 WHERE category = 'food'` })).toEqual({
+      ok: true,
+      changes: 2,
+      table: 'transactions',
+      grantedAt: findAccessGrant(db, grant.id)!.grant.grantedAt,
+    });
     expect(seatSpy).not.toHaveBeenCalled();
     expect(posted.map(kindOf)).toEqual(['plan-write']);
     expect(await rowsOf(ledger, LEDGER_ROWS)).toEqual(SEEDED);
@@ -803,5 +841,214 @@ describe('D-PR5-12 writeChatApproved — authority approval, via chat; ok ⇒ un
     configureScopedRead({ createWorker: undefined, wasm: { wasmUrl: locateWasm() }, now: () => clock.now });
     expect(await approve(approval(grant))).toMatchObject({ ok: false, why: 'failed' });
     await unchanged();
+  });
+});
+
+// =========================================================================================
+// TASK-20261010-host-broker PR-5 — Gate-5 fold G5-16 on the chat's write.
+//
+// ii-1  a statement the RENAME admits but the strict parser refuses (`renameDmlTarget` answers
+//       `{ok: false, rule: 'parse', parseRule}` — G5-10) answers `ACCESS_APP_MESSAGES.writeRefused
+//       (parseRule)`: arithmetic, a function, ON CONFLICT → the parser's `statement` words; no WHERE →
+//       the `no-where` words. Never `plainChange` (whose words point at a fault the statement does not
+//       have). `plainChange` stays for the rename's OWN rules (pinned above). Nothing recorded.
+// ii-2  a missing access is `gone` ONLY when the source app is gone; else `ended` (a "while it's
+//       open" access dropped with its frame, a reload, another generation's).
+// ii-7, SB-8  the card binds to the plan's `grantedAt`; an access gone before staging → `ended`,
+//       nothing staged (before the fold: staged with `grantedAt: ''`, dropped on reload).
+// ii-9  the real unjournalable case: the journal refuses after the commit → `ok`, `undoable: false`,
+//       no `undoId`.
+// ii-10 a chat seat without `planWrite` naming a writable table → `readOnly(source)`, nothing
+//       recorded (the defensive belt — guard).
+// SB-6  `isPlainSqlText` refuses the line/paragraph separators and the blank fillers the summary
+//       rule refuses (U+2028, U+2029, U+3164, U+115F, U+2800, …) → `unsafeText`, nothing recorded.
+// =========================================================================================
+
+describe('G5-16 (ii-1) a parser rule from the rename answers writeRefused(parseRule) — never plainChange', () => {
+  it.each([
+    ['arithmetic', 'UPDATE ledger__transactions SET amount = amount + 5 WHERE id = 1', 'statement'],
+    ['a function', "UPDATE ledger__transactions SET category = upper('food') WHERE id = 1", 'statement'],
+    ['ON CONFLICT', "INSERT INTO ledger__transactions (id, amount, category) VALUES (9, 1, 'x') ON CONFLICT DO NOTHING", 'statement'],
+    ['an UPDATE with no WHERE', 'UPDATE ledger__transactions SET amount = 1', 'no-where'],
+    ['a DELETE with no WHERE', 'DELETE FROM ledger__transactions', 'no-where'],
+  ] as const)('G5-16 %s (%s) → ACCESS_APP_MESSAGES.writeRefused(%s); nothing recorded, planned or staged', async (_label, sql, rule) => {
+    const h = fakeHarness();
+    const out = await propose(h, { statements: [sql] });
+    expect(out).toBe(`Error: ${ACCESS_APP_MESSAGES.writeRefused(rule)}`);
+    expect(out).not.toContain(said(DOOR.plainChange?.('Ledger')));
+    nothingHappened(h);
+  });
+});
+
+describe('G5-16 (ii-2) a missing access is gone only when its source is gone — else ended', () => {
+  async function sessionGrant(generation: number): Promise<AnyAccessGrant> {
+    const ranked = await collectSources(db, budget);
+    const offered = [...ranked.matched, ...ranked.rest].find((candidate) => candidate.appId === ledger)!;
+    return createGrantFromDecision(db, {
+      readerAppId: budget,
+      source: offered,
+      tables: [{ name: 'transactions', withheld: [], write: true }],
+      duration: 'session',
+      unattended: false,
+      purpose: 'to tidy my spending',
+      provenance: 'chat',
+      generation,
+      now: clock.now,
+    } as unknown as CreateGrantInput);
+  }
+  const approvalOf = (grant: AnyAccessGrant): WriteChatApprovedInput => ({
+    grantId: grant.id,
+    grantedAt: findAccessGrant(db, grant.id)!.grant.grantedAt,
+    sourceAppId: ledger,
+    table: 'transactions',
+    sql: 'UPDATE "transactions" SET amount = 1250 WHERE id = 1',
+    expectChanges: 1,
+  });
+  const chatAt = (liveGeneration: number): AccessCaller => ({ kind: 'chat', appId: budget, threadId: 'thread-1', liveGeneration } as AccessCaller);
+
+  it('G5-16 a "while it’s open" access dropped with its reader’s view (another generation noted) → why ended, nothing changed', async () => {
+    noteReaderGeneration(budget, 1);
+    const grant = await sessionGrant(1);
+    const input = approvalOf(grant);
+    noteReaderGeneration(budget, 2); // the reader's frame of generation 1 ended: its session access went with it
+    expect(findAccessGrant(db, grant.id), 'the session access is gone from memory').toBeUndefined();
+    expect(await (await chatWrite()).writeChatApproved(db, chatAt(2), input)).toMatchObject({ ok: false, why: 'ended' });
+    expect(await rowsOf(ledger, LEDGER_ROWS)).toEqual(SEEDED);
+  });
+
+  it('G5-16 a session access of ANOTHER generation (still in memory, not the caller’s) → why ended', async () => {
+    noteReaderGeneration(budget, 1);
+    const grant = await sessionGrant(1);
+    expect(await (await chatWrite()).writeChatApproved(db, chatAt(7), approvalOf(grant))).toMatchObject({ ok: false, why: 'ended' });
+    expect(await rowsOf(ledger, LEDGER_ROWS)).toEqual(SEEDED);
+  });
+
+  it('G5-16 a persisted access whose id is no longer in the file, its source still there → why ended', async () => {
+    const grant = await grantOn(['transactions'], ['transactions']);
+    const input = { ...approvalOf(grant), grantId: crypto.randomUUID() };
+    expect(await (await chatWrite()).writeChatApproved(db, chat(), input)).toMatchObject({ ok: false, why: 'ended' });
+  });
+
+  it('G5-16 guard: the SOURCE app deleted → why gone', async () => {
+    const grant = await grantOn(['transactions'], ['transactions']);
+    const input = approvalOf(grant);
+    await db.deleteApp(ledger);
+    expect(await (await chatWrite()).writeChatApproved(db, chat(), input)).toMatchObject({ ok: false, why: 'gone' });
+  });
+});
+
+describe('G5-16 (ii-7, SB-8) the card binds to the plan’s grantedAt; an access gone before staging stages nothing', () => {
+  it('G5-16 the staged card carries the grantedAt the plan answered', async () => {
+    const h = fakeHarness({ plan: { ok: true, changes: 1, table: 'transactions', grantedAt: FAKE_GRANTED_AT } });
+    await propose(h, { statements: [UPDATE_TX] });
+    expect(h.staged).toHaveLength(1);
+    expect(h.staged[0]!.target.grantedAt).toBe(FAKE_GRANTED_AT);
+  });
+
+  it('G5-16 the access revoked INSIDE the plan → Error: …ended…; onAccessWriteProposal never called, nothing staged', async () => {
+    const h = fakeHarness({
+      onPlan: async () => {
+        await revokeAccess(G_LEDGER);
+      },
+    });
+    const out = await propose(h, { statements: [UPDATE_TX] });
+    expect(out).toBe(`Error: ${CHAT_DOOR.ended('Ledger')}`);
+    expect(h.events).not.toContain('stage');
+    expect(h.staged).toEqual([]);
+  });
+
+  it('G5-16 a plan answering no grantedAt (or not an instant) stages nothing → Error: …ended…', async () => {
+    for (const plan of [{ ok: true as const, changes: 1, table: 'transactions' }, { ok: true as const, changes: 1, table: 'transactions', grantedAt: '' }]) {
+      const h = fakeHarness({ plan });
+      expect(await propose(h, { statements: [UPDATE_TX] }), JSON.stringify(plan)).toBe(`Error: ${CHAT_DOOR.ended('Ledger')}`);
+      expect(h.staged).toEqual([]);
+    }
+  });
+
+  it('G5-16 over the REAL engine: the access stopped between the plan and staging → ended, no card', async () => {
+    const grant = await grantOn(['transactions'], ['transactions']);
+    const { planChatWrite } = await chatWrite();
+    const svc = accessService();
+    const set = await svc.materialise(chat());
+    const staged: StagedAccessWrite[] = [];
+    const recordRead = (svc.recordRead as unknown as (caller: AccessCaller, set: MaterialisedSet, input: { grantIds: readonly string[]; sql?: string; counting?: true }) => ReturnType<WritableSeat['recordRead']>).bind(svc);
+    const seat: WritableSeat = {
+      set,
+      recordRead: (grantIds, sql, opts) => recordRead(chat(), set, { grantIds, sql, ...(opts?.counting === true ? { counting: true as const } : {}) }),
+      planWrite: async (grantId, sql) => {
+        const answer = await planChatWrite(db, chat(), { grantId, sql });
+        await revokeAccess(grant.id);
+        return answer;
+      },
+    };
+    const tools = buildDataTools({
+      appId: budget,
+      getDb: () => Promise.resolve(db),
+      allowWrites: true,
+      onProposal: () => true,
+      onAccessWriteProposal: (card: StagedAccessWrite) => {
+        staged.push(card);
+        return true;
+      },
+      shared: seat,
+    } as unknown as Parameters<typeof buildDataTools>[0]);
+    const out = String(await tools.find((tool) => tool.def.name === DATA_PROPOSE_WRITE_TOOL_NAME)!.run({ statements: [UPDATE_TX], summary: 'fix the coffee amount' }));
+    expect(out).toBe(`Error: ${CHAT_DOOR.ended('Ledger')}`);
+    expect(staged).toEqual([]);
+  });
+});
+
+describe('G5-16 (ii-9) the real unjournalable case: ok, undoable false, no undoId', () => {
+  it('G5-16 the journal refuses after the commit → { ok: true, undoable: false } with no undoId', async () => {
+    const grant = await grantOn(['transactions'], ['transactions']);
+    vi.spyOn(db, 'putAccessUndo').mockImplementation(() => 'full' as ReturnType<UserDb['putAccessUndo']>);
+    const outcome = await (await chatWrite()).writeChatApproved(db, chat(), {
+      grantId: grant.id,
+      grantedAt: findAccessGrant(db, grant.id)!.grant.grantedAt,
+      sourceAppId: ledger,
+      table: 'transactions',
+      sql: 'UPDATE "transactions" SET amount = 1250 WHERE id = 1',
+      expectChanges: 1,
+    });
+    expect(outcome).toMatchObject({ ok: true, undoable: false });
+    expect((outcome as { undoId?: string }).undoId).toBeUndefined();
+  });
+});
+
+describe('G5-16 (ii-10) a chat seat built without planWrite: the defensive belt', () => {
+  it('G5-16 a data_write seat without planWrite naming a writable table → readOnly(source), nothing recorded (guard)', async () => {
+    const set = fakeSet();
+    const recordRead = vi.fn(async () => ({ recorded: [], refused: [] }));
+    const staged: StagedAccessWrite[] = [];
+    const tools = buildDataTools({
+      appId: budget,
+      getDb: () => Promise.resolve(db),
+      allowWrites: true,
+      onProposal: () => true,
+      onAccessWriteProposal: (card: StagedAccessWrite) => {
+        staged.push(card);
+        return true;
+      },
+      shared: { set, recordRead },
+    } as unknown as Parameters<typeof buildDataTools>[0]);
+    const out = String(await tools.find((tool) => tool.def.name === DATA_PROPOSE_WRITE_TOOL_NAME)!.run({ statements: [UPDATE_TX], summary: 'fix the coffee amount' }));
+    expect(out).toBe(`Error: ${CHAT_DOOR.readOnly('Ledger')}`);
+    expect(recordRead).not.toHaveBeenCalled();
+    expect(staged).toEqual([]);
+  });
+});
+
+describe('G5-16 (SB-6) the statement refuses the separators and blank fillers the summary rule refuses', () => {
+  const HEAD = "UPDATE ledger__transactions SET category = '";
+  it.each([
+    ['U+2028 LINE SEPARATOR', ' '],
+    ['U+2029 PARAGRAPH SEPARATOR', ' '],
+    ['U+3164 HANGUL FILLER', 'ㅤ'],
+    ['U+115F HANGUL CHOSEONG FILLER', 'ᅟ'],
+    ['U+2800 BRAILLE BLANK', '⠀'],
+  ])('G5-16 a literal carrying %s → unsafeText; nothing recorded', async (_label, ch) => {
+    const h = fakeHarness();
+    expect(await propose(h, { statements: [`${HEAD}ok${ch.repeat(3)}' WHERE id = 1`] })).toContain(said(DOOR.unsafeText));
+    nothingHappened(h);
   });
 });

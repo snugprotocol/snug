@@ -58,6 +58,8 @@
 // exists anywhere, *more options…* describes only settings & notes and the fetch, and the allow
 // answers every table unwritten (the consent writer refuses a write on an offer too). The chat's
 // ask that wanted to change rows is titled for it ("let Budget read and change another app's data").
+// Gate-5 G5-15 (IB-6, S10): on a declared ask (`tableTierOnly`), ANY source the person picks starts
+// with only its TABLE-tier tables for the want's hints ticked — never a column match or every table.
 
 import type { MouseEvent as ReactMouseEvent, ReactElement } from 'react';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
@@ -78,7 +80,7 @@ import type { EgressOptions } from './egress.js';
 import { EgressNote } from './EgressNote.js';
 import type { TableChoice } from './grants.js';
 import { answerAccess } from './outcome.js';
-import { isOfferable, preselectedTables, type RankedSource, type SourceTable } from './relevance.js';
+import { isOfferable, preselectedTables, tableTierTables, type RankedSource, type SourceTable } from './relevance.js';
 import { SourcePicker, type SourceOptions } from './SourcePicker.js';
 import type { TableTick } from './TableChooser.js';
 import { sheetSeedOf } from './userAsk.js';
@@ -274,10 +276,12 @@ function ConsentSheetBody({ pending }: { pending: PendingAccessRequest }): React
   };
   const notNow = (): void => answer({ kind: 'not-now' });
 
+  /** The tables a source starts with when the person picks it: a declared ask's TABLE tier only (S10), else the ranking's own. */
+  const startingTables = (source: RankedSource): string[] => (pending.tableTierOnly === true ? tableTierTables(source, pending.hints) : preselectedTables(source));
   const choose = (appId: string): void => {
     setChosenAppId(appId);
     const source = sourceOf(appId);
-    if (source !== undefined && ticked[appId] === undefined) setTicked({ ...ticked, [appId]: ticksFor(source, preselectedTables(source)) });
+    if (source !== undefined && ticked[appId] === undefined) setTicked({ ...ticked, [appId]: ticksFor(source, startingTables(source)) });
   };
   const toggle = (appId: string, table: string, on: boolean): void => {
     const { [table]: _was, ...rest } = ticked[appId] ?? {};

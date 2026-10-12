@@ -1477,8 +1477,11 @@ interface RailChatProps {
   onDeclineAccessWrite?: ChatLogProps['onDeclineAccessWrite'];
 }
 
-/** Compact chat inside the rail — keep talking to the agent about the app. */
-function RailChat({
+/**
+ * Compact chat inside the rail — keep talking to the agent about the app. Exported for its rendered
+ * pins only (Gate-5 G5-20: the fetch toggle's press → consume → reset); RunView is its one caller.
+ */
+export function RailChat({
   appId,
   threadId,
   messages,
