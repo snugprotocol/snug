@@ -30,7 +30,7 @@ import { Button } from '../ui/Button.js';
 import { MISSED_ACTIONS, RESULT_STATUS_WORD, aiCalls, missedHeadline, missedRow, runningProgress } from './copy.js';
 import { MISSED } from './copy.page.js';
 import { describeSpec } from './cron.js';
-import { aiStepsOf, pendingAiCalls, pendingRows, runsNewestFirst } from './pageModel.js';
+import { aiCallsOf, pendingAiCalls, pendingRows, runsNewestFirst } from './pageModel.js';
 import { cancelRunning, runAllPending, runPending, skipAllPending, skipPending, useScheduler } from './scheduler.js';
 import { sameOccurrence } from './taskShape.js';
 
@@ -198,7 +198,7 @@ export function MissedCard({ focusTarget = defaultFocusTarget, undoMs = SKIP_UND
                 <li key={`${run.taskId}:${run.dueAt}`} className="missed-row" data-testid="missed-row">
                   <span className="missed-row-title">{item.title}</span>
                   <span className="missed-row-when">{missedRow(describeSpec(item.spec), run.collapsedCount)}</span>
-                  <span className="missed-row-cost">{aiCalls(aiStepsOf(item.steps))}</span>
+                  <span className="missed-row-cost">{aiCalls(aiCallsOf(item.steps))}</span>
                   <span className="missed-row-acts">
                     <Button variant="ghost" onClick={() => void act(runPending(run.taskId, run.dueAt))} data-testid="missed-row-run">
                       {MISSED_ACTIONS.run}

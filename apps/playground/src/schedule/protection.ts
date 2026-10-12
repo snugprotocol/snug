@@ -84,6 +84,9 @@ export interface Calls {
   net: number;
 }
 
+/** Nothing spent — the ONE spelling; a caller that needs a tally it can grow spreads it (`{ ...ZERO_CALLS }`). */
+export const ZERO_CALLS: Readonly<Calls> = { ai: 0, net: 0 };
+
 /** The one row the day's counters live in — the file, as the queue and the refresh engine reach it. */
 export type SchedulerStateSeat = Pick<UserDb, 'getSchedulerState' | 'setSchedulerState'>;
 

@@ -39,8 +39,9 @@
 // already spent (`ctx.spent`) PLUS the step's earlier attempts. The live frame counts on the run's
 // record instead (`run/appRuntime.ts`'s decorators) and never refuses mid-window: the ceiling is
 // asked BEFORE a delegated dispatch — either counter without headroom for one more call →
-// `refused`, `capped: true`, nothing dispatched (D-PR1-6) — and a tally that crosses a ceiling
-// inside the window marks the outcome `capped` without stopping app code. Tallies are SUMMED across
+// `refused`, `capped` with that ceiling's kind, nothing dispatched (D-PR1-6) — and a tally that
+// crosses a ceiling inside the window marks the outcome `capped` with the kind it crossed, without
+// stopping app code (the run then names WHICH limit — Gate-5 JOBS-F6). Tallies are SUMMED across
 // attempts; the counts ride the outcome's `calls`.
 //
 // A RUN FOLLOWS THE APP — ONCE, AND NEVER AFTER THE USER ANSWERED (ADR-0077 §5). Opening the app
@@ -130,7 +131,7 @@ import {
   type CappedWhat,
 } from './copy.js';
 import type { StepContext, StepOutcome } from './engine-types.js';
-import { countersSoFar, wouldExceedCeiling, type Calls } from './protection.js';
+import { ZERO_CALLS, countersSoFar, wouldExceedCeiling, type Calls, type CeilingKind } from './protection.js';
 import { MAX_HANDOVERS, beginDelegatedRun, endDelegatedRun, placeRun, type DelegatedRun, type DelegatedRunPosture, type Placement, type ScheduledRefusal } from './runPlacement.js';
 import { SCHEDULE_RESULT_EVENT, SCHEDULE_RUN_EVENT, scheduleKvKey } from './scheduleKey.js';
 import { scheduledDbDriver } from './scheduledDbDriver.js';
@@ -303,7 +304,7 @@ export function blockedAppRunDeps(): AppRunDeps {
 
 // ------------------------------------------------------------------ the executor
 
-const none = (): Calls => ({ ai: 0, net: 0 });
+const none = (): Calls => ({ ...ZERO_CALLS });
 
 /** One line for a run the app did not answer in time. */
 export const appDidNotAnswer = (ms: number): string => `the app didn’t answer within ${Math.round(ms / 1000)} s`;
@@ -429,21 +430,20 @@ function ceilingAllows(tally: Tally, soFar: Calls, add: { ai?: number; net?: num
   return wouldExceedCeiling(countersSoFar(tally.db, tally.spent, soFar, tally.now().toISOString()), add) === undefined;
 }
 
+/** A ceiling's words, as the capped sentence names it. */
+const CAPPED_WHAT: Readonly<Record<CeilingKind, CappedWhat>> = { ai: 'AI call', net: 'network call' };
+
 /** Which ceiling has no headroom for ONE more call — asked BEFORE a delegated dispatch (D-PR1-6). */
-function ceilingWithoutHeadroom(tally: Tally, soFar: Calls): CappedWhat | undefined {
-  switch (wouldExceedCeiling(countersSoFar(tally.db, tally.spent, soFar, tally.now().toISOString()), { ai: 1, net: 1 })) {
-    case 'ai':
-      return 'AI call';
-    case 'net':
-      return 'network call';
-    case undefined:
-      return undefined;
-  }
+function ceilingWithoutHeadroom(tally: Tally, soFar: Calls): CeilingKind | undefined {
+  return wouldExceedCeiling(countersSoFar(tally.db, tally.spent, soFar, tally.now().toISOString()), { ai: 1, net: 1 });
 }
 
-/** Did the step's summed tally CROSS a ceiling inside its window? The row says so; app code was not stopped (R-80). */
-function crossedCeiling(tally: Tally, calls: Calls): boolean {
-  return wouldExceedCeiling(countersSoFar(tally.db, tally.spent, calls, tally.now().toISOString()), {}) !== undefined;
+/**
+ * Which ceiling the step's summed tally CROSSED inside its window, if any — the row says so and
+ * names it (Gate-5 JOBS-F6); app code was not stopped (R-80).
+ */
+function crossedCeiling(tally: Tally, calls: Calls): CeilingKind | undefined {
+  return wouldExceedCeiling(countersSoFar(tally.db, tally.spent, calls, tally.now().toISOString()), {});
 }
 
 // ------------------------------------------------------------------ the outcome
@@ -519,6 +519,13 @@ function outcomeOf(app: AppRecord, attempt: Attempt, resultTimeoutMs: number): S
   }
 }
 
+/**
+ * Where the step ran, as the result says it (TASK-20261010-host-broker PR-4, D-PR4-17): an outcome
+ * the OPEN app's frame settled carries `inOpenApp`; one the hidden frame settled carries nothing —
+ * absent is "out of sight while it was closed". A manual *run now* only ever runs in the open app.
+ */
+const inOpenApp = (outcome: StepOutcome): StepOutcome => ({ ...outcome, inOpenApp: true });
+
 export async function executeAppRun(step: AppRunStep, ctx: StepContext, deps: AppRunDeps): Promise<StepOutcome> {
   if (ctx.signal.aborted) return { status: 'failed', summary: CANCELLED_SUMMARY, calls: none() };
   const app = ctx.db.getApp(step.appId);
@@ -551,7 +558,7 @@ export async function executeAppRun(step: AppRunStep, ctx: StepContext, deps: Ap
     if (!deps.live.has(appId)) return { status: 'refused', summary: openAndRunAgain(app.displayName), calls: none() };
     try {
       const attempt = await dispatchLive({ ...shared, mode: 'manual', deadline: Date.now() + deps.resultTimeoutMs, spent: none(), afterHandover: false });
-      return outcomeOf(app, { ...attempt, calls: none() }, deps.resultTimeoutMs);
+      return inOpenApp(outcomeOf(app, { ...attempt, calls: none() }, deps.resultTimeoutMs));
     } finally {
       await ctx.db.driver.kvSet(appId, key, null);
     }
@@ -563,17 +570,21 @@ export async function executeAppRun(step: AppRunStep, ctx: StepContext, deps: Ap
   let handovers = 0;
   const calls = none();
   const tally = (): Tally => ({ db: ctx.db, spent: spentByRun(), now: ctx.now });
-  const withCap = (outcome: StepOutcome): StepOutcome => (crossedCeiling(tally(), calls) ? { ...outcome, capped: true } : outcome);
+  const withCap = (outcome: StepOutcome): StepOutcome => {
+    const crossed = crossedCeiling(tally(), calls);
+    return crossed === undefined ? outcome : { ...outcome, capped: crossed };
+  };
   try {
     for (;;) {
       if (placement === 'live') {
         // The ceiling is asked BEFORE a delegated dispatch (D-PR1-6): inside the window calls are counted, never refused.
         const limit = ceilingWithoutHeadroom(tally(), calls);
-        if (limit !== undefined) return { status: 'refused', capped: true, summary: capped(limit), calls: { ...calls } };
+        if (limit !== undefined) return { status: 'refused', capped: limit, summary: capped(CAPPED_WHAT[limit]), calls: { ...calls } };
       }
       const before = spentByRun();
       const dispatch: Dispatch = { ...shared, mode: 'unattended', deadline, spent: { ai: before.ai + calls.ai, net: before.net + calls.net }, afterHandover: handovers > 0 };
-      const attempt = placement === 'live' ? await dispatchLive(dispatch) : await dispatchHidden(dispatch, createScheduledConfirmGate());
+      const placedLive = placement === 'live';
+      const attempt = placedLive ? await dispatchLive(dispatch) : await dispatchHidden(dispatch, createScheduledConfirmGate());
       calls.ai += attempt.calls.ai;
       calls.net += attempt.calls.net;
       if (attempt.end.kind === 'handover') {
@@ -582,7 +593,8 @@ export async function executeAppRun(step: AppRunStep, ctx: StepContext, deps: Ap
         placement = attempt.end.to;
         continue;
       }
-      return withCap(outcomeOf(app, { ...attempt, calls: { ...calls } }, deps.resultTimeoutMs));
+      const outcome = withCap(outcomeOf(app, { ...attempt, calls: { ...calls } }, deps.resultTimeoutMs));
+      return placedLive ? inOpenApp(outcome) : outcome;
     }
   } finally {
     await ctx.db.driver.kvSet(appId, key, null);

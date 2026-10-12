@@ -5,6 +5,8 @@
 // renderer is strict — an unknown placeholder is a build-breaking error, not silence.
 
 import {
+  APP_AGENT_MAX_ROUND_TRIPS,
+  APP_AGENT_MAX_TOOL_CALLS,
   APP_OBJECT_NAME_RULE,
   AUTH_EVIDENCE_MAX_CHARS,
   AUTH_EVIDENCE_MAX_ITEMS,
@@ -65,6 +67,10 @@ const STATIC_SUBSTITUTIONS: Readonly<Record<string, string>> = {
   // set, injected for the same reason — these are PERSISTED literals with one home.
   connectionRequirementDirectiveKind: CONNECTION_REQUIREMENT_DIRECTIVE_KIND,
   connectionKinds: CONNECTION_KINDS.join(', '),
+  // TASK-20261010-host-broker PR-4 (D-PR4-15): the scheduled agent's caps, which its preamble
+  // states and the host enforces — one home, never retyped in the prompt.
+  appAgentMaxToolCalls: String(APP_AGENT_MAX_TOOL_CALLS),
+  appAgentMaxRoundTrips: String(APP_AGENT_MAX_ROUND_TRIPS),
 };
 
 const FRAME_TYPE_PREFIX = 'frameType:';

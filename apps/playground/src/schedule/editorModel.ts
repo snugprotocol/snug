@@ -25,6 +25,17 @@
 // prefilled with the proposal — read through `parseScheduleProposal`, never trusted raw — so
 // *edit…* on the card is one click from the full form; the save is the user's own
 // (`provenance: 'user'`), because once edited the schedule is theirs.
+//
+// MAKING CHANGES ON ITS OWN (TASK-20261010-host-broker PR-4; ADR-0076 §9; D-PR4-8). The draft
+// carries the user's choice for what the changes its AI suggests do — wait for the user, or be
+// made on its own — and nothing seeds it but the task the editor opened (`draftFromTask`): a
+// template, a sentence or a suggestion always starts at *wait for my OK*. The choice is offered
+// only for a ONE-app schedule (`onItsOwnApp`), and what widens a schedule that already makes
+// changes (`widens`) is the ENGINE's rule: both live once in `taskShape.ts` and are re-exported
+// here by identity (PR-4 Gate 5, U12), so the editor offers and warns by exactly the rule `armTask`
+// admits and `updateTask` disarms by. An *ask* step may look things up (`tools`), which round-trips
+// through the drafts as a flag that is ABSENT on the protocol step when off (omit-defaults), never
+// `false`.
 
 import { STARTER_INSTALL_SOURCE_PREFIX, type AppRecord, type UserDb } from '@snugprotocol/db';
 import {
@@ -45,18 +56,23 @@ import {
   type ScheduleProposal,
   type ScheduleSpec,
   type ScheduleStep,
+  type ScheduledTask,
 } from '@snugprotocol/protocol';
 
 import { adapterKindFor } from '../agent/adapter.js';
+import { fetchableConnections } from '../agent/fetchConnectionTool.js';
 import { starterLook } from '../starter/starterLooks.js';
 import type { ActiveBrainKind } from '../state/activeBrain.js';
 import type { ByokProvider, KeyedProvider, PlaygroundMode } from '../state/mode.js';
 import type { Brain } from '../state/webllm.js';
 import { STEPS, TEMPLATE_TITLES } from './copy.editor.js';
 import { WEEKDAY_KEYS, compileSpec, instantInZone, occurrencesBetween, pad2, parseCron, resolveZone, specFromCron, wallClockIn } from './cron.js';
-import { defaultMissedPolicy } from './floors.js';
+import { defaultMissedPolicy, stepsCost } from './floors.js';
 import { readSchedule } from './parseScheduleText.js';
-import { appIdsOf } from './taskShape.js';
+import { armableAppOf } from './taskShape.js';
+
+// The engine's two arming rules, by identity — the editor never keeps a copy of either (U12).
+export { armableAppOf as onItsOwnApp, widens } from './taskShape.js';
 
 const DAY_MS = 86_400_000;
 const WEEK_MS = 7 * DAY_MS;
@@ -77,6 +93,8 @@ export type StepDraft =
       dataMode: 'tables' | 'queries';
       sql: string[];
       maxRows: number;
+      /** *let it look things up* (PR-4, D-PR4-15): the step may choose its own questions and fetch read-only. */
+      tools: boolean;
       /** A template step whose app is not installed: named here, disabled in the UI, dropped at save. */
       missingApp?: string;
     }
@@ -106,6 +124,12 @@ export interface EditorDraft {
   /** The user chose a policy, so a step change stops re-deriving it. */
   missedTouched: boolean;
   alert: AlertKind;
+  /**
+   * *changes it suggests:* — `true` is *make them on its own* (PR-4, D-PR4-8). Seeded ONLY from the
+   * task being edited; every other draft starts at *wait for my OK*. The consent is where it is
+   * confirmed: the editor pre-sets the consent's tick to it, and only that tick arms.
+   */
+  onItsOwn: boolean;
 }
 
 /** The next full hour after `now`, as an instant — the `once` default. */
@@ -225,6 +249,7 @@ export const emptyThink = (appId = ''): StepDraft => ({
   dataMode: 'tables',
   sql: [''],
   maxRows: SCHEDULE_CONTEXT_DEFAULT_ROWS,
+  tools: false,
 });
 
 /** A persisted step back into a draft (the edit route). */
@@ -242,6 +267,7 @@ export function draftsFromSteps(steps: readonly ScheduleStep[]): StepDraft[] {
           dataMode: sql.length > 0 ? 'queries' : 'tables',
           sql: sql.length > 0 ? [...sql] : [''],
           maxRows: step.context.maxRows,
+          tools: step.tools === true,
         };
       }
       case 'app-run':
@@ -291,7 +317,8 @@ export function prepareSteps(drafts: readonly StepDraft[]): PreparedSteps {
       return { ok: false, reason: STEPS.queryInvalid };
     }
     const maxRows = Math.min(SCHEDULE_CONTEXT_MAX_ROWS, Math.max(1, Math.round(draft.maxRows) || SCHEDULE_CONTEXT_DEFAULT_ROWS));
-    steps.push({ kind: 'app-think', appId: draft.appId, prompt, context: sql.length > 0 ? { sql, maxRows } : { maxRows } });
+    // Typed queries stay with a step that may look things up: they are where it starts (D-PR4-20).
+    steps.push({ kind: 'app-think', appId: draft.appId, prompt, context: sql.length > 0 ? { sql, maxRows } : { maxRows }, ...(draft.tools ? { tools: true as const } : {}) });
   }
   return { ok: true, steps };
 }
@@ -302,7 +329,7 @@ export function costSteps(drafts: readonly StepDraft[]): ScheduleStep[] {
   for (const draft of drafts) {
     if (draft.kind === 'notify') steps.push({ kind: 'notify', title: 'x', body: 'x' });
     else if (draft.missingApp !== undefined) continue;
-    else if (draft.kind === 'app-think') steps.push({ kind: 'app-think', appId: draft.appId || 'x', prompt: 'x', context: { maxRows: 1 } });
+    else if (draft.kind === 'app-think') steps.push({ kind: 'app-think', appId: draft.appId || 'x', prompt: 'x', context: { maxRows: 1 }, ...(draft.tools ? { tools: true as const } : {}) });
     else steps.push({ kind: 'app-run', appId: draft.appId || 'x' });
   }
   return steps;
@@ -383,6 +410,7 @@ const thinkStep = (apps: readonly TemplateAppCandidate[], app: TemplateApp, prom
     dataMode: 'queries',
     sql: [...sql],
     maxRows: SCHEDULE_CONTEXT_DEFAULT_ROWS,
+    tools: false,
     ...(installed === undefined ? { missingApp: app.name } : {}),
   };
 };
@@ -609,6 +637,8 @@ export function initialDraft({ text, template, app, proposal, apps, now }: Initi
       missedPolicy: defaultPolicyFor(steps),
       missedTouched: false,
       alert: fill?.alert ?? 'inbox',
+      // Never seeded — not from a suggestion, a template or a sentence (D-PR4-8).
+      onItsOwn: false,
     },
     parseFailed: typed && read === undefined,
   };
@@ -657,10 +687,11 @@ export function approvedHostsByApp(db: UserDb, appIds: readonly string[]): Recor
 
 /**
  * The most AI calls one day of the next seven can spend: the busiest day's occurrences in the
- * zone × the *ask the AI* steps, never above the global ceiling the engine enforces (E7).
+ * zone × what the steps may spend each time (`stepsCost` — ten for an *ask* step that may look
+ * things up), never above the global ceiling the engine enforces (E7).
  */
 export function dailyAiBound(spec: ScheduleSpec, steps: readonly ScheduleStep[], now: Date): number {
-  const ai = steps.filter((step) => step.kind === 'app-think').length;
+  const { ai } = stepsCost(steps);
   if (ai === 0) return 0;
   const zone = resolveZone(spec.tz);
   const perDay = new Map<string, number>();
@@ -685,7 +716,10 @@ export function knownZones(): string[] {
 }
 
 /** The `/schedule/:id` draft: the persisted schedule as the form shows it; nothing defaults over a saved choice. */
-export function draftFromTask(task: { title: string; spec: ScheduleSpec; steps: readonly ScheduleStep[]; missedPolicy: MissedPolicy; alert: AlertKind }, now: Date): EditorDraft {
+export function draftFromTask(
+  task: Pick<ScheduledTask, 'title' | 'spec' | 'steps' | 'missedPolicy' | 'alert' | 'writeAuthority'>,
+  now: Date,
+): EditorDraft {
   return {
     text: '',
     title: task.title,
@@ -697,5 +731,29 @@ export function draftFromTask(task: { title: string; spec: ScheduleSpec; steps: 
     missedPolicy: task.missedPolicy,
     missedTouched: true,
     alert: task.alert,
+    // The task's own state — an authority it holds, never the trace of one it lost (`disarmed`).
+    onItsOwn: task.writeAuthority !== undefined,
   };
+}
+
+// ------------------------------------------------- making changes on its own (PR-4, D-PR4-8)
+
+/** The one-app rule (`armableAppOf`) over the editor's drafts: the live steps whose app is chosen — a step still waiting for one names none. */
+export function onItsOwnAppOf(drafts: readonly StepDraft[]): string | undefined {
+  return armableAppOf(costSteps(drafts.filter((draft) => draft.kind === 'notify' || draft.appId !== '')));
+}
+
+
+/** Library id → the connections a step that may look things up could use there, by the name the user knows each by. */
+export type LookUpNamesByApp = Readonly<Record<string, readonly string[]>>;
+
+/**
+ * What the consent's look-up row names, per app (D-PR4-20): the connections a step that may look
+ * things up could actually fetch from — `fetchableConnections`, the tool's own rule (approved, not a
+ * helper on this device, not the home network, an app that may reach the network) — by name, sorted.
+ */
+export function lookUpNamesByApp(db: UserDb, appIds: readonly string[]): Record<string, string[]> {
+  const out: Record<string, string[]> = {};
+  for (const appId of new Set(appIds)) out[appId] = [...new Set(fetchableConnections(db, appId).map((connection) => connection.name))].sort();
+  return out;
 }

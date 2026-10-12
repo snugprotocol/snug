@@ -48,31 +48,47 @@
 // The VALUE scrub against the stored connected-host secrets (`scrubAuthValues`) lands with
 // PR-B's net handler, which is the one seam that holds those values; today's shapes-plus-
 // refusal is the whole reply-side wall, and it is named as such in the threat-model delta.
+//
+// TASK-20261010-host-broker PR-4 (D-PR4-15, D-PR4-16, D-PR4-17, D-PR4-5). THE KEYLESS GATE lives here
+// (`keylessBrainGate`): the demo override or a BYOK brain with no key in the file routes a turn to
+// the demo brain silently by design (`agent/adapter.ts`), which on a schedule would answer a person
+// with a script — so the PRODUCTION executor asks it first, on both paths, and the step is refused
+// with `blockedBy: 'brain'`. A direct call whose `transportFor` answers no transport is refused the
+// same way, in the same words (Gate-5 JOBS-F11: one state, one sentence). The offered changes pass
+// the ONE proposal gate (`proposalGate.ts`: the item schema, no unbound placeholder, no credential,
+// the app not mid-change, the dry run); one the app was too busy to check is said as that, never as
+// unsafe (JOBS-F8). What the brain is told about them follows the schedule's authority: "never run
+// automatically" is said only when it may NOT make changes on its own — otherwise it would be false,
+// and the capture rule is stated instead. The step's typed SELECTs ask `inTransaction` once before
+// any scratch copy is exported (`runContextQueries`, shared with the scheduled agent — JOBS-F9). The
+// step names the shared tables it was handed (`saw`), only when there were any.
 
 import type { AppRecord, ScratchAttachTable, ScratchStatementResult, UserDb } from '@snugprotocol/db';
 import {
   ERROR_CODES,
   SCHEDULE_PROPOSALS_PER_RUN,
-  SCHEDULE_PROPOSAL_SUMMARY_MAX_CHARS,
   buildAppRequest,
-  findScheduleCredential,
   isReadOnlySelect,
   parseAgentReply,
-  scheduleProposalItemSchema,
   type AppSchemaJson,
   type ScheduleProposalItem,
   type ScheduleStep,
+  type StepSaw,
 } from '@snugprotocol/protocol';
 import type { AgentTransport } from '@snugprotocol/runner';
 
+import { appMidChange } from '../access/copy.js';
+import { chatBrainRoute, type ReaderBrainRoute } from '../access/egress.js';
 import { toAttach } from '../access/materialise.js';
 import type { MaterialisedSet, MaterialisedTable } from '../access/service.js';
-import { renderSharedDdl } from '../agent/sharedDdl.js';
+import { oneLine, renderSharedDdl } from '../agent/sharedDdl.js';
 import { createAppTransport } from '../agent/transport.js';
 import { modeStore, providerStore } from '../state/mode.js';
 import { currentBrain } from '../state/webllm.js';
-import { appMissing } from './copy.js';
+import { appMissing, brainBlocked, busyNote } from './copy.js';
 import type { StepContext, StepOutcome } from './engine-types.js';
+import { gateProposal } from './proposalGate.js';
+import { ZERO_CALLS } from './protection.js';
 import { countsAsAiCall } from './scrub.js';
 import { messageOf } from './taskShape.js';
 
@@ -81,8 +97,8 @@ export type AppThinkStep = Extract<ScheduleStep, { kind: 'app-think' }>;
 export interface AppThinkDeps {
   /**
    * The app's OWN transport, or `undefined` when no brain can answer a scheduled question —
-   * the demo brain, which the step refuses by name. The production composition is
-   * `defaultTransportFor`; tests inject a recording fake.
+   * the demo brain, which the step refuses as the keyless gate does. The production composition
+   * is `defaultTransportFor`; tests inject a recording fake.
    */
   transportFor(appId: string): AgentTransport | undefined;
   /**
@@ -109,8 +125,25 @@ export const SCHEDULE_DATA_DELIMITER = {
 /** The summary of a step the queue's signal cut short — the queue records the run as interrupted. */
 export const CANCELLED_SUMMARY = 'cancelled';
 
-/** The refusal under the demo brain (E6: "refused by name"). */
-export const DEMO_BRAIN_REFUSAL = 'the demo brain doesn’t answer on a schedule — choose a brain in Settings';
+/**
+ * The refusal under the demo override or a keyless BYOK brain (PR-4, D-PR4-15) — the brain-blocked
+ * state's sentence, which the result page renders as its own state with *open Settings*. The one
+ * sentence for that state: the demo brain's own refusal went with Gate-5 JOBS-F11.
+ */
+export const KEYLESS_BRAIN_REFUSAL = brainBlocked.text;
+
+/** No brain here may answer an *ask* step: refused, nothing sent, nothing read, nothing spent. */
+const brainBlockedOutcome = (): StepOutcome => ({ status: 'refused', summary: KEYLESS_BRAIN_REFUSAL, calls: { ...ZERO_CALLS }, blockedBy: 'brain' });
+
+/**
+ * The keyless gate (D-PR4-15): `refused` with `blockedBy: 'brain'` when the brain an *Ask* step
+ * would reach for `appId` is the demo one — the demo override, or BYOK with no key in the FILE
+ * (`readerAdapterKind`'s derivation, the send path's own) — else `undefined`. Nothing is sent and
+ * nothing is read. The executors pass the route they already derived; a direct call derives it.
+ */
+export function keylessBrainGate(db: UserDb, appId: string, route: Pick<ReaderBrainRoute, 'kind'> = chatBrainRoute(db, appId)): StepOutcome | undefined {
+  return route.kind === 'demo' ? brainBlockedOutcome() : undefined;
+}
 
 /** Appended to the summary when a suggested change failed validation or its dry run. */
 export function droppedNote(count: number): string {
@@ -123,29 +156,40 @@ export function surplusNote(cap: number): string {
 }
 
 /**
- * What the brain is asked to answer with. `answer` is the text the person reads later; the
- * second field is the data changes it may OFFER — the description says they are shown for
- * approval and never run, which is also exactly what this module does with them.
+ * What the offered changes field says (D-PR4-16). Unarmed: shown for approval and never run —
+ * exactly what happens to them. Under a schedule that may make changes on its own, "never run"
+ * would be false: the walk may make them when the run finishes, so the field states the rule a
+ * change must follow to be made on its own and undone, and that any other waits for the person.
  */
-const RESPONSE_SCHEMA = {
-  type: 'object',
-  properties: {
-    answer: { type: 'string', description: 'the reply, in plain words, for the person to read later' },
-    proposals: {
-      type: 'array',
-      description:
-        'data changes to offer for approval — one INSERT, UPDATE or DELETE statement each; they are shown to the person, never run automatically',
-      items: {
-        type: 'object',
-        properties: { sql: { type: 'string' }, summary: { type: 'string', description: 'one line on why' } },
+const CHANGES_FIELD = {
+  unarmed: 'data changes to offer for approval — one INSERT, UPDATE or DELETE statement each; they are shown to the person, never run automatically',
+  armed:
+    'data changes — one INSERT, UPDATE or DELETE statement each; this schedule may make them on its own when it finishes, within its limits, and the person can undo them — so write each with literal values, a WHERE on every UPDATE and DELETE, and no functions, arithmetic or conflict clause; any other change waits for the person’s OK',
+} as const;
+
+/**
+ * What the brain is asked to answer with. `answer` is the text the person reads later; the
+ * second field is the data changes it may OFFER, described by what will really happen to them.
+ */
+function responseSchemaFor(armed: boolean) {
+  return {
+    type: 'object',
+    properties: {
+      answer: { type: 'string', description: 'the reply, in plain words, for the person to read later' },
+      proposals: {
+        type: 'array',
+        description: armed ? CHANGES_FIELD.armed : CHANGES_FIELD.unarmed,
+        items: {
+          type: 'object',
+          properties: { sql: { type: 'string' }, summary: { type: 'string', description: 'one line on why' } },
+        },
       },
     },
-  },
-} as const;
+  } as const;
+}
 
 const FENCE = '```';
 
-const none = (): StepOutcome['calls'] => ({ ai: 0, net: 0 });
 const oneAi = (): StepOutcome['calls'] => ({ ai: 1, net: 0 });
 
 /**
@@ -176,6 +220,12 @@ export interface RenderThinkContextInput {
   maxRows: number;
   /** Another app's tables for this step (PR-2) — absent or empty renders today's context byte for byte. */
   shared?: MaterialisedSet;
+  /**
+   * Render the shared tables' ROWS inside the delimiter (the default) — the tool-free step reads
+   * them recorded up front. `false` frames them by name only, never a row: the scheduled agent
+   * reads a shared row through `data_query`, with its line written first (PR-4, D-PR4-15).
+   */
+  withSharedRows?: boolean;
   /** The step's clock, for the heading's date (C-Q3) — never the wall clock on a schedule. */
   now?: number;
 }
@@ -230,7 +280,7 @@ function renderSharedFences(tables: readonly MaterialisedTable[], budget: number
 }
 
 /** The host-assembled context string: the overview, the DDL and the shared tables' framing as framing, the rows as delimited data. */
-export function renderThinkContext({ app, schema, queries, maxRows, shared, now }: RenderThinkContextInput): string {
+export function renderThinkContext({ app, schema, queries, maxRows, shared, withSharedRows = true, now }: RenderThinkContextInput): string {
   const overview = [`App: ${app.displayName}`, ...(app.description !== undefined && app.description !== '' ? [app.description] : [])].join('\n');
   const ddl = (schema?.objects ?? [])
     .map((object) => object.ddl.trim())
@@ -241,7 +291,7 @@ export function renderThinkContext({ app, schema, queries, maxRows, shared, now 
   // The doors' ONE renderer, outside the delimiter: names, types and counts — never a row (D-PR2-13).
   const sharedDdl = shared === undefined ? '' : renderSharedDdl(shared, now ?? Date.now());
   if (sharedDdl !== '') parts.push(sharedDdl);
-  const sharedTables = shared?.tables ?? [];
+  const sharedTables = withSharedRows ? (shared?.tables ?? []) : [];
   if (queries.length > 0 || sharedTables.length > 0) {
     // The step's own fences FIRST, then one per shared table under one budget (C-Q4).
     const blocks = [...queries.map((query) => renderQuery(query, maxRows)), ...renderSharedFences(sharedTables, maxRows)].join('\n');
@@ -256,7 +306,7 @@ export function renderThinkContext({ app, schema, queries, maxRows, shared, now 
  * it: the parse is one half of the boundary, the receiving side is the other. The shared
  * tables ride into the same throwaway copy (`attach`, D-PR2-9) — never into the dry run below.
  */
-async function runContextQuery(db: UserDb, appId: string, sql: string, attach: readonly ScratchAttachTable[]): Promise<ScratchStatementResult> {
+export async function runContextQuery(db: UserDb, appId: string, sql: string, attach: readonly ScratchAttachTable[]): Promise<ScratchStatementResult> {
   if (!isReadOnlySelect(sql)) return { error: 'refused: not a read-only SELECT' };
   try {
     const result = attach.length > 0 ? await db.scratchRun(appId, [{ sql }], { attach }) : await db.scratchRun(appId, [{ sql }]);
@@ -264,6 +314,26 @@ async function runContextQuery(db: UserDb, appId: string, sql: string, attach: r
   } catch (err) {
     return { error: messageOf(err) };
   }
+}
+
+/**
+ * The step's typed SELECTs as context (Gate-5 JOBS-F9, SEC-F6), for BOTH *ask* executors: the app is
+ * asked `inTransaction` ONCE, before any scratch copy is exported — an export under its open
+ * transaction discards it (D-PR4-5) — and while it is mid-change every query answers the busy
+ * sentence, naming `appName`, instead of running. No queries, no question asked.
+ */
+export async function runContextQueries(
+  db: UserDb,
+  appId: string,
+  appName: string,
+  sqls: readonly string[],
+  attach: readonly ScratchAttachTable[],
+): Promise<ContextQuery[]> {
+  if (sqls.length === 0) return [];
+  const busy = await db.driver.inTransaction(appId);
+  const queries: ContextQuery[] = [];
+  for (const sql of sqls) queries.push({ sql, result: busy ? { error: appMidChange(appName) } : await runContextQuery(db, appId, sql, attach) });
+  return queries;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -285,59 +355,55 @@ function readReply(text: string): ReadReply {
   return { answer, candidates };
 }
 
-/**
- * The item schema's fields, the reason trimmed to its cap rather than dropping the change for
- * verbosity, and the app it is FOR set HERE from the step — never from the reply (Gate-5 S4:
- * a run pools the items of every step it ran, and the approval card applies each one against
- * its own app's data).
- */
-function toItem(candidate: unknown, appId: string): { appId: string; sql: string; summary?: string } | undefined {
+/** A reply's candidate as the gate takes it — the statement and its reason, nothing the reply names beyond them. */
+function toCandidate(candidate: unknown): { sql: string; summary?: string } | undefined {
   if (typeof candidate !== 'object' || candidate === null) return undefined;
   const { sql, summary } = candidate as Record<string, unknown>;
   if (typeof sql !== 'string') return undefined;
-  return { appId, sql, ...(typeof summary === 'string' ? { summary: summary.slice(0, SCHEDULE_PROPOSAL_SUMMARY_MAX_CHARS) } : {}) };
-}
-
-/** The dry run on the throwaway copy: the count, or `undefined` when the statement was refused or failed. */
-async function dryRun(db: UserDb, appId: string, item: ScheduleProposalItem): Promise<ScheduleProposalItem | undefined> {
-  try {
-    const { statements } = await db.scratchRun(appId, [{ sql: item.sql }]);
-    const first = statements[0];
-    if (first === undefined || first.error !== undefined || first.changes === undefined) return undefined;
-    return { ...item, counts: { changes: first.changes } };
-  } catch {
-    return undefined;
-  }
+  return { sql, ...(typeof summary === 'string' ? { summary } : {}) };
 }
 
 interface DryRunOutcome {
   kept: ScheduleProposalItem[];
+  /** Refused by the gate's checks — malformed, a placeholder, a credential, a failed dry run. */
   dropped: number;
+  /** Never tried: the app was in the middle of a change (Gate-5 JOBS-F8) — not the change's fault. */
+  busy: number;
   surplus: boolean;
 }
 
 /**
  * At most `SCHEDULE_PROPOSALS_PER_RUN` candidates are CONSIDERED (bounded work: never more
- * dry runs than one result may hold); each must parse as one DML statement over literal
- * values (`scheduleProposalItemSchema` → `isSingleDmlStatement`, which also refuses a nested
- * `SELECT`/`FROM` — Gate-5 S8: a subquery reaches every table the app holds), carry no
- * credential, and dry-run to a count. Anything else is dropped and said.
+ * dry runs than one result may hold); each passes the ONE proposal gate (`proposalGate.ts` —
+ * one DML statement over literal values, no unbound placeholder, no credential, the app not
+ * mid-change, a dry-run count), filed under the step's app, never the reply's (Gate-5 S4).
+ * Anything else is dropped and said — a busy app apart, because nothing was wrong with the change.
  */
 async function dryRunCandidates(db: UserDb, appId: string, candidates: readonly unknown[]): Promise<DryRunOutcome> {
   const kept: ScheduleProposalItem[] = [];
   let dropped = 0;
+  let busy = 0;
   for (const candidate of candidates.slice(0, SCHEDULE_PROPOSALS_PER_RUN)) {
-    const item = toItem(candidate, appId);
-    const parsed = item === undefined ? undefined : scheduleProposalItemSchema.safeParse(item);
-    if (parsed === undefined || !parsed.success || findScheduleCredential(parsed.data) !== undefined) {
-      dropped += 1;
-      continue;
-    }
-    const counted = await dryRun(db, appId, parsed.data);
-    if (counted === undefined) dropped += 1;
-    else kept.push(counted);
+    const offered = toCandidate(candidate);
+    const verdict = offered === undefined ? undefined : await gateProposal(db, appId, offered);
+    if (verdict?.ok === true) kept.push(verdict.item);
+    else if (verdict?.reason === 'busy') busy += 1;
+    else dropped += 1;
   }
-  return { kept, dropped, surplus: candidates.length > SCHEDULE_PROPOSALS_PER_RUN };
+  return { kept, dropped, busy, surplus: candidates.length > SCHEDULE_PROPOSALS_PER_RUN };
+}
+
+/** The shared tables a step was handed, by the source's name and its own table name — once each, in the set's order (R-88). */
+export function sawOf(tables: readonly MaterialisedTable[]): StepSaw[] {
+  const seen = new Set<string>();
+  const saw: StepSaw[] = [];
+  for (const { sourceName, table } of tables) {
+    const key = JSON.stringify([sourceName, table]);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    saw.push({ source: sourceName, table });
+  }
+  return saw;
 }
 
 /** The step's position in its task — the request id's second half. Identity first, then value, then 0. */
@@ -354,20 +420,21 @@ function stepIndexOf(ctx: StepContext, step: ScheduleStep): number {
 // ---------------------------------------------------------------------------------------------
 
 export async function executeAppThink(step: AppThinkStep, ctx: StepContext, deps: AppThinkDeps): Promise<StepOutcome> {
-  if (ctx.signal.aborted) return { status: 'failed', summary: CANCELLED_SUMMARY, calls: none() };
+  if (ctx.signal.aborted) return { status: 'failed', summary: CANCELLED_SUMMARY, calls: { ...ZERO_CALLS } };
   const app = ctx.db.getApp(step.appId);
-  if (app === undefined) return { status: 'blocked', summary: appMissing.text, calls: none() };
+  if (app === undefined) return { status: 'blocked', summary: appMissing.text, calls: { ...ZERO_CALLS } };
   const transport = deps.transportFor(step.appId);
-  if (transport === undefined) return { status: 'refused', summary: DEMO_BRAIN_REFUSAL, calls: none() };
+  if (transport === undefined) return brainBlockedOutcome();
+  const appName = oneLine(app.displayName);
 
   // The scheduler door (C-Q2): asked only now that a brain will be sent something.
   const shared = deps.sharedFor !== undefined ? await deps.sharedFor(step.appId, ctx) : undefined;
   const attach = shared === undefined ? [] : toAttach(shared);
+  // What it was handed is what it read — the line is already on each source's history (R-88).
+  const saw = sawOf(shared?.tables ?? []);
+  const sawSeat = saw.length > 0 ? { saw } : {};
   const schema = ctx.db.getAppSchema(step.appId);
-  const queries: ContextQuery[] = [];
-  for (const sql of step.context.sql ?? []) {
-    queries.push({ sql, result: await runContextQuery(ctx.db, step.appId, sql, attach) });
-  }
+  const queries = await runContextQueries(ctx.db, step.appId, appName, step.context.sql ?? [], attach);
   const context = renderThinkContext({ app, schema, queries, maxRows: step.context.maxRows, ...(shared !== undefined ? { shared, now: ctx.now().getTime() } : {}) });
 
   const wire = buildAppRequest({
@@ -376,20 +443,21 @@ export async function executeAppThink(step: AppThinkStep, ctx: StepContext, deps
     requestId: `${ctx.run.id}:${stepIndexOf(ctx, step)}`,
     action: SCHEDULED_THINK_ACTION,
     payload: { prompt: step.prompt, context },
-    responseSchema: RESPONSE_SCHEMA,
+    responseSchema: responseSchemaFor(ctx.task.writeAuthority !== undefined),
   });
   const reply = await transport.send(wire, { signal: ctx.signal });
   if (!reply.ok) {
-    const calls = countsAsAiCall(reply) ? oneAi() : none(); // one rule with the hidden frame's transport (`scrub.ts`, M15)
-    if (reply.code === ERROR_CODES.CONSENT_REQUIRED) return { status: 'refused', summary: reply.message, calls };
-    if (reply.code === ERROR_CODES.CANCELLED) return { status: 'failed', summary: CANCELLED_SUMMARY, calls };
-    return { status: 'failed', summary: reply.message, calls };
+    const calls = countsAsAiCall(reply) ? oneAi() : { ...ZERO_CALLS }; // one rule with the hidden frame's transport (`scrub.ts`, M15)
+    if (reply.code === ERROR_CODES.CONSENT_REQUIRED) return { status: 'refused', summary: reply.message, calls, ...sawSeat };
+    if (reply.code === ERROR_CODES.CANCELLED) return { status: 'failed', summary: CANCELLED_SUMMARY, calls, ...sawSeat };
+    return { status: 'failed', summary: reply.message, calls, ...sawSeat };
   }
 
   const { answer, candidates } = readReply(reply.text);
-  const { kept, dropped, surplus } = await dryRunCandidates(ctx.db, step.appId, candidates);
+  const { kept, dropped, busy, surplus } = await dryRunCandidates(ctx.db, step.appId, candidates);
   const notes: string[] = [];
   if (dropped > 0) notes.push(droppedNote(dropped));
+  if (busy > 0) notes.push(busyNote(busy, appName));
   if (surplus) notes.push(surplusNote(SCHEDULE_PROPOSALS_PER_RUN));
   const summary = [answer, ...notes].filter((text) => text !== '').join('\n\n');
   return {
@@ -397,5 +465,6 @@ export async function executeAppThink(step: AppThinkStep, ctx: StepContext, deps
     summary,
     calls: oneAi(),
     ...(kept.length > 0 ? { proposals: kept } : {}),
+    ...sawSeat,
   };
 }

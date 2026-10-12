@@ -1,6 +1,6 @@
 # 0026 — Connection-relative addressing: apps name their connection, never its host
 
-- **Status:** accepted (2026-08-15, at merge; owner approved the plan and commissioned the merge explicitly)
+- **Status:** accepted (2026-08-15, at merge; owner approved the plan and commissioned the merge explicitly) — amended by 0076 §9 (2026-10-12, TASK-20261010-host-broker PR-4): the host-native fetch tool resolves a multi-host connection to its one declared API host; an app's symbolic addressing is unchanged
 - **Date:** 2026-08-14
 - **Task:** TASK-20260814-hue-starter-real-connection
 

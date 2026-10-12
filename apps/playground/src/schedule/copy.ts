@@ -26,8 +26,9 @@
 // ONE action (F14), and the honesty line is written where the user decides (F6): the editor,
 // the empty page, the consent surface — not only Settings.
 
-import type { AlertKind, MissedPolicy, PausedReason, RunStatus, ScheduleHostKind, ScheduleStep, StepResultStatus } from '@snugprotocol/protocol';
+import type { AlertKind, MissedPolicy, PausedReason, RunStatus, ScheduleDisarmedReason, ScheduleHostKind, ScheduleStep, StepResultStatus } from '@snugprotocol/protocol';
 
+import { appMidChange, rowsWord } from '../access/copy.js';
 import { PAUSE_AFTER_FAILURES, PAUSE_AFTER_UNSEEN } from './protection.js';
 
 /** The user-facing nouns (Q8). Views compose sentences from these rather than respelling them. */
@@ -39,7 +40,29 @@ export const WORDS = {
   missed: 'missed',
   suggestion: 'suggestion',
   changesWaiting: 'changes waiting for your OK',
+  /** The result page's first section (TASK-20261010-host-broker PR-4, D-PR4-18): what was made, above what waits. */
+  changesMade: 'changes it made',
 } as const;
+
+/**
+ * An *ask* step that may look things up (PR-4, D-PR4-20) — the tail every surface that prints a
+ * step in words adds to it (`stepWords`), and the step facts' word for it.
+ */
+export const LOOKS_THINGS_UP = 'may look things up';
+
+/**
+ * "changed 12 rows in Ledger" — a change the host MADE to an app's own data, in the words the
+ * result page, the schedule's changes list and the result's one line all share (D-PR4-18). The
+ * count is `rowsWord`'s, the ONE row pluraliser.
+ */
+export function changedRows(n: number, appName: string): string {
+  return `changed ${rowsWord(n)} in ${appName}`;
+}
+
+/** The same change, made by a schedule on its own — the result page's group and the result's one line. */
+export function changedOnItsOwn(n: number, appName: string): string {
+  return `${changedRows(n, appName)} on its own`;
+}
 
 /** The three step kinds, as the engine names them (`scheduleStepSchema`, C1). */
 export type StepKind = ScheduleStep['kind'];
@@ -69,14 +92,17 @@ export function stepLabel(kind: StepKind, appName?: string): string {
  * ferns" · "ask Ledger’s AI: Sum it up" · "run Weather". The chat card, the run-header strip and
  * the builder's tool all print a suggestion's steps through this, so a step reads the same on
  * every surface. `withInput` appends a *run <app>* step's input ("run Weather · {"fetch":true}")
- * where there is room for it (the card); the strip's one line leaves it out.
+ * where there is room for it (the card); the strip's one line leaves it out. An *ask* step that
+ * may look things up says so on every surface (PR-4): "ask Ledger’s AI: Sum it · may look things up".
  */
 export function stepWords(step: ScheduleStep, appName?: string, options: { withInput?: boolean } = {}): string {
   switch (step.kind) {
     case 'notify':
       return `${stepLabel('notify')}: ${step.title} — ${step.body}`;
-    case 'app-think':
-      return `${stepLabel('app-think', appName)}: ${step.prompt}`;
+    case 'app-think': {
+      const words = `${stepLabel('app-think', appName)}: ${step.prompt}`;
+      return step.tools === true ? `${words} · ${LOOKS_THINGS_UP}` : words;
+    }
     case 'app-run':
       return options.withInput === true && step.input !== undefined ? `${stepLabel('app-run', appName)} · ${JSON.stringify(step.input)}` : stepLabel('app-run', appName);
     default: {
@@ -257,8 +283,60 @@ export function capped(what: CappedWhat): string {
   return `daily ${what} limit reached — resumes tomorrow`;
 }
 
+/**
+ * Which ceiling a capped run reached, read back from its reason (PR-4 Gate 5, U14; J6): the queue
+ * words a capped step's kind as `capped(<what>)`, so the network one is named by its own words; any
+ * other reason — the AI sentence, a step's own words, none — is the AI ceiling, PR-A's only one.
+ */
+export function cappedWhatOf(reason: string | undefined): CappedWhat {
+  return reason?.includes('network call') === true ? 'network call' : 'AI call';
+}
+
 /** Arrived disabled with an untrusted import (C4); the one act is review. */
 export const imported: StateCopy = { text: 'arrived with an imported file — review before turning on', action: 'review' };
+
+// ---------------------------------------------------------------------------------------------
+// Making changes on its own (TASK-20261010-host-broker PR-4; ADR-0076 §9; D-PR4-8, D-PR4-20) — ONE
+// phrase names the authority on every surface: *make changes on its own*. The surfaces' own words
+// (the tick, the chip, the acts, the held lines) live in their copy modules and say it the same way.
+// ---------------------------------------------------------------------------------------------
+
+/** Why the authority went away without the user's act — the trace's words. */
+const DISARMED_WHY: Readonly<Record<ScheduleDisarmedReason, string>> = {
+  imported: 'arrived with an imported file',
+  'app-updated': 'this app was updated',
+};
+
+/** A disarm the user did not perform (the `disarmed` trace): the attention line, and its one act opens the editor to review. */
+export function disarmed(reason: ScheduleDisarmedReason): StateCopy {
+  return { text: `no longer makes changes on its own — ${DISARMED_WHY[reason]}`, action: 'review' };
+}
+
+/** Paused by an app update on a schedule that made changes on its own: resuming does not give the authority back (D-PR4-8). */
+export const pausedAfterDisarm: StateCopy = {
+  text: `${paused('app-updated').text} — resuming won’t let it make changes on its own until you confirm again`,
+  action: paused('app-updated').action,
+};
+
+/**
+ * No brain may answer an *ask* step here — the demo override, or a BYOK brain with no key (D-PR4-15).
+ * Its own state on the result, never *needs your OK*: the step's summary is `text` (the executors'
+ * refusal), and the one act opens Settings.
+ */
+export const brainBlocked = {
+  text: 'the brain in Settings can’t answer this — it’s the demo, or it has no key yet',
+  action: 'open Settings',
+} as const satisfies StateCopy;
+
+/** An *ask* step that may look things up hit its round trips before it answered (D-PR4-15) — `lookups` is the calls it made. */
+export function ranOutOfTurns(appName: string, lookups: number): string {
+  return `${appName}’s AI looked things up ${lookups} ${lookups === 1 ? 'time' : 'times'} and ran out of turns before answering`;
+}
+
+/** The same step's own deadline hit before the brain answered (D-PR4-15, D-I2b-12) — the time twin of `ranOutOfTurns`. */
+export function ranOutOfTime(appName: string, lookups: number): string {
+  return `${appName}’s AI looked things up ${lookups} ${lookups === 1 ? 'time' : 'times'} and ran out of time before answering`;
+}
 
 /** This tab lost the leader election (E2): another tab is ticking for this file. */
 export const followerTab = 'scheduling runs in another tab';
@@ -500,3 +578,16 @@ export const REFRESH_RUN = {
 
 /** The reconnect chip's attribution when a 401/403 happened inside a fetch another app asked for (DS20). */
 export const AUTH_REPAIR_VIA_REFRESH = 'a fetch another app asked for ran into this';
+
+// ---------------------------------------------------------------------------------------------
+// Suggested changes an *ask* step could not check (TASK-20261010-host-broker PR-4 Gate 5, JOBS-F8)
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * Appended to an *ask* step's answer when the app was in the middle of a change, so its suggested
+ * changes were never tried on a copy. Nothing was wrong with them — the note never says they were
+ * not safe to keep (that is a change that failed its checks); the busy words are the access door's.
+ */
+export function busyNote(count: number, appName: string): string {
+  return `${count} suggested ${count === 1 ? 'change' : 'changes'} not kept — ${appMidChange(appName)}`;
+}

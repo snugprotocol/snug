@@ -9,9 +9,24 @@
 //
 // Internals stay hidden until asked for: the data choice defaults to the tables, and the query
 // fields appear only under "specific queries (advanced)".
+//
+// TASK-20261010-host-broker PR-4 (D-PR4-15, D-PR4-20; D10, D13): the kind `<select>` and its labels
+// stay as they were and gain ONE hint per kind, naming the app — what *ask* and *run* each do. An
+// *ask* step gains the tick *let it look things up*: ticked, its line REPLACES *which data?* (the
+// step chooses its own questions), while any typed queries stay, as where it starts. When the brain
+// cannot use tools for the step's app the editor says so HERE, under the tick, before the first
+// result ever has to.
+//
+// THE BRAIN, THREE WAYS (PR-4 Gate 5, U1; `brainFor`, the engine's own gates handed in by the editor):
+// `blocked` — no brain here answers an *ask* step at all (the demo, or a key not set), said under
+// EVERY ask step of that app, ticked or not, with the way to Settings; `no-tools` — it answers but
+// cannot look things up, said under a ticked step; `tools` — nothing to say. Each line that explains
+// a control is attached to it (`aria-describedby`, U11): the tick names the lines under it that are
+// on screen, the kind select its one hint — a screen reader hears them with the control.
 
 import type { ReactElement } from 'react';
 import { useId } from 'react';
+import { Link } from 'react-router';
 
 import type { AppRecord } from '@snugprotocol/db';
 import {
@@ -27,16 +42,30 @@ import {
 } from '@snugprotocol/protocol';
 
 import { Button } from '../ui/Button.js';
+import type { AskBrain } from './askBrain.js';
+import { brainBlocked } from './copy.js';
 import { STEPS } from './copy.editor.js';
 import { emptyNotify, emptyRun, emptyThink, parseRunInput, type StepDraft } from './editorModel.js';
+import { SETTINGS_HREF } from './routes.js';
 
 export interface StepsEditorProps {
   steps: StepDraft[];
   apps: readonly AppRecord[];
   onChange: (steps: StepDraft[]) => void;
+  /** What the brain an app's *ask* step runs on now can do there (`askBrainFor`). Absent: it can look things up. */
+  brainFor?: (appId: string) => AskBrain;
 }
 
-export function StepsEditor({ steps, apps, onChange }: StepsEditorProps): ReactElement {
+/** The ids among `ids` whose line is on screen, as one `aria-describedby` — `undefined` when none is. */
+const describedBy = (ids: ReadonlyArray<string | false>): string | undefined => {
+  const shown = ids.filter((id): id is string => id !== false);
+  return shown.length === 0 ? undefined : shown.join(' ');
+};
+
+/** The app a hint names: the step's app, the template's missing one, or "this app" before one is chosen. */
+const HINT_APP_FALLBACK = 'this app';
+
+export function StepsEditor({ steps, apps, onChange, brainFor }: StepsEditorProps): ReactElement {
   const id = useId();
   const appName = (appId: string): string | undefined => apps.find((app) => app.appId === appId)?.displayName;
   const replace = (index: number, step: StepDraft): void => onChange(steps.map((s, i) => (i === index ? step : s)));
@@ -50,6 +79,12 @@ export function StepsEditor({ steps, apps, onChange }: StepsEditorProps): ReactE
           const key = `${id}-${index}`;
           const missing = step.kind !== 'notify' ? step.missingApp : undefined;
           const off = missing !== undefined;
+          const kindHintId = `${key}-kind-hint`;
+          // An ask step's brain, read once its app is chosen and installed (U1), and the ids of the lines under its tick (U11).
+          const brain = step.kind === 'app-think' && step.appId !== '' && missing === undefined ? brainFor?.(step.appId) : undefined;
+          const blocked = brain === 'blocked';
+          const noTools = step.kind === 'app-think' && step.tools && brain === 'no-tools';
+          const lineIds = { blocked: `${key}-brain-blocked`, tools: `${key}-tools-line`, noTools: `${key}-tools-unavailable` };
           return (
             <li key={key} className={off ? 'card schedule-step schedule-step-off' : 'card schedule-step'} data-testid={`step-${index}`} data-kind={step.kind}>
               <div className="field-row field-row-wrap schedule-step-head">
@@ -58,6 +93,7 @@ export function StepsEditor({ steps, apps, onChange }: StepsEditorProps): ReactE
                   <select
                     id={`${key}-kind`}
                     value={step.kind}
+                    aria-describedby={step.kind !== 'notify' ? kindHintId : undefined}
                     data-testid={`step-${index}-kind`}
                     onChange={(event) => {
                       const kind = event.target.value;
@@ -71,6 +107,11 @@ export function StepsEditor({ steps, apps, onChange }: StepsEditorProps): ReactE
                     <option value="app-think">{STEPS.ask()}</option>
                     <option value="app-run">{STEPS.run()}</option>
                   </select>
+                  {step.kind !== 'notify' ? (
+                    <span className="hint" id={kindHintId} data-testid={`step-${index}-kind-hint`}>
+                      {STEPS.kindHint(step.kind, missing ?? appName(step.appId) ?? HINT_APP_FALLBACK)}
+                    </span>
+                  ) : null}
                 </div>
                 {steps.length > 1 ? (
                   <Button variant="ghost" onClick={() => remove(index)} aria-label={`${STEPS.remove} ${index + 1}`} data-testid={`step-${index}-remove`}>
@@ -190,31 +231,61 @@ export function StepsEditor({ steps, apps, onChange }: StepsEditorProps): ReactE
                       onChange={(event) => replace(index, { ...step, prompt: event.target.value })}
                     />
                   </div>
-                  <div className="field" role="radiogroup" aria-label={STEPS.data}>
-                    <span className="schedule-radio-legend">{STEPS.data}</span>
-                    <label className="check-label">
-                      <input
-                        type="radio"
-                        name={`${key}-data`}
-                        value="tables"
-                        checked={step.dataMode === 'tables'}
-                        data-testid={`step-${index}-data-tables`}
-                        onChange={() => replace(index, { ...step, dataMode: 'tables' })}
-                      />
-                      {STEPS.dataTables}
-                    </label>
-                    <label className="check-label">
-                      <input
-                        type="radio"
-                        name={`${key}-data`}
-                        value="queries"
-                        checked={step.dataMode === 'queries'}
-                        data-testid={`step-${index}-data-queries`}
-                        onChange={() => replace(index, { ...step, dataMode: 'queries' })}
-                      />
-                      {STEPS.dataQueries}
-                    </label>
-                  </div>
+                  <label className="check-label">
+                    <input
+                      type="checkbox"
+                      checked={step.tools}
+                      aria-describedby={describedBy([blocked && lineIds.blocked, step.tools && lineIds.tools, noTools && lineIds.noTools])}
+                      data-testid={`step-${index}-tools`}
+                      onChange={(event) => replace(index, { ...step, tools: event.target.checked })}
+                    />
+                    {STEPS.lookThingsUp}
+                  </label>
+                  {/* No brain here answers this step at all — ticked or not, it is said first, with the way to fix it (U1). */}
+                  {blocked ? (
+                    <p className="hint" role="note" id={lineIds.blocked} data-testid={`step-${index}-brain-blocked`}>
+                      {brainBlocked.text} · <Link to={SETTINGS_HREF}>{brainBlocked.action}</Link>
+                    </p>
+                  ) : null}
+                  {step.tools ? (
+                    <>
+                      <p className="hint" id={lineIds.tools} data-testid={`step-${index}-tools-line`}>
+                        {STEPS.toolsLine(missing ?? appName(step.appId) ?? HINT_APP_FALLBACK)}
+                      </p>
+                      {noTools ? (
+                        <p className="hint" role="note" id={lineIds.noTools} data-testid={`step-${index}-tools-unavailable`}>
+                          {STEPS.toolsUnavailable}
+                        </p>
+                      ) : null}
+                    </>
+                  ) : (
+                    <div className="field" role="radiogroup" aria-label={STEPS.data}>
+                      <span className="schedule-radio-legend">{STEPS.data}</span>
+                      <label className="check-label">
+                        <input
+                          type="radio"
+                          name={`${key}-data`}
+                          value="tables"
+                          checked={step.dataMode === 'tables'}
+                          data-testid={`step-${index}-data-tables`}
+                          onChange={() => replace(index, { ...step, dataMode: 'tables' })}
+                        />
+                        {STEPS.dataTables}
+                      </label>
+                      <label className="check-label">
+                        <input
+                          type="radio"
+                          name={`${key}-data`}
+                          value="queries"
+                          checked={step.dataMode === 'queries'}
+                          data-testid={`step-${index}-data-queries`}
+                          onChange={() => replace(index, { ...step, dataMode: 'queries' })}
+                        />
+                        {STEPS.dataQueries}
+                      </label>
+                    </div>
+                  )}
+                  {/* Typed queries stay under the line of a step that may look things up: they are where it starts. */}
                   {step.dataMode === 'queries' ? (
                     <div className="schedule-queries" data-testid={`step-${index}-queries`}>
                       <span className="hint">{STEPS.queryHint}</span>

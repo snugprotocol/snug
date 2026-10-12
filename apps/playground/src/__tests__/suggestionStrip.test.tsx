@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { UserDb } from '@snugprotocol/db';
 import type { ScheduleProposal, ScheduleStep } from '@snugprotocol/protocol';
 
+import { armTask } from '../schedule/acts.js';
 import { CONSENT, SUGGESTION_ACTIONS, SUGGESTION_OUTCOME, stepWords, suggestionStrip } from '../schedule/copy.js';
 import { __setPageClockForTests } from '../schedule/pageModel.js';
 import { __resetSchedulerForTests } from '../schedule/scheduler.js';
@@ -29,6 +30,12 @@ import {
 import { SuggestionStrip, suggestionStepsLine } from '../schedule/SuggestionStrip.js';
 import { installTestUserDb } from './userdbTestHelper.js';
 import { click, mount, settle, unmount } from './scheduleUiHarness.js';
+
+// PR-4 Gate-5 U4: `armTask` wrapped (not replaced) so ONE test can make the arming refuse.
+vi.mock('../schedule/acts.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../schedule/acts.js')>();
+  return { ...actual, armTask: vi.fn(actual.armTask) };
+});
 
 declare global {
   // eslint-disable-next-line no-var
@@ -76,6 +83,7 @@ function render(): HTMLDivElement {
 
 beforeEach(async () => {
   vi.useFakeTimers({ toFake: ['Date'], now: NOW });
+  vi.mocked(armTask).mockClear();
   __resetSchedulerForTests();
   __resetScheduleRequestsForTests();
   __setPageClockForTests(() => new Date(NOW));
@@ -201,5 +209,73 @@ describe('not now and stop suggestions', () => {
     expect(await suggest({ spec: { kind: 'daily', time: '08:00', tz: 'UTC' } })).toBe('muted');
     await settle();
     expect(q(c, 'schedule-suggestion')).toBeNull();
+  });
+});
+
+// =============================================================================================
+// TASK-20261010-host-broker PR-4 Gate 5 — U4: the APP-AUTHORED channel's consent and the task write
+// authority (D-PR4-8, AC31 — "all four hosts"). The strip arms only through the user's tick on the
+// consent (`armIfTicked`): the tick mounts OFF — never seeded from the app's suggestion — so leaving
+// it off creates NO authority; ticking it arms the schedule the writer created (`rowsPerRun: 200`,
+// the app's current version); a refused arming leaves the schedule written, unarmed, and SAYS so
+// (the outcome's role=alert line). Pins only — no code change.
+// =============================================================================================
+
+describe('PR-4 Gate-5 U4 — the strip’s consent: the tick mounts off, off arms nothing, on arms, a refusal is said', () => {
+  const ask = (): ScheduleStep => ({ kind: 'app-think', appId: weather, prompt: 'Should I bike today?', context: { maxRows: 50 } });
+
+  async function openConsent(c: HTMLElement, over: Partial<ScheduleProposal> = {}): Promise<HTMLInputElement> {
+    expect(await suggest({ steps: [ask()], ...over })).toBe('accepted');
+    await settle();
+    await click(must(c, 'schedule-suggestion-accept'));
+    return must(c, 'consent-on-its-own') as HTMLInputElement;
+  }
+
+  it('the tick mounts OFF; a suggestion that smuggles an authority never even arrives (the intake’s strict shape)', async () => {
+    const c = render();
+    expect(await suggest({ steps: [ask()], writeAuthority: { rowsPerRun: 200, armedAt: '2026-10-09T12:00:00.000Z', armedVersion: 1 } } as Partial<ScheduleProposal>)).toBe('unreadable');
+    expect(pendingSuggestionFor(weather)).toBeUndefined();
+    clock.now += SCHEDULE_REQUEST_MIN_GAP_MS;
+    const tick = await openConsent(c);
+    expect(tick.type).toBe('checkbox');
+    expect(tick.checked).toBe(false);
+  });
+
+  it('left off: the schedule is written with NO authority', async () => {
+    const c = render();
+    await openConsent(c);
+    await click(must(c, 'consent-enable'));
+    const tasks = db.listScheduledTasks();
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]?.writeAuthority).toBeUndefined();
+    expect(vi.mocked(armTask), 'off arms nothing — the act is never even asked').not.toHaveBeenCalled();
+  });
+
+  it('ticked: the schedule the writer created is armed — 200 rows a run, for the app’s current version', async () => {
+    const c = render();
+    const tick = await openConsent(c);
+    await click(tick);
+    await click(must(c, 'consent-enable'));
+    await vi.waitFor(() => expect(db.listScheduledTasks()[0]?.writeAuthority).toBeDefined());
+    expect(db.listScheduledTasks()[0]?.writeAuthority).toMatchObject({ rowsPerRun: 200, armedVersion: db.getApp(weather)?.currentVersion });
+    expect(must(c, 'schedule-suggestion-outcome').dataset.outcome).toBe('scheduled');
+  });
+
+  it('a refused arming: the schedule stays written, unarmed, and the outcome SAYS so (role=alert)', async () => {
+    const refusal = 'that schedule can’t make changes on its own';
+    vi.mocked(armTask).mockResolvedValueOnce({ ok: false, reason: refusal } as Awaited<ReturnType<typeof armTask>>);
+    const c = render();
+    const tick = await openConsent(c);
+    await click(tick);
+    await click(must(c, 'consent-enable'));
+    await vi.waitFor(() => expect(q(c, 'schedule-suggestion-outcome')).not.toBeNull());
+    expect(vi.mocked(armTask)).toHaveBeenCalledTimes(1);
+    const tasks = db.listScheduledTasks();
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]?.writeAuthority).toBeUndefined();
+    const outcome = must(c, 'schedule-suggestion-outcome');
+    expect(outcome.dataset.outcome, 'it WAS scheduled').toBe('scheduled');
+    const alert = outcome.querySelector('[role="alert"]');
+    expect(alert?.textContent).toContain(refusal);
   });
 });

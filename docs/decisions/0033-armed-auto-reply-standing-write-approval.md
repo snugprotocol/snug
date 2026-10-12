@@ -9,6 +9,10 @@
   host-rendered control. The owner deferred that choice to a follow-up (2026-08-17), and
   WhatsApp Twin therefore ships manual Reply only, saying so on its own surface rather than
   offering a switch that authorizes nothing. §3's design is what governs when arming lands.
+  **Amended 2026-10-12 by ADR-0076 §9 (TASK-20261010-host-broker PR-4):** accepted — its SHAPE
+  gains its first arming surface in ADR-0076 §9 (a scheduled task's authority over its own
+  app's data, through the Write Broker, not this gate); the gate's arming and its persisted
+  store remain deferred.
 - **Date:** 2026-08-16
 - **Task:** TASK-20260816-whatsapp-twin
 

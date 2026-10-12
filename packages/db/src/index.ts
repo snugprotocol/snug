@@ -163,10 +163,18 @@ export {
   accessWantsSettingKey,
   appIdFromAccessWantsSettingKey,
   targetAppIdFromAccessUndoSettingKey,
+  // The own undo journal (TASK-20261010-host-broker PR-4, D-PR4-3): a bucket per armed schedule and one for the user's approvals.
+  OWN_UNDO_APPROVAL_BUCKET,
+  OWN_UNDO_SETTING_PREFIX,
+  ownUndoKey,
 } from './userdb/app-settings-keys.js';
 
 // The import/export bound a `running`/`pending` claim is retired under (TASK-20261009 C4).
 export { SCHEDULE_IMPORTED_CLAIM_MAX_AGE_MS } from './userdb/schedules.js';
+
+// The own undo journal's bucket rule (TASK-20261010-host-broker PR-4 Gate 5, A1): the accessor's,
+// and the one the Write Broker's own-write engine asks FIRST, before any seat.
+export { ownUndoBelongsIn } from './userdb/own-undo.js';
 
 // Access between apps (TASK-20261010-cross-app-access): the record types the accessors speak,
 // and the PURE scoped read the access engine's Worker runs on its own sql.js instance (AC6) —
@@ -198,6 +206,8 @@ export {
 // and `dmlTargetTable` is the write signal's table rule the host reads too.
 export {
   dmlTargetTable,
+  // PR-4 (D-PR4-4): the named predicate the proposal gate asks before an armed schedule proposes.
+  ownCapturable,
   planBrokeredWrite,
   type ApplyRefusal,
   type BrokeredApplyInput,
@@ -211,6 +221,7 @@ export {
   type BrokeredRefusalRule,
   type BrokeredRefused,
   type ColumnFact,
+  type OwnCaptureInput,
   type OwnStatement,
   type ParsedDml,
   type PlanRefusal,

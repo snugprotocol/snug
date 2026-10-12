@@ -28,9 +28,30 @@
 // The two seams this module reads from `scheduler.ts` — `currentDeps()` (the db, the clock) and
 // `engine()` (the queue) — are accessors, not consts, so the module cycle between the two files
 // dereferences nothing at evaluation (Gate-5 M20).
+//
+// MAKING CHANGES ON ITS OWN (TASK-20261010-host-broker PR-4, D-PR4-7/8/10; ADR-0076 §9 — ADR-0033's
+// shape, first armed here). `writeAuthority` is written by ONE act, `armTask` — the consent's tick
+// and the editor's control — and only for a schedule whose *Ask <App>'s AI* steps and every other
+// app step name ONE app (v2.1 N4: one seat call, one undo bucket, one app's data a run); it records
+// the app's CURRENT version, so new code never inherits the consent. It refuses (Gate 5) a schedule
+// whose id spells the approvals' own undo bucket (A1 — only a crafted file carries one) and an app
+// whose install time is ahead of now (A6 — the consent would predate it, and the walk refuses a
+// consent older than its app). The rules it admits and widens by live once, in `taskShape.ts`, where
+// the editor reads them too (A11). Nothing else writes it:
+// `createTask` builds its row field by field and `updateTask` copies a patch's fields one by one, so
+// a smuggled authority is never read. It goes away by the user's acts — `disarmTask` (the row's
+// *stop making changes on its own*), `disarmAllTasks` (Settings' act over every schedule) — which
+// leave no trace, and by an EDIT that widens what the schedule may do: its steps changed (compared
+// by canonical JSON — the editor sends `steps` on every save, so their mere presence says nothing),
+// its owning app changed, or its occurrences came closer together (the minimum gap between them
+// got SHORTER, v2.1 Q15). The editor routes such a save through the consent, which re-arms with
+// `armTask` after `updateTask` — a fresh `armedAt`. A title, alert or missed-policy edit never
+// disarms; neither does off/on or a pause and its resume (the walk refuses while either holds).
+// Every save through `updateTask` clears the `disarmed` trace: the user has looked (v2.1 N3).
 
-import type { UserDb } from '@snugprotocol/db';
+import { OWN_UNDO_APPROVAL_BUCKET, type UserDb } from '@snugprotocol/db';
 import {
+  ACCESS_WRITE_MAX_ROWS,
   scheduledTaskSchema,
   type AlertKind,
   type MissedPolicy,
@@ -45,11 +66,12 @@ import { bumpScheduleRevision } from '../platform/signals.js';
 import { onAppVersionChanged } from '../state/appVersionChanged.js';
 import type { AppVersionSource } from './appDrift.js';
 import { globalPaused } from './copy.js';
+import { RESERVED_ID, installedAhead } from './copy.page.js';
 import { compileSpec } from './cron.js';
 import { defaultMissedPolicy, frequencyFloorRefusal, freshnessWindowMs } from './floors.js';
 import { markSeen as markTaskSeen, resumeTask } from './protection.js';
 import { currentDeps, engine, freshSchedulerState, reconcile } from './scheduler.js';
-import { RESULT_STATUSES, appIdsOf, messageOf, sameOccurrence } from './taskShape.js';
+import { RESULT_STATUSES, appIdsOf, armableAppOf, installedAfterArming, messageOf, sameOccurrence, widens } from './taskShape.js';
 
 // ------------------------------------------------------------------------- types
 
@@ -65,7 +87,8 @@ export interface CreateTaskInput {
   endsAt?: string;
 }
 
-export type TaskPatch = Partial<Pick<CreateTaskInput, 'title' | 'steps' | 'spec' | 'missedPolicy' | 'alert' | 'startsAt' | 'endsAt'>>;
+/** What an edit may change. Never the write authority: only `armTask` writes it. A new `ownerAppId` is a widening (D-PR4-8). */
+export type TaskPatch = Partial<Pick<CreateTaskInput, 'title' | 'steps' | 'spec' | 'missedPolicy' | 'alert' | 'startsAt' | 'endsAt' | 'ownerAppId'>>;
 
 /**
  * A refused act, in one line. `route: 'review'` says the EDITOR is where this is answered —
@@ -91,6 +114,12 @@ export const IMPORTED_NEEDS_REVIEW = 'this schedule arrived with an imported fil
 
 /** The refusal of a *run now* (or a candidate) on a schedule that is off, by name (M2/S1). */
 export const scheduleOff = (title: string): string => `“${title}” is off — turn it on to run it`;
+
+/** `armTask` on a schedule whose steps name no app's AI, or more than one app (D-PR4-8, v2.1 N4) — the editor never offers it; this is the belt. */
+export const NOT_ONE_APP = 'only a schedule that asks one app’s AI, and uses no other app, can make changes on its own';
+
+/** `armTask` on a schedule whose id spells the approvals' own undo bucket (A1) — the words live in `copy.page.ts`; re-exported beside `NOT_ONE_APP`. */
+export { RESERVED_ID } from './copy.page.js';
 
 // ------------------------------------------------------------------------- helpers
 
@@ -124,6 +153,12 @@ function commitTask(db: UserDb, draft: ScheduledTask): TaskResult {
   }
   bumpScheduleRevision();
   return { ok: true, task: parsed.data };
+}
+
+/** The task as it is without its authority — the user's own disarm, so no trace (D-PR4-10). */
+function withoutAuthority(task: ScheduledTask): ScheduledTask {
+  const { writeAuthority: _stopped, ...rest } = task;
+  return rest;
 }
 
 function pendingRow(db: UserDb, taskId: string, dueAt: string): ScheduleRun | undefined {
@@ -199,8 +234,10 @@ export async function updateTask(taskId: string, patch: TaskPatch): Promise<Task
     if (!versions.ok) return versions;
     appVersions = versions.versions;
   }
+  // A widening edit takes the authority away; the consent re-arms it after this save (D-PR4-8).
+  const kept = task.writeAuthority !== undefined && widens(task, patch, now) ? withoutAuthority(task) : task;
   const next: ScheduledTask = {
-    ...task,
+    ...kept,
     title: patch.title ?? task.title,
     steps,
     spec,
@@ -209,11 +246,73 @@ export async function updateTask(taskId: string, patch: TaskPatch): Promise<Task
     appVersions,
     missedPolicy: patch.missedPolicy ?? task.missedPolicy,
     alert: patch.alert ?? task.alert,
+    ...(patch.ownerAppId !== undefined ? { ownerAppId: patch.ownerAppId } : {}),
     ...(patch.startsAt !== undefined ? { startsAt: patch.startsAt } : {}),
     ...(patch.endsAt !== undefined ? { endsAt: patch.endsAt } : {}),
     updatedAt: nowIso,
   };
+  // The user saved it, so they have seen why it stopped making changes on its own (v2.1 N3).
+  delete next.disarmed;
   return commitTask(db, next);
+}
+
+/**
+ * The consent's tick (D-PR4-8): this schedule may make its changes to its ONE app's data on its
+ * own — at most `ACCESS_WRITE_MAX_ROWS` rows a run, from now, for the app's CURRENT version. Clears
+ * a `disarmed` trace. Refused for a schedule that names no app's AI or more than one app, for one
+ * whose id spells the approvals' undo bucket (A1), and while the app's install time is ahead of now
+ * (A6 — the walk never honours a consent older than its app).
+ */
+export async function armTask(taskId: string): Promise<TaskResult> {
+  const deps = currentDeps();
+  const db = await deps.db();
+  const task = db.getScheduledTask(taskId);
+  if (task === undefined) return refuse('no such schedule');
+  // Its changes would be journaled among the user's own approvals — the bucket that never refuses (A1).
+  if (task.id === OWN_UNDO_APPROVAL_BUCKET) return refuse(RESERVED_ID);
+  const appId = armableAppOf(task.steps);
+  if (appId === undefined) return refuse(NOT_ONE_APP);
+  const app = db.getApp(appId);
+  if (app === undefined) return refuse(`app "${appId}" is not installed in this file`);
+  const nowIso = deps.now().toISOString();
+  const writeAuthority = { rowsPerRun: ACCESS_WRITE_MAX_ROWS, armedAt: nowIso, armedVersion: app.currentVersion };
+  if (installedAfterArming(app, writeAuthority)) return refuse(installedAhead(app.displayName));
+  const next: ScheduledTask = { ...task, writeAuthority, updatedAt: nowIso };
+  delete next.disarmed;
+  return commitTask(db, next);
+}
+
+/** The row's *stop making changes on its own* (D-PR4-10): the authority goes, nothing else — the schedule stays as it is, and no trace is left (the user did it). */
+export async function disarmTask(taskId: string): Promise<TaskResult> {
+  const deps = currentDeps();
+  const db = await deps.db();
+  const task = db.getScheduledTask(taskId);
+  if (task === undefined) return refuse('no such schedule');
+  if (task.writeAuthority === undefined) return { ok: true, task };
+  return commitTask(db, { ...withoutAuthority(task), updatedAt: deps.now().toISOString() });
+}
+
+/**
+ * Settings' *stop every schedule making changes on its own* (D-PR4-10): one write per armed
+ * schedule, nothing for the rest. Answers how many stopped. A walk already in flight re-reads the
+ * file immediately before its write, so it makes nothing more.
+ */
+export async function disarmAllTasks(): Promise<number> {
+  const deps = currentDeps();
+  const db = await deps.db();
+  const nowIso = deps.now().toISOString();
+  let stopped = 0;
+  for (const task of db.listScheduledTasks()) {
+    if (task.writeAuthority === undefined) continue;
+    try {
+      db.putScheduledTask({ ...withoutAuthority(task), updatedAt: nowIso });
+      stopped += 1;
+    } catch {
+      // A row the file refuses keeps what it had; the rest still stop.
+    }
+  }
+  if (stopped > 0) bumpScheduleRevision();
+  return stopped;
 }
 
 /**

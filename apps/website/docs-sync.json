@@ -7,7 +7,7 @@
       "sources": [
         {
           "path": "docs/spec-drafts/SPEC.md",
-          "sha256": "71408b21e4f5c84ad540104b9874b334682467c3b79af40d18ae11c2f2218e0c"
+          "sha256": "001573c00495ac06f612205023f5907c5e403a49fa0da0394976b953679ba4ca"
         }
       ]
     },
@@ -17,7 +17,7 @@
       "sources": [
         {
           "path": "docs/spec-drafts/SPEC.md",
-          "sha256": "71408b21e4f5c84ad540104b9874b334682467c3b79af40d18ae11c2f2218e0c"
+          "sha256": "001573c00495ac06f612205023f5907c5e403a49fa0da0394976b953679ba4ca"
         }
       ]
     },
@@ -27,7 +27,7 @@
       "sources": [
         {
           "path": "docs/spec-drafts/SPEC.md",
-          "sha256": "71408b21e4f5c84ad540104b9874b334682467c3b79af40d18ae11c2f2218e0c"
+          "sha256": "001573c00495ac06f612205023f5907c5e403a49fa0da0394976b953679ba4ca"
         }
       ]
     },
@@ -37,7 +37,7 @@
       "sources": [
         {
           "path": "docs/spec-drafts/SPEC.md",
-          "sha256": "71408b21e4f5c84ad540104b9874b334682467c3b79af40d18ae11c2f2218e0c"
+          "sha256": "001573c00495ac06f612205023f5907c5e403a49fa0da0394976b953679ba4ca"
         }
       ]
     },
@@ -47,7 +47,7 @@
       "sources": [
         {
           "path": "docs/spec-drafts/SPEC.md",
-          "sha256": "71408b21e4f5c84ad540104b9874b334682467c3b79af40d18ae11c2f2218e0c"
+          "sha256": "001573c00495ac06f612205023f5907c5e403a49fa0da0394976b953679ba4ca"
         }
       ]
     },
@@ -57,7 +57,7 @@
       "sources": [
         {
           "path": "docs/spec-drafts/SPEC.md",
-          "sha256": "71408b21e4f5c84ad540104b9874b334682467c3b79af40d18ae11c2f2218e0c"
+          "sha256": "001573c00495ac06f612205023f5907c5e403a49fa0da0394976b953679ba4ca"
         }
       ]
     },
@@ -67,7 +67,7 @@
       "sources": [
         {
           "path": "docs/spec-drafts/SPEC.md",
-          "sha256": "71408b21e4f5c84ad540104b9874b334682467c3b79af40d18ae11c2f2218e0c"
+          "sha256": "001573c00495ac06f612205023f5907c5e403a49fa0da0394976b953679ba4ca"
         }
       ]
     },
@@ -77,7 +77,7 @@
       "sources": [
         {
           "path": "docs/spec-drafts/SPEC.md",
-          "sha256": "71408b21e4f5c84ad540104b9874b334682467c3b79af40d18ae11c2f2218e0c"
+          "sha256": "001573c00495ac06f612205023f5907c5e403a49fa0da0394976b953679ba4ca"
         }
       ]
     },
@@ -87,7 +87,7 @@
       "sources": [
         {
           "path": "docs/spec-drafts/SPEC.md",
-          "sha256": "71408b21e4f5c84ad540104b9874b334682467c3b79af40d18ae11c2f2218e0c"
+          "sha256": "001573c00495ac06f612205023f5907c5e403a49fa0da0394976b953679ba4ca"
         }
       ]
     },
@@ -167,7 +167,7 @@
       "sources": [
         {
           "path": "docs/whitepaper/dist/snug-protocol-whitepaper.pdf",
-          "sha256": "e0be3526cf9ed1487edfa158b658b4b7797df15d91043c1b30b27a729637c508"
+          "sha256": "7dd2c66976ca44f4d2f7cf846c02a7af065d2c718d79d2c2567d59028c300142"
         }
       ]
     },
@@ -177,7 +177,7 @@
       "sources": [
         {
           "path": "docs/product-vision.md",
-          "sha256": "df3904ab5643d74487ec46f90a1f60fb4d35c1954f90db5b7c75b114196e72fd"
+          "sha256": "6e6494223e1cc01546354c5de8a49243574c8830f8509702b03df33c18335aa3"
         }
       ]
     },
@@ -187,7 +187,7 @@
       "sources": [
         {
           "path": "docs/product-vision.md",
-          "sha256": "df3904ab5643d74487ec46f90a1f60fb4d35c1954f90db5b7c75b114196e72fd"
+          "sha256": "6e6494223e1cc01546354c5de8a49243574c8830f8509702b03df33c18335aa3"
         }
       ]
     },
@@ -197,7 +197,7 @@
       "sources": [
         {
           "path": "docs/product-vision.md",
-          "sha256": "df3904ab5643d74487ec46f90a1f60fb4d35c1954f90db5b7c75b114196e72fd"
+          "sha256": "6e6494223e1cc01546354c5de8a49243574c8830f8509702b03df33c18335aa3"
         }
       ]
     },
@@ -207,11 +207,11 @@
       "sources": [
         {
           "path": "docs/product-vision.md",
-          "sha256": "df3904ab5643d74487ec46f90a1f60fb4d35c1954f90db5b7c75b114196e72fd"
+          "sha256": "6e6494223e1cc01546354c5de8a49243574c8830f8509702b03df33c18335aa3"
         },
         {
           "path": "docs/spec-drafts/SPEC.md",
-          "sha256": "71408b21e4f5c84ad540104b9874b334682467c3b79af40d18ae11c2f2218e0c"
+          "sha256": "001573c00495ac06f612205023f5907c5e403a49fa0da0394976b953679ba4ca"
         }
       ]
     },
@@ -231,7 +231,7 @@
       "sources": [
         {
           "path": "docs/spec-drafts/SPEC.md",
-          "sha256": "71408b21e4f5c84ad540104b9874b334682467c3b79af40d18ae11c2f2218e0c"
+          "sha256": "001573c00495ac06f612205023f5907c5e403a49fa0da0394976b953679ba4ca"
         },
         {
           "path": "packages/sdk/src/types.ts",
@@ -249,7 +249,7 @@
         },
         {
           "path": "docs/spec-drafts/SPEC.md",
-          "sha256": "71408b21e4f5c84ad540104b9874b334682467c3b79af40d18ae11c2f2218e0c"
+          "sha256": "001573c00495ac06f612205023f5907c5e403a49fa0da0394976b953679ba4ca"
         }
       ]
     },
@@ -259,7 +259,7 @@
       "sources": [
         {
           "path": "docs/spec-drafts/SPEC.md",
-          "sha256": "71408b21e4f5c84ad540104b9874b334682467c3b79af40d18ae11c2f2218e0c"
+          "sha256": "001573c00495ac06f612205023f5907c5e403a49fa0da0394976b953679ba4ca"
         }
       ]
     },
@@ -269,7 +269,7 @@
       "sources": [
         {
           "path": "docs/spec-drafts/SPEC.md",
-          "sha256": "71408b21e4f5c84ad540104b9874b334682467c3b79af40d18ae11c2f2218e0c"
+          "sha256": "001573c00495ac06f612205023f5907c5e403a49fa0da0394976b953679ba4ca"
         }
       ]
     },
@@ -279,7 +279,7 @@
       "sources": [
         {
           "path": "docs/spec-drafts/SPEC.md",
-          "sha256": "71408b21e4f5c84ad540104b9874b334682467c3b79af40d18ae11c2f2218e0c"
+          "sha256": "001573c00495ac06f612205023f5907c5e403a49fa0da0394976b953679ba4ca"
         }
       ]
     },
@@ -289,7 +289,7 @@
       "sources": [
         {
           "path": "docs/spec-drafts/SPEC.md",
-          "sha256": "71408b21e4f5c84ad540104b9874b334682467c3b79af40d18ae11c2f2218e0c"
+          "sha256": "001573c00495ac06f612205023f5907c5e403a49fa0da0394976b953679ba4ca"
         }
       ]
     },
@@ -299,7 +299,7 @@
       "sources": [
         {
           "path": "docs/spec-drafts/SPEC.md",
-          "sha256": "71408b21e4f5c84ad540104b9874b334682467c3b79af40d18ae11c2f2218e0c"
+          "sha256": "001573c00495ac06f612205023f5907c5e403a49fa0da0394976b953679ba4ca"
         }
       ]
     },
@@ -309,7 +309,7 @@
       "sources": [
         {
           "path": "docs/spec-drafts/SPEC.md",
-          "sha256": "71408b21e4f5c84ad540104b9874b334682467c3b79af40d18ae11c2f2218e0c"
+          "sha256": "001573c00495ac06f612205023f5907c5e403a49fa0da0394976b953679ba4ca"
         }
       ]
     },
@@ -319,7 +319,7 @@
       "sources": [
         {
           "path": "docs/whitepaper/dist/snug-protocol-whitepaper.pdf",
-          "sha256": "e0be3526cf9ed1487edfa158b658b4b7797df15d91043c1b30b27a729637c508"
+          "sha256": "7dd2c66976ca44f4d2f7cf846c02a7af065d2c718d79d2c2567d59028c300142"
         }
       ]
     }

@@ -4,6 +4,45 @@ Every change pushed to `snugprotocol/spec`, newest first. Format: `## YYYY-MM-DD
 
 ---
 
+## 2026-10-12 — spec 1.2 editorial revision — **STAGED, not yet pushed** — TASK-20261010-host-broker (PR-4) — an app's OWN writes: the task write authority over its own app's data and the own-app undo, host-internal
+**Prose only, version held at 1.2; pushed together with PR-5's revision by the owner, never on
+its own.** ADR-0076 §9 lands its own-app half: a schedule whose app steps all name ONE app may
+carry the user's authority to make its changes on its own — the host makes what a finished run
+proposed to THAT app's own data, at most `ACCESS_WRITE_MAX_ROWS` (200) rows a run, through the
+Write Broker's capture seat — and the user's own approvals of one change go through the same
+seat; both are journaled host-internally so the user can put them back for seven days, and
+neither writes a line on any history (an own write names no other app). In the draft: §24.5's
+own-app paragraph is rewritten for both (`ownUndo:<appId>:<bucket>`, `authority: 'approval' |
+'task'`, no access line; item 18 restated — every scheduled write of ANOTHER app's data is
+still refused); §8.1 names the host-internal `ownUndo:<appId>:<bucket>` key (rows, never
+statement text; a schedule's bucket ≤ 20 live entries and refuses rather than evicts; swept with
+its schedule and its app; dropped on an untrusted import, kept on a trusted pull) and the
+schedule row's authority (written by the user's act alone, stripped from every task by an
+untrusted import); §22.2 and §23.3 say the same of an own write; §25 is pruned of what landed —
+the arming surface of the task write authority over its own app's data and the undo surface
+for an app's OWN approved writes — and keeps what moved to PR-5 (the chat's cross-app write
+through its card and the three *fetch* affordances), naming in their place a scheduled task's
+authority over ANOTHER app's data (a spec 1.3 matter); the header carries a dated revision note
+marked STAGED. No MUST/SHOULD sentence, constant, conformance rule or protocol mechanic changed.
+**Schemas:** none — `packages/protocol/schemas/` is byte-identical to the 1.2 publication
+(`git diff main --stat -- packages/protocol/schemas` is empty); every new shape
+(`packages/protocol/src/own-undo.ts`, the new seats of `schedule.ts`) is internal, outside
+`json-schemas.ts` SOURCES. `PROTOCOL_VERSION` stays 1.
+**Forward compatibility (host-internal rows, stated for the file format).** The scheduling
+shapes are strict, so the direction is fail closed: a run carrying any PR-4 seat — one that ran
+in the open app (`inOpenApp`) or read another app's data (`saw`), its tools' record, a
+`blockedBy`, an `applied` or `approved` record, a `held` item — is refused by a pre-PR-4 reader,
+which drops it from its history and from its next export or push; a task carrying
+`writeAuthority`, `disarmed` or a `tools` step is unreadable there and deleted by its untrusted
+import. A run of an unchanged task, and a task that never used a new seat, are byte-identical
+to their pre-PR-4 form.
+The whitepaper moves to edition 6 as an UNPUBLISHED DRAFT (the scheduled-work paragraph of its
+limitations section rewritten true), rebuilt and checked; it is published with this revision.
+**Owner act, not performed:** the push to `snugprotocol/spec` needs an explicit ask in the
+session (PROCESS.md release rules) and happens ONCE, after PR-5, carrying this text and PR-5's
+as two commits (the spec + README; the whitepaper edition 6 PDF); on push this entry is
+rewritten `**PUSHED**` with the SHAs by a docs PR here.
+
 ## 2026-10-11 — spec 1.2 — **PUSHED** `761a406` (spec + schemas + README) · `133b16c` (whitepaper edition 5) via snugprotocol/spec#3, rebase-merged so the two commits landed as two — TASK-20261010-host-broker (PR-3, merged as snug#202; owner's ask, same day)
 **Writes with an undo, refresh on demand and discovery between apps (ADR-0076 §4–§8, §10) —
 the second post-1.0 minor, additive.** No new frame and no new capability flag: the

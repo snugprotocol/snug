@@ -110,7 +110,29 @@
 // end, and the whole batch rolls back on a second one), `BEGIN IMMEDIATE` (`busy`), each
 // statement in order, `sqlite3_changes()`, the drift halt against `expectChanges` (`drifted` with
 // both counts — the counts the user approved are own mode's count rule), `COMMIT`. No facts, no
-// capture, `undoable: false` — an own-app undo surface is PR-4's (AC31).
+// capture, `undoable: false`.
+//
+// OWN MODE THAT CAPTURES (TASK-20261010-host-broker PR-4, contract v2 D-PR4-4; ADR-0076 §9). The
+// `{ own, capture: true, caps, expectChanges, requireUndo, admit }` variant is the same change made
+// UNDOABLE — a user's approval, or an armed schedule's change to its own app's data — so it runs
+// under the rules an undo needs and nothing else: the literal grammar (`parseBrokeredStatement`),
+// the table's SHAPE (`tableShape` — the rules an undo re-checks anyway) and an OWN column rule — an
+// UPDATE or INSERT naming a credential-named column, or a DELETE on a table holding one, is
+// unplannable, since its undo would write under that column (the undo's SEC-4 refusal) — and a
+// generated column is never captured. NEVER `tableFacts`: its CHECK and DELETE-coverage rules are
+// oracles against a READER, and here nobody but the app's own user is asking. Plannability is
+// decided for the WHOLE batch before any transaction — one unplannable statement refuses the call by
+// its rule and nothing runs (the engine then chooses: an approval re-calls the bare `{ own }`, a
+// task holds the change); there is never a mixed batch. Then `BEGIN IMMEDIATE`, each statement with
+// its capture objects, `sum(changes) ≤ caps.maxChanges` over the WHOLE call after each statement
+// (`too-many`), the drift halt, and — after the last statement, BEFORE `COMMIT` — the verdict on the
+// captured rows: the cell rule and the journal bytes above (this module's own belt), then the
+// engine's `admit(steps)` (the protocol's own-undo schema over the exact entry it will write, which
+// this module cannot import — THE WORKER'S BUNDLE). A verdict of no rolls back `cannot-undo` when an
+// undo is REQUIRED (a schedule never changes what it cannot put back), and otherwise commits with
+// `undoable: false` (the user approved the change itself; the undo was a courtesy). A call that
+// captured no row at all has nothing to put back: it commits, not undoable, and `admit` is not asked.
+// Refusals are worded for the app's own user — never about another app or a share.
 //
 // THE WORKER'S BUNDLE CARRIES NO SCHEMA (D-PR3-28). The kit's inline Worker reaches this module
 // (`planBrokeredWrite`), and the protocol's `access.ts` constructs every access schema at its
@@ -226,7 +248,8 @@ export type ApplyRefusal =
   | BrokeredRefused
   | {
       ok: false;
-      reason: 'busy' | 'drifted' | 'too-many' | 'too-large' | 'unsafe' | 'failed';
+      /** `cannot-undo` (PR-4): the capture variant under `requireUndo` captured rows its journal cannot hold — rolled back. */
+      reason: 'busy' | 'drifted' | 'too-many' | 'too-large' | 'unsafe' | 'failed' | 'cannot-undo';
       message: string;
       /** On `drifted`: the counts the plan expected, and the counts the statements made (through the one that drifted). */
       previewed?: number[];
@@ -240,13 +263,30 @@ export interface OwnStatement {
 }
 
 /**
+ * Own mode that captures (PR-4, D-PR4-4) — see OWN MODE THAT CAPTURES in the header. `caps.maxChanges`
+ * bounds the WHOLE call (an approval passes `Infinity`); `admit` is the engine's verdict on the exact
+ * steps it would journal, asked inside the transaction before `COMMIT`; `requireUndo` decides what a
+ * no means.
+ */
+export interface OwnCaptureInput {
+  own: readonly OwnStatement[];
+  capture: true;
+  caps: BrokeredCaps;
+  expectChanges?: readonly number[];
+  requireUndo: boolean;
+  admit: (steps: readonly UndoStep[]) => boolean;
+}
+
+/**
  * The Worker's plans to apply (strict, under the caps), the app's own approved statements (own
- * mode — the approved counts are its only bound) or an undo's structured steps to reverse (D-Q2;
- * Gate-5 W-2: only the strict variant carries `caps`, because only it reads them).
+ * mode — the approved counts are its only bound), the same made undoable (own mode that captures,
+ * PR-4) or an undo's structured steps to reverse (D-Q2; Gate-5 W-2: only the variants that read
+ * `caps` carry it).
  */
 export type BrokeredApplyInput =
   | { plans: readonly BrokeredPlan[]; caps: BrokeredCaps; expectChanges?: readonly number[]; requireUndo: boolean; capture: boolean }
   | { own: readonly OwnStatement[]; expectChanges?: readonly number[] }
+  | OwnCaptureInput
   | { undo: readonly UndoStep[] };
 
 export type BrokeredApplyResult = { ok: true; steps: UndoStep[]; changes: number[]; undoable: boolean } | ApplyRefusal;
@@ -255,6 +295,8 @@ export type BrokeredApplyResult = { ok: true; steps: UndoStep[]; changes: number
 
 /** The one sentence a table rule answers with (DS19): no why, nothing about the table. */
 const TABLE_REFUSED = "that table can't be changed from another app";
+/** Own mode's words for the shape rules (PR-4): the app's own user is reading, and what fails is the undo. */
+const OWN_TABLE_REFUSED = "changes to that table can't be undone";
 const refused = (rule: BrokeredRefusalRule, message: string): BrokeredRefused => ({ ok: false, reason: 'refused', rule, message });
 
 // ------------------------------------------------------------------------------- the tokenizer
@@ -710,6 +752,18 @@ export function parseBrokeredStatement(sql: string): BrokeredParseResult {
   }
 }
 
+/**
+ * Whether an own change CAN be captured for an undo, judged from its text alone (PR-4, D-PR4-4): the
+ * literal grammar above — literal values or placeholders, a WHERE on UPDATE and DELETE, no
+ * function, arithmetic or conflict clause. The proposal gate asks it as a schedule proposes, so an
+ * armed schedule's model hears at once that a change will wait for the user; the capture seat
+ * decides again on the live schema. The rule is the parser's token, for the engine to word.
+ */
+export function ownCapturable(sql: string): { ok: true } | { ok: false; rule: BrokeredRefusalRule } {
+  const parsed = parseBrokeredStatement(sql);
+  return parsed.ok ? { ok: true } : { ok: false, rule: parsed.rule };
+}
+
 // ------------------------------------------------------------------------------- dmlTargetTable
 
 const DML_TARGET =
@@ -952,7 +1006,7 @@ function runToEnd(db: Database, sql: string, params: readonly unknown[] | undefi
  */
 function runPlan(
   db: Database,
-  plan: BrokeredPlan,
+  plan: Pick<BrokeredPlan, 'sql' | 'params' | 'op' | 'table'>,
   columns: readonly string[],
   capture: { suffix: string; created: string[] } | undefined,
 ): { changes: number; step?: UndoStep } {
@@ -1273,6 +1327,125 @@ function applyOwn(db: Database, input: Extract<BrokeredApplyInput, { own: unknow
   }
 }
 
+/** One own statement made plannable: the text and values to run, its op and table, and the columns its capture lists. */
+interface OwnCapturePlan {
+  plan: Pick<BrokeredPlan, 'sql' | 'params' | 'op' | 'table'>;
+  columns: string[];
+}
+
+/**
+ * The columns an own statement's capture lists, under the OWN column rule (PR-4): the SET or INSERT
+ * columns in their declared spelling — each must exist, be no generated column and carry no
+ * credential-shaped name — or, for a DELETE, every non-generated column of a table holding no
+ * credential-named column (the undo would write the whole row back under it).
+ */
+function ownCaptureColumns(parsed: ParsedDml, live: readonly ColumnFact[]): { ok: true; columns: string[] } | BrokeredRefused {
+  if (parsed.op === 'delete') {
+    const credential = live.find((column) => isCredentialKeyName(column.name));
+    if (credential !== undefined) return refused('column', `a row holding a credential-named column can't be put back: "${credential.name}"`);
+    return { ok: true, columns: live.filter((column) => !column.generated).map((column) => column.name) };
+  }
+  const named = parsed.op === 'update' ? parsed.setColumns : parsed.insertColumns;
+  if (named === undefined || named.length === 0) return refused('statement', `an ${parsed.op} names no columns`);
+  const columns: string[] = [];
+  for (const name of named) {
+    const fact = live.find((column) => column.name.toLowerCase() === name.toLowerCase());
+    if (fact === undefined) return refused('column', `that table has no column "${name}"`);
+    if (fact.generated) return refused('computed', `a computed column can't be changed: "${name}"`);
+    if (isCredentialKeyName(fact.name)) return refused('column', `a change to a credential-named column can't be undone: "${name}"`);
+    columns.push(fact.name);
+  }
+  return { ok: true, columns };
+}
+
+/**
+ * The parser's refusals that speak to a READER writing into another app, re-worded by rule for an
+ * own capture (PR-4 Gate 5, A9): here the change is to the app's own data, and what the refusal
+ * must say is why it can't be undone. A rule absent here keeps the parser's sentence — it names
+ * the statement's own token and no other app.
+ */
+const OWN_PARSE_WORDS: Readonly<Partial<Record<BrokeredRefusalRule, string>>> = {
+  'no-where': 'a change to every row can’t be undone — it needs a WHERE',
+};
+
+/** A parser refusal in own-mode words — the rule unchanged, so the engine still switches on the token. */
+function ownWorded(refusal: BrokeredRefused): BrokeredRefused {
+  const message = OWN_PARSE_WORDS[refusal.rule];
+  return message === undefined ? refusal : { ...refusal, message };
+}
+
+/** Phase 1 of own capture: every statement planned against the live schema — or the batch refused by the first rule that bites. */
+function planOwnCapture(db: Database, own: readonly OwnStatement[]): { ok: true; plans: OwnCapturePlan[] } | BrokeredRefused {
+  const plans: OwnCapturePlan[] = [];
+  for (const statement of own) {
+    const forbidden = forbiddenStatementReason(statement.sql);
+    if (forbidden !== undefined) return refused('statement', `forbidden statement: ${forbidden}`);
+    const parsed = parseBrokeredStatement(statement.sql);
+    if (!parsed.ok) return ownWorded(parsed);
+    let shape: ReturnType<typeof tableShape>;
+    try {
+      shape = tableShape(db, parsed.parsed.table);
+    } catch (err) {
+      return refused('table', `${OWN_TABLE_REFUSED} (${errorMessage(err)})`);
+    }
+    if (!shape.ok) return refused('table', OWN_TABLE_REFUSED);
+    const columns = ownCaptureColumns(parsed.parsed, shape.columns);
+    if (!columns.ok) return columns;
+    const { op, table } = parsed.parsed;
+    plans.push({ plan: { sql: statement.sql, ...(statement.params === undefined ? {} : { params: statement.params }), op, table }, columns: columns.columns });
+  }
+  return { ok: true, plans };
+}
+
+/** This module's own belt on the captured rows: every cell journalable under its column, the steps within the byte cap. */
+const capturedJournalable = (steps: readonly UndoStep[], caps: BrokeredCaps): boolean =>
+  steps.every((step) => stepRefusal(step) === undefined) && journalBytes(steps) <= caps.maxUndoBytes;
+
+const CANNOT_UNDO = "this change can't be undone, so it wasn't made";
+
+/** Own mode that captures (PR-4, D-PR4-4) — see OWN MODE THAT CAPTURES in the header. */
+function applyOwnCaptured(db: Database, input: OwnCaptureInput): BrokeredApplyResult {
+  const { own, caps, expectChanges, requireUndo, admit } = input;
+  // Phase 1 — the WHOLE batch planned before any transaction: one unplannable statement and nothing runs.
+  const planned = planOwnCapture(db, own);
+  if (!planned.ok) return planned;
+  // Phase 2 — the transaction: each statement captured and counted; the verdict on the rows before COMMIT.
+  const created: string[] = [];
+  const steps: UndoStep[] = [];
+  const changes: number[] = [];
+  let total = 0;
+  let began = false;
+  let committed = false;
+  try {
+    const refusal = beginImmediate(db);
+    if (refusal !== undefined) return refusal;
+    began = true;
+    const suffix = hex8();
+    for (const [index, { plan, columns }] of planned.plans.entries()) {
+      const outcome = runPlan(db, plan, columns, { suffix, created });
+      changes.push(outcome.changes);
+      total += outcome.changes;
+      if (total > caps.maxChanges) return { ok: false, reason: 'too-many', message: TOO_MANY(caps.maxChanges) };
+      const expected = expectChanges?.[index];
+      if (expected !== undefined && expected !== outcome.changes) {
+        return { ok: false, reason: 'drifted', message: DRIFTED, previewed: [...(expectChanges ?? [])], current: [...changes] };
+      }
+      // A step that captured no row has nothing to put back, and an empty step never parses into a journal (W-1).
+      if (outcome.step !== undefined && outcome.step.rows.length > 0) steps.push(outcome.step);
+    }
+    const undoable = steps.length > 0 && capturedJournalable(steps, caps) && admit(steps);
+    if (steps.length > 0 && !undoable && requireUndo) return { ok: false, reason: 'cannot-undo', message: CANNOT_UNDO };
+    db.run('COMMIT');
+    committed = true;
+    return { ok: true, steps: undoable ? steps : [], changes, undoable };
+  } catch (err) {
+    return thrown(err);
+  } finally {
+    if (began && !committed) rollBack(db);
+    dropCreated(db, created);
+  }
+}
+
 interface BuiltUndo {
   sql: string;
   params: unknown[];
@@ -1338,6 +1511,6 @@ function applyUndo(db: Database, steps: readonly UndoStep[]): BrokeredApplyResul
  */
 export function applyBrokeredBatch(db: Database, input: BrokeredApplyInput): BrokeredApplyResult {
   if ('plans' in input) return applyPlans(db, input);
-  if ('own' in input) return applyOwn(db, input);
+  if ('own' in input) return 'capture' in input ? applyOwnCaptured(db, input) : applyOwn(db, input);
   return applyUndo(db, input.undo);
 }

@@ -9,7 +9,7 @@
 //
 // Same voice: lowercase-leading labels, plain words, the typographic apostrophe.
 
-import { WORDS } from './copy.js';
+import { WORDS, changedRows } from './copy.js';
 import type { TemplateName } from './editorModel.js';
 
 // --------------------------------------------------------------------------- the page
@@ -62,6 +62,9 @@ export const GROUPS = {
 
 // ------------------------------------------------------------------------- a row
 
+/** Spelled once: the delete confirm and its variant for a schedule whose changes can still be undone. */
+const DELETE_CONFIRM = 'delete for good?';
+
 export const ROW = {
   /** "next tomorrow", "next in 2 hours" — the second line's tail. */
   next: (relative: string): string => `next ${relative}`,
@@ -73,7 +76,9 @@ export const ROW = {
   history: 'history',
   delete: 'delete',
   /** The tiles' armed inline confirm, word for word. */
-  deleteConfirm: 'delete for good?',
+  deleteConfirm: DELETE_CONFIRM,
+  /** …on a schedule whose changes can still be undone: deleting it ends them (TASK-20261010-host-broker PR-4, D-PR4-18). */
+  deleteConfirmUndo: `${DELETE_CONFIRM} — its changes from the last seven days can’t be undone after this`,
   deleteYes: 'delete',
   deleteKeep: 'keep',
   deleting: 'deleting…',
@@ -81,6 +86,23 @@ export const ROW = {
   /** The switch's state words for a screen reader (`aria-checked` carries the truth). */
   on: 'on',
   off: 'off',
+  // TASK-20261010-host-broker PR-4 (D-PR4-8, D-PR4-10; D5): the authority, wherever the schedule is.
+  /** Line 2's chip — a glyph whose accessible name is these words, the words beside it on a wide screen. */
+  onItsOwn: 'makes changes on its own',
+  /** The kebab's act on a schedule that makes changes on its own. */
+  stopOnItsOwn: 'stop making changes on its own',
+  /** …and what it says it did, in the row. */
+  stoppedOnItsOwn: 'it won’t change data on its own any more — turn it back on from edit',
+} as const;
+
+/**
+ * The schedule's changes list (PR-4, D-PR4-18): at the top of its history, read from its own undo
+ * bucket — so a change it made stays findable, with its undo, for the whole seven days, whatever
+ * was pruned or cleared. Each entry: *changed 12 rows in Ledger · 3 hours ago · undo*.
+ */
+export const CHANGES_LIST = {
+  heading: WORDS.changesMade,
+  entry: (n: number, appName: string): string => changedRows(n, appName),
 } as const;
 
 // --------------------------------------------------------------------- the hub section
@@ -152,6 +174,24 @@ export const SETTINGS = {
   noSuggestionsHint: `you can still ${WORDS.item} any app yourself`,
   on: 'on',
   off: 'off',
+  // TASK-20261010-host-broker PR-4 (D-PR4-10): the kill switch is an ACT, shown only while some
+  // schedule makes changes on its own — never a switch, never a disabled control.
+  /** How many make changes on their own now — the act's row. */
+  onItsOwnCount: (n: number): string => (n === 1 ? `1 ${WORDS.item} makes changes on its own` : `${n} ${WORDS.items} make changes on their own`),
+  /** Spelled whole, like every sentence of the one phrase — a person searches for it as one. */
+  stopAllOnItsOwn: 'stop every schedule making changes on its own',
+  /**
+   * The act, answered where its row was (PR-4 Gate 5, U7): the row goes with the authorities, so the
+   * card says how many stopped — `n` is what the act answered, never the count the row showed.
+   */
+  stoppedAll: (n: number): string =>
+    n === 0
+      ? 'none stopped — try again'
+      : n === 1
+        ? `1 ${WORDS.item} stopped making changes on its own — turn it back on from its edit`
+        : `${n} ${WORDS.items} stopped making changes on their own — turn each back on from its edit`,
+  /** The act never reached the file: nothing stopped, the act stays for another try. */
+  stopAllFailed: (reason: string): string => `nothing stopped — ${reason}`,
 } as const;
 
 // ------------------------------------------------ the running chip (U10) and the chat offer (E10)
@@ -171,3 +211,18 @@ export const OFFER = {
    */
   hostBrain: `on this brain the agent can’t suggest ${WORDS.items} itself — review is the way`,
 } as const;
+
+// ------------------------------------------------- the arming act's own refusals (PR-4 Gate 5)
+// What `armTask` answers when no surface should have offered the choice — the belts behind the
+// surfaces (TASK-20261010-host-broker A1, A6). Said in the authority's one phrase.
+
+/**
+ * A schedule whose id spells the bucket the user's own approvals are kept in (A1) — only a crafted
+ * file carries one. It never makes changes on its own: its undo would land among the approvals.
+ */
+export const RESERVED_ID = `this ${WORDS.item} can’t make changes on its own — it arrived under a name Snug keeps for itself; set it up again as a new ${WORDS.item}`;
+
+/** The app's own record says it was installed later than this device's clock says it is now (A6): a consent given now would predate the app it is for. */
+export function installedAhead(appName: string): string {
+  return `can’t make changes on its own yet — ${appName}’s install time is ahead of this device’s clock`;
+}

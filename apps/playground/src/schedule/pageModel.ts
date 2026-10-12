@@ -10,12 +10,13 @@
 
 import { useEffect, useState } from 'react';
 
-import type { RunStatus, ScheduleRun, ScheduleSpec, ScheduleStep, ScheduledTask } from '@snugprotocol/protocol';
+import type { RunStatus, ScheduleDisarmedReason, ScheduleRun, ScheduleSpec, ScheduleStep, ScheduledTask } from '@snugprotocol/protocol';
 
 import { useLibraryRevision } from '../platform/signals.js';
 import { refreshAppMeta, useAppMetaMap } from '../state/appMeta.js';
 import { userLibrary } from '../state/library.js';
 import { describeSpec, nextOccurrence, resolveZone } from './cron.js';
+import { stepsCost } from './floors.js';
 
 const MINUTE_MS = 60_000;
 const HOUR_MS = 3_600_000;
@@ -126,8 +127,11 @@ export const appIdsOf = (steps: readonly ScheduleStep[]): string[] => [...new Se
 /** The app a *run <app>* step runs — the first such step's; `undefined` for a schedule that runs no app. */
 export const appRunAppOf = (steps: readonly ScheduleStep[]): string | undefined => steps.find((step) => step.kind === 'app-run')?.appId;
 
-/** How many *ask the AI* steps a schedule has — one brain call each per occurrence. */
-export const aiStepsOf = (steps: readonly ScheduleStep[]): number => steps.filter((step) => step.kind === 'app-think').length;
+/**
+ * The AI calls one occurrence of a schedule may spend — one per *ask the AI* step, and up to its
+ * round trips for a step that may look things up (`floors.stepsCost`, TASK-20261010-host-broker PR-4).
+ */
+export const aiCallsOf = (steps: readonly ScheduleStep[]): number => stepsCost(steps).ai;
 
 // ---------------------------------------------------------------------- the results
 
@@ -191,22 +195,29 @@ export function pendingRows(tasks: readonly ScheduledTask[], runsByTask: Record<
   return rows.sort((a, b) => Date.parse(a.run.dueAt) - Date.parse(b.run.dueAt));
 }
 
-/** The AI calls accepting every candidate would spend: one per *ask the AI* step, per candidate (collapsed = runs once). */
+/** The AI calls accepting every candidate may spend: what each occurrence may spend, per candidate (collapsed = runs once). */
 export function pendingAiCalls(rows: readonly PendingRow[]): number {
-  return rows.reduce((sum, row) => sum + aiStepsOf(row.item.steps), 0);
+  return rows.reduce((sum, row) => sum + aiCallsOf(row.item.steps), 0);
 }
 
 // ---------------------------------------------------------------------- the groups
 
-export type Attention = { kind: 'needs-you'; run: ScheduleRun } | { kind: 'paused'; reason: NonNullable<ScheduledTask['pausedReason']> } | { kind: 'imported' };
+export type Attention =
+  | { kind: 'needs-you'; run: ScheduleRun }
+  | { kind: 'paused'; reason: NonNullable<ScheduledTask['pausedReason']> }
+  | { kind: 'disarmed'; reason: ScheduleDisarmedReason }
+  | { kind: 'imported' };
 
 /**
- * Why a schedule sits under *needs your attention*, or `undefined`: its latest result needs
- * the user, the engine paused it (with its reason — *resume* is the act), or it arrived
- * disabled with an imported file (*review* is the act).
+ * Why a schedule sits under *needs your attention*, or `undefined` — the first that applies, in
+ * this order: the engine paused it (with its reason — *resume* is the act); it stopped making
+ * changes on its own without the user's act (the `disarmed` trace, TASK-20261010-host-broker
+ * PR-4, D-PR4-8 — *review* is the act, and the user's next save clears the trace); it arrived
+ * disabled with an imported file (*review*); its latest result needs the user.
  */
 export function attentionOf(item: ScheduledTask, runs: readonly ScheduleRun[] | undefined): Attention | undefined {
   if (item.pausedReason !== undefined) return { kind: 'paused', reason: item.pausedReason };
+  if (item.disarmed !== undefined) return { kind: 'disarmed', reason: item.disarmed.reason };
   if (item.provenance === 'imported' && !item.enabled) return { kind: 'imported' };
   const latest = latestResult(runs);
   if (latest?.status === 'needs-you') return { kind: 'needs-you', run: latest };

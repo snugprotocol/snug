@@ -38,19 +38,46 @@
 // F13, the scheduler's import cycle below being the reason; `defaultAppRunDeps` — the page's
 // mount store and registry); `createStepExecutor(deps)` is the seam the tests inject into, with
 // `blockedAppRunDeps()` for a fake that wants every app-run step refused by name (M12).
+//
+// THE BRAIN GATES (TASK-20261010-host-broker PR-4, D-PR4-15; T-A Q8) run in the production
+// composition, which passes `brainRouteFor` — the chat's own route derivation, the app transport's.
+// On BOTH paths of an *ask* step, first: the demo override or a keyless BYOK brain → `refused` with
+// `blockedBy: 'brain'`, nothing sent, nothing read (that brain would answer a person with a script).
+// Then, for a step that may look things up: a route with no data lane (the host, subscription and
+// WebLLM brains — `chatDoorOpen`) or an app holding a sidecar fact (the tool loop has no R-9 egress
+// scrub, which the app transport applies per send) DEGRADES to the tool-free step, saying why on
+// `tools.unavailable`. Otherwise `schedule/appAgent.ts`, reached through a LAZY import: the agent's
+// graph loads only when a step needs it, and the host kit — whose brains never pass these gates —
+// swaps the module for a loud stub. A composition without `brainRouteFor` (the unit seam) runs every
+// *ask* step tool-free, exactly as before PR-4.
 
-import { SCHEDULE_STEP_SUMMARY_MAX_CHARS, findScheduleCredential, type ScheduleProposalItem, type ScheduleStep } from '@snugprotocol/protocol';
+import type { UserDb } from '@snugprotocol/db';
+import {
+  SCHEDULE_STEP_SUMMARY_MAX_CHARS,
+  STEP_SAW_MAX_ENTRIES,
+  STEP_SAW_NAME_MAX_CHARS,
+  findScheduleCredential,
+  type ScheduleProposalItem,
+  type ScheduleStep,
+  type StepSaw,
+} from '@snugprotocol/protocol';
 import type { AgentTransport } from '@snugprotocol/runner';
 
+import { chatBrainRoute, chatDoorOpen, type ReaderBrainRoute } from '../access/egress.js';
 import type { MaterialisedSet } from '../access/service.js';
+import { oneLine } from '../agent/sharedDdl.js';
+import { appHasSidecarFact } from '../state/sidecarLive.js';
 import { defaultAppRunDeps, executeAppRun, type AppRunDeps } from './appRun.js';
-import { CANCELLED_SUMMARY, defaultTransportFor, executeAppThink, type AppThinkDeps } from './appThink.js';
+import { CANCELLED_SUMMARY, defaultTransportFor, executeAppThink, keylessBrainGate, type AppThinkDeps, type AppThinkStep } from './appThink.js';
 import type { StepContext, StepExecutor, StepOutcome } from './engine-types.js';
-import { scrubOrWithhold } from './scrub.js';
+import { ZERO_CALLS } from './protection.js';
+import { WITHHELD_SUMMARY, scrubOrWithhold } from './scrub.js';
 import { messageOf } from './taskShape.js';
 
 export { CANCELLED_SUMMARY } from './appThink.js';
 export { blockedAppRunDeps } from './appRun.js';
+/** What replaces a text that looked like a credential — its home is `scrub.ts`, which the scheduled agent reads it from too. */
+export { WITHHELD_SUMMARY } from './scrub.js';
 
 export interface StepExecutorDeps {
   /** The app's OWN transport, or `undefined` when no brain can answer (the demo brain) — see `appThink.ts`. */
@@ -58,17 +85,18 @@ export interface StepExecutorDeps {
   /** The scheduler door's tables for an *Ask the AI* step (PR-2) — absent ⇒ the step sees none; see `appThink.ts`. */
   sharedFor?: AppThinkDeps['sharedFor'];
   /**
+   * The brain route an *Ask the AI* step would take for its app NOW (PR-4) — present, the brain
+   * gates run (the production composition passes `chatBrainRoute`); absent, every *ask* step runs
+   * tool-free, ungated, as before PR-4 (the unit seam).
+   */
+  brainRouteFor?(db: UserDb, appId: string): ReaderBrainRoute;
+  /**
    * The *Run [app]* seams (`appRun.ts`): the platform seat, the hidden mount store, the
    * live-host registry, the runtime composition. Required — a unit fake that wants the arm
    * refused by name passes `blockedAppRunDeps()` rather than leaving the seams out (M12).
    */
   appRun: AppRunDeps;
 }
-
-/** What replaces a summary, an alert line or a failure message that looked like a credential. */
-export const WITHHELD_SUMMARY = 'a result was withheld because it looked like a credential';
-
-const none = (): StepOutcome['calls'] => ({ ai: 0, net: 0 });
 
 /**
  * The production `sharedFor` (D-PR2-13; C-Q1): the Access Service, reached LAZILY (the cycle
@@ -96,6 +124,12 @@ function safeText(text: string): string {
   return safe === undefined ? WITHHELD_SUMMARY : safe.slice(0, SCHEDULE_STEP_SUMMARY_MAX_CHARS);
 }
 
+/** A read table's names as the run row may hold them: one line each, capped (R-88). */
+function safeSaw(saw: readonly StepSaw[]): StepSaw[] {
+  const cut = (text: string): string => oneLine(text).slice(0, STEP_SAW_NAME_MAX_CHARS);
+  return saw.slice(0, STEP_SAW_MAX_ENTRIES).map(({ source, table }) => ({ source: cut(source), table: cut(table) }));
+}
+
 function safeProposal(item: ScheduleProposalItem): ScheduleProposalItem | undefined {
   if (findScheduleCredential(item) !== undefined) return undefined;
   const summary = item.summary === undefined ? undefined : scrubOrWithhold(item.summary, 'store');
@@ -106,28 +140,50 @@ function safeProposal(item: ScheduleProposalItem): ScheduleProposalItem | undefi
 /** The one place result text is made safe to store (see the module comment). Answers a NEW object. */
 export function finalizeOutcome(outcome: StepOutcome): StepOutcome {
   const out: StepOutcome = { status: outcome.status, calls: { ...outcome.calls } };
-  if (outcome.capped === true) out.capped = true; // the queue's fold reads it (D-PR1-6); never a persisted field
+  // The queue's fold reads it (D-PR1-6) — the kind as found, so the run says WHICH limit (Gate-5 JOBS-F6); never a persisted field.
+  if (outcome.capped !== undefined && outcome.capped !== false) out.capped = outcome.capped;
   if (outcome.summary !== undefined) out.summary = safeText(outcome.summary);
   if (outcome.alert !== undefined) out.alert = { title: safeText(outcome.alert.title), body: safeText(outcome.alert.body) };
   if (outcome.proposals !== undefined) {
     const kept = outcome.proposals.map(safeProposal).filter((item): item is ScheduleProposalItem => item !== undefined);
     if (kept.length > 0) out.proposals = kept;
   }
+  // PR-4's host facts (D-PR4-17), each only when it has something to say.
+  if (outcome.inOpenApp === true) out.inOpenApp = true;
+  if (outcome.saw !== undefined && outcome.saw.length > 0) out.saw = safeSaw(outcome.saw);
+  if (outcome.tools !== undefined) out.tools = outcome.tools;
+  if (outcome.blockedBy !== undefined) out.blockedBy = outcome.blockedBy;
   return out;
+}
+
+/**
+ * An *Ask the AI* step under the production gates (see the module comment): refused for a keyless
+ * brain, degraded to the tool-free step where tools cannot run, else the agent — lazily.
+ */
+async function executeAsk(step: AppThinkStep, ctx: StepContext, deps: StepExecutorDeps): Promise<StepOutcome> {
+  const route = deps.brainRouteFor?.(ctx.db, step.appId);
+  if (route === undefined) return executeAppThink(step, ctx, deps);
+  const refused = keylessBrainGate(ctx.db, step.appId, route);
+  if (refused !== undefined) return refused;
+  if (step.tools !== true) return executeAppThink(step, ctx, deps);
+  const unavailable = !chatDoorOpen(route) ? 'brain' : appHasSidecarFact(ctx.db, step.appId) ? 'sidecar' : undefined;
+  if (unavailable !== undefined) return { ...(await executeAppThink(step, ctx, deps)), tools: { unavailable } };
+  const { executeAppAgent } = await import('./appAgent.js');
+  return executeAppAgent(step, ctx);
 }
 
 async function dispatch(step: ScheduleStep, ctx: StepContext, deps: StepExecutorDeps): Promise<StepOutcome> {
   switch (step.kind) {
     case 'notify':
-      return { status: 'ok', summary: step.body, calls: none(), alert: { title: step.title, body: step.body } };
+      return { status: 'ok', summary: step.body, calls: { ...ZERO_CALLS }, alert: { title: step.title, body: step.body } };
     case 'app-run':
       return executeAppRun(step, ctx, deps.appRun);
     case 'app-think':
-      return executeAppThink(step, ctx, deps);
+      return executeAsk(step, ctx, deps);
     default: {
       // A row a newer host wrote: `failed` with the kind named, never a throw.
       const unknown: never = step;
-      return { status: 'failed', summary: `unknown step kind: ${String((unknown as { kind?: unknown }).kind)}`, calls: none() };
+      return { status: 'failed', summary: `unknown step kind: ${String((unknown as { kind?: unknown }).kind)}`, calls: { ...ZERO_CALLS } };
     }
   }
 }
@@ -136,9 +192,9 @@ export function createStepExecutor(deps: StepExecutorDeps): StepExecutor {
   return async (step, ctx) => {
     let outcome: StepOutcome;
     try {
-      outcome = ctx.signal.aborted ? { status: 'failed', summary: CANCELLED_SUMMARY, calls: none() } : await dispatch(step, ctx, deps);
+      outcome = ctx.signal.aborted ? { status: 'failed', summary: CANCELLED_SUMMARY, calls: { ...ZERO_CALLS } } : await dispatch(step, ctx, deps);
     } catch (err) {
-      outcome = { status: 'failed', summary: messageOf(err), calls: none() };
+      outcome = { status: 'failed', summary: messageOf(err), calls: { ...ZERO_CALLS } };
     }
     // Cut short while it ran: say so (what was spent stays charged); the queue records the run.
     if (ctx.signal.aborted) outcome = { status: 'failed', summary: CANCELLED_SUMMARY, calls: outcome.calls };
@@ -148,8 +204,8 @@ export function createStepExecutor(deps: StepExecutorDeps): StepExecutor {
 
 /**
  * The production executor: the app transport resolved per call from the brain and the settings
- * stores, the scheduler door over the Access Service, the *Run [app]* seams over the page's
- * hidden mount store and live-host registry.
+ * stores, the brain gates over the chat's route derivation (PR-4), the scheduler door over the
+ * Access Service, the *Run [app]* seams over the page's hidden mount store and live-host registry.
  * Composed on FIRST USE, never at load. Re-evaluated at Gate-5 PR-B M8: moving the handshake's
  * names to `scheduleKey.ts` took `appRun.ts` out of the scheduler's imports, but the cycle this
  * guards remains through THIS module — `scheduler.ts` → `executors.ts` → `appRun.ts` →
@@ -159,6 +215,6 @@ export function createStepExecutor(deps: StepExecutorDeps): StepExecutor {
  */
 let production: StepExecutor | undefined;
 export const executeStep: StepExecutor = (step, ctx) => {
-  production ??= createStepExecutor({ transportFor: defaultTransportFor, sharedFor: defaultSharedFor, appRun: defaultAppRunDeps() });
+  production ??= createStepExecutor({ transportFor: defaultTransportFor, sharedFor: defaultSharedFor, brainRouteFor: chatBrainRoute, appRun: defaultAppRunDeps() });
   return production(step, ctx);
 };

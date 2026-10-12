@@ -15,7 +15,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { UserDb } from '@snugprotocol/db';
 import type { ScheduleSpec, ScheduleStep } from '@snugprotocol/protocol';
 
-import { CONSENT } from '../schedule/copy.js';
+import { CONSENT, brainBlocked } from '../schedule/copy.js';
 import { CONSENT_ROWS } from '../schedule/copy.editor.js';
 import { approvedHostsByApp, dailyAiBound } from '../schedule/editorModel.js';
 import { EnableConsent, type EnableConsentProps } from '../schedule/EnableConsent.js';
@@ -70,6 +70,9 @@ async function render(props: Partial<EnableConsentProps> & Pick<EnableConsentPro
         onNotNow={props.onNotNow ?? ((): void => undefined)}
         {...(props.busy !== undefined ? { busy: props.busy } : {})}
         {...(props.error !== undefined ? { error: props.error } : {})}
+        {...(props.presetOnItsOwn !== undefined ? { presetOnItsOwn: props.presetOnItsOwn } : {})}
+        {...(props.connectionsByApp !== undefined ? { connectionsByApp: props.connectionsByApp } : {})}
+        {...(props.blockedApps !== undefined ? { blockedApps: props.blockedApps } : {})}
         steps={props.steps}
       />,
     );
@@ -88,7 +91,11 @@ describe('what will run, verbatim', () => {
     expect(must('consent-prompt-0').textContent).toBe(PROMPT);
     expect(must('consent-prompt-0').querySelector('b'), 'markup in a prompt is characters, never an element').toBeNull();
     expect([...must('consent-queries-0').querySelectorAll('code')].map((c) => c.textContent)).toEqual(QUERIES);
-    expect(must('consent-hosts-0').textContent).toBe('api.bank.example, sync.bank.example');
+    // INVERTED by D-PR4-20 (TASK-20261010-host-broker PR-4, D11): a tool-free ask step calls nothing —
+    // its call row says so (*may call: none — it only reads data*), never the app's approved hosts.
+    // Was: expect(must('consent-hosts-0').textContent).toBe('api.bank.example, sync.bank.example');
+    expect(must('consent-hosts-0').textContent).toBe('none — it only reads data');
+    expect(must('consent-step-0').textContent).not.toContain('api.bank.example');
     expect(must('consent-cost').textContent).toBe(`${CONSENT.cost}: ${CONSENT_ROWS.dailyBound(1)}`);
     expect(must('consent-enable').textContent).toBe(CONSENT.enable);
     expect(must('consent-not-now').textContent).toBe(CONSENT.notNow);
@@ -98,7 +105,9 @@ describe('what will run, verbatim', () => {
     await render({ steps: [think('ledger')] });
     expect(must('consent-tables-0').textContent).toBe(CONSENT_ROWS.tables('Ledger'));
     expect(q('consent-queries-0')).toBeNull();
-    expect(must('consent-hosts-0').textContent).toBe(CONSENT_ROWS.noHosts);
+    // INVERTED by D-PR4-20 (PR-4): the tool-free ask step's call row reads *none — it only reads data*.
+    // Was: expect(must('consent-hosts-0').textContent).toBe(CONSENT_ROWS.noHosts);
+    expect(must('consent-hosts-0').textContent).toBe('none — it only reads data');
   });
 
   it('a reminder step shows its title and message; two apps are two rows', async () => {
@@ -159,5 +168,266 @@ describe('the daily bound (E7) and the hosts (F10) — the pure half', () => {
     db.putDeclaredConnection(app, 'pending', requirement('pending', ['never.example']), 'inference');
     db.putDeclaredConnection(other, 'standup', requirement('standup', ['api.standup.example']), 'inference');
     expect(approvedHostsByApp(db, [app, other, app])).toEqual({ [app]: ['api.bank.example', 'sync.bank.example'], [other]: [] });
+  });
+});
+
+// =============================================================================================
+// TASK-20261010-host-broker PR-4 — the task write authority's tick and the ask step's new rows
+// (D-PR4-8, D-PR4-20; AC31, AC32). The tick is ONE act on this surface (all four hosts land here):
+// OFF on every mount, never seeded from a proposal, an import, a draft or storage — only the
+// editor may pre-set it to the choice the user just made there (`presetOnItsOwn`); offered only
+// when every *Ask <App>'s AI* step names ONE app; its words are `CONSENT_ROWS.onItsOwn(appName)`.
+// The user's answer reaches the host through `onEnable({ onItsOwn })`.
+//
+// Assumed (lane T-C questions): the tick is `[data-testid="consent-on-its-own"]` (a checkbox), its
+// unticked hint `consent-on-its-own-hint`, the > 20-a-week note `consent-on-its-own-often`; the
+// look-up row `consent-lookups-<i>` composes the names `fetchableConnections` gives, handed in as
+// `connectionsByApp` (library id → connection display names).
+// =============================================================================================
+
+const tools = (appId: string, sql?: string[]): ScheduleStep => ({ kind: 'app-think', appId, prompt: PROMPT, context: sql === undefined ? { maxRows: 50 } : { sql, maxRows: 50 }, tools: true });
+const HOURLY: ScheduleSpec = { kind: 'every', n: 1, unit: 'hours', tz: 'device' };
+
+const tick = (): HTMLInputElement => must('consent-on-its-own') as HTMLInputElement;
+
+async function remount(props: Partial<EnableConsentProps> & Pick<EnableConsentProps, 'steps'>): Promise<void> {
+  await act(async () => {
+    root?.unmount();
+  });
+  container?.remove();
+  await render(props);
+}
+
+describe('PR-4 — the tick: *make changes on its own* (D-PR4-8, D-PR4-20)', () => {
+  it('a one-app ask step offers the tick, OFF, labelled with the contract’s words, with the off hint', async () => {
+    await render({ steps: [think('ledger')] });
+    expect(tick().type).toBe('checkbox');
+    expect(tick().checked).toBe(false);
+    expect(must('enable-consent').textContent).toContain(CONSENT_ROWS.onItsOwn('Ledger'));
+    expect(CONSENT_ROWS.onItsOwn('Ledger')).toBe('let it make its changes to Ledger’s data on its own — never another app’s · up to 200 rows each time · undo any of it for seven days');
+    expect(tick().labels?.[0]?.textContent ?? '', 'the tick is named by its own words').toContain(CONSENT_ROWS.onItsOwn('Ledger'));
+    expect(must('consent-on-its-own-hint').textContent).toBe('off: its changes wait for your OK on the result');
+  });
+
+  it('ticking it is the ONE act: the hint goes, and schedule it hands the host { onItsOwn: true }; left off, { onItsOwn: false }', async () => {
+    const choices: unknown[] = [];
+    await render({ steps: [think('ledger')], onEnable: (choice?: unknown) => void choices.push(choice) });
+    await act(async () => {
+      tick().click();
+    });
+    expect(tick().checked).toBe(true);
+    expect(q('consent-on-its-own-hint')).toBeNull();
+    await act(async () => {
+      must('consent-enable').click();
+    });
+    expect(choices).toEqual([{ onItsOwn: true }]);
+
+    choices.length = 0;
+    await remount({ steps: [think('ledger')], onEnable: (choice?: unknown) => void choices.push(choice) });
+    await act(async () => {
+      must('consent-enable').click();
+    });
+    expect(choices).toEqual([{ onItsOwn: false }]);
+  });
+
+  it('a reminder and an ask step of ONE app still offer it; the app named is that app', async () => {
+    await render({ steps: [{ kind: 'notify', title: 'stretch', body: 'stand up' }, think('ledger')] });
+    expect(tick().checked).toBe(false);
+    expect(must('enable-consent').textContent).toContain(CONSENT_ROWS.onItsOwn('Ledger'));
+  });
+
+  it('NEGATIVE: a task whose ask steps name TWO apps shows no tick at all — one seat call per run, one undo per run', async () => {
+    await render({ steps: [think('ledger'), think('standup')], appNames: { ledger: 'Ledger', standup: 'Standup' } });
+    expect(q('consent-on-its-own')).toBeNull();
+    expect(q('consent-on-its-own-hint')).toBeNull();
+    expect(must('enable-consent').textContent).not.toContain('on its own');
+  });
+
+  it('NEGATIVE: nothing to make changes with — a reminder-only or a run-only schedule shows no tick', async () => {
+    await render({ steps: [{ kind: 'notify', title: 'stretch', body: 'stand up' }] });
+    expect(q('consent-on-its-own')).toBeNull();
+    await remount({ steps: [{ kind: 'app-run', appId: 'ledger' }] });
+    expect(q('consent-on-its-own')).toBeNull();
+  });
+
+  it('NEGATIVE: OFF on every mount — a tick given on one mount is not there on the next, and nothing is kept in storage', async () => {
+    localStorage.clear();
+    sessionStorage.clear();
+    await render({ steps: [think('ledger')] });
+    await act(async () => {
+      tick().click();
+    });
+    expect(tick().checked).toBe(true);
+    await remount({ steps: [think('ledger')] });
+    expect(tick().checked, 'never seeded from the last mount').toBe(false);
+    expect(localStorage.length, 'never seeded from storage — so never written there').toBe(0);
+    expect(sessionStorage.length).toBe(0);
+  });
+
+  it('NEGATIVE: never seeded from the steps — an ask step carrying anything authority-shaped still mounts the tick OFF', async () => {
+    const smuggled = { ...think('ledger'), writeAuthority: { rowsPerRun: 200, armedAt: '2026-10-09T12:00:00.000Z', armedVersion: 1 }, onItsOwn: true } as unknown as ScheduleStep;
+    await render({ steps: [smuggled] });
+    expect(tick().checked).toBe(false);
+  });
+
+  it('the editor — and only the editor — pre-sets it to the choice the user just made there (presetOnItsOwn)', async () => {
+    const choices: unknown[] = [];
+    await render({ steps: [think('ledger')], presetOnItsOwn: true, onEnable: (choice?: unknown) => void choices.push(choice) });
+    expect(tick().checked).toBe(true);
+    expect(q('consent-on-its-own-hint')).toBeNull();
+    // …and the user can still take it back here: the consent is the review.
+    await act(async () => {
+      tick().click();
+    });
+    await act(async () => {
+      must('consent-enable').click();
+    });
+    expect(choices).toEqual([{ onItsOwn: false }]);
+  });
+
+  it('a schedule that runs more than 20 times a week says what happens once 20 changes wait to age out; a daily one does not', async () => {
+    await render({ steps: [think('ledger')], spec: HOURLY });
+    expect(must('consent-on-its-own-often').textContent).toBe('it runs more than 20 times a week — once 20 changes are waiting to age out, the rest wait for your OK');
+    await remount({ steps: [think('ledger')], spec: DAILY });
+    expect(q('consent-on-its-own-often')).toBeNull();
+  });
+
+  it('the busy flag disables the tick with the two acts', async () => {
+    await render({ steps: [think('ledger')], busy: true });
+    expect(tick().disabled).toBe(true);
+  });
+});
+
+describe('PR-4 — an ask step that may look things up: the call row, the queries line, the cost row (D-PR4-20; D11, D12)', () => {
+  // INVERTED by PR-4 Gate-5 U3 (ADR-0076 §9: GET-only is not read-only — the orchestrator's decision, reversal word "read-only").
+  // Was: const LOOK_UP = 'may look up (read only — it can’t send or change anything there; it can use them without asking you each time)';
+  const LOOK_UP = 'may look things up through (it only asks, never posts — but what it asks can carry your data; it can use them without asking you each time)';
+
+  it('the call row names the connections it may use (fetchableConnections’ names), in the contract’s words — never the hosts', async () => {
+    await render({
+      steps: [tools('ledger')],
+      hostsByApp: { ledger: ['api.bank.example'] },
+      connectionsByApp: { ledger: ['Spotify', 'Bank'] },
+    });
+    expect(must('consent-lookups-0').textContent).toBe(`${LOOK_UP}: Spotify, Bank`);
+    // PR-4 Gate-5 U3's negative: the row never promises what the host does not make.
+    expect(must('consent-lookups-0').textContent).not.toMatch(/read[\s-]only/i);
+    expect(must('consent-lookups-0').textContent).not.toMatch(/can[’']t send/i);
+    expect(must('consent-step-0').textContent).not.toContain('api.bank.example');
+    expect(must('consent-step-0').textContent).not.toContain('it only reads data');
+  });
+
+  it('NEGATIVE: the tool-free ask step shows no look-up row, whatever connections the app has', async () => {
+    await render({ steps: [think('ledger')], connectionsByApp: { ledger: ['Spotify'] } });
+    expect(q('consent-lookups-0')).toBeNull();
+    expect(must('consent-step-0').textContent).not.toContain('Spotify');
+    expect(must('consent-hosts-0').textContent).toBe('none — it only reads data');
+  });
+
+  it('typed queries stay as starting context — the consent says it starts from them and may read more itself', async () => {
+    await render({ steps: [tools('ledger', QUERIES)] });
+    expect([...must('consent-queries-0').querySelectorAll('code')].map((c) => c.textContent)).toEqual(QUERIES);
+    expect(must('consent-step-0').textContent).toContain('starts from these; may read more of Ledger’s data itself');
+  });
+
+  it('…and a tool-free step with typed queries does NOT say so (negative twin)', async () => {
+    await render({ steps: [think('ledger', QUERIES)] });
+    expect(must('consent-step-0').textContent).not.toContain('starts from these');
+  });
+
+  it('the cost row: up to 10 AI calls and 8 look-ups each time — up to N AI calls a day (the daily limit is 100)', async () => {
+    await render({ steps: [tools('ledger')], spec: WEEKLY });
+    expect(dailyAiBound(WEEKLY, [tools('ledger')], NOW)).toBe(10);
+    expect(must('consent-cost').textContent).toContain('up to 10 AI calls and 8 look-ups each time — up to 10 AI calls a day (the daily limit is 100)');
+    await remount({ steps: [tools('ledger')], spec: { kind: 'every', n: 2, unit: 'hours', tz: 'device' } });
+    expect(must('consent-cost').textContent).toContain('up to 10 AI calls and 8 look-ups each time — up to 100 AI calls a day (the daily limit is 100)');
+  });
+
+  it('the tick is offered on a tools step too (one app), still OFF', async () => {
+    await render({ steps: [tools('ledger')] });
+    expect(tick().checked).toBe(false);
+  });
+});
+
+// =============================================================================================
+// TASK-20261010-host-broker PR-4 Gate 5 — the consent's UI folds (U1, U11, U13).
+//
+// U1: a brain that cannot answer an *ask* step here at all (the demo override, or BYOK with no key —
+// `keylessBrainGate`'s own test) is said on the consent, under EVERY ask step of that app, tools or
+// not — the result is never the first to say it. The host hands the blocked apps in as `blockedApps`
+// (library ids — this pin's assumption of the prop's shape).
+// U11: the tick's explaining lines are attached to it (`aria-describedby`).
+// U13: the look-up bound counts only the steps that may look things up — a *run <app>* step's one
+// network call is not a look-up.
+// =============================================================================================
+
+describe('PR-4 Gate-5 U1 — a brain that cannot answer here is said on the consent, per ask step', () => {
+  it('a blocked app: brainBlocked.text under its ask step — with *let it look things up* and without', async () => {
+    await render({ steps: [tools('ledger'), think('ledger')], blockedApps: ['ledger'] });
+    expect(must('consent-step-0').textContent).toContain(brainBlocked.text);
+    expect(must('consent-step-1').textContent, 'a tool-free ask step is refused just the same').toContain(brainBlocked.text);
+  });
+
+  it('only the blocked app’s steps say it — another app’s ask step and a reminder do not', async () => {
+    await render({
+      steps: [think('ledger'), think('standup'), { kind: 'notify', title: 'stretch', body: 'stand up' }],
+      appNames: { ledger: 'Ledger', standup: 'Standup' },
+      blockedApps: ['ledger'],
+    });
+    expect(must('consent-step-0').textContent).toContain(brainBlocked.text);
+    expect(must('consent-step-1').textContent).not.toContain(brainBlocked.text);
+    expect(must('consent-step-2').textContent).not.toContain(brainBlocked.text);
+  });
+
+  it('NEGATIVE: nothing blocked (absent or empty) — no step says it', async () => {
+    await render({ steps: [tools('ledger'), think('ledger')] });
+    expect(must('enable-consent').textContent).not.toContain(brainBlocked.text);
+    await remount({ steps: [tools('ledger')], blockedApps: [] });
+    expect(must('enable-consent').textContent).not.toContain(brainBlocked.text);
+  });
+});
+
+describe('PR-4 Gate-5 U11 — the tick’s explaining lines are attached to it', () => {
+  /** The text of every element an `aria-describedby` names, in order. */
+  const describedBy = (el: HTMLElement): string[] =>
+    (el.getAttribute('aria-describedby') ?? '')
+      .split(/\s+/)
+      .filter((id) => id !== '')
+      .map((id) => document.getElementById(id)?.textContent ?? `<missing #${id}>`);
+
+  it('unticked: the tick is described by its off hint', async () => {
+    await render({ steps: [think('ledger')], spec: DAILY });
+    expect(describedBy(tick())).toContain('off: its changes wait for your OK on the result');
+  });
+
+  it('more than 20 a week: the tick is described by the often line too', async () => {
+    await render({ steps: [think('ledger')], spec: HOURLY });
+    const lines = describedBy(tick());
+    expect(lines).toContain('off: its changes wait for your OK on the result');
+    expect(lines).toContain('it runs more than 20 times a week — once 20 changes are waiting to age out, the rest wait for your OK');
+  });
+
+  it('every id it names resolves — ticked, the hint is gone and is no longer named', async () => {
+    await render({ steps: [think('ledger')], spec: HOURLY });
+    await act(async () => {
+      tick().click();
+    });
+    const lines = describedBy(tick());
+    expect(lines.filter((line) => line.startsWith('<missing'))).toEqual([]);
+    expect(lines).not.toContain('off: its changes wait for your OK on the result');
+  });
+});
+
+describe('PR-4 Gate-5 U13 — the look-up bound counts only the steps that may look things up', () => {
+  it('a look-things-up ask step plus a *run <app>* step: 8 look-ups each time, never 9', async () => {
+    await render({ steps: [tools('ledger'), { kind: 'app-run', appId: 'weather' }], appNames: { ledger: 'Ledger', weather: 'Weather' }, spec: WEEKLY });
+    const cost = must('consent-cost').textContent ?? '';
+    expect(cost).toContain('up to 10 AI calls and 8 look-ups each time');
+    expect(cost).not.toContain('9 look-ups');
+  });
+
+  it('two look-things-up ask steps count both: 16 look-ups', async () => {
+    await render({ steps: [tools('ledger'), tools('ledger')], spec: WEEKLY });
+    expect(must('consent-cost').textContent).toContain('up to 20 AI calls and 16 look-ups each time');
   });
 });

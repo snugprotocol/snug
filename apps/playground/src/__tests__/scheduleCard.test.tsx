@@ -24,6 +24,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { UserDb } from '@snugprotocol/db';
 import { proposalHash, type ScheduleProposal } from '@snugprotocol/protocol';
 
+import { enableProposedTask } from '../schedule/enableProposedTask.js';
 import { metaToScheduleCard, persistScheduleResolution, readScheduleCardRow, scheduleCardToMeta, stageScheduleCard, type ScheduleCardState } from '../agent/scheduleCard.js';
 import type { ChatMessage } from '../agent/useBuilderChat.js';
 import { CONSENT, SCHEDULE_CARD, stepWords } from '../schedule/copy.js';
@@ -412,5 +413,65 @@ describe('under a host brain the deterministic offer is the route, and the line 
     brainGate.host = true;
     await renderChat([{ id: 1, role: 'user', displayText: 'remind me every weekday at 8 to stretch' }]);
     expect(must('schedule-offer-note').textContent).toBe(OFFER.hostBrain);
+  });
+});
+
+// =============================================================================================
+// TASK-20261010-host-broker PR-4 — the consent's tick on a SUGGESTION (D-PR4-8, D-PR4-20; AC31):
+// the tick is OFF on every mount and never seeded from a proposal; the user's tick on the consent is
+// the ONE act that arms; no proposal channel can carry an authority (the writer re-parses strictly);
+// a suggestion may carry `tools: true` (*· may look things up* on the card), never an authority.
+// =============================================================================================
+
+describe('PR-4 — the tick on a suggestion’s consent is never pre-ticked (D-PR4-8)', () => {
+  it('schedule it → the consent offers the tick OFF; left off, the task is created with no authority', async () => {
+    await render(stagedCard(proposalFor(appId)));
+    await click(must('schedule-card-accept'));
+    const tick = must('consent-on-its-own') as HTMLInputElement;
+    expect(tick.checked, 'never seeded from the proposal').toBe(false);
+    await click(must('consent-enable'));
+    const tasks = db.listScheduledTasks();
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]?.writeAuthority).toBeUndefined();
+  });
+
+  it('the user’s tick there is the act that arms: the created task carries the authority over its own app', async () => {
+    await render(stagedCard(proposalFor(appId)));
+    await click(must('schedule-card-accept'));
+    await click(must('consent-on-its-own'));
+    await click(must('consent-enable'));
+    const created = db.listScheduledTasks()[0];
+    expect(created?.provenance).toBe('builder');
+    expect(created?.writeAuthority).toMatchObject({ rowsPerRun: 200, armedVersion: db.getApp(appId)?.currentVersion });
+  });
+
+  it('NEGATIVE: a not-now on the consent and a second schedule it — the tick is OFF again (every mount)', async () => {
+    await render(stagedCard(proposalFor(appId)));
+    await click(must('schedule-card-accept'));
+    await click(must('consent-on-its-own'));
+    await click(must('consent-not-now'));
+    await click(must('schedule-card-accept'));
+    expect((must('consent-on-its-own') as HTMLInputElement).checked).toBe(false);
+  });
+
+  it('NEGATIVE: no proposal channel can carry an authority — the writer refuses a proposal that names one, and creates nothing', async () => {
+    const smuggled = { ...proposalFor(appId), writeAuthority: { rowsPerRun: 200, armedAt: NOW.toISOString(), armedVersion: 1 } };
+    const result = await enableProposedTask({ proposal: smuggled, provenance: 'builder', ownerAppId: appId });
+    expect(result.ok).toBe(false);
+    expect(db.listScheduledTasks()).toHaveLength(0);
+    const inStep = { ...proposalFor(appId), steps: [{ ...proposalFor(appId).steps[0], writeAuthority: { rowsPerRun: 200 } }] };
+    expect((await enableProposedTask({ proposal: inStep, provenance: 'chat', ownerAppId: appId })).ok).toBe(false);
+    expect(db.listScheduledTasks()).toHaveLength(0);
+  });
+
+  it('a suggestion that may look things up says so on the card, and its consent tick is still OFF', async () => {
+    const withTools: ScheduleProposal = { ...proposalFor(appId), steps: [{ kind: 'app-think', appId, prompt: 'Sum up yesterday in two lines.', context: { maxRows: 50 }, tools: true }] };
+    await render(stagedCard(withTools));
+    expect(must('schedule-card-step-0').textContent).toBe('ask Ledger’s AI: Sum up yesterday in two lines. · may look things up');
+    await click(must('schedule-card-accept'));
+    expect((must('consent-on-its-own') as HTMLInputElement).checked).toBe(false);
+    await click(must('consent-enable'));
+    expect(db.listScheduledTasks()[0]?.steps[0]).toMatchObject({ kind: 'app-think', tools: true });
+    expect(db.listScheduledTasks()[0]?.writeAuthority).toBeUndefined();
   });
 });

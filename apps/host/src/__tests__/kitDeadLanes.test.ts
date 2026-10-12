@@ -22,6 +22,14 @@
 //      imports nothing from the module it replaces (no bytes ride back in);
 //   4. the stubs answer the kit's only reachable calls inertly and fail LOUDLY, by name, on a
 //      call the invariant says cannot happen.
+//
+// TASK-20261010-host-broker PR-4 (AC29; contract v2 D-PR4-15) — section 5: the scheduled agent
+// (`schedule/appAgent.ts`, *Ask <App>'s AI* that can look things up) rides out of the kit the same
+// way. The kit runs the scheduler, but the executors' brain gates send every kit brain AWAY from the
+// agent before it is reached: the demo brain is refused (`blockedBy: 'brain'`) and the host brain —
+// composed `tools: false` — has no data lane (`chatDoorOpen` is false for it), so a tools step
+// degrades to the tool-free step. The swap is pinned with that invariant; the stub keeps the real
+// module's runtime names and throws the one loud sentence.
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
@@ -169,5 +177,47 @@ describe('4 — the stubs answer the kit’s reachable calls inertly and fail LO
   it('AccessCard: renders nothing', async () => {
     const mod = await stub<typeof import('@playground/access/AccessCard.js')>('src/stubs/AccessCard.tsx');
     expect(mod.AccessCard({ card: {} as never, messageId: 1, busy: false })).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// 5 — TASK-20261010-host-broker PR-4: the scheduled agent is swapped out too (D-PR4-15)
+// ---------------------------------------------------------------------------------------------
+
+const AGENT_SWAP = { real: 'schedule/appAgent.ts', stub: 'src/stubs/appAgent.ts' } as const;
+
+describe('5 — the scheduled agent (schedule/appAgent.ts) is swapped for a loud stub, with the invariant that makes it dead', () => {
+  const config = stripComments(read(path.join(HOST, 'vite.config.ts')));
+
+  it('vite.config.ts swaps schedule/appAgent.ts for src/stubs/appAgent.ts by resolved path, inside the swapResolved table', () => {
+    expect(config).toMatch(/\[`\$\{playgroundSrc\}\/schedule\/appAgent\.ts`\]\s*:\s*here\('\.\/src\/stubs\/appAgent\.ts'\)/);
+    const table = config.slice(config.indexOf('swapResolved({'), config.indexOf('}),', config.indexOf('swapResolved({')));
+    expect(table).toContain('/schedule/appAgent.ts`');
+  });
+
+  it('the stub exports every runtime name the real module exports', () => {
+    const realNames = valueExports(read(path.join(PLAYGROUND, AGENT_SWAP.real)));
+    const stubNames = valueExports(read(path.join(HOST, AGENT_SWAP.stub)));
+    expect(realNames).toContain('executeAppAgent');
+    expect(stubNames).toEqual(expect.arrayContaining(realNames));
+  });
+
+  it('the stub imports no value from the playground and none of the agent’s graph', () => {
+    const code = stripComments(read(path.join(HOST, AGENT_SWAP.stub)));
+    const valueImports = [...code.matchAll(/^import\s+(?!type\b)[^'"]*from\s+['"]([^'"]+)['"]/gm)].map((match) => match[1]!);
+    expect(valueImports.filter((spec) => spec.startsWith('@playground') || spec.includes('playground/src'))).toEqual([]);
+    expect(importSpecifiers(code).filter((spec) => /appAgent|gatedAdapter|fetchConnectionTool|dataTools|providerTools|proposalGate|@snugprotocol\/adapters/.test(spec) && !/^\.\//.test(spec))).toEqual([]);
+  });
+
+  it('executeAppAgent fails LOUDLY, by name', async () => {
+    const mod = await stub<{ executeAppAgent: (...args: unknown[]) => Promise<unknown> }>(AGENT_SWAP.stub);
+    await expect(Promise.resolve().then(() => mod.executeAppAgent({} as never, {} as never))).rejects.toThrow(LOUD);
+    await expect(Promise.resolve().then(() => mod.executeAppAgent({} as never, {} as never))).rejects.toThrow(/appAgent\.executeAppAgent/);
+  });
+
+  it('the invariant: no kit brain opens the data lane the agent needs — the host brain and the demo brain both answer chatDoorOpen false', async () => {
+    const { chatDoorOpen } = await import('@playground/access/egress.js');
+    expect(chatDoorOpen({ kind: 'host', provider: 'mock', keyMissing: false, hostLabel: 'kit' })).toBe(false);
+    expect(chatDoorOpen({ kind: 'demo', provider: 'mock', keyMissing: false })).toBe(false);
   });
 });

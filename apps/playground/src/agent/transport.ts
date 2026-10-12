@@ -7,7 +7,7 @@
 // re-confirms endpoint settings — an imported DB is executable config.
 
 import { createHttpTransport, runAgentTurn, type AgentTurnEvent } from '@snugprotocol/adapters';
-import { buildHostSystemPrompt, renderRuntimeContract, SYSTEM_BLOCK_SEPARATOR } from '@snugprotocol/knowledge';
+import { buildHostSystemPrompt, renderRuntimeContract, SYSTEM_BLOCK_SEPARATOR, type HostPlatform } from '@snugprotocol/knowledge';
 import { ERROR_CODES, parseAppRequest, type RuntimeContract } from '@snugprotocol/protocol';
 import type { AgentTransport } from '@snugprotocol/runner';
 
@@ -25,6 +25,13 @@ import { getUserDb } from '../state/userdb.js';
 import { currentBrain } from '../state/webllm.js';
 import { createTurnAdapter, type DirectMode } from './adapter.js';
 import { guardWireForApp } from './pseudonymizeEgress.js';
+
+/**
+ * F15's refusal of a turn on the FILE's endpoints after an import or a first pull — they are
+ * executable config until the user confirms them. ONE spelling: the scheduled agent
+ * (`schedule/appAgent.ts`), which builds its adapter outside this transport, says it from here.
+ */
+export const ENDPOINTS_UNCONFIRMED = 'endpoint settings came from an imported or synced file — confirm them in Settings before running';
 
 export function createServerAppTransport(model?: string, appId?: string): AgentTransport {
   // App-path requests are self-contained envelopes — no threadId, no history.
@@ -95,6 +102,16 @@ async function readRuntimeContract(appId: string): Promise<RuntimeContract | und
   }
 }
 
+/**
+ * The shell an app-side prompt assembly serves (TASK-20260812 P2): the ONE read of the platform's
+ * kind on this path — a prompt layer telling the model where it is, never a capability. The
+ * scheduled agent assembles through it too (TASK-20261010-host-broker PR-4), so a second turn
+ * shape adds no second read.
+ */
+export function promptPlatform(): HostPlatform {
+  return getPlatform().kind;
+}
+
 export function createDirectAppTransport(options: DirectTransportOptions): AgentTransport {
   const readKey = options.getKey ?? getByokKey;
   const needsConfirm = options.needsConfirm ?? endpointsNeedConfirm;
@@ -109,7 +126,7 @@ export function createDirectAppTransport(options: DirectTransportOptions): Agent
     appBuilder: false,
     artifacts: false,
     appRuntime: true,
-    platform: getPlatform().kind,
+    platform: promptPlatform(),
   });
   return {
     async send(wire, { signal, onDelta }) {
@@ -119,7 +136,7 @@ export function createDirectAppTransport(options: DirectTransportOptions): Agent
         return {
           ok: false,
           code: ERROR_CODES.CONSENT_REQUIRED,
-          message: 'endpoint settings came from an imported or synced file — confirm them in Settings before running',
+          message: ENDPOINTS_UNCONFIRMED,
           retryable: false,
         };
       }

@@ -7,7 +7,16 @@
 // (Friday 2026-10-09 12:20Z) so no test depends on the machine's zone or DST.
 import { describe, expect, it } from 'vitest';
 
-import { SCHEDULE_MIN_INTERVAL_MS, SCHEDULE_STALE_AFTER_MS, TASK_PROVENANCES, type ScheduleSpec, type ScheduleStep } from '@snugprotocol/protocol';
+import {
+  APP_AGENT_MAX_ROUND_TRIPS,
+  APP_AGENT_MAX_TOOL_CALLS,
+  SCHEDULE_DAILY_CEILINGS,
+  SCHEDULE_MIN_INTERVAL_MS,
+  SCHEDULE_STALE_AFTER_MS,
+  TASK_PROVENANCES,
+  type ScheduleSpec,
+  type ScheduleStep,
+} from '@snugprotocol/protocol';
 
 import {
   defaultMissedPolicy,
@@ -17,6 +26,7 @@ import {
   freshnessWindowMs,
   minIntervalMs,
 } from '../schedule/floors.js';
+import { dailyAiBound } from '../schedule/editorModel.js';
 
 const MINUTE = 60_000;
 const HOUR = 3_600_000;
@@ -153,5 +163,44 @@ describe('estimatedCallsPerWeek — occurrences in the next 7 days × the steps 
     const elapsed = performance.now() - started;
     expect(got).toEqual({ ai: 10_080, net: 0 });
     expect(elapsed).toBeLessThan(1_500);
+  });
+});
+
+// TASK-20261010-host-broker PR-4 (D-PR4-20; F15, D12): an *Ask <App>'s AI* step that may look things
+// up costs what its bounds allow — APP_AGENT_MAX_ROUND_TRIPS AI calls and APP_AGENT_MAX_TOOL_CALLS
+// look-ups a time ({ai: 10, net: 8}) — in STEP_COST, so the weekly estimate, the daily bound and the
+// catch-up default all read the same number. A tool-free ask step still costs one AI call.
+describe('PR-4 — a tools step costs {ai: 10, net: 8} (STEP_COST, the weekly estimate, the daily bound)', () => {
+  const TOOLS: ScheduleStep = { kind: 'app-think', appId: 'ledger', prompt: 'sum it', context: { maxRows: 50 }, tools: true };
+
+  it('the bounds are the protocol’s constants: 10 round trips, 8 tool calls', () => {
+    expect(APP_AGENT_MAX_ROUND_TRIPS).toBe(10);
+    expect(APP_AGENT_MAX_TOOL_CALLS).toBe(8);
+  });
+
+  it.each<[string, ScheduleSpec, ScheduleStep[], { ai: number; net: number }]>([
+    ['daily, one tools step', daily(), [TOOLS], { ai: 70, net: 56 }],
+    ['hourly, one tools step', every(1, 'hours'), [TOOLS], { ai: 1680, net: 1344 }],
+    ['weekly on Monday, a tools step beside a tool-free one and a run', { kind: 'weekly', days: ['mon'], time: '08:00', tz: 'UTC' }, [TOOLS, THINK, RUN], { ai: 11, net: 9 }],
+    ['a one-off inside the week', once('2026-10-09T13:20:00.000Z'), [TOOLS], { ai: 10, net: 8 }],
+    ['a tools step beside a reminder', daily(), [NOTIFY, TOOLS], { ai: 70, net: 56 }],
+  ])('estimatedCallsPerWeek: %s', (_name, spec, steps, expected) => {
+    expect(estimatedCallsPerWeek(spec, steps, ANCHOR)).toEqual(expected);
+  });
+
+  it('the tool-free ask step is unchanged — one AI call, no network (negative twin)', () => {
+    expect(estimatedCallsPerWeek(daily(), [THINK], ANCHOR)).toEqual({ ai: 7, net: 0 });
+  });
+
+  it('dailyAiBound: the busiest day × 10 for a tools step, capped at the ceiling (the consent’s *up to N AI calls a day*)', () => {
+    expect(dailyAiBound(daily(), [TOOLS], ANCHOR)).toBe(10);
+    expect(dailyAiBound(daily(), [TOOLS, THINK], ANCHOR)).toBe(11);
+    expect(dailyAiBound(every(2, 'hours'), [TOOLS], ANCHOR)).toBe(SCHEDULE_DAILY_CEILINGS.ai);
+    expect(dailyAiBound(every(12, 'hours'), [TOOLS], ANCHOR)).toBe(20);
+    expect(dailyAiBound(daily(), [THINK], ANCHOR), 'the tool-free step is still one').toBe(1);
+  });
+
+  it('a tools step spends, so the catch-up default asks', () => {
+    expect(defaultMissedPolicy([TOOLS])).toBe('ask');
   });
 });

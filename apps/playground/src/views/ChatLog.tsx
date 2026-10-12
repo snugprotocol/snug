@@ -3,7 +3,10 @@ import type { ReactElement } from 'react';
 import { Link } from 'react-router';
 
 import { AccessCard, type ResolveAccessCard } from '../access/AccessCard.js';
+import { OwnUndoAct } from '../access/OwnUndoAct.js';
+import type { UndoOutcome } from '../access/writeBroker.js';
 import { sanitizeCardText, type ChatCardState } from '../agent/cards.js';
+import { DATA_WRITE_CARD } from '../agent/copy.dataWrite.js';
 import type { BuildStepView, ChatMessage, DataWriteCardState } from '../agent/useBuilderChat.js';
 import { CONNECTIONS_UNAVAILABLE } from '../platform/availability.js';
 import { allows } from '../platform/platform.js';
@@ -66,6 +69,15 @@ export interface ChatLogProps {
   /** Decline it. Declining executes nothing — there is no path from here to the DB. */
   onDeclineDataWrite?: (proposal: DataWriteCardState, messageId: number) => void;
   /**
+   * Undo an applied card's change (TASK-20261010-host-broker PR-4, D-PR4-19) — host chrome's act,
+   * carried out by the hook; it answers whether the rows went back. Absent ⇒ no card offers *undo*.
+   */
+  onUndoDataWrite?: (card: DataWriteCardState, messageId: number) => Promise<UndoOutcome>;
+  /** The undo ids the journal holds LIVE (the hook's read): only those cards offer *undo*. Absent: none does. */
+  dataWriteUndoable?: ReadonlySet<string>;
+  /** The app whose data the cards change — the undo's question names it. */
+  appName?: string;
+  /**
    * Resolve an inline choice card (TASK-20260815-inline-cards): the pick becomes the
    * next user message. Absent ⇒ options render disabled (a surface with no send path).
    */
@@ -108,6 +120,9 @@ export function ChatLog({
   onConnectionConnect,
   onApproveDataWrite,
   onDeclineDataWrite,
+  onUndoDataWrite,
+  dataWriteUndoable,
+  appName,
   onSelectCardOption,
   onResolveSchedule,
   onResolveAccess,
@@ -198,47 +213,19 @@ export function ChatLog({
             if the human can see what they are approving.
 
             Once resolved the buttons are gone: an approved change that still offers
-            "apply" invites a second, unreviewed execution.
+            "apply" invites a second, unreviewed execution. An applied change offers *undo*
+            while the journal holds it live (PR-4, D-PR4-19); the words are DATA_WRITE_CARD's.
           */}
           {message.dataWrite !== undefined ? (
-            <Card className="artifact-card" data-testid="data-write-card">
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)', width: '100%' }}>
-                <span className="artifact-name">{message.dataWrite.summary}</span>
-                <ol style={{ margin: 0, paddingInlineStart: '1.25rem' }}>
-                  {message.dataWrite.statements.map((statement, index) => (
-                    <li key={`${message.id}-sql-${index}`}>
-                      <code style={{ wordBreak: 'break-word' }}>{statement}</code>
-                      <span className="hint">
-                        {' '}
-                        — {message.dataWrite?.previewed[index] ?? 0} row(s)
-                      </span>
-                    </li>
-                  ))}
-                </ol>
-                {message.dataWrite.outcome === undefined ? (
-                  <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
-                    {onApproveDataWrite !== undefined ? (
-                      <Button variant="primary" onClick={() => onApproveDataWrite(message.dataWrite!, message.id)}>
-                        apply to my data
-                      </Button>
-                    ) : null}
-                    {onDeclineDataWrite !== undefined ? (
-                      <Button onClick={() => onDeclineDataWrite(message.dataWrite!, message.id)}>cancel</Button>
-                    ) : null}
-                  </div>
-                ) : (
-                  <span className="hint">
-                    {message.dataWrite.outcome === 'applied'
-                      ? `applied — ${(message.dataWrite.executed ?? message.dataWrite.previewed).join(', ')} row(s) changed`
-                      : message.dataWrite.outcome === 'declined'
-                        ? 'cancelled — nothing was changed'
-                        : message.dataWrite.outcome === 'drifted'
-                          ? 'the number of rows this would affect changed since the preview, so nothing was applied — ask again for a fresh one'
-                          : 'the change could not be applied — nothing was changed'}
-                  </span>
-                )}
-              </div>
-            </Card>
+            <DataWriteCard
+              card={message.dataWrite}
+              messageId={message.id}
+              onApprove={onApproveDataWrite}
+              onDecline={onDeclineDataWrite}
+              onUndo={onUndoDataWrite}
+              undoable={dataWriteUndoable}
+              appName={appName}
+            />
           ) : null}
           {/*
             The INLINE CHOICE CARD (TASK-20260815-inline-cards, ADR-0031 §3). UI-only
@@ -341,6 +328,80 @@ export function ChatLog({
       <ProviderConfirmCard />
       <StatusLine phase={phase} active={busy} />
     </div>
+  );
+}
+
+/** The app a card's undo question names when the surface did not say. */
+const THIS_APP = 'this app';
+
+/**
+ * The DATA-WRITE card itself (ADR-0019 D8; TASK-20261010-host-broker PR-4, D-PR4-19): the summary,
+ * each statement verbatim with its dry-run count, then the two acts — or, once answered, what became
+ * of it. An applied change says what it changed and, in the same breath, its undo: offered while
+ * its entry is live (and the surface wired the act), *can no longer be undone* once it is not, *this
+ * one can't be undone* when it was never captured. The line and its undo keep ONE shape from
+ * *applied* to *undone*, so the outcome line that took the focus is never pulled from under it.
+ */
+function DataWriteCard({
+  card,
+  messageId,
+  onApprove,
+  onDecline,
+  onUndo,
+  undoable,
+  appName = THIS_APP,
+}: {
+  card: DataWriteCardState;
+  messageId: number;
+  onApprove: ChatLogProps['onApproveDataWrite'];
+  onDecline: ChatLogProps['onDeclineDataWrite'];
+  onUndo: ChatLogProps['onUndoDataWrite'];
+  undoable: ReadonlySet<string> | undefined;
+  appName?: string | undefined;
+}): ReactElement {
+  const changed = (card.executed ?? card.previewed).reduce((sum, n) => sum + n, 0);
+  const live = card.undoId !== undefined && undoable?.has(card.undoId) === true;
+  return (
+    <Card className="artifact-card" data-testid="data-write-card">
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)', width: '100%' }}>
+        <span className="artifact-name">{card.summary}</span>
+        <ol style={{ margin: 0, paddingInlineStart: '1.25rem' }}>
+          {card.statements.map((statement, index) => (
+            <li key={`${messageId}-sql-${index}`}>
+              <code style={{ wordBreak: 'break-word' }}>{statement}</code>
+              <span className="hint"> {DATA_WRITE_CARD.previewed(card.previewed[index] ?? 0)}</span>
+            </li>
+          ))}
+        </ol>
+        {card.outcome === undefined ? (
+          <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
+            {onApprove !== undefined ? (
+              <Button variant="primary" onClick={() => onApprove(card, messageId)}>
+                {DATA_WRITE_CARD.apply}
+              </Button>
+            ) : null}
+            {onDecline !== undefined ? <Button onClick={() => onDecline(card, messageId)}>{DATA_WRITE_CARD.cancel}</Button> : null}
+          </div>
+        ) : card.outcome === 'applied' || card.outcome === 'undone' ? (
+          card.undoable === false ? (
+            <span className="hint">{DATA_WRITE_CARD.appliedLine(changed, 'none')}</span>
+          ) : card.outcome === 'undone' || (live && onUndo !== undefined) ? (
+            <span className="hint field-row field-row-wrap">
+              <span>{DATA_WRITE_CARD.appliedLine(changed, 'offered')}</span>
+              {' · '}
+              <OwnUndoAct rows={changed} appName={appName} offered={live} onUndo={onUndo === undefined ? undefined : () => onUndo(card, messageId)} undone={card.outcome === 'undone'} />
+            </span>
+          ) : (
+            // Captured once, but no longer live — or a change from before undo existed, which claims nothing.
+            <span className="hint">{DATA_WRITE_CARD.appliedLine(changed, card.undoId !== undefined ? 'ended' : 'offered')}</span>
+          )
+        ) : (
+          <span className="hint">
+            {card.outcome === 'declined' ? DATA_WRITE_CARD.declined : card.outcome === 'drifted' ? DATA_WRITE_CARD.drifted : DATA_WRITE_CARD.failed}
+          </span>
+        )}
+      </div>
+    </Card>
   );
 }
 

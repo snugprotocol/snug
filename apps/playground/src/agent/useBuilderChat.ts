@@ -22,11 +22,11 @@
 //   host's framing, never a row) and the data tools' `shared` seat, whose `data_query` records the
 //   read on the source's history before any shared row reaches the brain. No other lane opens it.
 
-import { useCallback, useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import type { AgentTool, AgentTurnEvent } from '@snugprotocol/adapters';
-import type { UserDb } from '@snugprotocol/db';
-import { AUTH_WIZARD_DIRECTIVE_KIND, type AuthWizardDirective, type RenderDirective, type ScheduleProposal } from '@snugprotocol/protocol';
+import { OWN_UNDO_APPROVAL_BUCKET, type UserDb } from '@snugprotocol/db';
+import { AUTH_WIZARD_DIRECTIVE_KIND, ownUndoEntrySchema, type AuthWizardDirective, type RenderDirective, type ScheduleProposal } from '@snugprotocol/protocol';
 
 import { directiveToMeta, metaToDirective, scanForRenderDirective } from './renderDirective.js';
 import { HOST_BRAIN_REFUSED_CODE } from '../platform/platform.js';
@@ -54,6 +54,7 @@ import type { AccessProposal } from './accessProposeTool.js';
 import { chatBrainRoute, chatDoorOpen } from '../access/egress.js';
 import type { AccessCaller } from '../access/policy.js';
 import type { MaterialisedSet } from '../access/service.js';
+import type { UndoOutcome } from '../access/writeBroker.js';
 import { appMayUseAccess } from '../run/appCapabilityRules.js';
 import type { SharedTablesSeat } from './dataTools.js';
 import { laneToolsFor } from './laneTools.js';
@@ -137,11 +138,26 @@ export interface ChatMessage {
   brainKind?: AdapterKind;
 }
 
+/**
+ * How a data-write card was resolved — the ONE list the persisted row's `outcome` is re-admitted
+ * from (TASK-20261010-host-broker PR-4, D-PR4-12): a word outside it is no outcome at all. `undone`
+ * is the user's undo of an applied change (D-PR4-19).
+ */
+export const DATA_WRITE_OUTCOMES = ['applied', 'declined', 'drifted', 'failed', 'undone'] as const;
+export type DataWriteOutcome = (typeof DATA_WRITE_OUTCOMES)[number];
+
 /** A proposal as the chat renders it: the staged change plus how it was resolved. */
 export interface DataWriteCardState extends PendingWriteProposal {
-  outcome?: 'applied' | 'declined' | 'drifted' | 'failed';
+  outcome?: DataWriteOutcome;
   /** Rows actually affected, recorded once applied. */
   executed?: number[];
+  /**
+   * The applied change's entry in the app's approval undo bucket (PR-4, D-PR4-6/19) — the card
+   * offers *undo* while the journal holds it live. Absent: never captured, or before PR-4.
+   */
+  undoId?: string;
+  /** `false`: applied, but not captured — the card says it can't be undone. */
+  undoable?: boolean;
   /**
    * The USER-DB row this card is persisted on, so resolving it can persist too (R-M5).
    *
@@ -196,6 +212,13 @@ export interface BuilderChat {
   approveDataWrite: (proposal: DataWriteCardState, messageId: number) => void;
   /** Decline it. Executes nothing; the card settles as cancelled. */
   declineDataWrite: (proposal: DataWriteCardState, messageId: number) => void;
+  /**
+   * Undo an applied card's change (TASK-20261010-host-broker PR-4, D-PR4-19): the user's act, through
+   * the app's approval bucket; done, the card settles as `undone` and so does its row.
+   */
+  undoDataWrite: (card: DataWriteCardState, messageId: number) => Promise<UndoOutcome>;
+  /** The undo ids of this thread's applied cards that the journal still holds LIVE — read, never trusted from a row. */
+  dataWriteUndoable: ReadonlySet<string>;
   /**
    * Resolve a presented inline card (TASK-20260815-inline-cards): persists the pick and
    * sends it as the next USER message. UI-only authority by construction.
@@ -306,6 +329,10 @@ function persistResolution(
   }
 }
 
+const isDataWriteOutcome = (value: unknown): value is DataWriteOutcome => typeof value === 'string' && (DATA_WRITE_OUTCOMES as readonly string[]).includes(value);
+/** An undo id is the journal's: a lowercase uuid v4 — the entry schema's own rule, never restated. */
+const isUndoId = (value: unknown): value is string => ownUndoEntrySchema.shape.id.safeParse(value).success;
+
 /**
  * Rebuild a data-write card from a persisted row, or `undefined` if the row cannot be
  * trusted to render one (R-M5).
@@ -325,19 +352,24 @@ function metaToDataWrite(meta: unknown): DataWriteCardState | undefined {
   if (typeof meta !== 'object' || meta === null) return undefined;
   const staged = (meta as PersistedMeta).dataWrite;
   if (staged === undefined || typeof staged !== 'object') return undefined;
-  const { appId, statements, params, summary, previewed, outcome, executed } = staged;
+  const { appId, statements, params, summary, previewed, outcome, executed, undoId, undoable } = staged as Record<keyof DataWriteCardState, unknown>;
   if (typeof appId !== 'string' || typeof summary !== 'string') return undefined;
   if (!Array.isArray(statements) || statements.length === 0) return undefined;
   if (!statements.every((sql) => typeof sql === 'string')) return undefined;
   if (!Array.isArray(previewed) || !previewed.every((n) => typeof n === 'number')) return undefined;
+  // THE BELT (TASK-20261010-host-broker PR-4, D-PR4-12): each seat a row could plant is re-admitted
+  // only in its own shape — an outcome from its list, an undo id as a uuid, the flag as a boolean.
+  // A planted word is no outcome (the card comes back unresolved); a planted id is no undo.
   return {
     appId,
     statements,
     params: Array.isArray(params) ? params : statements.map(() => []),
     summary,
     previewed,
-    ...(outcome !== undefined ? { outcome } : {}),
-    ...(Array.isArray(executed) ? { executed } : {}),
+    ...(isDataWriteOutcome(outcome) ? { outcome } : {}),
+    ...(Array.isArray(executed) && executed.every((n) => typeof n === 'number') ? { executed } : {}),
+    ...(isUndoId(undoId) ? { undoId } : {}),
+    ...(typeof undoable === 'boolean' ? { undoable } : {}),
   };
 }
 
@@ -536,7 +568,10 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
                 // Re-validated strictly on every read (D9): an imported row whose
                 // directive grew fields renders as no card at all.
                 const directive = metaToDirective(m.meta);
-                const dataWrite = metaToDataWrite(m.meta);
+                // PR-4 (D-PR4-12, the S10 belt the ask card has): a persisted change for any app
+                // but the thread's pinned one is no card — a row cannot aim the apply elsewhere.
+                const persistedWrite = metaToDataWrite(m.meta);
+                const dataWrite = persistedWrite !== undefined && pinnedApp !== undefined && persistedWrite.appId === pinnedApp ? persistedWrite : undefined;
                 const authChoice = metaToAuthChoice(m.meta);
                 const card = metaToCard(m.meta);
                 const schedule = metaToScheduleCard(m.meta);
@@ -1191,11 +1226,15 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
       try {
       const db = await getUserDb();
       const { executeApprovedWrite } = await import('./dataTools.js');
-      const outcome = await executeApprovedWrite(db, proposal);
+      // The chat card is the door (PR-4, D-PR4-6): the approval journals as the chat's.
+      const outcome = await executeApprovedWrite(db, proposal, { via: 'chat' });
       const resolved: DataWriteCardState = {
         ...proposal,
         outcome: outcome.ok ? ('applied' as const) : outcome.reason === 'drifted' ? ('drifted' as const) : ('failed' as const),
+        // Applied: what it changed, and the undo it can be put back by — or that it has none.
         ...(outcome.ok ? { executed: outcome.executed } : {}),
+        ...(outcome.ok && outcome.undoId !== undefined ? { undoId: outcome.undoId } : {}),
+        ...(outcome.ok && typeof outcome.undoable === 'boolean' ? { undoable: outcome.undoable } : {}),
       };
       patchMessage(messageId, (m) => ({ dataWrite: { ...(m.dataWrite ?? proposal), ...resolved } }));
       persistResolution(db, threadId, proposal, resolved);
@@ -1211,6 +1250,67 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
     patchMessage(messageId, (m) => ({ dataWrite: { ...(m.dataWrite ?? proposal), ...resolved } }));
     void (async () => persistResolution(await getUserDb(), threadId, proposal, resolved))();
   }, [patchMessage, session]);
+
+  /**
+   * THE LIVE SET (PR-4, D-PR4-19): which applied cards may still offer *undo* — read from the
+   * journal (the approval bucket of each card's app), never from the row, re-read whenever the
+   * thread's applied ids change and after every undo. A card undone elsewhere, or past its seven
+   * days, leaves the set and says it can no longer be undone.
+   */
+  const [dataWriteUndoable, setDataWriteUndoable] = useState<ReadonlySet<string>>(new Set());
+  const [undoRevision, setUndoRevision] = useState(0);
+  const appliedKey = useMemo(
+    () => JSON.stringify(messages.flatMap((m) => (m.dataWrite?.undoId !== undefined && m.dataWrite.outcome === 'applied' ? [[m.dataWrite.appId, m.dataWrite.undoId]] : []))),
+    [messages],
+  );
+  useEffect(() => {
+    const applied = JSON.parse(appliedKey) as Array<[string, string]>;
+    if (applied.length === 0) {
+      setDataWriteUndoable((current) => (current.size === 0 ? current : new Set()));
+      return;
+    }
+    let cancelled = false;
+    void getUserDb()
+      .then((db) => {
+        const live = new Set<string>();
+        for (const appId of new Set(applied.map(([appId]) => appId))) {
+          for (const entry of db.listOwnUndo(appId, { bucket: OWN_UNDO_APPROVAL_BUCKET })) live.add(entry.id);
+        }
+        if (!cancelled) setDataWriteUndoable(live);
+      })
+      .catch(() => {
+        // An unreadable journal offers no undo — the card says it can no longer be undone.
+        if (!cancelled) setDataWriteUndoable(new Set());
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [appliedKey, undoRevision]);
+
+  /**
+   * Undo → the user's act, from the card (D-PR4-19): the change's entry in the approval bucket,
+   * re-validated against the live rows by the engine; done, the card settles as `undone` on its
+   * row too. The engine is reached lazily, like the approve (F13).
+   */
+  const undoDataWrite = useCallback(
+    async (card: DataWriteCardState, messageId: number): Promise<UndoOutcome> => {
+      if (card.undoId === undefined) return { ok: false, reason: 'gone', message: 'this change has no undo' };
+      try {
+        const db = await getUserDb();
+        const { undoOwnWrite } = await import('../access/writeBroker.js');
+        const outcome = await undoOwnWrite(db, card.appId, OWN_UNDO_APPROVAL_BUCKET, card.undoId, { via: 'user' });
+        if (outcome.ok) {
+          const resolved: DataWriteCardState = { ...card, outcome: 'undone' as const };
+          patchMessage(messageId, (m) => ({ dataWrite: { ...(m.dataWrite ?? card), ...resolved } }));
+          persistResolution(db, threadId, card, resolved);
+        }
+        return outcome;
+      } finally {
+        setUndoRevision((n) => n + 1);
+      }
+    },
+    [patchMessage, threadId],
+  );
 
   /**
    * Resolve a presented card (TASK-20260815-inline-cards AC3/AC4). Single-shot: the
@@ -1329,6 +1429,8 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
     stop,
     approveDataWrite,
     declineDataWrite,
+    undoDataWrite,
+    dataWriteUndoable,
     selectCardOption,
     resolveSchedule,
     resolveAccess,

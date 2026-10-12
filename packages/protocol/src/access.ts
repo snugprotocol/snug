@@ -426,9 +426,14 @@ export type AccessGrantView = z.infer<typeof accessGrantViewSchema>;
 
 // ------------------------------------------------------------------ the RECORDS (persisted, strict)
 
-/** `crypto.randomUUID()`'s shape: a lowercase RFC 4122 version-4 uuid — a grant's id, an undo entry's id. Memory (session) grants mint theirs the same way. */
+/**
+ * `crypto.randomUUID()`'s shape: a lowercase RFC 4122 version-4 uuid — a grant's id, an undo entry's
+ * id. Memory (session) grants mint theirs the same way. Exported for the module's internal siblings
+ * (the own journal, a run's `applied` seat — TASK-20261010-host-broker PR-4), never from the index:
+ * one rule for every undo id the file holds.
+ */
 const UUID_V4_RULE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-const uuidV4Schema = z.string().regex(UUID_V4_RULE, 'a lowercase uuid v4');
+export const uuidV4Schema = z.string().regex(UUID_V4_RULE, 'a lowercase uuid v4');
 const appIdSchema = z.string().min(1).max(ACCESS_APP_ID_MAX_CHARS);
 const columnNameSchema = z.string().min(1).max(ACCESS_COLUMN_NAME_MAX_CHARS);
 
@@ -621,8 +626,8 @@ export type AccessLogEntry = z.infer<typeof accessLogEntrySchema>;
 
 // ------------------------------------------------------------------ the undo journal and the wants (persisted, strict)
 
-/** Steps per undo entry — a frame's `write` is exactly one; the room is for PR-4's multi-statement approvals. */
-const ACCESS_UNDO_MAX_STEPS = 64;
+/** Steps per undo entry — a frame's `write` is exactly one; the room is for PR-4's multi-statement approvals (the own journal reuses it). */
+export const ACCESS_UNDO_MAX_STEPS = 64;
 
 /**
  * One row a brokered write touched, as the journal keeps it: the rowid and the cells of the
@@ -680,14 +685,46 @@ export const accessUndoStepSchema = z
 export type AccessUndoStep = z.infer<typeof accessUndoStepSchema>;
 
 /**
+ * The two bounds every undo journal entry is held to, over the PARSED entry — the access journal's
+ * and the own journal's alike (TASK-20261010-host-broker PR-4 D-PR4-3: extracted, not copied, so a
+ * hand-edited row one schema refuses the other refuses too). The serialised entry is capped at
+ * `ACCESS_UNDO_MAX_BYTES`; then EVERY captured cell is walked UNDER ITS COLUMN
+ * (`findRecordCredential({ [column]: value })`, so the walk's key-context rule judges a
+ * high-entropy value by the column it sits in) and a hit is a REFUSAL — a journal never holds a
+ * credential, and the apply refuses a write whose captured values would (S12).
+ */
+export function refuseUndoOversizeOrCredential(entry: { readonly steps: readonly AccessUndoStep[] }, ctx: z.RefinementCtx): void {
+  if (utf8ByteLength(JSON.stringify(entry)) > ACCESS_UNDO_MAX_BYTES) {
+    ctx.addIssue({ code: 'custom', message: `the serialized undo entry must be at most ${ACCESS_UNDO_MAX_BYTES} bytes` });
+    return; // the walk below is bounded by the cap, not by the schema's row and step caps alone
+  }
+  for (const [stepIndex, step] of entry.steps.entries()) {
+    for (const [rowIndex, row] of step.rows.entries()) {
+      for (const seat of ['before', 'after'] as const) {
+        for (const [cellIndex, value] of (row[seat] ?? []).entries()) {
+          const column = step.columns[cellIndex];
+          if (column === undefined) continue; // the arity issue is the step's
+          const credential = findRecordCredential({ [column]: value });
+          if (credential) {
+            ctx.addIssue({
+              code: 'custom',
+              path: ['steps', stepIndex, 'rows', rowIndex, seat, cellIndex],
+              message: `an undo entry may not carry a credential (${credential.reason} under ${column})`,
+            });
+            return;
+          }
+        }
+      }
+    }
+  }
+}
+
+/**
  * One entry of the `accessUndo:<targetAppId>` row — the TARGET keeps the journal (ADR-0076 §5;
  * spec §22.4; D-PR3-7). Host-written after a brokered write committed; `readerName` is the
- * library name (host-written, not walked — the log entry's precedent, W-Q6). Capped at
- * `ACCESS_UNDO_MAX_BYTES`; EVERY captured cell is walked UNDER ITS COLUMN
- * (`findRecordCredential({ [column]: value })`, so the walk's key-context rule judges a
- * high-entropy value by the column it sits in) and a hit is a REFUSAL — the journal never
- * holds a credential, and the apply refuses a write whose captured values would (S12). An
- * undone entry is kept, marked `undoneAt`, until it expires; it is never offered again.
+ * library name (host-written, not walked — the log entry's precedent, W-Q6). Held to
+ * `refuseUndoOversizeOrCredential` above. An undone entry is kept, marked `undoneAt`, until it
+ * expires; it is never offered again.
  */
 export const accessUndoEntrySchema = z
   .strictObject({
@@ -702,31 +739,7 @@ export const accessUndoEntrySchema = z
     steps: z.array(accessUndoStepSchema).min(1).max(ACCESS_UNDO_MAX_STEPS),
     undoneAt: isoInstant.optional(),
   })
-  .superRefine((entry, ctx) => {
-    if (utf8ByteLength(JSON.stringify(entry)) > ACCESS_UNDO_MAX_BYTES) {
-      ctx.addIssue({ code: 'custom', message: `the serialized undo entry must be at most ${ACCESS_UNDO_MAX_BYTES} bytes` });
-      return; // the walk below is bounded by the cap, not by the schema's row and step caps alone
-    }
-    for (const [stepIndex, step] of entry.steps.entries()) {
-      for (const [rowIndex, row] of step.rows.entries()) {
-        for (const seat of ['before', 'after'] as const) {
-          for (const [cellIndex, value] of (row[seat] ?? []).entries()) {
-            const column = step.columns[cellIndex];
-            if (column === undefined) continue; // the arity issue is the step's
-            const credential = findRecordCredential({ [column]: value });
-            if (credential) {
-              ctx.addIssue({
-                code: 'custom',
-                path: ['steps', stepIndex, 'rows', rowIndex, seat, cellIndex],
-                message: `an undo entry may not carry a credential (${credential.reason} under ${column})`,
-              });
-              return;
-            }
-          }
-        }
-      }
-    }
-  });
+  .superRefine(refuseUndoOversizeOrCredential);
 export type AccessUndoEntry = z.infer<typeof accessUndoEntrySchema>;
 
 /**

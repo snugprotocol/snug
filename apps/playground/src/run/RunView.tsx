@@ -80,7 +80,7 @@ import { useMediaQuery } from './useMediaQuery.js';
 import { isNamedLoadRefusal, missingAppCopy, starterInstallDisclosureTail } from './copy.js';
 import { sqlJsEngineOptions } from './sqlJsEngine.js';
 import { RunBlocked } from '../views/AvailabilityNote.js';
-import { ChatLog } from '../views/ChatLog.js';
+import { ChatLog, type ChatLogProps } from '../views/ChatLog.js';
 import type { ResolveAccessCard } from '../access/AccessCard.js';
 import type { ResolveScheduleCard } from '../schedule/ScheduleCard.js';
 
@@ -917,6 +917,9 @@ export default function RunView(): ReactElement {
             }
             onApproveDataWrite={chat.approveDataWrite}
             onDeclineDataWrite={chat.declineDataWrite}
+            onUndoDataWrite={chat.undoDataWrite}
+            dataWriteUndoable={chat.dataWriteUndoable}
+            appName={getAppMeta(id)?.displayName ?? meta?.displayName ?? 'this app'}
             onSelectCardOption={chat.selectCardOption}
             onResolveSchedule={chat.resolveSchedule}
             onResolveAccess={chat.resolveAccess}
@@ -1442,9 +1445,13 @@ interface RailChatProps {
   onDirectiveConnect?: () => void;
   /** The v4 connect card's mount — the persisted (appId, slot) to open the wizard on. */
   onConnectionConnect?: (connection: { appId: string; slot: string }) => void;
-  /** The data-write approval card's actions (ADR-0019 D8). */
+  /** The data-write approval card's actions (ADR-0019 D8), and its undo once applied (TASK-20261010-host-broker PR-4, D-PR4-19). */
   onApproveDataWrite?: (proposal: DataWriteCardState, messageId: number) => void;
   onDeclineDataWrite?: (proposal: DataWriteCardState, messageId: number) => void;
+  onUndoDataWrite?: ChatLogProps['onUndoDataWrite'];
+  dataWriteUndoable?: ReadonlySet<string>;
+  /** The app whose data the chat's changes touch — the undo's question names it. */
+  appName?: string;
   onSelectCardOption?: (card: ChatCardState, messageId: number, optionId: string) => void;
   /** The schedule suggestion card's resolve path (TASK-20261009 P1) — threaded through to `ChatLog`. */
   onResolveSchedule?: ResolveScheduleCard;
@@ -1464,6 +1471,9 @@ function RailChat({
   onConnectionConnect,
   onApproveDataWrite,
   onDeclineDataWrite,
+  onUndoDataWrite,
+  dataWriteUndoable,
+  appName,
   onSelectCardOption,
   onResolveSchedule,
   onResolveAccess,
@@ -1498,6 +1508,9 @@ function RailChat({
           busy={busy}
           {...(onApproveDataWrite !== undefined ? { onApproveDataWrite } : {})}
           {...(onDeclineDataWrite !== undefined ? { onDeclineDataWrite } : {})}
+          {...(onUndoDataWrite !== undefined ? { onUndoDataWrite } : {})}
+          {...(dataWriteUndoable !== undefined ? { dataWriteUndoable } : {})}
+          {...(appName !== undefined ? { appName } : {})}
           {...(onSelectCardOption !== undefined ? { onSelectCardOption } : {})}
           {...(onResolveSchedule !== undefined ? { onResolveSchedule } : {})}
           {...(onResolveAccess !== undefined ? { onResolveAccess } : {})}

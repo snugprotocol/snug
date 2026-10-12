@@ -16,12 +16,19 @@ import type { ScheduleRun, ScheduledTask } from '@snugprotocol/protocol';
 
 import type { SnugPlatform } from '../platform/platform.js';
 import { WEB_NOTIFY_OPT_IN_KEY } from '../platform/webNotify.js';
+import { disarmAllTasks } from '../schedule/acts.js';
 import { followerTab, globalPaused } from '../schedule/copy.js';
 import { SETTINGS } from '../schedule/copy.page.js';
 import { NO_SUGGESTIONS_KEY, NOTIFY_OPT_IN_KEY, ScheduleSettingsCard } from '../schedule/ScheduleSettingsCard.js';
 import { __resetSchedulerForTests, initScheduler, schedulerStore, type SchedulerDeps } from '../schedule/scheduler.js';
 import { SettingsView } from '../views/SettingsView.js';
 import { installTestUserDb } from './userdbTestHelper.js';
+
+// PR-4 Gate-5 U7: `disarmAllTasks` wrapped (not replaced) so ONE test can make Settings' act fail.
+vi.mock('../schedule/acts.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../schedule/acts.js')>();
+  return { ...actual, disarmAllTasks: vi.fn(actual.disarmAllTasks) };
+});
 
 declare global {
   // eslint-disable-next-line no-var
@@ -113,6 +120,7 @@ const button = (el: HTMLElement, text: string): HTMLButtonElement | undefined =>
 
 beforeEach(async () => {
   __resetSchedulerForTests();
+  vi.mocked(disarmAllTasks).mockClear();
   localStorage.clear();
   vi.stubGlobal('Notification', undefined);
   db = await installTestUserDb();
@@ -322,5 +330,132 @@ describe('the mount is gated on allows("schedule") (C7)', () => {
     const el = await render(<view.SettingsView />);
     expect(el.querySelector('[data-testid="settings-section-connections"]')).not.toBeNull();
     expect(el.querySelector('[data-testid="settings-section-schedule"]')).toBeNull();
+  });
+});
+
+// =============================================================================================
+// TASK-20261010-host-broker PR-4 — the Settings kill switch is an ACT, not a row (D-PR4-10; SC6):
+// *stop every schedule making changes on its own* — shown ONLY while some schedule is armed,
+// naming how many — clears `writeAuthority` on every task (one task write each). No switch, no
+// storage flag, no disabled tick. A disarm the user performs here leaves no `disarmed` trace (that
+// seat is for a disarm the user did NOT perform — D-PR4-7).
+//
+// Assumed (lane T-C question): the act is the button whose text is the contract's phrase; the
+// count is named in the same settings row (`schedule-on-its-own-row`).
+// =============================================================================================
+
+describe('PR-4 — *stop every schedule making changes on its own* (D-PR4-10)', () => {
+  const STOP_ALL = 'stop every schedule making changes on its own';
+  const ARMED_AT = '2026-10-08T09:00:00.000Z';
+  const ask = { kind: 'app-think', appId: 'ledger', prompt: 'tidy the categories', context: { maxRows: 50 } } as const;
+  const armed = (id: string): ScheduledTask =>
+    ({ ...task(), id, title: `armed ${id}`, steps: [ask], writeAuthority: { rowsPerRun: 200, armedAt: ARMED_AT, armedVersion: 1 } }) as ScheduledTask;
+
+  it('NEGATIVE: with no armed schedule the act is not shown at all — never a disabled control', async () => {
+    db.putScheduledTask({ ...task(), steps: [ask] });
+    await initScheduler(deps());
+    const el = await render(<ScheduleSettingsCard />);
+    expect(button(el, STOP_ALL)).toBeUndefined();
+    expect(el.textContent).not.toContain(STOP_ALL);
+    expect(el.querySelector('[data-testid="schedule-on-its-own-row"]')).toBeNull();
+    expect([...el.querySelectorAll('[role="switch"]')], 'no switch was added for this').toHaveLength(2);
+  });
+
+  it('shown while some schedule is armed, naming how many', async () => {
+    db.putScheduledTask(armed('a1'));
+    db.putScheduledTask(armed('a2'));
+    db.putScheduledTask({ ...task(), id: 'u1', steps: [ask] });
+    await initScheduler(deps());
+    const el = await render(<ScheduleSettingsCard />);
+    expect(button(el, STOP_ALL)).toBeDefined();
+    const row = el.querySelector('[data-testid="schedule-on-its-own-row"]');
+    expect(row?.textContent ?? '').toMatch(/\b2\b/);
+    expect(row?.textContent ?? '', 'the unarmed schedule is not counted').not.toMatch(/\b3\b/);
+  });
+
+  it('clears the authority on EVERY armed schedule, leaves the others alone, writes no trace — then the act goes', async () => {
+    db.putScheduledTask(armed('a1'));
+    db.putScheduledTask(armed('a2'));
+    db.putScheduledTask({ ...task(), id: 'u1', steps: [ask] });
+    const untouched = db.getScheduledTask('u1');
+    await initScheduler(deps());
+    const el = await render(<ScheduleSettingsCard />);
+    await act(async () => {
+      button(el, STOP_ALL)?.click();
+    });
+    await vi.waitFor(() => {
+      expect(db.getScheduledTask('a1')?.writeAuthority).toBeUndefined();
+      expect(db.getScheduledTask('a2')?.writeAuthority).toBeUndefined();
+    });
+    for (const id of ['a1', 'a2']) {
+      expect(db.getScheduledTask(id)?.disarmed, `${id}: the user did this — no trace`).toBeUndefined();
+      expect(db.getScheduledTask(id)?.enabled, `${id}: still on — only the authority went`).toBe(true);
+    }
+    expect(db.getScheduledTask('u1')).toEqual(untouched);
+    await settle();
+    expect(button(el, STOP_ALL)).toBeUndefined();
+  });
+
+  it('one armed schedule is named as one', async () => {
+    db.putScheduledTask(armed('a1'));
+    await initScheduler(deps());
+    const el = await render(<ScheduleSettingsCard />);
+    expect(el.querySelector('[data-testid="schedule-on-its-own-row"]')?.textContent ?? '').toMatch(/\b1\b/);
+  });
+});
+
+// =============================================================================================
+// TASK-20261010-host-broker PR-4 Gate 5 — U7: Settings' act answers in words where the focus was.
+// The row disappearing is the answer (D-I4-14, no confirm) — but the focused button goes with it, so
+// the card leaves ONE outcome line, `SETTINGS.stoppedAll(n)` from `disarmAllTasks()`'s count, with
+// `role="status"`, and moves the focus to it; a failure is caught into words (an `error-note`),
+// never an unhandled rejection.
+// =============================================================================================
+
+describe('PR-4 Gate-5 U7 — *stop every schedule making changes on its own* answers in words', () => {
+  const STOP_ALL = 'stop every schedule making changes on its own';
+  const ask = { kind: 'app-think', appId: 'ledger', prompt: 'tidy the categories', context: { maxRows: 50 } } as const;
+  const armed = (id: string): ScheduledTask =>
+    ({ ...task(), id, title: `armed ${id}`, steps: [ask], writeAuthority: { rowsPerRun: 200, armedAt: '2026-10-08T09:00:00.000Z', armedVersion: 1 } }) as ScheduledTask;
+
+  it('SETTINGS.stoppedAll(n) is a sentence naming how many stopped', () => {
+    expect(typeof SETTINGS.stoppedAll).toBe('function');
+    expect(SETTINGS.stoppedAll(2)).toMatch(/\b2\b/);
+    expect(SETTINGS.stoppedAll(1)).toMatch(/\b1\b/);
+    expect(SETTINGS.stoppedAll(2)).not.toMatch(/\b(task|proposal)s?\b/i);
+  });
+
+  it('after the act: a role="status" line reads SETTINGS.stoppedAll(2) and holds the focus', async () => {
+    db.putScheduledTask(armed('a1'));
+    db.putScheduledTask(armed('a2'));
+    await initScheduler(deps());
+    const el = await render(<ScheduleSettingsCard />);
+    const stop = button(el, STOP_ALL);
+    await act(async () => {
+      stop?.focus();
+      stop?.click();
+    });
+    await vi.waitFor(() => expect(db.getScheduledTask('a2')?.writeAuthority).toBeUndefined());
+    await settle();
+    const line = [...el.querySelectorAll<HTMLElement>('[role="status"]')].find((node) => node.textContent === SETTINGS.stoppedAll(2));
+    expect(line, 'the outcome line').toBeDefined();
+    expect(document.activeElement, 'focus moves to the outcome line, never to <body>').toBe(line);
+  });
+
+  it('a failing act is caught into words — an error-note, and the act stays for another try', async () => {
+    db.putScheduledTask(armed('a1'));
+    await initScheduler(deps());
+    vi.mocked(disarmAllTasks).mockRejectedValueOnce(new Error('the file is read-only here'));
+    const el = await render(<ScheduleSettingsCard />);
+    await act(async () => {
+      button(el, STOP_ALL)?.click();
+    });
+    await settle();
+    expect(vi.mocked(disarmAllTasks)).toHaveBeenCalledTimes(1);
+    const note = el.querySelector('.error-note');
+    expect(note, 'the failure is said').not.toBeNull();
+    expect((note?.textContent ?? '').trim()).not.toBe('');
+    expect(button(el, STOP_ALL), 'nothing stopped — the act is still there').toBeDefined();
+    expect(db.getScheduledTask('a1')?.writeAuthority).toBeDefined();
   });
 });

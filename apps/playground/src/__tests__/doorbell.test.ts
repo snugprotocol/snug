@@ -541,3 +541,133 @@ describe('NEGATIVE — ids only: no event carries a row, a value, a name or a co
     for (const secret of [ROW_SECRET, 'Ledger', 'Budget', 'Pantry', 'food', 'note', 'rows', 'count', 'changes']) expect(everything, secret).not.toContain(secret);
   });
 });
+
+// ============================================================================================
+// TASK-20261010-host-broker PR-4 (contract v2 D-PR4-5; §24.7 item 29; AC32b): OWN writes ring.
+// Every own write — the user's approval and an armed task's change — clears the namespace's read
+// caches and rings `access-source-changed` to its live readers and `data-changed` to its own frame.
+// The driver's `brokered` signal under it still rings nothing from the doorbell: each reader hears
+// the change EXACTLY once (the broker's ring), never twice. The engine is reached through a
+// VARIABLE specifier (the file's own idiom; `applyOwnWrite`/`undoOwnWrite` are new exports).
+// ============================================================================================
+
+type WriteBrokerModule = typeof import('../access/writeBroker.js');
+const WRITE_BROKER_MODULE = '../access/writeBroker.js';
+const loadWriteBroker = (): Promise<WriteBrokerModule> => import(/* @vite-ignore */ WRITE_BROKER_MODULE) as Promise<WriteBrokerModule>;
+
+describe('PR-4 — own writes ring: data-changed to the app’s own frame, access-source-changed to its live readers (D-PR4-5)', () => {
+  beforeEach(() => {
+    __setAccessDepsForTests({ getDb: () => Promise.resolve(db), now: () => Date.now() });
+  });
+
+  it('the user’s APPROVAL of the app’s own change: the own frame hears data-changed { table } once; EVERY live reader hears access-source-changed { grantId } once — the doorbell adds nothing for the brokered signal', async () => {
+    const { applyApprovedWrite } = await loadWriteBroker();
+    open(source);
+    open(budget);
+    open(pantry);
+    disarm = doorbell.armDoorbell(db);
+    const outcome = await (applyApprovedWrite as unknown as (db: UserDb, proposal: unknown, options: { via: 'chat' | 'user' }) => Promise<Record<string, unknown>>)(
+      db,
+      { appId: source, statements: ['UPDATE transactions SET amount = 5 WHERE amount = 450'], params: [[]], summary: 'fix the amount', previewed: [1] },
+      { via: 'chat' },
+    );
+    expect(outcome).toMatchObject({ ok: true, executed: [1] });
+    await settle();
+    expect(ringsTo(source)).toEqual([{ appId: source, event: DATA_CHANGED_EVENT, data: { table: 'transactions' } }]);
+    expect(sourceChanged(budget)).toEqual([{ grantId: budgetGrant.id }]);
+    expect(sourceChanged(pantry)).toEqual([{ grantId: pantryGrant.id }]);
+  });
+
+  it('an armed TASK’s own change (applyOwnWrite, authority task) rings the same way — the own frame once, every live reader once', async () => {
+    const { applyOwnWrite } = await loadWriteBroker();
+    open(source);
+    open(budget);
+    open(pantry);
+    disarm = doorbell.armDoorbell(db);
+    const outcome = await applyOwnWrite(db, {
+      appId: source,
+      bucket: 'task-1',
+      statements: ['UPDATE transactions SET amount = 5 WHERE amount = 450'],
+      params: [[]],
+      expectChanges: [1],
+      maxChanges: 200,
+      requireUndo: true,
+      authority: 'task',
+      via: 'schedule',
+      runId: 'run-1',
+      taskId: 'task-1',
+      stillArmed: () => true,
+    });
+    expect(outcome).toMatchObject({ ok: true, undoable: true });
+    await settle();
+    expect(ringsTo(source)).toEqual([{ appId: source, event: DATA_CHANGED_EVENT, data: { table: 'transactions' } }]);
+    expect(sourceChanged(budget)).toEqual([{ grantId: budgetGrant.id }]);
+    expect(sourceChanged(pantry)).toEqual([{ grantId: pantryGrant.id }]);
+  });
+
+  it('the own UNDO rings the same way, and its rings carry ids only — never a row, a value or a count', async () => {
+    const { applyOwnWrite, undoOwnWrite } = await loadWriteBroker();
+    const applied = await applyOwnWrite(db, {
+      appId: source,
+      bucket: 'approval',
+      statements: ['UPDATE transactions SET category = ? WHERE amount = 450'],
+      params: [[ROW_SECRET]],
+      expectChanges: [1],
+      maxChanges: Number.POSITIVE_INFINITY,
+      requireUndo: false,
+      authority: 'approval',
+      via: 'user',
+    });
+    if (!applied.ok || applied.undoId === undefined) throw new Error(`expected an undoable apply, got ${JSON.stringify(applied)}`);
+    open(source);
+    open(budget);
+    open(pantry);
+    disarm = doorbell.armDoorbell(db);
+    expect(await undoOwnWrite(db, source, 'approval', applied.undoId, { via: 'user' })).toEqual({ ok: true });
+    await settle();
+    expect(ringsTo(source)).toEqual([{ appId: source, event: DATA_CHANGED_EVENT, data: { table: 'transactions' } }]);
+    expect(sourceChanged(budget)).toEqual([{ grantId: budgetGrant.id }]);
+    expect(sourceChanged(pantry)).toEqual([{ grantId: pantryGrant.id }]);
+    const everything = JSON.stringify(rung);
+    for (const secret of [ROW_SECRET, 'Ledger', 'changes', 'rows']) expect(everything, secret).not.toContain(secret);
+  });
+
+  it('a refused own write rings nothing (a full task bucket — nothing committed)', async () => {
+    const { applyOwnWrite } = await loadWriteBroker();
+    const journal = db as unknown as { putOwnUndo(appId: string, bucket: string, entry: unknown): string };
+    for (let i = 0; i < 20; i += 1) {
+      const at = new Date(Date.now()).toISOString();
+      journal.putOwnUndo(source, 'task-1', {
+        id: crypto.randomUUID(),
+        at,
+        expiresAt: new Date(Date.now() + 7 * 86_400_000).toISOString(),
+        authority: 'task',
+        via: 'schedule',
+        runId: `run-${i}`,
+        taskId: 'task-1',
+        steps: [{ table: 'transactions', op: 'update', columns: ['amount'], rows: [{ rowid: 1, before: [1], after: [2] }] }],
+      });
+    }
+    open(source);
+    open(budget);
+    open(pantry);
+    disarm = doorbell.armDoorbell(db);
+    const outcome = await applyOwnWrite(db, {
+      appId: source,
+      bucket: 'task-1',
+      statements: ['UPDATE transactions SET amount = 5 WHERE amount = 450'],
+      params: [[]],
+      expectChanges: [1],
+      maxChanges: 200,
+      requireUndo: true,
+      authority: 'task',
+      via: 'schedule',
+      runId: 'run-x',
+      taskId: 'task-1',
+      stillArmed: () => true,
+    });
+    expect(outcome).toMatchObject({ ok: false, reason: 'full' });
+    await settle();
+    expect(rung).toEqual([]);
+  });
+});

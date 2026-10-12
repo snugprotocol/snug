@@ -11,27 +11,51 @@
 // The row's switch never enables it directly — the engine refuses that too — so on an
 // imported row the switch's click is the same act as *review*: it opens the editor. Any
 // refusal the engine answers (a deleted app, a read-only file) is rendered inline, in words.
+//
+// MAKING CHANGES ON ITS OWN (TASK-20261010-host-broker PR-4; D-PR4-8, D-PR4-10, D-PR4-18; D5, D6):
+// shown wherever the schedule is. Line 2 carries the chip *makes changes on its own* — a glyph
+// whose accessible name is the words, the words beside it on a wide screen; the kebab gains *stop
+// making changes on its own*, which says what it did in the row; a disarm the user did not perform
+// is an attention line with *review*; a delete that would end live undos says so in its confirm.
+// THE HISTORY opens with the schedule's changes list (`ScheduleChanges` — read from its own undo
+// bucket, so an undo stays findable whatever was pruned), and each result's line carries the
+// host's facts after the AI's words (`resultFacts`, as of the page's clock — an expired batch waits
+// for nothing, U10), with no empty words before them (U13). ARRIVING FROM A RESULT'S LINK
+// (`?history=<id>`, U6) opens this row's history AND lands on it: scrolled into view and focused
+// (`tabIndex={-1}` — focusable without joining the tab order), never the top of the page with the
+// focus on <body>.
 
-import { useRef, useState, type ReactElement } from 'react';
-import { useNavigate } from 'react-router';
+import { useEffect, useRef, useState, type ReactElement } from 'react';
+import { useNavigate, useSearchParams } from 'react-router';
 
 import type { ScheduleRun, ScheduledTask } from '@snugprotocol/protocol';
 
 import { Button } from '../ui/Button.js';
 import { useDismissableMenu } from '../ui/useDismissableMenu.js';
-import { RESULT_STATUS_WORD, imported, needsYou, paused, type StateCopy } from './copy.js';
+import { disarmTask } from './acts.js';
+import { RESULT_STATUS_WORD, disarmed, imported, needsYou, paused, type StateCopy } from './copy.js';
 import { ROW } from './copy.page.js';
+import { resultFacts } from './copy.result.js';
 import { describeSpec } from './cron.js';
 import { appRunAppOf, attentionOf, nextFor, relativeTime, runsNewestFirst, type AppIndex, type Attention } from './pageModel.js';
-import { editHref } from './routes.js';
+import { HISTORY_PARAM, editHref } from './routes.js';
+import { ScheduleChanges, readScheduleChanges } from './ScheduleChanges.js';
+import { pausedRow } from './ScheduleStates.js';
 import { deleteTask, runNow, setTaskEnabled } from './scheduler.js';
 import { appIdsOf } from './taskShape.js';
+
+/** The glyph of the *makes changes on its own* chip; the words are its accessible name. */
+const ON_ITS_OWN_GLYPH = '✎';
 
 /** The attention line's copy, with its one act's handler. */
 function attentionCopy(attention: Attention, item: ScheduledTask, apps: AppIndex): { copy: StateCopy; act: 'resume' | 'review' | 'open-app' } {
   switch (attention.kind) {
     case 'paused':
-      return { copy: paused(attention.reason, attention.reason === 'failures' ? item.consecutiveFailures : attention.reason === 'ignored' ? item.unseenResults : undefined), act: 'resume' };
+      // Paused by an update that also ended making changes on its own: `pausedRow` says resuming won't bring that back.
+      if (attention.reason === 'app-updated') return { copy: pausedRow({ ...item, pausedReason: attention.reason }) ?? paused(attention.reason), act: 'resume' };
+      return { copy: paused(attention.reason, attention.reason === 'failures' ? item.consecutiveFailures : item.unseenResults), act: 'resume' };
+    case 'disarmed':
+      return { copy: disarmed(attention.reason), act: 'review' };
     case 'imported':
       return { copy: imported, act: 'review' };
     case 'needs-you': {
@@ -57,17 +81,41 @@ export function ScheduleRow({ item, runs, apps, now, attention }: ScheduleRowPro
   const navigate = useNavigate();
   const menu = useDismissableMenu();
   const [armed, setArmed] = useState(false);
-  const [historyOpen, setHistoryOpen] = useState(false);
+  // A result's link to the schedule's changes (`historyHref`) opens this row's history on arrival.
+  const [search] = useSearchParams();
+  const [historyOpen, setHistoryOpen] = useState(() => search.get(HISTORY_PARAM) === item.id);
+  /** Arrived by that link: the first commit lands on the history it opened (U6). Read once, like the open state. */
+  const landOnHistory = useRef(search.get(HISTORY_PARAM) === item.id);
+  const historyRef = useRef<HTMLUListElement>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
+  /** What the row's own act just did, said in the row (*stop making changes on its own*). */
+  const [outcome, setOutcome] = useState<string | undefined>(undefined);
+  /** The armed delete would end undos still live — read when it arms, from the schedule's own bucket. */
+  const [endsUndos, setEndsUndos] = useState(false);
   /** One confirm = one delete, even for two clicks in the same tick (the tiles' latch). */
   const deleteLatch = useRef(false);
+  const onItsOwn = item.writeAuthority !== undefined;
+
+  useEffect(() => {
+    if (!landOnHistory.current) return;
+    landOnHistory.current = false;
+    const history = historyRef.current;
+    if (history === null) return;
+    // A page without layout (a test, a print) has no scrolling to do; the focus still moves.
+    if (typeof history.scrollIntoView === 'function') history.scrollIntoView({ block: 'start' });
+    history.focus();
+  }, []);
 
   const next = nextFor(item, now);
   const appIds = appIdsOf(item.steps);
   const historyId = `schedule-history-${item.id}`;
-  /** The one enable path for an imported schedule is its editor's consent panel. */
-  const reviewFirst = (attention ?? attentionOf(item, runs))?.kind === 'imported';
+  /**
+   * The one enable path for an imported schedule is its editor's consent panel — also when its
+   * attention line speaks of the authority the import took away (the `disarmed` trace ranks first).
+   */
+  const shown = attention ?? attentionOf(item, runs);
+  const reviewFirst = shown?.kind === 'imported' || (shown?.kind === 'disarmed' && item.provenance === 'imported' && !item.enabled);
 
   const toggle = async (): Promise<void> => {
     setError(undefined);
@@ -104,6 +152,22 @@ export function ScheduleRow({ item, runs, apps, now, attention }: ScheduleRowPro
       setBusy(false);
       setArmed(false);
     }
+  };
+
+  /** The kebab's act on an armed schedule: the authority goes, the schedule stays on — and the row says so. */
+  const stopOnItsOwn = async (): Promise<void> => {
+    setError(undefined);
+    const result = await disarmTask(item.id);
+    if (result.ok) setOutcome(ROW.stoppedOnItsOwn);
+    else setError(result.reason);
+  };
+
+  /** Arm the delete confirm — and learn, from the journal, whether it would end undos still live. */
+  const armDelete = (): void => {
+    setError(undefined);
+    setEndsUndos(false);
+    setArmed(true);
+    void readScheduleChanges(item.id).then((changes) => setEndsUndos(changes.length > 0));
   };
 
   const attentionLine = attention === undefined ? undefined : attentionCopy(attention, item, apps);
@@ -185,13 +249,24 @@ export function ScheduleRow({ item, runs, apps, now, attention }: ScheduleRowPro
               >
                 {ROW.history}
               </button>
+              {onItsOwn ? (
+                <button
+                  type="button"
+                  className="schedule-menu-item"
+                  onClick={() => {
+                    menu.close(true);
+                    void stopOnItsOwn();
+                  }}
+                >
+                  {ROW.stopOnItsOwn}
+                </button>
+              ) : null}
               <button
                 type="button"
                 className="schedule-menu-item is-danger"
                 onClick={() => {
                   menu.close(true);
-                  setError(undefined);
-                  setArmed(true);
+                  armDelete();
                 }}
               >
                 {ROW.delete}
@@ -206,6 +281,14 @@ export function ScheduleRow({ item, runs, apps, now, attention }: ScheduleRowPro
           ·
         </span>
         <span className="schedule-row-next">{next === undefined ? ROW.nothingComing : ROW.next(relativeTime(next, now))}</span>
+        {onItsOwn ? (
+          <span className="schedule-on-its-own-chip" role="img" aria-label={ROW.onItsOwn} title={ROW.onItsOwn} data-testid="schedule-on-its-own-chip">
+            <span aria-hidden="true">{ON_ITS_OWN_GLYPH}</span>
+            <span className="schedule-on-its-own-words" aria-hidden="true">
+              {ROW.onItsOwn}
+            </span>
+          </span>
+        ) : null}
         {appIds.length > 0 ? (
           <span className="schedule-apps">
             {appIds.map((appId) => {
@@ -234,9 +317,14 @@ export function ScheduleRow({ item, runs, apps, now, attention }: ScheduleRowPro
           ) : null}
         </div>
       ) : null}
+      {outcome !== undefined ? (
+        <p className="hint schedule-row-outcome" role="status" data-testid="schedule-row-outcome">
+          {outcome}
+        </p>
+      ) : null}
       {armed ? (
         <div className="tile-confirm schedule-confirm" role="group" aria-label={`${ROW.delete} ${item.title}?`}>
-          <span className="tile-confirm-copy">{ROW.deleteConfirm}</span>
+          <span className="tile-confirm-copy">{endsUndos ? ROW.deleteConfirmUndo : ROW.deleteConfirm}</span>
           <Button variant="danger" data-testid="schedule-delete-confirm" disabled={busy} onClick={() => void confirmDelete()}>
             {busy ? ROW.deleting : ROW.deleteYes}
           </Button>
@@ -246,17 +334,21 @@ export function ScheduleRow({ item, runs, apps, now, attention }: ScheduleRowPro
         </div>
       ) : null}
       {historyOpen ? (
-        <ul className="schedule-history" id={historyId} data-testid="schedule-history">
+        <ul className="schedule-history" id={historyId} ref={historyRef} tabIndex={-1} data-testid="schedule-history">
+          <ScheduleChanges taskId={item.id} now={now} />
           {runsNewestFirst(runs).length === 0 ? (
             <li className="schedule-hint">{ROW.historyEmpty}</li>
           ) : (
-            runsNewestFirst(runs).map((entry) => (
-              <li key={`${entry.id}:${entry.dueAt}`} className="schedule-history-entry" data-status={entry.status}>
-                <span className="schedule-history-status">{RESULT_STATUS_WORD[entry.status]}</span>
-                <span className="schedule-history-when">{relativeTime(new Date(entry.finishedAt ?? entry.dueAt), now)}</span>
-                {entry.steps[0]?.summary !== undefined ? <span className="schedule-history-summary">{entry.steps[0].summary}</span> : entry.reason !== undefined ? <span className="schedule-history-summary">{entry.reason}</span> : null}
-              </li>
-            ))
+            runsNewestFirst(runs).map((entry) => {
+              const line = historyLine(entry, apps, now);
+              return (
+                <li key={`${entry.id}:${entry.dueAt}`} className="schedule-history-entry" data-status={entry.status}>
+                  <span className="schedule-history-status">{RESULT_STATUS_WORD[entry.status]}</span>
+                  <span className="schedule-history-when">{relativeTime(new Date(entry.finishedAt ?? entry.dueAt), now)}</span>
+                  {line !== undefined ? <span className="schedule-history-summary">{line}</span> : null}
+                </li>
+              );
+            })
           )}
         </ul>
       ) : null}
@@ -267,4 +359,11 @@ export function ScheduleRow({ item, runs, apps, now, attention }: ScheduleRowPro
       ) : null}
     </li>
   );
+}
+
+/** A result's one line in the history: the first step's words (or the run's reason), then the host's facts as of `now` — an empty words segment is left out, never a leading ` · `. */
+function historyLine(run: ScheduleRun, apps: AppIndex, now: Date): string | undefined {
+  const words = run.steps[0]?.summary ?? run.reason;
+  const parts = [...(words === undefined || words === '' ? [] : [words]), ...resultFacts(run, apps.name, now)];
+  return parts.length === 0 ? undefined : parts.join(' · ');
 }

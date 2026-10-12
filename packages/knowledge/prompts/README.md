@@ -18,6 +18,7 @@ prompts/
 │   ├── 36-app-builder-unaided.md    ← iff app-builder capability, knowledge 'none' (ADR-0066) — the honest layer for a brain that can carry neither (webllm)
 │   ├── 40-app-response-format.md    ← iff app-builder capability
 │   ├── 45-app-runtime.md            ← runtime branch only (ADR-0018 D1) — replaces 30 on an installed app's turn
+│   ├── 50-scheduled-agent.md        ← scheduled-agent branch only (ADR-0076 §9, D-PR4-15) — identity + this, never 45 or 40; wins over every other seat
 │   └── 95-platform-desktop.md       ← iff platform 'desktop' (TASK-20260812 P2) — appended LAST on both branches
 ├── knowledge-base/
 │   └── app-authoring/               ← the app-builder KB, section-searchable
@@ -44,6 +45,8 @@ prompts/
 │   ├── artifact-write.md
 │   ├── auth-spec-inferrer.md        ← D8 inference prompt, v3 hints (few-shot outputs contract-tested; retired by P4)
 │   ├── connection-requirement-inferrer.md  ← Dynamic Auth v2: FULL-requirement inference (few-shot outputs contract-tested)
+│   ├── data-propose-write-scheduled.md  ← the scheduled agent's own data_propose_write: one statement, values written in (D-PR4-16)
+│   ├── fetch-connection.md          ← the scheduled agent's GET-only, host-pinned look-up (ADR-0076 §9, D-PR4-13)
 │   └── schema-apply.md
 ├── skills/                          ← skill-builder prompts (workstream B)
 │   ├── skill-creator/               ← VENDORED Anthropic skill-creator — verbatim, commit-pinned,
@@ -95,6 +98,11 @@ prompts/
    sibling; absent or `'web'` assembles byte-identically to the pre-seat shape (ADR-0012:
    a client's platform never changes mid-session, so the cached prefix stays stable).
 6. Tenant blocks rendered from `templates/` (e.g. user identity) — runtime, optional.
+
+The SCHEDULED-AGENT branch (`scheduledAgent: true`, TASK-20261010-host-broker PR-4) is checked
+before every other seat and is exactly 1 + `system/50-scheduled-agent.md` (+ 5 on desktop): an
+unattended *Ask <App>'s AI* turn that may look things up carries neither 45/40's JSON doctrine
+nor an authoring layer. The caller appends the app's runtime contract as the END suffix.
 
 Golden snapshots cover the gating matrix (the four capability combinations, the runtime
 branch, and the two tool-free deliveries); any edit to these files shows up in the golden

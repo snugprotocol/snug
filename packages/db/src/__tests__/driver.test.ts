@@ -801,6 +801,128 @@ describe('brokeredWrite’s OWN variant — { own, caps, expectChanges }: the DM
   });
 });
 
+// TASK-20261010-host-broker PR-4 (contract v2 D-PR4-4; AC32b): the driver FORWARDS the capture
+// variant of own mode — `{ own, capture: true, caps, expectChanges, requireUndo, admit }` — to the
+// pure seat. The bare-{own} describe above stays exactly as written (F18); this is its own describe.
+// The variant's type is read from the driver's own union, so it is `never` until it lands (tsc red).
+type OwnCaptureWrite = Extract<BrokeredWriteInput, { own: unknown; capture: true }>;
+type CapturedStep = { table: string; op: string; columns: string[]; rows: Array<{ rowid: number; before?: unknown[]; after?: unknown[] }> };
+
+describe('brokeredWrite FORWARDS the capture variant of own mode (D-PR4-4)', () => {
+  async function seeded(): Promise<{ driver: SnugDbDriver; events: NamespaceWriteEvent[] }> {
+    const made = signalled();
+    for (const sql of [SCORES, "INSERT INTO scores (name, points) VALUES ('ada', 1), ('bo', 2)"]) expectOk(await made.driver.handle(NS, execFrame(sql)));
+    made.events.length = 0;
+    return made;
+  }
+
+  async function rows(d: SnugDbDriver, sql: string): Promise<unknown[][]> {
+    const result = await d.handle(NS, execFrame(sql));
+    expectOk(result);
+    return result.rows ?? [];
+  }
+
+  const capturing = (
+    statements: Array<{ sql: string; params?: unknown[] }>,
+    over: { expectChanges?: number[]; requireUndo?: boolean; admit?: (steps: readonly CapturedStep[]) => boolean } = {},
+  ): OwnCaptureWrite =>
+    ({ own: statements, capture: true, caps: BROKER_CAPS, requireUndo: true, admit: () => true, ...over }) as unknown as OwnCaptureWrite;
+
+  it('captures through the seat: steps, undoable, the admit asked once — and the brokered signal raised with the table and the summed changes', async () => {
+    const { driver: d, events } = await seeded();
+    const asked: CapturedStep[][] = [];
+    const result = await d.brokeredWrite(
+      NS,
+      capturing([{ sql: 'UPDATE scores SET points = ? WHERE name = ?', params: [50, 'ada'] }, { sql: "INSERT INTO scores (name, points) VALUES ('cy', 3)" }], {
+        expectChanges: [1, 1],
+        admit: (steps) => {
+          asked.push(JSON.parse(JSON.stringify(steps)) as CapturedStep[]);
+          return true;
+        },
+      }),
+    );
+    expect(result).toMatchObject({ ok: true, changes: [1, 1], undoable: true });
+    if (!result.ok) return;
+    expect(result.steps).toEqual([
+      { table: 'scores', op: 'update', columns: ['points'], rows: [{ rowid: 1, before: [1], after: [50] }] },
+      { table: 'scores', op: 'insert', columns: ['name', 'points'], rows: [{ rowid: 3, after: ['cy', 3] }] },
+    ]);
+    expect(asked).toEqual([result.steps]);
+    expect(events).toEqual([{ namespace: NS, kind: 'brokered', table: 'scores', changes: 2 }]);
+    expect(await rows(d, 'SELECT name FROM sqlite_temp_master')).toEqual([]);
+    expect(await d.inTransaction(NS)).toBe(false);
+  });
+
+  it('admit false under requireUndo → cannot-undo (not retryable): nothing changed, no signal', async () => {
+    const { driver: d, events } = await seeded();
+    const result = await d.brokeredWrite(NS, capturing([{ sql: "UPDATE scores SET points = 9 WHERE name = 'ada'" }], { expectChanges: [1], admit: () => false }));
+    expect(result).toMatchObject({ ok: false, reason: 'cannot-undo', retryable: false });
+    expect(await rows(d, 'SELECT name, points FROM scores ORDER BY rowid')).toEqual([
+      ['ada', 1],
+      ['bo', 2],
+    ]);
+    expect(events).toEqual([]);
+  });
+
+  it('admit false WITHOUT requireUndo commits undoable false (the approval\'s path) and signals', async () => {
+    const { driver: d, events } = await seeded();
+    let asked = 0;
+    const result = await d.brokeredWrite(
+      NS,
+      capturing([{ sql: "UPDATE scores SET points = 9 WHERE name = 'ada'" }], {
+        expectChanges: [1],
+        requireUndo: false,
+        admit: () => {
+          asked += 1;
+          return false;
+        },
+      }),
+    );
+    expect(asked).toBe(1);
+    expect(result).toMatchObject({ ok: true, changes: [1], undoable: false, steps: [] });
+    expect(events).toEqual([{ namespace: NS, kind: 'brokered', table: 'scores', changes: 1 }]);
+  });
+
+  it('busy under the app’s open BEGIN (retryable) BEFORE the handle is touched — admit never asked, the app’s transaction intact', async () => {
+    const { driver: d, events } = await seeded();
+    expectOk(await d.handle(NS, execFrame('BEGIN')));
+    expectOk(await d.handle(NS, execFrame("UPDATE scores SET points = 7 WHERE name = 'ada'")));
+    events.length = 0;
+    let asked = 0;
+    const result = await d.brokeredWrite(
+      NS,
+      capturing([{ sql: "UPDATE scores SET points = 50 WHERE name = 'bo'" }], {
+        admit: () => {
+          asked += 1;
+          return true;
+        },
+      }),
+    );
+    expect(result).toMatchObject({ ok: false, reason: 'busy', retryable: true });
+    expect(asked).toBe(0);
+    expect(events).toEqual([]);
+    expectOk(await d.handle(NS, execFrame('COMMIT')));
+    expect(await rows(d, 'SELECT name, points FROM scores ORDER BY rowid')).toEqual([
+      ['ada', 7],
+      ['bo', 2],
+    ]);
+  });
+
+  it('an unplannable batch is refused by name (not retryable) and nothing ran — the capture variant never falls into a mixed batch', async () => {
+    const { driver: d, events } = await seeded();
+    const result = await d.brokeredWrite(
+      NS,
+      capturing([{ sql: "UPDATE scores SET points = 5 WHERE name = 'ada'" }, { sql: "UPDATE scores SET points = abs(-6) WHERE name = 'bo'" }]),
+    );
+    expect(result).toMatchObject({ ok: false, reason: 'refused', retryable: false });
+    expect(await rows(d, 'SELECT name, points FROM scores ORDER BY rowid')).toEqual([
+      ['ada', 1],
+      ['bo', 2],
+    ]);
+    expect(events).toEqual([]);
+  });
+});
+
 describe('brokeredWrite and subscribeWrites through the user db’s facade (D-PR3-11 / D-PR3-20)', () => {
   async function userDb(backend = createMemoryBackend()) {
     const opened = await openUserDb({ backend, locateWasm, persistDebounceMs: 1 });

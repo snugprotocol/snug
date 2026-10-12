@@ -10,6 +10,22 @@ export const editHref = (taskId: string): string => `/schedule/${encodeURICompon
 /** `/schedule/:id/result/:dueAt` — one result, opened. */
 export const resultHref = (taskId: string, dueAt: string): string => `${editHref(taskId)}/result/${encodeURIComponent(dueAt)}`;
 
+/** The page's query key that opens one schedule's history — and the changes list at its top. */
+export const HISTORY_PARAM = 'history';
+
+/**
+ * `/schedule?history=:id` — the schedule page with one schedule's history open, its changes list
+ * first (TASK-20261010-host-broker PR-4, D-PR4-18): where every result links, so an undo stays
+ * findable for its whole seven days whatever became of the result.
+ */
+export const historyHref = (taskId: string): string => `/schedule?${new URLSearchParams({ [HISTORY_PARAM]: taskId }).toString()}`;
+
+/**
+ * `/settings` — where the brain is chosen: the one act of a step no brain here can answer (*open
+ * Settings*), from the result page and from the editor's step (TASK-20261010-host-broker PR-4 Gate 5, U1).
+ */
+export const SETTINGS_HREF = '/settings';
+
 export interface NewScheduleParams {
   /** A sentence to read ("every weekday at 8, summarise my ledger") — the create bar, the sheet, the chat offer. */
   text?: string;

@@ -578,6 +578,43 @@ export const ACCESS_SHEET = {
   you: 'you',
 } as const;
 
+/**
+ * The undo of an app's OWN change (TASK-20261010-host-broker PR-4, D-PR4-19; D16, D20) — a change
+ * the user applied from the chat or a result, or one a schedule made on its own. ONE home: the
+ * chat card, the result page and the schedule's changes list compose it from here. Only the
+ * question is its own (no other app to name — the rows are this app's, so the app is the place);
+ * every other word is the ⋈ sheet's, reused, never respelled.
+ */
+export const OWN_UNDO = {
+  undo: ACCESS_SHEET.undo,
+  /** The armed question: the count in `rowsWord`'s words, the app, and that nothing happens when the rows changed since; it agrees in number with the count. */
+  arm: (n: number, appName: string): string =>
+    `put ${rowsWord(n)} in ${appName} back as ${n === 1 ? 'it was' : 'they were'} before this change? (if ${n === 1 ? 'it' : 'they'} changed since, nothing happens)`,
+  yes: ACCESS_SHEET.undoYes,
+  keep: ACCESS_SHEET.undoKeep,
+  undone: ACCESS_SHEET.undone,
+  /** The outcome line when it could not be done — the engine's reason token (`busy` · `changed` · `gone` · `failed`). */
+  failed: ACCESS_SHEET.undoFailed,
+} as const;
+
+/**
+ * The tail of an own change's line once the journal holds its undo no longer, while the change is
+ * younger than its seven days — undone and gone, or given way early in its bucket (TASK-20261010-
+ * host-broker PR-4 Gate 5, U2). ONE home: the chat's data-write card and the result page's made line
+ * both end on it. Its own export, not an `OWN_UNDO` key — those are the ⋈ sheet's words, reused.
+ */
+export const OWN_UNDO_NO_LONGER = 'can no longer be undone';
+
+/**
+ * What an app's OWN change is answered with while that app is mid-change (its frame's BEGIN — the
+ * driver's `inTransaction`): the app by its name, so the user and the model know what to wait for
+ * (TASK-20261010-host-broker PR-4, D-PR4-5; T-A-12). ONE home: the write broker's own writes and
+ * the schedule's proposal gate (and the scheduled agent through it) say it from here.
+ */
+export function appMidChange(appName: string): string {
+  return `${appName} is in the middle of a change — try later`;
+}
+
 const SUSPEND_HISTORY_WORDS: Readonly<Record<AccessSuspendReason, string>> = {
   'reader-updated': 'it was updated',
   imported: 'arrived with an imported file',

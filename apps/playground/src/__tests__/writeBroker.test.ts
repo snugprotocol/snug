@@ -97,6 +97,15 @@ let gates: Map<string, Promise<void>>;
 const undoJournal = (): UndoAccessors => db;
 const seat = (): UserDb['driver'] => db.driver;
 
+// ---- PR-4 (contract v2 D-PR4-3/4/5/6): the own journal and the own-write engine -------------
+/** The own undo journal's accessors (D-PR4-3) — the UserDb's own once I-1 lands (until then the Pick is a tsc red). */
+type OwnJournal = Pick<UserDb, 'listOwnUndo' | 'putOwnUndo' | 'markOwnUndone' | 'ownUndoRoom'>;
+const ownJournal = (): OwnJournal => db;
+const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+/** `applyApprovedWrite` / `executeApprovedWrite` with D-PR4-6's `{ via }` — called through this one shape so the PR-3 signature is a single tsc red, not one per row. */
+type ApproveFn = (db: UserDb, proposal: PendingWriteProposal, options: { via: 'chat' | 'user' }) => Promise<Record<string, unknown>>;
+const approve = (fn: unknown, proposal: PendingWriteProposal, via: 'chat' | 'user'): Promise<Record<string, unknown>> => (fn as ApproveFn)(db, proposal, { via });
+
 const kindOf = (msg: unknown): string | undefined => (typeof msg === 'object' && msg !== null && 'id' in msg ? String((msg as { kind?: unknown }).kind ?? 'read') : undefined);
 
 /** The inline worker — the real responder — recording every job; a job whose kind has a gate waits for it. */
@@ -357,32 +366,64 @@ describe('the strict path — stillWritable twice, the cap, the seat, the entry,
 // Own mode — applyApprovedWrite
 // =========================================================================================
 
-describe('own mode — applyApprovedWrite: the app’s own approved write through the same seat, never journaled (D-PR3-8; AC20)', () => {
+// INVERTED by D-PR4-4/6 (PR-4 invert table): own mode's approval no longer runs the bare `{ own }`
+// variant, unjournaled. It runs the CAPTURE variant (`requireUndo: false`, `caps.maxChanges =
+// Infinity`, the engine's `admit`), journals the rows to `ownUndo:<appId>:approval` (authority
+// `approval`, the caller's `via`; never the access journal, never a history line) and rings
+// `data-changed` to its own frame AND `access-source-changed` to its live readers (D-PR4-5). The
+// outcome gains `undoId` and `undoable`. The rows below are the PR-3 rows, inverted IN PLACE: the
+// seat input, the journal, the rings. The drift row is unchanged by the contract.
+describe('own mode — applyApprovedWrite: the app’s own approved write through the same seat, now CAPTURED and journaled to the approval bucket (D-PR3-8 → D-PR4-4/6; AC20, AC32b)', () => {
+
+  // The own journal's liveness is read against the db's WALL clock (an entry is live while its
+  // expiresAt is ahead of it); the engine stamps entries with the injected clock (T0). Only `Date`
+  // is faked, at T0, so the two agree and no row turns red seven days after it was written.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(T0);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
   const proposal = (statements: string[], previewed: number[]): PendingWriteProposal => ({ appId: journal, statements, params: statements.map(() => []), summary: 'a change the user approved', previewed });
 
-  it('applies atomically through the seat’s OWN variant ({ own, expectChanges: the previewed counts } — no caps, no capture) — no BEGIN through the frame seat, no journal entry, no line — answers today’s executed counts and rings data-changed to its own frame', async () => {
+  it('applies atomically through the seat’s CAPTURE variant ({ own, capture: true, caps.maxChanges Infinity, expectChanges: the previewed counts, requireUndo: false, admit }) — no BEGIN through the frame seat, an APPROVAL entry journaled (no access entry, no line) — answers executed with its undoId and rings data-changed to its own frame and access-source-changed to its readers', async () => {
     const { applyApprovedWrite } = await writeBroker();
-    listen(journal);
+    const theirs = await grantOn(pantry, journal, ['entries'], false);
+    listen(journal, pantry);
     const seatSpy = vi.spyOn(seat(), 'brokeredWrite');
     const handleSpy = vi.spyOn(db.driver, 'handle');
-    const outcome = await applyApprovedWrite(db, proposal(["UPDATE entries SET amount = 9 WHERE title = 'tea'"], [1]));
-    expect(outcome).toEqual({ ok: true, executed: [1] });
+    const outcome = await approve(applyApprovedWrite, proposal(["UPDATE entries SET amount = 9 WHERE title = 'tea'"], [1]), 'chat');
+    expect(outcome).toEqual({ ok: true, executed: [1], undoId: expect.stringMatching(UUID_V4), undoable: true });
     expect(seatSpy).toHaveBeenCalledTimes(1);
     expect(seatSpy.mock.calls[0]![0]).toBe(journal);
-    // The seat's OWN variant (D-PR3-8, E1-Q12): the approved statements with their params, the previewed counts as the halt — no plans, no capture, no undo asked,
-    // and no caps (Gate-5 W-2: the approved counts are own mode's only bound).
-    const input = seatSpy.mock.calls[0]![1];
-    expect(input).toEqual({
+    // The seat's CAPTURE variant (D-PR4-4): the approved statements with their params, the previewed counts as the halt, no undo REQUIRED (an approval is never refused for its journal).
+    const input = seatSpy.mock.calls[0]![1] as unknown as Record<string, unknown>;
+    expect(input).toMatchObject({
       own: [{ sql: "UPDATE entries SET amount = 9 WHERE title = 'tea'", params: [] }],
+      capture: true,
       expectChanges: [1],
+      requireUndo: false,
     });
-    for (const strictSeat of ['plans', 'undo', 'requireUndo', 'capture', 'caps']) expect(input, strictSeat).not.toHaveProperty(strictSeat);
+    expect((input.caps as { maxChanges: number }).maxChanges, 'an approval is never refused for its size').toBe(Number.POSITIVE_INFINITY);
+    expect(typeof input.admit, 'the engine’s ownUndoEntrySchema.safeParse of the exact entry').toBe('function');
+    for (const strictSeat of ['plans', 'undo']) expect(input, strictSeat).not.toHaveProperty(strictSeat);
     const transactionControl = handleSpy.mock.calls.filter((call) => /^\s*(BEGIN|COMMIT|ROLLBACK|END)\b/i.test(String((call[1] as { sql?: unknown }).sql ?? '')));
-    expect(transactionControl, 'no awaited BEGIN/COMMIT through the frame seat any more').toEqual([]);
+    expect(transactionControl, 'no awaited BEGIN/COMMIT through the frame seat').toEqual([]);
     expect(await rowsOf(journal, "SELECT amount FROM entries WHERE title = 'tea'")).toEqual([[9]]);
+    // The journal: the OWN approval bucket — never the access journal, never a history line.
     expect(undoJournal().listAllAccessUndo(journal)).toEqual([]);
-    expect(db.listAccessLog(journal)).toEqual([]);
-    expect(doorbells()).toEqual([{ appId: journal, event: DATA_CHANGED_EVENT, data: { table: 'entries' } }]);
+    // sanctioned by PR-4 v2.2 note b — the journal holds the setup's grant line; the WRITE adds none.
+    expect(linesOf(journal).map((l) => l.kind), 'no line from the write').toEqual(['granted']);
+    const entries = ownJournal().listOwnUndo(journal, { bucket: 'approval' });
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ id: (outcome as { undoId?: string }).undoId, authority: 'approval', via: 'chat' });
+    expect(entries[0]!.steps).toEqual([{ table: 'entries', op: 'update', columns: ['amount'], rows: [{ rowid: 1, before: [3], after: [9] }] }]);
+    expect(JSON.stringify(entries[0]), 'no SQL text in the entry').not.toMatch(/UPDATE|WHERE/);
+    // The rings (D-PR4-5): its own frame AND its live readers.
+    expect(doorbells()).toContainEqual({ appId: journal, event: DATA_CHANGED_EVENT, data: { table: 'entries' } });
+    expect(doorbells()).toContainEqual({ appId: pantry, event: ACCESS_SOURCE_CHANGED_EVENT, data: { grantId: theirs.id } });
+    expect(doorbells()).toHaveLength(2);
   });
 
   it('a drift since approval keeps today’s outcome shape { ok: false, reason: drifted, previewed, current } — nothing applied, nothing rung', async () => {
@@ -391,18 +432,19 @@ describe('own mode — applyApprovedWrite: the app’s own approved write throug
     await exec(journal, "INSERT INTO entries (title, amount) VALUES ('jam', 1)"); // the app wrote between preview and approval
     listen(journal);
     const before = await rowsOf(journal, ENTRIES);
-    expect(await applyApprovedWrite(db, approved)).toEqual({ ok: false, reason: 'drifted', previewed: [2], current: [3] });
+    expect(await approve(applyApprovedWrite, approved, 'chat')).toEqual({ ok: false, reason: 'drifted', previewed: [2], current: [3] });
     expect(await rowsOf(journal, ENTRIES)).toEqual(before);
     expect(rings.filter((entry) => entry.event === DATA_CHANGED_EVENT)).toEqual([]);
   });
 
-  it('executeApprovedWrite is a thin caller of own mode — it reaches the seat (AC20)', async () => {
+  it('executeApprovedWrite(db, proposal, { via }) is a thin caller of own mode — it reaches the capture seat and journals with the caller’s via (AC20; D-PR4-6)', async () => {
     const seatSpy = vi.spyOn(seat(), 'brokeredWrite');
-    expect(await executeApprovedWrite(db, proposal(["UPDATE entries SET amount = 9 WHERE title = 'tea'"], [1]))).toEqual({ ok: true, executed: [1] });
+    const outcome = await (executeApprovedWrite as unknown as ApproveFn)(db, proposal(["UPDATE entries SET amount = 9 WHERE title = 'tea'"], [1]), { via: 'user' });
+    expect(outcome).toEqual({ ok: true, executed: [1], undoId: expect.stringMatching(UUID_V4), undoable: true });
     expect(seatSpy).toHaveBeenCalledTimes(1);
-    expect(seatSpy.mock.calls[0]![1]).toEqual({ own: [{ sql: "UPDATE entries SET amount = 9 WHERE title = 'tea'", params: [] }], expectChanges: [1] });
+    expect(seatSpy.mock.calls[0]![1]).toMatchObject({ own: [{ sql: "UPDATE entries SET amount = 9 WHERE title = 'tea'", params: [] }], capture: true, expectChanges: [1], requireUndo: false });
     expect(seatSpy.mock.calls[0]![1]).not.toHaveProperty('plans');
-    expect(seatSpy.mock.calls[0]![1], 'Gate-5 W-2: own mode carries no caps').not.toHaveProperty('caps');
+    expect(ownJournal().listOwnUndo(journal, { bucket: 'approval' })[0]).toMatchObject({ authority: 'approval', via: 'user' });
   });
 });
 
@@ -696,5 +738,656 @@ describe('Gate-5 ENG-4 — EVERY undo outcome bumps the access revision exactly 
     } finally {
       await exec(journal, 'ROLLBACK');
     }
+  });
+});
+
+// =========================================================================================
+// PR-4 — the approval's order and its paths (contract v2 D-PR4-4, D-PR4-5, D-PR4-6; AC32b)
+// =========================================================================================
+
+describe('PR-4 — applyApprovedWrite’s order: class guard → inTransaction → the scratchRun drift halt → the seat (D-PR4-5/6)', () => {
+
+  // The own journal's liveness is read against the db's WALL clock (an entry is live while its
+  // expiresAt is ahead of it); the engine stamps entries with the injected clock (T0). Only `Date`
+  // is faked, at T0, so the two agree and no row turns red seven days after it was written.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(T0);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+  const proposal = (statements: string[], previewed: number[]): PendingWriteProposal => ({ appId: journal, statements, params: statements.map(() => []), summary: 'a change the user approved', previewed });
+
+  it('asks the driver’s transaction record FIRST — before the scratchRun export (which would discard the app’s open transaction) and before the seat', async () => {
+    const { applyApprovedWrite } = await writeBroker();
+    const asked = vi.spyOn(db.driver, 'inTransaction');
+    const scratch = vi.spyOn(db, 'scratchRun');
+    const seatSpy = vi.spyOn(seat(), 'brokeredWrite');
+    expect(await approve(applyApprovedWrite, proposal(["UPDATE entries SET amount = 9 WHERE title = 'tea'"], [1]), 'chat')).toMatchObject({ ok: true });
+    expect(asked).toHaveBeenCalledWith(journal);
+    const first = (spy: { mock: { invocationCallOrder: number[] } }): number => spy.mock.invocationCallOrder[0] ?? Number.NaN;
+    expect(first(asked)).toBeLessThan(first(scratch));
+    expect(first(scratch)).toBeLessThan(first(seatSpy));
+  });
+
+  it('the app mid-change (its frame’s BEGIN) → failed with the busy sentence: no scratchRun, no seat, the app’s transaction left as it was', async () => {
+    const { applyApprovedWrite } = await writeBroker();
+    await exec(journal, 'BEGIN');
+    await exec(journal, "UPDATE entries SET amount = 7 WHERE title = 'cake'");
+    const scratch = vi.spyOn(db, 'scratchRun');
+    const seatSpy = vi.spyOn(seat(), 'brokeredWrite');
+    const outcome = await approve(applyApprovedWrite, proposal(["UPDATE entries SET amount = 9 WHERE title = 'tea'"], [1]), 'chat');
+    expect(outcome).toMatchObject({ ok: false, reason: 'failed' });
+    expect(String(outcome.message)).toMatch(/middle of a change/);
+    expect(scratch, 'an export would have discarded the app’s transaction').not.toHaveBeenCalled();
+    expect(seatSpy).not.toHaveBeenCalled();
+    expect(await db.driver.inTransaction(journal)).toBe(true);
+    await exec(journal, 'COMMIT');
+    expect(await rowsOf(journal, ENTRIES)).toEqual([
+      [1, 'tea', 3],
+      [2, 'cake', 7],
+      [3, 'bread', 2],
+    ]);
+  });
+
+  it('the class guard answers before anything else: a DDL is failed with no transaction read, no export, no seat', async () => {
+    const { applyApprovedWrite } = await writeBroker();
+    const asked = vi.spyOn(db.driver, 'inTransaction');
+    const scratch = vi.spyOn(db, 'scratchRun');
+    const seatSpy = vi.spyOn(seat(), 'brokeredWrite');
+    expect(await approve(applyApprovedWrite, proposal(['DROP TABLE entries'], [0]), 'chat')).toMatchObject({ ok: false, reason: 'failed' });
+    expect(asked).not.toHaveBeenCalled();
+    expect(scratch).not.toHaveBeenCalled();
+    expect(seatSpy).not.toHaveBeenCalled();
+  });
+
+  it(`over ${ACCESS_WRITE_MAX_ROWS} previewed rows the engine asks for the BARE { own } up front — never refused for its size, applied whole, undoable false, no entry`, async () => {
+    const { applyApprovedWrite } = await writeBroker();
+    const values = Array.from({ length: ACCESS_WRITE_MAX_ROWS + 1 }, (_, i) => `('bulk-${i}', 1)`).join(', ');
+    await exec(journal, `INSERT INTO entries (title, amount) VALUES ${values}`);
+    const seatSpy = vi.spyOn(seat(), 'brokeredWrite');
+    const outcome = await approve(applyApprovedWrite, proposal(['UPDATE entries SET amount = 0 WHERE amount = 1'], [ACCESS_WRITE_MAX_ROWS + 1]), 'chat');
+    expect(outcome).toEqual({ ok: true, executed: [ACCESS_WRITE_MAX_ROWS + 1], undoable: false });
+    expect(seatSpy).toHaveBeenCalledTimes(1);
+    expect(seatSpy.mock.calls[0]![1]).toEqual({ own: [{ sql: 'UPDATE entries SET amount = 0 WHERE amount = 1', params: [] }], expectChanges: [ACCESS_WRITE_MAX_ROWS + 1] });
+    expect(ownJournal().listOwnUndo(journal, { bucket: 'approval' })).toEqual([]);
+  });
+
+  it('a batch with ANY uncapturable statement runs the bare { own } path for the WHOLE batch — never a mixed batch: both apply, undoable false, no entry', async () => {
+    const { applyApprovedWrite } = await writeBroker();
+    const seatSpy = vi.spyOn(seat(), 'brokeredWrite');
+    const outcome = await approve(
+      applyApprovedWrite,
+      proposal(["UPDATE entries SET amount = 9 WHERE title = 'tea'", "UPDATE entries SET amount = amount + 1 WHERE title = 'cake'"], [1, 1]),
+      'chat',
+    );
+    expect(outcome).toEqual({ ok: true, executed: [1, 1], undoable: false });
+    const last = seatSpy.mock.calls.at(-1)![1];
+    expect(last, 'the batch that COMMITTED was the bare one').toEqual({
+      own: [
+        { sql: "UPDATE entries SET amount = 9 WHERE title = 'tea'", params: [] },
+        { sql: "UPDATE entries SET amount = amount + 1 WHERE title = 'cake'", params: [] },
+      ],
+      expectChanges: [1, 1],
+    });
+    expect(await rowsOf(journal, ENTRIES)).toEqual([
+      [1, 'tea', 9],
+      [2, 'cake', 6],
+      [3, 'bread', 2],
+    ]);
+    expect(ownJournal().listOwnUndo(journal, { bucket: 'approval' })).toEqual([]);
+  });
+
+  it('a captured cell the journal may not hold (a credential-shaped value) — admit says no: the approval COMMITS, undoable false, no entry; the value is in no journal', async () => {
+    const { applyApprovedWrite } = await writeBroker();
+    const KEY = 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJ';
+    const outcome = await approve(applyApprovedWrite, proposal([`UPDATE entries SET title = '${KEY}' WHERE id = 1`], [1]), 'chat');
+    expect(outcome).toEqual({ ok: true, executed: [1], undoable: false });
+    expect(ownJournal().listOwnUndo(journal, { bucket: 'approval' })).toEqual([]);
+    expect(JSON.stringify(db.getSetting(`ownUndo:${journal}:approval`) ?? null)).not.toContain(KEY);
+  });
+});
+
+// =========================================================================================
+// PR-4 — applyOwnWrite: the one own-write engine (D-PR4-3, D-PR4-4, D-PR4-5, D-PR4-11)
+// =========================================================================================
+
+/** A 20-live-entry bucket, planted through the accessor. */
+function fillOwnBucket(bucket: string, live: number, authority: 'task' | 'approval' = 'task'): string[] {
+  const ids: string[] = [];
+  for (let i = 0; i < live; i += 1) {
+    const id = crypto.randomUUID();
+    ids.push(id);
+    expect(
+      ownJournal().putOwnUndo(journal, bucket, {
+        id,
+        at: iso(clock.now - (live - i) * 60_000),
+        expiresAt: iso(clock.now + 7 * DAY),
+        authority,
+        via: authority === 'task' ? 'schedule' : 'chat',
+        ...(authority === 'task' ? { runId: `run-${i}`, taskId: bucket } : {}),
+        steps: [{ table: 'entries', op: 'update', columns: ['amount'], rows: [{ rowid: 2, before: [5], after: [5] }] }],
+      } as never),
+    ).toBe('ok');
+  }
+  return ids;
+}
+
+describe('PR-4 — applyOwnWrite (the module contract: {appId, bucket, statements, params, expectChanges, maxChanges, requireUndo, authority, via, runId?, taskId?, stillArmed?})', () => {
+
+  // The own journal's liveness is read against the db's WALL clock (an entry is live while its
+  // expiresAt is ahead of it); the engine stamps entries with the injected clock (T0). Only `Date`
+  // is faked, at T0, so the two agree and no row turns red seven days after it was written.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(T0);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+  type OwnWriteInput = Parameters<WriteBrokerModule['applyOwnWrite']>[1];
+  const taskWrite = (over: Partial<Record<string, unknown>> = {}): OwnWriteInput =>
+    ({
+      appId: journal,
+      bucket: 'task-1',
+      statements: ["UPDATE entries SET amount = 9 WHERE title = 'tea'"],
+      params: [[]],
+      expectChanges: [1],
+      maxChanges: ACCESS_WRITE_MAX_ROWS,
+      requireUndo: true,
+      authority: 'task',
+      via: 'schedule',
+      runId: 'run-1',
+      taskId: 'task-1',
+      stillArmed: () => true,
+      ...over,
+    }) as unknown as OwnWriteInput;
+
+  it('a task’s write: ONE capture seat call (requireUndo true, its maxChanges, admit), the entry in ITS bucket (authority task, via schedule, runId, taskId — no SQL), no access entry, no line', async () => {
+    const { applyOwnWrite } = await writeBroker();
+    const seatSpy = vi.spyOn(seat(), 'brokeredWrite');
+    const outcome = await applyOwnWrite(db, taskWrite());
+    expect(outcome).toEqual({ ok: true, changes: [1], undoId: expect.stringMatching(UUID_V4), undoable: true });
+    expect(seatSpy).toHaveBeenCalledTimes(1);
+    const input = seatSpy.mock.calls[0]![1] as unknown as Record<string, unknown>;
+    expect(input).toMatchObject({ own: [{ sql: "UPDATE entries SET amount = 9 WHERE title = 'tea'", params: [] }], capture: true, expectChanges: [1], requireUndo: true });
+    expect((input.caps as { maxChanges: number }).maxChanges).toBe(ACCESS_WRITE_MAX_ROWS);
+    expect(typeof input.admit).toBe('function');
+    const [entry] = ownJournal().listOwnUndo(journal, { taskId: 'task-1' });
+    expect(entry).toMatchObject({ id: (outcome as { undoId: string }).undoId, authority: 'task', via: 'schedule', runId: 'run-1', taskId: 'task-1' });
+    expect(entry!.steps).toEqual([{ table: 'entries', op: 'update', columns: ['amount'], rows: [{ rowid: 1, before: [3], after: [9] }] }]);
+    expect(JSON.stringify(entry), 'no SQL text in the entry').not.toMatch(/UPDATE|WHERE/);
+    expect(ownJournal().listOwnUndo(journal, { bucket: 'approval' })).toEqual([]);
+    expect(undoJournal().listAllAccessUndo(journal)).toEqual([]);
+    expect(db.listAccessLog(journal), 'authority task appears on no line').toEqual([]);
+  });
+
+  it('clears the namespace’s read caches and rings data-changed to its own frame and access-source-changed to every live reader', async () => {
+    const { applyOwnWrite } = await writeBroker();
+    const theirs = await grantOn(pantry, journal, ['entries'], false);
+    const pantryFrame = createAccessHandlerFor(pantry, { attended: true, generation: 0 });
+    expect(await pantryFrame.handle(pantry, queryFrame(theirs.id, 'SELECT 1'))).toMatchObject({ ok: true });
+    expect(__scopedReadCachedGrantsForTests()).toContain(theirs.id);
+    listen(journal, pantry, budget);
+    expect(await applyOwnWrite(db, taskWrite())).toMatchObject({ ok: true });
+    expect(__scopedReadCachedGrantsForTests()).not.toContain(theirs.id);
+    expect(doorbells()).toContainEqual({ appId: journal, event: DATA_CHANGED_EVENT, data: { table: 'entries' } });
+    expect(doorbells()).toContainEqual({ appId: pantry, event: ACCESS_SOURCE_CHANGED_EVENT, data: { grantId: theirs.id } });
+    expect(doorbells().filter((ring) => ring.appId === budget)).toEqual([]);
+  });
+
+  it('room BEFORE the seat: a task bucket holding 20 live entries answers full — the seat never reached, nothing changed', async () => {
+    const { applyOwnWrite } = await writeBroker();
+    fillOwnBucket('task-1', 20);
+    const seatSpy = vi.spyOn(seat(), 'brokeredWrite');
+    expect(await applyOwnWrite(db, taskWrite())).toMatchObject({ ok: false, reason: 'full' });
+    expect(seatSpy).not.toHaveBeenCalled();
+    expect(await rowsOf(journal, "SELECT amount FROM entries WHERE title = 'tea'")).toEqual([[3]]);
+    expect(ownJournal().listOwnUndo(journal, { taskId: 'task-1' })).toHaveLength(20);
+    // Another task's bucket is its own.
+    expect(await applyOwnWrite(db, taskWrite({ bucket: 'task-2', taskId: 'task-2' }))).toMatchObject({ ok: true });
+  });
+
+  it('the APPROVAL bucket never refuses: with 20 live entries the oldest gives way and the change is journaled', async () => {
+    const { applyOwnWrite } = await writeBroker();
+    const planted = fillOwnBucket('approval', 20, 'approval');
+    const outcome = await applyOwnWrite(
+      db,
+      taskWrite({ bucket: 'approval', authority: 'approval', via: 'chat', runId: undefined, taskId: undefined, stillArmed: undefined, requireUndo: false, maxChanges: Number.POSITIVE_INFINITY }),
+    );
+    expect(outcome).toMatchObject({ ok: true, undoable: true });
+    const ids = ownJournal().listOwnUndo(journal, { bucket: 'approval' }).map((entry) => entry.id);
+    expect(ids).toHaveLength(20);
+    expect(ids[0]).toBe((outcome as { undoId: string }).undoId);
+    expect(ids).not.toContain(planted[0]);
+  });
+
+  it('stillArmed false → stopped: the seat never reached, nothing changed, no entry', async () => {
+    const { applyOwnWrite } = await writeBroker();
+    const seatSpy = vi.spyOn(seat(), 'brokeredWrite');
+    expect(await applyOwnWrite(db, taskWrite({ stillArmed: () => false }))).toMatchObject({ ok: false, reason: 'stopped' });
+    expect(seatSpy).not.toHaveBeenCalled();
+    expect(await rowsOf(journal, "SELECT amount FROM entries WHERE title = 'tea'")).toEqual([[3]]);
+    expect(ownJournal().listOwnUndo(journal, { taskId: 'task-1' })).toEqual([]);
+  });
+
+  it('stillArmed is evaluated AFTER the last await and immediately before driver.brokeredWrite — every awaited db call comes before it, the seat right after', async () => {
+    const { applyOwnWrite } = await writeBroker();
+    const awaited = [vi.spyOn(db.driver, 'inTransaction'), vi.spyOn(db.driver, 'handle'), vi.spyOn(db, 'scratchRun'), vi.spyOn(db, 'exportAppRuntime')];
+    const stillArmed = vi.fn(() => true);
+    const seatSpy = vi.spyOn(seat(), 'brokeredWrite');
+    expect(await applyOwnWrite(db, taskWrite({ stillArmed }))).toMatchObject({ ok: true });
+    expect(stillArmed).toHaveBeenCalled();
+    const armedAt = stillArmed.mock.invocationCallOrder.at(-1)!;
+    const seatAt = seatSpy.mock.invocationCallOrder[0]!;
+    expect(armedAt).toBeLessThan(seatAt);
+    for (const spy of awaited) {
+      for (const order of spy.mock.invocationCallOrder) expect(order < armedAt || order > seatAt, 'no awaited db call between the check and the seat').toBe(true);
+    }
+  });
+
+  it('the app mid-change → busy, and the app’s transaction is left as it was', async () => {
+    const { applyOwnWrite } = await writeBroker();
+    await exec(journal, 'BEGIN');
+    await exec(journal, "UPDATE entries SET amount = 7 WHERE title = 'cake'");
+    expect(await applyOwnWrite(db, taskWrite())).toMatchObject({ ok: false, reason: 'busy' });
+    expect(await db.driver.inTransaction(journal)).toBe(true);
+    await exec(journal, 'ROLLBACK');
+    expect(await rowsOf(journal, ENTRIES)).toEqual([
+      [1, 'tea', 3],
+      [2, 'cake', 5],
+      [3, 'bread', 2],
+    ]);
+  });
+
+  it('a count that moved since the dry run → changed: rolled back, no entry', async () => {
+    const { applyOwnWrite } = await writeBroker();
+    expect(await applyOwnWrite(db, taskWrite({ statements: ['UPDATE entries SET amount = 0 WHERE amount < 4'], params: [[]], expectChanges: [1] }))).toMatchObject({
+      ok: false,
+      reason: 'changed',
+    });
+    expect(await rowsOf(journal, ENTRIES)).toEqual([
+      [1, 'tea', 3],
+      [2, 'cake', 5],
+      [3, 'bread', 2],
+    ]);
+    expect(ownJournal().listOwnUndo(journal, { taskId: 'task-1' })).toEqual([]);
+  });
+
+  it.each([
+    ['arithmetic', "UPDATE entries SET amount = amount + 1 WHERE title = 'tea'"],
+    ['a function', "UPDATE entries SET title = upper('tea') WHERE id = 1"],
+    ['no WHERE', 'UPDATE entries SET amount = 0'],
+    ['a conflict clause', "INSERT OR REPLACE INTO entries (id, title, amount) VALUES (1, 'tea', 1)"],
+  ])('a task never applies what it cannot undo (%s) → cannot-undo: nothing changed, no entry', async (_label, sql) => {
+    const { applyOwnWrite } = await writeBroker();
+    expect(await applyOwnWrite(db, taskWrite({ statements: [sql], params: [[]], expectChanges: [1] }))).toMatchObject({ ok: false, reason: 'cannot-undo' });
+    expect(await rowsOf(journal, ENTRIES)).toEqual([
+      [1, 'tea', 3],
+      [2, 'cake', 5],
+      [3, 'bread', 2],
+    ]);
+    expect(ownJournal().listOwnUndo(journal, { taskId: 'task-1' })).toEqual([]);
+  });
+
+  it('a task never applies a change to a credential-named column, nor one whose captured cell holds a credential → cannot-undo, rolled back', async () => {
+    const { applyOwnWrite } = await writeBroker();
+    await db.applyAppDdl(journal, ['CREATE TABLE vault (id INTEGER PRIMARY KEY, label TEXT, api_key TEXT)']);
+    await exec(journal, "INSERT INTO vault (id, label, api_key) VALUES (1, 'home', 'kept')");
+    expect(await applyOwnWrite(db, taskWrite({ statements: ["UPDATE vault SET api_key = 'x' WHERE id = 1"], params: [[]], expectChanges: [1] }))).toMatchObject({
+      ok: false,
+      reason: 'cannot-undo',
+    });
+    const KEY = 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJ';
+    expect(await applyOwnWrite(db, taskWrite({ statements: ['UPDATE vault SET label = ? WHERE id = 1'], params: [[KEY]], expectChanges: [1] }))).toMatchObject({
+      ok: false,
+      reason: 'cannot-undo',
+    });
+    expect(await rowsOf(journal, 'SELECT id, label, api_key FROM vault')).toEqual([[1, 'home', 'kept']]);
+    expect(ownJournal().listOwnUndo(journal, { taskId: 'task-1' })).toEqual([]);
+  });
+
+  it('a step over 200 captured rows is never applied under a task’s authority (admit refuses it) → cannot-undo, rolled back', async () => {
+    const { applyOwnWrite } = await writeBroker();
+    const values = Array.from({ length: ACCESS_WRITE_MAX_ROWS + 1 }, (_, i) => `('bulk-${i}', 1)`).join(', ');
+    await exec(journal, `INSERT INTO entries (title, amount) VALUES ${values}`);
+    const outcome = await applyOwnWrite(
+      db,
+      taskWrite({ statements: ['UPDATE entries SET amount = 0 WHERE amount = 1'], params: [[]], expectChanges: [ACCESS_WRITE_MAX_ROWS + 1], maxChanges: Number.POSITIVE_INFINITY }),
+    );
+    expect(outcome).toMatchObject({ ok: false, reason: 'cannot-undo' });
+    expect(await rowsOf(journal, 'SELECT count(*) FROM entries WHERE amount = 0')).toEqual([[0]]);
+  });
+});
+
+// =========================================================================================
+// PR-4 — undoOwnWrite: the user's undo of an own change (D-PR4-19; AC32b)
+// =========================================================================================
+
+describe('PR-4 — undoOwnWrite(db, appId, bucket, undoId, { via: user }) → UndoOutcome', () => {
+
+  // The own journal's liveness is read against the db's WALL clock (an entry is live while its
+  // expiresAt is ahead of it); the engine stamps entries with the injected clock (T0). Only `Date`
+  // is faked, at T0, so the two agree and no row turns red seven days after it was written.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(T0);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+  async function appliedApproval(sql: string, previewed: number[]): Promise<string> {
+    const { applyApprovedWrite } = await writeBroker();
+    const outcome = await approve(applyApprovedWrite, { appId: journal, statements: [sql], params: [[]], summary: 'x', previewed }, 'chat');
+    const undoId = (outcome as { undoId?: string }).undoId;
+    if (undoId === undefined) throw new Error(`expected an undoable approval, got ${JSON.stringify(outcome)}`);
+    return undoId;
+  }
+
+  it('puts the rows back, marks the entry, writes NO access line, clears the caches and rings data-changed and access-source-changed to every live reader', async () => {
+    const { undoOwnWrite } = await writeBroker();
+    const theirs = await grantOn(pantry, journal, ['entries'], false);
+    const undoId = await appliedApproval('UPDATE entries SET amount = 0 WHERE amount < 4', [2]);
+    const pantryFrame = createAccessHandlerFor(pantry, { attended: true, generation: 0 });
+    expect(await pantryFrame.handle(pantry, queryFrame(theirs.id, 'SELECT 1'))).toMatchObject({ ok: true });
+    listen(journal, pantry);
+    expect(await undoOwnWrite(db, journal, 'approval', undoId, { via: 'user' })).toEqual({ ok: true });
+    expect(await rowsOf(journal, ENTRIES)).toEqual([
+      [1, 'tea', 3],
+      [2, 'cake', 5],
+      [3, 'bread', 2],
+    ]);
+    expect(ownJournal().listOwnUndo(journal, { bucket: 'approval' }), 'no live entry is left').toEqual([]);
+    // sanctioned by PR-4 v2.2 note c — the lines are exactly the setup's (the grant and the reader's query); the undo adds none.
+    expect(linesOf(journal).map((l) => l.kind), 'undone without an access line').toEqual(['read', 'granted']);
+    expect(__scopedReadCachedGrantsForTests()).not.toContain(theirs.id);
+    expect(doorbells()).toContainEqual({ appId: journal, event: DATA_CHANGED_EVENT, data: { table: 'entries' } });
+    expect(doorbells()).toContainEqual({ appId: pantry, event: ACCESS_SOURCE_CHANGED_EVENT, data: { grantId: theirs.id } });
+  });
+
+  it('a task bucket’s entry undoes from ITS bucket; the approval bucket does not hold it', async () => {
+    const { applyOwnWrite, undoOwnWrite } = await writeBroker();
+    const applied = await applyOwnWrite(db, {
+      appId: journal,
+      bucket: 'task-1',
+      statements: ["UPDATE entries SET amount = 9 WHERE title = 'tea'"],
+      params: [[]],
+      expectChanges: [1],
+      maxChanges: ACCESS_WRITE_MAX_ROWS,
+      requireUndo: true,
+      authority: 'task',
+      via: 'schedule',
+      runId: 'run-1',
+      taskId: 'task-1',
+      stillArmed: () => true,
+    });
+    const undoId = (applied as { undoId: string }).undoId;
+    expect(await undoOwnWrite(db, journal, 'approval', undoId, { via: 'user' })).toMatchObject({ ok: false, reason: 'gone' });
+    expect(await undoOwnWrite(db, journal, 'task-1', undoId, { via: 'user' })).toEqual({ ok: true });
+    expect(await rowsOf(journal, "SELECT amount FROM entries WHERE title = 'tea'")).toEqual([[3]]);
+  });
+
+  it('an unknown or already-undone id is gone — the sheet’s sentence; nothing changes', async () => {
+    const { undoOwnWrite } = await writeBroker();
+    expect(await undoOwnWrite(db, journal, 'approval', crypto.randomUUID(), { via: 'user' })).toEqual({ ok: false, reason: 'gone', message: undoFailed('gone', 'Journal') });
+    const undoId = await appliedApproval("UPDATE entries SET amount = 0 WHERE title = 'tea'", [1]);
+    expect(await undoOwnWrite(db, journal, 'approval', undoId, { via: 'user' })).toEqual({ ok: true });
+    await exec(journal, "UPDATE entries SET amount = 0 WHERE title = 'tea'");
+    expect(await undoOwnWrite(db, journal, 'approval', undoId, { via: 'user' })).toMatchObject({ ok: false, reason: 'gone' });
+    expect(await rowsOf(journal, "SELECT amount FROM entries WHERE title = 'tea'")).toEqual([[0]]);
+  });
+
+  it('LIVE re-validation: a step naming a column the app no longer has, or a computed one, is gone before the seat — and the entry stops being live', async () => {
+    const { undoOwnWrite } = await writeBroker();
+    const seatSpy = vi.spyOn(seat(), 'brokeredWrite');
+    for (const step of [
+      { table: 'entries', op: 'update', columns: ['nope'], rows: [{ rowid: 1, before: [3], after: [0] }] },
+      { table: 'ghost', op: 'update', columns: ['amount'], rows: [{ rowid: 1, before: [3], after: [0] }] },
+      { table: 'sums', op: 'update', columns: ['doubled'], rows: [{ rowid: 1, before: [2], after: [4] }] },
+    ]) {
+      const id = crypto.randomUUID();
+      expect(ownJournal().putOwnUndo(journal, 'approval', { id, at: iso(clock.now), expiresAt: iso(clock.now + 7 * DAY), authority: 'approval', via: 'chat', steps: [step] } as never)).toBe('ok');
+      expect(await undoOwnWrite(db, journal, 'approval', id, { via: 'user' }), step.table).toEqual({ ok: false, reason: 'gone', message: undoFailed('gone', 'Journal') });
+      expect(ownJournal().listOwnUndo(journal, { bucket: 'approval' }).map((entry) => entry.id)).not.toContain(id);
+    }
+    expect(seatSpy, 'refused before the seat').not.toHaveBeenCalled();
+  });
+
+  it('a planted step naming a credential-named column is refused (the seat’s SEC-4 rule): gone, nothing written', async () => {
+    const { undoOwnWrite } = await writeBroker();
+    await db.applyAppDdl(journal, ['CREATE TABLE vault (id INTEGER PRIMARY KEY, label TEXT, api_key TEXT)']);
+    await exec(journal, "INSERT INTO vault (id, label, api_key) VALUES (1, 'home', 'kept')");
+    const id = crypto.randomUUID();
+    const step = { table: 'vault', op: 'update', columns: ['label', 'api_key'], rows: [{ rowid: 1, before: ['home', 'planted'], after: ['home', 'kept'] }] };
+    expect(ownJournal().putOwnUndo(journal, 'approval', { id, at: iso(clock.now), expiresAt: iso(clock.now + 7 * DAY), authority: 'approval', via: 'chat', steps: [step] } as never)).toBe('ok');
+    expect(await undoOwnWrite(db, journal, 'approval', id, { via: 'user' })).toEqual({ ok: false, reason: 'gone', message: undoFailed('gone', 'Journal') });
+    expect(await rowsOf(journal, 'SELECT id, label, api_key FROM vault')).toEqual([[1, 'home', 'kept']]);
+  });
+
+  it('a row changed since → changed: the WHOLE undo rolls back; busy under the app’s BEGIN — the entry still live', async () => {
+    const { undoOwnWrite } = await writeBroker();
+    const undoId = await appliedApproval('UPDATE entries SET amount = 0 WHERE amount < 4', [2]);
+    await exec(journal, "UPDATE entries SET amount = 7 WHERE title = 'bread'");
+    expect(await undoOwnWrite(db, journal, 'approval', undoId, { via: 'user' })).toEqual({ ok: false, reason: 'changed', message: undoFailed('changed', 'Journal') });
+    expect(await rowsOf(journal, ENTRIES)).toEqual([
+      [1, 'tea', 0],
+      [2, 'cake', 5],
+      [3, 'bread', 7],
+    ]);
+    const second = await appliedApproval("UPDATE entries SET amount = 1 WHERE title = 'cake'", [1]);
+    await exec(journal, 'BEGIN');
+    try {
+      expect(await undoOwnWrite(db, journal, 'approval', second, { via: 'user' })).toEqual({ ok: false, reason: 'busy', message: undoFailed('busy', 'Journal') });
+      expect(ownJournal().listOwnUndo(journal, { bucket: 'approval' }).map((entry) => entry.id)).toContain(second);
+    } finally {
+      await exec(journal, 'ROLLBACK');
+    }
+  });
+});
+
+// =========================================================================================
+// PR-4 Gate-5 — A1 (the bucket rule FIRST in the seat) and A5 (nothing after the commit turns it
+// into a refusal), on the own-write engine and the own undo.
+// =========================================================================================
+
+describe('PR-4 Gate-5 A1 — an entry that does not belong in its bucket never reaches the seat', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(T0);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const write = (over: Record<string, unknown>) =>
+    ({
+      appId: journal,
+      statements: ["UPDATE entries SET amount = 9 WHERE title = 'tea'"],
+      params: [[]],
+      expectChanges: [1],
+      maxChanges: ACCESS_WRITE_MAX_ROWS,
+      via: 'schedule',
+      runId: 'run-1',
+      stillArmed: () => true,
+      ...over,
+    }) as unknown as Parameters<WriteBrokerModule['applyOwnWrite']>[1];
+
+  it('a TASK’s write into the approval bucket (a task whose id spells it) → cannot-undo under requireUndo: the seat never reached, the row unchanged, the approval bucket empty', async () => {
+    const { applyOwnWrite } = await writeBroker();
+    const seatSpy = vi.spyOn(seat(), 'brokeredWrite');
+    const outcome = await applyOwnWrite(db, write({ bucket: 'approval', authority: 'task', taskId: 'approval', requireUndo: true }));
+    expect(outcome).toMatchObject({ ok: false, reason: 'cannot-undo' });
+    expect(seatSpy).not.toHaveBeenCalled();
+    expect(await rowsOf(journal, "SELECT amount FROM entries WHERE title = 'tea'")).toEqual([[3]]);
+    expect(ownJournal().listOwnUndo(journal, { bucket: 'approval' })).toEqual([]);
+  });
+
+  it('… and without requireUndo the same mismatch is failed — never a bare write that lands unjournaled', async () => {
+    const { applyOwnWrite } = await writeBroker();
+    const seatSpy = vi.spyOn(seat(), 'brokeredWrite');
+    const outcome = await applyOwnWrite(db, write({ bucket: 'approval', authority: 'task', taskId: 'approval', requireUndo: false }));
+    expect(outcome).toMatchObject({ ok: false, reason: 'failed' });
+    expect(seatSpy).not.toHaveBeenCalled();
+    expect(await rowsOf(journal, "SELECT amount FROM entries WHERE title = 'tea'")).toEqual([[3]]);
+  });
+
+  it.each([
+    ['a task entry naming ANOTHER task’s bucket', { bucket: 'task-2', authority: 'task', taskId: 'task-1', requireUndo: true }],
+    ['a task entry with no taskId', { bucket: 'task-1', authority: 'task', taskId: undefined, requireUndo: true }],
+    ['an approval entry in a task bucket', { bucket: 'task-1', authority: 'approval', via: 'chat', runId: undefined, taskId: undefined, requireUndo: true }],
+    ['an approval entry carrying a taskId', { bucket: 'approval', authority: 'approval', via: 'chat', taskId: 'task-1', requireUndo: true }],
+  ])('%s → refused before any seat, nothing changed', async (_label, over) => {
+    const { applyOwnWrite } = await writeBroker();
+    const seatSpy = vi.spyOn(seat(), 'brokeredWrite');
+    const outcome = await applyOwnWrite(db, write(over));
+    expect(outcome.ok).toBe(false);
+    expect(seatSpy).not.toHaveBeenCalled();
+    expect(await rowsOf(journal, "SELECT amount FROM entries WHERE title = 'tea'")).toEqual([[3]]);
+  });
+
+  it('the passing twins: a task in its OWN bucket, and the user’s approval in the approval bucket, are both journaled', async () => {
+    const { applyOwnWrite } = await writeBroker();
+    expect(await applyOwnWrite(db, write({ bucket: 'task-1', authority: 'task', taskId: 'task-1', requireUndo: true }))).toMatchObject({ ok: true, undoable: true });
+    expect(
+      await applyOwnWrite(
+        db,
+        write({ bucket: 'approval', authority: 'approval', via: 'chat', runId: undefined, taskId: undefined, stillArmed: undefined, requireUndo: false, maxChanges: Number.POSITIVE_INFINITY, statements: ["UPDATE entries SET amount = 1 WHERE title = 'cake'"] }),
+      ),
+    ).toMatchObject({ ok: true, undoable: true });
+    expect(ownJournal().listOwnUndo(journal, { taskId: 'task-1' })).toHaveLength(1);
+    expect(ownJournal().listOwnUndo(journal, { bucket: 'approval' })).toHaveLength(1);
+  });
+});
+
+describe('PR-4 Gate-5 A5 — once the seat answered ok, nothing after the commit turns the outcome into a refusal', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(T0);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** How many grants reads threw — each row asserts the fault was really injected after the commit (never vacuous). */
+  let thrown = 0;
+  /** From the moment `armed()` says so, every grants read throws — the doorbells' and the caches' read. */
+  function grantsThrowAfter(armed: () => boolean): void {
+    thrown = 0;
+    const listGrants = db.listAccessGrants.bind(db);
+    vi.spyOn(db, 'listAccessGrants').mockImplementation(((...args: Parameters<UserDb['listAccessGrants']>) => {
+      if (armed()) {
+        thrown += 1;
+        throw new Error('a grant row that will not parse');
+      }
+      return listGrants(...args);
+    }) as UserDb['listAccessGrants']);
+  }
+
+  it('applyOwnWrite: a doorbell that throws after the entry is put → still {ok:true, undoId}; the entry is in its bucket; the change stands', async () => {
+    const { applyOwnWrite } = await writeBroker();
+    const journalPut = ownJournal().putOwnUndo.bind(db);
+    let put = false;
+    vi.spyOn(db as unknown as OwnJournal, 'putOwnUndo').mockImplementation(((...args: Parameters<OwnJournal['putOwnUndo']>) => {
+      const answer = journalPut(...args);
+      put = true;
+      return answer;
+    }) as OwnJournal['putOwnUndo']);
+    grantsThrowAfter(() => put);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const outcome = await applyOwnWrite(db, {
+      appId: journal,
+      bucket: 'task-1',
+      statements: ["UPDATE entries SET amount = 9 WHERE title = 'tea'"],
+      params: [[]],
+      expectChanges: [1],
+      maxChanges: ACCESS_WRITE_MAX_ROWS,
+      requireUndo: true,
+      authority: 'task',
+      via: 'schedule',
+      runId: 'run-1',
+      taskId: 'task-1',
+      stillArmed: () => true,
+    });
+    expect(put).toBe(true);
+    expect(thrown, 'the fault landed after the commit').toBeGreaterThan(0);
+    expect(outcome).toEqual({ ok: true, changes: [1], undoId: expect.stringMatching(UUID_V4), undoable: true });
+    expect(ownJournal().listOwnUndo(journal, { taskId: 'task-1' }).map((entry) => entry.id)).toEqual([(outcome as { undoId: string }).undoId]);
+    expect(await rowsOf(journal, "SELECT amount FROM entries WHERE title = 'tea'")).toEqual([[9]]);
+    warn.mockRestore();
+  });
+
+  it('applyOwnWrite: a throwing onCommitted (the caller’s record) never turns the made change into a refusal', async () => {
+    const { applyOwnWrite } = await writeBroker();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const outcome = await applyOwnWrite(db, {
+      appId: journal,
+      bucket: 'task-1',
+      statements: ["UPDATE entries SET amount = 9 WHERE title = 'tea'"],
+      params: [[]],
+      expectChanges: [1],
+      maxChanges: ACCESS_WRITE_MAX_ROWS,
+      requireUndo: true,
+      authority: 'task',
+      via: 'schedule',
+      runId: 'run-1',
+      taskId: 'task-1',
+      stillArmed: () => true,
+      onCommitted: () => {
+        throw new Error('the claim row was refused');
+      },
+    } as Parameters<WriteBrokerModule['applyOwnWrite']>[1]);
+    expect(outcome).toMatchObject({ ok: true, undoable: true });
+    warn.mockRestore();
+  });
+
+  it('the approval: a doorbell that throws after the commit → still applied with its undo (never "nothing was changed")', async () => {
+    const { applyApprovedWrite } = await writeBroker();
+    const journalPut = ownJournal().putOwnUndo.bind(db);
+    let put = false;
+    vi.spyOn(db as unknown as OwnJournal, 'putOwnUndo').mockImplementation(((...args: Parameters<OwnJournal['putOwnUndo']>) => {
+      const answer = journalPut(...args);
+      put = true;
+      return answer;
+    }) as OwnJournal['putOwnUndo']);
+    grantsThrowAfter(() => put);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const outcome = await approve(applyApprovedWrite, { appId: journal, statements: ["UPDATE entries SET amount = 0 WHERE title = 'tea'"], params: [[]], summary: 'x', previewed: [1] }, 'chat');
+    expect(thrown, 'the fault landed after the commit').toBeGreaterThan(0);
+    expect(outcome).toMatchObject({ ok: true, executed: [1], undoable: true });
+    expect(await rowsOf(journal, "SELECT amount FROM entries WHERE title = 'tea'")).toEqual([[0]]);
+    warn.mockRestore();
+  });
+
+  it('undoOwnWrite: a retire() that throws after the undo landed → still {ok:true}; the rows are back', async () => {
+    const { applyApprovedWrite, undoOwnWrite } = await writeBroker();
+    const applied = await approve(applyApprovedWrite, { appId: journal, statements: ["UPDATE entries SET amount = 0 WHERE title = 'tea'"], params: [[]], summary: 'x', previewed: [1] }, 'chat');
+    const undoId = (applied as { undoId?: string }).undoId!;
+    const retire = vi.spyOn(db as unknown as OwnJournal, 'markOwnUndone').mockImplementation(() => {
+      throw new Error('the journal row could not be written');
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    expect(await undoOwnWrite(db, journal, 'approval', undoId, { via: 'user' })).toEqual({ ok: true });
+    expect(retire, 'the fault landed after the undo').toHaveBeenCalled();
+    expect(await rowsOf(journal, "SELECT amount FROM entries WHERE title = 'tea'")).toEqual([[3]]);
+    warn.mockRestore();
+  });
+
+  it('undoOwnWrite: a doorbell that throws after the undo landed → still {ok:true}', async () => {
+    const { applyApprovedWrite, undoOwnWrite } = await writeBroker();
+    const applied = await approve(applyApprovedWrite, { appId: journal, statements: ["UPDATE entries SET amount = 0 WHERE title = 'tea'"], params: [[]], summary: 'x', previewed: [1] }, 'chat');
+    const undoId = (applied as { undoId?: string }).undoId!;
+    const markUndone = ownJournal().markOwnUndone.bind(db);
+    let retired = false;
+    vi.spyOn(db as unknown as OwnJournal, 'markOwnUndone').mockImplementation(((...args: Parameters<OwnJournal['markOwnUndone']>) => {
+      markUndone(...args);
+      retired = true;
+    }) as OwnJournal['markOwnUndone']);
+    grantsThrowAfter(() => retired);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    expect(await undoOwnWrite(db, journal, 'approval', undoId, { via: 'user' })).toEqual({ ok: true });
+    expect(thrown, 'the fault landed after the undo').toBeGreaterThan(0);
+    expect(await rowsOf(journal, "SELECT amount FROM entries WHERE title = 'tea'")).toEqual([[3]]);
+    warn.mockRestore();
   });
 });

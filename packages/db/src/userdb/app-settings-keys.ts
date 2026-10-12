@@ -14,6 +14,8 @@
 // spelled the key differently, the symptom would be a pick that survives its own app's
 // deletion and then silently applies to a REUSED app id.
 
+import type { OwnWriteAuthority } from '@snugprotocol/protocol';
+
 /** The `appModel:` namespace prefix — exported so a hydrating reader can scan for it. */
 export const APP_MODEL_SETTING_PREFIX = 'appModel:';
 
@@ -433,4 +435,31 @@ export function appIdFromAccessWantsSettingKey(key: string): string | undefined 
   if (!key.startsWith(ACCESS_WANTS_SETTING_PREFIX)) return undefined;
   const appId = key.slice(ACCESS_WANTS_SETTING_PREFIX.length);
   return appId.length === 0 ? undefined : appId;
+}
+
+// ---------------------- the own undo journal (TASK-20261010-host-broker PR-4, D-PR4-3)
+//
+// `ownUndo:<appId>:<bucket>` keeps the rows an OWN write changed — one row per armed schedule
+// (`<bucket>` = its task id) and one for the user's own approvals (`approval`) — so a schedule's
+// bucket can refuse when full while the user's approvals never do. Host-internal; the user's own
+// device state: `deleteApp` sweeps the app's prefix, `deleteScheduledTask` its bucket, and an
+// untrusted import drops the namespace.
+
+/** The `ownUndo:` namespace prefix. */
+export const OWN_UNDO_SETTING_PREFIX = 'ownUndo:';
+
+/** The bucket of the user's own approvals — spelled as the authority it journals, so a rename is a type error. */
+export const OWN_UNDO_APPROVAL_BUCKET = 'approval' as const satisfies OwnWriteAuthority;
+
+/** `ownUndo:<appId>:<bucket>` — one bucket's journal: ONE JSON array of `ownUndoEntrySchema` entries, newest first. `bucket` is `approval` or a task id. */
+export function ownUndoKey(appId: string, bucket: string): string {
+  if (appId.length === 0) throw new Error('appId must be non-empty');
+  if (bucket.length === 0) throw new Error('bucket must be non-empty');
+  return `${ownUndoPrefixFor(appId)}${bucket}`;
+}
+
+/** `ownUndo:<appId>:` — every bucket of one app, for the `deleteApp` sweep (the `auth:` prefix's known limit: an app id holding a colon would over-match a sibling — unreachable with UUID ids). */
+export function ownUndoPrefixFor(appId: string): string {
+  if (appId.length === 0) throw new Error('appId must be non-empty');
+  return `${OWN_UNDO_SETTING_PREFIX}${appId}:`;
 }

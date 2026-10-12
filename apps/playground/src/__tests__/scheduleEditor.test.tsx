@@ -22,11 +22,12 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { UserDb } from '@snugprotocol/db';
-import type { ScheduledTask } from '@snugprotocol/protocol';
+import type { ScheduleStep, ScheduledTask } from '@snugprotocol/protocol';
 
-import { imported, nextLine } from '../schedule/copy.js';
-import { CONSENT_ROWS, FROM_SUGGESTION, SENTENCE, STEPS, TEMPLATE_TITLES, TITLE, WHEN } from '../schedule/copy.editor.js';
-import { LEDGER_QUERIES, STANDUP_QUERIES, TEMPLATE_PROMPTS, parseRunInput, proposalFill, remainderOf } from '../schedule/editorModel.js';
+import { armTask } from '../schedule/acts.js';
+import { brainBlocked, disarmed, imported, nextLine } from '../schedule/copy.js';
+import { ACTIONS, CHANGES_CONTROL, CONSENT_ROWS, FROM_SUGGESTION, SENTENCE, STEPS, TEMPLATE_TITLES, TITLE, WHEN } from '../schedule/copy.editor.js';
+import { LEDGER_QUERIES, STANDUP_QUERIES, TEMPLATE_PROMPTS, draftsFromSteps, lookUpNamesByApp, parseRunInput, prepareSteps, proposalFill, remainderOf } from '../schedule/editorModel.js';
 import { readSchedule } from '../schedule/parseScheduleText.js';
 import { newScheduleHref } from '../schedule/routes.js';
 import { ScheduleEditorView } from '../schedule/ScheduleEditorView.js';
@@ -39,6 +40,11 @@ import { installTestUserDb } from './userdbTestHelper.js';
 vi.mock('../schedule/scheduler.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../schedule/scheduler.js')>();
   return { ...actual, createTask: vi.fn(actual.createTask) };
+});
+// PR-4 Gate-5 U13: `armTask` wrapped (not replaced) so ONE test can make the arming after a create refuse.
+vi.mock('../schedule/acts.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../schedule/acts.js')>();
+  return { ...actual, armTask: vi.fn(actual.armTask) };
 });
 
 declare global {
@@ -64,6 +70,7 @@ beforeEach(async () => {
   webllmFlagStore.set(false);
   webgpuStore.set('unknown');
   vi.mocked(createTask).mockClear();
+  vi.mocked(armTask).mockClear();
   db = await installTestUserDb();
 });
 
@@ -590,7 +597,9 @@ describe('consent before the first save (U8) and the exact createTask input', ()
     expect(must('consent-prompt-0').textContent).toBe(TEMPLATE_PROMPTS.spend);
     const queries = [...must('consent-queries-0').querySelectorAll('code')].map((code) => code.textContent);
     expect(queries).toEqual([...LEDGER_QUERIES]);
-    expect(must('consent-hosts-0').textContent).toBe(CONSENT_ROWS.noHosts);
+    // INVERTED by D-PR4-20 (TASK-20261010-host-broker PR-4, D11): a tool-free ask step's call row reads
+    // *may call: none — it only reads data*. Was: expect(must('consent-hosts-0').textContent).toBe(CONSENT_ROWS.noHosts);
+    expect(must('consent-hosts-0').textContent).toBe('none — it only reads data');
     expect(must('consent-cost').textContent).toBe(`daily cost: ${CONSENT_ROWS.dailyBound(1)}`);
     await click(must('consent-enable'));
     await settleUntil(() => q('schedule-page') !== null, 'navigation to /schedule');
@@ -731,5 +740,620 @@ describe('/schedule/:id', () => {
     const saved = db.getScheduledTask(task.id);
     expect(saved?.enabled).toBe(true);
     expect(saved?.provenance).toBe('imported');
+  });
+});
+
+// =============================================================================================
+// TASK-20261010-host-broker PR-4 — the editor's words and the task write authority (D-PR4-8,
+// D-PR4-20; AC31, AC32). The chooser keeps the `<select>` and its pinned labels and gains ONE hint
+// per kind (`STEPS.kindHint`); an *Ask <App>'s AI* step gains the tick *let it look things up* with
+// its line, which replaces *which data?* while typed queries stay as starting context; a brain that
+// cannot use tools for the app is said HERE first. The task-level control *changes it suggests:*
+// (•) *wait for my OK* / (•) *make them on its own* sits under the steps when a step asks an app's
+// AI (one app only), and an existing task's save goes through the consent when the choice moves to
+// *make them on its own*, when an ARMED task's steps change (canonical JSON), or when its minimum
+// interval gets SHORTER; a title, alert or missed-policy edit never disarms; *wait for my OK*
+// disarms with no consent.
+//
+// Assumed (lane T-C questions): the hint `step-<i>-kind-hint`; the tick `step-<i>-tools` with its line
+// `step-<i>-tools-line` and the brain line `step-<i>-tools-unavailable`; the control `changes-it-suggests`
+// with the radios `changes-wait` / `changes-on-its-own`; the warning `armed-warning`; the consent's tick
+// `consent-on-its-own` (enableConsent.test.tsx).
+// =============================================================================================
+
+const WARNING = 'changing what it does stops it making changes on its own — you’ll confirm again before saving';
+const ASK_LEDGER = (appId: string, over: Partial<Extract<ScheduleStep, { kind: 'app-think' }>> = {}): ScheduleStep => ({ kind: 'app-think', appId, prompt: 'sum it', context: { maxRows: 50 }, ...over });
+
+async function setSelect(el: HTMLSelectElement, value: string): Promise<void> {
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!.call(el, value);
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+}
+
+describe('PR-4 — the chooser’s hints (D-PR4-20; D10)', () => {
+  it('ONE hint under the kind select, per kind, naming the app — and the select and its labels are unchanged', async () => {
+    const ledger = installLedger();
+    await mount(`/schedule/new?app=${ledger}`);
+    expect([...select('step-0-kind').options].map((option) => option.textContent)).toEqual(['remind me', 'ask this app’s AI', 'run this app']);
+    expect(must('step-0-kind-hint').textContent).toBe(STEPS.kindHint('app-think', 'Ledger'));
+    expect(must('step-0-kind-hint').textContent).toBe('Ledger’s AI answers from Ledger’s data — Ledger doesn’t need to open');
+    await setSelect(select('step-0-kind'), 'app-run');
+    expect(must('step-0-kind-hint').textContent).toBe('Ledger itself does the job, the way it was built — in the app if it’s open, out of sight if not');
+    expect(must('step-0-kind-hint').textContent).not.toMatch(/\b(routine|background)\b/);
+  });
+});
+
+describe('PR-4 — *let it look things up* (D-PR4-15, D-PR4-20; D10, D13)', () => {
+  // INVERTED by PR-4 Gate-5 U3 (ADR-0076 §9: GET-only is not read-only — the orchestrator's decision, reversal word "read-only").
+  // Was: const TOOLS_LINE = 'it can choose its own questions over Ledger’s data and what you let it read from other apps, and fetch from Ledger’s connections — read only · up to 10 AI calls each time';
+  const TOOLS_LINE = 'it can choose its own questions over Ledger’s data and what you let it read from other apps, and ask Ledger’s connections (it only asks, never posts) · up to 10 AI calls each time';
+
+  it('an ask step offers the tick OFF; ticked, its line REPLACES *which data?*', async () => {
+    const ledger = installLedger();
+    await mount(`/schedule/new?app=${ledger}`);
+    const toolsTick = input('step-0-tools');
+    expect(toolsTick.type).toBe('checkbox');
+    expect(toolsTick.checked).toBe(false);
+    expect(must('step-0').textContent).toContain('let it look things up');
+    expect(must('step-0').querySelector(`[role="radiogroup"][aria-label="${STEPS.data}"]`), 'which data? is there while the tick is off').not.toBeNull();
+    await click(toolsTick);
+    expect(input('step-0-tools').checked).toBe(true);
+    expect(must('step-0-tools-line').textContent).toBe(TOOLS_LINE);
+    // PR-4 Gate-5 U3's negative: the line never promises what the host does not make.
+    expect(must('step-0-tools-line').textContent).not.toMatch(/read[\s-]only/i);
+    expect(must('step-0-tools-line').textContent).not.toMatch(/can[’']t send/i);
+    expect(must('step-0').querySelector(`[role="radiogroup"][aria-label="${STEPS.data}"]`), 'which data? is replaced by the line').toBeNull();
+    expect(q('step-0-data-tables')).toBeNull();
+  });
+
+  it('a reminder or a run step has no such tick (negative)', async () => {
+    installWeather();
+    await mount('/schedule/new?template=morning-weather');
+    expect(q('step-0-tools')).toBeNull();
+    expect(q('step-1-tools')).toBeNull();
+  });
+
+  it('typed queries stay as starting context: the save carries them AND tools: true, and the consent says it starts from them', async () => {
+    const ledger = installLedger();
+    await mount('/schedule/new?template=spend-review');
+    await click(input('step-0-tools'));
+    await click(must('schedule-save'));
+    expect(must('consent-step-0').textContent).toContain('starts from these; may read more of Ledger’s data itself');
+    await click(must('consent-enable'));
+    await settleUntil(() => q('schedule-page') !== null, 'navigation to /schedule');
+    expect((vi.mocked(createTask).mock.calls[0]?.[0] as { steps: unknown[] }).steps).toEqual([
+      { kind: 'app-think', appId: ledger, prompt: TEMPLATE_PROMPTS.spend, context: { sql: [...LEDGER_QUERIES], maxRows: 50 }, tools: true },
+    ]);
+  });
+
+  it('the cost line counts what a tools step may spend — ten AI calls a time', async () => {
+    installLedger();
+    await mount('/schedule/new?template=spend-review');
+    expect(must('preview-cost').textContent).toContain('≈ 1 AI call a week');
+    await click(input('step-0-tools'));
+    expect(must('preview-cost').textContent).toContain('≈ 10 AI calls a week');
+  });
+
+  it('tools round-trips through draftsFromSteps / prepareSteps; a tool-free step stays tool-free (absent, never false)', () => {
+    const withTools = [ASK_LEDGER('ledger', { tools: true })];
+    const prepared = prepareSteps(draftsFromSteps(withTools));
+    expect(prepared).toEqual({ ok: true, steps: withTools });
+    const toolFree = [ASK_LEDGER('ledger')];
+    const back = prepareSteps(draftsFromSteps(toolFree));
+    expect(back).toEqual({ ok: true, steps: toolFree });
+    expect(back.ok && 'tools' in (back.steps[0] as object), 'absent ≡ tool-free (omit-defaults)').toBe(false);
+  });
+
+  it('a brain that cannot use tools for this app is said HERE, first: *this brain will answer without looking things up*', async () => {
+    const ledger = installLedger();
+    modeStore.set('subscription');
+    await mount(`/schedule/new?app=${ledger}`);
+    await click(input('step-0-tools'));
+    expect(must('step-0-tools-unavailable').textContent).toBe('this brain will answer without looking things up');
+  });
+
+  it('…and a keyed brain that can use them says nothing of the sort (negative twin)', async () => {
+    const ledger = installLedger();
+    db.setSecret('byok:anthropic', 'sk-test-key');
+    byokKeyPresenceStore.set({ anthropic: true, openai: false });
+    providerStore.set('anthropic');
+    await mount(`/schedule/new?app=${ledger}`);
+    await click(input('step-0-tools'));
+    expect(q('step-0-tools-unavailable')).toBeNull();
+  });
+});
+
+describe('PR-4 — *changes it suggests:* — the task-level control (D-PR4-8; D1)', () => {
+  it('sits under the steps when a step asks ONE app’s AI: *wait for my OK* (checked) and *make them on its own*', async () => {
+    const ledger = installLedger();
+    await mount(`/schedule/new?app=${ledger}`);
+    const control = must('changes-it-suggests');
+    expect(control.textContent).toContain('changes it suggests:');
+    expect(control.textContent).toContain('wait for my OK');
+    expect(control.textContent).toContain('make them on its own');
+    expect(input('changes-wait').checked, 'never seeded: a new schedule waits for your OK').toBe(true);
+    expect(input('changes-on-its-own').checked).toBe(false);
+    expect(must('steps-editor').compareDocumentPosition(control) & Node.DOCUMENT_POSITION_FOLLOWING, 'under the steps').toBeTruthy();
+  });
+
+  it('NEGATIVE: no control for a reminder-only schedule, nor for one that asks TWO apps’ AI', async () => {
+    await mount('/schedule/new?template=nudge');
+    expect(q('changes-it-suggests')).toBeNull();
+    installLedger();
+    installStandup();
+    await mount('/schedule/new?template=friday-review');
+    expect(q('changes-it-suggests')).toBeNull();
+  });
+
+  it('a NEW schedule set to *make them on its own*: the consent opens with its tick pre-set to that choice, and schedule it arms the task', async () => {
+    const ledger = installLedger();
+    await mount('/schedule/new?template=spend-review');
+    await click(input('changes-on-its-own'));
+    await click(must('schedule-save'));
+    expect((must('consent-on-its-own') as HTMLInputElement).checked, 'the tick carries the editor’s choice').toBe(true);
+    await click(must('consent-enable'));
+    await settleUntil(() => q('schedule-page') !== null, 'navigation to /schedule');
+    const saved = db.listScheduledTasks()[0];
+    expect(saved?.writeAuthority).toMatchObject({ rowsPerRun: 200, armedVersion: db.getApp(ledger)?.currentVersion });
+    expect(saved?.writeAuthority?.armedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
+
+  it('a NEW schedule left at *wait for my OK*: the tick is OFF and the task is saved without an authority; ticking it in the consent arms it', async () => {
+    installLedger();
+    await mount('/schedule/new?template=spend-review');
+    await click(must('schedule-save'));
+    expect((must('consent-on-its-own') as HTMLInputElement).checked).toBe(false);
+    await click(must('consent-enable'));
+    await settleUntil(() => q('schedule-page') !== null, 'navigation to /schedule');
+    expect(db.listScheduledTasks()[0]?.writeAuthority).toBeUndefined();
+
+    await mount('/schedule/new?template=spend-review');
+    await click(must('schedule-save'));
+    await click(must('consent-on-its-own'));
+    await click(must('consent-enable'));
+    await settleUntil(() => q('schedule-page') !== null, 'navigation to /schedule');
+    expect(db.listScheduledTasks().filter((task) => task.writeAuthority !== undefined)).toHaveLength(1);
+  });
+
+  it('NEGATIVE: the ?suggestion= draft can never pre-set it — a proposal carrying an authority opens at *wait for my OK*', async () => {
+    const ledger = installLedger();
+    const proposal = {
+      title: 'tidy',
+      steps: [{ kind: 'app-think', appId: ledger, prompt: 'Tidy the categories.', context: { maxRows: 50 } }],
+      spec: { kind: 'daily', time: '08:00', tz: 'device' },
+      writeAuthority: { rowsPerRun: 200, armedAt: '2026-10-09T12:00:00.000Z', armedVersion: 1 },
+    };
+    await mount(newScheduleHref({ suggestion: JSON.stringify(proposal), app: ledger }));
+    if (q('changes-it-suggests') !== null) expect(input('changes-wait').checked).toBe(true);
+    expect(q('changes-on-its-own') === null || !input('changes-on-its-own').checked).toBe(true);
+  });
+});
+
+describe('PR-4 — an EXISTING schedule: what goes through the consent, what disarms, what never does (D-PR4-8; D1)', () => {
+  const ARMED_AT = '2026-10-08T09:00:00.000Z';
+
+  async function seedArmed(over: Partial<ScheduledTask> = {}): Promise<{ task: ScheduledTask; ledger: string }> {
+    const ledger = installLedger();
+    const result = await createTask({ title: 'tidy ledger', steps: [ASK_LEDGER(ledger)], spec: { kind: 'daily', time: '18:00', tz: 'device' }, provenance: 'user' });
+    if (!result.ok) throw new Error(result.reason);
+    const armed = { ...result.task, writeAuthority: { rowsPerRun: 200, armedAt: ARMED_AT, armedVersion: db.getApp(ledger)!.currentVersion }, ...over } as ScheduledTask;
+    db.putScheduledTask(armed);
+    vi.mocked(createTask).mockClear();
+    return { task: armed, ledger };
+  }
+
+  const authority = (id: string): unknown => db.getScheduledTask(id)?.writeAuthority;
+
+  it('the control shows the task’s state: an armed task reads *make them on its own*', async () => {
+    const { task } = await seedArmed();
+    await mount(`/schedule/${task.id}`);
+    expect(input('changes-on-its-own').checked).toBe(true);
+    expect(input('changes-wait').checked).toBe(false);
+    expect(q('armed-warning'), 'nothing changed yet — no warning').toBeNull();
+  });
+
+  it('a TITLE edit saves at once and never disarms', async () => {
+    const { task } = await seedArmed();
+    await mount(`/schedule/${task.id}`);
+    await type(input('schedule-title'), 'tidy the ledger');
+    expect(q('armed-warning')).toBeNull();
+    await click(must('schedule-save'));
+    await settleUntil(() => q('schedule-page') !== null, 'navigation to /schedule');
+    expect(q('enable-consent')).toBeNull();
+    expect(db.getScheduledTask(task.id)?.title).toBe('tidy the ledger');
+    expect(authority(task.id)).toEqual(task.writeAuthority);
+  });
+
+  it('an ALERT or a MISSED-POLICY edit saves at once and never disarms', async () => {
+    const { task } = await seedArmed();
+    await mount(`/schedule/${task.id}`);
+    await click(input('alert-notification'));
+    await click(input('missed-skip'));
+    await click(must('schedule-save'));
+    await settleUntil(() => q('schedule-page') !== null, 'navigation to /schedule');
+    expect(db.getScheduledTask(task.id)?.alert).toBe('notification');
+    expect(db.getScheduledTask(task.id)?.missedPolicy).toBe('skip');
+    expect(authority(task.id)).toEqual(task.writeAuthority);
+  });
+
+  it('NEGATIVE: a save that changes nothing — the editor sends steps on every save — never asks again and never disarms (canonical compare, never `steps !== undefined`)', async () => {
+    const { task } = await seedArmed();
+    await mount(`/schedule/${task.id}`);
+    await click(must('schedule-save'));
+    await settleUntil(() => q('schedule-page') !== null, 'navigation to /schedule');
+    expect(q('enable-consent')).toBeNull();
+    expect(authority(task.id)).toEqual(task.writeAuthority);
+  });
+
+  it('NEGATIVE: a prompt edited and put back is the same steps — no warning, no consent, still armed', async () => {
+    const { task } = await seedArmed();
+    await mount(`/schedule/${task.id}`);
+    const prompt = must('step-0-prompt') as HTMLTextAreaElement;
+    await type(prompt, 'sum it all');
+    expect(must('armed-warning').textContent).toBe(WARNING);
+    await type(prompt, 'sum it');
+    expect(q('armed-warning')).toBeNull();
+    await click(must('schedule-save'));
+    await settleUntil(() => q('schedule-page') !== null, 'navigation to /schedule');
+    expect(authority(task.id)).toEqual(task.writeAuthority);
+  });
+
+  it('a STEPS change on an armed task warns above save, then goes through the consent with the tick pre-set; schedule it keeps it armed with the new steps', async () => {
+    const { task } = await seedArmed();
+    await mount(`/schedule/${task.id}`);
+    await type(must('step-0-prompt') as HTMLTextAreaElement, 'sum it and tidy the categories');
+    const warning = must('armed-warning');
+    expect(warning.textContent).toBe(WARNING);
+    expect(warning.compareDocumentPosition(must('schedule-save')) & Node.DOCUMENT_POSITION_FOLLOWING, 'the warning sits above save').toBeTruthy();
+    await click(must('schedule-save'));
+    expect((must('consent-on-its-own') as HTMLInputElement).checked).toBe(true);
+    expect(db.getScheduledTask(task.id)?.steps, 'nothing saved before the consent').toEqual(task.steps);
+    await click(must('consent-enable'));
+    await settleUntil(() => q('schedule-page') !== null, 'navigation to /schedule');
+    const saved = db.getScheduledTask(task.id);
+    expect(saved?.steps[0]).toMatchObject({ prompt: 'sum it and tidy the categories' });
+    expect(saved?.writeAuthority).toMatchObject({ rowsPerRun: 200 });
+  });
+
+  it('…the consent’s *not now* saves nothing; unticking there saves the steps DISARMED', async () => {
+    const { task } = await seedArmed();
+    await mount(`/schedule/${task.id}`);
+    await type(must('step-0-prompt') as HTMLTextAreaElement, 'sum it and tidy the categories');
+    await click(must('schedule-save'));
+    await click(must('consent-not-now'));
+    expect(db.getScheduledTask(task.id)?.steps).toEqual(task.steps);
+    expect(authority(task.id)).toEqual(task.writeAuthority);
+    await click(must('schedule-save'));
+    await click(must('consent-on-its-own'));
+    await click(must('consent-enable'));
+    await settleUntil(() => q('schedule-page') !== null, 'navigation to /schedule');
+    expect(db.getScheduledTask(task.id)?.steps[0]).toMatchObject({ prompt: 'sum it and tidy the categories' });
+    expect(authority(task.id)).toBeUndefined();
+  });
+
+  it('a SHORTER minimum interval on an armed task warns and goes through the consent', async () => {
+    const { task } = await seedArmed();
+    await mount(`/schedule/${task.id}`);
+    await click(must('spec-kind-every'));
+    expect(must('armed-warning').textContent).toBe(WARNING);
+    await click(must('schedule-save'));
+    expect(q('enable-consent')).not.toBeNull();
+  });
+
+  it('NEGATIVE: a LONGER interval does not widen it — no warning, no consent, still armed', async () => {
+    const { task } = await seedArmed({ spec: { kind: 'every', n: 1, unit: 'hours', tz: 'device' }, cron: '0 * * * *' });
+    await mount(`/schedule/${task.id}`);
+    await click(must('spec-kind-daily'));
+    expect(q('armed-warning')).toBeNull();
+    await click(must('schedule-save'));
+    await settleUntil(() => q('schedule-page') !== null, 'navigation to /schedule');
+    expect(q('enable-consent')).toBeNull();
+    expect(authority(task.id)).toEqual(task.writeAuthority);
+  });
+
+  it('*wait for my OK* disarms on save with no consent', async () => {
+    const { task } = await seedArmed();
+    await mount(`/schedule/${task.id}`);
+    await click(input('changes-wait'));
+    await click(must('schedule-save'));
+    await settleUntil(() => q('schedule-page') !== null, 'navigation to /schedule');
+    expect(q('enable-consent')).toBeNull();
+    expect(authority(task.id)).toBeUndefined();
+  });
+
+  it('an UNARMED existing task moved to *make them on its own* goes through the consent (tick pre-set), and schedule it arms it', async () => {
+    const ledger = installLedger();
+    const result = await createTask({ title: 'tidy ledger', steps: [ASK_LEDGER(ledger)], spec: { kind: 'daily', time: '18:00', tz: 'device' }, provenance: 'user' });
+    if (!result.ok) throw new Error(result.reason);
+    await mount(`/schedule/${result.task.id}`);
+    expect(input('changes-wait').checked).toBe(true);
+    await click(input('changes-on-its-own'));
+    await click(must('schedule-save'));
+    expect((must('consent-on-its-own') as HTMLInputElement).checked).toBe(true);
+    expect(authority(result.task.id), 'nothing armed before the consent').toBeUndefined();
+    await click(must('consent-enable'));
+    await settleUntil(() => q('schedule-page') !== null, 'navigation to /schedule');
+    expect(authority(result.task.id)).toMatchObject({ rowsPerRun: 200, armedVersion: db.getApp(ledger)?.currentVersion });
+  });
+
+  it('NEGATIVE: a task disarmed by an import or an update reads *wait for my OK* — the trace never re-seeds the choice', async () => {
+    const ledger = installLedger();
+    const result = await createTask({ title: 'tidy ledger', steps: [ASK_LEDGER(ledger)], spec: { kind: 'daily', time: '18:00', tz: 'device' }, provenance: 'user' });
+    if (!result.ok) throw new Error(result.reason);
+    db.putScheduledTask({ ...result.task, disarmed: { reason: 'imported', at: '2026-10-09T10:00:00.000Z' } } as ScheduledTask);
+    await mount(`/schedule/${result.task.id}`);
+    expect(input('changes-wait').checked).toBe(true);
+    expect(input('changes-on-its-own').checked).toBe(false);
+  });
+});
+
+// =============================================================================================
+// TASK-20261010-host-broker PR-4 Gate 5 — the editor's UI folds (U1, U5, U8, U9, U11, U13).
+//
+// U1: the editor's brain read is tri-state. `blocked` (the demo override, or BYOK with no key in the
+// FILE — `keylessBrainGate(db, appId, chatBrainRoute(db, appId)) !== undefined`): `brainBlocked.text`
+// with a link to Settings under EVERY ask step, ticked or not, and on the consent; `no-tools`
+// (subscription, …): `STEPS.toolsUnavailable` under a ticked step, as before; a keyed brain: neither.
+// U5: an armed schedule edited out of one-app says so in the warning slot (`CHANGES_CONTROL.armedLost`).
+// U8: a disarmed schedule opens with the disarm line and `CHANGES_CONTROL.disarmedHint`.
+// U9: an existing schedule whose ask step GAINS *let it look things up* saves through the consent.
+// U11: the tick and the kind select are described by the lines that explain them.
+// U13: an arming refused after a create reads `ACTIONS.savedButWaits(refusal)`.
+//
+// Assumed: the blocked line `step-<i>-brain-blocked` holding a link to `/settings`; the disarm line a
+// `role="note"` above the control.
+// =============================================================================================
+
+/** The text of every element an `aria-describedby` names, in order. */
+const describedBy = (el: HTMLElement): string[] =>
+  (el.getAttribute('aria-describedby') ?? '')
+    .split(/\s+/)
+    .filter((id) => id !== '')
+    .map((id) => document.getElementById(id)?.textContent ?? `<missing #${id}>`);
+
+describe('PR-4 Gate-5 U1 — a brain that cannot answer an ask step here is said under EVERY ask step, first', () => {
+  const blockedLine = (index: number): HTMLElement => must(`step-${index}-brain-blocked`);
+
+  async function expectBlocked(): Promise<void> {
+    // unticked: said already — a tool-free ask step is refused just the same
+    expect(input('step-0-tools').checked).toBe(false);
+    expect(blockedLine(0).textContent).toContain(brainBlocked.text);
+    const link = blockedLine(0).querySelector<HTMLAnchorElement>('a');
+    expect(link?.textContent).toBe(brainBlocked.action);
+    expect(link?.getAttribute('href')).toBe('/settings');
+    expect(q('step-0-tools-unavailable'), 'never the no-tools line: this brain does not answer at all').toBeNull();
+    // ticked: still the blocked line, still not the no-tools line
+    await click(input('step-0-tools'));
+    expect(blockedLine(0).textContent).toContain(brainBlocked.text);
+    expect(q('step-0-tools-unavailable')).toBeNull();
+  }
+
+  it('BYOK with a keyed provider and NO key in the file: blocked', async () => {
+    const ledger = installLedger();
+    modeStore.set('byok');
+    providerStore.set('anthropic');
+    await mount(`/schedule/new?app=${ledger}`);
+    await expectBlocked();
+  });
+
+  it('the demo override (the in-browser brain asked for where it cannot run): blocked', async () => {
+    const ledger = installLedger();
+    db.setSecret('byok:anthropic', 'sk-test-key');
+    providerStore.set('anthropic');
+    webllmFlagStore.set(true);
+    webgpuStore.set('no');
+    await mount(`/schedule/new?app=${ledger}`);
+    await expectBlocked();
+  });
+
+  it('every ask step of a blocked app says it — the second one too', async () => {
+    installLedger();
+    installStandup();
+    providerStore.set('anthropic');
+    await mount('/schedule/new?template=friday-review');
+    expect(blockedLine(0).textContent).toContain(brainBlocked.text);
+    expect(blockedLine(1).textContent).toContain(brainBlocked.text);
+  });
+
+  it('…and the consent says it on the step too (`blockedApps`)', async () => {
+    installLedger();
+    providerStore.set('anthropic');
+    await mount('/schedule/new?template=spend-review');
+    await click(must('schedule-save'));
+    expect(must('consent-step-0').textContent).toContain(brainBlocked.text);
+  });
+
+  it('the subscription twin keeps today’s line: *this brain will answer without looking things up* under a ticked step — never the blocked line', async () => {
+    const ledger = installLedger();
+    modeStore.set('subscription');
+    await mount(`/schedule/new?app=${ledger}`);
+    expect(q('step-0-brain-blocked')).toBeNull();
+    await click(input('step-0-tools'));
+    expect(must('step-0-tools-unavailable').textContent).toBe(STEPS.toolsUnavailable);
+    expect(q('step-0-brain-blocked')).toBeNull();
+  });
+
+  it('NEGATIVE: a keyed brain says neither, ticked or not, here or on the consent', async () => {
+    installLedger();
+    db.setSecret('byok:anthropic', 'sk-test-key');
+    byokKeyPresenceStore.set({ anthropic: true, openai: false });
+    providerStore.set('anthropic');
+    await mount('/schedule/new?template=spend-review');
+    expect(q('step-0-brain-blocked')).toBeNull();
+    await click(input('step-0-tools'));
+    expect(q('step-0-brain-blocked')).toBeNull();
+    expect(q('step-0-tools-unavailable')).toBeNull();
+    await click(must('schedule-save'));
+    expect(must('enable-consent').textContent).not.toContain(brainBlocked.text);
+  });
+});
+
+describe('PR-4 Gate-5 U11 — the new controls are described by the lines that explain them', () => {
+  it('ticked, *let it look things up* is described by its tools line', async () => {
+    const ledger = installLedger();
+    await mount(`/schedule/new?app=${ledger}`);
+    await click(input('step-0-tools'));
+    const toolsLine = must('step-0-tools-line');
+    expect(toolsLine.id, 'the line has an id to be named by').not.toBe('');
+    expect((input('step-0-tools').getAttribute('aria-describedby') ?? '').split(/\s+/)).toContain(toolsLine.id);
+    expect(describedBy(input('step-0-tools'))).toContain(toolsLine.textContent);
+  });
+
+  it('…and by the no-tools line too, where the brain cannot look things up', async () => {
+    const ledger = installLedger();
+    modeStore.set('subscription');
+    await mount(`/schedule/new?app=${ledger}`);
+    await click(input('step-0-tools'));
+    const lines = describedBy(input('step-0-tools'));
+    expect(lines).toContain(must('step-0-tools-line').textContent);
+    expect(lines).toContain(STEPS.toolsUnavailable);
+  });
+
+  it('every id the tick names resolves — unticked, it names no line that is not there', async () => {
+    const ledger = installLedger();
+    await mount(`/schedule/new?app=${ledger}`);
+    expect(describedBy(input('step-0-tools')).filter((line) => line.startsWith('<missing'))).toEqual([]);
+  });
+
+  it('the kind select is described by its one hint', async () => {
+    const ledger = installLedger();
+    await mount(`/schedule/new?app=${ledger}`);
+    expect(describedBy(select('step-0-kind'))).toContain(STEPS.kindHint('app-think', 'Ledger'));
+  });
+});
+
+describe('PR-4 Gate-5 U5, U8, U9, U13 — an existing schedule’s authority and look-ups, said and confirmed', () => {
+  const ARMED_AT = '2026-10-08T09:00:00.000Z';
+
+  async function seed(over: Partial<ScheduledTask> = {}, step: Partial<Extract<ScheduleStep, { kind: 'app-think' }>> = {}): Promise<{ task: ScheduledTask; ledger: string }> {
+    const ledger = installLedger();
+    const result = await createTask({ title: 'tidy ledger', steps: [ASK_LEDGER(ledger, step)], spec: { kind: 'daily', time: '18:00', tz: 'device' }, provenance: 'user' });
+    if (!result.ok) throw new Error(result.reason);
+    const task = { ...result.task, ...over } as ScheduledTask;
+    db.putScheduledTask(task);
+    vi.mocked(createTask).mockClear();
+    return { task, ledger };
+  }
+
+  const armedOver = (ledgerVersion: number): Partial<ScheduledTask> => ({ writeAuthority: { rowsPerRun: 200, armedAt: ARMED_AT, armedVersion: ledgerVersion } }) as Partial<ScheduledTask>;
+
+  it('U5: an armed schedule edited out of one-app (a *run* step of another app added) says it stops making changes on its own; the save leaves no authority', async () => {
+    const weather = installWeather();
+    const ledger = installLedger();
+    const result = await createTask({ title: 'tidy ledger', steps: [ASK_LEDGER(ledger)], spec: { kind: 'daily', time: '18:00', tz: 'device' }, provenance: 'user' });
+    if (!result.ok) throw new Error(result.reason);
+    db.putScheduledTask({ ...result.task, ...armedOver(db.getApp(ledger)!.currentVersion) } as ScheduledTask);
+    await mount(`/schedule/${result.task.id}`);
+    expect(q('armed-warning'), 'nothing changed yet').toBeNull();
+    await click(must('step-add'));
+    await setSelect(select('step-1-kind'), 'app-run');
+    await setSelect(select('step-1-app'), weather);
+    expect(q('changes-it-suggests'), 'two apps: the control is not offered').toBeNull();
+    const warning = must('armed-warning');
+    expect(warning.textContent).toContain(CHANGES_CONTROL.armedLost);
+    expect(warning.compareDocumentPosition(must('schedule-save')) & Node.DOCUMENT_POSITION_FOLLOWING, 'above save').toBeTruthy();
+    await click(must('schedule-save'));
+    if (q('enable-consent') !== null) await click(must('consent-enable'));
+    await settleUntil(() => q('schedule-page') !== null, 'navigation to /schedule');
+    expect(db.getScheduledTask(result.task.id)?.steps).toHaveLength(2);
+    expect(db.getScheduledTask(result.task.id)?.writeAuthority).toBeUndefined();
+  });
+
+  it('U5 NEGATIVE: an UNARMED schedule edited the same way shows no such warning', async () => {
+    const weather = installWeather();
+    const { task } = await seed();
+    await mount(`/schedule/${task.id}`);
+    await click(must('step-add'));
+    await setSelect(select('step-1-kind'), 'app-run');
+    await setSelect(select('step-1-app'), weather);
+    expect(q('armed-warning')).toBeNull();
+  });
+
+  it.each(['app-updated', 'imported'] as const)('U8: a schedule disarmed (%s) opens with the disarm line and the way out, above the control; save clears the trace', async (reason) => {
+    const { task } = await seed({ disarmed: { reason, at: '2026-10-09T10:00:00.000Z' } } as Partial<ScheduledTask>);
+    await mount(`/schedule/${task.id}`);
+    const note = [...document.body.querySelectorAll<HTMLElement>('[role="note"]')].find((el) => el.textContent?.includes(disarmed(reason).text));
+    expect(note, 'the disarm line is a role=note').toBeDefined();
+    expect(must('schedule-editor').textContent).toContain(CHANGES_CONTROL.disarmedHint);
+    expect(CHANGES_CONTROL.disarmedHint).toBe('save to keep it waiting for your OK, or choose make them on its own');
+    expect(note!.compareDocumentPosition(must('changes-it-suggests')) & Node.DOCUMENT_POSITION_FOLLOWING, 'above the control').toBeTruthy();
+    expect(input('changes-wait').checked, 'the trace never re-seeds the choice').toBe(true);
+    await click(must('schedule-save'));
+    if (q('enable-consent') !== null) await click(must('consent-enable'));
+    await settleUntil(() => q('schedule-page') !== null, 'navigation to /schedule');
+    expect(db.getScheduledTask(task.id)?.disarmed, 'the user reviewed it — the trace is gone').toBeUndefined();
+    expect(db.getScheduledTask(task.id)?.writeAuthority, 'saving at *wait for my OK* never arms').toBeUndefined();
+  });
+
+  it('U8 NEGATIVE: a schedule never disarmed opens with no disarm line', async () => {
+    const { task } = await seed();
+    await mount(`/schedule/${task.id}`);
+    expect(must('schedule-editor').textContent).not.toContain('no longer makes changes on its own');
+    expect(must('schedule-editor').textContent).not.toContain(CHANGES_CONTROL.disarmedHint);
+  });
+
+  /** An approved connection the look-up tool can reach — named *Bank* by its provider. */
+  function approveBank(appId: string): void {
+    db.putDeclaredConnection(
+      appId,
+      'bank',
+      {
+        slot: 'bank',
+        kind: 'api_key',
+        provider: { name: 'Bank' },
+        fields: [{ key: 'api_key', label: 'API key', type: 'secret' }],
+        request: { headerTemplate: { 'X-Api-Key': '{{api_key}}' } },
+        declaredApiHosts: ['api.bank.example'],
+      },
+      'inference',
+    );
+    db.approveConnection(appId, 'bank');
+  }
+
+  it('U9: an existing UNARMED schedule whose ask step GAINS *let it look things up* saves through the consent, naming the connections; *not now* writes nothing', async () => {
+    const { task, ledger } = await seed();
+    approveBank(ledger);
+    expect(lookUpNamesByApp(db, [ledger])[ledger], 'precondition: the tool can reach Bank').toEqual(['Bank']);
+    await mount(`/schedule/${task.id}`);
+    await click(input('step-0-tools'));
+    await click(must('schedule-save'));
+    expect(q('enable-consent'), 'the consent opens — the 10× cost and the connections are confirmed').not.toBeNull();
+    expect(must('consent-lookups-0').textContent).toContain('Bank');
+    expect(must('consent-cost').textContent).toContain('look-ups each time');
+    expect(db.getScheduledTask(task.id)?.steps, 'nothing saved before the consent').toEqual(task.steps);
+    await click(must('consent-not-now'));
+    expect(db.getScheduledTask(task.id)?.steps).toEqual(task.steps);
+    await click(must('schedule-save'));
+    await click(must('consent-enable'));
+    await settleUntil(() => q('schedule-page') !== null, 'navigation to /schedule');
+    expect(db.getScheduledTask(task.id)?.steps[0]).toMatchObject({ tools: true });
+  });
+
+  it('U9 NEGATIVE: a schedule that already looked things up and keeps doing so saves a title edit at once — no consent', async () => {
+    const { task } = await seed({}, { tools: true });
+    await mount(`/schedule/${task.id}`);
+    await type(input('schedule-title'), 'tidy the ledger');
+    await click(must('schedule-save'));
+    await settleUntil(() => q('schedule-page') !== null, 'navigation to /schedule');
+    expect(q('enable-consent')).toBeNull();
+    expect(db.getScheduledTask(task.id)?.title).toBe('tidy the ledger');
+  });
+
+  it('U13: an arming refused after the create says the schedule WAS saved and waits — `ACTIONS.savedButWaits(refusal)`; the schedule is there, unarmed', async () => {
+    installLedger();
+    const refusal = 'app "ledger" is not installed in this file';
+    vi.mocked(armTask).mockResolvedValueOnce({ ok: false, reason: refusal } as Awaited<ReturnType<typeof armTask>>);
+    await mount('/schedule/new?template=spend-review');
+    await click(input('changes-on-its-own'));
+    await click(must('schedule-save'));
+    await click(must('consent-enable'));
+    await settleUntil(() => q('save-error') !== null, 'the refusal line');
+    expect(vi.mocked(armTask)).toHaveBeenCalledTimes(1);
+    expect(must('save-error').textContent).toBe(ACTIONS.savedButWaits(refusal));
+    expect(must('save-error').textContent).not.toBe(refusal);
+    const saved = db.listScheduledTasks();
+    expect(saved, 'the schedule was written').toHaveLength(1);
+    expect(saved[0]?.writeAuthority).toBeUndefined();
   });
 });

@@ -335,6 +335,76 @@
   border-radius: var(--radius-s);
 }
 
+/* ------------------------------------------- making changes on its own (TASK-20261010-host-broker PR-4) */
+
+/* The consent's tick and its two lines under it. */
+.schedule-consent-on-its-own {
+  display: grid;
+  gap: var(--space-1);
+}
+
+/* The result page: the one *stop* under the when-line, each made change on one line with its undo,
+   and a held change's one line above its acts. */
+.schedule-result-on-its-own {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  margin: 0;
+}
+
+.schedule-result-made {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.schedule-made-group {
+  margin: 0;
+}
+
+.schedule-change-held {
+  margin: 0;
+  color: var(--fg);
+}
+
+.schedule-result-step-facts {
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+}
+
+/* An own change's undo (`access/OwnUndoAct`): the act, the armed confirm — which takes the line's
+   whole width, so at 375 px it stacks below what it would undo — and the one outcome line. */
+.own-undo {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.own-undo:has(.own-undo-confirm) {
+  flex-basis: 100%;
+}
+
+.own-undo-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+}
+
+.own-undo-confirm .hint {
+  flex: 1 1 20ch;
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+}
+
+.own-undo-outcome {
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+}
+
 /* ---------------------------------------------------------------- motion (U9) */
 
 @media (prefers-reduced-motion: reduce) {

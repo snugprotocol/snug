@@ -63,6 +63,7 @@ import {
   type AccessLogEntry,
   type AccessUndoEntry,
   type DbRequestFrame,
+  type OwnUndoEntry,
   type RuntimeContract,
   type ScheduleRun,
   type ScheduledTask,
@@ -85,7 +86,7 @@ import {
 import { SIDECAR_IDENTITY_DIRECTORY_SETTING_KEY } from './sidecar-identity-keys.js';
 import {
   createScheduleAccessors,
-  hasScheduleRunProposals,
+  hasScheduleRunSeatsToStrip,
   reconcileImportedSchedules,
   scrubScheduleRunRows,
   snapshotLocalSchedules,
@@ -100,6 +101,8 @@ import {
   type AccessDecline,
   type AccessImportReport,
 } from './access.js';
+import { createOwnUndoAccessors, dropImportedOwnUndo, sweepOwnUndoForDeletedApp } from './own-undo.js';
+import type { OWN_UNDO_APPROVAL_BUCKET } from './app-settings-keys.js';
 import { jsonCharWeight, runScratchStatement } from './scratch-statement.js';
 import { selectableColumns } from '../scoped-read.js';
 import { errorMessage, quoteIdent, selectRows } from '../sqlite-helpers.js';
@@ -188,8 +191,9 @@ export const USERDB_ERROR_CODES = {
   /**
    * An access grant, an access-history entry or a decline failed the protocol's strict parse
    * at the write boundary (TASK-20261010-cross-app-access AC8, ADR-0075 §2) — the 16 KiB grant
-   * cap, the record invariants (D25) and the C1 credential refusal all surface here. Nothing
-   * was written.
+   * cap, the record invariants (D25) and the C1 credential refusal all surface here — or an
+   * undo journal entry did, the access journal's or the own journal's (TASK-20261010-host-broker
+   * PR-3, PR-4). Nothing was written.
    */
   ACCESS_INVALID: 'USERDB_ACCESS_INVALID',
   /**
@@ -549,9 +553,11 @@ export interface UserDbImportReport {
    * The scheduler pass (TASK-20261009 C4, ADR-0074 §2): tasks that landed disabled with
    * provenance `imported` because they were not byte-identical to a local one (always 0
    * on a trusted pull), and the pending data-change proposals stripped from run rows on
-   * EVERY import — a foreign file can never plant an approval card.
+   * EVERY import — a foreign file can never plant an approval card. `disarmedTasks`
+   * (TASK-20261010-host-broker PR-4, D-PR4-9): tasks whose write authority an untrusted
+   * import stripped — intent-equal ones included (always 0 on a trusted pull).
    */
-  schedules: { demotedTasks: number; strippedProposals: number };
+  schedules: { demotedTasks: number; strippedProposals: number; disarmedTasks: number };
   /**
    * The access pass (TASK-20261010-cross-app-access AC10, ADR-0075 §9): grants that landed
    * `suspended / imported` because they were not intent-identical to a local grant (always 0
@@ -1037,6 +1043,30 @@ export interface UserDb {
   putAccessUndo(targetAppId: string, entry: AccessUndoEntry): 'ok' | 'reader-cap';
   /** Stamp `undoneAt` on one entry — a done AND a failed undo alike (D-Q10). An unknown id is a no-op; ACCESS_INVALID for a bad instant. */
   markAccessUndone(targetAppId: string, id: string, at: string): void;
+
+  // The OWN undo journal `ownUndo:<appId>:<bucket>` (TASK-20261010-host-broker PR-4, D-PR4-3): the
+  // rows an own write changed — a bucket per armed schedule (its task id) and one for the user's
+  // approvals (`approval`) — see the `own-undo.ts` header for the caps and the postures.
+
+  /**
+   * The bucket's LIVE entries (not undone, not expired), newest first — with `includeUndone`, the
+   * undone-but-unexpired ones too, each carrying its `undoneAt` (PR-4 Gate 5, A12). Only entries
+   * that BELONG in the bucket (`ownUndoBelongsIn`, A1). Never throws on what the row holds.
+   */
+  listOwnUndo(appId: string, which: { taskId: string } | { bucket: typeof OWN_UNDO_APPROVAL_BUCKET }, options?: { includeUndone?: boolean }): OwnUndoEntry[];
+  /**
+   * Prepend one entry to a bucket. Refuses ACCESS_INVALID (the strict schema: no statement text,
+   * the 64 KiB entry cap, the per-cell credential walk — or an entry outside its own bucket: an
+   * approval's in `approval`, a schedule's in its task id's) and NOT_FOUND for an app the file does
+   * not hold. A schedule's bucket answers `'full'` — nothing written, nothing evicted — at
+   * `OWN_UNDO_MAX_LIVE` live entries or when the row would cross `OWN_UNDO_ROW_MAX_BYTES` after its
+   * undone entries gave way; the approval bucket never does: its oldest live entry gives way.
+   */
+  putOwnUndo(appId: string, bucket: string, entry: OwnUndoEntry): 'ok' | 'full';
+  /** Stamp `undoneAt` on one entry of one bucket — a done AND a failed undo alike. An unknown id is a no-op; ACCESS_INVALID for a bad instant. */
+  markOwnUndone(appId: string, bucket: string, id: string, at: string): void;
+  /** Whether a schedule's bucket can take one more FULL entry without a refusal — asked BEFORE the seat (the approval bucket always can). */
+  ownUndoRoom(appId: string, bucket: string): boolean;
   getProfileField(key: string): unknown;
   setProfileField(key: string, value: unknown): void;
   getSecret(key: string): string | undefined;
@@ -2524,11 +2554,25 @@ function construct(
     refuse: (code, message) => {
       throw new UserDbError(USERDB_ERROR_CODES[code], message);
     },
+    now: () => Date.now(),
   });
 
   // The access accessors (TASK-20261010 AC8): the same seams, plus the app-row check (a grant
   // or a history never names an app the file does not hold) and the clock.
   const accessAccessors = createAccessAccessors({
+    assertOpen,
+    select,
+    run,
+    setSetting: (key, value) => kvSet(USERDB_TABLES.settings, key, value),
+    refuse: (code, message) => {
+      throw new UserDbError(USERDB_ERROR_CODES[code], message);
+    },
+    hasApp: (appId) => getApp(appId) !== undefined,
+    now: () => Date.now(),
+  });
+
+  // The own undo journal (TASK-20261010-host-broker PR-4, D-PR4-3): the access accessors' seams.
+  const ownUndoAccessors = createOwnUndoAccessors({
     assertOpen,
     select,
     run,
@@ -2605,6 +2649,7 @@ function construct(
   const userDb: UserDb = {
     ...scheduleAccessors,
     ...accessAccessors,
+    ...ownUndoAccessors,
     get persistence(): DbPersistence {
       return backend.kind === 'memory' ? 'none' : backend.kind;
     },
@@ -2849,7 +2894,8 @@ function construct(
         db.run(`DELETE FROM ${USERDB_TABLES.settings} WHERE key LIKE ? ESCAPE '!'`, [`${linkPrefix}%`]);
         // 3c'. The scheduler's rows (TASK-20261009 C3, ADR-0074 §2): a task whose EVERY
         //     step names this app goes with its runs row (a multi-app task is left as is
-        //     — the engine marks the dead step's result at run time), plus the app's
+        //     — the engine marks the dead step's result at run time — save that it loses
+        //     any authority to change this app's data on its own, PR-4 Gate 5 A6), plus the app's
         //     `scheduleDeclined:<appId>:*` by escaped prefix and `scheduleMuted:<appId>`
         //     by equality. Three sweeps, each mutation-checked by delete-app.test.ts.
         sweepSchedulesForDeletedApp(sqlOn(db), appId);
@@ -2858,6 +2904,9 @@ function construct(
         //     `accessDeclined:<appId>:*` by escaped prefix and its `accessMuted:<appId>` by
         //     equality. Five sweeps, each mutation-checked by delete-app.test.ts.
         sweepAccessForDeletedApp(sqlOn(db), appId);
+        // 3c''''. The own undo journal (TASK-20261010-host-broker PR-4, D-PR4-3): every
+        //     `ownUndo:<appId>:` bucket by escaped prefix — nothing is left to put back.
+        sweepOwnUndoForDeletedApp(sqlOn(db), appId);
         // 3d. The sidecar identity directory, when this app held the LAST approved
         //     sidecar-ceiling connection (TASK-20260820, R-9 lifecycle). Inside the
         //     transaction: the check reads the connection rows step 3 just deleted, so
@@ -3749,9 +3798,12 @@ function construct(
       const bytes = db.export();
       // PROPOSALS NEVER LEAVE THE DEVICE (TASK-20261009 C4, ADR-0074 §6): a run's pending
       // data changes are this device's own dry-run, stripped from every history row on
-      // BOTH export paths — the file export and the sync push alike. The secrets-included
-      // path keeps its no-copy fast path when no history row carries one.
-      if (opts.includeSecrets === true && !hasScheduleRunProposals(sqlOn(db))) {
+      // BOTH export paths — the file export and the sync push alike. What this device MADE
+      // of them (PR-4: the `applied` and `approved` seats) rides along: only an UNTRUSTED
+      // import strips those (Gate 5, A7), so a pull keeps the device's record of what
+      // changed. The secrets-included path keeps its no-copy fast path when no history row
+      // carries a seat the scrub may touch.
+      if (opts.includeSecrets === true && !hasScheduleRunSeatsToStrip(sqlOn(db))) {
         if (bytes.byteLength > maxBytes) {
           throw new UserDbError(USERDB_ERROR_CODES.TOO_LARGE, `export is ${bytes.byteLength} bytes — cap is ${maxBytes}`);
         }
@@ -3909,6 +3961,9 @@ function construct(
       // A staged schedule suggestion on a chat message is a proposal too (S9): an untrusted
       // file's cards go; a trusted pull keeps the user's own.
       if (options?.trustedOrigin !== true) dropImportedScheduleCards(next);
+      // The own undo journal names rows to write back into an app (PR-4, D-PR4-3): an untrusted
+      // file's buckets go; a trusted pull keeps the user's own.
+      if (options?.trustedOrigin !== true) dropImportedOwnUndo(sqlOn(next));
       // A stripped proposal's statement would otherwise linger in the candidate's free
       // pages and ride the next secrets-included export raw — the `stripSecrets` rule.
       if (report.schedules.strippedProposals > 0) next.run('VACUUM');

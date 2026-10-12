@@ -82,23 +82,39 @@ export interface BuildProviderToolsOptions {
   maxCalls?: number;
 }
 
+export interface RenderProviderResultOptions {
+  /**
+   * The R-9 pseudonymisation pass (TASK-20260820), injected for SIDECAR-CLASS results only:
+   * this lane returns bodies to the model with no app-message wire involved, so the
+   * transport-seam scrub never sees them (fresh-context plan review, blocker 2).
+   */
+  scrub?: (text: string) => string;
+  /**
+   * Where the body is cut — the provider lane's 8,000 when absent. The scheduled agent's
+   * `fetch_connection` passes its own bound (TASK-20261010-host-broker PR-4, D-PR4-13).
+   */
+  maxChars?: number;
+}
+
 /**
  * Render one executor result for the model — scrubbed, defanged, capped.
  *
- * `scrub` is the R-9 pseudonymisation pass (TASK-20260820), injected for SIDECAR-CLASS
- * results only: this lane returns bodies to the model with no app-message wire involved,
- * so the transport-seam scrub never sees them (fresh-context plan review, blocker 2).
- * Applied FIRST — before the LAN-literal scrub and before the size cap, so truncation
- * can never become a scrub bypass (the reference scrub's own budget-path rule).
+ * The scrub is applied FIRST — before the LAN-literal scrub and before the size cap, so
+ * truncation can never become a scrub bypass (the reference scrub's own budget-path rule).
+ * The second argument may still be the bare scrub, the spelling every caller used before the
+ * options object; the two forms render byte-identically.
  */
+export function renderProviderResult(result: Extract<ConnectedFetchResult, { ok: true }>, options?: RenderProviderResultOptions): string;
+export function renderProviderResult(result: Extract<ConnectedFetchResult, { ok: true }>, scrub?: (text: string) => string): string;
 export function renderProviderResult(
   result: Extract<ConnectedFetchResult, { ok: true }>,
-  scrub?: (text: string) => string,
+  options: RenderProviderResultOptions | ((text: string) => string) = {},
 ): string {
+  const { scrub, maxChars = MAX_RESULT_CHARS } = typeof options === 'function' ? { scrub: options } : options;
   const contentType = result.headers['content-type'];
   let body = scrub !== undefined ? scrub(result.body) : result.body;
   body = body.replace(RFC1918_LITERAL, '[lan-address]');
-  if (body.length > MAX_RESULT_CHARS) body = `${body.slice(0, MAX_RESULT_CHARS)}\n…[body truncated]`;
+  if (body.length > maxChars) body = `${body.slice(0, maxChars)}\n…[body truncated]`;
   const lines = [
     `HTTP ${result.status}${contentType !== undefined ? ` — ${contentType}` : ''}`,
     body === '' ? '(empty body)' : body,
@@ -256,7 +272,7 @@ export function buildProviderTools(options: BuildProviderToolsOptions): AgentToo
         // stay raw — they are data the user connected this app to fetch.
         if (isSidecarClassUrl(input.url, db, appId)) {
           const directory = readIdentityDirectory(db);
-          return renderProviderResult(result, (text) => scrubText(text, directory));
+          return renderProviderResult(result, { scrub: (text) => scrubText(text, directory) });
         }
         return renderProviderResult(result);
       } catch (err) {

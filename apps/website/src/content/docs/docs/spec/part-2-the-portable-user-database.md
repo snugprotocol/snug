@@ -107,6 +107,15 @@ does not implement Part VI MAY carry these rows untouched and is still conformin
 implements Part VI at 1.1 cannot parse a 1.2 grant row and MUST hold it unreadable (§22.1 rule
 8). The per-app keys are cascaded on app delete (both directions for a grant; the undo journal
 and the wants with their app).
+The 1.2 editorial revision (2026-10-12, ADR-0076 §9) adds one more key, host-internal like the
+scheduling keys: `ownUndo:<appId>:<bucket>` (the rows an app's OWN change touched — one change
+the user approved, in the bucket `approval`, or the changes a schedule the user let make its
+changes on its own made to its own app's data, in the bucket named by that schedule's id — as
+data, never statement text, so the user can put them back for seven days; a schedule's bucket
+holds at most 20 live entries and refuses rather than evicts; swept with its schedule and with
+its app; dropped on an untrusted import, kept on a trusted pull). The `schedule:<taskId>` row
+may carry that authority — the user's act alone writes it, and a host that imports a file it
+does not trust strips it from every task, even one it would otherwise keep enabled.
 
 ### 8.2 Per-app data: native namespaced tables
 

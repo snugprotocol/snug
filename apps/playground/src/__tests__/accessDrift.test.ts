@@ -453,3 +453,73 @@ describe('the reset seams — a source scan: every thread-session reset is paire
     expect(unpairedResets('function t(threadId: string) { resetThreadSessions({ threadId }); }')).toEqual([]);
   });
 });
+
+// ------------------------------------------------------------------------------------------------
+// PR-4 Gate-5 A2 [SEC-F2, AUTH-F1, AUTH-F12] — every place a NEW VERSION of an app is saved reaches the
+// fan-out (the user's own builder edit, a revert, reset to factory and a starter update included —
+// before Gate 5 only the hand-in and the shared install did, so the proactive disarm never ran for the
+// rest); and the disarm the fan-out runs first never throws at the update.
+// ------------------------------------------------------------------------------------------------
+
+/** The member calls that save a new version of an app: `.saveAppVersion(` · `.revertApp(` · `.resetToFactory(`. */
+const versionSaves = (code: string): string[] => [...strip(code).matchAll(/\.\s*(saveAppVersion|revertApp|resetToFactory)\s*\(/g)].map((match) => match[1]!);
+/** The calls that reach the fan-out: `onAppVersionChanged(` itself, or the act that wraps it (`noteAppVersion(`). */
+const fanOutCalls = (code: string): number => callsOf(code, 'onAppVersionChanged') + callsOf(code, 'noteAppVersion');
+
+describe('PR-4 Gate-5 A2 — every version save reaches the fan-out (a source scan)', () => {
+  const files = [...sourcesUnder(path.join(APPS, 'playground', 'src')), ...sourcesUnder(path.join(APPS, 'host', 'src'))];
+  const saving = files.filter((file) => versionSaves(readFileSync(file, 'utf8')).length > 0);
+
+  it('the scan is not vacuous: it finds the builder sink, the versions panel and the starter update', () => {
+    const rel = saving.map((file) => path.relative(APPS, file));
+    for (const expected of ['playground/src/agent/artifactSink.ts', 'playground/src/run/VersionsPanel.tsx', 'playground/src/starter/starterUpdate.ts']) {
+      expect(rel, expected).toContain(expected);
+    }
+  });
+
+  it('every file that saves a new version (saveAppVersion / revertApp / resetToFactory) also calls the fan-out', () => {
+    const offenders = saving.filter((file) => fanOutCalls(readFileSync(file, 'utf8')) === 0).map((file) => path.relative(APPS, file));
+    expect(offenders).toEqual([]);
+  });
+
+  it('VersionsPanel reaches it for BOTH the revert and the reset (one call per save, or one shared after-change call)', () => {
+    const code = readFileSync(path.join(APPS, 'playground/src/run/VersionsPanel.tsx'), 'utf8');
+    expect(versionSaves(code).sort()).toEqual(['resetToFactory', 'revertApp']);
+    expect(fanOutCalls(code)).toBeGreaterThanOrEqual(1);
+  });
+
+  it('the source each one names: the builder and the versions panel are the user’s own edit; a starter update is the starter’s', () => {
+    const sourceOf = (rel: string): string[] => [...strip(readFileSync(path.join(APPS, rel), 'utf8')).matchAll(/onAppVersionChanged\s*\([^)]*?'(own|starter|shared|agent)'/g)].map((match) => match[1]!);
+    expect(sourceOf('playground/src/agent/artifactSink.ts')).toEqual(['own']);
+    expect(new Set(sourceOf('playground/src/run/VersionsPanel.tsx'))).toEqual(new Set(['own']));
+    expect(sourceOf('playground/src/starter/starterUpdate.ts')).toEqual(['starter']);
+  });
+
+  it('PLANTED-CALL PROOF: the save scan sees a member call (any spacing) and ignores a definition and a comment', () => {
+    expect(versionSaves('const meta = db.saveAppVersion(id, html, title);')).toEqual(['saveAppVersion']);
+    expect(versionSaves('db . revertApp (appId, 1)')).toEqual(['revertApp']);
+    expect(versionSaves('const resetToFactory = useCallback(() => {});')).toEqual([]);
+    expect(versionSaves('// db.saveAppVersion(x) used to be here')).toEqual([]);
+  });
+});
+
+describe('PR-4 Gate-5 A2 [AUTH-F12] — the disarm never throws at the update; the reader-access pause still runs', () => {
+  it('an armed task whose row the file refuses: onAppVersionChanged returns, and the updated app’s reader access is still suspended reader-updated', async () => {
+    const { readsLedger } = await seedGrants();
+    db.putScheduledTask({ ...scheduleNaming(budget, 1), enabled: false, writeAuthority: { rowsPerRun: 200, armedAt: CREATED, armedVersion: 1 } } as TaskRow);
+    const put = db.putScheduledTask.bind(db);
+    let refused = 0;
+    vi.spyOn(db, 'putScheduledTask').mockImplementation((task) => {
+      if ((task as { disarmed?: unknown }).disarmed !== undefined) {
+        refused += 1;
+        throw new Error('the file refused the row');
+      }
+      put(task);
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    expect(() => onAppVersionChanged(db, budget, 2, 'agent', NOW)).not.toThrow();
+    expect(refused, 'the disarm’s write was refused').toBe(1);
+    expect(statusOf(readsLedger.id)).toEqual({ status: 'suspended', suspendedReason: 'reader-updated' });
+    warn.mockRestore();
+  });
+});

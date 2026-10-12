@@ -2,7 +2,7 @@
 layer: tool
 destination: registered as the description of the host's schedule-propose tool — in the builder's direct-mode tool set, and as the ONLY tool of the `schedule` app-chat lane (ADR-0074 §4); the LLM reads this in the request's tool list
 blast-radius: whether a suggested schedule is clear enough for the user to enable — the tool cannot enable anything (the user's act on the host's consent surface does), so the risk is a confusing or wrongly timed suggestion the user accepts without reading
-source: written for TASK-20261009 (ADR-0074, scheduled tasks — the proposal ladder)
+source: written for TASK-20261009 (ADR-0074, scheduled tasks — the proposal ladder); the look-things-up step shape added for TASK-20261010-host-broker PR-4 (ADR-0076 §9, D-PR4-20), its GET-is-not-read-only wording at PR-4 Gate 6 (ADR-0076's PR-4 fold, Gate-5 U3)
 -->
 
 ## Tool: schedule propose
@@ -48,9 +48,22 @@ Required. One to five steps, each one of:
   in the user's words.
 - `{"kind":"app-think","prompt":"…"}` — *ask this app's AI*: the question to put to the app's
   own AI when the schedule fires (≤ 2048). The host hands it the app's tables itself — do NOT
-  include queries or SQL; a step carrying them is refused.
+  include queries or SQL; a step carrying them is refused. It answers from a snapshot of the
+  app's data, in one AI call.
+- `{"kind":"app-think","prompt":"…","tools":true}` — the same question, but the app's AI *may
+  look things up* first: it chooses its own queries over the app's data (and what the user let
+  this app read from other apps) and may read from the app's connections by asking (GET) only.
+  Some services act on a GET, and what it asks can carry the app's data, so make the step a
+  question to answer, never a job to do on a service. Each time costs up to
+  {{appAgentMaxRoundTrips}} AI calls and {{appAgentMaxToolCalls}} look-ups, so add
+  `"tools":true` only when the question needs more than a snapshot: "check the forecast and tell
+  me if I should water the garden", "compare this week's spend with last month's".
 - `{"kind":"app-run","input":…}` — *run this app*: the app's own code runs and answers a
   summary. `input` is optional small JSON (≤ 1 KiB) the app reads at that run.
+
+A step's AI may propose changes to the app's data; they wait for the user's OK. Whether a
+schedule may make them on its own is the user's choice on the host's consent — no suggestion
+can ask for it, so never include anything that would.
 
 Every step is for THIS app — never name another app, and never pass an app id. An
 `app-think` or `app-run` step needs the app to exist already; for a thread with no app yet,

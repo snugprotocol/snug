@@ -12,10 +12,17 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import type { z } from 'zod';
+import { z } from 'zod';
 import { buildJsonSchemas } from '../json-schemas.js';
+import { ACCESS_WRITE_MAX_ROWS } from '../access.js';
+import * as protocolIndex from '../index.js';
 import {
   ALERT_KINDS,
+  APP_AGENT_DEADLINE_MARGIN_MS,
+  APP_AGENT_MAX_ROUND_TRIPS,
+  APP_AGENT_MAX_TOOL_CALLS,
+  FETCH_CONNECTION_MAX_CHARS,
+  SCHEDULE_HELD_REASONS,
   MISSED_POLICIES,
   PAUSED_REASONS,
   RUN_STATUSES,
@@ -878,5 +885,392 @@ describe('publication line — the schedule shapes stay OUT of json-schemas SOUR
     const names = Object.keys(buildJsonSchemas());
     expect(names).not.toContain('schedule.json');
     expect(names.some((name) => /schedul/i.test(name))).toBe(false);
+  });
+});
+
+// ======================================================================
+// TASK-20261010-host-broker PR-4 — the task write authority, the run's new seats and the
+// host-native job constants (contract v2: D-PR4-7, D-PR4-11, D-PR4-15, D-PR4-17; AC31).
+// Every new seat is INTERNAL, strict, and OMITTED when absent (D-PR3-2's omit-defaults rule),
+// so a task or a run that never used one stays byte-identical to its pre-PR-4 form.
+// ======================================================================
+
+const ARMED_AT = '2026-10-11T09:00:00.000Z';
+const UNDO_UUID = '3f2b8c1e-7a4d-4e5f-9b6a-1c2d3e4f5a6b';
+const writeAuthority = (over: Record<string, unknown> = {}) => ({ rowsPerRun: 200, armedAt: ARMED_AT, armedVersion: 3, ...over });
+const armedTask = (over: Record<string, unknown> = {}) => ({ ...minimalTask, steps: [appThink], writeAuthority: writeAuthority(), ...over });
+
+describe('PR-4 — the new constants (contract v2 module contracts)', () => {
+  it('pins SCHEDULE_HELD_REASONS exactly — ONE table of why an armed item was not made (D-PR4-11)', () => {
+    expect([...SCHEDULE_HELD_REASONS]).toEqual(['busy', 'changed', 'cannot-undo', 'full', 'failed', 'over-limit', 'stopped']);
+  });
+
+  it('pins the host-native job bounds (D-PR4-13, D-PR4-15)', () => {
+    expect(APP_AGENT_MAX_TOOL_CALLS).toBe(8);
+    expect(APP_AGENT_MAX_ROUND_TRIPS).toBe(10);
+    expect(FETCH_CONNECTION_MAX_CHARS).toBe(16_000);
+    expect(APP_AGENT_DEADLINE_MARGIN_MS).toBe(30_000);
+  });
+
+  it('index.ts exports every new name (the module contract: "index.ts exports")', () => {
+    const exported = protocolIndex as Record<string, unknown>;
+    for (const name of ['SCHEDULE_HELD_REASONS', 'APP_AGENT_MAX_TOOL_CALLS', 'APP_AGENT_MAX_ROUND_TRIPS', 'FETCH_CONNECTION_MAX_CHARS', 'APP_AGENT_DEADLINE_MARGIN_MS']) {
+      expect(exported[name], name).toBeDefined();
+    }
+    expect(exported.SCHEDULE_HELD_REASONS).toBe(SCHEDULE_HELD_REASONS);
+  });
+});
+
+describe('PR-4 — app-think + tools?: true (D-PR4-15; absent ≡ tool-free)', () => {
+  it('an app-think step accepts tools: true, and absent stays the tool-free step', () => {
+    expect(parses(scheduleStepSchema, { ...appThink, tools: true })).toBe(true);
+    const parsed = scheduleStepSchema.parse(appThink);
+    expect('tools' in parsed).toBe(false);
+    const withTools = scheduleStepSchema.parse({ ...appThink, tools: true });
+    expect(withTools.kind === 'app-think' && withTools.tools).toBe(true);
+  });
+
+  it('tools is the literal true only (omit-defaults: false is never written, so it never parses)', () => {
+    expect(parses(scheduleStepSchema, { ...appThink, tools: true }), 'the passing twin').toBe(true);
+    expect(parses(scheduleStepSchema, { ...appThink, tools: false })).toBe(false);
+    expect(parses(scheduleStepSchema, { ...appThink, tools: 'yes' })).toBe(false);
+    expect(parses(scheduleStepSchema, { ...appThink, tools: 1 })).toBe(false);
+    expect(parses(scheduleStepSchema, { ...appThink, tools: ['data_query'] })).toBe(false);
+  });
+
+  it('the seat is app-think\'s alone — notify and app-run refuse it', () => {
+    expect(parses(scheduleStepSchema, { ...appThink, tools: true }), 'the passing twin').toBe(true);
+    expect(parses(scheduleStepSchema, { ...notify, tools: true })).toBe(false);
+    expect(parses(scheduleStepSchema, { ...appRun, tools: true })).toBe(false);
+  });
+
+  it('a tools step rides a task and a proposal (every proposal channel may carry tools: true — D-PR4-20)', () => {
+    expect(parses(scheduledTaskSchema, { ...minimalTask, steps: [{ ...appThink, tools: true }] })).toBe(true);
+    expect(parses(scheduleProposalSchema, { ...minimalProposal, steps: [{ ...appThink, tools: true }] })).toBe(true);
+  });
+
+  it('tools is part of the intent: a tool-free and a tools step are different schedules', () => {
+    const base = canonicalScheduleIntent(scheduledTaskSchema.parse({ ...minimalTask, steps: [appThink] }));
+    expect(canonicalScheduleIntent(scheduledTaskSchema.parse({ ...minimalTask, steps: [{ ...appThink, tools: true }] }))).not.toBe(base);
+    const proposal = proposalHash(scheduleProposalSchema.parse({ ...minimalProposal, steps: [appThink] }));
+    expect(proposalHash(scheduleProposalSchema.parse({ ...minimalProposal, steps: [{ ...appThink, tools: true }] }))).not.toBe(proposal);
+  });
+});
+
+describe('PR-4 — the task\'s writeAuthority and disarmed seats (D-PR4-7)', () => {
+  it('accepts writeAuthority {rowsPerRun 1..ACCESS_WRITE_MAX_ROWS, armedAt, armedVersion}', () => {
+    expect(ACCESS_WRITE_MAX_ROWS).toBe(200);
+    expect(parses(scheduledTaskSchema, armedTask())).toBe(true);
+    expect(parses(scheduledTaskSchema, armedTask({ writeAuthority: writeAuthority({ rowsPerRun: 1 }) }))).toBe(true);
+    expect(parses(scheduledTaskSchema, armedTask({ writeAuthority: writeAuthority({ rowsPerRun: ACCESS_WRITE_MAX_ROWS }) }))).toBe(true);
+    const parsed = scheduledTaskSchema.parse(armedTask());
+    expect(parsed.writeAuthority).toEqual({ rowsPerRun: 200, armedAt: ARMED_AT, armedVersion: 3 });
+  });
+
+  it('bounds rowsPerRun at 1..200, an int; armedAt an ISO instant; armedVersion an int — every seat required', () => {
+    expect(parses(scheduledTaskSchema, armedTask()), 'the passing twin').toBe(true);
+    for (const rowsPerRun of [0, -1, ACCESS_WRITE_MAX_ROWS + 1, 1.5, '200', null]) {
+      expect(parses(scheduledTaskSchema, armedTask({ writeAuthority: writeAuthority({ rowsPerRun }) })), String(rowsPerRun)).toBe(false);
+    }
+    for (const armedAt of ['2026-10-11', 'now', 1760000000000, '']) {
+      expect(parses(scheduledTaskSchema, armedTask({ writeAuthority: writeAuthority({ armedAt }) })), String(armedAt)).toBe(false);
+    }
+    for (const armedVersion of [1.5, '3', null]) {
+      expect(parses(scheduledTaskSchema, armedTask({ writeAuthority: writeAuthority({ armedVersion }) })), String(armedVersion)).toBe(false);
+    }
+    for (const seat of ['rowsPerRun', 'armedAt', 'armedVersion']) {
+      expect(parses(scheduledTaskSchema, armedTask({ writeAuthority: writeAuthority({ [seat]: undefined }) })), `without ${seat}`).toBe(false);
+    }
+  });
+
+  it('writeAuthority is STRICT — no seat can widen it (another app, a table list, a standing approval)', () => {
+    expect(parses(scheduledTaskSchema, armedTask()), 'the passing twin').toBe(true);
+    expect(parses(scheduledTaskSchema, armedTask({ writeAuthority: writeAuthority({ appId: 'budget' }) }))).toBe(false);
+    expect(parses(scheduledTaskSchema, armedTask({ writeAuthority: writeAuthority({ tables: ['transactions'] }) }))).toBe(false);
+    expect(parses(scheduledTaskSchema, armedTask({ writeAuthority: writeAuthority({ cross: true }) }))).toBe(false);
+    expect(parses(scheduledTaskSchema, armedTask({ writeAuthority: true }))).toBe(false);
+    expect(parses(scheduledTaskSchema, armedTask({ writeAuthority: [writeAuthority()] }))).toBe(false);
+  });
+
+  it('accepts disarmed {reason: imported | app-updated, at} — a trace of a disarm the user did not perform', () => {
+    for (const reason of ['imported', 'app-updated']) {
+      expect(parses(scheduledTaskSchema, { ...minimalTask, disarmed: { reason, at: AT } }), reason).toBe(true);
+    }
+    expect(parses(scheduledTaskSchema, { ...minimalTask, disarmed: { reason: 'user', at: AT } })).toBe(false);
+    expect(parses(scheduledTaskSchema, { ...minimalTask, disarmed: { reason: 'switched-off', at: AT } })).toBe(false);
+    expect(parses(scheduledTaskSchema, { ...minimalTask, disarmed: { reason: 'imported' } })).toBe(false);
+    expect(parses(scheduledTaskSchema, { ...minimalTask, disarmed: { reason: 'imported', at: '2026-10-11' } })).toBe(false);
+    expect(parses(scheduledTaskSchema, { ...minimalTask, disarmed: { reason: 'imported', at: AT, by: 'sync' } })).toBe(false);
+  });
+
+  it('both seats are OMITTED when absent — a task that never armed parses with neither key (omit-defaults)', () => {
+    expect(parses(scheduledTaskSchema, armedTask({ disarmed: { reason: 'app-updated', at: AT } })), 'the seats exist').toBe(true);
+    const parsed = scheduledTaskSchema.parse(minimalTask);
+    expect('writeAuthority' in parsed).toBe(false);
+    expect('disarmed' in parsed).toBe(false);
+    expect(Object.keys(JSON.parse(canonicalScheduledTask(parsed)))).not.toContain('writeAuthority');
+    expect(Object.keys(JSON.parse(canonicalScheduledTask(parsed)))).not.toContain('disarmed');
+  });
+
+  it('canonicalScheduleIntent EXCLUDES both — consent state, like enabled (AC31 "includes" amended)', () => {
+    const base = canonicalScheduleIntent(scheduledTaskSchema.parse({ ...minimalTask, steps: [appThink] }));
+    expect(canonicalScheduleIntent(scheduledTaskSchema.parse(armedTask()))).toBe(base);
+    expect(canonicalScheduleIntent(scheduledTaskSchema.parse(armedTask({ writeAuthority: writeAuthority({ rowsPerRun: 1, armedVersion: 9 }) })))).toBe(base);
+    expect(canonicalScheduleIntent(scheduledTaskSchema.parse({ ...minimalTask, steps: [appThink], disarmed: { reason: 'imported', at: AT } }))).toBe(base);
+    expect(canonicalScheduleIntent(scheduledTaskSchema.parse(armedTask())).includes('writeAuthority')).toBe(false);
+    expect(canonicalScheduleIntent(scheduledTaskSchema.parse(armedTask())).includes('armedAt')).toBe(false);
+  });
+
+  it('the whole-row canonical bytes DO see them (the row is the row)', () => {
+    const plain = canonicalScheduledTask(scheduledTaskSchema.parse({ ...minimalTask, steps: [appThink] }));
+    expect(canonicalScheduledTask(scheduledTaskSchema.parse(armedTask()))).not.toBe(plain);
+  });
+
+  it('the tolerant reader keeps an armed task\'s authority and refuses a malformed one as "no such task"', () => {
+    expect(parseScheduledTask(JSON.stringify(armedTask()))?.writeAuthority?.rowsPerRun).toBe(200);
+    expect(parseScheduledTask(JSON.stringify(armedTask({ writeAuthority: writeAuthority({ rowsPerRun: 201 }) })))).toBeUndefined();
+  });
+});
+
+describe('PR-4 — NO proposal channel can carry an authority (AC31 negative; D-PR4-20)', () => {
+  it('scheduleProposalSchema refuses writeAuthority, disarmed and an enabled flag — strict, whatever the shape', () => {
+    // The authority seat exists on the TASK (the user's act writes it) …
+    expect(parses(scheduledTaskSchema, armedTask()), 'the task carries it').toBe(true);
+    // … and never on what a builder, a chat or an app may propose.
+    expect(parses(scheduleProposalSchema, { ...minimalProposal, writeAuthority: writeAuthority() })).toBe(false);
+    expect(parses(scheduleProposalSchema, { ...minimalProposal, steps: [appThink], writeAuthority: writeAuthority() })).toBe(false);
+    expect(parses(scheduleProposalSchema, { ...minimalProposal, writeAuthority: { rowsPerRun: 1 } })).toBe(false);
+    expect(parses(scheduleProposalSchema, { ...minimalProposal, disarmed: { reason: 'imported', at: AT } })).toBe(false);
+    expect(parseScheduleProposal(JSON.stringify({ ...minimalProposal, writeAuthority: writeAuthority() }))).toBeUndefined();
+  });
+
+  it('a step cannot smuggle it either — no step kind has an authority seat', () => {
+    expect(parses(scheduleStepSchema, { ...appThink, tools: true }), 'the tools step itself parses').toBe(true);
+    for (const step of [notify, appRun, appThink, { ...appThink, tools: true }]) {
+      expect(parses(scheduleStepSchema, { ...step, writeAuthority: writeAuthority() }), step.kind).toBe(false);
+      expect(parses(scheduleStepSchema, { ...step, makeChanges: true }), step.kind).toBe(false);
+    }
+  });
+});
+
+describe('PR-4 — the run\'s applied group: one app, ≤ 3 items, NO SQL (D-PR4-17)', () => {
+  const applied = (over: Record<string, unknown> = {}) => ({ appId: 'ledger', undoId: UNDO_UUID, items: [{ summary: 'Tags March rent', changes: 12 }], ...over });
+
+  it('accepts a group with an undo id, and one that cannot be undone (undoable: false, no undoId)', () => {
+    expect(parses(scheduleRunSchema, { ...minimalRun, applied: applied() })).toBe(true);
+    expect(parses(scheduleRunSchema, { ...minimalRun, applied: { appId: 'ledger', undoable: false, items: [{ changes: 2 }] } })).toBe(true);
+    expect(parses(scheduleRunSchema, { ...minimalRun, applied: applied({ items: [{ changes: 1 }, { changes: 0 }, { summary: 'x', changes: 3 }] }) })).toBe(true);
+  });
+
+  it('is omitted when absent — a run of an unchanged task stays pre-PR-4 bytes', () => {
+    expect(parses(scheduleRunSchema, { ...minimalRun, applied: applied() }), 'the seat exists').toBe(true);
+    const parsed = scheduleRunSchema.parse(minimalRun);
+    expect('applied' in parsed).toBe(false);
+  });
+
+  it('items ≤ SCHEDULE_PROPOSALS_PER_RUN; changes a non-negative int; ONE group, never a list of groups', () => {
+    const item = { changes: 1 };
+    expect(parses(scheduleRunSchema, { ...minimalRun, applied: applied({ items: Array.from({ length: SCHEDULE_PROPOSALS_PER_RUN }, () => item) }) })).toBe(true);
+    expect(parses(scheduleRunSchema, { ...minimalRun, applied: applied({ items: Array.from({ length: SCHEDULE_PROPOSALS_PER_RUN + 1 }, () => item) }) })).toBe(false);
+    expect(parses(scheduleRunSchema, { ...minimalRun, applied: applied({ items: [{ changes: -1 }] }) })).toBe(false);
+    expect(parses(scheduleRunSchema, { ...minimalRun, applied: applied({ items: [{ changes: 1.5 }] }) })).toBe(false);
+    expect(parses(scheduleRunSchema, { ...minimalRun, applied: applied({ items: [{ summary: 'no count' }] }) })).toBe(false);
+    expect(parses(scheduleRunSchema, { ...minimalRun, applied: [applied()] })).toBe(false);
+    expect(parses(scheduleRunSchema, { ...minimalRun, applied: applied({ appId: undefined }) })).toBe(false);
+    expect(parses(scheduleRunSchema, { ...minimalRun, applied: applied({ appId: 'x'.repeat(SCHEDULE_ID_MAX_CHARS + 1) }) })).toBe(false);
+  });
+
+  it('carries NO SQL — not on the group, not on an item (the undo is the journal\'s, never statement text)', () => {
+    expect(parses(scheduleRunSchema, { ...minimalRun, applied: applied() }), 'the passing twin').toBe(true);
+    expect(parses(scheduleRunSchema, { ...minimalRun, applied: applied({ sql: 'DELETE FROM t WHERE id = 1' }) })).toBe(false);
+    expect(parses(scheduleRunSchema, { ...minimalRun, applied: applied({ items: [{ changes: 1, sql: 'DELETE FROM t WHERE id = 1' }] }) })).toBe(false);
+    expect(parses(scheduleRunSchema, { ...minimalRun, applied: applied({ items: [{ changes: 1, appId: 'budget' }] }) })).toBe(false);
+    expect(parses(scheduleRunSchema, { ...minimalRun, applied: applied({ steps: [] }) })).toBe(false);
+  });
+
+  it('undoable is the literal false only (omit-defaults); undoId is a uuid', () => {
+    expect(parses(scheduleRunSchema, { ...minimalRun, applied: applied({ undoId: undefined, undoable: false }) }), 'the passing twin').toBe(true);
+    expect(parses(scheduleRunSchema, { ...minimalRun, applied: applied({ undoable: true }) })).toBe(false);
+    expect(parses(scheduleRunSchema, { ...minimalRun, applied: applied({ undoId: 'undo-1' }) })).toBe(false);
+    expect(parses(scheduleRunSchema, { ...minimalRun, applied: applied({ undoId: '' }) })).toBe(false);
+  });
+
+  it('the item summary is bounded like a proposal item\'s', () => {
+    expect(parses(scheduleRunSchema, { ...minimalRun, applied: applied({ items: [{ summary: 'x'.repeat(SCHEDULE_PROPOSAL_SUMMARY_MAX_CHARS), changes: 1 }] }) })).toBe(true);
+    expect(parses(scheduleRunSchema, { ...minimalRun, applied: applied({ items: [{ summary: 'x'.repeat(SCHEDULE_PROPOSAL_SUMMARY_MAX_CHARS + 1), changes: 1 }] }) })).toBe(false);
+  });
+
+  it('a credential in an applied summary is a refusal like anywhere else in a run', () => {
+    expect(parses(scheduleRunSchema, { ...minimalRun, applied: applied() }), 'the passing twin').toBe(true);
+    expect(parses(scheduleRunSchema, { ...minimalRun, applied: applied({ items: [{ summary: `Key ${OPENAI_SHAPED_KEY}`, changes: 1 }] }) })).toBe(false);
+  });
+
+  it('a run holding both a pending proposal and an applied group parses (held items stay pending beside what was made)', () => {
+    const run = {
+      ...minimalRun,
+      applied: applied(),
+      proposals: { items: [{ appId: 'ledger', sql: 'DELETE FROM notes WHERE id = 1', held: 'over-limit' }], expiresAt: AT },
+    };
+    expect(parses(scheduleRunSchema, run)).toBe(true);
+  });
+});
+
+describe('PR-4 — a proposal item\'s held reason (D-PR4-11)', () => {
+  const item = { appId: 'ledger', sql: 'DELETE FROM notes WHERE id = 1' };
+
+  it('accepts every SCHEDULE_HELD_REASONS value and nothing else', () => {
+    for (const held of SCHEDULE_HELD_REASONS) expect(parses(scheduleProposalItemSchema, { ...item, held }), held).toBe(true);
+    for (const held of ['switched-off', 'paused', 'Busy', '', 'too-many']) expect(parses(scheduleProposalItemSchema, { ...item, held }), held).toBe(false);
+  });
+
+  it('is omitted when absent — an unarmed run\'s item is pre-PR-4 bytes', () => {
+    expect(parses(scheduleProposalItemSchema, { ...item, held: 'busy' }), 'the seat exists').toBe(true);
+    expect('held' in scheduleProposalItemSchema.parse(item)).toBe(false);
+  });
+});
+
+describe('PR-4 — the step result\'s host facts: inOpenApp?, saw?, tools?, blockedBy? (D-PR4-17)', () => {
+  it('inOpenApp is the literal true only — absent = out of sight', () => {
+    expect(parses(stepResultSchema, { status: 'ok', inOpenApp: true })).toBe(true);
+    expect(parses(stepResultSchema, { status: 'ok', inOpenApp: false })).toBe(false);
+    expect('inOpenApp' in stepResultSchema.parse({ status: 'ok' })).toBe(false);
+  });
+
+  it('saw is 1..8 {source ≤ 64, table ≤ 64} — written only when non-empty', () => {
+    const seen = (n: number) => Array.from({ length: n }, (_, i) => ({ source: `app${i}`, table: `t${i}` }));
+    expect(parses(stepResultSchema, { status: 'ok', saw: seen(1) })).toBe(true);
+    expect(parses(stepResultSchema, { status: 'ok', saw: seen(8) })).toBe(true);
+    expect(parses(stepResultSchema, { status: 'ok', saw: seen(9) })).toBe(false);
+    expect(parses(stepResultSchema, { status: 'ok', saw: [] })).toBe(false);
+    expect(parses(stepResultSchema, { status: 'ok', saw: [{ source: 'x'.repeat(64), table: 'y'.repeat(64) }] })).toBe(true);
+    expect(parses(stepResultSchema, { status: 'ok', saw: [{ source: 'x'.repeat(65), table: 't' }] })).toBe(false);
+    expect(parses(stepResultSchema, { status: 'ok', saw: [{ source: 'ledger', table: 'y'.repeat(65) }] })).toBe(false);
+    expect(parses(stepResultSchema, { status: 'ok', saw: [{ source: 'ledger' }] })).toBe(false);
+    expect(parses(stepResultSchema, { status: 'ok', saw: [{ source: 'ledger', table: 't', columns: ['a'] }] })).toBe(false);
+    expect(parses(stepResultSchema, { status: 'ok', saw: [{ source: 'ledger', table: 't', sql: 'SELECT 1' }] })).toBe(false);
+  });
+
+  it('tools is {used 0..8, fetched?} or {unavailable: brain | sidecar} — slot names and counts only, never a path', () => {
+    expect(parses(stepResultSchema, { status: 'ok', tools: { used: 0 } })).toBe(true);
+    expect(parses(stepResultSchema, { status: 'ok', tools: { used: APP_AGENT_MAX_TOOL_CALLS } })).toBe(true);
+    expect(parses(stepResultSchema, { status: 'ok', tools: { used: APP_AGENT_MAX_TOOL_CALLS + 1 } })).toBe(false);
+    expect(parses(stepResultSchema, { status: 'ok', tools: { used: -1 } })).toBe(false);
+    expect(parses(stepResultSchema, { status: 'ok', tools: { used: 1.5 } })).toBe(false);
+    expect(parses(stepResultSchema, { status: 'ok', tools: { used: 3, fetched: [{ connection: 'spotify', calls: 3 }] } })).toBe(true);
+    const fetched = (n: number) => Array.from({ length: n }, (_, i) => ({ connection: `conn-${i}`, calls: 1 }));
+    expect(parses(stepResultSchema, { status: 'ok', tools: { used: 8, fetched: fetched(8) } })).toBe(true);
+    expect(parses(stepResultSchema, { status: 'ok', tools: { used: 8, fetched: fetched(9) } })).toBe(false);
+    for (const calls of [0, 9, 1.5]) {
+      expect(parses(stepResultSchema, { status: 'ok', tools: { used: 1, fetched: [{ connection: 'spotify', calls }] } }), String(calls)).toBe(false);
+    }
+    // A slot name (CONNECTION_SLOT_RULE), never a URL, a path or a query.
+    for (const connection of ['Spotify', 'https://api.spotify.com', 'spotify/v1/me', '', 'x'.repeat(41)]) {
+      expect(parses(stepResultSchema, { status: 'ok', tools: { used: 1, fetched: [{ connection, calls: 1 }] } }), connection).toBe(false);
+    }
+    expect(parses(stepResultSchema, { status: 'ok', tools: { used: 1, fetched: [{ connection: 'spotify', calls: 1, path: '/v1/me' }] } })).toBe(false);
+    expect(parses(stepResultSchema, { status: 'ok', tools: { used: 1, fetched: [{ connection: 'spotify', calls: 1, query: { q: 'x' } }] } })).toBe(false);
+
+    expect(parses(stepResultSchema, { status: 'ok', tools: { unavailable: 'brain' } })).toBe(true);
+    expect(parses(stepResultSchema, { status: 'ok', tools: { unavailable: 'sidecar' } })).toBe(true);
+    expect(parses(stepResultSchema, { status: 'ok', tools: { unavailable: 'network' } })).toBe(false);
+    expect(parses(stepResultSchema, { status: 'ok', tools: { unavailable: 'brain', used: 0 } })).toBe(false);
+    expect(parses(stepResultSchema, { status: 'ok', tools: {} })).toBe(false);
+    expect(parses(stepResultSchema, { status: 'ok', tools: true })).toBe(false);
+  });
+
+  it('blockedBy is the literal brain only', () => {
+    expect(parses(stepResultSchema, { status: 'refused', blockedBy: 'brain' })).toBe(true);
+    expect(parses(stepResultSchema, { status: 'refused', blockedBy: 'network' })).toBe(false);
+    expect(parses(stepResultSchema, { status: 'refused', blockedBy: true })).toBe(false);
+  });
+
+  it('every new seat is omitted when absent — a pre-PR-4 step result parses to the same bytes', () => {
+    expect(parses(stepResultSchema, { status: 'ok', inOpenApp: true, tools: { used: 0 } }), 'the seats exist').toBe(true);
+    const parsed = stepResultSchema.parse({ status: 'ok', summary: 'Spent 120 on food.' });
+    expect(Object.keys(parsed).sort()).toEqual(['status', 'summary']);
+  });
+
+  it('the seats ride a run inside the whole-run byte cap and the credential walk', () => {
+    const run = {
+      ...minimalRun,
+      steps: [{ status: 'ok', inOpenApp: true }, { status: 'ok', saw: [{ source: 'ledger', table: 'transactions' }], tools: { used: 2, fetched: [{ connection: 'spotify', calls: 1 }] } }, { status: 'refused', blockedBy: 'brain' }],
+    };
+    expect(parses(scheduleRunSchema, run)).toBe(true);
+  });
+});
+
+describe('PR-4 — publication line still holds: json-schemas SOURCES unchanged (pinned)', () => {
+  it('buildJsonSchemas() exports exactly the sixteen it exported before PR-4 — no own-undo, no schedule entry', () => {
+    expect(Object.keys(buildJsonSchemas())).toEqual([
+      'app-announce.json',
+      'host-ready.json',
+      'app-message.json',
+      'app-cancel.json',
+      'app-response.json',
+      'db-request.json',
+      'db-response.json',
+      'host-event.json',
+      'app-event.json',
+      'net-request.json',
+      'net-response.json',
+      'open-url-request.json',
+      'open-url-result.json',
+      'access-request.json',
+      'access-response.json',
+      'app-request-envelope.json',
+    ]);
+  });
+});
+
+// =================================================================================================
+// PR-4 Gate-5 AUTH-F8 — the forward-compatibility DIRECTION, pinned against a hand-copied pre-PR-4
+// reader (main @ 76c9262, packages/protocol/src/schedule.ts). A pre-PR-4 hub parses strictly, so:
+//   - a step result carrying `inOpenApp` (a run that ran in the open app — every manual *run now* of an
+//     app-run included) or `saw` (it read another app's data) is REFUSED by it — dropped from its
+//     history, and from its next export or push;
+//   - an *Ask* step carrying `tools` is refused by it — a task holding one (or `writeAuthority`, or
+//     `disarmed`) is deleted by its untrusted import.
+// The current schema accepts each (the direction is new → old only). This records the residual the
+// threat delta names; it never asks the old reader to change.
+// =================================================================================================
+
+describe('PR-4 Gate-5 AUTH-F8 — what a pre-PR-4 reader refuses (the direction, hand-copied)', () => {
+  /** main's `stepResultSchema`, byte for byte but for the imports. */
+  const preStepResultSchema = z.strictObject({
+    status: z.enum(['ok', 'failed', 'blocked', 'refused', 'no-handler', 'skipped']),
+    summary: z.string().max(4096).optional(),
+    appMissing: z.boolean().optional(),
+  });
+  /** main's `app-think` step member: no `tools` seat. */
+  const preAppThinkStepSchema = z.strictObject({
+    kind: z.literal('app-think'),
+    appId: z.string().min(1),
+    prompt: z.string().min(1),
+    context: z.strictObject({ sql: z.array(z.string()).optional(), maxRows: z.int().min(1).optional() }),
+  });
+
+  it('a step result with inOpenApp: the current schema reads it; a pre-PR-4 reader refuses it', () => {
+    const row = { status: 'ok', inOpenApp: true };
+    expect(parses(stepResultSchema, row)).toBe(true);
+    expect(parses(preStepResultSchema, row)).toBe(false);
+  });
+
+  it('a step result with saw: read now, refused before', () => {
+    const row = { status: 'ok', saw: [{ source: 'Ledger', table: 'transactions' }] };
+    expect(parses(stepResultSchema, row)).toBe(true);
+    expect(parses(preStepResultSchema, row)).toBe(false);
+  });
+
+  it('the passing twin: a plain step result is read by both', () => {
+    expect(parses(stepResultSchema, { status: 'ok', summary: 'done' })).toBe(true);
+    expect(parses(preStepResultSchema, { status: 'ok', summary: 'done' })).toBe(true);
+  });
+
+  it('an Ask step with tools: read now, refused before', () => {
+    const step = { kind: 'app-think', appId: 'ledger', prompt: 'tidy', context: { maxRows: 50 }, tools: true };
+    expect(parses(scheduleStepSchema, step)).toBe(true);
+    expect(parses(preAppThinkStepSchema, step)).toBe(false);
+    const { tools: _t, ...plain } = step;
+    expect(parses(preAppThinkStepSchema, plain)).toBe(true);
   });
 });

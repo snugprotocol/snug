@@ -79,7 +79,11 @@ export interface NamespaceWriteEvent {
   changes?: number;
 }
 
-/** What `brokeredWrite` applies: the Worker's plans, the app's own approved statements (own mode, D-PR3-8), or an undo's structured steps (D-Q2 — the same union the apply takes). */
+/**
+ * What `brokeredWrite` applies: the Worker's plans, the app's own approved statements (own mode,
+ * D-PR3-8) — bare, or captured for an undo (PR-4, D-PR4-4: `{ own, capture: true, … }`, forwarded
+ * as is) — or an undo's structured steps (D-Q2 — the same union the apply takes).
+ */
 export type BrokeredWriteInput = BrokeredApplyInput;
 
 /**

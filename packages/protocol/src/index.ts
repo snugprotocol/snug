@@ -290,6 +290,10 @@ export {
 // draft, OUT of the json-schemas SOURCES: scheduling is a host feature, not protocol.
 export {
   ALERT_KINDS,
+  APP_AGENT_DEADLINE_MARGIN_MS,
+  APP_AGENT_MAX_ROUND_TRIPS,
+  APP_AGENT_MAX_TOOL_CALLS,
+  FETCH_CONNECTION_MAX_CHARS,
   MISSED_POLICIES,
   PAUSED_REASONS,
   RUN_STATUSES,
@@ -302,8 +306,10 @@ export {
   SCHEDULE_CONTEXT_SQL_MAX_STATEMENTS,
   SCHEDULE_CRON_MAX_CHARS,
   SCHEDULE_DAILY_CEILINGS,
+  SCHEDULE_DISARMED_REASONS,
   SCHEDULE_EVERY_MAX_N,
   SCHEDULE_GRACE_MS,
+  SCHEDULE_HELD_REASONS,
   SCHEDULE_HOST_KINDS,
   SCHEDULE_ID_MAX_CHARS,
   SCHEDULE_MAX_APP_VERSIONS,
@@ -328,6 +334,9 @@ export {
   SCHEDULE_UNITS,
   SCHEDULE_UNTIL_MAX_COUNT,
   STEP_RESULT_STATUSES,
+  STEP_SAW_MAX_ENTRIES,
+  STEP_SAW_NAME_MAX_CHARS,
+  STEP_TOOLS_UNAVAILABLE_REASONS,
   TASK_PROVENANCES,
   WEEKDAYS,
   canonicalScheduleIntent,
@@ -355,21 +364,46 @@ export {
   type RunStatus,
   type RunTrigger,
   type ScheduleCredentialIssue,
+  type ScheduleDisarmed,
+  type ScheduleDisarmedReason,
+  type ScheduleHeldReason,
   type ScheduleHostKind,
   type ScheduleProposal,
   type ScheduleProposalItem,
   type ScheduleRun,
+  type ScheduleRunApplied,
+  type ScheduleRunApproved,
   type ScheduleSpec,
   type ScheduleStep,
   type ScheduleUnit,
   type ScheduleUntil,
+  type ScheduleWriteAuthority,
   type ScheduledTask,
   type SchedulerState,
   type StepResult,
   type StepResultStatus,
+  type StepSaw,
+  type StepTools,
+  type StepToolsUnavailableReason,
   type TaskProvenance,
   type Weekday,
 } from './schedule.js';
+
+// The OWN undo journal (TASK-20261010-host-broker PR-4, ADR-0076 §9; D-PR4-3): the entry an own
+// write's captured rows are kept under in `ownUndo:<appId>:<bucket>`, the two authorities and
+// vias spelled once, and the bucket caps. Internal draft, OUT of the json-schemas SOURCES.
+export {
+  APPROVAL_WRITE_AUTHORITY,
+  OWN_UNDO_MAX_LIVE,
+  OWN_UNDO_ROW_MAX_BYTES,
+  OWN_UNDO_VIAS,
+  OWN_WRITE_AUTHORITIES,
+  TASK_WRITE_AUTHORITY,
+  ownUndoEntrySchema,
+  type OwnUndoEntry,
+  type OwnUndoVia,
+  type OwnWriteAuthority,
+} from './own-undo.js';
 
 // The guards every persisted record shares (TASK-20261010-cross-app-access D8): the SQL
 // statement rules, the ONE credential walk, and the record-identity helpers. `isReadOnlySelect`
@@ -446,6 +480,7 @@ export {
   ACCESS_UNDO_MAX_BYTES,
   ACCESS_UNDO_MAX_ENTRIES,
   ACCESS_UNDO_MAX_ROW_BYTES,
+  ACCESS_UNDO_MAX_STEPS,
   ACCESS_UNDO_TTL_MS,
   ACCESS_WANTS_MAX_BYTES,
   ACCESS_WANTS_MAX_ENTRIES,

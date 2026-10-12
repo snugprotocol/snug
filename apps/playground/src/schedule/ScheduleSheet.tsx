@@ -13,6 +13,9 @@
 // "stretch" — as the reminder's title and message or the ask's title. When nothing is left,
 // the app's name stands in. The clock is the page's (`useNow` for what is shown,
 // `pageClock.now()` in the act), the same one the editor and the rows read.
+//
+// The consent's tick *make changes on its own* mounts OFF here (TASK-20261010-host-broker PR-4,
+// D-PR4-8); the user's tick arms the schedule once it is written (`armIfTicked`).
 
 import type { ReactElement } from 'react';
 import { useEffect, useMemo, useState } from 'react';
@@ -24,11 +27,12 @@ import { getUserDb } from '../state/userdb.js';
 import '../theme/schedule-editor.css';
 import { Button } from '../ui/Button.js';
 import { ConfirmOverlay } from '../ui/ConfirmOverlay.js';
+import { blockedAppsOf } from './askBrain.js';
 import { EMPTY, stepLabel } from './copy.js';
 import { ACTIONS, SENTENCE, SHEET, STEPS } from './copy.editor.js';
 import { describeSpec } from './cron.js';
-import { approvedHostsByApp, remainderOf } from './editorModel.js';
-import { EnableConsent } from './EnableConsent.js';
+import { approvedHostsByApp, lookUpNamesByApp, remainderOf } from './editorModel.js';
+import { EnableConsent, armIfTicked, type EnableChoice } from './EnableConsent.js';
 import { nextWords, pageClock, useNow } from './pageModel.js';
 import { readSchedule } from './parseScheduleText.js';
 import { newScheduleHref } from './routes.js';
@@ -52,6 +56,9 @@ export function ScheduleSheet({ appId, onClose }: ScheduleSheetProps): ReactElem
   const [error, setError] = useState<string | undefined>(undefined);
   const [done, setDone] = useState<string | undefined>(undefined);
   const [hosts, setHosts] = useState<Record<string, string[]>>({});
+  const [lookUps, setLookUps] = useState<Record<string, string[]>>({});
+  /** This app, when no brain here would answer its *ask* step — the consent says so on the step (U1). */
+  const [blocked, setBlocked] = useState<readonly string[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -60,6 +67,8 @@ export function ScheduleSheet({ appId, onClose }: ScheduleSheetProps): ReactElem
       const app = db.getApp(appId);
       if (app !== undefined) setName(app.displayName);
       setHosts(approvedHostsByApp(db, [appId]));
+      setLookUps(lookUpNamesByApp(db, [appId]));
+      setBlocked(blockedAppsOf(db, [appId]));
     });
     return () => {
       cancelled = true;
@@ -85,17 +94,20 @@ export function ScheduleSheet({ appId, onClose }: ScheduleSheetProps): ReactElem
     return { steps: [{ kind: 'app-think', appId, prompt: ask, context: { maxRows: 50 } }], spec, title: (words || stepLabel('app-think', name)).slice(0, SCHEDULE_TITLE_MAX_CHARS) };
   };
 
-  const commit = async (save: { steps: ScheduleStep[]; spec: ScheduleSpec; title: string }): Promise<void> => {
+  const commit = async (save: { steps: ScheduleStep[]; spec: ScheduleSpec; title: string }, choice: EnableChoice = { onItsOwn: false }): Promise<void> => {
     setBusy(true);
     setError(undefined);
     const result = await createTask({ title: save.title, steps: save.steps, spec: save.spec, provenance: 'user' });
+    // The schedule exists from here on: a refused arming leaves it waiting for the user's OK — said, never retried.
+    const refusal = result.ok ? await armIfTicked(result.task.id, choice) : undefined;
     setBusy(false);
     if (!result.ok) {
       setError(result.reason);
       return;
     }
     setConsent(undefined);
-    setDone(ACTIONS.scheduled(nextWords(result.task.spec, pageClock.now(), new Date(result.task.createdAt))));
+    const scheduled = ACTIONS.scheduled(nextWords(result.task.spec, pageClock.now(), new Date(result.task.createdAt)));
+    setDone(refusal === undefined ? scheduled : `${scheduled} — ${refusal}`);
   };
 
   const scheduleIt = (): void => {
@@ -134,9 +146,11 @@ export function ScheduleSheet({ appId, onClose }: ScheduleSheetProps): ReactElem
             now={now}
             appNames={{ [appId]: name }}
             hostsByApp={hosts}
+            connectionsByApp={lookUps}
+            blockedApps={blocked}
             busy={busy}
             {...(error !== undefined ? { error } : {})}
-            onEnable={() => void commit(consent)}
+            onEnable={(choice) => void commit(consent, choice)}
             onNotNow={() => setConsent(undefined)}
           />
         ) : (

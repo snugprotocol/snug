@@ -1,17 +1,21 @@
 # The Snug Protocol whitepaper
 
 Source for **"The Snug Protocol: An Open Protocol for Agent-Backed Personal Software"**
-(Jeetu Maker), **edition 5 — the 1.2 edition** — the design rationale, threat model, and
-security argument behind **Specification 1.2** (wire protocol · portable user database ·
-connected applications · runtime contracts · linked-device connections · access between
-apps, read or write with an undo).
+(Jeetu Maker), **edition 6 — the 1.2 edition, an UNPUBLISHED DRAFT** — the design rationale,
+threat model, and security argument behind **Specification 1.2** (wire protocol · portable user
+database · connected applications · runtime contracts · linked-device connections · access
+between apps, read or write with an undo). Edition 6 is staged across TASK-20261010-host-broker
+PR-4 (a schedule may look things up, and may make its own application's changes on its own,
+with an undo) and PR-5, and is published ONCE with the staged spec revision by the owner; its
+cover reads `1.2 · edition 6 (draft)` until then — drop `(draft)` in the publishing change.
+Edition 5 is the published one.
 
 | | |
 |---|---|
 | **Source** | [`src/paper.html`](src/paper.html) · [`src/paper.css`](src/paper.css) · [`src/figures/`](src/figures/) |
 | **Output** | [`dist/snug-protocol-whitepaper.pdf`](dist/) — A4, 36 pages, 11 figures |
 | **Spec fixture** | [`../spec-drafts/SPEC.md`](../spec-drafts/SPEC.md) + `packages/protocol/schemas/` |
-| **Tasks** | edition 5: `TASK-20261010-host-broker` (PR-3) · edition 4: `TASK-20261010-cross-app-access` · edition 3: `TASK-20260822-spec-10-final` · edition 2: `TASK-20260820-spec-v03-whitepaper` · edition 1: `TASK-20260807-protocol-whitepaper` |
+| **Tasks** | edition 6 (unpublished draft): `TASK-20261010-host-broker` (PR-4, PR-5) · edition 5: `TASK-20261010-host-broker` (PR-3) · edition 4: `TASK-20261010-cross-app-access` · edition 3: `TASK-20260822-spec-10-final` · edition 2: `TASK-20260820-spec-v03-whitepaper` · edition 1: `TASK-20260807-protocol-whitepaper` |
 
 ## Build
 
@@ -28,7 +32,7 @@ assembled single-file HTML in `dist/` for debugging.
 pipeline apply shrink-to-fit to the ENTIRE document (every font scales ×~0.91, the page
 count drops ~12%, and every hand-authored TOC hint goes stale) — found 2026-08-22 when an
 Edition cell briefly rode as a fourth item. Fold new facts into an existing cell
-(`1.2 · edition 5`); a page-count change on rebuild is the tell.
+(`1.2 · edition 6 (draft)`); a page-count change on rebuild is the tell.
 
 **Let the build finish.** It renders through Chrome and then rewrites the PDF's `/Info`
 dictionary; killing it midway leaves a PDF with no author metadata. The checker catches
