@@ -258,3 +258,44 @@ describe('P4 retrieval delivery — build-time queries reach the teaching', () =
     expect(searchKnowledge('mandatory html template').slice(0, 1).map((hit) => hit.file)).not.toContain(KB_FILE);
   });
 });
+
+// TASK-20261010-host-broker PR-4 (AC32e; D-PR4-22): KB 85 learns that a schedule may make changes on
+// its own — ONE sentence in the timer section (only the USER turns that on, for its own app's data,
+// with an undo) and ONE bullet under "What the Host Shows"; NO new heading (the heading tree above
+// stays pinned — the retrieval keys do not move). An app can never arm it: the KB names no seat an
+// app could write.
+describe('PR-4 — KB 85: a schedule may make changes on its own (one sentence, one bullet, no new heading)', () => {
+  const TIMER = "## The Host's Scheduler Is the One Timer";
+  const HANDSHAKE = '## The Scheduled-Run Handshake';
+  const SHOWS = '## What the Host Shows';
+
+  /** The text of one `##` section of the rendered file (up to the next `##` heading). */
+  const section = (heading: string): string => {
+    const text = rendered(KB_FILE);
+    const start = text.indexOf(heading);
+    expect(start, `${heading} is in the file`).toBeGreaterThanOrEqual(0);
+    const next = text.indexOf('\n## ', start + heading.length);
+    return text.slice(start, next === -1 ? undefined : next);
+  };
+
+  it('the timer section carries the sentence: only the user turns it on, for its own app’s data, with an undo', () => {
+    expect(rendered(KB_FILE).indexOf(HANDSHAKE)).toBeGreaterThan(rendered(KB_FILE).indexOf(TIMER));
+    expect(prose(section(TIMER))).toMatch(/[Aa] schedule may make changes on its own — only the user turns that on, for its own app's data, with an undo/);
+  });
+
+  it('"What the Host Shows" gains one bullet about the changes a schedule made on its own, with their undo', () => {
+    const bullets = section(SHOWS)
+      .split('\n')
+      .filter((line) => /^\s*[-*] /.test(line));
+    const about = bullets.filter((line) => /on its own/.test(line));
+    expect(about, 'one bullet names it').toHaveLength(1);
+    expect(prose(section(SHOWS))).toMatch(/undo/);
+  });
+
+  it('NEGATIVE: the KB names no seat an app could write to arm it — the user turns it on in the host', () => {
+    const text = rendered(KB_FILE);
+    expect(text).not.toContain('writeAuthority');
+    expect(text).not.toContain('ownUndo:');
+    expect(prose(text)).not.toMatch(/your app (can|may) (turn|switch) (it|this) on/i);
+  });
+});

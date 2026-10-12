@@ -21,10 +21,13 @@ import { createRequire } from 'node:module';
 import { admitConnectionRequirement, type AdmissionChannel } from '@snugprotocol/auth';
 import { createMemoryBackend, openUserDb, type ConnectionAdmissionGate, type UserDb } from '@snugprotocol/db';
 import {
+  FRAME_TYPES,
+  PROTOCOL_VERSION,
   SCHEDULE_DAILY_CEILINGS,
   SCHEDULE_NOTIFY_BODY_MAX_CHARS,
   SCHEDULE_PROPOSAL_TTL_MS,
   SCHEDULE_RUN_MAX_BYTES,
+  scheduleRunSchema,
   type ScheduleRun,
   type ScheduleStep,
   type ScheduledTask,
@@ -805,5 +808,229 @@ describe('a step outcome that says `capped` (TASK-20261010-host-broker PR-1)', (
     expect(out).toMatchObject({ status: 'refused', capped: true, summary: 'daily AI call limit reached — resumes tomorrow', calls: { ai: 0, net: 0 } });
     const plain = finalizeOutcome({ status: 'ok', summary: 'done', calls: { ai: 0, net: 0 } });
     expect(plain).not.toHaveProperty('capped');
+  });
+});
+
+// ================================================================================================
+// TASK-20261010-host-broker PR-4 (contract v2 D-PR4-11, D-PR4-15, D-PR4-17; AC29 late fold, AC31):
+// the WALK at the pooling point — after every step, BEFORE the run row is written — for a task the
+// file holds ARMED; the row's new seats through `fitRunRow` and the M17 row; a late outcome's calls.
+// Real queue, real walk, real Write Broker, real memory user db — the executor is the recorder.
+// ================================================================================================
+
+describe('PR-4 — an armed run applies at the pooling point (D-PR4-11)', () => {
+  const ARMED_AT = '2026-10-05T09:00:00.000Z';
+  const armedOver = (rowsPerRun = 200): Partial<ScheduledTask> =>
+    ({ steps: [THINK], appVersions: { ledger: 1 }, writeAuthority: { rowsPerRun, armedAt: ARMED_AT, armedVersion: 1 } }) as unknown as Partial<ScheduledTask>;
+  type AppliedRow = ScheduleRun & { applied?: { appId: string; undoId?: string; undoable?: false; items: Array<{ summary?: string; changes: number }> } };
+  const NOTE = (id: number) => ({ appId: 'ledger', sql: `UPDATE notes SET done = 1 WHERE id = ${id}`, summary: `mark ${id}`, counts: { changes: 1 } });
+
+  async function ledgerRows(): Promise<unknown[][]> {
+    const answer = await db.driver.handle('ledger', { v: PROTOCOL_VERSION, type: FRAME_TYPES.dbRequest, requestId: `q-${Math.random()}`, instanceId: 'check', op: 'exec', sql: 'SELECT id, done FROM notes ORDER BY id' } as never);
+    return answer.ok ? (answer.rows ?? []) : [];
+  }
+
+  beforeEach(async () => {
+    // The own journal's liveness reads the WALL clock; the queue's is injected (NOW_MS). Only `Date` is
+    // faked, at NOW_MS, so an entry stamped by the walk is live when the row is read (no clock bomb).
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(NOW_MS);
+    await db.applyAppDdl('ledger', ['CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT, done INTEGER NOT NULL DEFAULT 0)']);
+    const seeded = await db.driver.handle('ledger', {
+      v: PROTOCOL_VERSION,
+      type: FRAME_TYPES.dbRequest,
+      requestId: 'seed',
+      instanceId: 'seed',
+      op: 'exec',
+      sql: "INSERT INTO notes (id, body, done) VALUES (1, 'a', 0), (2, 'b', 0), (3, 'c', 0)",
+    } as never);
+    if (!seeded.ok) throw new Error('seed failed');
+  });
+
+  it('the run’s ok step’s items apply BEFORE the run row is written: claim → claim + applied → the final row (still carrying applied); the data changed; the entry is journaled', async () => {
+    const t = seed(armedOver());
+    const writes: AppliedRow[] = [];
+    const putRun = db.putScheduleRun.bind(db);
+    vi.spyOn(db, 'putScheduleRun').mockImplementation((row) => {
+      writes.push(JSON.parse(JSON.stringify(row)) as AppliedRow);
+      putRun(row);
+    });
+    const q = queue(recorder(() => ok('tidied', { ai: 1, net: 0 }, { proposals: [NOTE(1), NOTE(2)] })).execute);
+    q.enqueue(item(t));
+    await q.idle();
+    expect(writes.map((row) => [row.status, row.applied !== undefined])).toEqual([
+      ['running', false],
+      ['running', true],
+      ['ok', true],
+    ]);
+    const final = rows()[0] as AppliedRow;
+    expect(final.applied).toMatchObject({ appId: 'ledger', items: [{ summary: 'mark 1', changes: 1 }, { summary: 'mark 2', changes: 1 }] });
+    expect(final.proposals, 'nothing is left waiting').toBeUndefined();
+    expect(await ledgerRows()).toEqual([
+      [1, 1],
+      [2, 1],
+      [3, 0],
+    ]);
+    expect((db as unknown as { listOwnUndo(appId: string, filter: { taskId: string }): Array<{ id: string }> }).listOwnUndo('ledger', { taskId: 't1' }).map((entry) => entry.id)).toEqual([final.applied!.undoId]);
+  });
+
+  it('held items stay waiting beside the applied group, each with its reason (rowsPerRun 1: one applied, one over-limit)', async () => {
+    const t = seed(armedOver(1));
+    const q = queue(recorder(() => ok('tidied', { ai: 1, net: 0 }, { proposals: [NOTE(1), NOTE(2)] })).execute);
+    q.enqueue(item(t));
+    await q.idle();
+    const final = rows()[0] as AppliedRow;
+    expect(final.applied?.items).toEqual([{ summary: 'mark 1', changes: 1 }]);
+    expect(final.proposals?.items).toEqual([{ ...NOTE(2), held: 'over-limit' }]);
+  });
+
+  it('an ABORTED run applies nothing (cancel, timeout, pause, file swap): its items stay waiting, held stopped', async () => {
+    const t = seed({ ...armedOver(), steps: [THINK, THINK] } as Partial<ScheduledTask>);
+    const started = deferred<undefined>();
+    let n = 0;
+    const q = queue(
+      recorder((_step, ctx) => {
+        n += 1;
+        if (n === 1) return ok('first', { ai: 1, net: 0 }, { proposals: [NOTE(1)] });
+        return hanging(started)(THINK, ctx);
+      }).execute,
+    );
+    q.enqueue(item(t));
+    await started.promise;
+    q.cancelCurrent();
+    await q.idle();
+    const final = rows()[0] as AppliedRow;
+    expect(final.status).toBe('interrupted');
+    expect(final.applied).toBeUndefined();
+    expect(final.proposals?.items).toEqual([{ ...NOTE(1), held: 'stopped' }]);
+    expect(await ledgerRows()).toEqual([
+      [1, 0],
+      [2, 0],
+      [3, 0],
+    ]);
+  });
+
+  it('only items of steps whose status is ok are armable: a failed step’s items stay waiting UNHELD; the ok step’s apply', async () => {
+    const t = seed({ ...armedOver(), steps: [THINK, THINK] } as Partial<ScheduledTask>);
+    let n = 0;
+    const q = queue(
+      recorder(() => {
+        n += 1;
+        return n === 1
+          ? { status: 'failed', summary: 'half done', calls: { ai: 1, net: 0 }, proposals: [NOTE(1)] }
+          : ok('second', { ai: 1, net: 0 }, { proposals: [NOTE(2)] });
+      }).execute,
+    );
+    q.enqueue(item(t));
+    await q.idle();
+    const final = rows()[0] as AppliedRow;
+    expect(final.applied?.items).toEqual([{ summary: 'mark 2', changes: 1 }]);
+    expect(final.proposals?.items).toEqual([NOTE(1)]);
+    expect(final.proposals?.items[0]).not.toHaveProperty('held');
+    expect(await ledgerRows()).toEqual([
+      [1, 0],
+      [2, 1],
+      [3, 0],
+    ]);
+  });
+
+  it('an UNARMED task’s items stay waiting exactly as before — no walk, no held, no applied', async () => {
+    const t = seed({ steps: [THINK], appVersions: { ledger: 1 } });
+    const q = queue(recorder(() => ok('tidied', { ai: 1, net: 0 }, { proposals: [NOTE(1)] })).execute);
+    q.enqueue(item(t));
+    await q.idle();
+    const final = rows()[0] as AppliedRow;
+    expect(final.applied).toBeUndefined();
+    expect(final.proposals?.items).toEqual([NOTE(1)]);
+    expect(await ledgerRows()).toEqual([
+      [1, 0],
+      [2, 0],
+      [3, 0],
+    ]);
+  });
+
+  it('M17: when the final row is refused, the minimal row still carries the applied group (the change happened)', async () => {
+    const t = seed(armedOver());
+    const putRun = db.putScheduleRun.bind(db);
+    let writes = 0;
+    vi.spyOn(db, 'putScheduleRun').mockImplementation((row) => {
+      writes += 1;
+      if (writes === 3) throw new Error('refused: too big');
+      putRun(row);
+    });
+    const q = queue(recorder(() => ok('tidied', { ai: 1, net: 0 }, { proposals: [NOTE(1)] })).execute);
+    q.enqueue(item(t));
+    await q.idle();
+    expect(writes).toBe(4);
+    const final = rows()[0] as AppliedRow;
+    expect(final).toMatchObject({ status: 'ok', reason: 'result too large' });
+    expect(final.applied).toMatchObject({ appId: 'ledger', items: [{ summary: 'mark 1', changes: 1 }] });
+  });
+});
+
+describe('PR-4 — fitRunRow drops proposals BEFORE applied, and never applied (D-PR4-17)', () => {
+  it('a row over the cap with summaries, proposals and an applied group: summaries go, then proposals — the applied group stays', () => {
+    const longSql = (id: number) => `UPDATE notes SET body = '${'x'.repeat(1990)}' WHERE id = ${id}`;
+    const fat = {
+      id: 'r',
+      taskId: 't1',
+      dueAt: DUE,
+      trigger: 'due',
+      collapsedCount: 1,
+      status: 'ok',
+      host: { kind: 'web' },
+      steps: Array.from({ length: 5 }, () => ({ status: 'ok' as const, summary: 'y'.repeat(4096) })),
+      calls: { ai: 0, net: 0 },
+      proposals: { items: [1, 2, 3].map((id) => ({ appId: 'ledger', sql: longSql(id), summary: 's'.repeat(300), held: 'over-limit' })), expiresAt: DUE },
+      applied: { appId: 'ledger', undoId: '3f2b8c1e-7a4d-4e5f-9b6a-1c2d3e4f5a6b', items: [1, 2, 3].map(() => ({ summary: 'a'.repeat(300), changes: 1 })) },
+    } as unknown as ScheduleRun;
+    const { proposals: _p, ...withoutProposals } = fat;
+    const { steps: _s, ...bareish } = fat;
+    expect(new TextEncoder().encode(JSON.stringify({ ...bareish, steps: fat.steps.map(({ status }) => ({ status })) })).length, 'bare WITH proposals is still over the cap').toBeGreaterThan(SCHEDULE_RUN_MAX_BYTES);
+    expect(withoutProposals).toBeDefined();
+    const fitted = fitRunRow(fat) as ScheduleRun & { applied?: unknown };
+    expect(scheduleRunSchema.safeParse(fitted).success, 'the fitted row is a row the file admits').toBe(true);
+    expect(new TextEncoder().encode(JSON.stringify(fitted)).length).toBeLessThanOrEqual(SCHEDULE_RUN_MAX_BYTES);
+    expect(fitted.proposals).toBeUndefined();
+    expect(fitted.applied).toEqual((fat as ScheduleRun & { applied?: unknown }).applied);
+  });
+
+  it('a row that fits with its applied group is left untouched', () => {
+    const row = {
+      id: 'r',
+      taskId: 't1',
+      dueAt: DUE,
+      trigger: 'due',
+      collapsedCount: 1,
+      status: 'ok',
+      host: { kind: 'web' },
+      steps: [{ status: 'ok', summary: 'fine' }],
+      calls: { ai: 0, net: 0 },
+      applied: { appId: 'ledger', undoable: false, items: [{ changes: 2 }] },
+    } as unknown as ScheduleRun;
+    expect(fitRunRow(row)).toBe(row);
+  });
+});
+
+describe('PR-4 — a late outcome’s calls are folded when it settles (D-PR4-15; AC29)', () => {
+  it('a step that loses the bound race and answers LATER still charges the day with the calls it spent', async () => {
+    vi.useFakeTimers();
+    db.setSchedulerState({ watermark: CREATED, globalPause: false, daily: { date: '2026-10-09', ai: 0, net: 0 } });
+    const t = seed({ steps: [THINK] });
+    const late = deferred<StepOutcome>();
+    const started = deferred<undefined>();
+    const q = queue(async () => {
+      started.resolve(undefined);
+      return late.promise; // ignores the signal; answers only when told
+    });
+    q.enqueue(item(t));
+    await started.promise;
+    await vi.advanceTimersByTimeAsync(DEFAULT_RUN_BOUNDS.thinkMs);
+    await q.idle();
+    expect(rows()[0]).toMatchObject({ status: 'interrupted', reason: 'timeout' });
+    expect(db.getSchedulerState()?.daily).toEqual({ date: '2026-10-09', ai: 0, net: 0 });
+    late.resolve({ status: 'ok', summary: 'too late', calls: { ai: 7, net: 3 } });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(db.getSchedulerState()?.daily, 'the calls it spent are the user’s budget all the same').toEqual({ date: '2026-10-09', ai: 7, net: 3 });
   });
 });

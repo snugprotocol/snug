@@ -17,11 +17,12 @@ import { MemoryRouter, Route, Routes, type NavigateFunction, type NavigateOption
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { UserDb } from '@snugprotocol/db';
-import { RUN_STATUSES, SCHEDULE_PROPOSAL_TTL_MS, type ScheduleProposalItem, type ScheduleRun, type ScheduleStep, type ScheduledTask } from '@snugprotocol/protocol';
+import { RUN_STATUSES, SCHEDULE_HELD_REASONS, SCHEDULE_PROPOSAL_TTL_MS, type ScheduleProposalItem, type ScheduleRun, type ScheduleStep, type ScheduledTask } from '@snugprotocol/protocol';
 
+import { ACCESS_SHEET, OWN_UNDO } from '../access/copy.js';
 import type { SnugPlatform } from '../platform/platform.js';
-import { RESULT_STATUS_WORD, capped, needsYouDeclined, needsYouUnanswered, noHandler } from '../schedule/copy.js';
-import { CAPPED_WHAT, DECLINED, DRIFTED, EXPIRED, NO_APP_FOR_CHANGES, RESULT_MISSING, applied, callsLine, hostWord, interruptedWhy, needsYouTitle, openingToRun, wouldChange } from '../schedule/copy.result.js';
+import { RESULT_STATUS_WORD, WORDS, capped, needsYouDeclined, needsYouUnanswered, noHandler } from '../schedule/copy.js';
+import { CAPPED_WHAT, DECLINED, DRIFTED, EXPIRED, HELD_WHY, NO_APP_FOR_CHANGES, RESULT_MISSING, applied, callsLine, hostWord, interruptedWhy, needsYouTitle, openingToRun, wouldChange } from '../schedule/copy.result.js';
 import type { StepContext, StepExecutor } from '../schedule/engine-types.js';
 import { outcomeWord } from '../schedule/MissedCard.js';
 import type { AppIndex } from '../schedule/pageModel.js';
@@ -588,5 +589,377 @@ describe('copy.result — the pure sentences', () => {
     expect(wouldChange(undefined)).toBe('row count unknown');
     expect(applied([1])).toBe('applied — 1 row changed');
     expect(applied([2, 3])).toBe('applied — 5 rows changed');
+  });
+});
+
+// =============================================================================================
+// TASK-20261010-host-broker PR-4 — the result page (D-PR4-18, D-PR4-6, D-PR4-15; D2, D7, D8, D13,
+// D18, D19; AC31, AC32). Two sections, in order: *changes it made* (`WORDS.changesMade`) — a task's
+// group reads *changed 12 rows in Ledger on its own · undo*, the user's approve *you applied this —
+// 2 rows changed · undo* (now PERSISTED as the run's `applied` group, so a reload keeps it), *undone*
+// after an undo, *undo ended after seven days* past it, *· can’t be undone* when `undoable:false`;
+// then *changes waiting for your OK*, each held item with ONE line `HELD_WHY[reason]` above its acts.
+// *stop making changes on its own* appears ONCE, under the header's when-line. Each step has ONE
+// host line `stepFacts` (where · saw · tools — the word *background* never shown). `blockedBy:'brain'`
+// is its own state with the one act *open Settings*, never *needs your OK*. The undo's armed confirm
+// moves focus to *keep* when it arms and to the outcome line when answered; the group is
+// `role="group"` named by its question; at 375 px the line wraps (`field-row-wrap`).
+//
+// Clocks: every own-undo entry is seeded relative to the REAL clock (the db's liveness reads it,
+// like the batch's expiry above) — never a fixed instant against the wall clock.
+//
+// Assumed (lane T-C questions): `schedule-result-made` (section) · `schedule-made-group` ·
+// `schedule-change-held` · `schedule-result-on-its-own` · `schedule-result-step-facts` ·
+// `schedule-result-brain` · `schedule-result-changes-link`; the journal accessors
+// `db.putOwnUndo(appId, bucket, entry)` / `db.listOwnUndo(appId, {taskId} | {bucket:'approval'})`
+// with a task's bucket being its id; a task group vs the user's is told apart by the implementation.
+// =============================================================================================
+
+const U_TASK = '7d1e2f3a-4b5c-4d6e-8f70-81a2b3c4d5e6';
+const U_GONE = '0a1b2c3d-4e5f-4a6b-9c7d-8e9f0a1b2c3d';
+const ARMED = { rowsPerRun: 200, armedAt: '2026-10-08T09:00:00.000Z', armedVersion: 1 };
+const armedTask = (over: Partial<ScheduledTask> = {}): ScheduledTask => task({ writeAuthority: ARMED, ...over } as Partial<ScheduledTask>);
+
+/** A live task-bucket entry for the two coffees (rowid 1 and 3), seeded relative to the real clock. */
+function taskEntry(id: string, rows = 2): Record<string, unknown> {
+  const at = Date.now() - 3 * 3_600_000;
+  return {
+    id,
+    at: new Date(at).toISOString(),
+    expiresAt: new Date(at + 7 * 86_400_000).toISOString(),
+    authority: 'task',
+    via: 'schedule',
+    runId: 'r1',
+    taskId: 't1',
+    steps: [
+      {
+        table: 'expenses',
+        op: 'update',
+        columns: ['cents'],
+        rows: Array.from({ length: rows }, (_, i) => ({ rowid: i + 1, before: [450], after: [999] })),
+      },
+    ],
+  };
+}
+
+const appliedGroup = (over: Record<string, unknown> = {}): Record<string, unknown> => ({ appId: 'ledger', undoId: U_TASK, items: [{ summary: 'Tidied the coffees', changes: 12 }], ...over });
+
+const heldBatch = (reason: string): NonNullable<ScheduleRun['proposals']> =>
+  batch([{ appId: 'ledger', sql: SQL, summary: 'Set both coffees to 9.99', counts: { changes: 2 }, held: reason } as ScheduleProposalItem]);
+
+describe('PR-4 — two sections, in order: changes it made, then changes waiting for your OK (D-PR4-18)', () => {
+  it('a task’s group reads *changed 12 rows in Ledger on its own · undo*, ABOVE the held item, whose one line sits above its acts', async () => {
+    seed(armedTask(), run({ applied: appliedGroup(), proposals: heldBatch('over-limit') } as Partial<ScheduleRun>));
+    db.putOwnUndo('ledger', 't1', taskEntry(U_TASK, 12));
+    await initScheduler(deps());
+    const el = await open();
+    const made = el.querySelector('[data-testid="schedule-result-made"]');
+    const waiting = el.querySelector('[data-testid="schedule-result-changes"]');
+    expect(made?.querySelector('h2')?.textContent).toBe(WORDS.changesMade);
+    expect(WORDS.changesMade).toBe('changes it made');
+    expect(waiting?.querySelector('h2')?.textContent).toBe(WORDS.changesWaiting);
+    expect(made!.compareDocumentPosition(waiting!) & Node.DOCUMENT_POSITION_FOLLOWING, 'changes it made comes first').toBeTruthy();
+    const group = made?.querySelector('[data-testid="schedule-made-group"]');
+    expect(group?.textContent).toBe('changed 12 rows in Ledger on its own · undo');
+    expect(group?.querySelector('button')?.textContent).toBe(ACCESS_SHEET.undo);
+    expect(group?.className, 'at 375 px the line and its undo wrap').toContain('field-row-wrap');
+    const held = waiting?.querySelector('[data-testid="schedule-change-held"]');
+    expect(held?.textContent).toBe('not made — it would pass the 200 rows this schedule may change each time');
+    const apply = button(el, 'apply to my data');
+    expect(held!.compareDocumentPosition(apply!) & Node.DOCUMENT_POSITION_FOLLOWING, 'the line sits above its acts').toBeTruthy();
+  });
+
+  it.each([...(SCHEDULE_HELD_REASONS ?? [])])('a %s item carries HELD_WHY’s one line, verbatim', async (reason) => {
+    seed(armedTask(), run({ proposals: heldBatch(reason) }));
+    await initScheduler(deps());
+    const el = await open();
+    const entry = (HELD_WHY as Record<string, string | ((appName: string) => string)>)[reason];
+    const expected = typeof entry === 'function' ? entry('Ledger') : entry;
+    expect(el.querySelectorAll('[data-testid="schedule-change-held"]')).toHaveLength(1);
+    expect(el.querySelector('[data-testid="schedule-change-held"]')?.textContent).toBe(expected);
+  });
+
+  it('the seven held sentences, byte for byte (the busy one names the app)', async () => {
+    const lines: Record<string, string> = {};
+    for (const reason of SCHEDULE_HELD_REASONS) {
+      seed(armedTask(), run({ proposals: heldBatch(reason) }));
+      schedulerStore.set({ ...initialSchedulerView(), ready: true, tasks: [armedTask()], runsByTask: { t1: [run({ proposals: heldBatch(reason) })] } });
+      const el = await open();
+      lines[reason] = el.querySelector('[data-testid="schedule-change-held"]')?.textContent ?? '';
+      unmountNow();
+    }
+    expect(lines).toEqual({
+      'cannot-undo': 'not made — it couldn’t be undone, so it waits for you (applying it here can’t be undone either)',
+      'over-limit': 'not made — it would pass the 200 rows this schedule may change each time',
+      busy: 'not made — Ledger was in the middle of a change',
+      stopped: 'not made — it was stopped from making changes on its own',
+      changed: 'not made — the data moved since the AI looked',
+      full: 'not made — 20 earlier changes can still be undone; it will make changes again as they age out',
+      failed: 'not made — something went wrong; nothing was changed',
+    });
+  });
+
+  it('NEGATIVE: an unheld item (an unarmed run’s) carries no held line', async () => {
+    seed(task(), run({ proposals: batch() }));
+    await initScheduler(deps());
+    const el = await open();
+    expect(el.querySelector('[data-testid="schedule-change-held"]')).toBeNull();
+    expect(el.querySelector('[data-testid="schedule-result-made"]'), 'nothing was made — no first section').toBeNull();
+  });
+
+  it('`undoable:false`: the group says it can’t be undone and offers no undo', async () => {
+    seed(armedTask(), run({ applied: appliedGroup({ undoId: undefined, undoable: false }) } as Partial<ScheduleRun>));
+    await initScheduler(deps());
+    const el = await open();
+    const group = el.querySelector('[data-testid="schedule-made-group"]');
+    expect(group?.textContent).toBe('changed 12 rows in Ledger on its own · can’t be undone');
+    expect(group?.querySelector('button')).toBeNull();
+  });
+
+  it('past its seven days (the journal holds it no longer): *undo ended after seven days*, no undo', async () => {
+    seed(armedTask(), run({ applied: appliedGroup({ undoId: U_GONE }) } as Partial<ScheduleRun>));
+    await initScheduler(deps());
+    const el = await open();
+    const group = el.querySelector('[data-testid="schedule-made-group"]');
+    expect(group?.textContent).toBe('changed 12 rows in Ledger on its own · undo ended after seven days');
+    expect(group?.querySelector('button')).toBeNull();
+  });
+
+  it('each result links to the schedule’s changes list, so an undo is findable for its whole seven days', async () => {
+    seed(armedTask(), run({ applied: appliedGroup() } as Partial<ScheduleRun>));
+    db.putOwnUndo('ledger', 't1', taskEntry(U_TASK, 12));
+    await initScheduler(deps());
+    const el = await open();
+    const link = el.querySelector<HTMLAnchorElement>('[data-testid="schedule-result-changes-link"]');
+    expect(link).not.toBeNull();
+    expect(link?.getAttribute('href') ?? '').toMatch(/^\/schedule\b.*t1/);
+  });
+});
+
+describe('PR-4 — the user’s approve is PERSISTED as an `approved` entry, with its undo (D-PR4-6, D-PR4-18, D-PR4-19; v2.1 note N1)', () => {
+  it('apply → the run row carries `approved` (no SQL), the approval bucket journals it as the user’s, and the first section reads *you applied this — 2 rows changed · undo*; a reload keeps it', async () => {
+    seed(task(), run({ proposals: batch() }));
+    await initScheduler(deps());
+    let el = await open();
+    await act(async () => {
+      button(el, 'apply to my data')?.click();
+    });
+    await vi.waitFor(async () => expect(await coffeeCents()).toEqual([999, 999]));
+    // v2.1 note N1 (orchestrator, moved from `applied`): the run's `applied` seat is the TASK's own group;
+    // the user's approve of an item is ONE `approved` entry, so both can sit on one run.
+    await vi.waitFor(() => expect((db.listScheduleRuns('t1')[0] as { approved?: unknown }).approved).toBeDefined());
+    const approvedSeat = (db.listScheduleRuns('t1')[0] as { approved?: Array<{ appId: string; undoId?: string; summary?: string; changes: number }> }).approved!;
+    expect(approvedSeat).toHaveLength(1);
+    const group = approvedSeat[0]!;
+    expect(group).toMatchObject({ appId: 'ledger', summary: 'Set both coffees to 9.99', changes: 2 });
+    expect((db.listScheduleRuns('t1')[0] as { applied?: unknown }).applied, 'the task’s seat stays absent').toBeUndefined();
+    expect(JSON.stringify(group), 'no SQL in the group').not.toContain('UPDATE');
+    const journal = db.listOwnUndo('ledger', { bucket: 'approval' });
+    expect(journal).toHaveLength(1);
+    expect(journal[0]).toMatchObject({ id: group.undoId, authority: 'approval', via: 'user' });
+    await settle();
+    expect(el.querySelector('[data-testid="schedule-made-group"]')?.textContent).toBe('you applied this — 2 rows changed · undo');
+
+    unmountNow();
+    el = await open();
+    expect(el.querySelector('[data-testid="schedule-made-group"]')?.textContent, 'a reload keeps it').toBe('you applied this — 2 rows changed · undo');
+  });
+
+  it('undo: armed confirm (role=group named by its question) with focus on *keep*; keep backs out; *yes, undo* puts the rows back and focuses the outcome', async () => {
+    seed(task(), run({ proposals: batch() }));
+    await initScheduler(deps());
+    const el = await open();
+    await act(async () => {
+      button(el, 'apply to my data')?.click();
+    });
+    await vi.waitFor(() => expect(el.querySelector('[data-testid="schedule-made-group"] button')).not.toBeNull());
+    const undoButton = (): HTMLButtonElement | null => el.querySelector<HTMLButtonElement>('[data-testid="schedule-made-group"] button');
+    await act(async () => {
+      undoButton()?.click();
+    });
+    await settle();
+    const question = OWN_UNDO.arm(2, 'Ledger');
+    const confirm = el.querySelector(`[role="group"][aria-label="${question}"]`);
+    expect(confirm, 'the group is named by its question').not.toBeNull();
+    expect(confirm?.textContent).toContain(question);
+    expect(document.activeElement?.textContent, 'focus moves to keep when it arms').toBe(ACCESS_SHEET.undoKeep);
+    await act(async () => {
+      button(el, ACCESS_SHEET.undoKeep)?.click();
+    });
+    await settle();
+    expect(el.querySelector(`[role="group"][aria-label="${question}"]`)).toBeNull();
+    expect(await coffeeCents(), 'keep undid nothing').toEqual([999, 999]);
+
+    await act(async () => {
+      undoButton()?.click();
+    });
+    await settle();
+    await act(async () => {
+      button(el, ACCESS_SHEET.undoYes)?.click();
+    });
+    await vi.waitFor(async () => expect(await coffeeCents()).toEqual([450, 500]));
+    await settle();
+    const group = el.querySelector('[data-testid="schedule-made-group"]');
+    expect(group?.textContent).toContain(ACCESS_SHEET.undone);
+    expect(group?.querySelector('button'), 'no second undo').toBeNull();
+    expect(document.activeElement?.textContent, 'focus moves to the outcome line when answered').toContain(ACCESS_SHEET.undone);
+    expect(db.listOwnUndo('ledger', { bucket: 'approval' }), 'the entry is no longer live').toHaveLength(0);
+  });
+
+  it('a task’s group undoes through ITS bucket: the rows go back and the task’s journal holds it no longer', async () => {
+    // The live rows are the AFTER values the entry captured — the undo re-validates against them.
+    await db.driver.handle('ledger', execFrame("UPDATE expenses SET cents = 999 WHERE label = 'coffee'"));
+    const entry = taskEntry(U_TASK, 1);
+    seed(armedTask(), run({ applied: appliedGroup({ items: [{ changes: 1 }] }) } as Partial<ScheduleRun>));
+    db.putOwnUndo('ledger', 't1', entry);
+    await initScheduler(deps());
+    const el = await open();
+    const group = el.querySelector('[data-testid="schedule-made-group"]');
+    expect(group?.textContent).toBe('changed 1 row in Ledger on its own · undo');
+    await act(async () => {
+      group?.querySelector<HTMLButtonElement>('button')?.click();
+    });
+    await settle();
+    await act(async () => {
+      button(el, ACCESS_SHEET.undoYes)?.click();
+    });
+    await vi.waitFor(async () => expect(await coffeeCents()).toEqual([450, 999]));
+    expect(db.listOwnUndo('ledger', { taskId: 't1' })).toHaveLength(0);
+  });
+});
+
+describe('PR-4 — the one *stop*, under the header (D-PR4-18; D7)', () => {
+  it('an armed schedule’s result says so under the when-line, with ONE act *stop* — which clears the authority', async () => {
+    seed(armedTask(), run());
+    await initScheduler(deps());
+    const el = await open();
+    const line = el.querySelector('[data-testid="schedule-result-on-its-own"]');
+    expect(line?.textContent).toBe('this schedule makes changes on its own · stop');
+    const when = el.querySelector('[data-testid="schedule-result-when"]');
+    expect(when!.compareDocumentPosition(line!) & Node.DOCUMENT_POSITION_FOLLOWING, 'under the when-line').toBeTruthy();
+    expect([...el.querySelectorAll('button')].filter((b) => /^stop\b/.test(b.textContent?.trim() ?? '')), 'stop appears ONCE').toHaveLength(1);
+    await act(async () => {
+      line?.querySelector<HTMLButtonElement>('button')?.click();
+    });
+    await vi.waitFor(() => expect(db.getScheduledTask('t1')?.writeAuthority).toBeUndefined());
+    expect(db.getScheduledTask('t1')?.disarmed, 'the user did this — no trace').toBeUndefined();
+    await settle();
+    expect(el.querySelector('[data-testid="schedule-result-on-its-own"]')).toBeNull();
+  });
+
+  it('NEGATIVE: an unarmed schedule’s result has no such line and no stop', async () => {
+    seed(task(), run());
+    await initScheduler(deps());
+    const el = await open();
+    expect(el.querySelector('[data-testid="schedule-result-on-its-own"]')).toBeNull();
+    expect(el.textContent).not.toContain('makes changes on its own');
+  });
+});
+
+describe('PR-4 — each step’s ONE host line, stepFacts (D-PR4-18; D18, R-88)', () => {
+  const facts = (el: HTMLElement): string[] => [...el.querySelectorAll('[data-testid="schedule-result-step-facts"]')].map((n) => n.textContent ?? '');
+
+  it('an ask step: Snug did it itself — the app didn’t open; a tools step that needed nothing says so, joined by a middle dot', async () => {
+    seed(task(), run({ steps: [{ status: 'ok', summary: 'fine', tools: { used: 0 } } as never] }));
+    await initScheduler(deps());
+    const el = await open();
+    expect(facts(el)).toEqual(['Snug did this itself — Ledger didn’t open · didn’t need to look anything up']);
+  });
+
+  it('a tool-free ask step says only where it ran', async () => {
+    seed(task(), run());
+    await initScheduler(deps());
+    const el = await open();
+    expect(facts(el)).toEqual(['Snug did this itself — Ledger didn’t open']);
+  });
+
+  it('a run step: in the open app, or out of sight while it was closed — never the word *background*', async () => {
+    const RUN: ScheduleStep = { kind: 'app-run', appId: 'ledger' };
+    seed(task({ steps: [RUN, RUN] }), run({ steps: [{ status: 'ok', inOpenApp: true } as never, { status: 'ok' }] }));
+    await initScheduler(deps());
+    const el = await open();
+    expect(facts(el)).toEqual(['ran in Ledger while it was open', 'ran Ledger out of sight while it was closed']);
+    expect(el.textContent).not.toMatch(/\bbackground\b/i);
+  });
+
+  it('what it saw (R-88 closed): one shared table is named with its app; more than two fold into a count', async () => {
+    seed(
+      task(),
+      run({
+        steps: [{ status: 'ok', saw: [{ source: 'Budget', table: 'transactions' }] } as never],
+      }),
+    );
+    await initScheduler(deps());
+    let el = await open();
+    expect(facts(el)[0]).toBe('Snug did this itself — Ledger didn’t open · read Budget’s transactions (you allowed it)');
+    unmountNow();
+    schedulerStore.set({
+      ...initialSchedulerView(),
+      ready: true,
+      tasks: [task()],
+      runsByTask: {
+        t1: [
+          run({
+            steps: [
+              {
+                status: 'ok',
+                saw: [
+                  { source: 'Budget', table: 'transactions' },
+                  { source: 'Budget', table: 'budgets' },
+                  { source: 'Standup', table: 'notes' },
+                ],
+              } as never,
+            ],
+          }),
+        ],
+      },
+    });
+    el = await open();
+    expect(facts(el)[0]).toContain('read 3 tables from 2 apps you allowed');
+  });
+
+  it('what it looked up, through which connection (slot names on the row, the connection’s name on the page)', async () => {
+    db.putDeclaredConnection(
+      'ledger',
+      'spotify',
+      {
+        slot: 'spotify',
+        kind: 'api_key',
+        provider: { name: 'Spotify' },
+        fields: [{ key: 'api_key', label: 'API key', type: 'secret' }],
+        request: { headerTemplate: { Authorization: 'Bearer {{api_key}}' } },
+        declaredApiHosts: ['api.spotify.example'],
+      },
+      'inference',
+    );
+    db.approveConnection('ledger', 'spotify');
+    seed(task(), run({ steps: [{ status: 'ok', tools: { used: 3, fetched: [{ connection: 'spotify', calls: 3 }] } } as never] }));
+    await initScheduler(deps());
+    const el = await open();
+    expect(facts(el)[0]).toBe('Snug did this itself — Ledger didn’t open · looked things up 3 times through Spotify');
+  });
+
+  it('a brain that could not look things up: the step says so on the result too', async () => {
+    seed(task(), run({ steps: [{ status: 'ok', tools: { unavailable: 'brain' } } as never] }));
+    await initScheduler(deps());
+    const el = await open();
+    expect(facts(el)[0]).toContain('without looking things up');
+  });
+});
+
+describe('PR-4 — blockedBy:"brain" is its own state: *open Settings*, never *needs your OK* (D-PR4-15; D13)', () => {
+  it('a step refused because the brain is the demo or keyless: the one act opens Settings; no needs-you card, no run-now act', async () => {
+    seed(task(), run({ status: 'needs-you', reason: 'refused', steps: [{ status: 'refused', blockedBy: 'brain', summary: 'refused' } as never] }));
+    await initScheduler(deps());
+    const el = await open();
+    const card = el.querySelector('[data-testid="schedule-result-brain"]');
+    expect(card).not.toBeNull();
+    const act1 = [...(card?.querySelectorAll('a, button') ?? [])];
+    expect(act1).toHaveLength(1);
+    expect(act1[0]?.textContent).toBe('open Settings');
+    expect(act1[0]?.getAttribute('href')).toBe('/settings');
+    expect(el.querySelector('[data-testid="schedule-result-needs-you"]')).toBeNull();
+    expect(el.textContent).not.toContain('needs your OK');
+    expect(button(el, 'run now and review')).toBeUndefined();
   });
 });

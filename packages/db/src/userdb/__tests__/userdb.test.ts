@@ -475,7 +475,7 @@ describe('importUserDb — scheduled tasks are executable intent (TASK-20261009 
     expect(landed?.enabled).toBe(false);
     expect(landed?.provenance).toBe('imported');
     expect(landed?.ownerAppId).toBe('weather'); // the rest of the task is kept, readable, for the user to review
-    expect(report.schedules).toEqual({ demotedTasks: 1, strippedProposals: 0 });
+    expect(report.schedules).toEqual({ demotedTasks: 1, strippedProposals: 0, disarmedTasks: 0 }); // widened by v2.1 note N2 (D-PR4-9: the report gains disarmedTasks)
     await db.close();
   });
 
@@ -724,6 +724,211 @@ describe('importUserDb — scheduled tasks are executable intent (TASK-20261009 
     await db.importUserDb(bytes);
     expect(db.getSchedulerState()).toBeUndefined();
     expect(db.listSettingKeys()).not.toContain(SCHEDULER_STATE_SETTING_KEY);
+    await db.close();
+  });
+});
+
+// ------------------------------------------------ PR-4: the task write authority on import (D-PR4-9)
+//
+// TASK-20261010-host-broker PR-4 (contract v2 D-PR4-7, D-PR4-9, D-PR4-18; AC31): an UNTRUSTED
+// import strips `writeAuthority` from EVERY task — intent-equal and demoted alike, since the
+// authority is consent state OUTSIDE the intent bytes — and writes `disarmed: { reason:
+// 'imported', at }` where it stripped one; the report gains `disarmedTasks`. A TRUSTED pull is
+// untouched. The run row's `applied` seat is stripped with `proposals` (`scrubScheduleRunRows`),
+// and the export's cheap test `hasScheduleRunSeatsToStrip` matches either. `clearScheduleHistory`
+// keeps a run holding unexpired proposals or an applied group whose undo is still live.
+
+const OWN_APP = '5e4d3c2b-1a09-4f8e-8d7c-6b5a49382716';
+const thinkStep = { kind: 'app-think', appId: OWN_APP, prompt: 'tidy the notes', context: { maxRows: 50 } };
+const authority = () => ({ rowsPerRun: 200, armedAt: minutesAgo(60), armedVersion: 1 });
+const armed = (id: string, overrides: Record<string, unknown> = {}): ScheduledTask =>
+  scheduledTask(id, { steps: [thinkStep], appVersions: { [OWN_APP]: 1 }, writeAuthority: authority(), ...overrides });
+const appliedGroup = (undoId?: string) => ({ appId: OWN_APP, ...(undoId === undefined ? { undoable: false } : { undoId }), items: [{ summary: 'Tidies notes', changes: 2 }] });
+
+describe('importUserDb — the write authority never rides an untrusted file (PR-4 D-PR4-9)', () => {
+  it('UNTRUSTED, a task the hub has never seen: demoted AND its writeAuthority stripped, with the imported trace; disarmedTasks counts it', async () => {
+    const bytes = await donorBytes((donor) => donor.putScheduledTask(armed('foreign')));
+    const db = await open(backend);
+    const before = Date.now();
+
+    const report = await db.importUserDb(bytes);
+
+    const landed = db.getScheduledTask('foreign');
+    expect(landed).toMatchObject({ enabled: false, provenance: 'imported' });
+    expect(landed?.writeAuthority).toBeUndefined();
+    expect(landed?.disarmed?.reason).toBe('imported');
+    expect(Date.parse(landed?.disarmed?.at ?? '')).toBeGreaterThanOrEqual(before - 1000);
+    expect(Date.parse(landed?.disarmed?.at ?? '')).toBeLessThanOrEqual(Date.now());
+    expect(report.schedules.disarmedTasks).toBe(1);
+    expect(report.schedules.demotedTasks).toBe(1);
+    await db.close();
+  });
+
+  it('UNTRUSTED, an INTENT-EQUAL task (a backup round trip): it stays enabled — but its authority is stripped all the same, with the imported trace', async () => {
+    const mine = armed('mine');
+    const bytes = await donorBytes((donor) => donor.putScheduledTask(mine));
+    const db = await open(backend);
+    db.putScheduledTask(mine);
+
+    const report = await db.importUserDb(bytes);
+
+    const landed = db.getScheduledTask('mine');
+    expect(landed).toMatchObject({ enabled: true, provenance: 'user' });
+    expect(landed?.writeAuthority).toBeUndefined();
+    expect(landed?.disarmed?.reason).toBe('imported');
+    expect(report.schedules.demotedTasks).toBe(0);
+    expect(report.schedules.disarmedTasks).toBe(1);
+    await db.close();
+  });
+
+  it('UNTRUSTED, an armed task that is intent-equal to a local UNARMED one: the import cannot arm it (the authority is not intent)', async () => {
+    const local = scheduledTask('mine', { steps: [thinkStep], appVersions: { [OWN_APP]: 1 } });
+    const bytes = await donorBytes((donor) => donor.putScheduledTask(armed('mine')));
+    const db = await open(backend);
+    db.putScheduledTask(local);
+
+    await db.importUserDb(bytes);
+
+    expect(db.getScheduledTask('mine')?.enabled).toBe(true);
+    expect(db.getScheduledTask('mine')?.writeAuthority).toBeUndefined();
+    await db.close();
+  });
+
+  it('UNTRUSTED, an unarmed task: no trace is written (nothing was stripped) and disarmedTasks stays 0', async () => {
+    const bytes = await donorBytes((donor) => donor.putScheduledTask(scheduledTask('plain', { steps: [thinkStep] })));
+    const db = await open(backend);
+    const report = await db.importUserDb(bytes);
+    expect(db.getScheduledTask('plain')?.disarmed).toBeUndefined();
+    expect(report.schedules.disarmedTasks).toBe(0);
+    await db.close();
+  });
+
+  it('TRUSTED: an armed task arrives exactly as it is — authority kept, no trace, disarmedTasks 0 (the named residual: a trusted pull carries an authority)', async () => {
+    const theirs = armed('theirs');
+    const bytes = await donorBytes((donor) => donor.putScheduledTask(theirs));
+    const db = await open(backend);
+    const report = await db.importUserDb(bytes, { trustedOrigin: true });
+    expect(db.getScheduledTask('theirs')).toEqual(theirs);
+    expect(report.schedules.disarmedTasks).toBe(0);
+    await db.close();
+  });
+});
+
+describe('the run row’s applied seat is stripped like proposals (PR-4 D-PR4-9)', () => {
+  it('on BOTH import paths an applied group leaves every run row; the rest of the history stays', async () => {
+    const exported = await donorBytes((donor) => donor.putScheduledTask(armed('t1')));
+    const bytes = await plantRaw(exported, [
+      [scheduleRunsSettingKey('t1'), [scheduleRun('t1', minutesAgo(3), { status: 'ok', applied: appliedGroup('3f2b8c1e-7a4d-4e5f-9b6a-1c2d3e4f5a6b') }), scheduleRun('t1', minutesAgo(9), { status: 'ok' })]],
+    ]);
+    for (const options of [undefined, { trustedOrigin: true }]) {
+      const db = await open(createMemoryBackend());
+      await db.importUserDb(bytes, options);
+      const runs = db.listScheduleRuns('t1');
+      expect(runs, `trusted=${String(options?.trustedOrigin)}`).toHaveLength(2);
+      for (const run of runs) expect(run.applied).toBeUndefined();
+      await db.close();
+    }
+  });
+
+  it('the export’s cheap test matches "applied" too: a file whose ONLY strippable seat is an applied group still leaves without it', async () => {
+    const db = await open(backend);
+    db.putScheduledTask(armed('t1'));
+    db.putScheduleRun(scheduleRun('t1', minutesAgo(5), { status: 'ok', applied: appliedGroup() }));
+    for (const opts of [undefined, { includeSecrets: true }]) {
+      const bytes = await db.exportUserDb(opts);
+      const row = (await settingFromBytes(bytes, scheduleRunsSettingKey('t1'))) as Array<Record<string, unknown>>;
+      expect(row.map((r) => r.status), `includeSecrets=${String(opts?.includeSecrets)}`).toEqual(['ok']);
+      expect(row.every((r) => !('applied' in r)), `includeSecrets=${String(opts?.includeSecrets)}`).toBe(true);
+    }
+    // The device's own record is untouched by exporting.
+    expect(db.listScheduleRuns('t1')[0]?.applied).toEqual(appliedGroup());
+    await db.close();
+  });
+
+  it('hasScheduleRunSeatsToStrip and scrubScheduleRunRows, on a bare handle: "applied" OR "proposals" — and a clean row is left byte-stable', async () => {
+    const schedules = (await import('../schedules.js')) as unknown as {
+      hasScheduleRunSeatsToStrip: (sql: { select(sql: string, params?: unknown[]): unknown[][]; run(sql: string, params?: unknown[]): void }) => boolean;
+      scrubScheduleRunRows: (sql: { select(sql: string, params?: unknown[]): unknown[][]; run(sql: string, params?: unknown[]): void }) => number;
+    };
+    const SQL = await initSqlJs({ locateFile: locateWasm });
+    const raw = new SQL.Database();
+    raw.run(`CREATE TABLE ${USERDB_TABLES.settings} (key TEXT PRIMARY KEY, value TEXT)`);
+    const sql = {
+      select: (text: string, params: unknown[] = []) => raw.exec(text, params as never)[0]?.values ?? [],
+      run: (text: string, params: unknown[] = []) => void raw.run(text, params as never),
+    };
+    const put = (key: string, value: unknown) => raw.run(`INSERT OR REPLACE INTO ${USERDB_TABLES.settings} (key, value) VALUES (?, ?)`, [key, JSON.stringify(value)]);
+    try {
+      put(scheduleRunsSettingKey('clean'), [scheduleRun('clean', minutesAgo(4), { status: 'ok' })]);
+      expect(schedules.hasScheduleRunSeatsToStrip(sql)).toBe(false);
+      put(scheduleRunsSettingKey('t1'), [scheduleRun('t1', minutesAgo(3), { status: 'ok', applied: appliedGroup() })]);
+      expect(schedules.hasScheduleRunSeatsToStrip(sql)).toBe(true);
+      const cleanBefore = sql.select(`SELECT value FROM ${USERDB_TABLES.settings} WHERE key = ?`, [scheduleRunsSettingKey('clean')]);
+      schedules.scrubScheduleRunRows(sql);
+      const after = JSON.parse(String(sql.select(`SELECT value FROM ${USERDB_TABLES.settings} WHERE key = ?`, [scheduleRunsSettingKey('t1')])[0]?.[0])) as Array<Record<string, unknown>>;
+      expect(after.every((r) => !('applied' in r))).toBe(true);
+      expect(sql.select(`SELECT value FROM ${USERDB_TABLES.settings} WHERE key = ?`, [scheduleRunsSettingKey('clean')])).toEqual(cleanBefore);
+      expect(schedules.hasScheduleRunSeatsToStrip(sql)).toBe(false);
+      put(scheduleRunsSettingKey('t2'), [scheduleRun('t2', minutesAgo(3), { status: 'needs-you', proposals })]);
+      expect(schedules.hasScheduleRunSeatsToStrip(sql)).toBe(true);
+    } finally {
+      raw.close();
+    }
+  });
+});
+
+describe('clearScheduleHistory keeps what can still be acted on (PR-4 D-PR4-18: keptOnClear)', () => {
+  const ownEntry = (id: string) => ({
+    id,
+    at: minutesAgo(10),
+    expiresAt: minutesAgo(-7 * 24 * 60),
+    authority: 'task',
+    via: 'schedule',
+    runId: 'run-x',
+    taskId: 't1',
+    steps: [{ table: 'notes', op: 'update', columns: ['body'], rows: [{ rowid: 1, before: ['a'], after: ['b'] }] }],
+  });
+  const LIVE_UNDO = '3f2b8c1e-7a4d-4e5f-9b6a-1c2d3e4f5a6b';
+  const DONE_UNDO = '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d';
+
+  it('a SEEN run holding unexpired proposals stays; one whose proposals expired goes', async () => {
+    const db = await open(backend);
+    db.putScheduledTask(scheduledTask('t1'));
+    const fresh = { ...proposals, expiresAt: minutesAgo(-60) };
+    const stale = { ...proposals, expiresAt: minutesAgo(60) };
+    const keptDue = minutesAgo(30);
+    db.putScheduleRun(scheduleRun('t1', keptDue, { status: 'needs-you', seenAt: minutesAgo(20), proposals: fresh }));
+    db.putScheduleRun(scheduleRun('t1', minutesAgo(40), { status: 'needs-you', seenAt: minutesAgo(35), proposals: stale }));
+    db.putScheduleRun(scheduleRun('t1', minutesAgo(50), { status: 'ok' }));
+
+    db.clearScheduleHistory('t1');
+
+    expect(db.listScheduleRuns('t1').map((r) => r.dueAt)).toEqual([keptDue]);
+    expect(db.listScheduleRuns('t1')[0]?.proposals?.expiresAt).toBe(fresh.expiresAt);
+    await db.close();
+  });
+
+  it('a run whose applied group’s undo is still LIVE stays; an undone one, an unknown id or an applied that cannot be undone goes', async () => {
+    const db = await open(backend);
+    db.installApp({ appId: OWN_APP, displayName: 'Notes', html: '<html>notes</html>' });
+    db.putScheduledTask(armed('t1'));
+    const journal = db as unknown as { putOwnUndo(appId: string, bucket: string, entry: unknown): string; markOwnUndone(appId: string, bucket: string, id: string, at: string): void };
+    expect(journal.putOwnUndo(OWN_APP, 't1', ownEntry(LIVE_UNDO))).toBe('ok');
+    expect(journal.putOwnUndo(OWN_APP, 't1', ownEntry(DONE_UNDO))).toBe('ok');
+    journal.markOwnUndone(OWN_APP, 't1', DONE_UNDO, minutesAgo(1));
+
+    const keep = scheduleRun('t1', minutesAgo(10), { status: 'ok', applied: appliedGroup(LIVE_UNDO) });
+    db.putScheduleRun(keep);
+    db.putScheduleRun(scheduleRun('t1', minutesAgo(20), { status: 'ok', applied: appliedGroup(DONE_UNDO) }));
+    db.putScheduleRun(scheduleRun('t1', minutesAgo(30), { status: 'ok', applied: appliedGroup('1d2c3b4a-5f6e-4d7c-8b9a-0f1e2d3c4b5a') }));
+    db.putScheduleRun(scheduleRun('t1', minutesAgo(40), { status: 'ok', applied: appliedGroup() }));
+    db.putScheduleRun(scheduleRun('t1', minutesAgo(50), { status: 'pending', trigger: 'catch-up' }));
+
+    db.clearScheduleHistory('t1');
+
+    const left = db.listScheduleRuns('t1');
+    expect(left.map((r) => r.status)).toEqual(['ok', 'pending']);
+    expect(left[0]?.applied?.undoId).toBe(LIVE_UNDO);
     await db.close();
   });
 });

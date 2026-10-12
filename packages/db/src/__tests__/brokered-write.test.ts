@@ -1305,3 +1305,345 @@ describe('applyBrokeredBatch({ undo }) — the inverse, applied atomically throu
     db.close();
   });
 });
+
+// =========================================================================== PR-4: the CAPTURE variant of own mode
+
+/*
+ * TASK-20261010-host-broker PR-4 (contract v2 D-PR4-4; AC32b) — ONE own-write seat that captures:
+ * `{ own, capture: true, caps, expectChanges, requireUndo, admit }`. The app's own change, run
+ * under the SHAPE rules (`tableShape`) and an OWN column rule — never `tableFacts`, whose CHECK and
+ * DELETE-coverage rules are reader oracles — with the capture objects, so the user can undo it.
+ *  - plannability is decided for the WHOLE batch before any transaction (the literal grammar, the
+ *    shape, the own column rule) — never a mixed batch;
+ *  - `sum(changes) ≤ caps.maxChanges` over the WHOLE call, checked after each statement;
+ *  - `admit(steps)` is asked after the last statement and BEFORE `COMMIT`: false under
+ *    `requireUndo: true` rolls back `cannot-undo`; under `requireUndo: false` commits `undoable: false`;
+ *  - refusal words are OWN-mode words (nothing about "another app" or "shared").
+ * The type of the variant is read from the module (`Extract<…>`), so until it exists the helper
+ * below is `never` and the package's tsc test config reds on it (a contract reason).
+ */
+
+type OwnCaptureInput = Extract<BrokeredApplyInput, { own: unknown; capture: true }>;
+type Admit = (steps: readonly UndoStep[]) => boolean;
+
+const OWN_TABLES = [
+  ...LEDGER,
+  // A CHECK on a table holding a credential-named column: tableFacts would refuse it (a column outside a scope); tableShape admits it.
+  'CREATE TABLE budgets (id INTEGER PRIMARY KEY, cap INTEGER CHECK (cap >= 0), api_key TEXT)',
+  "INSERT INTO budgets (id, cap, api_key) VALUES (1, 10, 'hunter2')",
+  // A generated column: a DELETE captures every NON-generated column (tableFacts would refuse the DELETE outright).
+  'CREATE TABLE sized (id INTEGER PRIMARY KEY, body TEXT, size INTEGER GENERATED ALWAYS AS (length(body)) VIRTUAL)',
+  "INSERT INTO sized (id, body) VALUES (1, 'abc'), (2, 'de')",
+  // The shape rules still hold — a trigger, WITHOUT ROWID, ON CONFLICT REPLACE.
+  'CREATE TABLE audit (what TEXT)',
+  'CREATE TABLE logged (id INTEGER PRIMARY KEY, v TEXT)',
+  "INSERT INTO logged (id, v) VALUES (1, 'a')",
+  "CREATE TRIGGER logged_audit AFTER UPDATE ON logged BEGIN INSERT INTO audit (what) VALUES ('x'); END",
+  'CREATE TABLE keyed (k TEXT PRIMARY KEY, v TEXT) WITHOUT ROWID',
+  "INSERT INTO keyed (k, v) VALUES ('a', 'b')",
+  'CREATE TABLE replaced (id INTEGER PRIMARY KEY ON CONFLICT REPLACE, v TEXT)',
+  "INSERT INTO replaced (id, v) VALUES (1, 'a')",
+];
+
+/** The capture variant as the engine hands it. */
+const capture = (own: Array<{ sql: string; params?: unknown[] }>, over: Partial<Record<string, unknown>> = {}): OwnCaptureInput =>
+  ({ own, capture: true, caps: CAPS, requireUndo: true, admit: () => true, ...over }) as unknown as OwnCaptureInput;
+
+/** An admit that records every call and what the handle looked like when it was asked. */
+function admitSpy(db: Database, verdict: boolean | Admit = true): { admit: Admit; calls: UndoStep[][]; inTransaction: boolean[]; notes: unknown[][][] } {
+  const calls: UndoStep[][] = [];
+  const inTransaction: boolean[] = [];
+  const notes: unknown[][][] = [];
+  const admit: Admit = (steps) => {
+    calls.push(JSON.parse(JSON.stringify(steps)) as UndoStep[]);
+    inTransaction.push(openTransaction(db));
+    notes.push(all(db, 'SELECT id, note FROM transactions ORDER BY id'));
+    return typeof verdict === 'function' ? verdict(steps) : verdict;
+  };
+  return { admit, calls, inTransaction, notes };
+}
+
+/** The own-mode words: nothing about another app or a share (the reader's oracle words). */
+const READER_WORDS = /another app|isn.t shared|shared/i;
+
+describe('PR-4 — the capture variant: whole-batch, captured, admitted before COMMIT (D-PR4-4)', () => {
+  it('an UPDATE and an INSERT in ONE call: changes per statement, one captured step each, undoable — admit asked ONCE, after the last statement, inside the open transaction', async () => {
+    const { applyBrokeredBatch } = await brokered();
+    const db = handle(OWN_TABLES);
+    const spy = admitSpy(db);
+    const result = okApply(
+      applyBrokeredBatch(
+        db,
+        capture(
+          [{ sql: "UPDATE transactions SET note = 'latte' WHERE id = 1" }, { sql: 'INSERT INTO transactions (id, amount, note) VALUES (?, ?, ?)', params: [9, 12, 'gum'] }],
+          { expectChanges: [1, 1], admit: spy.admit },
+        ),
+      ),
+    );
+    expect(result.changes).toEqual([1, 1]);
+    expect(result.undoable).toBe(true);
+    expect(byRowid(result.steps)).toEqual([
+      { table: 'transactions', op: 'update', columns: ['note'], rows: [{ rowid: 1, before: ['coffee'], after: ['latte'] }] },
+      { table: 'transactions', op: 'insert', columns: ['id', 'amount', 'note'], rows: [{ rowid: 9, after: [9, 12, 'gum'] }] },
+    ]);
+    expect(spy.calls).toHaveLength(1);
+    expect(byRowid(spy.calls[0]!)).toEqual(byRowid(result.steps));
+    expect(spy.inTransaction).toEqual([true]); // asked BEFORE COMMIT
+    expect(spy.notes[0]).toContainEqual([9, 'gum']); // … and after the LAST statement
+    expect(openTransaction(db)).toBe(false);
+    expect(tempObjects(db)).toEqual([]);
+    expect(all(db, 'SELECT note FROM transactions WHERE id IN (1, 9) ORDER BY id')).toEqual([['latte'], ['gum']]);
+    db.close();
+  });
+
+  it('a DELETE captures the WHOLE row under its rowid — every non-generated column (tableShape, not tableFacts: a generated column does not refuse it)', async () => {
+    const { applyBrokeredBatch } = await brokered();
+    const db = handle(OWN_TABLES);
+    const result = okApply(applyBrokeredBatch(db, capture([{ sql: 'DELETE FROM sized WHERE id = 1' }], { expectChanges: [1] })));
+    expect(result.steps).toEqual([{ table: 'sized', op: 'delete', columns: ['id', 'body'], rows: [{ rowid: 1, before: [1, 'abc'] }] }]);
+    expect(result.undoable).toBe(true);
+    expect(all(db, 'SELECT id FROM sized')).toEqual([[2]]);
+    db.close();
+  });
+
+  it('a CHECK on a table with a credential-named column is NOT refused (the reader-oracle rule is not an own rule): an UPDATE of a plain column captures', async () => {
+    const { applyBrokeredBatch } = await brokered();
+    const db = handle(OWN_TABLES);
+    const result = okApply(applyBrokeredBatch(db, capture([{ sql: 'UPDATE budgets SET cap = 20 WHERE id = 1' }], { expectChanges: [1] })));
+    expect(result.steps).toEqual([{ table: 'budgets', op: 'update', columns: ['cap'], rows: [{ rowid: 1, before: [10], after: [20] }] }]);
+    db.close();
+  });
+
+  it('the own column rule: an UPDATE or INSERT naming a credential-named column, or a DELETE on a table holding one, is UNPLANNABLE — refused by name, nothing run', async () => {
+    const { applyBrokeredBatch } = await brokered();
+    const db = handle(OWN_TABLES);
+    const before = dump(db, 'accounts');
+    const spy = watch(db);
+    for (const sql of [
+      "UPDATE accounts SET api_key = 'x' WHERE name = 'checking'",
+      "UPDATE accounts SET balance = 1, API_KEY = 'x' WHERE name = 'checking'",
+      "INSERT INTO accounts (name, api_key) VALUES ('savings', 'x')",
+      "DELETE FROM accounts WHERE name = 'checking'",
+    ]) {
+      const result = applyBrokeredBatch(db, capture([{ sql }], { requireUndo: true }));
+      expect(result, sql).toMatchObject({ ok: false, reason: 'refused' });
+      if (!result.ok && /^(UPDATE|INSERT)/.test(sql)) expect((result as { rule?: string }).rule, sql).toBe('column');
+      if (!result.ok) expect(result.message, sql).not.toMatch(READER_WORDS);
+    }
+    expect(spy.seen.filter((sql) => /^\s*(BEGIN|UPDATE|INSERT|DELETE)\b/i.test(sql)), 'refused before any transaction or statement').toEqual([]);
+    expect(dump(db, 'accounts')).toEqual(before);
+    // The passing twin: the same table's plain column.
+    expect(okApply(applyBrokeredBatch(db, capture([{ sql: "UPDATE accounts SET balance = 7 WHERE name = 'checking'" }], { expectChanges: [1] }))).steps).toEqual([
+      { table: 'accounts', op: 'update', columns: ['balance'], rows: [{ rowid: 1, before: [100], after: [7] }] },
+    ]);
+    db.close();
+  });
+
+  it('the shape rules still hold — a triggered, a WITHOUT ROWID and an ON CONFLICT REPLACE table are unplannable `table`, in own-mode words', async () => {
+    const { applyBrokeredBatch } = await brokered();
+    const db = handle(OWN_TABLES);
+    for (const sql of ["UPDATE logged SET v = 'b' WHERE id = 1", "UPDATE keyed SET v = 'c' WHERE k = 'a'", "UPDATE replaced SET v = 'b' WHERE id = 1"]) {
+      const result = applyBrokeredBatch(db, capture([{ sql }]));
+      expect(result, sql).toMatchObject({ ok: false, reason: 'refused', rule: 'table' });
+      if (!result.ok) expect(result.message, sql).not.toMatch(READER_WORDS);
+    }
+    expect(all(db, 'SELECT v FROM logged')).toEqual([['a']]);
+    expect(all(db, 'SELECT count(*) FROM audit')).toEqual([[0]]);
+    db.close();
+  });
+
+  it('the literal grammar decides capturability: a function, arithmetic, a conflict clause or no WHERE is unplannable by its parser rule', async () => {
+    const { applyBrokeredBatch, parseBrokeredStatement } = await brokered();
+    const db = handle(OWN_TABLES);
+    const before = dump(db, 'transactions');
+    for (const sql of [
+      "UPDATE transactions SET note = lower('X') WHERE id = 1",
+      'UPDATE transactions SET amount = amount + 1 WHERE id = 1',
+      "INSERT OR REPLACE INTO transactions (id, amount, note) VALUES (1, 1, 'x')",
+      "UPDATE transactions SET note = 'x'",
+      'DELETE FROM transactions',
+    ]) {
+      const parsed = parseBrokeredStatement(sql);
+      expect(parsed.ok, sql).toBe(false);
+      const result = applyBrokeredBatch(db, capture([{ sql }]));
+      expect(result, sql).toMatchObject({ ok: false, reason: 'refused', rule: parsed.ok ? 'statement' : parsed.rule });
+    }
+    expect(dump(db, 'transactions')).toEqual(before);
+    db.close();
+  });
+
+  it.each([true, false])('plannability is WHOLE-BATCH (requireUndo %s): a plannable statement beside an unplannable one is refused BEFORE any transaction — the plannable one never runs, admit is never asked', async (requireUndo) => {
+    const { applyBrokeredBatch } = await brokered();
+    const db = handle(OWN_TABLES);
+    const before = dump(db, 'transactions');
+    const spy = admitSpy(db);
+    const seen = watch(db);
+    const result = applyBrokeredBatch(
+      db,
+      capture([{ sql: "UPDATE transactions SET note = 'latte' WHERE id = 1" }, { sql: "UPDATE transactions SET note = upper('x') WHERE id = 2" }], { requireUndo, admit: spy.admit }),
+    );
+    expect(result).toMatchObject({ ok: false, reason: 'refused' });
+    expect(seen.seen.filter((sql) => /^\s*(BEGIN|UPDATE|INSERT|DELETE)\b/i.test(sql))).toEqual([]);
+    expect(spy.calls).toEqual([]);
+    expect(dump(db, 'transactions')).toEqual(before);
+    expect(openTransaction(db)).toBe(false);
+    db.close();
+  });
+
+  it('sum(changes) ≤ caps.maxChanges over the WHOLE call: 2 + 2 under a cap of 3 is too-many and rolls back BOTH; 2 + 1 passes', async () => {
+    const { applyBrokeredBatch } = await brokered();
+    const db = handle([...OWN_TABLES, "INSERT INTO transactions (id, amount, category, note) VALUES (4, 1, 'home', 'a'), (5, 2, 'home', 'b')"]);
+    const before = dump(db, 'transactions');
+    const caps: BrokeredCaps = { maxChanges: 3, maxUndoBytes: CAPS.maxUndoBytes };
+    const over = applyBrokeredBatch(
+      db,
+      capture([{ sql: "UPDATE transactions SET note = 'f' WHERE category = 'food'" }, { sql: "UPDATE transactions SET note = 'h' WHERE id IN (4, 5)" }], { caps }),
+    );
+    expect(over).toMatchObject({ ok: false, reason: 'too-many' });
+    expect(dump(db, 'transactions')).toEqual(before);
+    expect(openTransaction(db)).toBe(false);
+    expect(tempObjects(db)).toEqual([]);
+    const within = okApply(
+      applyBrokeredBatch(db, capture([{ sql: "UPDATE transactions SET note = 'f' WHERE category = 'food'" }, { sql: "UPDATE transactions SET note = 'h' WHERE id = 4" }], { caps })),
+    );
+    expect(within.changes).toEqual([2, 1]);
+    db.close();
+  });
+
+  it('admit false under requireUndo: true → ROLLBACK, `cannot-undo`: nothing changed, no open transaction, no temp object', async () => {
+    const { applyBrokeredBatch } = await brokered();
+    const db = handle(OWN_TABLES);
+    const before = dump(db, 'transactions');
+    const spy = admitSpy(db, false);
+    const result = applyBrokeredBatch(db, capture([{ sql: "UPDATE transactions SET note = 'latte' WHERE id = 1" }], { requireUndo: true, admit: spy.admit, expectChanges: [1] }));
+    expect(result).toMatchObject({ ok: false, reason: 'cannot-undo' });
+    expect(spy.calls).toHaveLength(1);
+    expect(spy.notes[0]).toContainEqual([1, 'latte']); // the statement HAD run when admit was asked …
+    expect(dump(db, 'transactions')).toEqual(before); // … and the rollback took it back
+    expect(openTransaction(db)).toBe(false);
+    expect(tempObjects(db)).toEqual([]);
+    db.close();
+  });
+
+  it('admit false under requireUndo: false → COMMITS with NO undo (undoable: false, no steps) — an approval is never refused for its journal', async () => {
+    const { applyBrokeredBatch } = await brokered();
+    const db = handle(OWN_TABLES);
+    const spy = admitSpy(db, false);
+    const result = okApply(applyBrokeredBatch(db, capture([{ sql: "UPDATE transactions SET note = 'latte' WHERE id = 1" }], { requireUndo: false, admit: spy.admit, expectChanges: [1] })));
+    expect(spy.calls).toHaveLength(1); // it WAS captured and asked — the answer, not a skipped capture, made it uncaptured
+    expect(spy.inTransaction).toEqual([true]);
+    expect(result).toMatchObject({ changes: [1], undoable: false, steps: [] });
+    expect(all(db, 'SELECT note FROM transactions WHERE id = 1')).toEqual([['latte']]);
+    expect(openTransaction(db)).toBe(false);
+    expect(tempObjects(db)).toEqual([]);
+    db.close();
+  });
+
+  it('an approval\'s Infinity cap is never refused for its size: 250 rows commit; the admit the engine passes refuses > 200 rows a step, so it commits undoable: false', async () => {
+    const { applyBrokeredBatch } = await brokered();
+    const rows = Array.from({ length: 250 }, (_, i) => `(${100 + i}, 1, 'bulk', 'n')`).join(', ');
+    const db = handle([...OWN_TABLES, `INSERT INTO transactions (id, amount, category, note) VALUES ${rows}`]);
+    const asked: number[] = [];
+    const admit: Admit = (steps) => {
+      asked.push(...steps.map((step) => step.rows.length));
+      return steps.every((step) => step.rows.length <= 200);
+    };
+    const result = okApply(
+      applyBrokeredBatch(
+        db,
+        capture([{ sql: "UPDATE transactions SET note = 'm' WHERE category = 'bulk'" }], { caps: { maxChanges: Number.POSITIVE_INFINITY, maxUndoBytes: Number.POSITIVE_INFINITY }, requireUndo: false, admit }),
+      ),
+    );
+    expect(result.changes).toEqual([250]);
+    expect(asked).toEqual([250]); // captured whole, judged by admit — never too-many
+    expect(result.undoable).toBe(false);
+    expect(all(db, "SELECT count(*) FROM transactions WHERE note = 'm'")).toEqual([[250]]);
+    db.close();
+  });
+
+  it('the drift halt holds in the capture variant: a count the engine did not expect rolls back the whole call, `drifted` with both counts', async () => {
+    const { applyBrokeredBatch } = await brokered();
+    const db = handle(OWN_TABLES);
+    const before = dump(db, 'transactions');
+    const result = applyBrokeredBatch(db, capture([{ sql: "UPDATE transactions SET note = 'x' WHERE category = 'food'" }], { expectChanges: [1] }));
+    expect(result).toMatchObject({ ok: false, reason: 'drifted', previewed: [1], current: [2] });
+    expect(dump(db, 'transactions')).toEqual(before);
+    db.close();
+  });
+
+  it('busy: the app\'s nested BEGIN — the capture variant never touches the app\'s transaction', async () => {
+    const { applyBrokeredBatch } = await brokered();
+    const db = handle(OWN_TABLES);
+    db.run('BEGIN');
+    db.run("UPDATE transactions SET note = 'mine' WHERE id = 2");
+    const result = applyBrokeredBatch(db, capture([{ sql: "UPDATE transactions SET note = 'x' WHERE id = 1" }]));
+    expect(result).toMatchObject({ ok: false, reason: 'busy' });
+    expect(openTransaction(db)).toBe(true);
+    db.run('COMMIT');
+    expect(all(db, 'SELECT id, note FROM transactions WHERE id IN (1, 2) ORDER BY id')).toEqual([
+      [1, 'coffee'],
+      [2, 'mine'],
+    ]);
+    db.close();
+  });
+
+  it('the captured steps undo through the same seat: the { undo } of an own capture puts the rows back', async () => {
+    const { applyBrokeredBatch } = await brokered();
+    const db = handle(OWN_TABLES);
+    const before = dump(db, 'transactions');
+    const applied = okApply(applyBrokeredBatch(db, capture([{ sql: "UPDATE transactions SET note = 'x' WHERE category = 'food'" }, { sql: 'DELETE FROM transactions WHERE id = 2' }])));
+    expect(applied.undoable).toBe(true);
+    okApply(applyBrokeredBatch(db, { undo: [...applied.steps].reverse() }));
+    expect(dump(db, 'transactions')).toEqual(before);
+    db.close();
+  });
+
+  it('the BARE { own } path is unchanged beside it: a triggered table still applies there, uncaptured (the approval\'s path for an unplannable batch)', async () => {
+    const { applyBrokeredBatch } = await brokered();
+    const db = handle(OWN_TABLES);
+    const spy = watch(db);
+    const result = applyBrokeredBatch(db, { own: [{ sql: "UPDATE logged SET v = 'b' WHERE id = 1" }], expectChanges: [1] });
+    expect(result).toEqual({ ok: true, steps: [], changes: [1], undoable: false });
+    expect(spy.seen.filter((sql) => /CREATE\s+TEMP/i.test(sql))).toEqual([]);
+    expect(all(db, 'SELECT count(*) FROM audit')).toEqual([[1]]);
+    db.close();
+  });
+});
+
+describe('PR-4 — ownCapturable(sql): a pure predicate over the literal grammar (D-PR4-4; W-5\'s surface otherwise unchanged)', () => {
+  const STATEMENTS = [
+    "UPDATE transactions SET note = 'x' WHERE id = 1",
+    'UPDATE transactions SET note = ? WHERE id = ?',
+    "INSERT INTO transactions (id, amount, note) VALUES (9, 1, 'gum')",
+    'DELETE FROM transactions WHERE id IN (1, 2)',
+    "UPDATE transactions SET note = lower('X') WHERE id = 1",
+    'UPDATE transactions SET amount = amount + 1 WHERE id = 1',
+    "INSERT OR REPLACE INTO transactions (id, amount, note) VALUES (1, 1, 'x')",
+    "INSERT INTO transactions (id, amount, note) VALUES (1, 1, 'x') ON CONFLICT DO NOTHING",
+    "UPDATE transactions SET note = 'x'",
+    'DELETE FROM transactions',
+    'INSERT INTO transactions (id) SELECT rowid FROM accounts',
+    "UPDATE transactions SET note = 'x' WHERE id = 1; DELETE FROM transactions WHERE id = 2",
+  ];
+
+  it('agrees with the parser on every statement: {ok: true} exactly when it parses, else {ok: false, rule} with the parser\'s rule', async () => {
+    const { ownCapturable, parseBrokeredStatement } = await brokered();
+    for (const sql of STATEMENTS) {
+      const parsed = parseBrokeredStatement(sql);
+      expect(ownCapturable(sql), sql).toEqual(parsed.ok ? { ok: true } : { ok: false, rule: parsed.rule });
+    }
+  });
+
+  it('the literal-valued shapes are capturable; a function, arithmetic, a conflict clause or a missing WHERE is not', async () => {
+    const { ownCapturable } = await brokered();
+    expect(ownCapturable("UPDATE transactions SET note = 'x' WHERE id = 1")).toEqual({ ok: true });
+    for (const sql of ["UPDATE transactions SET note = lower('X') WHERE id = 1", 'UPDATE transactions SET amount = amount + 1 WHERE id = 1', "INSERT OR REPLACE INTO t (a) VALUES (1)", "UPDATE t SET a = 1"]) {
+      expect(ownCapturable(sql).ok, sql).toBe(false);
+    }
+  });
+
+  it('is exported from the package index (a named predicate the engine and the proposal gate call)', async () => {
+    const index = (await import('../index.js')) as Record<string, unknown>;
+    expect(typeof index.ownCapturable).toBe('function');
+  });
+});

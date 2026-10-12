@@ -9,19 +9,28 @@
 // `views/Schedule*.tsx` for a string literal that spells the whole word "task" or "proposal",
 // and refuses it anywhere but `copy.ts` — the one file where the words are decided.
 //
-// What the scan can and cannot see. It reads string literals ('…', "…", `…`) with comments
-// blanked, and matches the whole word, case-insensitively — so `taskId`, `scheduleRuns:` and
-// `'schedule:' + task.id` pass (identifiers and keys are not sentences), while `'a task was
-// missed'` and `"Task"` do not. It does NOT see JSX text nodes (`<p>a task</p>`) — those are
-// not string literals — and it does NOT police "run": "run" is the sanctioned APP VERB ("run
-// Ledger", "run now", "runs while…"), and a regex cannot tell the verb from the noun. Both
-// gaps are closed by the copy-review at Gate 5, not by this file. The scan tolerates the
-// directories being empty or absent (today `schedule/` holds only `copy.ts`), and proves it
-// can fail on a planted sentence before it is trusted on the real tree.
+// What the scan can and cannot see (TASK-20261010-host-broker PR-4, D-PR4-21 — the parse upgrade).
+// It walks the TypeScript parser's tree through the shared helper `./literalsIn.ts` (the walker
+// `accessCopy.test.ts` introduced): string literals, JSX attribute strings, template literals by
+// their literal parts AND JSX text nodes (`<p>a task</p>`, which the old regex scan could not see)
+// are sentences; comments are trivia; a module specifier is a file name; identifiers and keys are
+// not sentences (`taskId`, `scheduleRuns:` and `'schedule:' + task.id` pass). It matches the whole
+// word, case-insensitively, and does NOT police "run": "run" is the sanctioned APP VERB ("run
+// Ledger", "run now", "runs while…"), and no parser can tell the verb from the noun — that gap is
+// closed by the copy-review at Gate 5. It also refuses *routine* and *automation* (copy.ts:15-17).
+// The scan covers `schedule/*`, `views/Schedule*.tsx`, `access/refresh.ts` and the chat card's
+// words `agent/copy.dataWrite.ts` (AC32d), and proves it can fail before it is trusted.
+//
+// PR-4 also pins every sentence the contract gives byte for byte (D-PR4-18/20): the tick, the
+// chooser's hints, the held reasons, the step words' tools tail, and the home of every fixed
+// sentence the surfaces print.
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
+import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
+
+import { SCHEDULE_HELD_REASONS, type ScheduleStep } from '@snugprotocol/protocol';
 
 import {
   APP_UNREACHABLE_SUMMARY,
@@ -72,9 +81,10 @@ import {
   stepWords,
   suggestionStrip,
 } from '../schedule/copy.js';
-import { ACTIONS } from '../schedule/copy.editor.js';
-import { needsYouTitle } from '../schedule/copy.result.js';
+import { ACTIONS, CONSENT_ROWS, STEPS } from '../schedule/copy.editor.js';
+import { HELD_WHY, needsYouTitle } from '../schedule/copy.result.js';
 import { PAUSE_AFTER_FAILURES, PAUSE_AFTER_UNSEEN } from '../schedule/protection.js';
+import { literalsIn, scriptKindOf } from './literalsIn.js';
 
 describe('vocabulary (Q8) — the five nouns and the three step kinds', () => {
   it('WORDS is the user-facing vocabulary, nothing internal', () => {
@@ -86,6 +96,8 @@ describe('vocabulary (Q8) — the five nouns and the three step kinds', () => {
       missed: 'missed',
       suggestion: 'suggestion',
       changesWaiting: 'changes waiting for your OK',
+      // AMENDED by D-PR4-18 (TASK-20261010-host-broker PR-4): the result page's first section, *changes it made*.
+      changesMade: 'changes it made',
     });
   });
 
@@ -557,30 +569,60 @@ describe('the refresh — the contract’s text, byte for byte (D-PR3-19)', () =
 });
 
 // ---------------------------------------------------------------------------------------------
-// THE VOCABULARY SCAN
+// THE VOCABULARY SCAN — on the TypeScript-compiler walker (TASK-20261010-host-broker PR-4, D-PR4-21)
 // ---------------------------------------------------------------------------------------------
+//
+// The regex scan this block replaced could not see JSX text (`<p>a task</p>` is not a string
+// literal). It now walks the parser's tree through the ONE shared helper `./literalsIn.ts` (the
+// walker `accessCopy.test.ts` introduced): string literals, JSX attribute strings, template
+// literals by their literal parts, and JSX text nodes are all sentences; comments are trivia and a
+// module specifier is a file name. A literal that IS, in its entirety, a pinned machine token is an
+// enum member, not a sentence — the exemption list is pinned below, so a new one is a deliberate
+// edit here. Existing JSX text that trips the scan is reported by the test lane and fixed in copy,
+// never exempted.
 
 const PLAYGROUND_SRC = path.resolve(__dirname, '..');
 
-/** Source text with `//` and block comments blanked — a rule must not be tripped (or satisfied) by prose. */
+/** Source text with `//` and block comments blanked — for the code-shape checks below (the scan itself parses). */
 function stripComments(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:'"`\\])\/\/[^\n]*/g, '$1');
 }
 
-/** Every string literal in a source: single-, double- and backtick-quoted, comments already blanked. */
-function stringLiterals(code: string): string[] {
-  const literal = /'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`/g;
-  return [...code.matchAll(literal)].map((match) => match[0].slice(1, -1));
+/** Every string literal in a source, as reported — by the parser, the scan's own walker. */
+function stringLiterals(code: string, kind: ts.ScriptKind = ts.ScriptKind.TS): string[] {
+  return literalsIn(code, kind).map((literal) => literal.text);
 }
 
 const INTERNAL_WORD = /\b(task|proposal)s?\b/i;
+/** copy.ts:15-17 — "routine" and "automation" read as someone else's product (Q8). */
+const FOREIGN_WORD = /\b(routine|automation)s?\b/i;
 
-/** The internal words, spelled as a WHOLE word inside a string literal — `taskId` and `'schedule:' + id` pass. */
-function internalWordsIn(code: string): string[] {
-  return stringLiterals(stripComments(code)).filter((text) => INTERNAL_WORD.test(text));
+/**
+ * Machine tokens a literal may BE in its entirety (an enum member or a storage key the engine
+ * defines, never a sentence). Pinned: a new entry is a deliberate edit here, never a quiet one.
+ */
+const MACHINE_TOKENS: ReadonlySet<string> = new Set<string>([]);
+
+/** The internal words, spelled as a WHOLE word in a piece of text a person could read — `taskId` and `'schedule:' + id` pass. */
+function internalWordsIn(code: string, kind: ts.ScriptKind = ts.ScriptKind.TSX): string[] {
+  return literalsIn(code, kind)
+    .filter((literal) => INTERNAL_WORD.test(literal.words) && !MACHINE_TOKENS.has(literal.text))
+    .map((literal) => literal.text);
 }
 
-/** The files the scan covers; an absent directory is an empty list, not a failure. */
+function foreignWordsIn(code: string, kind: ts.ScriptKind = ts.ScriptKind.TSX): string[] {
+  return literalsIn(code, kind)
+    .filter((literal) => FOREIGN_WORD.test(literal.words))
+    .map((literal) => literal.text);
+}
+
+/** The single files beyond the two globs that the scan covers (PR-3's refresh engine; PR-4's chat-card words, D-PR4-19). */
+const EXTRA_FILES = [path.join('access', 'refresh.ts'), path.join('agent', 'copy.dataWrite.ts')] as const;
+
+/** The modules PR-4 adds under schedule/ (the contract's module list) — scanned by the `schedule/*` glob like every other. */
+const PR4_SCHEDULE_MODULES = ['appAgent.ts', 'proposalGate.ts', 'applyArmed.ts'] as const;
+
+/** The files the scan covers; an absent directory or extra file is an empty list, not a failure (the presence of each is pinned separately). */
 function uiFiles(): string[] {
   const scheduleDir = path.join(PLAYGROUND_SRC, 'schedule');
   const viewsDir = path.join(PLAYGROUND_SRC, 'views');
@@ -590,7 +632,19 @@ function uiFiles(): string[] {
           .filter((entry) => entry.isFile() && /\.tsx?$/.test(entry.name) && keep(entry.name))
           .map((entry) => path.join(dir, entry.name))
       : [];
-  return [...under(scheduleDir, () => true), ...under(viewsDir, (name) => /^Schedule.*\.tsx$/.test(name))].sort();
+  const extras = EXTRA_FILES.map((rel) => path.join(PLAYGROUND_SRC, rel)).filter((file) => existsSync(file));
+  return [...under(scheduleDir, () => true), ...under(viewsDir, (name) => /^Schedule.*\.tsx$/.test(name)), ...extras].sort();
+}
+
+const isScheduleCopy = (file: string): boolean => path.basename(file) === 'copy.ts' && path.basename(path.dirname(file)) === 'schedule';
+
+function scanOffenders(): string[] {
+  const offenders: string[] = [];
+  for (const file of uiFiles()) {
+    if (isScheduleCopy(file)) continue;
+    for (const text of internalWordsIn(readFileSync(file, 'utf8'), scriptKindOf(file))) offenders.push(`${path.relative(PLAYGROUND_SRC, file)}: '${text}'`);
+  }
+  return offenders;
 }
 
 describe('vocabulary scan — no UI file spells "task" or "proposal" as a user-facing word', () => {
@@ -601,6 +655,29 @@ describe('vocabulary scan — no UI file spells "task" or "proposal" as a user-f
     expect(internalWordsIn(`const key = 'schedule:' + task.id; const id = row.taskId; const k = 'scheduleRuns:';`)).toEqual([]);
     expect(internalWordsIn(`// a task is the internal word\nconst x = 'schedule';`)).toEqual([]);
     expect(internalWordsIn(`/* proposal: the data-write card */ const y = "result";`)).toEqual([]);
+  });
+
+  it('D-PR4-21: JSX TEXT is a sentence now — the regex scan could not see it; the walker does', () => {
+    expect(internalWordsIn('export const A = () => <p>a task was missed</p>;')).toEqual(['a task was missed']);
+    expect(internalWordsIn('export const A = () => <p>{n} proposals waiting</p>;')).toEqual(['proposals waiting']);
+    expect(internalWordsIn('export const A = () => <button aria-label="stop the task">x</button>;')).toEqual(['stop the task']);
+    // An identifier inside an expression container is code: `{task.title}` reads nothing.
+    expect(internalWordsIn('export const A = ({ task }) => <p>{task.title}</p>;')).toEqual([]);
+  });
+
+  it('a comment marker INSIDE a string never blinds the scan, and a module specifier is a file name', () => {
+    expect(internalWordsIn(`const a = 'path // a task'; const b = '*/';`)).toEqual(['path // a task']);
+    expect(internalWordsIn(`import { x } from './task.js'; export { y } from './proposal.js';`, ts.ScriptKind.TS)).toEqual([]);
+    expect(internalWordsIn(`import { x } from './task.js'; const s = './task.js';`, ts.ScriptKind.TS)).toEqual(['./task.js']);
+  });
+
+  it('a template is read by its literal parts — a `${task.id}` substitution is code', () => {
+    expect(internalWordsIn('const a = `${task.id} is due`;')).toEqual([]);
+    expect(internalWordsIn('const a = `outer ${`the task ${x}`} end`;')).toEqual(['the task ${x}']);
+  });
+
+  it('the machine-token exemption is pinned — today it is empty: no literal in the scanned tree is an enum member that spells either word', () => {
+    expect([...MACHINE_TOKENS].sort()).toEqual([]);
   });
 
   it('the walk sees copy.ts and the three surface copy modules, and tolerates the rest of the tree being empty', () => {
@@ -616,6 +693,49 @@ describe('vocabulary scan — no UI file spells "task" or "proposal" as a user-f
     }
   });
 
+  it('the walk covers the .tsx surfaces too, whose JSX text it now reads (D-PR4-21)', () => {
+    const files = uiFiles().map((file) => path.relative(PLAYGROUND_SRC, file));
+    for (const name of ['EnableConsent.tsx', 'ScheduleEditor.tsx', 'StepsEditor.tsx', 'ScheduleRow.tsx', 'ResultDetail.tsx', 'ResultsList.tsx', 'ScheduleSettingsCard.tsx']) {
+      expect(files).toContain(path.join('schedule', name));
+    }
+    expect(files).toContain(path.join('views', 'ScheduleView.tsx'));
+  });
+
+  it.each(PR4_SCHEDULE_MODULES)('the walk sees PR-4’s new schedule/%s (the contract’s module list) — absent is red here, never created', (name) => {
+    const files = uiFiles().map((file) => path.relative(PLAYGROUND_SRC, file));
+    expect(existsSync(path.join(PLAYGROUND_SRC, 'schedule', name)), `schedule/${name} exists`).toBe(true);
+    expect(files).toContain(path.join('schedule', name));
+  });
+
+  it('the refresh engine (`access/refresh.ts`, PR-3) and the chat card’s words (`agent/copy.dataWrite.ts`, D-PR4-19) are scanned by the same rule (AC32d)', () => {
+    const files = uiFiles().map((file) => path.relative(PLAYGROUND_SRC, file));
+    expect(existsSync(path.join(PLAYGROUND_SRC, 'access', 'refresh.ts')), 'access/refresh.ts exists').toBe(true);
+    expect(files).toContain(path.join('access', 'refresh.ts'));
+    expect(existsSync(path.join(PLAYGROUND_SRC, 'agent', 'copy.dataWrite.ts')), 'agent/copy.dataWrite.ts exists — the card’s ONE home (D-PR4-19)').toBe(true);
+    expect(files).toContain(path.join('agent', 'copy.dataWrite.ts'));
+  });
+
+  it('the scan BITES in memory on a real .tsx surface: clean as shipped, red with a JSX sentence appended — the file is never written', () => {
+    const file = path.join(PLAYGROUND_SRC, 'schedule', 'ScheduleRow.tsx');
+    const original = readFileSync(file, 'utf8');
+    expect(internalWordsIn(original, ts.ScriptKind.TSX)).toEqual([]);
+    expect(internalWordsIn(`${original}\nexport const VocabularyProbe = () => <p>this task was missed</p>;\n`, ts.ScriptKind.TSX)).toEqual(['this task was missed']);
+    expect(readFileSync(file, 'utf8'), 'the proof reads the file and never writes it').toBe(original);
+  });
+
+  it.each([...PR4_SCHEDULE_MODULES.map((name) => path.join('schedule', name)), path.join('agent', 'copy.dataWrite.ts')])(
+    'the scan BITES on %s’s bytes in memory: clean as shipped, red with a sentence appended — never created or written here',
+    (rel) => {
+      const file = path.join(PLAYGROUND_SRC, rel);
+      expect(existsSync(file), `${rel} exists`).toBe(true);
+      const original = readFileSync(file, 'utf8');
+      const kind = scriptKindOf(file);
+      expect(internalWordsIn(original, kind)).toEqual([]);
+      expect(internalWordsIn(`${original}\nexport const VOCABULARY_PROBE = 'a proposal for this task';\n`, kind)).toEqual(['a proposal for this task']);
+      expect(readFileSync(file, 'utf8')).toBe(original);
+    },
+  );
+
   it('the surface copy modules compose from copy.ts and never carry a pluraliser or a status word of their own (M5, M12)', () => {
     for (const name of ['copy.page.ts', 'copy.editor.ts', 'copy.result.ts']) {
       const code = stripComments(readFileSync(path.join(PLAYGROUND_SRC, 'schedule', name), 'utf8'));
@@ -626,25 +746,142 @@ describe('vocabulary scan — no UI file spells "task" or "proposal" as a user-f
     }
   });
 
-  it('every scanned file outside copy.ts is clean — copy.ts is where the words are decided, and its sentences are pinned above', () => {
-    const offenders: string[] = [];
-    for (const file of uiFiles()) {
-      if (path.basename(file) === 'copy.ts' && path.basename(path.dirname(file)) === 'schedule') continue;
-      for (const text of internalWordsIn(readFileSync(file, 'utf8'))) {
-        offenders.push(`${path.relative(PLAYGROUND_SRC, file)}: '${text}'`);
-      }
-    }
-    expect(offenders).toEqual([]);
+  it('every scanned file outside copy.ts is clean — JSX text included; copy.ts is where the words are decided, and its sentences are pinned above', () => {
+    expect(scanOffenders()).toEqual([]);
   });
 
   it('the refresh engine (`access/refresh.ts`, TASK-20261010-host-broker PR-3) is held to the same rule — its sentences come from copy.ts, its strings spell neither word', () => {
     const file = path.join(PLAYGROUND_SRC, 'access', 'refresh.ts');
     expect(existsSync(file), 'access/refresh.ts exists').toBe(true);
-    expect(internalWordsIn(readFileSync(file, 'utf8'))).toEqual([]);
+    expect(internalWordsIn(readFileSync(file, 'utf8'), ts.ScriptKind.TS)).toEqual([]);
   });
 
   it('…and copy.ts itself spells neither word in any of its sentences — the exemption is for its comments, not its strings', () => {
     const copy = readFileSync(path.join(PLAYGROUND_SRC, 'schedule', 'copy.ts'), 'utf8');
-    expect(internalWordsIn(copy)).toEqual([]);
+    expect(internalWordsIn(copy, ts.ScriptKind.TS)).toEqual([]);
+  });
+
+  it('no scanned file spells "routine" or "automation" in a sentence — copy.ts:15-17 bans both (D-PR4-20: the chooser’s hints say neither)', () => {
+    expect(foreignWordsIn(`const a = 'your morning routine';`)).toEqual(['your morning routine']);
+    expect(foreignWordsIn('export const A = () => <p>an automation</p>;')).toEqual(['an automation']);
+    const offenders: string[] = [];
+    for (const file of uiFiles()) {
+      for (const text of foreignWordsIn(readFileSync(file, 'utf8'), scriptKindOf(file))) offenders.push(`${path.relative(PLAYGROUND_SRC, file)}: '${text}'`);
+    }
+    expect(offenders).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// TASK-20261010-host-broker PR-4 — the contract's sentences, byte for byte (D-PR4-18, D-PR4-20)
+// ---------------------------------------------------------------------------------------------
+
+const SCHEDULE_COPY_MODULES = ['copy.ts', 'copy.page.ts', 'copy.editor.ts', 'copy.result.ts'] as const;
+
+/** Every piece of text the four schedule copy modules hold, joined — where a fixed sentence must live. */
+function scheduleCopyText(): string {
+  return SCHEDULE_COPY_MODULES.flatMap((name) => literalsIn(readFileSync(path.join(PLAYGROUND_SRC, 'schedule', name), 'utf8'), ts.ScriptKind.TS).map((literal) => literal.words)).join('\n');
+}
+
+const TOOLS_THINK: ScheduleStep = { kind: 'app-think', appId: 'x', prompt: 'Sum it', context: { maxRows: 5 }, tools: true };
+
+describe('PR-4 — the tick, the chooser and the step words (D-PR4-20)', () => {
+  it('CONSENT_ROWS.onItsOwn(appName): the one tick, in the contract’s words', () => {
+    expect(CONSENT_ROWS.onItsOwn('Ledger')).toBe('let it make its changes to Ledger’s data on its own — never another app’s · up to 200 rows each time · undo any of it for seven days');
+  });
+
+  it('STEPS.kindHint: ONE hint per kind — ask and run, in the contract’s words; never *routine* (Q: called as kindHint(kind, appName))', () => {
+    expect(STEPS.kindHint('app-think', 'Ledger')).toBe('Ledger’s AI answers from Ledger’s data — Ledger doesn’t need to open');
+    expect(STEPS.kindHint('app-run', 'Ledger')).toBe('Ledger itself does the job, the way it was built — in the app if it’s open, out of sight if not');
+    expect(STEPS.kindHint('app-run', 'Ledger')).not.toMatch(FOREIGN_WORD);
+    expect(STEPS.kindHint('app-run', 'Ledger')).not.toMatch(/\bbackground\b/);
+  });
+
+  it('stepWords appends *· may look things up* to an ask step that may look things up — and only to that one', () => {
+    expect(stepWords(TOOLS_THINK, 'Ledger')).toBe('ask Ledger’s AI: Sum it · may look things up');
+    expect(stepWords({ kind: 'app-think', appId: 'x', prompt: 'Sum it', context: { maxRows: 5 } }, 'Ledger')).toBe('ask Ledger’s AI: Sum it');
+  });
+});
+
+describe('PR-4 — the held reasons: ONE table, one sentence each (D-PR4-11, D-PR4-18)', () => {
+  /** A held sentence may name the app (busy does): read it either way. */
+  const why = (reason: string): string => {
+    const entry = (HELD_WHY as Record<string, string | ((appName: string) => string)>)[reason];
+    return typeof entry === 'function' ? entry('Ledger') : (entry ?? '');
+  };
+
+  it('HELD_WHY has exactly the protocol’s held reasons — a new reason is a type error, never a missing line', () => {
+    expect(Object.keys(HELD_WHY).sort()).toEqual([...SCHEDULE_HELD_REASONS].sort());
+    expect([...SCHEDULE_HELD_REASONS]).toEqual(['busy', 'changed', 'cannot-undo', 'full', 'failed', 'over-limit', 'stopped']);
+  });
+
+  it('each sentence is the contract’s, byte for byte', () => {
+    expect(why('cannot-undo')).toBe('not made — it couldn’t be undone, so it waits for you (applying it here can’t be undone either)');
+    expect(why('over-limit')).toBe('not made — it would pass the 200 rows this schedule may change each time');
+    expect(why('busy')).toBe('not made — Ledger was in the middle of a change');
+    expect(why('stopped')).toBe('not made — it was stopped from making changes on its own');
+    expect(why('changed')).toBe('not made — the data moved since the AI looked');
+    expect(why('full')).toBe('not made — 20 earlier changes can still be undone; it will make changes again as they age out');
+    expect(why('failed')).toBe('not made — something went wrong; nothing was changed');
+  });
+});
+
+describe('PR-4 — every fixed sentence the surfaces print lives in a schedule copy module (one home; D-PR4-18/20)', () => {
+  const FIXED: readonly string[] = [
+    // the consent's tick (D-PR4-20)
+    'off: its changes wait for your OK on the result',
+    'it runs more than 20 times a week — once 20 changes are waiting to age out, the rest wait for your OK',
+    // the consent's rows for an ask step (D-PR4-20)
+    'may look up (read only — it can’t send or change anything there; it can use them without asking you each time)',
+    'it only reads data',
+    'look-ups each time',
+    // the editor (D-PR4-8, D-PR4-20)
+    'let it look things up',
+    'it can choose its own questions over',
+    'this brain will answer without looking things up',
+    'changes it suggests:',
+    'wait for my OK',
+    'make them on its own',
+    'changing what it does stops it making changes on its own — you’ll confirm again before saving',
+    // the row, the menu, Settings (D-PR4-8, D-PR4-10)
+    'makes changes on its own',
+    'stop making changes on its own',
+    'it won’t change data on its own any more — turn it back on from edit',
+    'stop every schedule making changes on its own',
+    'no longer makes changes on its own',
+    'arrived with an imported file',
+    'resuming won’t let it make changes on its own until you confirm again',
+    'its changes from the last seven days can’t be undone after this',
+    // the result page (D-PR4-18)
+    'this schedule makes changes on its own',
+    'you applied this',
+    'undo ended after seven days',
+    'can’t be undone',
+    'didn’t need to look anything up',
+    'out of sight while it was closed',
+    'you allowed it',
+    'may look things up',
+  ];
+
+  it.each(FIXED)('%j', (sentence) => {
+    expect(scheduleCopyText()).toContain(sentence);
+  });
+
+  it('none of them spells task, proposal, routine, automation or "background"; each keeps the typographic apostrophe', () => {
+    for (const sentence of FIXED) {
+      expect(sentence, sentence).not.toMatch(INTERNAL_WORD);
+      expect(sentence, sentence).not.toMatch(FOREIGN_WORD);
+      expect(sentence, sentence).not.toMatch(/\bbackground\b/i);
+      expect(sentence, sentence).not.toMatch(/[A-Za-z]'[A-Za-z]/);
+    }
+  });
+
+  it('the word *background* is never shown on the result page’s step facts — no schedule copy module spells it in a PR-4 sentence (D-PR4-18)', () => {
+    const offenders = SCHEDULE_COPY_MODULES.flatMap((name) =>
+      literalsIn(readFileSync(path.join(PLAYGROUND_SRC, 'schedule', name), 'utf8'), ts.ScriptKind.TS)
+        .map((literal) => literal.words)
+        .filter((words) => /\bbackground\b/i.test(words) && /(out of sight|didn’t open|while it was)/.test(words)),
+    );
+    expect(offenders).toEqual([]);
   });
 });

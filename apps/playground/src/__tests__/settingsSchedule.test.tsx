@@ -324,3 +324,74 @@ describe('the mount is gated on allows("schedule") (C7)', () => {
     expect(el.querySelector('[data-testid="settings-section-schedule"]')).toBeNull();
   });
 });
+
+// =============================================================================================
+// TASK-20261010-host-broker PR-4 — the Settings kill switch is an ACT, not a row (D-PR4-10; SC6):
+// *stop every schedule making changes on its own* — shown ONLY while some schedule is armed,
+// naming how many — clears `writeAuthority` on every task (one task write each). No switch, no
+// storage flag, no disabled tick. A disarm the user performs here leaves no `disarmed` trace (that
+// seat is for a disarm the user did NOT perform — D-PR4-7).
+//
+// Assumed (lane T-C question): the act is the button whose text is the contract's phrase; the
+// count is named in the same settings row (`schedule-on-its-own-row`).
+// =============================================================================================
+
+describe('PR-4 — *stop every schedule making changes on its own* (D-PR4-10)', () => {
+  const STOP_ALL = 'stop every schedule making changes on its own';
+  const ARMED_AT = '2026-10-08T09:00:00.000Z';
+  const ask = { kind: 'app-think', appId: 'ledger', prompt: 'tidy the categories', context: { maxRows: 50 } } as const;
+  const armed = (id: string): ScheduledTask =>
+    ({ ...task(), id, title: `armed ${id}`, steps: [ask], writeAuthority: { rowsPerRun: 200, armedAt: ARMED_AT, armedVersion: 1 } }) as ScheduledTask;
+
+  it('NEGATIVE: with no armed schedule the act is not shown at all — never a disabled control', async () => {
+    db.putScheduledTask({ ...task(), steps: [ask] });
+    await initScheduler(deps());
+    const el = await render(<ScheduleSettingsCard />);
+    expect(button(el, STOP_ALL)).toBeUndefined();
+    expect(el.textContent).not.toContain(STOP_ALL);
+    expect(el.querySelector('[data-testid="schedule-on-its-own-row"]')).toBeNull();
+    expect([...el.querySelectorAll('[role="switch"]')], 'no switch was added for this').toHaveLength(2);
+  });
+
+  it('shown while some schedule is armed, naming how many', async () => {
+    db.putScheduledTask(armed('a1'));
+    db.putScheduledTask(armed('a2'));
+    db.putScheduledTask({ ...task(), id: 'u1', steps: [ask] });
+    await initScheduler(deps());
+    const el = await render(<ScheduleSettingsCard />);
+    expect(button(el, STOP_ALL)).toBeDefined();
+    const row = el.querySelector('[data-testid="schedule-on-its-own-row"]');
+    expect(row?.textContent ?? '').toMatch(/\b2\b/);
+    expect(row?.textContent ?? '', 'the unarmed schedule is not counted').not.toMatch(/\b3\b/);
+  });
+
+  it('clears the authority on EVERY armed schedule, leaves the others alone, writes no trace — then the act goes', async () => {
+    db.putScheduledTask(armed('a1'));
+    db.putScheduledTask(armed('a2'));
+    db.putScheduledTask({ ...task(), id: 'u1', steps: [ask] });
+    const untouched = db.getScheduledTask('u1');
+    await initScheduler(deps());
+    const el = await render(<ScheduleSettingsCard />);
+    await act(async () => {
+      button(el, STOP_ALL)?.click();
+    });
+    await vi.waitFor(() => {
+      expect(db.getScheduledTask('a1')?.writeAuthority).toBeUndefined();
+      expect(db.getScheduledTask('a2')?.writeAuthority).toBeUndefined();
+    });
+    for (const id of ['a1', 'a2']) {
+      expect(db.getScheduledTask(id)?.disarmed, `${id}: the user did this — no trace`).toBeUndefined();
+      expect(db.getScheduledTask(id)?.enabled, `${id}: still on — only the authority went`).toBe(true);
+    }
+    expect(db.getScheduledTask('u1')).toEqual(untouched);
+    await settle();
+    expect(button(el, STOP_ALL)).toBeUndefined();
+  });
+
+  it('one armed schedule is named as one', async () => {
+    db.putScheduledTask(armed('a1'));
+    await initScheduler(deps());
+    const el = await render(<ScheduleSettingsCard />);
+    expect(el.querySelector('[data-testid="schedule-on-its-own-row"]')?.textContent ?? '').toMatch(/\b1\b/);
+  });
+});

@@ -6,14 +6,15 @@
 // on its inputs; the tiny components are mounted once each to prove the act fires.
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { MemoryRouter, Route, Routes } from 'react-router';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { UserDb } from '@snugprotocol/db';
-import type { ConnectionRequirement, ScheduleStep } from '@snugprotocol/protocol';
+import type { ConnectionRequirement, ScheduleStep, ScheduledTask } from '@snugprotocol/protocol';
 
 import { HOST_OFFERS, type AppNeed } from '../platform/availability.js';
 import { appMissing, blockedHere, imported, paused } from '../schedule/copy.js';
-import { RELOAD } from '../schedule/copy.page.js';
+import { RELOAD, ROW } from '../schedule/copy.page.js';
 import {
   AppMissingNote,
   BlockedStepNote,
@@ -30,6 +31,8 @@ import {
   stepAvailability,
   type AppName,
 } from '../schedule/ScheduleStates.js';
+import { ScheduleView } from '../views/ScheduleView.js';
+import * as harness from './scheduleUiHarness.js';
 
 declare global {
   // eslint-disable-next-line no-var
@@ -229,5 +232,181 @@ describe('the tiny components', () => {
     expect(toggle?.textContent).toBe('off');
     act(() => (toggle as HTMLButtonElement).click());
     expect(onChange).toHaveBeenCalledWith(true);
+  });
+});
+
+// =============================================================================================
+// TASK-20261010-host-broker PR-4 — the row shows the authority wherever the task is (D-PR4-8,
+// D-PR4-10, D-PR4-18; D5, D6). Line 2 gains the chip *makes changes on its own* (a glyph whose
+// accessible name is the words; the words on a wide screen); the kebab gains *stop making changes
+// on its own* on an armed task, whose outcome is *it won’t change data on its own any more — turn
+// it back on from edit*; a disarm the user did NOT perform leaves the attention line *no longer
+// makes changes on its own — arrived with an imported file | this app was updated* with the one act
+// *review*; on a task that was armed, `paused('app-updated')` reads *…resuming won’t let it make
+// changes on its own until you confirm again*; the delete confirm of a schedule whose changes can
+// still be undone says they can’t be after this.
+//
+// Over the REAL engine and memory db (`scheduleUiHarness`), the Date faked at the harness's NOW so
+// the own-undo journal's liveness (the db's clock) and the page's clock agree — no fixture is
+// seeded at a fixed instant against the wall clock.
+//
+// Assumed (lane T-C questions): the chip `schedule-on-its-own-chip`; the act's outcome line
+// `schedule-row-outcome`; the own-undo journal is the UserDb accessor `putOwnUndo(appId, bucket, entry)`
+// with the task's id as its bucket.
+// =============================================================================================
+
+const ON_ITS_OWN = 'makes changes on its own';
+const STOP = 'stop making changes on its own';
+const STOPPED = 'it won’t change data on its own any more — turn it back on from edit';
+const ARMED_AT = '2026-10-08T09:00:00.000Z';
+const UNDO_ID = '3b2a1c0d-4e5f-4a6b-8c7d-9e0f1a2b3c4d';
+
+describe('PR-4 — pausedRow on a schedule that WAS armed (D-PR4-8; D6)', () => {
+  it('paused by an app update with the disarm trace: the armed copy, resume still the one act', () => {
+    const row = pausedRow({ ...PAUSE_BASE, pausedReason: 'app-updated', disarmed: { reason: 'app-updated', at: ARMED_AT } } as Parameters<typeof pausedRow>[0]);
+    expect(row).toEqual({ text: 'paused: this app was updated — resuming won’t let it make changes on its own until you confirm again', action: 'resume' });
+  });
+
+  it('…and a schedule that never made changes on its own keeps the plain sentence (negative twin)', () => {
+    expect(pausedRow({ ...PAUSE_BASE, pausedReason: 'app-updated' })).toEqual(paused('app-updated'));
+  });
+});
+
+describe('PR-4 — the row: chip, act, attention, delete warning (D-PR4-8, D-PR4-10, D-PR4-18)', () => {
+  let env: harness.Env;
+  let path = '';
+
+  beforeEach(async () => {
+    vi.useFakeTimers({ toFake: ['Date'], now: harness.NOW });
+    env = await harness.setupEnv();
+    env.db.installApp({ appId: 'ledger', displayName: 'Ledger', iconEmoji: '📒', html: '<html>ledger</html>', installSource: 'starter:ledger' });
+    path = '';
+  });
+
+  afterEach(() => {
+    harness.unmount();
+    harness.teardownEnv();
+    vi.useRealTimers();
+  });
+
+  const ask: ScheduleStep = { kind: 'app-think', appId: 'ledger', prompt: 'tidy the categories', context: { maxRows: 50 } };
+  const armedTask = (over: Partial<ScheduledTask> = {}): ScheduledTask =>
+    harness.makeTask({ id: 't1', title: 'Tidy', steps: [ask], appVersions: { ledger: 1 }, writeAuthority: { rowsPerRun: 200, armedAt: ARMED_AT, armedVersion: 1 }, ...over } as Partial<ScheduledTask>);
+
+  function render(): HTMLDivElement {
+    return harness.mount(
+      <MemoryRouter initialEntries={['/schedule']}>
+        <Routes>
+          <Route path="/schedule" element={<ScheduleView />} />
+          <Route path="/schedule/:id" element={<harness.PathProbe onPath={(p) => (path = p)} />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+  }
+
+  const rowEl = (c: HTMLElement): HTMLElement => c.querySelector<HTMLElement>('[data-schedule-id="t1"]')!;
+  const menuItems = (c: HTMLElement): HTMLElement[] => [...c.querySelectorAll<HTMLElement>('.schedule-menu-item')];
+
+  it('an armed row’s line 2 carries the chip: a glyph whose accessible name is the words, the words beside it for a wide screen', async () => {
+    env.db.putScheduledTask(armedTask());
+    await env.boot();
+    const c = render();
+    await harness.settle();
+    const chip = rowEl(c).querySelector('.schedule-row-line2 [data-testid="schedule-on-its-own-chip"]');
+    expect(chip, 'the chip sits on line 2').not.toBeNull();
+    expect(chip?.getAttribute('role')).toBe('img');
+    expect(chip?.getAttribute('aria-label')).toBe(ON_ITS_OWN);
+    expect(chip?.textContent).toContain(ON_ITS_OWN);
+  });
+
+  it('NEGATIVE: an unarmed row has no chip, and its kebab has no stop act (the four acts as before)', async () => {
+    env.db.putScheduledTask(harness.makeTask({ id: 't1', title: 'Tidy', steps: [ask], appVersions: { ledger: 1 } }));
+    await env.boot();
+    const c = render();
+    await harness.settle();
+    expect(rowEl(c).querySelector('[data-testid="schedule-on-its-own-chip"]')).toBeNull();
+    await harness.click(rowEl(c).querySelector('[data-testid="schedule-kebab"]'));
+    expect(menuItems(c).map((item) => item.textContent)).toEqual([ROW.runNow, ROW.edit, ROW.history, ROW.delete]);
+  });
+
+  it('the kebab’s *stop making changes on its own* clears the authority (no trace, still on) and says what happened, in the row', async () => {
+    env.db.putScheduledTask(armedTask());
+    await env.boot();
+    const c = render();
+    await harness.settle();
+    await harness.click(rowEl(c).querySelector('[data-testid="schedule-kebab"]'));
+    const stop = menuItems(c).find((item) => item.textContent === STOP);
+    expect(stop, 'the act is in the menu').toBeDefined();
+    await harness.click(stop);
+    await harness.settleUntil(() => env.db.getScheduledTask('t1')?.writeAuthority === undefined, 'the authority cleared');
+    const task = env.db.getScheduledTask('t1');
+    expect(task?.disarmed, 'the user did this — no trace').toBeUndefined();
+    expect(task?.enabled).toBe(true);
+    const outcome = rowEl(c).querySelector('[data-testid="schedule-row-outcome"]');
+    expect(outcome?.textContent).toBe(STOPPED);
+    expect(outcome?.getAttribute('role')).toBe('status');
+    expect(rowEl(c).querySelector('[data-testid="schedule-on-its-own-chip"]'), 'the chip goes with it').toBeNull();
+  });
+
+  it.each([
+    ['imported', 'no longer makes changes on its own — arrived with an imported file'],
+    ['app-updated', 'no longer makes changes on its own — this app was updated'],
+  ] as const)('a disarm the user did not perform (%s) leaves the attention line with the one act *review*, which opens the editor', async (reason, text) => {
+    env.db.putScheduledTask(harness.makeTask({ id: 't1', title: 'Tidy', steps: [ask], appVersions: { ledger: 1 }, disarmed: { reason, at: ARMED_AT } } as Partial<ScheduledTask>));
+    await env.boot();
+    const c = render();
+    await harness.settle();
+    const attention = rowEl(c).querySelector('[data-testid="schedule-attention"]');
+    expect(attention?.querySelector('span')?.textContent).toBe(text);
+    const act1 = rowEl(c).querySelector('[data-testid="schedule-attention-act"]');
+    expect(act1?.textContent).toBe('review');
+    await harness.click(act1);
+    expect(path).toBe('/schedule/t1');
+    expect(c.querySelector('[data-testid="schedule-group-attention"] [data-schedule-id="t1"]'), 'it sits under needs your attention').not.toBeNull();
+  });
+
+  it('paused by an app update on a schedule that was armed: the armed paused copy, resume the act', async () => {
+    env.db.putScheduledTask(
+      harness.makeTask({ id: 't1', title: 'Tidy', steps: [ask], appVersions: { ledger: 1 }, enabled: false, pausedReason: 'app-updated', disarmed: { reason: 'app-updated', at: ARMED_AT } } as Partial<ScheduledTask>),
+    );
+    await env.boot();
+    const c = render();
+    await harness.settle();
+    expect(rowEl(c).querySelector('[data-testid="schedule-attention"] span')?.textContent).toBe(
+      'paused: this app was updated — resuming won’t let it make changes on its own until you confirm again',
+    );
+    expect(rowEl(c).querySelector('[data-testid="schedule-attention-act"]')?.textContent).toBe('resume');
+  });
+
+  it('the delete confirm of a schedule whose changes can still be undone says they can’t be after this; without any, it reads as before', async () => {
+    env.db.putScheduledTask(armedTask());
+    env.db.putOwnUndo('ledger', 't1', {
+      id: UNDO_ID,
+      at: harness.iso(harness.NOW - harness.HOUR),
+      expiresAt: harness.iso(harness.NOW - harness.HOUR + 7 * harness.DAY),
+      authority: 'task',
+      via: 'schedule',
+      runId: 'r-1',
+      taskId: 't1',
+      steps: [{ table: 'expenses', op: 'update', columns: ['cents'], rows: [{ rowid: 1, before: [450], after: [999] }] }],
+    });
+    await env.boot();
+    const c = render();
+    await harness.settle();
+    await harness.click(rowEl(c).querySelector('[data-testid="schedule-kebab"]'));
+    await harness.click(menuItems(c).find((item) => item.textContent === ROW.delete));
+    const confirm = rowEl(c).querySelector('[role="group"]');
+    expect(confirm?.textContent).toContain(ROW.deleteConfirm);
+    expect(confirm?.textContent).toContain('— its changes from the last seven days can’t be undone after this');
+  });
+
+  it('NEGATIVE: a schedule with no live undo entry keeps the plain delete question', async () => {
+    env.db.putScheduledTask(harness.makeTask({ id: 't1', title: 'Tidy', steps: [ask], appVersions: { ledger: 1 } }));
+    await env.boot();
+    const c = render();
+    await harness.settle();
+    await harness.click(rowEl(c).querySelector('[data-testid="schedule-kebab"]'));
+    await harness.click(menuItems(c).find((item) => item.textContent === ROW.delete));
+    expect(rowEl(c).querySelector('[role="group"]')?.textContent).not.toContain('can’t be undone');
   });
 });

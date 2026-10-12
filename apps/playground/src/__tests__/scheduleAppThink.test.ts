@@ -28,6 +28,18 @@
 // rows this file already pins, not captured from a run). These rows are RED until
 // `schedule/appThink.ts`, `agent/sharedDdl.ts` and `access/copy.ts`'s `CHAT_DOOR` land; the
 // byte-identical rows and the dry-run row are GREEN today and must stay green.
+//
+// TASK-20261010-host-broker PR-4 (AC29; contract v2 D-PR4-15, D-PR4-16, D-PR4-17, D-PR4-5) — the rows
+// at the end: the KEYLESS gate's home is this module (`keylessBrainGate(db, appId)` + its sentence
+// `KEYLESS_BRAIN_REFUSAL`; the executors call it first on both paths — `scheduleExecutors.test.ts`):
+// the demo override or a keyless BYOK (`readerAdapterKind === 'demo'`) answers `refused` with
+// `blockedBy: 'brain'`, any other brain passes. The step's `saw` lists the shared tables it was handed
+// — only when there were any. The `RESPONSE_SCHEMA`'s proposals description says "never run
+// automatically" ONLY when the task is not armed, and under an armed task states the capture rule.
+// The offered changes go through the ONE proposal gate (`schedule/proposalGate.ts`): `inTransaction`
+// is asked before any dry run, and a busy app keeps nothing. The injected-transport rows above run
+// under the stores' default brain, which the executors refuse — that refusal is the executors', so
+// `executeAppThink` called directly with a transport still answers (every row above stays green).
 import { parseAppRequest, SCHEDULE_PROPOSALS_PER_RUN, type ScheduleStep, type ScheduledTask } from '@snugprotocol/protocol';
 import type { AgentTransport } from '@snugprotocol/runner';
 import type { UserDb } from '@snugprotocol/db';
@@ -38,13 +50,16 @@ import { appMissing } from '../schedule/copy.js';
 import type { StepContext } from '../schedule/engine-types.js';
 import {
   DEMO_BRAIN_REFUSAL,
+  KEYLESS_BRAIN_REFUSAL,
   SCHEDULE_DATA_DELIMITER,
   SCHEDULED_THINK_ACTION,
   defaultTransportFor,
   droppedNote,
   executeAppThink,
+  keylessBrainGate,
   type AppThinkStep,
 } from '../schedule/appThink.js';
+import { modeStore, providerStore } from '../state/mode.js';
 import { CANCELLED_SUMMARY } from '../schedule/executors.js';
 import { CHAT_DOOR } from '../access/copy.js';
 import type { MaterialisedSet, MaterialisedTable } from '../access/service.js';
@@ -824,5 +839,149 @@ describe('the scheduler door — shared tables in the context (AC13; D-PR2-13)',
       expect(options?.attach ?? []).toEqual([]);
     }
     expect(await realBytes(budgetId)).toBe(before);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// TASK-20261010-host-broker PR-4 — the keyless gate, `saw`, the armed wording, the one gate
+// ---------------------------------------------------------------------------------------------
+
+describe('PR-4 — the keyless gate (D-PR4-15): refused with blockedBy "brain", or nothing', () => {
+  afterEach(() => {
+    modeStore.set('byok');
+    providerStore.set('mock');
+    webllmFlagStore.set(false);
+    webgpuStore.set('unknown');
+  });
+
+  const refused = (): unknown => ({ status: 'refused', summary: KEYLESS_BRAIN_REFUSAL, calls: { ai: 0, net: 0 }, blockedBy: 'brain' });
+
+  it('the sentence is a string of its own', () => {
+    expect(typeof KEYLESS_BRAIN_REFUSAL).toBe('string');
+    expect(KEYLESS_BRAIN_REFUSAL.length).toBeGreaterThan(0);
+  });
+
+  it('BYOK on the keyless demo provider (the default) → refused', () => {
+    expect(keylessBrainGate(db, appId)).toEqual(refused());
+  });
+
+  it('BYOK on Anthropic with no key in the FILE → refused; with the key → passes (undefined)', () => {
+    providerStore.set('anthropic');
+    expect(keylessBrainGate(db, appId)).toEqual(refused());
+    db.setSecret('byok:anthropic', 'sk-ant-api03-test-0123456789abcdefghij');
+    expect(keylessBrainGate(db, appId)).toBeUndefined();
+  });
+
+  it('the demo override (WebLLM on, no GPU) → refused even with a key in the file', () => {
+    providerStore.set('anthropic');
+    db.setSecret('byok:anthropic', 'sk-ant-api03-test-0123456789abcdefghij');
+    webllmFlagStore.set(true);
+    webgpuStore.set('no');
+    expect(keylessBrainGate(db, appId)).toEqual(refused());
+  });
+
+  it('a local brain and the subscription brain pass — they are brains, not the demo', () => {
+    modeStore.set('local');
+    expect(keylessBrainGate(db, appId)).toBeUndefined();
+    modeStore.set('subscription');
+    expect(keylessBrainGate(db, appId)).toBeUndefined();
+  });
+});
+
+describe('PR-4 — `saw`: the shared tables the step was handed, only when there were any (D-PR4-17, R-88)', () => {
+  it('a non-empty set → saw names each table by its source and its own name, in the set’s order', async () => {
+    const transport = fakeTransport(json({ answer: 'ok' }));
+    const step = thinkStep();
+    const outcome = await executeAppThink(step, context([step]), { transportFor: () => transport, sharedFor: () => Promise.resolve(sharedSet([TRANSACTIONS, ACCOUNTS])) });
+    expect(outcome.saw).toEqual([
+      { source: 'Ledger', table: 'transactions' },
+      { source: 'Ledger', table: 'accounts' },
+    ]);
+  });
+
+  it('a skipped grant is not something the step saw', async () => {
+    const transport = fakeTransport(json({ answer: 'ok' }));
+    const step = thinkStep();
+    const outcome = await executeAppThink(step, context([step]), {
+      transportFor: () => transport,
+      sharedFor: () => Promise.resolve(sharedSet([TRANSACTIONS], [{ grantId: 'g-pantry', sourceAppId: 'pantry-app', sourceName: 'Pantry', reason: 'timeout' }])),
+    });
+    expect(outcome.saw).toEqual([{ source: 'Ledger', table: 'transactions' }]);
+  });
+
+  it('an EMPTY set, or no sharedFor at all → no saw seat (today’s outcome, exactly)', async () => {
+    const step = thinkStep();
+    const empty = await executeAppThink(step, context([step]), { transportFor: () => fakeTransport(json({ answer: 'ok' })), sharedFor: () => Promise.resolve(EMPTY_SET) });
+    expect(empty).toEqual({ status: 'ok', summary: 'ok', calls: { ai: 1, net: 0 } });
+    const none = await executeAppThink(step, context([step]), { transportFor: () => fakeTransport(json({ answer: 'ok' })) });
+    expect(none).toEqual({ status: 'ok', summary: 'ok', calls: { ai: 1, net: 0 } });
+  });
+
+  it('a step that never reached a brain saw nothing', async () => {
+    const step = thinkStep();
+    const outcome = await executeAppThink(step, context([step]), { transportFor: () => undefined, sharedFor: () => Promise.resolve(sharedSet([TRANSACTIONS])) });
+    expect(outcome.saw).toBeUndefined();
+  });
+});
+
+describe('PR-4 — RESPONSE_SCHEMA’s proposals wording follows the task’s armed state (D-PR4-16)', () => {
+  function proposalsDescription(wire: string): string {
+    const parsed = parseAppRequest(wire);
+    if (!parsed.ok) throw new Error(`wire did not parse: ${parsed.detail}`);
+    const schema = (parsed.envelope as { responseSchema?: { properties?: { proposals?: { description?: string } } } }).responseSchema;
+    return schema?.properties?.proposals?.description ?? '';
+  }
+
+  const armedTask = (steps: ScheduleStep[]): ScheduledTask =>
+    ({ ...task(steps), writeAuthority: { rowsPerRun: 200, armedAt: NOW, armedVersion: 1 } }) as ScheduledTask;
+
+  it('unarmed: the changes are offered for approval and "never run automatically"', async () => {
+    const transport = fakeTransport(json({ answer: 'ok' }));
+    const step = thinkStep();
+    await executeAppThink(step, context([step]), { transportFor: () => transport });
+    expect(proposalsDescription(transport.wires[0] ?? '')).toContain('never run automatically');
+  });
+
+  it('armed: "never run automatically" is NOT said (it would be false), and the capture rule is', async () => {
+    const transport = fakeTransport(json({ answer: 'ok' }));
+    const step = thinkStep();
+    await executeAppThink(step, context([step], { task: armedTask([step]) }), { transportFor: () => transport });
+    const description = proposalsDescription(transport.wires[0] ?? '');
+    expect(description).not.toContain('never run automatically');
+    expect(description).toContain('no functions, arithmetic or conflict clause');
+  });
+});
+
+describe('PR-4 — the offered changes go through the ONE proposal gate (D-PR4-16, D-PR4-5)', () => {
+  it('inTransaction is asked for the step’s app BEFORE the dry run', async () => {
+    const busy = vi.spyOn(db.driver, 'inTransaction');
+    const scratchRun = vi.spyOn(db, 'scratchRun');
+    const transport = fakeTransport(json({ answer: 'x', proposals: [{ sql: 'DELETE FROM t WHERE id = 1' }] }));
+    const step = thinkStep({ context: { maxRows: 50 } });
+    const outcome = await executeAppThink(step, context([step]), { transportFor: () => transport });
+    expect(outcome.proposals).toEqual([{ appId, sql: 'DELETE FROM t WHERE id = 1', counts: { changes: 1 } }]);
+    expect(busy).toHaveBeenCalledWith(appId);
+    expect(busy.mock.invocationCallOrder[0]).toBeLessThan(scratchRun.mock.invocationCallOrder[0]!);
+  });
+
+  it('the app mid-change → nothing is kept and nothing dry-runs', async () => {
+    vi.spyOn(db.driver, 'inTransaction').mockResolvedValue(true);
+    const scratchRun = vi.spyOn(db, 'scratchRun');
+    const transport = fakeTransport(json({ answer: 'x', proposals: [{ sql: 'DELETE FROM t WHERE id = 1' }] }));
+    const step = thinkStep({ context: { maxRows: 50 } });
+    const outcome = await executeAppThink(step, context([step]), { transportFor: () => transport });
+    expect(outcome.status).toBe('ok');
+    expect(outcome.proposals).toBeUndefined();
+    expect(scratchRun).not.toHaveBeenCalled();
+    expect(await realRowCount(appId)).toBe(3);
+  });
+
+  it('a credential-carrying change never asks inTransaction (the gate’s order: schema → credential → busy → dry run)', async () => {
+    const busy = vi.spyOn(db.driver, 'inTransaction');
+    const transport = fakeTransport(json({ answer: 'x', proposals: [{ sql: "UPDATE t SET label = 'Bearer eyJhbGciOiJIUzI1NiJ9.abcdefghij.klmnopqrst' WHERE id = 1" }] }));
+    const step = thinkStep({ context: { maxRows: 50 } });
+    const outcome = await executeAppThink(step, context([step]), { transportFor: () => transport });
+    expect(outcome.proposals).toBeUndefined();
+    expect(busy).not.toHaveBeenCalled();
   });
 });

@@ -62,6 +62,7 @@ import {
   ACCESS_CARD,
   ACCESS_SHEET,
   CHAT_DOOR,
+  OWN_UNDO,
   CONSENT_SHEET,
   CONSENT_UI,
   EGRESS,
@@ -89,6 +90,7 @@ import { nameCollides, provenanceLine, readerProvenanceKind } from '../access/pr
 import { starterSourceOf } from '../schedule/Templates.js';
 import { STARTER_PREFIX, starterInstallSource } from '../starter/starterApps.js';
 import { EXCLUDED_REASONS } from '../access/relevance.js';
+import { literalsIn, scriptKindOf } from './literalsIn.js';
 
 // Local-time fixtures: every clock below is built from local components, so the pins hold in
 // any timezone the suite runs in.
@@ -973,45 +975,8 @@ describe('PR-3 — every new sentence keeps the straight apostrophe and the pers
 
 const ACCESS_DIR = path.resolve(__dirname, '..', 'access');
 
-/** One piece of text a person could read: as it is reported, and the words the rule is applied to. */
-interface Literal {
-  /** The literal as reported — a template's source text between its backticks, substitutions included. */
-  text: string;
-  /** Only what a person reads: a template's LITERAL parts (a `${grant.id}` substitution is code, not copy). */
-  words: string;
-}
-
-/** A string that names a module — `from './grants.js'`, `import('./x.js')`, `require`-style references — is a file name, not a sentence. */
-function isModuleSpecifier(node: ts.Node): boolean {
-  const parent = node.parent;
-  if ((ts.isImportDeclaration(parent) || ts.isExportDeclaration(parent)) && parent.moduleSpecifier === node) return true;
-  if (ts.isCallExpression(parent) && parent.expression.kind === ts.SyntaxKind.ImportKeyword && parent.arguments[0] === node) return true;
-  if (ts.isExternalModuleReference(parent)) return true;
-  return ts.isLiteralTypeNode(parent) && ts.isImportTypeNode(parent.parent);
-}
-
-/**
- * Every piece of text in a source, by the TypeScript parser (comments are trivia, never seen):
- * string literals (JSX attribute strings included), template literals (nested ones too), and
- * JSX text nodes — module specifiers left out.
- */
-function literalsIn(code: string, kind: ts.ScriptKind = ts.ScriptKind.TSX): Literal[] {
-  const source = ts.createSourceFile(kind === ts.ScriptKind.TSX ? 'scan.tsx' : 'scan.ts', code, ts.ScriptTarget.Latest, true, kind);
-  const out: Literal[] = [];
-  const visit = (node: ts.Node): void => {
-    if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
-      if (!isModuleSpecifier(node)) out.push({ text: node.text, words: node.text });
-    } else if (ts.isTemplateExpression(node)) {
-      const parts = [node.head.text, ...node.templateSpans.map((span) => span.literal.text)];
-      out.push({ text: node.getText(source).slice(1, -1), words: parts.join(' \u2026 ') });
-    } else if (ts.isJsxText(node)) {
-      if (node.text.trim() !== '') out.push({ text: node.text.trim(), words: node.text });
-    }
-    ts.forEachChild(node, visit);
-  };
-  visit(source);
-  return out;
-}
+// The walker itself — `Literal`, `isModuleSpecifier`, `literalsIn`, `scriptKindOf` — is the ONE shared helper
+// `./literalsIn.ts` (TASK-20261010-host-broker PR-4, D-PR4-21): `scheduleCopy.test.ts` scans with it too.
 
 /** Every string literal in a source, as reported (the share-word check below reads these). */
 function stringLiterals(code: string, kind?: ts.ScriptKind): string[] {
@@ -1028,8 +993,6 @@ function internalWordsIn(code: string, kind?: ts.ScriptKind): string[] {
     .filter((literal) => INTERNAL_WORD.test(literal.words) && !MACHINE_TOKENS.has(literal.text))
     .map((literal) => literal.text);
 }
-
-const scriptKindOf = (file: string): ts.ScriptKind => (file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
 
 /** Every .ts/.tsx file under access/, recursively; an absent directory is an empty list. */
 function accessFiles(dir: string = ACCESS_DIR): string[] {
@@ -1201,5 +1164,53 @@ describe('vocabulary scan — no file under access/ but copy.ts spells grant, re
     expect(literals.sort()).toEqual(
       ["the other app's data is too large to share this way", 'installed from a share link on ${installedOn} · not built by you', 'never shared', "a column it names isn't shared"].sort(),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// TASK-20261010-host-broker PR-4 — own-app undo's sentences (D-PR4-19): ONE home, `OWN_UNDO`
+// ---------------------------------------------------------------------------------------------
+
+describe('PR-4 — OWN_UNDO: the own-app undo’s armed question, once, in access/copy.ts (D-PR4-19; D16, D20)', () => {
+  it('arm(n, appName) is the contract’s sentence, byte for byte', () => {
+    expect(OWN_UNDO.arm(12, 'Ledger')).toBe('put 12 rows in Ledger back as they were before this change? (if they changed since, nothing happens)');
+  });
+
+  it('…and it agrees in number with its count, as the ⋈ sheet’s question does (Gate-5 UI-1 of PR-3) — Q: the contract gives only the plural', () => {
+    expect(OWN_UNDO.arm(1, 'Ledger')).toBe('put 1 row in Ledger back as it was before this change? (if it changed since, nothing happens)');
+  });
+
+  it('the count is rowsWord’s — never "row(s)"', () => {
+    expect(OWN_UNDO.arm(2, 'Ledger')).toContain(rowsWord(2));
+    for (const n of [1, 2, 12, 200]) expect(OWN_UNDO.arm(n, 'Ledger')).not.toContain('row(s)');
+  });
+
+  it('the answers are REUSED from the ⋈ sheet, never respelled: every string OWN_UNDO holds is one of ACCESS_SHEET’s undo words', () => {
+    const reused = new Set<string>([ACCESS_SHEET.undo, ACCESS_SHEET.undoYes, ACCESS_SHEET.undoKeep, ACCESS_SHEET.undone]);
+    for (const [key, value] of Object.entries(OWN_UNDO as Record<string, unknown>)) {
+      if (typeof value === 'string') expect(reused.has(value), `OWN_UNDO.${key} = ${JSON.stringify(value)} respells a sheet word`).toBe(true);
+    }
+    const source = readFileSync(path.resolve(__dirname, '..', 'access', 'copy.ts'), 'utf8');
+    expect(source.split("'yes, undo'").length - 1, '"yes, undo" is spelled once').toBe(1);
+  });
+
+  it('no file outside access/copy.ts spells the own-undo question — the chat card and the result page compose it from OWN_UNDO', () => {
+    const SRC = path.resolve(__dirname, '..');
+    const under = (dir: string): string[] =>
+      existsSync(dir)
+        ? readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+            const full = path.join(dir, entry.name);
+            if (entry.isDirectory()) return entry.name === '__tests__' ? [] : under(full);
+            return /\.tsx?$/.test(entry.name) ? [full] : [];
+          })
+        : [];
+    const offenders = [...under(path.join(SRC, 'schedule')), ...under(path.join(SRC, 'agent')), ...under(path.join(SRC, 'views')), ...under(path.join(SRC, 'access'))]
+      .filter((file) => file !== path.join(SRC, 'access', 'copy.ts'))
+      .filter((file) => literalsIn(readFileSync(file, 'utf8'), scriptKindOf(file)).some((literal) => /before this change\?/.test(literal.words)));
+    expect(offenders.map((file) => path.relative(SRC, file))).toEqual([]);
+  });
+
+  it('the shared walker is the one this file scans with (D-PR4-21) — a JSX text node is a sentence', () => {
+    expect(literalsIn('export const A = () => <p>the reader may read</p>;').map((literal) => literal.text)).toEqual(['the reader may read']);
   });
 });
