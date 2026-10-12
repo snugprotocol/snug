@@ -167,7 +167,19 @@ export {
   OWN_UNDO_APPROVAL_BUCKET,
   OWN_UNDO_SETTING_PREFIX,
   ownUndoKey,
+  // The imported marker (TASK-20261010-host-broker PR-5, D-PR5-9).
+  APP_PROVENANCE_SETTING_PREFIX,
+  appIdFromAppProvenanceKey,
+  appProvenanceKey,
 } from './userdb/app-settings-keys.js';
+
+// The imported marker's fail-closed read (TASK-20261010-host-broker PR-5, D-PR5-9): the access
+// provenance reads `appProvenance:<appId>` through it — a row it cannot read is imported, no date.
+export { readAppProvenance } from './userdb/app-provenance.js';
+
+// The access declaration's reader (TASK-20261010-host-broker PR-5, D-PR5-2): the shared install
+// preview reads a bundle's html in memory through the SAME grammar the `accessWants:` row is derived by.
+export { ACCESS_WANTS_SCAN_MAX_UNITS, extractAccessWants, findHeadMeta } from './access-wants.js';
 
 // The import/export bound a `running`/`pending` claim is retired under (TASK-20261009 C4).
 export { SCHEDULE_IMPORTED_CLAIM_MAX_AGE_MS } from './userdb/schedules.js';
@@ -209,6 +221,10 @@ export {
   // PR-4 (D-PR4-4): the named predicate the proposal gate asks before an armed schedule proposes.
   ownCapturable,
   planBrokeredWrite,
+  // PR-5 (D-PR5-11): the chat's cross-app change, renamed from the shared alias to the source's table.
+  renameDmlTarget,
+  type RenameDmlTargetResult,
+  type RenameRefusalRule,
   type ApplyRefusal,
   type BrokeredApplyInput,
   type BrokeredApplyResult,
@@ -309,6 +325,8 @@ export {
   loadSidecar,
   saveSidecar,
   sha256Hex,
+  // PR-5 (D-PR5-8): the anchor a pull that carried history leaves, so the next tick pushes.
+  SYNC_UNANCHORED_HASH,
   adoptLegacySidecar,
   sidecarFileFor,
   type SyncSidecarState,

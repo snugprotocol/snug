@@ -80,8 +80,9 @@ export function RunHeaderActions({
   // The schedule sheet's open state lives HERE, not in RunView: the sheet portals to <body>
   // (ConfirmOverlay), so nothing about the header's layout changes while it is open.
   const [scheduleOpen, setScheduleOpen] = useState(false);
-  // The access sheet's open state, the same way (it portals too). The ⋈ shows only for an owned
-  // app with ACCESS STATE where the host allows access — the hook reads nothing otherwise.
+  // The access sheet's open state, the same way (it portals too). The ⋈ shows for an owned app
+  // where the host allows access, when it has ACCESS STATE or the file holds another app that may
+  // use access (TASK-20261010-host-broker PR-5, D-PR5-5) — the hook reads nothing otherwise.
   const [accessOpen, setAccessOpen] = useState(false);
   const accessState = useHasAccessState(appId, !isStarter && allows('access'));
   return (
@@ -196,9 +197,12 @@ export function RunHeaderActions({
       {/*
         THE ACCESS CONTROL (TASK-20261010-cross-app-access AC19, D20) — between the schedule
         control and share, so share keeps the cluster's last slot. Glyph `⋈` — a join, monochrome
-        like its neighbours; the accessible name is "access". Rendered only when the app HAS
-        access state (access either way, a pending ask, or a declined ask — the ⚯ rule: no empty
-        door) on an owned app where the host allows access. Opens the ⋈ sheet (portaled).
+        like its neighbours; the accessible name is "access". On an owned app where the host allows
+        access, rendered when the app has access state (access either way, a pending ask, or a
+        declined ask) OR the file holds another app that may use access — PR-5 (D-PR5-5) reversed
+        D20's "no empty door": the creation act and a source's offer live behind it, so an app
+        with nothing yet still has a door to start from. A one-app file still shows none. Opens the
+        ⋈ sheet (portaled).
       */}
       {accessState ? (
         <Button

@@ -141,6 +141,12 @@
   color: var(--fg);
 }
 
+.schedule-running-more {
+  flex: none;
+  color: var(--fg-muted);
+  font-size: var(--text-xs);
+}
+
 .schedule-running-cancel {
   padding: 0 var(--space-1);
   min-height: 24px;
@@ -169,8 +175,11 @@
   }
 
   /* A run delegated to the open app: "running in <app>" is shorter than the default and is the
-     one thing that says WHERE the run executes (ADR-0077 §2) — it stays. */
-  .schedule-running-chip--in-app .schedule-running-label {
+     one thing that says WHERE the run executes (ADR-0077 §2) — it stays. So does "fetching in
+     <source>" (TASK-20261010-host-broker PR-5, D-PR5-17): the fetch chip has no title, and its
+     label is the one thing that says which app is fetching and what its act stops. */
+  .schedule-running-chip--in-app .schedule-running-label,
+  .schedule-running-chip--fetching .schedule-running-label {
     display: inline;
   }
 }

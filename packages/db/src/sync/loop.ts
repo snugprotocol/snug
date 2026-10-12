@@ -5,6 +5,14 @@
 // divergence, surfaced as an event and resolved exclusively by the explicit
 // last-writer-wins actions applyRemote()/pushLocal().
 //
+// Amended by ADR-0076 (TASK-20261010-host-broker PR-5, D-PR5-8): the DATA stays a divergence
+// the user resolves, but the ACCESS HISTORY survives either resolution and a STOP WINS on
+// both sides. A pull carries this device's newer history lines into the origin's image and
+// puts this device's revocations back over it (`importUserDb`'s `carryHistorySince`); a
+// *keep this device's copy* first carries the origin's lines and revocations into the local
+// file (`carryFromImage`). A pull that moved anything holds a file the origin has not seen,
+// so it anchors `SYNC_UNANCHORED_HASH` and the next tick pushes the merged history up.
+//
 // Deliberately absent: pagehide/visibility listeners. keepalive caps (~64 KiB) make a
 // pagehide network push a lie for real images — pagehide flushes OPFS only (the UserDb
 // does that itself); a local copy newer than the origin pushes via reconcileOnStart()
@@ -17,16 +25,48 @@ import {
   type SyncProvider,
   type SyncPullResult,
 } from './provider.js';
-import { adoptLegacySidecar, loadSidecar, saveSidecar, sha256Hex, type SyncSidecarState } from './sidecar.js';
+import {
+  SYNC_UNANCHORED_HASH,
+  adoptLegacySidecar,
+  loadSidecar,
+  saveSidecar,
+  sha256Hex,
+  type SyncSidecarState,
+} from './sidecar.js';
+
+// The sentinel is sidecar state (a `lastPushedHash` value); the loop is what anchors it.
+export { SYNC_UNANCHORED_HASH } from './sidecar.js';
 
 /** The subset of UserDb the loop needs — structural, so tests can stub it. */
 export interface SyncableUserDb {
   exportUserDb(opts?: { includeSecrets?: boolean }): Promise<Uint8Array>;
-  /** Result (the import report) is deliberately ignored by the loop. */
-  importUserDb(bytes: Uint8Array, options?: { trustedOrigin?: boolean }): Promise<unknown>;
+  /**
+   * The loop reads ONE seat of the result, tolerantly: `history` (the carry's counts) decides
+   * the anchor. Anything else in the import report — or no report at all — is ignored.
+   */
+  importUserDb(bytes: Uint8Array, options?: { trustedOrigin?: boolean; carryHistorySince?: string | null }): Promise<unknown>;
+  /**
+   * Carry a pulled image's access lines newer than `since` and its revocations into the live
+   * file (PR-5, D-PR5-8) — *keep this device's copy* runs it before it pushes. Never throws for
+   * an image it cannot open; the loop does not let it block the push either way.
+   */
+  carryFromImage(bytes: Uint8Array, options: { since: string | null }): Promise<{ carried: number; restopped: number }>;
   listSecretKeys(): string[];
   getSecret(key: string): string | undefined;
   setSecret(key: string, value: string): void;
+}
+
+/**
+ * Whether an import moved the history (D-PR5-8): its report's `history` seat names a line
+ * carried or a stop put back. Read tolerantly — a stub's report, an older report with no seat,
+ * or none at all is "nothing moved", which keeps today's anchor.
+ */
+function historyMoved(report: unknown): boolean {
+  if (typeof report !== 'object' || report === null) return false;
+  const history: unknown = (report as { history?: unknown }).history;
+  if (typeof history !== 'object' || history === null) return false;
+  const { carried, restopped } = history as { carried?: unknown; restopped?: unknown };
+  return (typeof carried === 'number' && carried > 0) || (typeof restopped === 'number' && restopped > 0);
 }
 
 export type SyncEvent =
@@ -136,8 +176,15 @@ export function createSyncLoop(options: CreateSyncLoopOptions): SyncLoop {
     return (sidecar = await loadSidecar(backend, file));
   };
 
+  /**
+   * `lastSyncAt` is when this device and the origin last AGREED — the history carry's `since`
+   * (D-PR5-8). So an anchor on the sentinel keeps the previous instant: the origin has not yet
+   * seen the lines that pull carried in, and a divergence before the next push lands must still
+   * count them as new, or *use the origin copy* would then lose them.
+   */
   const anchor = async (revision: string, hash: string): Promise<void> => {
-    sidecar = { lastPushedRevision: revision, lastPushedHash: hash, lastSyncAt: new Date().toISOString() };
+    const lastSyncAt = hash === SYNC_UNANCHORED_HASH ? (await state()).lastSyncAt : new Date().toISOString();
+    sidecar = { lastPushedRevision: revision, lastPushedHash: hash, ...(lastSyncAt !== undefined ? { lastSyncAt } : {}) };
     await saveSidecar(backend, file, sidecar);
   };
 
@@ -189,16 +236,24 @@ export function createSyncLoop(options: CreateSyncLoopOptions): SyncLoop {
     });
   };
 
-  /** Pull is a merge, never a swap: local `snug_secrets` rows survive the import. */
+  /**
+   * Pull is a merge, never a swap: local `snug_secrets` rows survive the import, and so do this
+   * device's access-history lines newer than its last sync and its stops (D-PR5-8) — `null` on a
+   * device that never synced, so every local line is a candidate.
+   */
   const pullMerge = async (remote: SyncPullResult): Promise<void> => {
     const kept = userDb.listSecretKeys().map((key) => [key, userDb.getSecret(key)] as const);
+    const since = (await state()).lastSyncAt ?? null;
     // Pulled from the user's OWN configured sync origin, so contracts survive (R-M2).
-    await userDb.importUserDb(remote.bytes, { trustedOrigin: true });
+    const report = await userDb.importUserDb(remote.bytes, { trustedOrigin: true, carryHistorySince: since });
     for (const [key, value] of kept) {
       if (value !== undefined) userDb.setSecret(key, value); // local wins over any pulled row
     }
-    // Anchor on the merged image so the next tick sees "unchanged" and stays quiet.
-    await anchor(remote.revision, (await payloadFor()).plaintextHash);
+    // Anchor on the merged image so the next tick sees "unchanged" and stays quiet — unless the
+    // pull carried history or put a stop back: then this file holds what the origin has not, and
+    // the sentinel (never equal to a real hash) makes the next tick push it up.
+    const hash = historyMoved(report) ? SYNC_UNANCHORED_HASH : (await payloadFor()).plaintextHash;
+    await anchor(remote.revision, hash);
     emit({ kind: 'pulled', revision: remote.revision });
   };
 
@@ -262,6 +317,16 @@ export function createSyncLoop(options: CreateSyncLoopOptions): SyncLoop {
       // Explicit local-wins: rebase onto whatever revision the origin holds RIGHT NOW,
       // so the conditional write replaces it (or provisions an empty origin).
       const remote = await provider.pull();
+      if (remote !== undefined) {
+        // This device's DATA wins, but the origin's newer access lines and its stops come along
+        // (D-PR5-8) — carried into the local file BEFORE the payload is built, so they ride the
+        // push. Never a reason not to push: the user's choice goes ahead whatever the carry does.
+        try {
+          await userDb.carryFromImage(remote.bytes, { since: (await state()).lastSyncAt ?? null });
+        } catch {
+          // an image the carry cannot use carries nothing
+        }
+      }
       const { plaintextHash, wireBytes } = await payloadFor();
       await push(wireBytes, plaintextHash, remote?.revision);
     });

@@ -35,6 +35,12 @@
 // schedule whose *ask* step GAINS *let it look things up* saves through the consent, which names the
 // connections and the cost (U9); and an arming refused after the save says the schedule was saved
 // and its changes wait (U13 — never the refusal alone).
+//
+// *FETCH NEW DATA FIRST* (TASK-20261010-host-broker PR-5, D-PR5-19; F8). The apps each *ask* step's
+// app could ask to fetch new data first are read ONCE per render from the one derivation
+// (`fetchFirstSourcesByApp`), re-read when access changes, and handed to the steps (the tick and its
+// line) and to the consent (its row). The tick is the seat's only setter; an existing schedule whose
+// *ask* step GAINS it saves through the consent, which names the apps it would ask.
 
 import type { ReactElement } from 'react';
 import { useId, useMemo, useRef, useState } from 'react';
@@ -42,6 +48,7 @@ import { useId, useMemo, useRef, useState } from 'react';
 import type { AppRecord, UserDb } from '@snugprotocol/db';
 import { SCHEDULE_TITLE_MAX_CHARS, type AlertKind, type MissedPolicy, type ScheduleSpec, type ScheduleStep, type ScheduledTask } from '@snugprotocol/protocol';
 
+import { useAccessRevision } from '../access/grants.js';
 import { useAppProvider } from '../state/appModel.js';
 import { useByokKeyPresence, useMode, useProvider } from '../state/mode.js';
 import { useBrain } from '../state/webllm.js';
@@ -72,6 +79,7 @@ import {
   type StepDraft,
 } from './editorModel.js';
 import { EnableConsent, armIfTicked, type EnableChoice } from './EnableConsent.js';
+import { fetchFirstSourcesByApp } from './fetchFirstFacts.js';
 import { frequencyFloorRefusal } from './floors.js';
 import { hostHonesty } from './honesty.js';
 import { pageClock, useNow } from './pageModel.js';
@@ -110,6 +118,8 @@ interface PendingConsent extends PreparedSave {
 
 /** An *ask* step that may look things up — absent (a step the schedule did not have) is not one. */
 const looksThingsUp = (step: ScheduleStep | undefined): boolean => step?.kind === 'app-think' && step.tools === true;
+/** An *ask* step that fetches new data first — absent is not one. */
+const fetchesFirst = (step: ScheduleStep | undefined): boolean => step?.kind === 'app-think' && step.refreshFirst === true;
 
 export function ScheduleEditor({ initial, parseFailed: initialParseFailed, apps, db, task, onSaved, onCancel }: ScheduleEditorProps): ReactElement {
   const id = useId();
@@ -171,8 +181,18 @@ export function ScheduleEditor({ initial, parseFailed: initialParseFailed, apps,
   const losesOnItsOwn = existing !== undefined && armed && armableApp === undefined;
   /** An existing schedule whose *ask* step gains *let it look things up*: the consent names what it may use and what it costs (U9). */
   const gainsLookUps = existing !== undefined && prepared.ok && prepared.steps.some((step, index) => looksThingsUp(step) && !looksThingsUp(existing.steps[index]));
+  /** An existing schedule whose *ask* step gains *fetch new data first*: the consent names the apps it would ask (D-PR5-19). */
+  const gainsFetchFirst = existing !== undefined && prepared.ok && prepared.steps.some((step, index) => fetchesFirst(step) && !fetchesFirst(existing.steps[index]));
   /** What the brain an app's *ask* step runs on now can do there — the engine's own gates (U1). */
   const brainFor = (appId: string): AskBrain => askBrainFor(db, appId);
+  // The apps each ask step's app could ask to fetch new data first: read for the apps the steps name (by value), the
+  // page's minute and the file's access — and again whenever any of them moves.
+  const accessRevision = useAccessRevision();
+  const thinkAppKey = [...new Set(draft.steps.flatMap((step) => (step.kind === 'app-think' && step.appId !== '' ? [step.appId] : [])))].join(' ');
+  const nowMs = now.getTime();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- `accessRevision` is the re-read itself: access changed, so read again
+  const fetchFirstByApp = useMemo(() => fetchFirstSourcesByApp(db, thinkAppKey === '' ? [] : thinkAppKey.split(' '), nowMs), [db, thinkAppKey, nowMs, accessRevision]);
+  const fetchFirstFor = (appId: string): readonly string[] => fetchFirstByApp[appId] ?? [];
 
   const update = (patch: Partial<EditorDraft>): void => setDraft((current) => ({ ...current, ...patch }));
 
@@ -271,7 +291,7 @@ export function ScheduleEditor({ initial, parseFailed: initialParseFailed, apps,
     // and so is a save that starts or widens making changes on its own (D-PR4-8).
     const spends = prepared.steps.some((step) => step.kind !== 'notify');
     const startsOnItsOwn = wantsOnItsOwn && !armed;
-    if ((existing === undefined && spends) || importedDisabled || (existing !== undefined && (startsOnItsOwn || widening || gainsLookUps))) {
+    if ((existing === undefined && spends) || importedDisabled || (existing !== undefined && (startsOnItsOwn || widening || gainsLookUps || gainsFetchFirst))) {
       setError(undefined);
       setConsent({ ...save, presetOnItsOwn: wantsOnItsOwn });
       return;
@@ -326,7 +346,7 @@ export function ScheduleEditor({ initial, parseFailed: initialParseFailed, apps,
 
       <SpecControls mode={draft.mode} spec={draft.spec} cron={draft.cron} onMode={onMode} onSpec={(spec) => update({ spec })} onCron={onCron} onCronCommit={onCronCommit} />
 
-      <StepsEditor steps={draft.steps} apps={apps} onChange={onSteps} brainFor={brainFor} />
+      <StepsEditor steps={draft.steps} apps={apps} onChange={onSteps} brainFor={brainFor} fetchFirstFor={fetchFirstFor} />
 
       {existing?.disarmed !== undefined ? (
         <div className="connection-note" role="note" data-testid="disarmed-note">
@@ -393,6 +413,7 @@ export function ScheduleEditor({ initial, parseFailed: initialParseFailed, apps,
           hostsByApp={approvedHostsByApp(db, appIdsOf(consent.steps))}
           connectionsByApp={lookUpNamesByApp(db, appIdsOf(consent.steps))}
           blockedApps={blockedAppsOf(db, appIdsOf(consent.steps))}
+          fetchFirstByApp={fetchFirstByApp}
           presetOnItsOwn={consent.presetOnItsOwn}
           busy={busy}
           {...(error !== undefined ? { error } : {})}

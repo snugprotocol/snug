@@ -16,6 +16,7 @@ import { getPlatform } from '../platform/platform.js';
 import { sqlJsEngineOptions } from '../run/sqlJsEngine.js';
 import { armDoorbell } from '../access/doorbell.js';
 import { resetAccessSession } from '../access/grants.js';
+import { abortAllRefreshes } from '../access/refreshRuns.js';
 import { resetThreadSessions } from '../agent/threadSessions.js';
 import { initScheduler } from '../schedule/scheduler.js';
 
@@ -228,6 +229,7 @@ export async function restoreUserDbFromBytes(bytes: Uint8Array): Promise<void> {
   resetSidecarIdentitySession();
   resetThreadSessions(); // ADR-0062 swap seam: the sessions mirror the file being replaced
   resetAccessSession(); // the same seam for access between apps (TASK-20261010-cross-app-access AC14)
+  abortAllRefreshes('reset'); // a fetch in flight writes nothing into the file that replaces this one (TASK-20261010-host-broker PR-5, S6)
   await backend.save(USERDB_FILE, bytes);
   corruptResult = undefined;
   userDbStatusStore.set({ state: 'opening' });
@@ -256,6 +258,7 @@ export async function recoverFresh(): Promise<UserDb> {
   if (corruptResult === undefined) throw new Error('recoverFresh: user DB is not in the corrupt state');
   resetThreadSessions(); // ADR-0062 swap seam
   resetAccessSession(); // TASK-20261010-cross-app-access AC14: session access mirrors the file being replaced
+  abortAllRefreshes('reset'); // TASK-20261010-host-broker PR-5 (S6): a fetch in flight writes nothing into the fresh file
   const fresh = await corruptResult.openFresh();
   corruptResult = undefined;
   armDoorbellQuietly(fresh); // a fresh file is a new facade: the doorbell follows it (D-PR3-20 b)
@@ -282,6 +285,7 @@ export function resetUserDbForTests(): void {
   resetSidecarIdentitySession();
   resetThreadSessions();
   resetAccessSession();
+  abortAllRefreshes('reset');
   opened = false;
   corruptResult = undefined;
   readyPromise = undefined;

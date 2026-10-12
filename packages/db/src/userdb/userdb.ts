@@ -62,6 +62,7 @@ import {
   type AccessHints,
   type AccessLogEntry,
   type AccessUndoEntry,
+  type AccessWants,
   type DbRequestFrame,
   type OwnUndoEntry,
   type RuntimeContract,
@@ -78,6 +79,7 @@ import {
   appIdFromRenamedSettingKey,
   appModelSettingKey,
   appProviderSettingKey,
+  appProvenanceKey,
   appRenamedSettingKey,
   starterVersionSettingKey,
   shareLinkSettingPrefixFor,
@@ -96,11 +98,15 @@ import {
 import {
   createAccessAccessors,
   reconcileImportedAccessGrants,
+  rederiveAccessWants,
   snapshotLocalAccessGrants,
   sweepAccessForDeletedApp,
+  writeAccessWantsFor,
   type AccessDecline,
   type AccessImportReport,
 } from './access.js';
+import { markImportedApps, snapshotLocalAppIdentity } from './app-provenance.js';
+import { applyTombstones, carryAccessHistory, snapshotLocalAccessHistory } from './history-carry.js';
 import { createOwnUndoAccessors, dropImportedOwnUndo, sweepOwnUndoForDeletedApp } from './own-undo.js';
 import type { OWN_UNDO_APPROVAL_BUCKET } from './app-settings-keys.js';
 import { jsonCharWeight, runScratchStatement } from './scratch-statement.js';
@@ -536,6 +542,16 @@ export interface UserDbImportOptions {
    * the playground and the desktop adopt secrets exactly as before.
    */
   stripSecrets?: boolean;
+  /**
+   * Carry THIS device's access history into the incoming image (TASK-20261010-host-broker PR-5,
+   * D-PR5-8; ADR-0009 amended by ADR-0076) — passed only by the sync loop's pull, as the sidecar's
+   * `lastSyncAt` (`null` on a device that never synced: every local line is a candidate). The
+   * local `accessLog:*` lines newer than it that the image lacks are carried in, and a grant the
+   * user stopped HERE stays stopped whatever the image says (a stop wins); the undo journals
+   * follow the image. ABSENT — the UI's file import, the recovery restore — carries nothing: the
+   * image arrives exactly as today.
+   */
+  carryHistorySince?: string | null;
 }
 
 /** What `importUserDb` surfaces about the auth reconciliation passes (plan D5/N1). */
@@ -566,6 +582,12 @@ export interface UserDbImportReport {
    * `imported` (untrusted only).
    */
   access: AccessImportReport;
+  /**
+   * The history carry (PR-5, D-PR5-8) — present ONLY when `carryHistorySince` was passed (`null`
+   * included): local lines carried into the image, local candidates not carried (an absent source,
+   * a cap), and pulled grant rows replaced by this device's stop.
+   */
+  history?: { carried: number; dropped: number; restopped: number };
 }
 
 /** One column of an app's table, as the consent sheet shows it (TASK-20261010 AC7). */
@@ -1044,6 +1066,15 @@ export interface UserDb {
   /** Stamp `undoneAt` on one entry — a done AND a failed undo alike (D-Q10). An unknown id is a no-op; ACCESS_INVALID for a bad instant. */
   markAccessUndone(targetAppId: string, id: string, at: string): void;
 
+  // The access declaration `accessWants:<appId>` (TASK-20261010-host-broker PR-5, D-PR5-2): a
+  // host-derived mirror of the app's current html head — written at every admission, re-derived on
+  // every import; read-only here.
+
+  /** The app's declaration, or `undefined` — none, an unknown app, or a row that does not parse. */
+  getAccessWants(appId: string): AccessWants | undefined;
+  /** Every app's readable declaration, by app id (one prefix read). */
+  listAccessWants(): ReadonlyMap<string, AccessWants>;
+
   // The OWN undo journal `ownUndo:<appId>:<bucket>` (TASK-20261010-host-broker PR-4, D-PR4-3): the
   // rows an own write changed — a bucket per armed schedule (its task id) and one for the user's
   // approvals (`approval`) — see the `own-undo.ts` header for the caps and the postures.
@@ -1086,6 +1117,14 @@ export interface UserDb {
    * applyRemote, recovery restore, and UI import all inherit it through here.
    */
   importUserDb(bytes: Uint8Array, options?: UserDbImportOptions): Promise<UserDbImportReport>;
+  /**
+   * *Keep this device's copy* without losing the origin's history (TASK-20261010-host-broker PR-5,
+   * D-PR5-8): open a pulled image through the SAME decode `importUserDb` uses, and carry ITS access
+   * lines newer than `since` (every line when `null`) and ITS revocations into this live file —
+   * nothing else moves. An image it cannot open (sealed for another key, not a database) carries
+   * nothing: it answers zeros and never throws, so the user's choice is never blocked.
+   */
+  carryFromImage(bytes: Uint8Array, options: { since: string | null }): Promise<{ carried: number; restopped: number }>;
 
   /**
    * Seals bytes into this file's container, or `undefined` when the file is not
@@ -1394,29 +1433,52 @@ function sqlOn(target: Database): SettingsSql {
 }
 
 /**
- * An UNTRUSTED import's chat messages lose their staged schedule suggestion (TASK-20261009
- * PR-B S9; ADR-0074 §4). The card on `meta.schedule` is a proposal the user has not answered,
- * rendered as if this hub's own brain had suggested it — in a foreign file it is a planted
- * suggestion with a *schedule it* button, so it goes, like the run rows' proposals do. Only the
- * `schedule` key is dropped: the data-write card (`meta.dataWrite`) is left as it is — its
- * approval re-runs the drift check against the live data before anything executes, which is
- * its own guard — and the rest of the meta (the artifact card, the brain stamp) stays. A
- * message whose meta held nothing else ends with no meta at all. Answers how many were dropped.
+ * The chat cards an untrusted import must not carry live (D-PR5-10), each with the seat that marks
+ * it ANSWERED: a staged schedule suggestion (`meta.schedule`, TASK-20261009 PR-B S9; ADR-0074 §4)
+ * answered by its `resolution`; the app's own change (`meta.dataWrite`) and the chat's change to
+ * another app's data (`meta.accessWrite`, PR-5) settled by their `outcome`.
  */
-function dropImportedScheduleCards(target: Database): number {
+const IMPORTED_CARD_RESOLUTION = { schedule: 'resolution', dataWrite: 'outcome', accessWrite: 'outcome' } as const;
+type ImportedCardKey = keyof typeof IMPORTED_CARD_RESOLUTION;
+
+/**
+ * An UNTRUSTED import's chat messages lose every UNANSWERED card named in `keys` (TASK-20261010-
+ * host-broker PR-5, D-PR5-10; S1). An unanswered card is a proposal the user has not answered,
+ * rendered as if this hub's own brain had made it — in a foreign file it is a planted card with
+ * an act on it (*schedule it*, *apply*), so it goes, like the run rows' proposals do. An answered
+ * card carries no act and stays; the rest of the meta (the artifact card, the brain stamp) stays,
+ * and a message whose meta held nothing else ends with no meta at all.
+ *
+ * By the PARSED key: EVERY message row with a meta is `JSON.parse`d — a pre-filter on the stored
+ * text (the old `meta LIKE '%"schedule"%'`) is what a JSON escape (`"\u0073chedule"`) walks past,
+ * while the reader's `JSON.parse` sees the key. A meta that does not parse renders no card (the
+ * tolerant reader ignores it) and is kept verbatim. A card value that is not an object answers
+ * nothing, so it is unanswered. Answers how many cards were dropped.
+ */
+function dropImportedCards(target: Database, keys: readonly ImportedCardKey[], options: { unresolvedOnly: boolean }): number {
   let dropped = 0;
-  for (const row of selectRows(target, `SELECT id, meta FROM ${USERDB_TABLES.chatMessages} WHERE meta LIKE '%"schedule"%'`)) {
+  for (const row of selectRows(target, `SELECT id, meta FROM ${USERDB_TABLES.chatMessages} WHERE meta IS NOT NULL`)) {
     let meta: unknown;
     try {
       meta = JSON.parse(String(row[1]));
     } catch {
       continue; // an unreadable meta renders no card; the tolerant reader already ignores it
     }
-    if (typeof meta !== 'object' || meta === null || !('schedule' in meta)) continue;
-    const { schedule: _card, ...rest } = meta as Record<string, unknown>;
+    if (typeof meta !== 'object' || meta === null || Array.isArray(meta)) continue;
+    const record = meta as Record<string, unknown>;
+    const gone: ReadonlySet<string> = new Set(
+      keys.filter((key) => {
+        if (!Object.hasOwn(record, key)) return false;
+        const card = record[key];
+        const answered = typeof card === 'object' && card !== null && Object.hasOwn(card, IMPORTED_CARD_RESOLUTION[key]);
+        return !(options.unresolvedOnly && answered);
+      }),
+    );
+    if (gone.size === 0) continue;
+    dropped += gone.size;
+    const rest = Object.fromEntries(Object.entries(record).filter(([key]) => !gone.has(key)));
     const next = Object.keys(rest).length === 0 ? null : JSON.stringify(rest);
     target.run(`UPDATE ${USERDB_TABLES.chatMessages} SET meta = ? WHERE id = ?`, [next, row[0]] as never);
-    dropped += 1;
   }
   return dropped;
 }
@@ -2536,6 +2598,10 @@ function construct(
       `INSERT INTO ${USERDB_TABLES.appVersions} (app_id, version, html, note, created_at, pinned, runtime_contract_json) VALUES (?, ?, ?, ?, ?, ?, ?)`,
       [appId, version, html, note ?? null, createdAt, pinned ? 1 : 0, contractJson],
     );
+    // The access declaration mirrors the html this admission makes current (D-PR5-2): every
+    // caller — install, save, revert, reset, a starter's or a shared bundle's install and update,
+    // the hand-in — lands its version here, and the version it inserts is the one it makes current.
+    writeAccessWantsFor({ select, run }, appId, version);
     // Retention: the newest N unpinned versions plus every pinned (factory) version.
     run(`DELETE FROM ${USERDB_TABLES.appVersions} WHERE app_id = ? AND version <= ? AND pinned = 0`, [
       appId,
@@ -2644,6 +2710,66 @@ function construct(
   function assertLiveApp(appId: string): void {
     if (deletedApps.has(appId)) throw new UserDbError(USERDB_ERROR_CODES.NOT_FOUND, `app "${appId}" was deleted`);
     if (getApp(appId) === undefined) throw new UserDbError(USERDB_ERROR_CODES.NOT_FOUND, `unknown app "${appId}"`);
+  }
+
+  /**
+   * Foreign bytes → an open candidate database with this hub's schema guarantees: the ONE decode
+   * `importUserDb` and `carryFromImage` share. A protected payload is unwrapped FIRST, so every
+   * guard after it — the cap, the magic check, the open-check — sees ordinary SQLite bytes; doing
+   * it here rather than at each call site is what gives sync pull-merge, applyRemote, recovery
+   * restore and the UI import identical behavior for free. The version stamp a file arrived with
+   * is another hub's claim, so the candidate is migrated forward and healed against
+   * `sqlite_master` before any table of it is read. Throws `UserDbError` (LOCKED_IMPORT,
+   * BAD_IMPORT, TOO_LARGE); the caller owns the returned handle.
+   */
+  async function decodeImage(incoming: Uint8Array, secrets: ContainerSecrets | undefined): Promise<{ image: Database; migratedFrom: number }> {
+    let bytes = incoming;
+    if (isEncryptedContainer(incoming)) {
+      const opened = await decryptContainer(incoming, secrets ?? {});
+      if (opened.status === 'locked') {
+        throw new UserDbError(
+          USERDB_ERROR_CODES.LOCKED_IMPORT,
+          'this Snug file is protected — enter its passphrase or Recovery Key to import it',
+        );
+      }
+      if (opened.status === 'corrupt') {
+        throw new UserDbError(USERDB_ERROR_CODES.BAD_IMPORT, `this Snug file is damaged: ${opened.reason}`);
+      }
+      bytes = opened.bytes;
+    }
+    // The cap applies to the PLAINTEXT: a container adds a header, wrapped keys, an
+    // IV and a tag, so charging the user for that overhead would make a database
+    // that fits become un-importable the moment they protected it (review B9).
+    if (bytes.byteLength > maxBytes) {
+      throw new UserDbError(USERDB_ERROR_CODES.TOO_LARGE, `import is ${bytes.byteLength} bytes — cap is ${maxBytes}`);
+    }
+    if (!hasSqliteMagic(bytes)) {
+      throw new UserDbError(USERDB_ERROR_CODES.BAD_IMPORT, 'not a SQLite database (missing magic header)');
+    }
+    let image: Database | undefined;
+    try {
+      image = new SQL.Database(bytes);
+      image.exec('SELECT count(*) FROM sqlite_master');
+    } catch (err) {
+      image?.close();
+      throw new UserDbError(USERDB_ERROR_CODES.BAD_IMPORT, `not an openable SQLite database: ${errorMessage(err)}`);
+    }
+    const foundVersion = readUserVersion(image);
+    if (foundVersion > USERDB_SCHEMA_VERSION) {
+      image.close();
+      throw new UserDbError(
+        USERDB_ERROR_CODES.BAD_IMPORT,
+        `user DB is schema v${foundVersion}; this hub supports up to v${USERDB_SCHEMA_VERSION}`,
+      );
+    }
+    try {
+      const migration = migrate(image);
+      healMissingTables(image);
+      return { image, migratedFrom: migration.found };
+    } catch (err) {
+      image.close();
+      throw err;
+    }
   }
 
   const userDb: UserDb = {
@@ -2907,6 +3033,9 @@ function construct(
         // 3c''''. The own undo journal (TASK-20261010-host-broker PR-4, D-PR4-3): every
         //     `ownUndo:<appId>:` bucket by escaped prefix — nothing is left to put back.
         sweepOwnUndoForDeletedApp(sqlOn(db), appId);
+        // 3c'''''. The imported marker (TASK-20261010-host-broker PR-5, D-PR5-9) — one row per
+        //     app, by equality: no edit clears it, only the delete does.
+        db.run(`DELETE FROM ${USERDB_TABLES.settings} WHERE key = ?`, [appProvenanceKey(appId)]);
         // 3d. The sidecar identity directory, when this app held the LAST approved
         //     sidecar-ceiling connection (TASK-20260820, R-9 lifecycle). Inside the
         //     transaction: the check reads the connection rows step 3 just deleted, so
@@ -3830,57 +3959,11 @@ function construct(
 
     async importUserDb(incoming, options) {
       assertOpen();
-      // Unwrap a protected payload FIRST, so every guard below — the cap, the magic
-      // check, the open-check, the reconciliation passes — sees ordinary SQLite bytes.
-      // Doing it here rather than at each call site is what gives sync pull-merge,
-      // applyRemote, recovery restore and the UI import identical behavior for free.
-      let bytes = incoming;
-      if (isEncryptedContainer(incoming)) {
-        const opened = await decryptContainer(incoming, options?.secrets ?? {});
-        if (opened.status === 'locked') {
-          throw new UserDbError(
-            USERDB_ERROR_CODES.LOCKED_IMPORT,
-            'this Snug file is protected — enter its passphrase or Recovery Key to import it',
-          );
-        }
-        if (opened.status === 'corrupt') {
-          throw new UserDbError(USERDB_ERROR_CODES.BAD_IMPORT, `this Snug file is damaged: ${opened.reason}`);
-        }
-        bytes = opened.bytes;
-      }
-      // The cap applies to the PLAINTEXT: a container adds a header, wrapped keys, an
-      // IV and a tag, so charging the user for that overhead would make a database
-      // that fits become un-importable the moment they protected it (review B9).
-      if (bytes.byteLength > maxBytes) {
-        throw new UserDbError(USERDB_ERROR_CODES.TOO_LARGE, `import is ${bytes.byteLength} bytes — cap is ${maxBytes}`);
-      }
-      if (!hasSqliteMagic(bytes)) {
-        throw new UserDbError(USERDB_ERROR_CODES.BAD_IMPORT, 'not a SQLite database (missing magic header)');
-      }
-      let next: Database | undefined;
-      try {
-        next = new SQL.Database(bytes);
-        next.exec('SELECT count(*) FROM sqlite_master');
-      } catch (err) {
-        next?.close();
-        throw new UserDbError(USERDB_ERROR_CODES.BAD_IMPORT, `not an openable SQLite database: ${errorMessage(err)}`);
-      }
-      const foundVersion = readUserVersion(next);
-      if (foundVersion > USERDB_SCHEMA_VERSION) {
-        next.close();
-        throw new UserDbError(
-          USERDB_ERROR_CODES.BAD_IMPORT,
-          `user DB is schema v${foundVersion}; this hub supports up to v${USERDB_SCHEMA_VERSION}`,
-        );
-      }
-      const importMigration = migrate(next);
-      // The candidate gets the SAME schema guarantees as an opened file: the version
-      // stamp it arrived with is another hub's claim, so heal against sqlite_master
-      // before reading its tables, and run the v3→v4 legacy wipe on a v3-era import for
-      // the same reason it runs on a v3-era open (fold T-M4) — an imported file's
-      // orphaned credential slice is no less orphaned for having arrived over sync.
-      healMissingTables(next);
-      if (importMigration.found < USERDB_SCHEMA_VERSION) wipeLegacyAuthSlice(next);
+      const { image: next, migratedFrom } = await decodeImage(incoming, options?.secrets);
+      // The v3→v4 legacy wipe on a v3-era import, for the same reason it runs on a v3-era open
+      // (fold T-M4) — an imported file's orphaned credential slice is no less orphaned for
+      // having arrived over sync.
+      if (migratedFrom < USERDB_SCHEMA_VERSION) wipeLegacyAuthSlice(next);
       // AC9 (C1): on a host that can use no credential, the candidate loses its secrets
       // HERE — before reconciliation reads it and before it is adopted — so no path below
       // (and no later export) ever sees a value the host has no use for.
@@ -3924,6 +4007,13 @@ function construct(
       // Access grants (TASK-20261010 AC10): the local grants' canonical INTENT, for the same
       // reason — an imported grant stays as it is only when it equals one this hub holds.
       const localAccessGrants = snapshotLocalAccessGrants(sqlOn(db));
+      // The history carry (PR-5, D-PR5-8): only the sync loop's pull asks for it — this device's
+      // access history, read before the swap, is what it carries into the image.
+      const carrySince = options?.carryHistorySince;
+      const localHistory = carrySince === undefined ? undefined : snapshotLocalAccessHistory(sqlOn(db));
+      // The imported marker (PR-5, D-PR5-9): an untrusted file's apps are compared against the
+      // apps THIS hub holds — their identity and their marker, read before the swap.
+      const localApps = options?.trustedOrigin === true ? undefined : await snapshotLocalAppIdentity(sqlOn(db));
       /**
        * TRUSTED RESTORE (R-M2, 2026-08-11). Keying "known" off the open DB's contracts made
        * an EMPTY hub mean "nothing is known", so every contract was nulled — and an empty
@@ -3958,15 +4048,29 @@ function construct(
         // intent-identical; trusted → kept. Unparseable grant rows go on both paths.
         access: reconcileImportedAccessGrants(sqlOn(next), localAccessGrants, options?.trustedOrigin === true),
       };
-      // A staged schedule suggestion on a chat message is a proposal too (S9): an untrusted
-      // file's cards go; a trusted pull keeps the user's own.
-      if (options?.trustedOrigin !== true) dropImportedScheduleCards(next);
+      // An unanswered card on a chat message is a proposal too (S9; PR-5 D-PR5-10): an untrusted
+      // file's staged schedule suggestions and changes go, by their parsed key; a trusted pull
+      // keeps the user's own.
+      const droppedCards = options?.trustedOrigin === true ? 0 : dropImportedCards(next, ['schedule', 'dataWrite', 'accessWrite'], { unresolvedOnly: true });
       // The own undo journal names rows to write back into an app (PR-4, D-PR4-3): an untrusted
       // file's buckets go; a trusted pull keeps the user's own.
       if (options?.trustedOrigin !== true) dropImportedOwnUndo(sqlOn(next));
-      // A stripped proposal's statement would otherwise linger in the candidate's free
+      // The access declaration is the apps' own html, never the file's row (PR-5, D-PR5-2): EVERY
+      // import, whatever its origin, derives it afresh.
+      rederiveAccessWants(sqlOn(next));
+      // An untrusted file's apps that are not this hub's own, byte for byte, are marked as having
+      // arrived with it (PR-5, D-PR5-9); a trusted pull keeps the markers it carries.
+      if (localApps !== undefined) await markImportedApps(sqlOn(next), localApps);
+      // The history carry (PR-5, D-PR5-8): this device's lines into the image, then this device's
+      // stops over whatever the image says — only when the caller asked.
+      if (carrySince !== undefined && localHistory !== undefined) {
+        const { carried, dropped } = carryAccessHistory(sqlOn(next), localHistory, { since: carrySince });
+        const restopped = applyTombstones(sqlOn(next), localAccessGrants.revoked);
+        report.history = { carried, dropped, restopped };
+      }
+      // A stripped proposal's or card's statement would otherwise linger in the candidate's free
       // pages and ride the next secrets-included export raw — the `stripSecrets` rule.
-      if (report.schedules.strippedProposals > 0) next.run('VACUUM');
+      if (report.schedules.strippedProposals > 0 || droppedCards > 0) next.run('VACUUM');
       // Close the inner driver FIRST: its cached app databases came from the old handle.
       // Its close-flush writes into the old handle, which is discarded right after.
       await inner.close();
@@ -3991,6 +4095,41 @@ function construct(
       }
       markDirty();
       return report;
+    },
+
+    async carryFromImage(incoming, { since }) {
+      assertOpen();
+      const nothing = { carried: 0, restopped: 0 };
+      let image: Database;
+      try {
+        ({ image } = await decodeImage(incoming, undefined));
+      } catch {
+        return nothing; // sealed for another key, damaged, not a database: the user's choice still goes ahead
+      }
+      try {
+        const history = snapshotLocalAccessHistory(sqlOn(image));
+        const revoked = snapshotLocalAccessGrants(sqlOn(image)).revoked;
+        // One transaction on the live file: the carry and the stops land together or not at all.
+        db.run('BEGIN IMMEDIATE');
+        try {
+          const { carried } = carryAccessHistory(sqlOn(db), history, { since });
+          const restopped = applyTombstones(sqlOn(db), revoked);
+          db.run('COMMIT');
+          if (carried > 0 || restopped > 0) markDirty();
+          return { carried, restopped };
+        } catch {
+          try {
+            db.run('ROLLBACK');
+          } catch {
+            /* nothing to roll back */
+          }
+          return nothing;
+        }
+      } catch {
+        return nothing;
+      } finally {
+        image.close();
+      }
     },
 
     // A GETTER, not a snapshot. `protect()` reassigns `sealer` mid-session, and a

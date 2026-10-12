@@ -748,8 +748,10 @@ export type AccessUndoEntry = z.infer<typeof accessUndoEntrySchema>;
  * and optional hints, each under the ask's own rules (one display-safe line, shareable table
  * names, never a credential), the whole capped at `ACCESS_WANTS_MAX_BYTES`. No other seat: an
  * access level, an app, a source or a table list has no place in a declaration — the user's
- * act decides those. Defined here; PR-5 parses it from the app's HTML, and an untrusted
- * import drops it.
+ * act decides those. Since PR-5 (D-PR5-2) the host DERIVES the row from the app's own html head
+ * (`<meta name="snug:access-wants" content='…'>`, read by `@snugprotocol/db`'s
+ * `extractAccessWants`) at every admission, and every import re-derives it — never a bundle
+ * field, never trusted from a file.
  */
 export const accessWantsSchema = z
   .array(z.strictObject({ purpose: accessPurposeSchema, hints: accessHintsSchema.optional() }))

@@ -102,9 +102,12 @@ export function isVendored(rel: string): boolean {
  *    and read back through an ordinary `kvGet`; it never rides a frame's `type` seat.
  *    Only the prefix WITH its trailing colon is exempt, so a frame-shaped `snug:schedule-x`
  *    would still be caught.
+ *  - the access declaration's meta NAME `snug:access-wants` (TASK-20261010-host-broker PR-5,
+ *    D-PR5-2, taught verbatim in 87-cross-app-access.md and the skill) — an HTML `<meta name>`
+ *    the host reads from the app's own head; it never rides a frame's `type` seat (v2.2 note (d)).
  */
 export function withoutNonFrameSnugMentions(text: string): string {
-  return text.replace(/snug:[a-z-]*\*/g, '').replace(/snug:schedule:/g, '');
+  return text.replace(/snug:[a-z-]*\*/g, '').replace(/snug:schedule:/g, '').replace(/snug:access-wants\b/g, '');
 }
 
 export interface RenderedStoreEntry {

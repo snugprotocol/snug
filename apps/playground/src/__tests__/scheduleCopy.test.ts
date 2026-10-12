@@ -395,7 +395,19 @@ describe('empty states and the running chip', () => {
   });
 
   it('RUNNING_CHIP: the label and its one act (security F15) — and, since TASK-20261010-host-broker PR-1, where a delegated run is running — and, since PR-3 (D-PR3-19), what a refresh another app asked for is fetching', () => {
-    expect(RUNNING_CHIP).toEqual({ label: 'a schedule is running', cancel: 'cancel', inApp: expect.any(Function), fetching: expect.any(Function) });
+    // v2.2 note (b): PR-5 (D-PR5-17) adds the fetch chip's label and its two acts — widened, not weakened.
+    expect(RUNNING_CHIP).toEqual({
+      label: 'a schedule is running',
+      cancel: 'cancel',
+      inApp: expect.any(Function),
+      fetching: expect.any(Function),
+      fetchingIn: expect.any(Function),
+      cancelFetch: expect.any(Function),
+      stopWaiting: 'stop waiting',
+      stopWaitingFor: expect.any(Function),
+      moreFetchesShort: expect.any(Function),
+      moreFetches: expect.any(Function),
+    });
   });
 });
 

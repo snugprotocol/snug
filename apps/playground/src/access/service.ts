@@ -35,8 +35,9 @@
 // rows reach a brain: ONE `read` line per named grant — the posture, EVERY granted table, the rows
 // handed over, the statement as the history keeps it — after re-checking the grant is still
 // owned, active and unexpired (else `ended`), and `noteRead`; a line the history refuses answers
-// `failed`, and the caller hands out only the tables of the ids answered `recorded`. Neither
-// throws (D-PR2-18): a grant-level failure is a skip with its reason; a failure of the whole call
+// `failed`, and the caller hands out only the tables of the ids answered `recorded`. A `counting`
+// call (PR-5, D-PR5-11 (6)) is the chat's line for a change it proposes: the ONE table changed, no
+// `sql`, no `rows`. Neither throws (D-PR2-18): a grant-level failure is a skip with its reason; a failure of the whole call
 // answers the empty set with one skip naming the reader (its name folded to one line, as every
 // name a brain reads is — `oneLine`), and the turn proceeds without shared tables.
 //
@@ -62,6 +63,15 @@
 // leaves no entry behind — eight asks at once are one walk of the library, not eight. A refusal's named effect is performed on a `read` ONLY (E1-Q3): a refused write,
 // refresh or discover leaves the history and the grant exactly as they were.
 //
+// THE HOST DOORS' REFRESH (PR-5, D-PR5-18; T-D Q4). `refreshFor` is the chat's and a schedule's
+// *fetch new data first* — a verb beside the frame's `refresh`, whose wire result it leaves alone:
+// the policy's `refresh` verdict FIRST (a refusal answers its code and words, nothing dispatched),
+// then the engine's host-door form through the same lazy edge, which answers `{ outcome, calls }`,
+// joins a refresh already in flight and honours the door's own stop. In a schedule's run it does not
+// fold the day (the run does) and counts what the run spent so far. `refreshableReads` is the ONE
+// admission every surface that offers it reads — the chat's toggle, the editor's tick, the fetch
+// itself: the caller's rows the policy admits for `refresh`, performing nothing.
+//
 // THE READ'S DOORBELL (D-PR3-20 (d)): after a frame's read is logged, and after each grant a chat
 // turn's `recordRead` recorded, the SOURCE's live frame hears `access-read { grantId }` —
 // uncoalesced, ids only. The scope a read or a dump is copied under is `readScopeOf(grant)`: the
@@ -84,6 +94,7 @@ import {
   ACCESS_MAX_RESULT_BYTES,
   ACCESS_MAX_ROWS,
   ACCESS_TIMEOUT_STRIKES,
+  isAccessErrorCode,
   isCredentialKeyName,
   scanForCredentialValues,
   type AccessCandidateClass,
@@ -96,6 +107,8 @@ import { dmlTargetTable, type UserDb } from '@snugprotocol/db';
 import type { AccessHandlerResult } from '@snugprotocol/runner';
 
 import { oneLine } from '../agent/sharedDdl.js';
+import type { AppRunDeps } from '../schedule/appRun.js';
+import type { Calls } from '../schedule/protection.js';
 import { appHasSidecarFact } from '../state/sidecarLive.js';
 import { collectSources } from './consent.js';
 import { ACCESS_APP_MESSAGES } from './copy.js';
@@ -120,8 +133,11 @@ import {
 } from './grants.js';
 import { SourceTooLarge, materialiseGrants, readScopeOf, sourceBytesOf } from './materialise.js';
 import { attendedFor, authorise, ownsGrant, stillReadable, type AccessCaller, type PolicyContext, type Refusal } from './policy.js';
+import type { RefreshOutcome } from './refresh.js';
 import { scopedDump, scopedRead } from './scopedRead.js';
 import { appendLine, brokeredWrite, loggedSql, writeRefused } from './writeBroker.js';
+
+const NO_CALLS: Calls = { ai: 0, net: 0 };
 
 // ---------------------------------------------------------------------------------------- shapes
 
@@ -149,6 +165,11 @@ export interface MaterialisedTable {
   totalRows?: number;
   duration: AccessDuration;
   expiresAt?: string;
+  /**
+   * The chat may propose ONE change to this table (PR-5, D-PR5-13): set by `materialiseGrants` only
+   * for the chat caller and a table the user let it change (never `snug_kv`), omitted otherwise.
+   */
+  write?: true;
 }
 
 export type MaterialiseSkipReason = 'drift' | 'timeout' | 'unavailable' | 'failed' | 'too-large' | 'copy-failed' | 'ended';
@@ -172,6 +193,12 @@ export const EMPTY_MATERIALISED_SET: MaterialisedSet = Object.freeze({ tables: [
 export interface RecordReadInput {
   grantIds: readonly string[];
   sql?: string;
+  /**
+   * The chat's COUNTING line for a change it proposes (PR-5, D-PR5-11 (6); S18; TC-Q4): the line
+   * names only the ONE table `sql` changes (`dmlTargetTable`, which the grant must hold), with no
+   * `sql` and no `rows` — no DML ever sits on a `read` line, and a declined card leaves an honest read.
+   */
+  counting?: true;
 }
 
 export interface RecordReadOutcome {
@@ -195,6 +222,22 @@ export interface AccessDiscoverInput {
   hints?: AccessHints;
 }
 
+/**
+ * The host doors' refresh (PR-5, D-PR5-18; T-D Q4): the caller's run seams, the door's own stop,
+ * and — in a schedule's run — what it spent so far and its bound (see `access/fetchFirst.ts`).
+ */
+export interface AccessRefreshForOptions {
+  deps: AppRunDeps;
+  signal: AbortSignal;
+  run?: { spent(): Calls; deadline: number };
+}
+
+/** The frame's outcome, and what the attempt spent — a host door folds or carries the calls itself. */
+export interface AccessRefreshForAnswer {
+  outcome: RefreshOutcome;
+  calls: Calls;
+}
+
 export interface AccessService {
   /** The handler's former `query` body, byte-identical for a frame but for policy rule 4's one named invert. */
   read(caller: AccessCaller, input: AccessReadInput): Promise<AccessHandlerResult>;
@@ -208,6 +251,12 @@ export interface AccessService {
   write(caller: AccessCaller, input: AccessWriteInput): Promise<AccessHandlerResult>;
   /** PR-3: the verdict, then the refresh engine through the lazy edge — its outcome is the wire's. */
   refresh(caller: AccessCaller, input: AccessRefreshInput): Promise<AccessHandlerResult>;
+  /**
+   * PR-5 (D-PR5-18): the HOST doors' refresh — the chat's and a schedule's *fetch new data first* —
+   * beside the frame's `refresh`, whose wire result it leaves alone: the policy first, then the
+   * engine's host-door form. Never reached by a frame.
+   */
+  refreshFor(caller: AccessCaller, grantId: string, opts: AccessRefreshForOptions): Promise<AccessRefreshForAnswer>;
   /** PR-3: the presence rule, then the cached class of the library — nothing recorded. */
   discover(caller: AccessCaller, input: AccessDiscoverInput): Promise<AccessHandlerResult>;
 }
@@ -236,6 +285,18 @@ function viaOf(caller: AccessCaller): AccessLogVia {
     case 'schedule':
       return 'schedule';
   }
+}
+
+/**
+ * The caller's rows the policy admits for `refresh` now (D-PR5-18), in grant order, performing
+ * nothing: owned, active, unexpired, someone there or *also while I'm away* ticked (a session grant
+ * never for nobody), the source not restricted, and its `refresh` seat set. The ONE answer to "which
+ * apps may this door ask to fetch new data" — the fetch asks exactly these, and the toggle and the
+ * editor's tick offer it exactly when there is one.
+ */
+export function refreshableReads(db: UserDb, caller: AccessCaller, now: number): LiveGrantRow[] {
+  const ctx = policyContextFor(db, now);
+  return grantsForApp(db, caller.appId, now).reads.filter((row) => authorise(ctx, caller, { kind: 'refresh', grantId: row.grant.id }).ok);
 }
 
 /** D-PR3-21: how many sources the library offers, as a class — the reader learns no name and no count. */
@@ -483,7 +544,9 @@ function createAccessService(): AccessService {
       return { recorded, refused };
     }
     const attended = attendedFor(caller);
-    const sql = input.sql === undefined ? undefined : loggedSql(input.sql);
+    const sql = input.sql === undefined || input.counting === true ? undefined : loggedSql(input.sql);
+    // The counting line's one table: the table the statement changes, as the statement names it (TC-Q4).
+    const changed = input.counting === true && input.sql !== undefined ? dmlTargetTable(input.sql) : undefined;
     for (const id of ids) {
       try {
         const current = stillReadable((grantId) => findAccessGrant(db, grantId), caller, id, now());
@@ -493,18 +556,30 @@ function createAccessService(): AccessService {
         }
         const { grant } = current;
         const stamp = iso(now());
-        // The line BEFORE the rows leave: EVERY granted table (A-Q7), the rows handed over across this grant's tables.
-        appendLine(db, grant.sourceAppId, {
-          at: stamp,
-          kind: 'read',
-          grantId: id,
-          readerAppId: caller.appId,
-          readerName: readerNameOf(db, caller.appId),
-          tables: grant.scope.tables.map((table) => table.name),
-          ...(sql !== undefined ? { sql } : {}),
-          rows: handedOf(id).reduce((sum, table) => sum + table.rows.length, 0),
-          attended,
-        });
+        const readerName = readerNameOf(db, caller.appId);
+        if (input.counting === true) {
+          // The counting line: the ONE table the change names, in the grant's own spelling — a table the grant does not hold is no read at all.
+          const lower = changed?.toLowerCase();
+          const table = grant.scope.tables.find((entry) => entry.name.toLowerCase() === lower)?.name;
+          if (table === undefined) {
+            refuse(id, 'failed');
+            continue;
+          }
+          appendLine(db, grant.sourceAppId, { at: stamp, kind: 'read', grantId: id, readerAppId: caller.appId, readerName, tables: [table], attended });
+        } else {
+          // The line BEFORE the rows leave: EVERY granted table (A-Q7), the rows handed over across this grant's tables.
+          appendLine(db, grant.sourceAppId, {
+            at: stamp,
+            kind: 'read',
+            grantId: id,
+            readerAppId: caller.appId,
+            readerName,
+            tables: grant.scope.tables.map((table) => table.name),
+            ...(sql !== undefined ? { sql } : {}),
+            rows: handedOf(id).reduce((sum, table) => sum + table.rows.length, 0),
+            attended,
+          });
+        }
         noteRead(db, id, stamp);
         ringRead(grant.sourceAppId, id);
         recorded.push(id);
@@ -580,7 +655,26 @@ function createAccessService(): AccessService {
     }
   }
 
-  return { read, materialise, recordRead, list, release, write, refresh, discover };
+  async function refreshFor(caller: AccessCaller, grantId: string, opts: AccessRefreshForOptions): Promise<AccessRefreshForAnswer> {
+    const db = await accessDeps().getDb();
+    const verdict = authorise(policyContextFor(db, now()), caller, { kind: 'refresh', grantId });
+    // The policy first: a refusal is answered in its own code and words — no effect, no line (E1-Q3), nothing dispatched.
+    if (!verdict.ok) {
+      const code = isAccessErrorCode(verdict.code) ? verdict.code : ACCESS_ERROR_CODES.ACCESS_NOT_GRANTED;
+      return { outcome: { ok: false, code, message: verdict.message, retryable: verdict.retryable }, calls: { ...NO_CALLS } };
+    }
+    const { refreshSource } = await import('./refresh.js');
+    const { run } = opts;
+    return refreshSource(
+      db,
+      opts.deps,
+      { grant: verdict.grant.grant, requestedBy: readerNameOf(db, caller.appId), via: viaOf(caller) },
+      // In a schedule's run: the day is the run's to fold, and its spend so far counts at the ceiling.
+      { signal: opts.signal, ...(run !== undefined ? { fold: false as const, spent: run.spent(), deadline: run.deadline } : {}) },
+    );
+  }
+
+  return { read, materialise, recordRead, list, release, write, refresh, refreshFor, discover };
 }
 
 // ----------------------------------------------------------------------------------- instance
@@ -599,6 +693,7 @@ function current(): AccessService {
     release: overrides.release ?? real.release,
     write: overrides.write ?? real.write,
     refresh: overrides.refresh ?? real.refresh,
+    refreshFor: overrides.refreshFor ?? real.refreshFor,
     discover: overrides.discover ?? real.discover,
   };
 }
@@ -611,6 +706,7 @@ const facade: AccessService = {
   release: (caller, grantId) => current().release(caller, grantId),
   write: (caller, input) => current().write(caller, input),
   refresh: (caller, input) => current().refresh(caller, input),
+  refreshFor: (caller, grantId, opts) => current().refreshFor(caller, grantId, opts),
   discover: (caller, input) => current().discover(caller, input),
 };
 

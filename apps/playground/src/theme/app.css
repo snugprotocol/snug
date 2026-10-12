@@ -622,6 +622,42 @@
   overflow: hidden;
 }
 
+/* Access between apps on the tile (TASK-20261010-host-broker PR-5, D-PR5-6/7). The line sits in
+   NORMAL FLOW under .tile-sub, inside the tile's face — never absolutely positioned, since the
+   owned tile's hover .tile-delete already holds the top-right corner — small and muted: a report,
+   not an act. Its words are part of the link's name; the ⋈ before them is decoration. */
+.app-tile .tile-access-line {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  color: var(--fg-muted);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+/* The *could read…* act and its outcome line: siblings of the link, lifted above the colour wash
+   like .tile-install, and wrapping so a long app name never widens the tile. */
+.app-tile .tile-could-read-slot {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.app-tile .tile-could-read {
+  font-size: var(--text-xs);
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.app-tile .access-act-line {
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
 /* ---------------------------------------------------------------- builder */
 
 .builder {

@@ -8,6 +8,10 @@
 //
 // A failure is recorded with the engine's message, but the strip says it only through
 // `failedWords` (copy.ts): a message the engine did not word for a person goes to the console.
+//
+// TASK-20261010-host-broker PR-5 (D-PR5-5): a SOURCE that offered itself hears the answer too —
+// the line is recorded under the reader's id AND the source's, so both strips say it (each with
+// its own *stop*).
 
 import { createStore, type Store } from '../state/store.js';
 import type { ConsentDecision, ConsentOutcome, PendingAccessRequest } from './consent.js';
@@ -51,6 +55,11 @@ function worthALine(pending: PendingAccessRequest, outcome: ConsentOutcome): boo
 export async function answerAccess(pending: PendingAccessRequest, decision: ConsentDecision): Promise<ConsentOutcome> {
   const outcome = await pending.resolve(decision);
   if (outcome.kind === 'failed') console.warn('[snug] access: the allow was not written —', outcome.message);
-  if (worthALine(pending, outcome)) recordOutcome(pending.readerAppId, pending.readerName, outcome);
+  if (worthALine(pending, outcome)) {
+    recordOutcome(pending.readerAppId, pending.readerName, outcome);
+    // An offer's sheet is pinned to its source (the only candidate, preselected): the source's strip hears it too.
+    const offeredFrom = pending.offeredBy === 'source' ? pending.preselect?.appId : undefined;
+    if (offeredFrom !== undefined && offeredFrom !== pending.readerAppId) recordOutcome(offeredFrom, pending.readerName, outcome);
+  }
   return outcome;
 }

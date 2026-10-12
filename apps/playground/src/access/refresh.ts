@@ -1,6 +1,8 @@
 // access/refresh.ts — a fetch another app asked for: the SOURCE's own code run on a reader's act
 // (TASK-20261010-host-broker PR-3; ADR-0076 §6; contract v2 D-PR3-17, D-PR3-18, D-PR3-19; the
-// spec's §24.6 (25)–(27) and §24.7 (28); AC22; contract v2.1 notes E2-Q1..Q9, E2-Q15, E1-Q11).
+// spec's §24.6 (25)–(27) and §24.7 (28); AC22; contract v2.1 notes E2-Q1..Q9, E2-Q15, E1-Q11.
+// PR-5: the host doors' form, the join and the abort seam — contract v2 D-PR5-17, D-PR5-18 and its
+// v2.1 answers T-D Q1–Q7, Q18; S2, S6, S14, F6, F19).
 //
 // WHAT A REFRESH IS. A reader holding an access with `refresh: true` may ask the source to fetch
 // new data before reading it. Nothing of the reader's reaches the source but its display name,
@@ -19,7 +21,7 @@
 // E2-Q4): the answer is `ACCESS_REFRESH_FAILED` and the line's reason `refused` — the source tried
 // to send a change on a reader's act, and the person should see it. The sticky generation is
 // recorded for a refresh as for a schedule (S6): a handler that answers and POSTs afterwards meets
-// the same after-run dialog D-PR1-3 built.
+// the same after-run dialog D-PR1-3 built — worded for a fetch (`touchedPosture`, D-PR5-17).
 //
 // THE ORDER, and what each step leaves behind (E2-Q2):
 //   (1) the three gates — the platform's scheduler seat with `capabilities.schedule !== false`
@@ -27,45 +29,70 @@
 //       `globalPause === false` (the user's "pause everything unattended") — else
 //       `ACCESS_REFRESH_FAILED` "schedules are off for this file", not retryable: NO line, NO stamp;
 //   (2) the cooldown — one dispatch per source per `ACCESS_REFRESH_COOLDOWN_MS`, in memory: within
-//       it `{ fresh: false, reason: 'recent' }`, nothing run, no line (a second ask while the first
-//       is in flight reads the same, E2-Q6);
-//   (3) the ceiling, asked BEFORE dispatch over the FILE's day (the one counter there is): no
-//       headroom for one more AI or network call → `capped`, the `refreshed` line written, nothing
-//       stamped;
+//       it `{ fresh: false, reason: 'recent' }`, nothing run, no line (a FRAME asking while the
+//       first is still in flight reads the same, E2-Q6 — a host door joins it instead, below);
+//   (3) the ceiling, asked BEFORE dispatch over the FILE's day (the one counter there is) plus what
+//       a schedule's run already spent (a host door's `spent`): no headroom for one more AI or
+//       network call → `capped`, the `refreshed` line written, nothing stamped;
 //   (4) the stamp, AT DISPATCH — a dispatch that then ends in failure stamped it all the same; one
 //       that ends `busy` (the one-instance rule: a delegated run already in flight, or the hidden
 //       frame already holding another run) never ran anything, and the stamp is put back;
 //   (5)–(6) the dispatch, live or hidden, with the handover loop and ONE deadline
-//       (`now + deps.resultTimeoutMs`, E2-Q9);
-//   (7) the attempt's calls folded into `schedulerState.daily` (`foldDailyCalls`, shared with the queue);
+//       (`now + deps.resultTimeoutMs`, E2-Q9 — or a schedule's own sooner bound);
+//   (7) the attempt's calls folded into `schedulerState.daily` (`foldDailyCalls`, shared with the
+//       queue) — unless a schedule's run that asked is still waiting and carries them itself;
 //   (8) the `refreshed` line on the SOURCE's history BEFORE the answer — `via` as given, the
 //       reader's host-written library name, no `tables` (E2-Q15), and on failure a reason from the
 //       fixed set `ACCESS_REFRESH_REASONS` (a handler's words never reach a line);
 //   (9) the answer: `{ fresh: true }` after the source's read caches are dropped
 //       (`clearSourceReadCaches`, the Write Broker's), else the code and the reader's sentence.
-// The kv key is cleared in `finally`, whatever happened (a key stranded by a crash is ≤ 1 KiB of
-// inert kv the SDK never reads without its hint).
+// The kv key is cleared once the dispatch ends, whatever happened (a key stranded by a crash is
+// ≤ 1 KiB of inert kv the SDK never reads without its hint).
+//
+// ONE FLIGHT PER SOURCE, MANY WAITERS (D-PR5-17, D-PR5-18; F19, S14). A dispatch is a FLIGHT: one
+// `refreshRuns` entry from its start to its end, spanning its handovers (the chip follows it), with
+// the dispatch's OWN controller. Every door that waits on it joins it (`joinRefreshRun`) — the one
+// that started it too, the frame's op included — and leaves when its own signal fires: a door's
+// stop abandons ONLY its wait, and only the last one leaving abandons the dispatch. A HOST door (a
+// fourth argument — the chat's or a schedule's *fetch new data first*) asking while a flight is up
+// JOINS it before the cooldown is asked; a joiner also leaves at its own deadline, and hears `calls`
+// of nothing (the flight is counted once, by whoever started it).
+//
+// THE FOUR WAYS A FLIGHT IS STOPPED, each the dispatch's controller aborted with its reason
+// (`refreshAbortReason`): the person's act on the chip (`cancel`), the last waiter leaving
+// (`abandoned`), an app delete (`deleted`) and a file swap (`reset`). Every waiter still there is
+// answered `ACCESS_REFRESH_FAILED` with `ACCESS_APP_MESSAGES.refreshStopped`, not retryable. A
+// cancel or an abandon keeps the cooldown stamp, clears no cache and writes its line with the
+// reason `failed` (*the fetch didn't finish*; `refused` if the window refused a change) before the
+// answer (T-D Q18); a delete writes no line (its history is going, or names an app that is gone). A
+// RESET writes NOTHING — no line, no fold, no kv clear in the file that is now there (S6): the
+// engine captures a file epoch when a flight starts and re-checks it after every await, and the
+// reset clears the cooldowns and the remembered outcomes with it. A flight stopped while the
+// source's LIVE frame held it does not end its delegated record (S2): the handler may still be
+// running, so the record is HELD — refusing every mutating call, counting — until the handler's
+// result arrives, the dispatch's original deadline passes or the frame goes away (`keepRefusing`).
 //
 // WHO LOADS THIS. The access service reaches this module and `defaultAppRunDeps` through ONE lazy
 // edge (F8): `appRun.ts` imports `composeAppRuntime` → the access handler → the service, so a
 // top-level import the other way would close a cycle. Tests pass their own `AppRunDeps`. No
-// module under access/ is called at this module's top level (the load-order rule). The sentences
-// a person reads are `access/copy.ts`'s and `schedule/copy.ts`'s; the strings here are machine
-// tokens only (D-PR3-25).
+// module under access/ is called at this module's top level (the load-order rule) — `refreshRuns.ts`
+// is a leaf store. The sentences a person reads are `access/copy.ts`'s and `schedule/copy.ts`'s;
+// the strings here are machine tokens only (D-PR3-25, D-PR5-24).
 
-import type { UserDb } from '@snugprotocol/db';
+import type { AppRecord, UserDb } from '@snugprotocol/db';
 import { ACCESS_ERROR_CODES, ACCESS_REFRESH_COOLDOWN_MS, type AccessErrorCode, type AccessLogEntry, type AccessLogVia, type AccessRefreshReason } from '@snugprotocol/protocol';
 
 import { oneLine } from '../agent/sharedDdl.js';
-import { dispatchHidden, dispatchLive, type AppRunDeps, type Dispatch, type DispatchEnd } from '../schedule/appRun.js';
+import { dispatchHidden, dispatchLive, parseScheduleResult, type AppRunDeps, type Dispatch, type DispatchEnd } from '../schedule/appRun.js';
 import { REFRESH_RUN, handedOverTwice } from '../schedule/copy.js';
 import { countersSoFar, foldDailyCalls, wouldExceedCeiling, type Calls } from '../schedule/protection.js';
-import { MAX_HANDOVERS, placeRun, type ScheduledRefusal } from '../schedule/runPlacement.js';
-import { scheduleKvKey } from '../schedule/scheduleKey.js';
+import { MAX_HANDOVERS, delegatedRunFor, holdDelegatedRun, placeRun, releaseDelegatedRun, type Placement, type ScheduledRefusal } from '../schedule/runPlacement.js';
+import { SCHEDULE_RESULT_EVENT, scheduleKvKey } from '../schedule/scheduleKey.js';
 import { createScheduledConfirmGate } from '../schedule/scheduledConfirmGate.js';
 import { ACCESS_APP_MESSAGES } from './copy.js';
 import type { AnyAccessGrant } from './grantFacts.js';
 import { accessDeps, iso, readerNameOf } from './grants.js';
+import { beginRefreshRun, endRefreshRun, joinRefreshRun, refreshAbortReason, setRefreshPlacement, type RefreshPlacement, type RefreshRun } from './refreshRuns.js';
 import * as writeBroker from './writeBroker.js';
 
 /** The `taskId` a refresh rides the handshake under — the ONE signal beside `input.kind` that this is no schedule (D-PR3-17). */
@@ -88,20 +115,47 @@ export type RefreshOutcome =
   | { ok: true; op: 'refresh'; fresh: false; reason: 'recent' }
   | { ok: false; code: AccessErrorCode; message: string; retryable: boolean };
 
-/** `sourceAppId → the instant of its last dispatch` — the cooldown, in memory for this session. */
-const lastDispatchAt = new Map<string, number>();
-
-export function __resetRefreshForTests(): void {
-  lastDispatchAt.clear();
+/**
+ * A HOST DOOR's call — the chat's or a schedule's *fetch new data first* (TASK-20261010-host-broker
+ * PR-5, D-PR5-18; T-D Q3/Q4): a fourth argument marks it. It answers `{ outcome, calls }`, joins a
+ * refresh already in flight for the source before the cooldown is asked, and honours `signal`
+ * (abandoning only its own wait), `fold: false` (a schedule's run folds its day itself), `spent`
+ * (what the run spent before, counted by the ceiling) and `deadline` (on `Date.now()`'s clock: a
+ * schedule's bound — a joiner stops waiting then; a dispatch it starts is bounded by it). The
+ * frame's three-argument call is unchanged — its answer is the outcome alone, the wire's bytes.
+ */
+export interface RefreshDoorOptions {
+  signal?: AbortSignal;
+  fold?: false;
+  spent?: Calls;
+  deadline?: number;
 }
 
-const NONE: Calls = { ai: 0, net: 0 };
+/** What a host door hears: the frame's outcome and what the attempt spent. */
+export interface RefreshDoorAnswer {
+  outcome: RefreshOutcome;
+  calls: Calls;
+}
+
+/** When a source was last dispatched and, once that dispatch settled, whether it delivered — what a host door says of a `recent` answer. */
+export interface LastRefresh {
+  /** The dispatch's instant (ISO) — the cooldown's stamp. */
+  at: string;
+  /** Absent while that dispatch is still in flight, or when it was another session's. */
+  ok?: boolean;
+}
+
+const NONE: Readonly<Calls> = { ai: 0, net: 0 };
+/** Nothing spent, as an answer's own object — a door may add to what it is handed. */
+const nothing = (): Calls => ({ ...NONE });
 
 /** Every answer is a fresh object: the service hands it to the frame, and nothing here is shared between calls. */
 const fresh = (): RefreshOutcome => ({ ok: true, op: 'refresh', fresh: true });
 const recent = (): RefreshOutcome => ({ ok: true, op: 'refresh', fresh: false, reason: 'recent' });
 const off = (): RefreshOutcome => ({ ok: false, code: ACCESS_ERROR_CODES.ACCESS_REFRESH_FAILED, message: ACCESS_APP_MESSAGES.refreshOff, retryable: false });
 const busy = (): RefreshOutcome => ({ ok: false, code: ACCESS_ERROR_CODES.ACCESS_BUSY, message: ACCESS_APP_MESSAGES.busy, retryable: true });
+/** A stop — the chip's act, a reset, a delete, or the door's own signal: the fetch did not finish, and asking again now would not help. */
+const stopped = (): RefreshOutcome => ({ ok: false, code: ACCESS_ERROR_CODES.ACCESS_REFRESH_FAILED, message: ACCESS_APP_MESSAGES.refreshStopped, retryable: false });
 /** `ACCESS_REFRESH_FAILED` with the reader's sentence for the reason (E2-Q3) — never a source fact, never the handler's words. */
 const failed = (reason: AccessRefreshReason): RefreshOutcome => ({
   ok: false,
@@ -109,6 +163,60 @@ const failed = (reason: AccessRefreshReason): RefreshOutcome => ({
   message: reason === 'no-handler' ? ACCESS_APP_MESSAGES.refreshNoHandler : ACCESS_APP_MESSAGES.refreshFailed(reason),
   retryable: false,
 });
+
+/** What a flight came to: the outcome its waiters are answered with, and what the dispatch spent. */
+interface Settlement {
+  outcome: RefreshOutcome;
+  calls: Calls;
+}
+
+/** The door that started a flight: whether its calls fold into the day, and whether it is still waiting to carry them itself. */
+interface Starter {
+  readonly fold: boolean;
+  waiting: boolean;
+}
+
+/** One dispatch in flight for one source — its `refreshRuns` entry, who started it, and what it will come to. */
+interface Flight {
+  readonly run: RefreshRun;
+  readonly starter: Starter;
+  readonly settled: Promise<Settlement>;
+}
+
+/** `sourceAppId → the instant of its last dispatch` — the cooldown, in memory for this session. */
+const lastDispatchAt = new Map<string, number>();
+/** `sourceAppId → whether its last SETTLED dispatch delivered` (D-PR5-18) — read back by a host door's `recent`. */
+const lastDelivered = new Map<string, boolean>();
+/** `sourceAppId → the flight up for it` — what a host door joins. */
+const inFlight = new Map<string, Flight>();
+/** The held delegated records of stopped LIVE flights (S2), each with its release. */
+const holds = new Set<() => void>();
+/**
+ * Moves at every reset (S6): a flight captures it when it starts and re-checks it after every await —
+ * a mismatch means the file it was writing to is gone, and nothing more is written.
+ */
+let fileEpoch = 0;
+
+/** A file swap (`abortAllRefreshes('reset')`): the old file's cooldowns, outcomes and flights go with it. */
+function forgetFile(): void {
+  fileEpoch += 1;
+  lastDispatchAt.clear();
+  lastDelivered.clear();
+  inFlight.clear();
+}
+
+export function __resetRefreshForTests(): void {
+  for (const release of [...holds]) release();
+  forgetFile();
+}
+
+/** When `sourceAppId` was last dispatched and how that went — `undefined` when it was not, this session. */
+export function lastRefreshOf(sourceAppId: string): LastRefresh | undefined {
+  const at = lastDispatchAt.get(sourceAppId);
+  if (at === undefined) return undefined;
+  const ok = lastDelivered.get(sourceAppId);
+  return { at: iso(at), ...(ok !== undefined ? { ok } : {}) };
+}
 
 /** How a dispatch settled for the reader: new data, the one-instance rule, or a reason from the fixed set. */
 type Settled = { kind: 'fresh' } | { kind: 'busy' } | { kind: 'failed'; reason: AccessRefreshReason };
@@ -164,20 +272,28 @@ function logQuietly(db: UserDb, sourceAppId: string, entry: AccessLogEntry): voi
   }
 }
 
+/** Where the chip says the source's code runs. */
+const placementOf = (placement: Placement): RefreshPlacement => (placement === 'live' ? 'live' : 'headless');
+
 /**
  * The whole run of one refresh: where the source lives, at most one handover, one deadline; the
  * tally and every refusal summed across attempts. Each attempt is handed what the earlier ones
- * SPENT (Gate-5 ENG-3): the ceiling a hidden attempt asks after a handover counts the live
- * attempt's calls, as the executor's `Dispatch.spent` counts a step's earlier attempts.
+ * SPENT (Gate-5 ENG-3) on top of what the door's run spent before (`spent`, D-PR5-18): the ceiling
+ * a hidden attempt asks after a handover counts the live attempt's calls, as the executor's
+ * `Dispatch.spent` counts a step's earlier attempts. `moved` hears every handover's destination.
  */
-async function runRefresh(base: Omit<Dispatch, 'afterHandover' | 'spent'>): Promise<{ end: DispatchEnd; calls: Calls; refused: ScheduledRefusal[] }> {
-  const source = base.step.appId;
+async function runRefresh(
+  base: Omit<Dispatch, 'afterHandover' | 'spent'>,
+  first: Placement,
+  spent: Calls,
+  moved: (to: Placement) => void,
+): Promise<{ end: DispatchEnd; calls: Calls; refused: ScheduledRefusal[] }> {
   const calls: Calls = { ai: 0, net: 0 };
   const refused: ScheduledRefusal[] = [];
-  let placement = placeRun(base.deps.live, source);
+  let placement = first;
   let handovers = 0;
   for (;;) {
-    const dispatch: Dispatch = { ...base, afterHandover: handovers > 0, spent: { ...calls } };
+    const dispatch: Dispatch = { ...base, afterHandover: handovers > 0, spent: { ai: spent.ai + calls.ai, net: spent.net + calls.net } };
     const attempt = placement === 'live' ? await dispatchLive(dispatch) : await dispatchHidden(dispatch, createScheduledConfirmGate());
     calls.ai += attempt.calls.ai;
     calls.net += attempt.calls.net;
@@ -186,6 +302,7 @@ async function runRefresh(base: Omit<Dispatch, 'afterHandover' | 'spent'>): Prom
       if (handovers >= MAX_HANDOVERS) return { end: { kind: 'failed', message: handedOverTwice(base.app.displayName) }, calls, refused };
       handovers += 1;
       placement = attempt.end.to;
+      moved(placement);
       continue;
     }
     return { end: attempt.end, calls, refused };
@@ -193,44 +310,69 @@ async function runRefresh(base: Omit<Dispatch, 'afterHandover' | 'spent'>): Prom
 }
 
 /**
- * Ask the source to fetch new data on the reader's behalf — see the header for the order and what
- * each step leaves behind. `deps` are the caller's (`defaultAppRunDeps()` in production, through
- * the service's lazy edge; a fake in the suites); nothing here reads a page store at load.
+ * S2: a flight stopped while the source's OPEN frame held it. Its handler may still be running, so
+ * the delegated record is held — refusing every mutating call, the access door closed, counting —
+ * until the handler's result arrives (from the generation that was hinted, bound to this run), the
+ * dispatch's ORIGINAL deadline passes or the frame goes away. Then the record ends, the sticky
+ * after-run ask applies, and what it counted after its attempt reported is folded into the day —
+ * unless the file was swapped meanwhile (S6).
  */
-export async function refreshSource(db: UserDb, deps: AppRunDeps, input: RefreshInput): Promise<RefreshOutcome> {
+function keepRefusing(db: UserDb, deps: AppRunDeps, sourceAppId: string, runId: string, deadline: number, epoch: number): void {
+  const record = delegatedRunFor(sourceAppId);
+  if (record === undefined || record.runId !== runId || !holdDelegatedRun(sourceAppId, runId)) return;
+  const { generation } = record;
+  let stopEvents: () => void = () => undefined;
+  let stopHosts: () => void = () => undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const release = (): void => {
+    if (!holds.delete(release)) return;
+    if (timer !== undefined) clearTimeout(timer);
+    stopEvents();
+    stopHosts();
+    const ended = releaseDelegatedRun(sourceAppId, runId);
+    if (ended !== undefined && epoch === fileEpoch) foldDailyCalls(db, ended.late, iso(accessDeps().now()));
+  };
+  holds.add(release);
+  stopEvents = deps.live.subscribeEvents(sourceAppId, (event, data, from) => {
+    if (event === SCHEDULE_RESULT_EVENT && from === generation && parseScheduleResult(data, runId) !== undefined) release();
+  });
+  stopHosts = deps.live.subscribe((appId, live) => {
+    if (appId === sourceAppId && !live) release();
+  });
+  timer = setTimeout(release, Math.max(0, deadline - Date.now()));
+}
+
+/** Everything a flight needs to fly. */
+interface FlightInput {
+  db: UserDb;
+  deps: AppRunDeps;
+  input: RefreshInput;
+  app: AppRecord;
+  /** The stamp this dispatch replaced, and how that one went — put back when the one-instance rule answers (nothing ran). */
+  previous: { at: number | undefined; delivered: boolean | undefined };
+  opts: RefreshDoorOptions | undefined;
+}
+
+/**
+ * Start a flight: its `refreshRuns` entry (the chip's), the dispatch under that entry's controller,
+ * and what each of the four stops does the moment it lands. Registered in `inFlight` before the
+ * dispatch's first await, so a host door asking in the same tick joins it.
+ */
+function startFlight({ db, deps, input, app, previous, opts }: FlightInput): Flight {
   const { grant, via } = input;
-  const source = grant.sourceAppId;
-
-  // (1) The three gates — no line, no stamp.
-  const platform = deps.platform();
-  if (platform.scheduler === undefined || platform.capabilities.schedule === false) return off();
-  const state = db.getSchedulerState();
-  if (state === undefined || state.globalPause) return off();
-
-  // (2) The cooldown — stamped at dispatch, so an ask inside the window reads `recent` whether the last dispatch is still in flight or long over.
-  const askedAt = accessDeps().now();
-  const previous = lastDispatchAt.get(source);
-  if (previous !== undefined && askedAt - previous < ACCESS_REFRESH_COOLDOWN_MS) return recent();
-
-  // The source is the app the access names; without its row there is nothing to run and no history to write on.
-  const app = db.getApp(source);
-  if (app === undefined) return failed('failed');
-
-  // (3) The ceiling, over the FILE's day, before anything is stamped or dispatched.
-  if (wouldExceedCeiling(countersSoFar(db, NONE, NONE, new Date(askedAt).toISOString()), { ai: 1, net: 1 }) !== undefined) {
-    logQuietly(db, source, refreshedLine(db, grant, via, askedAt, 'capped'));
-    return failed('capped');
-  }
-
-  // (4) The stamp, at dispatch.
-  lastDispatchAt.set(source, askedAt);
-
+  const source = app.appId;
+  const runId = crypto.randomUUID();
+  const placement = placeRun(deps.live, source);
+  const run = beginRefreshRun({ runId, sourceAppId: source, sourceName: app.displayName, requestedBy: grant.readerAppId, placement: placementOf(placement) });
+  const starter: Starter = { fold: opts?.fold !== false, waiting: true };
+  const epoch = fileEpoch;
+  const { signal } = run.controller;
   // (5) `requestedBy` folded to ONE line at the one place the input is built (S17); the record's title reads it too.
   const requestedBy = oneLine(input.requestedBy);
-  const runId = crypto.randomUUID();
   const refreshInput = { kind: 'refresh', requestedBy } as const;
   const key = scheduleKvKey(runId);
   // (6) The dispatch — the posture, the ids-only hint, the one deadline on the dispatchers' clock (as the executor's).
+  const deadline = Math.min(Date.now() + deps.resultTimeoutMs, opts?.deadline ?? Number.POSITIVE_INFINITY);
   const base: Omit<Dispatch, 'afterHandover' | 'spent'> = {
     mode: 'unattended',
     posture: 'refresh',
@@ -238,41 +380,178 @@ export async function refreshSource(db: UserDb, deps: AppRunDeps, input: Refresh
     step: { kind: 'app-run', appId: source, input: refreshInput },
     deps,
     db,
-    signal: new AbortController().signal,
+    signal,
     now: () => new Date(accessDeps().now()),
     taskId: REFRESH_TASK_ID,
     runId,
     title: REFRESH_RUN.title(requestedBy),
     key,
     payload: { taskId: REFRESH_TASK_ID, runId, input: refreshInput },
-    deadline: Date.now() + deps.resultTimeoutMs,
+    deadline,
   };
 
-  let ran: Awaited<ReturnType<typeof runRefresh>>;
+  let flight: Flight | undefined;
+  // What each stop does AT ONCE, before the dispatch even hears it: a reset forgets the file; any
+  // other stop takes the flight out of reach (a later door reads the kept stamp, never a stopped
+  // run); and a stop on the open frame holds its record (S2).
+  signal.addEventListener(
+    'abort',
+    () => {
+      if (refreshAbortReason(signal) === 'reset') forgetFile();
+      else if (flight !== undefined && inFlight.get(source) === flight) inFlight.delete(source);
+      keepRefusing(db, deps, source, runId, deadline, epoch);
+    },
+    { once: true },
+  );
+
+  const fly = async (): Promise<Settlement> => {
+    let ran: Awaited<ReturnType<typeof runRefresh>>;
+    try {
+      ran = await runRefresh(base, placement, opts?.spent ?? NONE, (to) => setRefreshPlacement(runId, placementOf(to)));
+    } finally {
+      // The kv input, cleared — in the file it was written to only (S6), and only while its app is there.
+      if (epoch === fileEpoch && db.getApp(source) !== undefined) await db.driver.kvSet(source, key, null);
+    }
+    // A reset landed somewhere above: the file this flight wrote to is gone — nothing more is written.
+    if (epoch !== fileEpoch) return { outcome: stopped(), calls: nothing() };
+
+    // (7) The attempt's calls on the file's day — unless the run that started this is still waiting to carry them.
+    const endedAt = accessDeps().now();
+    if (starter.fold || !starter.waiting) foldDailyCalls(db, ran.calls, iso(endedAt));
+
+    // A stop that ended the dispatch: the chip's act, the last waiter leaving, or an app delete.
+    const stop = ran.end.kind === 'aborted' ? refreshAbortReason(signal) : undefined;
+    if (stop !== undefined) {
+      lastDelivered.set(source, false);
+      if (stop !== 'deleted') logQuietly(db, source, refreshedLine(db, grant, via, endedAt, ran.refused.length > 0 ? 'refused' : 'failed'));
+      return { outcome: stopped(), calls: ran.calls };
+    }
+
+    const settled = settle(ran.end, ran.refused);
+    if (settled.kind === 'busy') {
+      // Nothing ran: the one-instance rule answered. The stamp is put back as it was (E2-Q2), no line.
+      if (previous.at === undefined) lastDispatchAt.delete(source);
+      else lastDispatchAt.set(source, previous.at);
+      if (previous.delivered === undefined) lastDelivered.delete(source);
+      else lastDelivered.set(source, previous.delivered);
+      return { outcome: busy(), calls: ran.calls };
+    }
+    lastDelivered.set(source, settled.kind === 'fresh');
+    // The source's code ran and reported success: whatever the record then outranks, its data may have changed, so the reader's caches go.
+    if (ran.end.kind === 'result' && ran.end.result.ok) writeBroker.clearSourceReadCaches(db, source);
+    // (8) The line before the answer; (9) the answer.
+    if (settled.kind === 'failed') {
+      logQuietly(db, source, refreshedLine(db, grant, via, endedAt, settled.reason));
+      return { outcome: failed(settled.reason), calls: ran.calls };
+    }
+    logQuietly(db, source, refreshedLine(db, grant, via, endedAt));
+    return { outcome: fresh(), calls: ran.calls };
+  };
+
+  let resolveSettled!: (settlement: Settlement) => void;
+  let rejectSettled!: (err: unknown) => void;
+  const settled = new Promise<Settlement>((resolve, reject) => {
+    resolveSettled = resolve;
+    rejectSettled = reject;
+  });
+  // Nobody may be left to hear a flight that fails (its last door stopped waiting): the rejection is still theirs to see, never an unhandled one.
+  settled.catch(() => undefined);
+  flight = { run, starter, settled };
+  inFlight.set(source, flight);
+  const own = flight;
+  void fly()
+    .finally(() => {
+      // The flight is over: its entry goes (a no-op after a stop took it), and it is out of reach.
+      endRefreshRun(runId);
+      if (inFlight.get(source) === own) inFlight.delete(source);
+    })
+    .then(resolveSettled, rejectSettled);
+  return flight;
+}
+
+/**
+ * A door's wait on a flight: the flight's settlement — or, first, the door's own stop or its
+ * deadline, which answer that door alone and leave the flight to its other waiters (S14). The
+ * door that started the flight hears what it spent; a joiner hears `calls` of nothing.
+ */
+async function waitOn(flight: Flight, opts: RefreshDoorOptions | undefined, starter: boolean): Promise<Settlement> {
+  const leave = joinRefreshRun(flight.run.runId);
+  const { signal, deadline } = opts ?? {};
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let onAbort: (() => void) | undefined;
+  type Left = { left: 'stopped' | 'timeout' };
+  const gaveUp = new Promise<Left>((resolve) => {
+    if (signal !== undefined) {
+      onAbort = () => resolve({ left: 'stopped' });
+      if (signal.aborted) onAbort();
+      else signal.addEventListener('abort', onAbort, { once: true });
+    }
+    // A joiner's own bound; a flight its door started is bounded by that door's deadline already.
+    if (deadline !== undefined && !starter) timer = setTimeout(() => resolve({ left: 'timeout' }), Math.max(0, deadline - Date.now()));
+  });
   try {
-    ran = await runRefresh(base);
+    const first = await Promise.race<Settlement | Left>([flight.settled, gaveUp]);
+    if (!('left' in first)) return starter ? first : { outcome: first.outcome, calls: nothing() };
+    if (starter) flight.starter.waiting = false;
+    leave();
+    return { outcome: first.left === 'stopped' ? stopped() : failed('timeout'), calls: nothing() };
   } finally {
-    await db.driver.kvSet(source, key, null);
+    if (timer !== undefined) clearTimeout(timer);
+    if (signal !== undefined && onAbort !== undefined) signal.removeEventListener('abort', onAbort);
+  }
+}
+
+/**
+ * Ask the source to fetch new data on the reader's behalf — see the header for the order and what
+ * each step leaves behind. `deps` are the caller's (`defaultAppRunDeps()` in production, through
+ * the service's lazy edge; a fake in the suites); nothing here reads a page store at load. The
+ * host door's form (`opts`, PR-5) is declared first so the frame's stays the LAST overload — the
+ * one `ReturnType` of the engine names.
+ */
+export function refreshSource(db: UserDb, deps: AppRunDeps, input: RefreshInput, opts: RefreshDoorOptions): Promise<RefreshDoorAnswer>;
+export function refreshSource(db: UserDb, deps: AppRunDeps, input: RefreshInput): Promise<RefreshOutcome>;
+export async function refreshSource(db: UserDb, deps: AppRunDeps, input: RefreshInput, opts?: RefreshDoorOptions): Promise<RefreshOutcome | RefreshDoorAnswer> {
+  const door = opts !== undefined;
+  const answer = (settlement: Settlement): RefreshOutcome | RefreshDoorAnswer => (door ? settlement : settlement.outcome);
+  const now = (outcome: RefreshOutcome): RefreshOutcome | RefreshDoorAnswer => answer({ outcome, calls: nothing() });
+  const { grant, via } = input;
+  const source = grant.sourceAppId;
+
+  // A door that stopped before it asked asks nothing; one with no time left, likewise.
+  if (opts?.signal?.aborted === true) return now(stopped());
+  if (opts?.deadline !== undefined && opts.deadline <= Date.now()) return now(failed('timeout'));
+
+  // (1) The three gates — no line, no stamp.
+  const platform = deps.platform();
+  if (platform.scheduler === undefined || platform.capabilities.schedule === false) return now(off());
+  const state = db.getSchedulerState();
+  if (state === undefined || state.globalPause) return now(off());
+
+  // (2′) A host door JOINS a refresh already in flight for the source, before the cooldown (D-PR5-18); the frame never does (E2-Q6).
+  if (door) {
+    const flight = inFlight.get(source);
+    if (flight !== undefined) return waitOn(flight, opts, false);
   }
 
-  // (7) The attempt's calls on the file's day.
-  const endedAt = accessDeps().now();
-  foldDailyCalls(db, ran.calls, new Date(endedAt).toISOString());
+  // (2) The cooldown — stamped at dispatch, so an ask inside the window reads `recent` whether the last dispatch is still in flight or long over.
+  const askedAt = accessDeps().now();
+  const previous = lastDispatchAt.get(source);
+  if (previous !== undefined && askedAt - previous < ACCESS_REFRESH_COOLDOWN_MS) return now(recent());
 
-  const settled = settle(ran.end, ran.refused);
-  if (settled.kind === 'busy') {
-    // Nothing ran: the one-instance rule answered. The stamp is put back as it was (E2-Q2), no line.
-    if (previous === undefined) lastDispatchAt.delete(source);
-    else lastDispatchAt.set(source, previous);
-    return busy();
+  // The source is the app the access names; without its row there is nothing to run and no history to write on.
+  const app = db.getApp(source);
+  if (app === undefined) return now(failed('failed'));
+
+  // (3) The ceiling, over the FILE's day plus what a schedule's run already spent, before anything is stamped or dispatched.
+  if (wouldExceedCeiling(countersSoFar(db, opts?.spent ?? NONE, NONE, iso(askedAt)), { ai: 1, net: 1 }) !== undefined) {
+    logQuietly(db, source, refreshedLine(db, grant, via, askedAt, 'capped'));
+    return now(failed('capped'));
   }
-  // The source's code ran and reported success: whatever the record then outranks, its data may have changed, so the reader's caches go.
-  if (ran.end.kind === 'result' && ran.end.result.ok) writeBroker.clearSourceReadCaches(db, source);
-  // (8) The line before the answer; (9) the answer.
-  if (settled.kind === 'failed') {
-    logQuietly(db, source, refreshedLine(db, grant, via, endedAt, settled.reason));
-    return failed(settled.reason);
-  }
-  logQuietly(db, source, refreshedLine(db, grant, via, endedAt));
-  return fresh();
+
+  // (4) The stamp, at dispatch; (5)–(9) the flight, which this door waits on like any other.
+  const delivered = lastDelivered.get(source);
+  lastDispatchAt.set(source, askedAt);
+  lastDelivered.delete(source);
+  const flight = startFlight({ db, deps, input, app, previous: { at: previous, delivered }, opts });
+  return answer(await waitOn(flight, opts, true));
 }

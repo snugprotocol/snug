@@ -24,6 +24,11 @@
 // data"; the allowed line names the tables the person let it change ("can now read and change
 // …" / "…, and change <t>") from the outcome's `write`, and *stop* on such an access says "no
 // longer reads or changes". A read ask and a read-only allow keep the 1.1 lines, byte for byte.
+//
+// TASK-20261010-host-broker PR-5 (D-PR5-5, D-PR5-15; D17): an ask that wanted to change rows and
+// was allowed read-only says so in its one clause ("can now read — not change —", the outcome's
+// `notChange`); and a SOURCE that offered itself has its strip hear the answer too (outcome.ts
+// records an offer's line under both ids), so this strip may name another app as the one that reads.
 
 import type { ReactElement } from 'react';
 import { useEffect, useRef, useState } from 'react';
@@ -66,7 +71,9 @@ function OutcomeLine({ appId, recorded }: { appId: string; recorded: RecordedOut
       case 'allowed':
         return (
           <>
-            <span data-testid="access-ask-outcome-words">{STRIP_OUTCOME.allowed(readerName, outcome.sourceName, outcome.tables, outcome.duration, outcome.write)}</span>
+            <span data-testid="access-ask-outcome-words">
+              {STRIP_OUTCOME.allowed(readerName, outcome.sourceName, outcome.tables, outcome.duration, outcome.write, { notChange: outcome.notChange === true })}
+            </span>
             {' · '}
             <Button
               variant="ghost"

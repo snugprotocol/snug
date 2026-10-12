@@ -18,6 +18,7 @@ import {
   SCHEDULE_TITLE_MAX_CHARS,
 } from '@snugprotocol/protocol';
 
+import { listWords } from '../access/copy.js';
 import { CONSENT, SCHEDULED_NEXT, aiCalls, stepLabel } from './copy.js';
 
 /** The route's heading, by mode. */
@@ -139,6 +140,18 @@ export const STEPS = {
     `it can choose its own questions over ${appName}’s data and what you let it read from other apps, and ask ${appName}’s connections (it only asks, never posts) · up to ${aiCalls(APP_AGENT_MAX_ROUND_TRIPS)} each time`,
   /** Said here, first, when the brain cannot use tools for this app — the result never says it first. */
   toolsUnavailable: 'this brain will answer without looking things up',
+  // TASK-20261010-host-broker PR-5 (D-PR5-19; D11, S15): an *ask* step may first ask the apps it
+  // may read while the person is away to fetch new data. The tick names the class — any such app,
+  // now or later — and its hint names the ones that do now and what each fetch costs.
+  /** The tick, offered when the app may ask at least one other app for new data while the person is away. */
+  fetchFirst: (appName: string): string => `fetch new data first from the apps ${appName} may read while you’re away`,
+  /** Under the ticked box: the sources now, whose own code runs through their own connections. */
+  fetchFirstHint: (sourceNames: readonly string[]): string =>
+    sourceNames.length === 1
+      ? `now: ${sourceNames[0]} — runs ${sourceNames[0]}’s own fetch just before, through ${sourceNames[0]}’s connections, counted on your daily limits`
+      : `now: ${listWords(sourceNames)} — runs each one’s own fetch just before, through its own connections, counted on your daily limits`,
+  /** A step that carries the tick when no app lets it ask any more: the tick stays, and says it does nothing. */
+  fetchFirstStale: (appName: string): string => `no app lets ${appName} ask for new data now — this does nothing until one does`,
 } as const;
 
 /**
@@ -209,6 +222,14 @@ export const CONSENT_ROWS = {
     `may look things up through (it only asks, never posts — but what it asks can carry your data; it can use them without asking you each time): ${connectionNames.length === 0 ? NO_HOSTS : connectionNames.join(', ')}`,
   /** Its typed queries are where it starts, not all it may read. */
   startsFrom: (appName: string): string => `starts from these; may read more of ${appName}’s data itself`,
+  /**
+   * TASK-20261010-host-broker PR-5 (D-PR5-19): the row under an *ask* step that fetches new data
+   * first — the sources now, by name; none now, and the row says the tick does nothing until one does.
+   */
+  fetchFirst: (appName: string, sourceNames: readonly string[]): string =>
+    sourceNames.length > 0
+      ? `first asks the apps ${appName} may read while you’re away to fetch new data (now: ${listWords(sourceNames)})`
+      : `first asks the apps ${appName} may read while you’re away to fetch new data — ${STEPS.fetchFirstStale(appName)}`,
   /**
    * The cost row when a step may look things up (D12): what one time may spend — `each.ai` is the
    * steps' AI calls per occurrence (`floors.stepsCost`: ten a step that may look things up) and

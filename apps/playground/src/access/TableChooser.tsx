@@ -16,6 +16,9 @@
 //     breath undo note under it once ticked: the bound, where the changes are listed, that each
 //     can be undone.
 // An UNTICKED row keeps the 1.1 look: the choices belong to a table that is allowed at all.
+//
+// TASK-20261010-host-broker PR-5 (D-PR5-5): `canChange={false}` — a source's offer — draws no
+// write toggle on any row, open options or not.
 
 import type { ReactElement } from 'react';
 import { useState } from 'react';
@@ -42,6 +45,8 @@ export interface TableChooserProps {
   ticked: Readonly<Record<string, TableTick>>;
   /** The sheet's *more options…* is open: each ticked row shows its write toggle. */
   optionsOpen: boolean;
+  /** PR-5 (D-PR5-5): `false` on a source's offer — no write toggle on any row. Default `true`. */
+  canChange?: boolean;
   onToggle: (table: string, on: boolean) => void;
   onColumn: (table: string, column: string, on: boolean) => void;
   onWrite: (table: string, on: boolean) => void;
@@ -124,12 +129,13 @@ interface TableRowProps {
   /** The row's choices — `undefined` for an unticked (or unofferable) table. */
   tick: TableTick | undefined;
   optionsOpen: boolean;
+  canChange: boolean;
   onToggle: (on: boolean) => void;
   onColumn: (column: string, on: boolean) => void;
   onWrite: (on: boolean) => void;
 }
 
-function TableRow({ id, sourceName, readerName, table, tick, optionsOpen, onToggle, onColumn, onWrite }: TableRowProps): ReactElement {
+function TableRow({ id, sourceName, readerName, table, tick, optionsOpen, canChange, onToggle, onColumn, onWrite }: TableRowProps): ReactElement {
   const offerable = isOfferable(table);
   const [columnsOpen, setColumnsOpen] = useState(false);
   // The chooser belongs to a ticked table; an unticked row keeps the 1.1 chips (and forgets an open chooser).
@@ -162,7 +168,7 @@ function TableRow({ id, sourceName, readerName, table, tick, optionsOpen, onTogg
           {columnsOpen ? <ColumnBoxes id={id} table={table} tick={tick} onColumn={onColumn} /> : null}
         </details>
       ) : null}
-      {chooser && optionsOpen ? (
+      {chooser && optionsOpen && canChange ? (
         <div className="access-write">
           <label className="check-label">
             <input type="checkbox" checked={tick.write} data-testid={`access-write-${id}-${table.name}`} onChange={(event) => onWrite(event.target.checked)} />
@@ -175,7 +181,7 @@ function TableRow({ id, sourceName, readerName, table, tick, optionsOpen, onTogg
   );
 }
 
-export function TableChooser({ source, readerName, ticked, optionsOpen, onToggle, onColumn, onWrite }: TableChooserProps): ReactElement {
+export function TableChooser({ source, readerName, ticked, optionsOpen, canChange = true, onToggle, onColumn, onWrite }: TableChooserProps): ReactElement {
   const id = source.appId;
   return (
     <ul className="access-tables">
@@ -188,6 +194,7 @@ export function TableChooser({ source, readerName, ticked, optionsOpen, onToggle
           table={table}
           tick={isOfferable(table) ? ticked[table.name] : undefined}
           optionsOpen={optionsOpen}
+          canChange={canChange}
           onToggle={(on) => onToggle(table.name, on)}
           onColumn={(column, on) => onColumn(table.name, column, on)}
           onWrite={(on) => onWrite(table.name, on)}

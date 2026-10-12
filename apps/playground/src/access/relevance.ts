@@ -27,8 +27,19 @@
 // whose every table is like that has no data to read (`no-tables`).
 //
 // Pure: no db, no store, no React.
+//
+// TASK-20261010-host-broker PR-5 (contract v2 D-PR5-4; AC34; S10, F3; v2.1 TB-Q6/Q7) adds the
+// PAIRS' pure core. `registryTables` reads an app's REGISTERED schema (the `getAppSchema` value)
+// as the sheet's tables — `table` objects only, column names parsed from the verbatim DDL by the
+// rule `intentContext.ts`'s `tableSummaries` uses, credential-named columns sensitive, no row
+// count — so a pair is found with no runtime export and no `describeAppData`. `rankPairs` ranks
+// every source for each reader's DECLARED want with `rankSources`' own tiers, but ADMITS a pair
+// only on a TABLE-tier match (an exact hint table, or a hint word inside an offerable table's
+// name): a column or a name match ranks a pair, it never makes one (S10 — the declaration is the
+// app's text, so it may point at a table, never pre-tick a guess). `tableTierTables` is that tier
+// alone, which is also what the declared ask pre-ticks.
 
-import { ACCESS_HINT_TABLES_MAX, ACCESS_HINT_WORDS_MAX } from '@snugprotocol/protocol';
+import { ACCESS_HINT_TABLES_MAX, ACCESS_HINT_WORDS_MAX, isCredentialKeyName, type AccessWants, type AppSchemaJson } from '@snugprotocol/protocol';
 
 export interface SourceColumn {
   name: string;
@@ -75,6 +86,9 @@ export interface RankedSources {
   excluded: ExcludedApp[];
 }
 
+/** An ask's relevance hints as the ranking reads them (the protocol's `AccessHints`, read-only). */
+export type HintLists = { words?: readonly string[]; tables?: readonly string[] };
+
 /** At most this many candidates are shown first; the rest sit behind *more apps…*. */
 export const MATCHED_MAX = 5;
 
@@ -104,6 +118,10 @@ const isDescribed = (input: SourceInput): input is SourceApp => !('excluded' in 
 /** A table a grant could hold: at least one column that is not credential-named (D23). */
 export const isOfferable = (table: SourceTable): boolean => table.columns.some((column) => !column.sensitive);
 
+/** The TABLE tier's test on one folded table name: a hint names it exactly, or a hint word sits inside it. */
+const inTableTier = (name: string, hintTables: readonly string[], words: readonly string[]): boolean =>
+  hintTables.includes(name) || words.some((word) => name.includes(word));
+
 function score(app: SourceApp, hintTables: readonly string[], words: readonly string[]): RankedSource {
   // Only offerable tables can match: a table with nothing readable is never a reason to rank an app.
   const offerable = app.tables.filter(isOfferable);
@@ -117,8 +135,7 @@ function score(app: SourceApp, hintTables: readonly string[], words: readonly st
 
   const matchedTables = offerable
     .filter((table) => {
-      const name = fold(table.name);
-      return hintTables.includes(name) || words.some((word) => name.includes(word) || shareable(table).some((column) => column.includes(word)));
+      return inTableTier(fold(table.name), hintTables, words) || words.some((word) => shareable(table).some((column) => column.includes(word)));
     })
     .map((table) => table.name);
 
@@ -133,7 +150,7 @@ function score(app: SourceApp, hintTables: readonly string[], words: readonly st
 export function rankSources(input: {
   readerAppId: string;
   apps: readonly SourceInput[];
-  hints?: { words?: readonly string[]; tables?: readonly string[] };
+  hints?: HintLists;
 }): RankedSources {
   const hintTables = normalise(input.hints?.tables, ACCESS_HINT_TABLES_MAX, 1);
   const words = normalise(input.hints?.words, ACCESS_HINT_WORDS_MAX, MIN_WORD_CHARS);
@@ -160,4 +177,111 @@ export function rankSources(input: {
 /** The tables the sheet ticks first: those a hint matched, or every OFFERABLE table when none did. */
 export function preselectedTables(source: RankedSource): string[] {
   return source.matchedTables.length > 0 ? [...source.matchedTables] : source.tables.filter(isOfferable).map((table) => table.name);
+}
+
+// ------------------------------------------------------------------------- the pairs (PR-5)
+
+/** A constraint clause inside `CREATE TABLE (…)` — never a column. */
+const CONSTRAINT_CLAUSE = /^(primary|foreign|unique|check|constraint)$/i;
+
+/**
+ * An app's REGISTERED tables as the sheet's `SourceTable`s (D-PR5-4, F3): every `table` object of
+ * its `getAppSchema` value, its column names parsed from the verbatim DDL — the registry is the
+ * schema of record (ADR-0010) — credential-named ones `sensitive`, and no row count (nothing is
+ * read to count). No schema → no tables.
+ */
+export function registryTables(schema: Pick<AppSchemaJson, 'objects'> | undefined): SourceTable[] {
+  if (schema === undefined) return [];
+  return schema.objects
+    .filter((object) => object.type === 'table')
+    .map((object) => {
+      const body = /\(([\s\S]*)\)/.exec(object.ddl)?.[1] ?? '';
+      const columns = body
+        .split(',')
+        .map((part) => part.trim().split(/\s+/)[0] ?? '')
+        .filter((name) => name !== '' && !CONSTRAINT_CLAUSE.test(name))
+        .map((name) => ({ name, sensitive: isCredentialKeyName(name) }));
+      return { name: object.name, columns, rowCount: 0 };
+    });
+}
+
+/** Whether a want carries anything to match: a hint table, or a hint word long enough to rank. */
+export function hasHints(hints: HintLists | undefined): boolean {
+  return normalise(hints?.tables, ACCESS_HINT_TABLES_MAX, 1).length > 0 || normalise(hints?.words, ACCESS_HINT_WORDS_MAX, MIN_WORD_CHARS).length > 0;
+}
+
+/**
+ * The TABLE tier alone (S10), in the source's own order: the offerable tables a hint names
+ * exactly, or whose name holds a hint word. What a pair is admitted on, and all a declared ask
+ * may pre-tick — never a column match, never the every-table fallback.
+ */
+export function tableTierTables(source: SourceApp, hints: HintLists | undefined): string[] {
+  const hintTables = normalise(hints?.tables, ACCESS_HINT_TABLES_MAX, 1);
+  const words = normalise(hints?.words, ACCESS_HINT_WORDS_MAX, MIN_WORD_CHARS);
+  return source.tables
+    .filter((table) => isOfferable(table) && inTableTier(fold(table.name), hintTables, words))
+    .map((table) => table.name);
+}
+
+/** A reader with what its access-wants meta declares. */
+export interface PairReader {
+  appId: string;
+  displayName: string;
+  wants: AccessWants;
+}
+
+/** *Budget could read Ledger's transactions* — one reader, one source, the want that matched (D-PR5-4). */
+export interface PairSuggestion {
+  readerAppId: string;
+  readerName: string;
+  sourceAppId: string;
+  sourceName: string;
+  want: AccessWants[number];
+  /** The TABLE-tier tables only, in the source's order. */
+  matchedTables: string[];
+  /** `rankSources`' score for this want. */
+  score: number;
+}
+
+const byText = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+
+/** Score desc, then reader name, source name, and the ids — never the input order. */
+const pairOrder = (a: PairSuggestion, b: PairSuggestion): number =>
+  b.score - a.score ||
+  byText(a.readerName, b.readerName) ||
+  byText(a.sourceName, b.sourceName) ||
+  byText(a.readerAppId, b.readerAppId) ||
+  byText(a.sourceAppId, b.sourceAppId);
+
+/**
+ * EVERY admitted pair, sorted (TB-Q7 — the ≤ 5 cut is Settings'): for each reader's want WITH
+ * hints, every source ranked by `rankSources` (the reader itself and table-less sources fall out
+ * there), admitted only on a table-tier match. One pair per (reader, source): the want that
+ * scored highest, the first declared on a tie.
+ */
+export function rankPairs(input: { readers: readonly PairReader[]; sources: readonly SourceApp[] }): PairSuggestion[] {
+  const best = new Map<string, PairSuggestion>();
+  for (const reader of input.readers) {
+    for (const want of reader.wants) {
+      if (!hasHints(want.hints)) continue;
+      const ranked = rankSources({ readerAppId: reader.appId, apps: input.sources, ...(want.hints !== undefined ? { hints: want.hints } : {}) });
+      for (const source of [...ranked.matched, ...ranked.rest]) {
+        const matchedTables = tableTierTables(source, want.hints);
+        if (matchedTables.length === 0) continue;
+        const key = JSON.stringify([reader.appId, source.appId]);
+        const held = best.get(key);
+        if (held !== undefined && held.score >= source.score) continue;
+        best.set(key, {
+          readerAppId: reader.appId,
+          readerName: reader.displayName,
+          sourceAppId: source.appId,
+          sourceName: source.displayName,
+          want,
+          matchedTables,
+          score: source.score,
+        });
+      }
+    }
+  }
+  return [...best.values()].sort(pairOrder);
 }

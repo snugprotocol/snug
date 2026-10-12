@@ -30,11 +30,15 @@
 // An *ask* step that may look things up (`tools: true`, TASK-20261010-host-broker PR-4, D-PR4-20)
 // is counted at what its bounds ALLOW — every round trip a brain call, every tool call a look-up —
 // so the weekly line, the daily bound and the catch-up default never promise less than it may
-// spend.
+// spend. An *ask* step that fetches new data first (`refreshFirst`, PR-5, D-PR5-19; F10) may first
+// run up to `REFRESH_FIRST_MAX_SOURCES` other apps' own fetch — each what a *run <app>* step costs —
+// so it counts that many on top of its own: an honest "up to". Those fetches are no look-ups of the
+// step's own tools (`stepsLookUps` never counts them).
 
 import {
   APP_AGENT_MAX_ROUND_TRIPS,
   APP_AGENT_MAX_TOOL_CALLS,
+  REFRESH_FIRST_MAX_SOURCES,
   SCHEDULE_MIN_INTERVAL_MS,
   SCHEDULE_STALE_AFTER_MS,
   type MissedPolicy,
@@ -73,7 +77,12 @@ const LOOK_UP_STEP_COST: StepCost = { ai: APP_AGENT_MAX_ROUND_TRIPS, net: APP_AG
 
 /** What ONE step may spend per occurrence — the one rule the estimate, the daily bound and the consent's cost row read. */
 export function stepCost(step: ScheduleStep): StepCost {
-  return step.kind === 'app-think' && step.tools === true ? LOOK_UP_STEP_COST : STEP_COST[step.kind];
+  if (step.kind !== 'app-think') return STEP_COST[step.kind];
+  const own = step.tools === true ? LOOK_UP_STEP_COST : STEP_COST['app-think'];
+  if (step.refreshFirst !== true) return own;
+  // Up to REFRESH_FIRST_MAX_SOURCES other apps' own fetch first, each a *run <app>* step's cost (F10).
+  const fetch = STEP_COST['app-run'];
+  return { ai: own.ai + REFRESH_FIRST_MAX_SOURCES * fetch.ai, net: own.net + REFRESH_FIRST_MAX_SOURCES * fetch.net };
 }
 
 /** What every step together may spend per occurrence. */

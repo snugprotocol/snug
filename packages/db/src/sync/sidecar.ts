@@ -19,6 +19,14 @@ export interface SyncSidecarState {
 
 export const sidecarFileFor = (file: string): string => `${file}.sync.json`;
 
+/**
+ * A `lastPushedHash` no SHA-256 hex can equal (TASK-20261010-host-broker PR-5, D-PR5-8): a pull that
+ * carried this device's access history into the origin's image, or put a stop back over it, holds
+ * a file the origin has not seen — anchoring this instead of the merged image's hash makes the
+ * next content-hash gate see a change, so the next tick pushes the merged history up.
+ */
+export const SYNC_UNANCHORED_HASH = 'unanchored';
+
 const stringField = (value: unknown): string | undefined => (typeof value === 'string' ? value : undefined);
 
 export async function loadSidecar(backend: PersistenceBackend, file: string): Promise<SyncSidecarState> {

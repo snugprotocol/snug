@@ -1250,7 +1250,7 @@ describe('PR-5 D-PR5-17 cancelRefresh — the chip’s act (S2: a cancelled LIVE
     expect(fetched).toHaveLength(sentBefore);
     expect(delegatedRunFor(source)?.refused).toEqual([{ host: API_HOST, method: 'POST', why: 'refused' }]);
     expect((await live.net.handle(source, netFrame('GET'))).ok).toBe(true);
-    expect(delegatedRunFor(source)?.calls.net, 'still counting').toBe(1);
+    expect(delegatedRunFor(source)?.calls.net, 'still counting').toBe(2) // v2.2 note (c): the refused POST and the GET — every request is counted before the gate (A5);
 
     // The result ends the record — THEN the sticky after-run ask applies.
     deps.live.emit(source, SCHEDULE_RESULT_EVENT, { ok: true });

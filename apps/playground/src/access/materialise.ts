@@ -34,6 +34,12 @@
 // one spelling of "what this grant may read" for a read, a dump and a plan alike. The caps live in
 // the protocol's Appendix B (D-PR3-26) — `access/limits.ts` is gone.
 //
+// THE WRITE MARK (TASK-20261010-host-broker PR-5, D-PR5-13). For the CHAT caller alone, a table the
+// user let the reader change carries `write: true` — the one seat `sharedDdl.ts` reads to say *can be
+// changed* on a `data_write` turn, and `dataTools.ts` to admit a change to it. `snug_kv` never carries
+// it (the kv seat is read-only whatever the grant says), and every other table, and every table a
+// schedule is handed, OMITS the seat — so an unmarked set is exactly what it was before PR-5.
+//
 // `namesTable` is the lazy door's test (D-PR2-10): does this statement name this table, as a whole
 // identifier — bare, "quoted", `quoted`, [bracketed], in any case, and conservatively inside a
 // string literal too (a name that merely contains it, `ledger__transactions_archive`, does not).
@@ -183,6 +189,8 @@ export async function materialiseGrants(db: UserDb, caller: AccessCaller, rows: 
     }
     const granted = dumpedNames(grant);
     const alias = aliasFor(row.sourceName, granted, taken);
+    /** D-PR5-13: the chat's mark — a scope table with `write`, never the kv table, never another caller. */
+    const writable = (name: string): boolean => caller.kind === 'chat' && name !== KV_TABLE && grant.scope.tables.some((entry) => entry.name === name && entry.write === true);
     for (const name of granted) taken.add(`${alias}${JOIN}${name}`.toLowerCase());
     for (const table of outcome.tables) {
       remaining -= table.rows.reduce((sum, cells) => sum + rowBytes(cells), 0);
@@ -200,6 +208,7 @@ export async function materialiseGrants(db: UserDb, caller: AccessCaller, rows: 
         ...(table.totalRows !== undefined ? { totalRows: table.totalRows } : {}),
         duration: row.duration,
         ...(row.expiresAt !== undefined ? { expiresAt: row.expiresAt } : {}),
+        ...(writable(table.name) ? { write: true as const } : {}),
       });
     }
   }

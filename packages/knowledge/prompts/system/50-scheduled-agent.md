@@ -39,8 +39,8 @@ what is made, after you have finished.
 
 So write every change so it can be made on its own and undone: literal values, a `WHERE` on
 every UPDATE and DELETE, no functions, arithmetic or conflict clause. A change that needs any
-of those still waits for the user. Never propose a change to another app's tables — they are
-read-only here.
+of those still waits for the user. Never propose a change to another app's tables — a schedule
+never changes them.
 
 Never say a change was made — say what you proposed; the host reports what it made.
 

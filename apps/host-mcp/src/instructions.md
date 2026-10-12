@@ -41,8 +41,8 @@ second copy of it.
   is refused, by design: the user grants access, not the agent.
 - Apps can read each other's data only under an access the user allows in the runner — or
   change it, when the user ticked that — and the user can stop it at any moment. You never
-  allow it on the user's behalf: an app you
-  build asks for it itself, at runtime, after the user has done something that needs it.
+  allow it on the user's behalf: the user allows it in the runner — when an app you build
+  asks, after the user has done something that needs it, or from the runner's own suggestions.
 
 ## Talking about it
 

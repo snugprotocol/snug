@@ -15,8 +15,9 @@ import type { RoutedLane } from './chatRouter.js';
 import { noDataLane } from './noDataLane.js';
 
 /**
- * The real module's seams, mirrored. The two shapes `dataTools.ts` owns (the write proposal and
- * the chat door's shared seat) ride out with the lane: the stub never calls the one nor reads the other.
+ * The real module's seams, mirrored. The shapes `dataTools.ts` and the cross-app card own (the
+ * write proposal, the chat door's shared seat and its caller, the cross-app card — PR-5) ride out
+ * with the lane: the stub never calls nor reads them.
  */
 export interface LaneToolDeps {
   db: UserDb;
@@ -29,6 +30,8 @@ export interface LaneToolDeps {
   onScheduleProposal: (proposal: ScheduleProposal, appId: string | undefined) => boolean;
   onAccessProposal: (proposal: AccessProposal, appId: string) => boolean;
   shared?: unknown;
+  accessCaller?: unknown;
+  onAccessWriteProposal?: (card: never) => boolean;
 }
 
 export function laneToolsFor(route: RoutedLane | undefined, _deps: LaneToolDeps): Promise<AgentTool[] | undefined> {

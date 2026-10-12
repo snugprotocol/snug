@@ -20,7 +20,8 @@ import { USERDB_OPFS_DIR } from '@snugprotocol/protocol';
 import { allows, getPlatform, secretsUsable } from '../platform/platform.js';
 import { refreshAppMeta } from './appMeta.js';
 import { hydrateSettings, markEndpointsNeedConfirm } from './mode.js';
-import { resetAccessSession } from '../access/grants.js';
+import { bumpAccessRevision, resetAccessSession } from '../access/grants.js';
+import { abortAllRefreshes } from '../access/refreshRuns.js';
 import { resetThreadSessions } from '../agent/threadSessions.js';
 import { hydrateSharedInbox, resetSharedInbox } from '../share/sharedInbox.js';
 import { resetSidecarIdentitySession } from './sidecarIdentity.js';
@@ -67,8 +68,11 @@ async function afterForeignBytes(): Promise<void> {
   // file that was just replaced, and any in-flight turn would write into the new one.
   resetThreadSessions();
   // …and access between apps (TASK-20261010-cross-app-access AC14): session access, the
-  // limiters, pending asks and the cached bytes belong to the file that was just replaced.
+  // limiters, pending asks and the cached bytes belong to the file that was just replaced — and a
+  // fetch another app asked for, still in flight, writes nothing into this one (TASK-20261010-host-broker
+  // PR-5, S6: no line, no fold, no kv clear; the cooldowns go with the old file).
   resetAccessSession();
+  abortAllRefreshes('reset');
   markEndpointsNeedConfirm();
   const db = await getUserDb();
   hydrateSettings(db);
@@ -232,6 +236,9 @@ export async function applyRemote(): Promise<void> {
 export async function pushLocal(): Promise<void> {
   if (loop === undefined) return;
   await loop.pushLocal();
+  // PR-5 (D-PR5-8): *keep this device's copy* first carries the origin's history and stops into the
+  // live file (`carryFromImage`), so the access surfaces re-read — the engine re-reads on every op.
+  bumpAccessRevision();
   syncStatusStore.set({ ...syncStatusStore.get(), state: 'idle', detail: undefined });
 }
 
@@ -302,6 +309,7 @@ export async function importUserFile(file: { arrayBuffer(): Promise<ArrayBuffer>
   // `afterForeignBytes` resets again afterwards — that call also serves the pull path.
   resetThreadSessions();
   resetAccessSession(); // the same seam (TASK-20261010-cross-app-access AC14)
+  abortAllRefreshes('reset'); // …and a fetch in flight writes nothing into the imported file (TASK-20261010-host-broker PR-5, S6)
   // The shelf mirrors rows of the file being replaced (ADR-0063 §4); drop it before the
   // swap so a memory entry cannot be "kept" into the wrong file mid-import, then
   // `afterForeignBytes` re-hydrates from the file that is now local.

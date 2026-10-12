@@ -16,7 +16,7 @@ import { SnugAppFrame, type FrameDirection, type RunnerHost } from '@snugprotoco
 
 import { NET_ERROR_CODES, type ConnectionRequirement } from '@snugprotocol/protocol';
 import { ReportErrorLink } from '../feedback/ReportErrorLink.js';
-import { useBuilderChat, type DataWriteCardState } from '../agent/useBuilderChat.js';
+import { useBuilderChat, type ChatSendOptions, type DataWriteCardState } from '../agent/useBuilderChat.js';
 import type { ChatCardState } from '../agent/cards.js';
 import { createOpenUrlHandlerFor } from '../state/openUrl.js';
 import { dismissPendingAccess } from '../access/consent.js';
@@ -69,6 +69,8 @@ import { RunHeaderActions } from './RunHeaderActions.js';
 import { useAppEventConsumer } from '../schedule/scheduleRequest.js';
 import { SuggestionStrip } from '../schedule/SuggestionStrip.js';
 import { AccessStrip } from '../access/AccessStrip.js';
+import { AccessWantsNote } from '../access/AccessWantsNote.js';
+import { ChatFetchToggle } from './ChatFetchToggle.js';
 import { appMayUseAccess } from './appCapabilityRules.js';
 import { HelperInstallCard } from '../connections/HelperInstallCard.js';
 import { WHATSAPP_HELPER, helperNeedsInstall, refreshHelperStatus } from '../state/helperInstall.js';
@@ -903,6 +905,8 @@ export default function RunView(): ReactElement {
             </div>
           ) : null}
           <RailChat
+            appId={id}
+            threadId={threadId}
             messages={chat.messages}
             steps={chat.steps}
             activity={chat.activity}
@@ -923,6 +927,8 @@ export default function RunView(): ReactElement {
             onSelectCardOption={chat.selectCardOption}
             onResolveSchedule={chat.resolveSchedule}
             onResolveAccess={chat.resolveAccess}
+            onApproveAccessWrite={chat.approveAccessWrite}
+            onDeclineAccessWrite={chat.declineAccessWrite}
           />
         </>
       )}
@@ -1270,14 +1276,19 @@ export default function RunView(): ReactElement {
           <ShareSheet appId={id} displayName={fallbackName ?? 'this app'} onClose={() => setShareOpen(false)} />
         ) : null}
         {isSharedId(id) && sharedEntry !== undefined ? (
-          <div className="hint" data-testid="shared-preview-disclosure" style={{ margin: 'var(--space-3) var(--space-4) 0' }}>
-            {installedCopy !== undefined && !installedCopy.current
-              ? `shared app · preview of a NEWER version of ${installedCopy.displayName}, which is already in your file · nothing changes until you update.`
-              : 'shared app · preview · nothing is saved until you install.'}
-            {sharedEntry.bundle.connections.length > 0
-              ? ` it will ask to connect to ${sharedEntry.bundle.connections.map((c) => c.provider.name).join(', ')} — you review and approve each one yourself; its author never sees your keys.`
-              : ''}
-          </div>
+          <>
+            <div className="hint" data-testid="shared-preview-disclosure" style={{ margin: 'var(--space-3) var(--space-4) 0' }}>
+              {installedCopy !== undefined && !installedCopy.current
+                ? `shared app · preview of a NEWER version of ${installedCopy.displayName}, which is already in your file · nothing changes until you update.`
+                : 'shared app · preview · nothing is saved until you install.'}
+              {sharedEntry.bundle.connections.length > 0
+                ? ` it will ask to connect to ${sharedEntry.bundle.connections.map((c) => c.provider.name).join(', ')} — you review and approve each one yourself; its author never sees your keys.`
+                : ''}
+            </div>
+            {/* TASK-20261010-host-broker PR-5 (D-PR5-3): what the app would like to read from the
+                person's other apps, read from the bundle's own HTML before it is installed. */}
+            {allows('access') ? <AccessWantsNote appName={sharedEntry.bundle.app.displayName} html={sharedEntry.bundle.html} /> : null}
+          </>
         ) : isSharedId(id) ? (
           <div className="hint" data-testid="shared-preview-disclosure" style={{ margin: 'var(--space-3) var(--space-4) 0' }}>
             this shared app is no longer on your shelf — <Link to="/">back to your apps</Link>.
@@ -1431,11 +1442,15 @@ function RailTabButton({ tab, active, onSelect }: RailTabButtonProps): ReactElem
 }
 
 interface RailChatProps {
+  /** The app the rail talks about, and the thread it is on — the fetch toggle's state is per both. */
+  appId: string;
+  threadId: string;
   messages: ReturnType<typeof useBuilderChat>['messages'];
   steps: ReturnType<typeof useBuilderChat>['steps'];
   activity: string | undefined;
   busy: boolean;
-  onSend: (text: string) => void;
+  /** `options` carries *fetch new data first* when the toggle is pressed (TASK-20261010-host-broker PR-5, D-PR5-20). */
+  onSend: (text: string, wireText?: string, options?: ChatSendOptions) => void;
   onStop: () => void;
   /**
    * Directive-card mount — the run view always has an appId to attach. It takes NO
@@ -1457,10 +1472,15 @@ interface RailChatProps {
   onResolveSchedule?: ResolveScheduleCard;
   /** The brain's ask card's resolve path (TASK-20261010-host-broker PR-2) — threaded through to `ChatLog`. */
   onResolveAccess?: ResolveAccessCard;
+  /** The chat's cross-app card's acts (TASK-20261010-host-broker PR-5, D-PR5-14) — threaded through to `ChatLog`. */
+  onApproveAccessWrite?: ChatLogProps['onApproveAccessWrite'];
+  onDeclineAccessWrite?: ChatLogProps['onDeclineAccessWrite'];
 }
 
 /** Compact chat inside the rail — keep talking to the agent about the app. */
 function RailChat({
+  appId,
+  threadId,
   messages,
   steps,
   activity,
@@ -1477,11 +1497,28 @@ function RailChat({
   onSelectCardOption,
   onResolveSchedule,
   onResolveAccess,
+  onApproveAccessWrite,
+  onDeclineAccessWrite,
 }: RailChatProps): ReactElement {
   const [draft, setDraft] = useState('');
+  /**
+   * *fetch new data first* (TASK-20261010-host-broker PR-5, D-PR5-20; F9): pressed FOR this app and
+   * thread — another app or thread reads it unpressed, so a change of either resets it without an
+   * effect. The next send carries it; the turn consumes it (`onConsumed`) only when it opens the
+   * data door — a turn routed anywhere else leaves it pressed. The fetch starts inside `send`, an
+   * event handler, never a render or an effect.
+   */
+  const fetchKey = `${appId} ${threadId}`;
+  const [fetchPressedFor, setFetchPressedFor] = useState<string | undefined>(undefined);
+  const fetchPressed = fetchPressedFor === fetchKey;
   const submit = (): void => {
     if (draft.trim() === '') return;
-    onSend(draft);
+    if (fetchPressed) {
+      const pressedKey = fetchKey;
+      onSend(draft, undefined, { fetchFirst: true, onConsumed: () => setFetchPressedFor((current) => (current === pressedKey ? undefined : current)) });
+    } else {
+      onSend(draft);
+    }
     setDraft('');
   };
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
@@ -1514,6 +1551,8 @@ function RailChat({
           {...(onSelectCardOption !== undefined ? { onSelectCardOption } : {})}
           {...(onResolveSchedule !== undefined ? { onResolveSchedule } : {})}
           {...(onResolveAccess !== undefined ? { onResolveAccess } : {})}
+          {...(onApproveAccessWrite !== undefined ? { onApproveAccessWrite } : {})}
+          {...(onDeclineAccessWrite !== undefined ? { onDeclineAccessWrite } : {})}
           phase="edit"
           onDirectiveConnect={onDirectiveConnect}
           onConnectionConnect={onConnectionConnect}
@@ -1528,6 +1567,7 @@ function RailChat({
           onChange={(event) => setDraft(event.target.value)}
           onKeyDown={onKeyDown}
         />
+        <ChatFetchToggle appId={appId} pressed={fetchPressed} onPress={() => setFetchPressedFor(fetchPressed ? undefined : fetchKey)} disabled={busy} />
         {busy ? (
           <Button variant="danger" onClick={onStop}>
             stop

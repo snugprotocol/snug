@@ -23,6 +23,11 @@
 // (U1); the tick names the lines that explain it (`aria-describedby`, U11); the cost row counts a
 // look-up only where a step may look things up — a *run <app>* step's call is not one (U13).
 //
+// TASK-20261010-host-broker PR-5 (D-PR5-19; F8): an *ask* step that fetches new data first says so
+// in ONE row under the step — the apps it would ask NOW (`fetchFirstByApp`, from the one derivation
+// in `fetchFirstFacts.ts` the mount site calls), or that none would. The consent never sets the seat:
+// the editor's tick is its only setter (v2.1 N7), and a suggestion never carries it.
+//
 // Text nodes only: a prompt or a query is rendered as text, never as markup.
 
 import type { ReactElement } from 'react';
@@ -54,6 +59,8 @@ export interface EnableConsentProps {
   connectionsByApp?: LookUpNamesByApp;
   /** Library ids of the apps whose *ask* steps no brain here would answer (`blockedAppsOf`) — said on each such step. */
   blockedApps?: readonly string[];
+  /** Library id → the apps its *ask* step would ask to fetch new data first, now (`fetchFirstSourcesByApp`) — said on each step that does. */
+  fetchFirstByApp?: Readonly<Record<string, readonly string[]>>;
   /**
    * The editor's own choice (*changes it suggests:*), which the user made a moment ago and confirms
    * here. Only the editor passes it; every other host leaves the tick OFF.
@@ -88,6 +95,7 @@ export function EnableConsent({
   hostsByApp,
   connectionsByApp = {},
   blockedApps = [],
+  fetchFirstByApp = {},
   presetOnItsOwn = false,
   busy = false,
   error,
@@ -180,6 +188,11 @@ export function EnableConsent({
               {tools ? (
                 <p className="hint schedule-consent-lookups" data-testid={`consent-lookups-${index}`}>
                   {CONSENT_ROWS.lookUps(connectionsByApp[step.appId] ?? [])}
+                </p>
+              ) : null}
+              {step.refreshFirst === true ? (
+                <p className="hint" data-testid={`consent-fetch-first-${index}`}>
+                  {CONSENT_ROWS.fetchFirst(name, fetchFirstByApp[step.appId] ?? [])}
                 </p>
               ) : null}
               {blockedApps.includes(step.appId) ? (

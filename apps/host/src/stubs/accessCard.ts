@@ -5,7 +5,9 @@
 // can reach are the READS a chat row from another host may hit — a file the desktop wrote,
 // opened here — and `persistAccessResolution` from a card that never mounts. The reads answer
 // NO card (the real module's own answer for a row it cannot stand behind) and the persist is a
-// no-op; staging or serialising a card names the fact.
+// no-op; staging or serialising a card names the fact. The shapes mirror the real module's —
+// PR-3's written tables and PR-5's write ask included (D-PR5-16, v2.1 N9; `kitDeadLanes.test.ts`
+// checks them with `expectTypeOf`).
 
 import type { UserDb } from '@snugprotocol/db';
 import type { AccessDuration, AccessHints } from '@snugprotocol/protocol';
@@ -14,7 +16,7 @@ import type { AccessProposal } from './accessProposeTool.js';
 import { noDataLane } from './noDataLane.js';
 
 export type AccessCardResolution =
-  | { kind: 'allowed'; sourceName: string; tables: string[]; duration: AccessDuration }
+  | { kind: 'allowed'; sourceName: string; tables: string[]; duration: AccessDuration; write?: string[] }
   | { kind: 'not-now' }
   | { kind: 'declined' }
   | { kind: 'failed' };
@@ -22,6 +24,7 @@ export type AccessCardResolution =
 export interface AccessCardState {
   purpose: string;
   hints?: AccessHints;
+  access?: 'write';
   appId: string;
   threadId: string;
   resolution?: AccessCardResolution;

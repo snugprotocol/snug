@@ -6,7 +6,7 @@
 // inject a recording executor, the executors' tests inject a fake transport and db.
 
 import type { UserDb } from '@snugprotocol/db';
-import type { ScheduleProposalItem, ScheduleStep, ScheduledTask, StepResult, StepResultStatus, StepSaw, StepTools } from '@snugprotocol/protocol';
+import type { ScheduleProposalItem, ScheduleStep, ScheduledTask, StepFetched, StepResult, StepResultStatus, StepSaw, StepTools } from '@snugprotocol/protocol';
 
 import type { SchedulerSeat } from '../platform/platform.js';
 
@@ -72,6 +72,8 @@ export interface StepOutcome {
   saw?: StepSaw[] | undefined;
   /** What a step that may look things up did with its tools, or why it answered without them. */
   tools?: StepTools | undefined;
+  /** What an *ask* step's *fetch new data first* came to, per source (TASK-20261010-host-broker PR-5, D-PR5-19) — only when it asked. */
+  fetched?: StepFetched[] | undefined;
   /** No brain may answer this step here (the demo override or a keyless BYOK) — the page offers *open Settings*. */
   blockedBy?: StepResult['blockedBy'];
 }

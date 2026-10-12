@@ -47,7 +47,14 @@
 // engine pre-checks, so the throw is a belt). `deleteApp` sweeps the target's journal and the
 // app's `accessWants:` declaration (D-Q12 — entries in OTHER targets' journals whose reader is
 // the deleted app stay: the user may still undo what it changed); an untrusted import drops
-// both prefixes, a trusted pull keeps them (the user's own device state).
+// the journals, a trusted pull keeps them (the user's own device state).
+//
+// THE DECLARATION (TASK-20261010-host-broker PR-5, D-PR5-2). `accessWants:<appId>` is a host-
+// derived MIRROR of the app's current html head (`access-wants.ts`), written at every admission
+// (`insertVersion`) and re-derived on every import, both origins — never trusted from a file.
+//
+// THE PRUNE CORE lives in `access-log-prune.ts` (PR-5, D-PR5-8): the same tiers prune a history
+// here and give way in the two-device history carry.
 //
 // HOMED BESIDE userdb.ts, not inside it: the seams (`select`/`run` on the open handle, the
 // guarded settings write, the factory's thrower, the app-row check, the clock) are injected
@@ -58,7 +65,6 @@
 import {
   ACCESS_ENDED_RETENTION_MS,
   ACCESS_LOG_COALESCE_MS,
-  ACCESS_LOG_KINDS,
   ACCESS_LOG_MAX_BYTES,
   ACCESS_LOG_MAX_ENTRIES,
   ACCESS_LOG_TOTAL_MAX_BYTES,
@@ -72,14 +78,16 @@ import {
   accessPurposeSchema,
   accessUndoEntrySchema,
   canonicalAccessGrantIntent,
+  canonicalJson,
   parseAccessGrant,
-  utf8ByteLength,
+  parseAccessWants,
   type AccessGrant,
   type AccessHints,
   type AccessLogEntry,
-  type AccessLogKind,
   type AccessUndoEntry,
+  type AccessWants,
 } from '@snugprotocol/protocol';
+import { ACCESS_WANTS_SCAN_MAX_UNITS, extractAccessWants } from '../access-wants.js';
 import {
   ACCESS_DECLINED_SETTING_PREFIX,
   ACCESS_GRANT_SETTING_PREFIX,
@@ -94,9 +102,11 @@ import {
   accessMutedSettingKey,
   accessUndoSettingKey,
   accessWantsSettingKey,
+  appIdFromAccessWantsSettingKey,
   grantIdFromAccessGrantSettingKey,
   sourceAppIdFromAccessLogSettingKey,
 } from './app-settings-keys.js';
+import { bytesOf, looseEntries, pruneToFit } from './access-log-prune.js';
 import type { SettingsSql } from './schedules.js';
 import type { UserDb } from './userdb.js';
 
@@ -146,6 +156,8 @@ export type AccessAccessors = Pick<
   | 'listAllAccessUndo'
   | 'putAccessUndo'
   | 'markAccessUndone'
+  | 'getAccessWants'
+  | 'listAccessWants'
 >;
 
 // ----------------------------------------------------------------------- helpers
@@ -267,106 +279,6 @@ function readLog(raw: string | undefined): LogRow {
   }
   return { entries, unreadable };
 }
-
-/** A history row's elements as stored, unvalidated: absent → none; a non-array row → one worthless element. */
-function looseEntries(raw: string | undefined): unknown[] {
-  if (raw === undefined) return [];
-  let json: unknown;
-  try {
-    json = JSON.parse(raw);
-  } catch {
-    json = raw;
-  }
-  return Array.isArray(json) ? json : [json];
-}
-
-const LOG_KIND_SET: ReadonlySet<string> = new Set(ACCESS_LOG_KINDS);
-/** The lifecycle kinds whose LATEST entry per grant is never pruned (ADR-0075 §7) — and, since 1.2, a grant's latest `wrote` (D-PR3-6). */
-const PROTECTED_KINDS: ReadonlySet<AccessLogKind> = new Set<AccessLogKind>(['granted', 'revoked', 'suspended', 'released', 'wrote']);
-
-interface EntryView {
-  /** Undefined for an element that is not a readable entry: worthless bytes, pruned first. */
-  kind: AccessLogKind | undefined;
-  grantId: string | undefined;
-  at: number;
-}
-
-/**
- * The LOOSE view of a stored element — the write path validates what it ADDS and only ever
- * REMOVES from what was there, so nothing already stored is re-parsed on every append (the
- * strict parse's credential walk is the expensive half of a read; the `schedules.ts` M3
- * reasoning). The READ path (`readLog`) still vouches for every entry it hands out.
- */
-function looseView(item: unknown): EntryView {
-  if (typeof item !== 'object' || item === null || Array.isArray(item)) return { kind: undefined, grantId: undefined, at: Number.NEGATIVE_INFINITY };
-  const { kind, grantId, at } = item as { kind?: unknown; grantId?: unknown; at?: unknown };
-  const parsedAt = typeof at === 'string' ? instant(at) : Number.NaN;
-  return {
-    kind: typeof kind === 'string' && LOG_KIND_SET.has(kind) ? (kind as AccessLogKind) : undefined,
-    grantId: typeof grantId === 'string' ? grantId : undefined,
-    at: Number.isNaN(parsedAt) ? Number.NEGATIVE_INFINITY : parsedAt,
-  };
-}
-
-/** The latest protected-kind entry per (grant, kind) in one row, as index → grantId. Ties keep the newer position. */
-function protectedIndices(entries: readonly unknown[]): Map<number, string> {
-  const latest = new Map<string, { index: number; at: number; grantId: string }>();
-  entries.forEach((item, index) => {
-    const view = looseView(item);
-    if (view.kind === undefined || !PROTECTED_KINDS.has(view.kind) || view.grantId === undefined) return;
-    const slot = `${view.grantId}\u0000${view.kind}`;
-    const seen = latest.get(slot);
-    // The row is stored newest first, so on an equal instant the LOWER index is the newer entry.
-    if (seen === undefined || view.at > seen.at) latest.set(slot, { index, at: view.at, grantId: view.grantId });
-  });
-  return new Map([...latest.values()].map(({ index, grantId }) => [index, grantId]));
-}
-
-/**
- * Pruning tiers, in order: unreadable bytes, then reads, then every other entry that is not
- * the latest of its kind for its grant — and LAST the latest entries of a grant the file no
- * longer holds (`protectedGrant` is that entry's grant id, `undefined` for an unprotected one).
- */
-type PruneTier = (view: EntryView, protectedGrant: string | undefined, heldGrants: ReadonlySet<string>) => boolean;
-const PRUNE_TIERS: readonly PruneTier[] = [
-  ({ kind }, guard) => guard === undefined && kind === undefined,
-  ({ kind }, guard) => guard === undefined && kind === 'read',
-  ({ kind }, guard) => guard === undefined && kind !== undefined && kind !== 'read',
-  (_view, guard, held) => guard !== undefined && !held.has(guard),
-];
-
-/**
- * The OLDEST prunable element across the given rows, tier by tier; `keep` (the entry being
- * written) is never its own victim. `heldGrants` is read only when the last tier is reached.
- * Returns the row and index, or `undefined` when nothing may go.
- */
-function pruneVictim(
-  rows: ReadonlyMap<string, unknown[]>,
-  keep: unknown,
-  heldGrants: () => ReadonlySet<string>,
-): { sourceAppId: string; index: number } | undefined {
-  const guarded = new Map<string, Map<number, string>>();
-  for (const [sourceAppId, entries] of rows) guarded.set(sourceAppId, protectedIndices(entries));
-  const none: ReadonlySet<string> = new Set();
-  for (const [tier, prunable] of PRUNE_TIERS.entries()) {
-    const held = tier === PRUNE_TIERS.length - 1 ? heldGrants() : none;
-    let victim: { sourceAppId: string; index: number; at: number } | undefined;
-    for (const [sourceAppId, entries] of rows) {
-      const fenced = guarded.get(sourceAppId);
-      for (let index = 0; index < entries.length; index += 1) {
-        const item = entries[index];
-        if (item === keep) continue;
-        const view = looseView(item);
-        if (!prunable(view, fenced?.get(index), held)) continue;
-        if (victim === undefined || view.at < victim.at) victim = { sourceAppId, index, at: view.at };
-      }
-    }
-    if (victim !== undefined) return { sourceAppId: victim.sourceAppId, index: victim.index };
-  }
-  return undefined;
-}
-
-const bytesOf = (entries: ReadonlyArray<unknown>): number => utf8ByteLength(JSON.stringify(entries));
 
 /** The same table list, in the same order — or both absent. */
 function sameTables(a: readonly string[] | undefined, b: readonly string[] | undefined): boolean {
@@ -571,12 +483,9 @@ export function createAccessAccessors(seams: AccessSeams): AccessAccessors {
       // The per-source caps: entries, then bytes.
       const own = new Map<string, unknown[]>([[sourceAppId, entries]]);
       const held = heldGrantIds();
-      while (entries.length > ACCESS_LOG_MAX_ENTRIES || bytesOf(entries) > ACCESS_LOG_MAX_BYTES) {
-        const victim = pruneVictim(own, written, held);
-        if (victim === undefined) {
-          limit(`the access history of "${sourceAppId}" holds nothing that may be pruned (${ACCESS_LOG_MAX_ENTRIES} entries / ${ACCESS_LOG_MAX_BYTES} bytes)`);
-        }
-        entries.splice(victim.index, 1);
+      const rowFits = (): boolean => entries.length <= ACCESS_LOG_MAX_ENTRIES && bytesOf(entries) <= ACCESS_LOG_MAX_BYTES;
+      if (!pruneToFit(own, rowFits, { keep: written, heldGrants: held })) {
+        limit(`the access history of "${sourceAppId}" holds nothing that may be pruned (${ACCESS_LOG_MAX_ENTRIES} entries / ${ACCESS_LOG_MAX_BYTES} bytes)`);
       }
 
       // The ceiling across every source: one SUM over the other rows' stored bytes on the
@@ -596,18 +505,20 @@ export function createAccessAccessors(seams: AccessSeams): AccessAccessors {
           if (otherSource === undefined || otherSource === sourceAppId) continue;
           all.set(otherSource, looseEntries(raw));
         }
+        const sizes = new Map<string, number>([...all].map(([source, list]) => [source, bytesOf(list)]));
         let total = 0;
-        for (const list of all.values()) total += bytesOf(list);
-        while (total > ACCESS_LOG_TOTAL_MAX_BYTES) {
-          const victim = pruneVictim(all, written, held);
-          if (victim === undefined) limit(`every source's access history holds nothing that may be pruned (${ACCESS_LOG_TOTAL_MAX_BYTES} bytes across sources)`);
-          const list = all.get(victim.sourceAppId);
-          if (list === undefined) break;
-          const before = bytesOf(list);
-          list.splice(victim.index, 1);
-          total -= before - bytesOf(list);
-          changed.set(victim.sourceAppId, list);
-        }
+        for (const size of sizes.values()) total += size;
+        const pruned = pruneToFit(all, () => total <= ACCESS_LOG_TOTAL_MAX_BYTES, {
+          keep: written,
+          heldGrants: held,
+          onPruned: (source, list) => {
+            const after = bytesOf(list);
+            total -= (sizes.get(source) ?? after) - after;
+            sizes.set(source, after);
+            changed.set(source, list);
+          },
+        });
+        if (!pruned) limit(`every source's access history holds nothing that may be pruned (${ACCESS_LOG_TOTAL_MAX_BYTES} bytes across sources)`);
       }
       writeLogRows(changed);
     },
@@ -725,6 +636,22 @@ export function createAccessAccessors(seams: AccessSeams): AccessAccessors {
       entries[index] = { ...(entries[index] as Record<string, unknown>), undoneAt: stamp.data };
       seams.setSetting(key, entries);
     },
+
+    getAccessWants(appId) {
+      assertOpen();
+      return parseAccessWants(rawValue(seams, accessWantsSettingKey(appId)));
+    },
+
+    listAccessWants() {
+      assertOpen();
+      const wants = new Map<string, AccessWants>();
+      for (const [key, raw] of rowsUnder(seams, ACCESS_WANTS_SETTING_PREFIX)) {
+        const appId = appIdFromAccessWantsSettingKey(key);
+        const declared = appId === undefined ? undefined : parseAccessWants(raw);
+        if (appId !== undefined && declared !== undefined) wants.set(appId, declared);
+      }
+      return wants;
+    },
   };
 }
 
@@ -779,14 +706,56 @@ export function sweepAccessForDeletedApp(sql: SettingsSql, appId: string): void 
   deleteKey(sql, accessWantsSettingKey(appId));
 }
 
+// ---------------------------------------------- the declaration (PR-5, D-PR5-2)
+
+/**
+ * Mirror one app's access declaration from its html: read the first `ACCESS_WANTS_SCAN_MAX_UNITS`
+ * characters of the CURRENT version (or of `version`, the one an admission is making current),
+ * and write the `accessWants:<appId>` row as the canonical JSON of what `extractAccessWants`
+ * reads there — or DELETE it when the html declares nothing. A cell that is not TEXT (a BLOB a
+ * foreign file planted) derives nothing (v2.1 N4). SQLite's `substr` counts characters and the
+ * reader caps UTF-16 units itself, so the reader alone decides — the admission, an import and the
+ * shared preview agree. A plain write, never the guarded `setSetting`: the row is derived, and a
+ * declaration must never be the reason an install or an import is refused.
+ */
+export function writeAccessWantsFor(sql: SettingsSql, appId: string, version?: number): void {
+  const prefix = `CASE WHEN typeof(v.html) = 'text' THEN substr(v.html, 1, ${ACCESS_WANTS_SCAN_MAX_UNITS}) END`;
+  const row =
+    version === undefined
+      ? sql.select(
+          `SELECT ${prefix} FROM ${USERDB_TABLES.apps} a JOIN ${USERDB_TABLES.appVersions} v ON v.app_id = a.app_id AND v.version = a.current_version WHERE a.app_id = ?`,
+          [appId],
+        )[0]
+      : sql.select(`SELECT ${prefix} FROM ${USERDB_TABLES.appVersions} v WHERE v.app_id = ? AND v.version = ?`, [appId, version])[0];
+  const head = row?.[0];
+  const declared = typeof head === 'string' ? extractAccessWants(head) : undefined;
+  if (declared === undefined) deleteKey(sql, accessWantsSettingKey(appId));
+  else sql.run(`INSERT OR REPLACE INTO ${SETTINGS} (key, value) VALUES (?, ?)`, [accessWantsSettingKey(appId), canonicalJson(declared)]);
+}
+
+/**
+ * Every import, whatever its origin (D-PR5-2): EVERY `accessWants:` row goes — a planted or an
+ * orphan row is never read — then one is derived per app the file holds, from its own html. The
+ * derivation is deterministic, so a trusted round trip is byte-identical (§22.1 rule 5's one
+ * derived carve-out).
+ */
+export function rederiveAccessWants(sql: SettingsSql): void {
+  sql.run(`DELETE FROM ${SETTINGS} WHERE ${PREFIX_WHERE}`, [likePrefix(ACCESS_WANTS_SETTING_PREFIX)]);
+  for (const row of sql.select(`SELECT app_id FROM ${USERDB_TABLES.apps} ORDER BY app_id`)) writeAccessWantsFor(sql, String(row[0]));
+}
+
 // --------------------------------------------------------------- import (AC10)
 
 /** What `importUserDb` reads from the OPEN handle about the local grants before the candidate goes live. */
 export interface LocalAccessGrantSnapshot {
   /** grantId → `canonicalAccessGrantIntent` of every ACTIVE local grant — the only ones that may vouch for an imported twin. */
   live: Map<string, string>;
-  /** grantId → the local TOMBSTONE of every grant the user stopped (an import never re-arms it). */
-  revoked: Map<string, { revokedAt: string; updatedAt: string }>;
+  /**
+   * grantId → the FULL local row of every grant the user stopped (an import never re-arms it): the
+   * untrusted import stamps its `revokedAt`/`updatedAt` on the file's row, and a carry-enabled pull
+   * puts the whole row back over whatever the origin says (a stop wins, PR-5 D-PR5-8).
+   */
+  revoked: Map<string, AccessGrant & { revokedAt: string }>;
   /** readerAppId → the reader's CURRENT code (html) here, for every reader of an active local grant. */
   readerHtml: Map<string, string | undefined>;
 }
@@ -814,7 +783,7 @@ export function snapshotLocalAccessGrants(sql: SettingsSql): LocalAccessGrantSna
     const grant = grantId === undefined ? undefined : readGrant(raw, grantId);
     if (grant === undefined) continue;
     if (grant.status === 'revoked' && grant.revokedAt !== undefined) {
-      snapshot.revoked.set(grant.id, { revokedAt: grant.revokedAt, updatedAt: grant.updatedAt });
+      snapshot.revoked.set(grant.id, { ...grant, revokedAt: grant.revokedAt });
     } else if (grant.status === 'active') {
       snapshot.live.set(grant.id, canonicalAccessGrantIntent(grant));
       if (!snapshot.readerHtml.has(grant.readerAppId)) snapshot.readerHtml.set(grant.readerAppId, currentHtml(sql, grant.readerAppId));
@@ -854,12 +823,13 @@ export interface AccessImportReport {
  * already inert, and suspending it would make a grant the user never gave revivable with one
  * tap. Declines and mutes are dropped (the user's own answers, not something a file carries
  * in), and every history entry is tagged `imported: true` (shown under its own heading);
- * entries that do not parse are dropped. The undo journals and the wants are dropped too
- * (PR-3, D-PR3-7): a journal names rows to write back into an app, and a file must never plant
- * one; the wants are re-parsed from the app's own HTML (PR-5).
+ * entries that do not parse are dropped. The undo journals are dropped too (PR-3, D-PR3-7): a
+ * journal names rows to write back into an app, and a file must never plant one. The wants are
+ * not this pass's: EVERY import re-derives them from the apps' own html (`rederiveAccessWants`,
+ * PR-5 D-PR5-2).
  *
- * TRUSTED (the user's own configured origin): grants, declines, mutes, histories, journals and
- * wants stay as they are — a grant row this hub cannot parse included (the `schedules.ts`
+ * TRUSTED (the user's own configured origin): grants, declines, mutes, histories and journals
+ * stay as they are — a grant row this hub cannot parse included (the `schedules.ts`
  * precedent, review finding 2): it may be a NEWER hub's grant carrying a field this spec does
  * not know; it is inert here (the tolerant read answers "no such grant"), and removing it
  * would sync the loss back to the device that wrote it.
@@ -914,7 +884,7 @@ export function reconcileImportedAccessGrants(
   }
 
   if (!trustedOrigin) {
-    for (const prefix of [ACCESS_DECLINED_SETTING_PREFIX, ACCESS_MUTED_SETTING_PREFIX, ACCESS_UNDO_SETTING_PREFIX, ACCESS_WANTS_SETTING_PREFIX]) {
+    for (const prefix of [ACCESS_DECLINED_SETTING_PREFIX, ACCESS_MUTED_SETTING_PREFIX, ACCESS_UNDO_SETTING_PREFIX]) {
       sql.run(`DELETE FROM ${SETTINGS} WHERE ${PREFIX_WHERE}`, [likePrefix(prefix)]);
     }
     for (const [key, raw] of rowsUnder(sql, ACCESS_LOG_SETTING_PREFIX)) {

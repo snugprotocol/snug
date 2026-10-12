@@ -17,15 +17,22 @@
  * framing of them — names, types and counts, never a row — after the app's own DDL and before
  * the doc titles, under its OWN `CONTEXT_CAPS.schema` cap (the app's DDL keeps its own; the
  * truncation marker applies per block). No other lane ever carries it, whatever it is handed.
+ *
+ * THE CLOSING LINE IS NEVER CUT (PR-5, D-PR5-13; F11): the cap applies to the shared TABLES alone
+ * (`renderSharedDdlParts`); the closing sentence and the unreadable notes follow it whole, so a long
+ * block still ends on the rule the brain must keep. A `data_write` turn passes `changes: true`: a
+ * table the user let this app change is marked *can be changed*, and `CHAT_DOOR.changes` replaces
+ * the rule. Uncut, the block is byte-identical to the joined renderer's.
  */
 
 import type { UserDb } from '@snugprotocol/db';
 import { isFeatureIntent, laneForIntent, type ChatIntent } from '@snugprotocol/protocol';
 
+import { registryTables } from '../access/relevance.js';
 import type { MaterialisedSet } from '../access/service.js';
 import { buildAppTurnContext, CONTEXT_CAPS, type AppTurnContext } from './appContext.js';
 import { buildProviderContextBlock } from './providerContext.js';
-import { renderSharedDdl } from './sharedDdl.js';
+import { renderSharedDdlParts } from './sharedDdl.js';
 
 /** Cap on the DDL shown to a data turn — the same budget the builder context uses. */
 const DATA_SCHEMA_CAP = CONTEXT_CAPS.schema;
@@ -42,20 +49,10 @@ function capText(text: string, cap: number): string {
  * message.
  */
 export function tableSummaries(db: UserDb, appId: string): string[] {
-  const schema = db.getAppSchema(appId);
-  if (schema === undefined) return [];
-  return schema.objects
-    .filter((object) => object.type === 'table')
-    .map((object) => {
-      // Column names are parsed out of the verbatim DDL rather than re-queried: the
-      // registry IS the schema of record (ADR-0010), and a second source could disagree.
-      const columns = /\(([\s\S]*)\)/.exec(object.ddl)?.[1] ?? '';
-      const names = columns
-        .split(',')
-        .map((part) => part.trim().split(/\s+/)[0] ?? '')
-        .filter((name) => name !== '' && !/^(primary|foreign|unique|check|constraint)$/i.test(name));
-      return `${object.name}(${names.join(', ')})`;
-    });
+  // Column names are parsed out of the verbatim DDL rather than re-queried: the registry IS the
+  // schema of record (ADR-0010), and a second source could disagree. ONE parser for it —
+  // `registryTables`, which the pairs rank on too (PR-5 D-PR5-4).
+  return registryTables(db.getAppSchema(appId)).map((table) => `${table.name}(${table.columns.map((column) => column.name).join(', ')})`);
 }
 
 /** The chat door's seat (PR-2): the materialised set a DATA turn may be told about, dated on the engine's clock. */
@@ -115,10 +112,12 @@ export async function buildIntentTurnContext(
         ? capText(schema.objects.map((object) => object.ddl).join(';\n'), DATA_SCHEMA_CAP)
         : '(this app has no data tables yet — none registered)',
     );
-    // The chat door's tables, for the DATA lane only (the header): the host's framing, never a row.
+    // The chat door's tables, for the DATA lane only (the header): the host's framing, never a row —
+    // the tables capped, the closing sentence after them whole (D-PR5-13).
     if (lane === 'data' && options?.shared !== undefined) {
-      const shared = renderSharedDdl(options.shared, options.now ?? Date.now());
-      if (shared !== '') parts.push(capText(shared, DATA_SCHEMA_CAP));
+      const shared = renderSharedDdlParts(options.shared, options.now ?? Date.now(), { changes: intent === 'data_write' });
+      const block = [shared.tables === '' ? '' : capText(shared.tables, DATA_SCHEMA_CAP), shared.closing].filter((part) => part !== '').join('\n\n');
+      if (block !== '') parts.push(block);
     }
   }
 

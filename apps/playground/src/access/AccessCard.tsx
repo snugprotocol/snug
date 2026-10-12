@@ -24,10 +24,15 @@
 // TRUTH on a remount (`readAccessCardRow`). Mounted by `ChatLog` under the agent's message, in
 // both chats, where the host allows access between apps.
 //
-// TASK-20261010-host-broker PR-3 (D-PR3-16/23; DS2; contract v2.1 U-Q13): the chat's ask carries
-// no `access` — but the person may tick *can also change rows* on the sheet, and the outcome
-// line then says what the strip says ("can now read and change …") from the resolution's `write`
+// TASK-20261010-host-broker PR-3 (D-PR3-16/23; DS2; contract v2.1 U-Q13): whatever the ask, the
+// person may tick *can also change rows* on the sheet, and the outcome line then says what the
+// strip says ("can now read and change …") from the resolution's `write`
 // (the written tables; omitted for a read-only allow, so a 1.1 row reads as before).
+//
+// TASK-20261010-host-broker PR-5 (D-PR5-15; D17): an ask to CHANGE rows (`access: 'write'`) is
+// titled as the sheet titles it ("let Budget read and change another app's data"), hands
+// `access` to `startUserAsk` (the pending wants write; *don't allow* records the tool's hash), and
+// when the person let it change nothing its line says so ("can now read — not change — …").
 
 import type { ReactElement } from 'react';
 import { useEffect, useRef, useState } from 'react';
@@ -87,7 +92,7 @@ function resolutionOf(outcome: ConsentOutcome): AccessCardResolution | undefined
   }
 }
 
-function OutcomeLine({ resolution, readerName }: { resolution: AccessCardResolution; readerName: string }): ReactElement {
+function OutcomeLine({ resolution, readerName, wantedWrite }: { resolution: AccessCardResolution; readerName: string; wantedWrite: boolean }): ReactElement {
   const lineRef = useRef<HTMLDivElement>(null);
 
   // Focus fell to the page with the acts it answered: the line catches it (the strip's rule).
@@ -99,7 +104,7 @@ function OutcomeLine({ resolution, readerName }: { resolution: AccessCardResolut
   const words = ((): string => {
     switch (resolution.kind) {
       case 'allowed':
-        return STRIP_OUTCOME.allowed(readerName, resolution.sourceName, resolution.tables, resolution.duration, resolution.write ?? []);
+        return STRIP_OUTCOME.allowed(readerName, resolution.sourceName, resolution.tables, resolution.duration, resolution.write ?? [], { notChange: wantedWrite });
       case 'not-now':
         return ACCESS_CARD.notNowLine;
       case 'declined':
@@ -185,7 +190,12 @@ export function AccessCard({ card, messageId, busy, onResolve }: AccessCardProps
     setPhase('waiting');
     const current = stateRef.current;
     const came = await startUserAsk(thread.appId, {
-      ask: { purpose: current.purpose, ...(current.hints !== undefined ? { hints: current.hints } : {}), settle },
+      ask: {
+        purpose: current.purpose,
+        ...(current.hints !== undefined ? { hints: current.hints } : {}),
+        ...(current.access === 'write' ? { access: 'write' as const } : {}),
+        settle,
+      },
     });
     if (came === 'opened') return;
     if (came === 'no-app') {
@@ -198,17 +208,18 @@ export function AccessCard({ card, messageId, busy, onResolve }: AccessCardProps
 
   const readerName = thread?.name ?? '';
   const { resolution } = state;
+  const wantsWrite = state.access === 'write';
 
   return (
     <Card className="artifact-card access-card" data-testid="access-card" data-resolution={resolution?.kind ?? (stale ? 'stale' : 'staged')}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)', width: '100%' }}>
         <span className="hint">{ACCESS_CARD.lead}</span>
-        {thread !== undefined && thread !== null ? <span className="artifact-name">{CONSENT_SHEET.userTitle(thread.name)}</span> : null}
+        {thread !== undefined && thread !== null ? <span className="artifact-name">{CONSENT_SHEET.userTitle(thread.name, wantsWrite)}</span> : null}
         <q className="access-quote" data-testid="access-card-quote">
           {CONSENT_SHEET.quote(state.purpose)}
         </q>
         {resolution !== undefined ? (
-          <OutcomeLine key={resolution.kind} resolution={resolution} readerName={readerName} />
+          <OutcomeLine key={resolution.kind} resolution={resolution} readerName={readerName} wantedWrite={wantsWrite} />
         ) : stale ? (
           <span className="hint" data-testid="access-card-stale">
             {ACCESS_CARD.stale}

@@ -35,7 +35,9 @@
 // here by identity (PR-4 Gate 5, U12), so the editor offers and warns by exactly the rule `armTask`
 // admits and `updateTask` disarms by. An *ask* step may look things up (`tools`), which round-trips
 // through the drafts as a flag that is ABSENT on the protocol step when off (omit-defaults), never
-// `false`.
+// `false`. So does *fetch new data first* (`refreshFirst`, TASK-20261010-host-broker PR-5, D-PR5-19):
+// the user's tick is its ONLY setter — a suggestion's prefill never carries it (`proposalFill`), and
+// nothing but the task the editor opened seeds it.
 
 import { STARTER_INSTALL_SOURCE_PREFIX, type AppRecord, type UserDb } from '@snugprotocol/db';
 import {
@@ -95,6 +97,8 @@ export type StepDraft =
       maxRows: number;
       /** *let it look things up* (PR-4, D-PR4-15): the step may choose its own questions and fetch read-only. */
       tools: boolean;
+      /** *fetch new data first* (PR-5, D-PR5-19): ask the apps it may read while the person is away to fetch, before it is asked. */
+      refreshFirst: boolean;
       /** A template step whose app is not installed: named here, disabled in the UI, dropped at save. */
       missingApp?: string;
     }
@@ -250,6 +254,7 @@ export const emptyThink = (appId = ''): StepDraft => ({
   sql: [''],
   maxRows: SCHEDULE_CONTEXT_DEFAULT_ROWS,
   tools: false,
+  refreshFirst: false,
 });
 
 /** A persisted step back into a draft (the edit route). */
@@ -268,6 +273,7 @@ export function draftsFromSteps(steps: readonly ScheduleStep[]): StepDraft[] {
           sql: sql.length > 0 ? [...sql] : [''],
           maxRows: step.context.maxRows,
           tools: step.tools === true,
+          refreshFirst: step.refreshFirst === true,
         };
       }
       case 'app-run':
@@ -318,7 +324,14 @@ export function prepareSteps(drafts: readonly StepDraft[]): PreparedSteps {
     }
     const maxRows = Math.min(SCHEDULE_CONTEXT_MAX_ROWS, Math.max(1, Math.round(draft.maxRows) || SCHEDULE_CONTEXT_DEFAULT_ROWS));
     // Typed queries stay with a step that may look things up: they are where it starts (D-PR4-20).
-    steps.push({ kind: 'app-think', appId: draft.appId, prompt, context: sql.length > 0 ? { sql, maxRows } : { maxRows }, ...(draft.tools ? { tools: true as const } : {}) });
+    steps.push({
+      kind: 'app-think',
+      appId: draft.appId,
+      prompt,
+      context: sql.length > 0 ? { sql, maxRows } : { maxRows },
+      ...(draft.tools ? { tools: true as const } : {}),
+      ...(draft.refreshFirst ? { refreshFirst: true as const } : {}),
+    });
   }
   return { ok: true, steps };
 }
@@ -329,7 +342,15 @@ export function costSteps(drafts: readonly StepDraft[]): ScheduleStep[] {
   for (const draft of drafts) {
     if (draft.kind === 'notify') steps.push({ kind: 'notify', title: 'x', body: 'x' });
     else if (draft.missingApp !== undefined) continue;
-    else if (draft.kind === 'app-think') steps.push({ kind: 'app-think', appId: draft.appId || 'x', prompt: 'x', context: { maxRows: 1 }, ...(draft.tools ? { tools: true as const } : {}) });
+    else if (draft.kind === 'app-think')
+      steps.push({
+        kind: 'app-think',
+        appId: draft.appId || 'x',
+        prompt: 'x',
+        context: { maxRows: 1 },
+        ...(draft.tools ? { tools: true as const } : {}),
+        ...(draft.refreshFirst ? { refreshFirst: true as const } : {}),
+      });
     else steps.push({ kind: 'app-run', appId: draft.appId || 'x' });
   }
   return steps;
@@ -411,6 +432,7 @@ const thinkStep = (apps: readonly TemplateAppCandidate[], app: TemplateApp, prom
     sql: [...sql],
     maxRows: SCHEDULE_CONTEXT_DEFAULT_ROWS,
     tools: false,
+    refreshFirst: false,
     ...(installed === undefined ? { missingApp: app.name } : {}),
   };
 };
@@ -593,8 +615,11 @@ export function proposalFill(raw: string | null | undefined, apps: readonly Temp
     title: proposal.title,
     // A step naming an app this file no longer holds gets the same off state a template step
     // gets, so the save drops it rather than refusing by surprise — and it is named in WORDS: a
-    // suggestion carries no app names, so the note says "that app", never an id (M14).
-    steps: draftsFromSteps(proposal.steps).map((step) => (step.kind !== 'notify' && !known.has(step.appId) ? { ...step, missingApp: STEPS.unknownApp } : step)),
+    // suggestion carries no app names, so the note says "that app", never an id (M14). A suggestion
+    // never ticks *fetch new data first* for the user (D-PR5-19, S15): the tick is theirs to make.
+    steps: draftsFromSteps(proposal.steps)
+      .map((step) => (step.kind === 'app-think' ? { ...step, refreshFirst: false } : step))
+      .map((step) => (step.kind !== 'notify' && !known.has(step.appId) ? { ...step, missingApp: STEPS.unknownApp } : step)),
     spec: proposal.spec,
   };
 }

@@ -18,6 +18,8 @@ export const ACCESS_PROPOSE_TOOL_NAME = 'access_propose';
 export interface AccessProposal {
   purpose: string;
   hints?: AccessHints;
+  /** PR-5 (D-PR5-15): an ask to change rows too — mirrored, never staged here. */
+  access?: 'write';
 }
 
 export type OnAccessProposal = (proposal: AccessProposal, appId: string) => boolean | void;

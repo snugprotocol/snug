@@ -2,7 +2,7 @@
 layer: knowledge-base
 destination: served (whole or as ##-sections via searchKnowledge) by the {{appBuilderToolName}} tool when the host LLM is asked for an app that reads ANOTHER app's data — a budget that reads the ledger's transactions, a meal planner that reads the pantry, two apps the user built that should work together — or that changes it where the user ticked that; NOT in the inline core (a tool-free brain gets only the one row in 30's frame table); reachable only when the app-builder capability is enabled
 blast-radius: whether a generated app can read — or change — another app's tables at all; a wrong frame shape here produces apps whose asks the runner answers MALFORMED or never answers, an ask on load produces apps that nag on every open, an app that assumes its access is permanent breaks the day the user stops it, and a write shaped outside the one plain statement the runner brokers is refused every time
-source: written for TASK-20261010-cross-app-access (ADR-0075 §1 the frame pair, §4 the strip and its answers, §5 what the app learns, §6 the scoped read and its bounds, §9 revocation; spec 1.1 Part VI); v2 for TASK-20261010-host-broker PR-3 (ADR-0076 §4–§8 the brokered write, the undo journal, the refresh, the discover class and the three hints; spec 1.2 §24.5–§24.7); the helper mirrors packages/sdk/src/access.ts, the module-form hook
+source: written for TASK-20261010-cross-app-access (ADR-0075 §1 the frame pair, §4 the strip and its answers, §5 what the app learns, §6 the scoped read and its bounds, §9 revocation; spec 1.1 Part VI); v2 for TASK-20261010-host-broker PR-3 (ADR-0076 §4–§8 the brokered write, the undo journal, the refresh, the discover class and the three hints; spec 1.2 §24.5–§24.7); the helper mirrors packages/sdk/src/access.ts, the module-form hook; v3 for TASK-20261010-host-broker PR-5 (ADR-0076 §5, §7: the access declaration the host reads from the app's own head, and the chat's proposed change the user applies — spec 1.3)
 -->
 
 # Access Between Apps
@@ -68,6 +68,32 @@ acts, and one of three answers comes back:
 - *stop asking* → the same answer for EVERY later ask from your app, whatever its hints or
   purpose, until the user turns asks back on in Settings — stop asking altogether and carry on
   without the other app's data.
+
+## Saying what your app would like to read
+
+An app that will want another app's data can say so up front, in its own HTML: ONE
+`<meta name="snug:access-wants">` in the `<head>`, RIGHT AFTER the viewport meta and before any
+`<script>` or `<style>` — the host stops looking at the first script, style or body. Its
+`content` is a JSON list of one to four wants, each a `purpose` (one plain line, like an ask's)
+with optional `hints` (`words`, `tables`), at most 2 KiB in all — in SINGLE quotes, so the JSON's
+double quotes need no escaping:
+
+```html
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="snug:access-wants" content='[{"purpose":"to show spending by category","hints":{"tables":["transactions","accounts"],"words":["spending","budget"]}}]'>
+<title>Budget</title>
+```
+
+The host reads it from the app's HTML each time the app is installed, saved or updated, and
+shows it to the user BEFORE your app asks anything: on a shared app's preview ("Budget would
+like to read data like transactions and accounts from your other apps — nothing is read until
+you allow it"), and among the apps that could work together, where the user may start the
+access themselves. Declaring allows nothing and reads nothing: your app still ASKS at runtime,
+through the helper below, after the user has done something that needs the other app's data —
+declare AND ask, with the same purpose words. It lives in the app's HTML, never in the bundle;
+a meta the host cannot read — two of them, an unquoted value, JSON the schema refuses, past the
+limits — is simply no declaration, and the app installs all the same.
 
 ## The Two Frames and Their Seven Ops
 
@@ -329,13 +355,14 @@ The runner's own AI beside your app — the chat the user opens next to it — c
 the user allowed your app to read, once the user allows it (ADR-0076 §1–§3). On a question
 about the other app's data, the host copies the allowed tables into the chat's throwaway
 working copy as `<source>__<table>` tables (`ledger__transactions`; the other app's settings
-& notes as `<source>__snug_kv` when the user allowed them), lists them under *From <Source>
-(read-only …)*, and the chat's AI queries them with `data_query` — joins across your app's
-tables and theirs included. The chat's AI can also ASK for access on your app's behalf: the
+& notes as `<source>__snug_kv` when the user allowed them), lists them under *From <Source>*,
+and the chat's AI queries them with `data_query` — joins across your app's tables and theirs
+included. The chat's AI can also ASK for access on your app's behalf: the
 host shows its ask as a card in the chat, and *review* opens the same consent sheet an
 app's ask opens. A scheduled *ask <app>'s AI* question sees the same tables when the user
-ticked *also while I'm away*. The chat does not change the other app's tables — a change
-is your app's own `write`, under the user's tick.
+ticked *also while I'm away*. When the user also let your app change one of those tables,
+the chat's AI may propose ONE change to it — the user applies it on its card in the chat and
+can undo it from the other app's history; nothing changes until they do.
 
 None of this needs code in your app, and none of it reaches your app's frame: the rows go to
 the user's own AI, never to your `query`. Build for what your app does on its own; when the

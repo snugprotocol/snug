@@ -367,7 +367,7 @@ export interface Dispatch {
   step: AppRunStep;
   deps: AppRunDeps;
   db: UserDb;
-  /** Aborted by the queue's bound, a file swap or the user's cancel — a refresh's never fires. */
+  /** Aborted by the queue's bound, a file swap or the user's cancel — a refresh's by `refreshRuns`' four stops (the chip, the last waiter leaving, an app delete, a file swap; PR-5 D-PR5-17). */
   signal: AbortSignal;
   now: () => Date;
   /** The schedule's id — or `'access-refresh'`, which names no schedule (D-PR3-17). */
@@ -612,7 +612,9 @@ export async function executeAppRun(step: AppRunStep, ctx: StepContext, deps: Ap
  * handover to the hidden frame, unless the user ANSWERED in this attempt (F-7) — an ALLOWED change
  * → `failed` by name, never a re-run; a DECISIVE refusal → `failed`, and the record carries the
  * user's answer for `outcomeOf`. The record is ended in `finally`, whatever happened, and is what
- * the attempt reports.
+ * the attempt reports — a refresh's record the engine HELD on a stop keeps refusing until the
+ * engine releases it (`holdDelegatedRun`/`releaseDelegatedRun`, PR-5 S2; `endDelegatedRun` honours
+ * the hold).
  */
 export async function dispatchLive(d: Dispatch): Promise<Attempt> {
   const { appId } = d.step;

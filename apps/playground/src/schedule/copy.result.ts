@@ -22,7 +22,7 @@ import {
   type StepToolsUnavailableReason,
 } from '@snugprotocol/protocol';
 
-import { OWN_UNDO_NO_LONGER, listWords, rowsWord } from '../access/copy.js';
+import { FETCH_FIRST, OWN_UNDO_NO_LONGER, listWords, rowsWord } from '../access/copy.js';
 import { WORDS, aiCalls, changedOnItsOwn, changedRows } from './copy.js';
 
 // ---------------------------------------------------------------------------------------------
@@ -315,13 +315,46 @@ function toolsFact(tools: StepTools | undefined, names: StepFactNames): string |
   return `looked things up ${times}${through}`;
 }
 
+/** An *ask* step that fetched new data first, when no app let it ask any more (TASK-20261010-host-broker PR-5, D-PR5-19). */
+export function fetchedNone(appName: string): string {
+  return `didn’t fetch first — no app lets ${appName} ask for new data any more`;
+}
+
+/**
+ * What an *ask* step's *fetch new data first* came to (PR-5, D-PR5-19; D11): one fact per source,
+ * in `access/copy.ts`'s `FETCH_FIRST` words — never respelled — and `none` naming the step's own app.
+ */
+function fetchedFacts(fetched: StepResult['fetched'], appName: string): string[] {
+  if (fetched === undefined) return [];
+  return fetched.map((entry) => {
+    switch (entry.outcome) {
+      case 'fresh':
+        return FETCH_FIRST.done(entry.source);
+      case 'recent':
+        return FETCH_FIRST.recentUsed(entry.source);
+      case 'failed':
+        return FETCH_FIRST.failed(entry.source);
+      case 'skipped':
+        return FETCH_FIRST.skipped(entry.source);
+      case 'none':
+        return fetchedNone(appName);
+      default: {
+        const never: never = entry.outcome;
+        return never;
+      }
+    }
+  });
+}
+
 /**
  * Each step's ONE host line on the result page, its facts joined by a middle dot: where it ran
- * (the word *background* is never shown), what it read with the user's leave, what it looked up.
- * `undefined` when there is nothing the host can say.
+ * (the word *background* is never shown), what it fetched first (PR-5), what it read with the
+ * user's leave, what it looked up. `undefined` when there is nothing the host can say.
  */
 export function stepFacts(step: ScheduleStep, result: StepResult, names: StepFactNames): string | undefined {
-  const facts = [whereFact(step, result, names.app), sawFact(result.saw), toolsFact(result.tools, names)].filter((fact): fact is string => fact !== undefined);
+  const facts = [whereFact(step, result, names.app), ...fetchedFacts(result.fetched, names.app), sawFact(result.saw), toolsFact(result.tools, names)].filter(
+    (fact): fact is string => fact !== undefined,
+  );
   return facts.length === 0 ? undefined : facts.join(' · ');
 }
 

@@ -44,6 +44,17 @@
 // the same after-run dialog D-PR1-3 built. The cost (after a refresh, the source's *remember for
 // this session* is unavailable on that frame until the user reopens it) is PR-1's, accepted.
 //
+// A CANCELLED REFRESH ON THE LIVE FRAME (TASK-20261010-host-broker PR-5; contract v2 D-PR5-17;
+// security S2). Stopping a fetch from the chip cannot stop the source's handler: it is the open
+// app's own code, and it may still be running. Ending the record then would turn the window's
+// refusals into the sticky after-run ASK — a dialog for a change nobody chose. So the refresh engine
+// HOLDS the record (`holdDelegatedRun`, `cancelled: true`): the attempt's `endDelegatedRun` answers
+// the tally so far and leaves the record in place — still refusing every mutating call, the access
+// door still closed, still counting — until the engine RELEASES it (`releaseDelegatedRun`) when the
+// handler's result arrives or the dispatch's original deadline passes; only then does it end, and
+// the sticky posture applies as after any run. The touched record keeps the run's POSTURE too, so
+// the after-run dialog says what really ran in the frame (`touchedPosture`; D12(ii)).
+//
 // A LEAF. Imports `state/store.ts`, `state/appHosts.ts` and `schedule/copy.ts` (pure strings) only —
 // `state/net.ts`, `state/openUrl.ts`, `run/appRuntime.ts`, `access/accessHandler.ts`,
 // `access/refresh.ts` and `RunningChip.tsx` sit above it, so loading it can never enter the
@@ -93,18 +104,30 @@ export interface DelegatedRun {
   asking: boolean;
   /** Aborted by `endDelegatedRun` — every parked prompt for the run listens to it and withdraws. */
   readonly signal: AbortSignal;
+  /**
+   * A refresh stopped while its handler may still run in the open frame (D-PR5-17, S2; T-D Q7): the
+   * record is HELD — refusing, counting — until `releaseDelegatedRun`. Absent on every other record.
+   */
+  cancelled?: true;
 }
+
+/** What a dispatch reads off the record when its attempt ends. */
+export type DelegatedRunTally = Pick<DelegatedRun, 'calls' | 'refused' | 'granted'>;
 
 /** appId → the run in flight on the LIVE frame. */
 export const delegatedRunStore: Store<ReadonlyMap<string, DelegatedRun>> = createStore<ReadonlyMap<string, DelegatedRun>>(new Map());
 
 const controllers = new WeakMap<DelegatedRun, AbortController>();
 
-/** The generation a delegated run last began on, with the registration it began under and the app's name. */
+/** A held record's calls as its attempt reported them — what it counted AFTER that is the release's `late`. */
+const reportedAtHold = new WeakMap<DelegatedRun, DelegatedRun['calls']>();
+
+/** The generation a delegated run last began on, with the registration it began under, the app's name and what ran. */
 interface Touched {
   generation: number;
   token: symbol | undefined;
   appName: string;
+  posture: DelegatedRunPosture;
 }
 const touched = new Map<string, Touched>();
 
@@ -139,7 +162,7 @@ export function beginDelegatedRun(input: BeginDelegatedRunInput): { ok: true; ru
     signal: controller.signal,
   };
   controllers.set(run, controller);
-  touched.set(input.appId, { generation: input.generation, token: liveAppHostToken(input.appId), appName: input.appName });
+  touched.set(input.appId, { generation: input.generation, token: liveAppHostToken(input.appId), appName: input.appName, posture: run.posture });
   const next = new Map(current);
   next.set(input.appId, run);
   delegatedRunStore.set(next);
@@ -153,21 +176,60 @@ export function beginDelegatedRun(input: BeginDelegatedRunInput): { ok: true; ru
  * could have read the kv input — but only while the registration is still the one the run began
  * under (a retraction and re-registration is a different view, and the posture has died with the
  * token). With no registry (a unit suite) both tokens are `undefined` and nothing moves.
+ *
+ * A HELD record (`cancelled`, D-PR5-17) is not ended here: the attempt gets the tally so far and
+ * the record stays, refusing, until `releaseDelegatedRun`.
  */
-export function endDelegatedRun(appId: string, runId: string): Pick<DelegatedRun, 'calls' | 'refused' | 'granted'> | undefined {
-  const current = delegatedRunStore.get();
-  const run = current.get(appId);
+export function endDelegatedRun(appId: string, runId: string): DelegatedRunTally | undefined {
+  const run = delegatedRunStore.get().get(appId);
   if (run === undefined || run.runId !== runId) return undefined;
+  if (run.cancelled === true) {
+    const reported = { ...run.calls };
+    reportedAtHold.set(run, reported);
+    return { calls: reported, refused: [...run.refused], granted: run.granted };
+  }
+  return finish(appId, run);
+}
+
+/** The end itself: the sticky generation moved (F-6), the entry removed, the signal aborted. */
+function finish(appId: string, run: DelegatedRun): DelegatedRunTally {
   const record = touched.get(appId);
   if (record !== undefined && record.token === liveAppHostToken(appId)) {
     const generation = liveAppHostGeneration(appId);
     if (generation !== undefined) record.generation = generation;
   }
-  const next = new Map(current);
+  const next = new Map(delegatedRunStore.get());
   next.delete(appId);
   delegatedRunStore.set(next);
   controllers.get(run)?.abort();
   return { calls: run.calls, refused: run.refused, granted: run.granted };
+}
+
+/**
+ * Hold the run `runId` for `appId` (D-PR5-17, S2): a REFRESH whose dispatch was stopped while its
+ * handler may still run in the open frame. Marks the record `cancelled`; `endDelegatedRun` then
+ * leaves it in place. `false` — nothing held — for another run id, no record, or a schedule's run
+ * (a schedule's window asks the person present; only a refresh's refuses, so only it is held).
+ */
+export function holdDelegatedRun(appId: string, runId: string): boolean {
+  const run = delegatedRunFor(appId);
+  if (run === undefined || run.runId !== runId || run.posture !== 'refresh') return false;
+  run.cancelled = true;
+  return true;
+}
+
+/**
+ * End a held run at last — the handler's result arrived, the original deadline passed, or the frame
+ * went away. Answers the final record and what it counted AFTER its attempt reported (`late` — the
+ * engine folds it into the day); the sticky posture applies from here as after any run. A record
+ * never held ends exactly as `endDelegatedRun` ends it, all of its calls `late`.
+ */
+export function releaseDelegatedRun(appId: string, runId: string): (DelegatedRunTally & { late: DelegatedRun['calls'] }) | undefined {
+  const run = delegatedRunStore.get().get(appId);
+  if (run === undefined || run.runId !== runId) return undefined;
+  const reported = reportedAtHold.get(run) ?? { ai: 0, net: 0 };
+  const tally = finish(appId, run);
+  return { ...tally, late: { ai: Math.max(0, tally.calls.ai - reported.ai), net: Math.max(0, tally.calls.net - reported.net) } };
 }
 
 /** Count one call on the run in flight for `appId`; a no-op when there is none (never creates one, never throws). */
@@ -192,6 +254,11 @@ export function touchedGeneration(appId: string): number | undefined {
 /** The display name recorded beside the touched generation — the after-run dialog's subject. */
 export function touchedAppName(appId: string): string | undefined {
   return liveTouched(appId)?.appName;
+}
+
+/** What last ran on the touched generation — a schedule, or a fetch another app asked for: the after-run dialog's words follow it (D-PR5-17; T-D Q14). */
+export function touchedPosture(appId: string): DelegatedRunPosture | undefined {
+  return liveTouched(appId)?.posture;
 }
 
 /** Clear the posture — only for the generation it names. Called on a retraction (the belt below) and by suites that end what they began. */

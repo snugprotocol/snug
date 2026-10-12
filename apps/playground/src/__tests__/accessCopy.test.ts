@@ -523,6 +523,8 @@ describe('the access sheet, history and the Settings card (AC19 copy)', () => {
       refreshNoHandler: 'the other app does not fetch on request',
       refreshFailed: expect.any(Function),
       refreshOff: 'schedules are off for this file',
+      // PR-5 (D-PR5-17; v2.2 note (a)): a refresh the user stopped answers the frame with its own words.
+      refreshStopped: "the other app's fetch was stopped before it finished",
     });
   });
 });
