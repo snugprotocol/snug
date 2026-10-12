@@ -50,6 +50,11 @@
 //      once the host's 90 s bound is crossed on the page clock. The scheduler is on in this app
 //      (the playground boots it with the shell — App.tsx → initScheduler → the schedulerState
 //      row), so the refresh engine's gates pass.
+//  12. (TASK-20261010-host-broker PR-5, AC35) A SOURCE OFFERS ITSELF: Pantry's ⋈ sheet → the offer
+//      block under *what reads Pantry* → pick Budget → the offer act → the ONE consent sheet,
+//      titled `CONSENT_SHEET.offerTitle(Budget, Pantry)`, pinned to Pantry, with no write toggle
+//      even under more options → allow for a day → the outcome on Pantry's strip → Pantry's ⋈
+//      sheet lists Budget under *what reads Pantry* and offers it no more.
 //
 // WHY CLAUSE 4 AND CLAUSE 7 ARE SPLIT (a deviation from the one-grant reading of AC22, reported):
 // Settings is a route, so opening it closes Budget's view — a *while it's open* access ends right
@@ -310,8 +315,11 @@ test.describe('AC22 — access between apps, end to end (Playground)', () => {
       'ready',
     );
     expect(new Set([ids.ledger, ids.pantry, ids.budget]).size).toBe(3);
-    // Nothing asked yet: Budget has no access state, so its header has no ⋈ (the ⚯ rule).
-    await expect(page.getByTestId('access-app')).toHaveCount(0);
+    // INVERTED — D-PR5-5 (TASK-20261010-host-broker PR-5, AC35): nothing asked yet, but the file
+    // holds other apps that may use access (Ledger, Pantry), so Budget's header shows the ⋈ — the
+    // creation act and a source's offer have someone to name. (Before PR-5: no access state → no ⋈.)
+    await expect(page.getByTestId('access-app')).toHaveCount(1);
+    await expect(page.getByRole('button', { name: ACCESS_SHEET.iconLabel, exact: true })).toBeVisible();
   });
 
   test('2 · request → the strip → review → the consent sheet → allow while it’s open → the query returns rows', async () => {
@@ -740,5 +748,68 @@ test.describe('AC22 — access between apps, end to end (Playground)', () => {
       )
       .toBe('refresh: ACCESS_REFRESH_FAILED');
     await expect(app.locator('#result')).toContainText('ACCESS_REFRESH_FAILED · final');
+  });
+
+  test('12 · PR-5 (AC35) a source offers itself: Pantry’s ⋈ → *let another app read Pantry’s data* → Budget → the one consent sheet, pinned, read-only → allow → Budget reads Pantry', async () => {
+    test.setTimeout(90_000);
+    await page.setViewportSize({ width: 1280, height: 800 });
+    // Pantry: a source with registered tables that nothing reads yet.
+    await openApp(page, ids.pantry);
+    await page.getByRole('button', { name: ACCESS_SHEET.iconLabel, exact: true }).click();
+    const own = page.getByRole('dialog', { name: ACCESS_SHEET.title(OTHER) });
+    await expect(own).toBeVisible();
+
+    // The offer block sits under the source's *what reads Pantry* heading, never under *Pantry reads*.
+    const readBy = own.getByTestId('access-read-by');
+    await expect(readBy).toContainText(ACCESS_SHEET.readBy(OTHER));
+    await expect(readBy.getByTestId('access-row'), 'nothing reads Pantry yet').toHaveCount(0);
+    await expect(readBy.getByRole('group', { name: ACCESS_SHEET.offerTitle(OTHER) })).toBeVisible();
+    await expect(own.getByTestId('access-reads').getByTestId('access-offer')).toHaveCount(0);
+    const pick = readBy.getByTestId('access-offer-pick');
+    await expect(pick).toHaveAccessibleName(ACCESS_SHEET.offerPick);
+    const offered = await pick.locator('option').evaluateAll((options) => options.map((option) => (option as HTMLOptionElement).value));
+    expect(offered, 'every other app that may use access, never the source itself').toEqual(expect.arrayContaining([ids.budget, ids.ledger]));
+    expect(offered).not.toContain(ids.pantry);
+    await pick.selectOption(ids.budget);
+    const offer = readBy.getByTestId('access-offer');
+    await expect(offer).toHaveText(ACCESS_SHEET.offer(READER, OTHER));
+    await offer.click();
+
+    // The ONE consent sheet, titled for the offer, pinned to Pantry, with no way to grant a change.
+    const sheet = page.getByRole('dialog', { name: CONSENT_SHEET.offerTitle(READER, OTHER) });
+    await expect(sheet).toBeVisible({ timeout: 10_000 });
+    await expect(own, 'the ⋈ sheet closed before the review opened').toHaveCount(0);
+    await expect(sheet.getByTestId('access-sheet-title')).toHaveText(CONSENT_SHEET.offerTitle(READER, OTHER));
+    await expect(sheet.getByTestId(`access-source-${ids.pantry}`)).toBeChecked();
+    await sheet.getByTestId(`access-table-${ids.pantry}-transactions`).check();
+    await openMoreOptions(sheet);
+    await expect(sheet.locator('input[data-testid^="access-write-"]'), 'an offer never offers a write toggle').toHaveCount(0);
+    await sheet.getByTestId('access-duration-day').check();
+    const allow = sheet.getByTestId('access-allow');
+    await expect(allow).toHaveText(allowLabel('day'));
+    await expect(allow).toBeEnabled({ timeout: 5_000 });
+    await allow.click();
+    await expect(sheet).toHaveCount(0);
+
+    // The outcome is heard on the source's strip too (recorded under both ids).
+    const outcome = page.getByTestId('access-ask-outcome');
+    await expect(outcome).toHaveAttribute('data-outcome', 'allowed');
+    await expect(outcome.getByTestId('access-ask-outcome-words')).toHaveText(STRIP_OUTCOME.allowed(READER, OTHER, ['transactions'], 'day'));
+
+    // Budget now reads Pantry: Pantry's ⋈ sheet lists it under *what reads Pantry*, and Budget is offered no more.
+    await page.getByRole('button', { name: ACCESS_SHEET.iconLabel, exact: true }).click();
+    const again = page.getByRole('dialog', { name: ACCESS_SHEET.title(OTHER) });
+    await expect(again).toBeVisible();
+    const rows = again.getByTestId('access-read-by').getByTestId('access-row');
+    await expect(rows).toHaveCount(1);
+    await expect(rows.first()).toHaveAttribute('data-side', 'read-by');
+    await expect(rows.first().getByTestId('access-row-sentence')).toHaveText(ACCESS_SHEET.row(READER, OTHER, ['transactions']));
+    const stillOffered = await again
+      .getByTestId('access-offer-pick')
+      .locator('option')
+      .evaluateAll((options) => options.map((option) => (option as HTMLOptionElement).value));
+    expect(stillOffered, 'a reader that already reads the source live is not offered again').not.toContain(ids.budget);
+    await again.getByTestId('access-sheet-close').click();
+    await expect(again).toHaveCount(0);
   });
 });

@@ -247,9 +247,16 @@ test.describe('375px viewport — an owned app’s run header', () => {
     await expect(page).toHaveURL(/\/settings$/);
     await install(page, 'budget.snug', 'Budget', fixture('access-reader.html'));
 
-    // The owned app's header WITHOUT the ⋈ first (no access state yet)…
-    await expect(page.getByTestId('access-app')).toHaveCount(0);
+    // INVERTED — D-PR5-5 (TASK-20261010-host-broker PR-5, AC35, SC11): no access state yet, but
+    // the file holds another app that may use access (Ledger), so the ⋈ is ALREADY in the owned
+    // app's header — and the cluster with schedule, ⋈, share and the theme toggle all present
+    // still fits 375 px with no horizontal scroll. (Before PR-5: no access state → no ⋈.)
+    expect(page.viewportSize()?.width, 'this describe runs at 375 px').toBe(375);
+    await expect(page.getByTestId('access-app')).toHaveCount(1);
+    await expect(page.getByTestId('schedule-app')).toBeVisible();
+    await expect(page.getByTestId('access-app')).toBeVisible();
     await expect(page.getByTestId('share-app')).toBeVisible();
+    await expect(page.getByTestId('access-app').locator('..').getByRole('button', { name: /^switch to (dark|light) theme$/ })).toBeVisible();
     await expectNoHorizontalScroll(page);
 
     // …then the reader asks (a user act in the app), the strip shows, and the ⋈ joins the cluster.
