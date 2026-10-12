@@ -47,6 +47,7 @@
 
 import {
   ACCESS_WRITE_MAX_ROWS,
+  REFRESH_FIRST_MAX_SOURCES,
   type AccessDuration,
   type AccessGrantStatus,
   type AccessLogEntry,
@@ -80,6 +81,11 @@ export function listWords(items: readonly string[]): string {
 }
 
 /** "Ledger's transactions" · "Ledger's transactions and accounts". */
+/** The ONE clause every pair sentence is built from (Gate-5 fold IB-8): "could read Ledger's transactions". */
+const couldReadTables = (sourceName: string, tables: readonly string[]): string => `could read ${tablesPhrase(sourceName, tables)}`;
+/** The Hub's clause, with no tables named: "could read Ledger's data". */
+const couldReadData = (sourceName: string): string => `could read ${sourceName}'s data`;
+
 export function tablesPhrase(sourceName: string, tables: readonly string[]): string {
   return `${sourceName}'s ${listWords(tables)}`;
 }
@@ -457,7 +463,7 @@ export const CHAT_DOOR = {
   // Each refusal names what to do instead and never a row, a value or a column's content (DS19).
   /** REPLACES `rule` on a `data_write` turn whose block marks a table *can be changed* — said once, after the last source. */
   changes:
-    'the tables under *From …* above are copies of other apps’ data the user allowed this chat to read — query them with data_query by their full names as written (ledger__transactions); a table marked *can be changed* may take ONE change through data_propose_write — one statement on that table alone, with its values written in — which the user applies on its card; never propose a change to any other of them',
+    'the tables under *From …* above are copies of other apps’ data the user allowed this chat to read — query them with data_query by their full names as written (ledger__transactions); a table marked *can be changed* may take ONE change through data_propose_write — one INSERT, UPDATE or DELETE on that table alone, naming it once at the start, with plain values written in (no ?, no arithmetic, functions or ON CONFLICT) and a WHERE on every UPDATE or DELETE — which the user applies on its card; never propose a change to any other of them',
   /** A batch of more than one statement on another app's table. */
   oneChange: 'a change to another app’s table is one statement at a time — propose just one',
   /** `params` beside a statement on another app's table. */
@@ -655,9 +661,9 @@ export const ACCESS_SHEET = {
    */
   declaredPurpose: (readerName: string): string => `you started this from what ${readerName} said it would like to read`,
   /** The reader's pair act: the source and the tables its declaration matched — host words, never the app's purpose. */
-  pair: (sourceName: string, tables: readonly string[]): string => `could read ${tablesPhrase(sourceName, tables)} — review…`,
+  pair: (sourceName: string, tables: readonly string[]): string => `${couldReadTables(sourceName, tables)} — review…`,
   /** Its accessible name, naming both apps (D3). */
-  pairName: (readerName: string, sourceName: string, tables: readonly string[]): string => `${readerName} could read ${tablesPhrase(sourceName, tables)} — review`,
+  pairName: (readerName: string, sourceName: string, tables: readonly string[]): string => `${SETTINGS_CARD.pairRow(readerName, sourceName, tables)} — review`,
   // TASK-20261010-host-broker PR-3 (D-PR3-24; DS7, DS12, DS14): the write badge, *what it changed*,
   // and *undo* behind its armed confirm.
   /** The badge beside a live row's words (`access-row-write`) — no second act (MUST 17). */
@@ -870,11 +876,11 @@ export const SETTINGS_CARD = {
   // nothing is shared until the person allows it.
   pairsTitle: 'apps that could work together',
   /** One pair: the reader, the source and the tables its declaration matched — the purpose is quoted below it. */
-  pairRow: (readerName: string, sourceName: string, tables: readonly string[]): string => `${readerName} could read ${tablesPhrase(sourceName, tables)}`,
+  pairRow: (readerName: string, sourceName: string, tables: readonly string[]): string => `${readerName} ${couldReadTables(sourceName, tables)}`,
   /** The row's act. */
   pairReview: 'review…',
   /** The act's accessible name: the row's sentence, then the act. */
-  pairReviewName: (readerName: string, sourceName: string, tables: readonly string[]): string => ACCESS_SHEET.pairName(readerName, sourceName, tables),
+  pairReviewName: (readerName: string, sourceName: string, tables: readonly string[]): string => `${SETTINGS_CARD.pairRow(readerName, sourceName, tables)} — review`,
 } as const;
 
 // ---------------------------------------------------------------------------------------------
@@ -889,9 +895,9 @@ export const HUB_TILE = {
   /** The tile's access line, VISIBLE inside the tile's link so it is part of its name: "reads 1 other app · read by 2 apps"; empty at 0 · 0 (no line). */
   accessWords: (reads: number, readBy: number): string => [...(reads > 0 ? [readsApps(reads)] : []), ...(readBy > 0 ? [readByApps(readBy)] : [])].join(' · '),
   /** The sibling act on a tile whose app could read another's — host words only, never the app's purpose. */
-  couldRead: (sourceName: string): string => `could read ${sourceName}'s data — review…`,
+  couldRead: (sourceName: string): string => `${couldReadData(sourceName)} — review…`,
   /** Its accessible name, naming both apps. */
-  couldReadName: (appName: string, sourceName: string): string => `${appName} could read ${sourceName}'s data — review`,
+  couldReadName: (appName: string, sourceName: string): string => `${appName} ${couldReadData(sourceName)} — review`,
 } as const;
 
 /** The update confirm names the access that will pause (AC21) beside the schedules. */
@@ -1005,11 +1011,24 @@ export const FETCH_FIRST = {
   skipped: (sourceName: string): string => `${sourceName} wasn't asked for new data this time`,
   /** The person stopped the turn while the source was fetching. */
   stopped: (sourceName: string): string => `stopped while ${sourceName} was fetching new data`,
+  /** The person pressed *fetch new data first* but no app lets this one ask any more (an access ended since — Gate-5 fold P3-10). */
+  nothingToAsk: (readerName: string): string => `no app lets ${readerName} ask for new data now — answered from what it had`,
+  /** The ONE host line the chat's brain reads about the fetch (Gate-5 fold P3-2): the names in it are `oneLine`-folded. */
+  contextLine: (note: string): string => `The host, before this turn: ${note}`,
 } as const;
 
 /** The chat's toggle beside *send* (D-PR5-20): up to two sources by name, more by count — the names then ride the title. */
 export const CHAT_FETCH = {
-  first: (names: readonly string[]): string => (names.length <= 2 ? `fetch new data from ${listWords(names)} first` : `fetch new data from ${names.length} apps first`),
-  /** The toggle's title: every source, by name. */
-  firstNamed: (names: readonly string[]): string => `fetch new data from ${listWords(names)} first`,
+  /** The label names only the sources a fetch asks — at most `REFRESH_FIRST_MAX_SOURCES`, in order — and counts the rest (Gate-5 fold P3-6). */
+  first: (names: readonly string[]): string => {
+    const asked = names.slice(0, REFRESH_FIRST_MAX_SOURCES);
+    const rest = names.length - asked.length;
+    return `fetch new data from ${listWords(asked)} first${rest > 0 ? ` (+${rest} not asked)` : ''}`;
+  },
+  /** The toggle's title: the sources asked by name, then the ones it never asks. */
+  firstNamed: (names: readonly string[]): string => {
+    const asked = names.slice(0, REFRESH_FIRST_MAX_SOURCES);
+    const rest = names.slice(REFRESH_FIRST_MAX_SOURCES);
+    return `fetch new data from ${listWords(asked)} first${rest.length > 0 ? ` — ${listWords(rest)} ${rest.length === 1 ? "isn't" : "aren't"} asked (at most ${REFRESH_FIRST_MAX_SOURCES} each time)` : ''}`;
+  },
 } as const;
