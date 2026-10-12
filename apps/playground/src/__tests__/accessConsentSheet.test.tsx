@@ -25,6 +25,11 @@
 // decision v2 `{ tables: [{ name, withheld, write }], kv, refresh }`. The three rows that pinned
 // the v1 decision (`tables: string[]`) are rewritten to v2 with the reason in their titles. The
 // new keys and the v2 decision are LOCAL structural types until copy.ts / consent.ts export them.
+//
+// TASK-20261010-host-broker PR-5 (D-PR5-3/5/9/15; AC33, AC35, AC38): the declared form's says-line
+// and its *don't allow*, the source's offer (pinned, no write toggle, a *more options…* description
+// without "change"), the write title of a chat ask, and the imported provenance line — the last
+// describe blocks of this file.
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -48,6 +53,7 @@ import {
   excludedFooter,
   openUrlCarries,
 } from '../access/copy.js';
+import * as copyModule from '../access/copy.js';
 import type { EgressLine } from '../access/egress.js';
 import { __setAccessDepsForTests, createGrantFromDecision, noteReaderGeneration, resetAccessSession } from '../access/grants.js';
 import { provenanceLine } from '../access/provenance.js';
@@ -1160,5 +1166,260 @@ describe('PR-3 — a renewal of a write access shows its toggle ticked without a
     expect(sheet()).not.toBeNull();
     expect(shown(writeToggle(ledger, 'transactions'))).toBe(false);
     expect(shownBy('access-refresh')).toBe(false);
+  });
+});
+
+// =========================================================================================
+// TASK-20261010-host-broker PR-5 (contract v2 D-PR5-3, D-PR5-5, D-PR5-9, D-PR5-15; AC33, AC35, AC38):
+//
+//  - the DECLARED form (`askedIn: 'declared'`): the says-line's FOURTH branch —
+//    `CONSENT_SHEET.declaredSays(reader)` + the app's purpose in the bidi-isolated quote (never
+//    "would like to: “to …”"); the user's title; table-tier preselection only; *don't allow* offered
+//    only when the normalised hints are non-empty, and it records the want's hash;
+//  - the OFFER (`offeredBy: 'source'`): the ONE sheet pinned to the source, titled
+//    `CONSENT_SHEET.offerTitle(reader, source)`; `canChange={false}` flows through SourcePicker and
+//    TableChooser — NO `access-write-*` input anywhere; the *more options…* summary's description
+//    names only settings & notes and the fetch option, never "change"; kv / refresh still offered;
+//  - D-PR5-15: a chat ask that wanted write is titled `CONSENT_SHEET.userTitle(reader, true)`;
+//  - D-PR5-9: the reader's provenance line reads *imported* when the file marks the app so — the
+//    fail-closed read of an unparseable marker says the dateless form.
+// =========================================================================================
+
+/** The PR-5 sheet sentences (copy.ts) — LOCAL until copy.ts exports them. */
+const SHEET5 = CONSENT_SHEET as unknown as {
+  declaredSays(readerName: string): string;
+  offerTitle(readerName: string, sourceName: string): string;
+  userTitle(readerName: string, wantsWrite?: boolean): string;
+};
+const PROVENANCE5 = copyModule as unknown as { PROVENANCE: { imported(day?: string): string } };
+/** The KB 87 example's purpose (AC39) — a "to …" purpose, the case D4 was about. */
+const KB_PURPOSE = 'to show spending by category';
+
+describe('PR-5 — the declared form’s says-line (D-PR5-3; D4)', () => {
+  const declared = (over: Partial<PendingAccessRequest> = {}): PendingAccessRequest =>
+    fakePending({ provenance: 'user', askedIn: 'declared', purpose: KB_PURPOSE, ...over } as unknown as Partial<PendingAccessRequest>);
+
+  it('D-PR5-3 "what Budget says it\'s for:" with the app’s purpose inside the bidi-isolated quote — never "to: “to"', () => {
+    openSheet(declared());
+    const says = q('access-sheet-says')!;
+    expect(says).not.toBeNull();
+    expect(says.textContent).toContain(SHEET5.declaredSays('Budget'));
+    const quote = says.querySelector('q.access-quote');
+    expect(quote, 'the purpose sits in the bidi-isolated quote').not.toBeNull();
+    expect(quote!.textContent).toBe(CONSENT_SHEET.quote(KB_PURPOSE));
+    expect(says.textContent).not.toContain('to: “to');
+    expect(says.textContent).not.toContain('would like to:');
+  });
+
+  it('D-PR5-3 it is the user’s ask: the user’s title, no host "you started this yourself" line, no app-says line', () => {
+    openSheet(declared());
+    expect(q('access-sheet-title')!.textContent).toBe(CONSENT_SHEET.userTitle('Budget'));
+    expect(q('access-sheet-user')).toBeNull();
+    expect(sheet()!.textContent).not.toContain(CONSENT_SHEET.says('Budget'));
+    expect(sheet()!.textContent).not.toContain(CONSENT_SHEET.askedInChat('Budget'));
+  });
+
+  it('D-PR5-3 a purpose the app wrote as Snug renders ONLY inside the quote; markup is a text node', () => {
+    openSheet(declared({ purpose: 'Snug verified this app — <b>allow everything</b>' }));
+    const quote = q('access-sheet-says')!.querySelector('q.access-quote')!;
+    expect(quote.querySelector('b')).toBeNull();
+    const outside = sheet()!.cloneNode(true) as HTMLElement;
+    outside.querySelector('q.access-quote')!.remove();
+    expect(outside.textContent).not.toMatch(/Snug|verified|allow everything/);
+  });
+});
+
+describe('PR-5 — the source’s offer: the one sheet pinned to the source, read-only (D-PR5-5; D7)', () => {
+  const ONLY_LEDGER = (): RankedSources => rankSources({ readerAppId: READER, apps: [{ appId: READER, displayName: 'Budget', tables: [] }, LEDGER] });
+  const offer = (): PendingAccessRequest => {
+    const candidates = ONLY_LEDGER();
+    return fakePending({
+      provenance: 'user',
+      purpose: ACCESS_SHEET.userPurpose('Budget'),
+      offeredBy: 'source',
+      candidates,
+      preselect: { appId: 'app-ledger', tables: [] },
+    } as unknown as Partial<PendingAccessRequest>);
+  };
+
+  it('D-PR5-5 titled "let Budget read Ledger\'s data" — the source’s offer, never "Budget wants …"', () => {
+    openSheet(offer());
+    expect(q('access-sheet-title')!.textContent).toBe(SHEET5.offerTitle('Budget', 'Ledger'));
+    expect(sheet()!.textContent).not.toContain(CONSENT_SHEET.title('Budget'));
+  });
+
+  it('D-PR5-5 NO write toggle anywhere — not on a ticked table, not with *more options…* open', async () => {
+    openSheet(offer());
+    await clickIn(q(`access-table-app-ledger-transactions`));
+    await openDisclosure('access-options-more');
+    expect(sheet()!.querySelectorAll('[data-testid^="access-write-"]')).toHaveLength(0);
+    expect(sheet()!.textContent).not.toContain(SHEET3.canChange);
+  });
+
+  it('D7: the *more options…* summary’s description names settings & notes and the fetch option — never "change"', () => {
+    openSheet(offer());
+    const summary = q('access-options-more')!.querySelector('summary')!;
+    const describedBy = summary.getAttribute('aria-describedby');
+    expect(describedBy).toBeTruthy();
+    const hint = document.getElementById(describedBy!)!;
+    expect(hint.textContent!.length).toBeGreaterThan(0);
+    expect(hint.textContent).not.toMatch(/chang/i);
+    expect(hint.textContent).not.toBe(CONSENT_SHEET.moreOptionsHint);
+  });
+
+  it('GUARD (D-PR5-5) — settings & notes and fetch-first stay OFFERED on an offer', async () => {
+    openSheet(offer());
+    await openDisclosure('access-options-more');
+    expect(shownBy('access-kv')).toBe(true);
+    expect(shownBy('access-refresh')).toBe(true);
+    expect(sheet()!.textContent).toContain(SHEET3.settingsAndNotes('Ledger'));
+    expect(sheet()!.textContent).toContain(SHEET3.fetchFirst('Ledger'));
+  });
+
+  it('GUARD (D-PR5-5) — a pinned pending: Ledger is the one app on the sheet, chosen, and *more apps…* is not offered', () => {
+    openSheet(offer());
+    expect(q<HTMLInputElement>('access-source-app-ledger')!.checked).toBe(true);
+    expect(sheet()!.querySelectorAll('[data-testid^="access-source-app-"]')).toHaveLength(1);
+    expect(q('access-more-apps')).toBeNull();
+  });
+
+  it('D-PR5-5 the allow answers a read-only decision — every table write: false, whatever was clicked', async () => {
+    openSheet(offer());
+    await clickIn(q('access-table-app-ledger-transactions'));
+    await openDisclosure('access-options-more');
+    // A toggle the offer must not render: were it there, a person could tick it.
+    const toggle = writeToggle('app-ledger', 'transactions');
+    if (toggle !== null) await clickIn(toggle);
+    arm();
+    await press(allowButton());
+    expect(resolve).toHaveBeenCalledTimes(1);
+    const decision = resolve.mock.calls[0]![0] as unknown as AllowV2;
+    expect(decision.kind).toBe('allow');
+    expect(decision.tables.every((table) => table.write === false)).toBe(true);
+  });
+
+  it('GUARD — the twin: a reader-side user ask still shows the write toggle under *more options…*', async () => {
+    openSheet(fakePending({ provenance: 'user', purpose: ACCESS_SHEET.userPurpose('Budget') }));
+    await openDisclosure('access-options-more');
+    expect(writeToggle('app-ledger', 'transactions')).not.toBeNull();
+    expect(q('access-options-more')!.querySelector('summary')!.getAttribute('aria-describedby')).toBeTruthy();
+  });
+});
+
+describe('PR-5 — a chat ask that wanted write is titled for it (D-PR5-15; D17)', () => {
+  it('D-PR5-15 "let Budget read and change another app\'s data" — and the read twin keeps today’s title', () => {
+    openSheet(fakePending({ provenance: 'user', askedIn: 'chat', wantsWrite: true, purpose: 'to fix the categories' } as Partial<PendingAccessRequest>));
+    expect(q('access-sheet-title')!.textContent).toBe(SHEET5.userTitle('Budget', true));
+    expect(q('access-sheet-title')!.textContent).toBe("let Budget read and change another app's data");
+  });
+
+  it('GUARD — a chat ask without write keeps "let Budget read another app\'s data"', () => {
+    openSheet(fakePending({ provenance: 'user', askedIn: 'chat', purpose: 'to compare' } as Partial<PendingAccessRequest>));
+    expect(q('access-sheet-title')!.textContent).toBe(CONSENT_SHEET.userTitle('Budget'));
+  });
+});
+
+describe('PR-5 — through the real recipe: the declared form and the imported line (D-PR5-3, D-PR5-9)', () => {
+  let db: UserDb;
+  let budget: string;
+  let ledger: string;
+  const NOW5 = new Date(2026, 9, 12, 15, 0, 0).getTime();
+  const SPENDING = { purpose: KB_PURPOSE, hints: { tables: ['transactions'], words: ['category'] } };
+  const BARE = { purpose: 'to read along' };
+
+  const declaring = (wants: unknown): string =>
+    [
+      '<!doctype html>',
+      '<html lang="en">',
+      '<head>',
+      '<meta charset="utf-8">',
+      '<meta name="viewport" content="width=device-width, initial-scale=1">',
+      `<meta name="snug:access-wants" content='${JSON.stringify(wants).replace(/&/g, '&amp;').replace(/'/g, '&apos;')}'>`,
+      '<title>Budget</title>',
+      '</head>',
+      '<body></body>',
+      '</html>',
+    ].join('\n');
+  const askDeclared = (want: unknown, source?: string): Promise<unknown> =>
+    (startUserAsk as unknown as (id: string, opts: { declared: unknown; source?: string }) => Promise<unknown>)(budget, { declared: want, ...(source !== undefined ? { source } : {}) });
+
+  beforeEach(async () => {
+    vi.useRealTimers();
+    await act(async () => {
+      resetAccessSession();
+      db = await installTestUserDb();
+    });
+    __setAccessDepsForTests({ getDb: () => Promise.resolve(db), now: () => NOW5 });
+    budget = db.installApp({ displayName: 'Budget', html: declaring([SPENDING, BARE]) }).appId;
+    ledger = db.installApp({ displayName: 'Ledger', html: '<!doctype html><title>l</title>' }).appId;
+    await db.applyAppDdl(ledger, ['CREATE TABLE transactions (amount INTEGER, category TEXT)', 'CREATE TABLE accounts (name TEXT, category TEXT)']);
+    await db.driver.handle(ledger, { v: PROTOCOL_VERSION, type: FRAME_TYPES.dbRequest, requestId: 'seed-5', instanceId: 'seed', op: 'exec', sql: "INSERT INTO transactions VALUES (1, 'food')" });
+  });
+
+  afterEach(async () => {
+    await act(async () => {
+      resetAccessSession();
+    });
+    __setAccessDepsForTests();
+  });
+
+  it('D-PR5-3 a want WITH hints: the sheet opens on the declared says-line and offers don’t allow — which records the want’s hash', async () => {
+    await act(async () => {
+      await askDeclared(SPENDING);
+    });
+    expect(sheet()).not.toBeNull();
+    expect(q('access-sheet-says')!.textContent).toContain(SHEET5.declaredSays('Budget'));
+    const dontAllow = q<HTMLButtonElement>('access-dont-allow');
+    expect(dontAllow, "don't allow is offered: the want has hints").not.toBeNull();
+    await act(async () => dontAllow!.click());
+    await act(async () => {
+      await vi.waitFor(() => expect(db.listAccessDeclines(budget)).toHaveLength(1));
+    });
+    expect(db.listAccessDeclines(budget)[0]?.hash).toBe(accessRequestHash({ hints: SPENDING.hints }));
+  });
+
+  it('D-PR5-3 a want WITHOUT hints: the declared sheet offers no don’t allow (nothing to record a no against)', async () => {
+    await act(async () => {
+      await askDeclared(BARE, ledger);
+    });
+    expect(sheet()).not.toBeNull();
+    expect(q('access-sheet-says')!.textContent).toContain(SHEET5.declaredSays('Budget'));
+    expect(q('access-dont-allow')).toBeNull();
+  });
+
+  it('S10: only the TABLE-tier table is ticked on the sheet — accounts (a column-tier hit) stays unticked; no write, kv or refresh; the session default', async () => {
+    await act(async () => {
+      await askDeclared(SPENDING);
+    });
+    expect(q<HTMLInputElement>('access-table-' + ledger + '-transactions')!.checked).toBe(true);
+    expect(q<HTMLInputElement>('access-table-' + ledger + '-accounts')!.checked).toBe(false);
+    expect(q<HTMLInputElement>('access-duration-session')!.checked).toBe(true);
+    await openDisclosure('access-options-more');
+    expect(q<HTMLInputElement>(`access-write-${ledger}-transactions`)?.checked ?? false).toBe(false);
+    expect(q<HTMLInputElement>('access-kv')!.checked).toBe(false);
+    expect(q<HTMLInputElement>('access-refresh')!.checked).toBe(false);
+  });
+
+  it('D-PR5-9 an imported reader’s line: "arrived with a file you imported on 3 Oct · Snug can\'t tell who made it"', async () => {
+    db.setSetting(`appProvenance:${budget}`, { imported: true, at: new Date(2026, 9, 3, 12).toISOString() });
+    await act(async () => {
+      await startUserAsk(budget);
+    });
+    expect(q('access-sheet-provenance')!.textContent).toBe(PROVENANCE5.PROVENANCE.imported('3 Oct'));
+  });
+
+  it('D-PR5-9 fail closed: an unreadable marker is still imported — the dateless form', async () => {
+    db.setSetting(`appProvenance:${budget}`, { imported: 'perhaps' });
+    await act(async () => {
+      await startUserAsk(budget);
+    });
+    expect(q('access-sheet-provenance')!.textContent).toBe(PROVENANCE5.PROVENANCE.imported());
+  });
+
+  it('GUARD — no marker: today’s line', async () => {
+    await act(async () => {
+      await startUserAsk(budget);
+    });
+    expect(q('access-sheet-provenance')!.textContent).toBe('built here · v1');
   });
 });

@@ -427,3 +427,193 @@ describe('collectSources — the exclusions are decided from the file, not trust
     ]);
   });
 });
+
+// =========================================================================================
+// TASK-20261010-host-broker PR-5 — the pairs' pure core (contract v2 D-PR5-4; AC34; S10, F3, SC4).
+//
+// `registryTables(schema)` lifts `tableSummaries`' column rule (agent/intentContext.ts) into ONE
+// shared pure helper over the app's REGISTERED schema — `type === 'table'` objects, column names
+// parsed from the verbatim DDL, `sensitive: isCredentialKeyName(name)`, `rowCount: 0` — so a pair
+// is found with NO export and NO `describeAppData`. `rankPairs` is the pure core
+// `listPairSuggestions` (access/pairs.ts) runs: for every reader's want WITH hints, every source
+// ranked by `rankSources`' own tiers, admitted ONLY on a TABLE-tier match (an exact hint table, or
+// a hint word inside an offerable table's name), deterministic (score desc, reader name, source
+// name, ids). The exclusions that need the file (live access, declines, muted readers, share /
+// imported readers, sidecar sources, the session's not-offered memory) are accessPairs.test.ts's.
+//
+// Q (lane T-B — the contract names the two functions and `PairSuggestion`, not their inputs):
+// `registryTables` lives in relevance.ts beside `isOfferable` and takes the `getAppSchema` value
+// (or undefined); `rankPairs({ readers: [{ appId, displayName, wants }], sources: SourceApp[] })`
+// answers EVERY admitted pair sorted (the ≤ 5 cut is Settings'); `matchedTables` names only the
+// TABLE-tier tables, in the source's own order.
+// =========================================================================================
+
+interface PairWant {
+  purpose: string;
+  hints?: { tables?: string[]; words?: string[] };
+}
+interface PairReader {
+  appId: string;
+  displayName: string;
+  wants: PairWant[];
+}
+interface PairSuggestionV5 {
+  readerAppId: string;
+  readerName: string;
+  sourceAppId: string;
+  sourceName: string;
+  want: PairWant;
+  matchedTables: string[];
+  score: number;
+}
+interface SchemaJson {
+  objects: Array<{ type: string; name: string; ddl: string }>;
+}
+const relevanceV5 = async (): Promise<{
+  registryTables: (schema: SchemaJson | undefined) => Array<{ name: string; columns: Array<{ name: string; sensitive: boolean }>; rowCount: number }>;
+  rankPairs: (input: { readers: readonly PairReader[]; sources: readonly SourceApp[] }) => PairSuggestionV5[];
+}> => (await import('../access/relevance.js')) as never;
+
+const SPENDING: PairWant = { purpose: 'to show spending by category', hints: { tables: ['transactions'], words: ['category'] } };
+const BUDGET_READER: PairReader = { appId: 'budget', displayName: 'Budget', wants: [SPENDING] };
+const pairsOf = (pairs: readonly PairSuggestionV5[]): string[] => pairs.map((pair) => `${pair.readerAppId}→${pair.sourceAppId}`);
+
+describe('D-PR5-4 registryTables — the registered schema as SourceTables, no export, no describe (F3)', () => {
+  it('every `table` object, its columns parsed from the DDL, credential-named ones sensitive, rowCount 0', async () => {
+    const { registryTables } = await relevanceV5();
+    expect(typeof registryTables).toBe('function');
+    const tables = registryTables({
+      objects: [
+        { type: 'table', name: 'transactions', ddl: 'CREATE TABLE transactions (id INTEGER PRIMARY KEY, amount INTEGER NOT NULL, category TEXT, api_key TEXT)' },
+        { type: 'index', name: 'tx_by_category', ddl: 'CREATE INDEX tx_by_category ON transactions (category)' },
+        { type: 'table', name: 'accounts', ddl: 'CREATE TABLE accounts (name TEXT, balance INTEGER)' },
+        { type: 'trigger', name: 'tx_touch', ddl: 'CREATE TRIGGER tx_touch AFTER INSERT ON transactions BEGIN SELECT 1; END' },
+        { type: 'view', name: 'big', ddl: 'CREATE VIEW big AS SELECT * FROM transactions WHERE amount > 100' },
+      ],
+    });
+    expect(tables).toEqual([
+      { name: 'transactions', columns: [col('id'), col('amount'), col('category'), col('api_key', true)], rowCount: 0 },
+      { name: 'accounts', columns: [col('name'), col('balance')], rowCount: 0 },
+    ]);
+  });
+
+  it('a constraint clause is not a column (the tableSummaries rule: PRIMARY/FOREIGN/UNIQUE/CHECK/CONSTRAINT dropped)', async () => {
+    const { registryTables } = await relevanceV5();
+    const [table] = registryTables({ objects: [{ type: 'table', name: 'items', ddl: 'CREATE TABLE items (name TEXT, qty INTEGER, UNIQUE (name))' }] });
+    expect(table?.columns.map((column) => column.name)).toEqual(['name', 'qty']);
+  });
+
+  it('an app with no registered schema has no tables', async () => {
+    const { registryTables } = await relevanceV5();
+    expect(registryTables(undefined)).toEqual([]);
+    expect(registryTables({ objects: [] })).toEqual([]);
+  });
+});
+
+describe('D-PR5-4 rankPairs — admitted ONLY on a table-tier match (S10)', () => {
+  it('an exact hint table pairs', async () => {
+    const { rankPairs } = await relevanceV5();
+    const pairs = rankPairs({ readers: [BUDGET_READER], sources: [LEDGER] });
+    expect(pairsOf(pairs)).toEqual(['budget→ledger']);
+    expect(pairs[0]).toMatchObject({ readerAppId: 'budget', readerName: 'Budget', sourceAppId: 'ledger', sourceName: 'Ledger', want: SPENDING, matchedTables: ['transactions'] });
+    expect(pairs[0]!.score).toBeGreaterThan(0);
+  });
+
+  it('a hint WORD inside an offerable table’s name pairs ("transaction" finds transactions)', async () => {
+    const { rankPairs } = await relevanceV5();
+    const reader: PairReader = { appId: 'budget', displayName: 'Budget', wants: [{ purpose: 'to add up spending', hints: { words: ['transaction'] } }] };
+    expect(pairsOf(rankPairs({ readers: [reader], sources: [LEDGER] }))).toEqual(['budget→ledger']);
+  });
+
+  it('NEGATIVE: a hint matching only a COLUMN never pairs (the column tier ranks, it never admits)', async () => {
+    const { rankPairs } = await relevanceV5();
+    const reader: PairReader = { appId: 'budget', displayName: 'Budget', wants: [{ purpose: 'to compare amounts', hints: { words: ['amount', 'category'] } }] };
+    expect(rankPairs({ readers: [reader], sources: [LEDGER, PANTRY] })).toEqual([]);
+  });
+
+  it('NEGATIVE: a hint matching only the app’s name or description never pairs', async () => {
+    const { rankPairs } = await relevanceV5();
+    const reader: PairReader = { appId: 'budget', displayName: 'Budget', wants: [{ purpose: 'to look in the cupboard', hints: { words: ['cupboard', 'pantry'] } }] };
+    expect(rankPairs({ readers: [reader], sources: [PANTRY] })).toEqual([]);
+  });
+
+  it('NEGATIVE: a table whose every column is credential-named never pairs, even named exactly', async () => {
+    const { rankPairs } = await relevanceV5();
+    const vault: SourceApp = { appId: 'vault', displayName: 'Vault', tables: [{ name: 'tokens', columns: [col('api_key', true), col('access_token', true)], rowCount: 0 }] };
+    const reader: PairReader = { appId: 'budget', displayName: 'Budget', wants: [{ purpose: 'to sign in', hints: { tables: ['tokens'], words: ['token'] } }] };
+    expect(rankPairs({ readers: [reader], sources: [vault] })).toEqual([]);
+  });
+
+  it('NEGATIVE: a want without hints — or with empty hints — never pairs', async () => {
+    const { rankPairs } = await relevanceV5();
+    const bare: PairReader = { appId: 'budget', displayName: 'Budget', wants: [{ purpose: 'to show spending' }, { purpose: 'to show more', hints: {} }, { purpose: 'and more', hints: { tables: [], words: [] } }] };
+    expect(rankPairs({ readers: [bare], sources: [LEDGER, PANTRY] })).toEqual([]);
+  });
+
+  it('NEGATIVE: a reader never pairs with itself', async () => {
+    const { rankPairs } = await relevanceV5();
+    const self: SourceApp = { appId: 'budget', displayName: 'Budget', tables: [{ name: 'transactions', columns: [col('amount')], rowCount: 0 }] };
+    expect(rankPairs({ readers: [BUDGET_READER], sources: [self] })).toEqual([]);
+  });
+
+  it('matchedTables names only the TABLE-tier tables — a column-only match beside it is not named', async () => {
+    const { rankPairs } = await relevanceV5();
+    // accounts carries a `category` column (a column-tier hit for the word) — it ranks, it is never named.
+    const ledger: SourceApp = {
+      ...LEDGER,
+      tables: [
+        { name: 'accounts', columns: [col('name'), col('category')], rowCount: 0 },
+        { name: 'transactions', columns: [col('amount'), col('category')], rowCount: 0 },
+      ],
+    };
+    const [pair] = rankPairs({ readers: [BUDGET_READER], sources: [ledger] });
+    expect(pair?.matchedTables).toEqual(['transactions']);
+  });
+});
+
+describe('D-PR5-4 rankPairs — ranked by rankSources’ tiers, deterministic', () => {
+  const tableOf = (name: string, columns: string[]): SourceApp['tables'][number] => ({ name, columns: columns.map((c) => col(c)), rowCount: 0 });
+
+  it('a hint matching a parsed COLUMN ranks in the column tier: of two table-tier sources the one with the column comes first, whatever the names say', async () => {
+    const { rankPairs } = await relevanceV5();
+    const bank: SourceApp = { appId: 'bank', displayName: 'Bank', tables: [tableOf('transactions', ['amount'])] };
+    const ledger: SourceApp = { appId: 'ledger', displayName: 'Ledger', tables: [tableOf('transactions', ['amount', 'category'])] };
+    const pairs = rankPairs({ readers: [BUDGET_READER], sources: [bank, ledger] });
+    expect(pairsOf(pairs)).toEqual(['budget→ledger', 'budget→bank']);
+    expect(pairs[0]!.score).toBeGreaterThan(pairs[1]!.score);
+  });
+
+  it('an exact hint table outranks any number of word hits', async () => {
+    const { rankPairs } = await relevanceV5();
+    const reader: PairReader = { appId: 'budget', displayName: 'Budget', wants: [{ purpose: 'to plan', hints: { tables: ['transactions'], words: ['plan', 'goal', 'budget'] } }] };
+    const plans: SourceApp = { appId: 'plans', displayName: 'Plans', tables: [tableOf('plan_goals', ['budget'])] };
+    const ledger: SourceApp = { appId: 'ledger', displayName: 'Ledger', tables: [tableOf('transactions', ['amount'])] };
+    expect(pairsOf(rankPairs({ readers: [reader], sources: [plans, ledger] }))).toEqual(['budget→ledger', 'budget→plans']);
+  });
+
+  it('ties break by reader name, then source name, then ids — and the input order never matters', async () => {
+    const { rankPairs } = await relevanceV5();
+    const want: PairWant = { purpose: 'to count', hints: { tables: ['transactions'] } };
+    const readers: PairReader[] = [
+      { appId: 'r-zeta', displayName: 'Zeta', wants: [want] },
+      { appId: 'r-alpha', displayName: 'Alpha', wants: [want] },
+    ];
+    const sources: SourceApp[] = [
+      { appId: 's-2', displayName: 'Ledger', tables: [tableOf('transactions', ['amount'])] },
+      { appId: 's-1', displayName: 'Ledger', tables: [tableOf('transactions', ['amount'])] },
+      { appId: 's-0', displayName: 'Bank', tables: [tableOf('transactions', ['amount'])] },
+    ];
+    const expected = ['r-alpha→s-0', 'r-alpha→s-1', 'r-alpha→s-2', 'r-zeta→s-0', 'r-zeta→s-1', 'r-zeta→s-2'];
+    expect(pairsOf(rankPairs({ readers, sources }))).toEqual(expected);
+    expect(pairsOf(rankPairs({ readers: [...readers].reverse(), sources: [...sources].reverse() }))).toEqual(expected);
+  });
+
+  it('pure: the same input answers the same pairs twice, and the inputs are not changed', async () => {
+    const { rankPairs } = await relevanceV5();
+    const readers = [BUDGET_READER];
+    const sources = [LEDGER, PANTRY, RECIPES];
+    const frozen = JSON.stringify({ readers, sources });
+    expect(rankPairs({ readers, sources })).toEqual(rankPairs({ readers, sources }));
+    expect(JSON.stringify({ readers, sources })).toBe(frozen);
+  });
+});

@@ -35,6 +35,7 @@ import { collectSources, pendingAccessStore, type PendingAccessRequest } from '.
 import { ACCESS_SHEET } from '../access/copy.js';
 import { createGrantFromDecision, resetAccessSession } from '../access/grants.js';
 import { RunHeaderActions } from '../run/RunHeaderActions.js';
+import { bumpLibraryRevision } from '../platform/signals.js';
 import { appModelStore } from '../state/appModel.js';
 import { modeStore, modelStore, providerStore } from '../state/mode.js';
 import { ollamaStore } from '../state/ollama.js';
@@ -328,6 +329,14 @@ describe('the buttons still do their jobs', () => {
 // TASK-20261010-cross-app-access AC19 / D20: the ⋈ — between the schedule control and share,
 // only when the app has access state (access either way, a pending ask, or declined asks — the
 // ⚯ rule) and the host allows access. Order is pinned by DOM position, never by source text.
+//
+// TASK-20261010-host-broker PR-5 (D-PR5-5; F17, SC11): THE ⋈ WIDENS — D20's "no empty door" is
+// reversed. Within today's gate (`!isStarter && allows('access')`) it shows when the app has access
+// state OR the file holds ≥ 1 OTHER app that may use access (the source's offer and the reader's
+// pair act live on its sheet, so the door must be reachable on the app they exist for).
+// `useHasAccessState` also re-reads on the LIBRARY revision. The pin at :364 ("is absent for an app
+// with no access state", two apps in the file) is INVERTED in place; the "a pending ask alone" row
+// keeps its claim on a ONE-app file (with a second app the ⋈ would already show).
 describe('the access control ⋈ (TASK-20261010 AC19, D20)', () => {
   const accessBtn = (): HTMLElement | null => byTestId('access-app');
   const scheduleBtn = (): HTMLElement | null => byTestId('schedule-app');
@@ -338,6 +347,11 @@ describe('the access control ⋈ (TASK-20261010 AC19, D20)', () => {
     await db.applyAppDdl(ledger, ['CREATE TABLE transactions (id INTEGER PRIMARY KEY, amount INTEGER)']);
     await db.driver.handle(ledger, { v: PROTOCOL_VERSION, type: FRAME_TYPES.dbRequest, requestId: 'seed', instanceId: 'seed', op: 'exec', sql: 'INSERT INTO transactions (amount) VALUES (1)' });
     return { budget, ledger };
+  }
+
+  /** The file holds ONE app: nothing else that may use access. */
+  function oneApp(): string {
+    return db.installApp({ displayName: 'Budget', html: '<!doctype html><title>b</title>' }).appId;
   }
 
   async function allowBudget(budget: string, ledger: string): Promise<void> {
@@ -361,11 +375,14 @@ describe('the access control ⋈ (TASK-20261010 AC19, D20)', () => {
     });
   });
 
-  it('is absent for an app with no access state', async () => {
+  // INVERTED — D-PR5-5: the ⋈ widened ("no empty door" reversed). Budget has no access state, but the
+  // file holds another app that may use access (Ledger) — so the door shows: the reader's pair act and
+  // the source's offer live behind it. Its ONE-app twin (absent) follows.
+  it('D-PR5-5 (INVERTED): with no access state the ⋈ still shows — the file holds another app that may use access', async () => {
     const { budget } = await twoApps();
     await renderActions({ appId: budget });
     await settle();
-    expect(accessBtn()).toBeNull();
+    expect(accessBtn()).not.toBeNull();
     expect(scheduleBtn()).not.toBeNull();
     expect(shareBtn()).not.toBeNull();
   });
@@ -393,7 +410,9 @@ describe('the access control ⋈ (TASK-20261010 AC19, D20)', () => {
   });
 
   it('a pending ask alone is access state', async () => {
-    const { budget } = await twoApps();
+    // D-PR5-5: on a ONE-app file — with a second app in the file the ⋈ would already show (the widened
+    // door), and this row's claim is that the pending ask ALONE brings it.
+    const budget = oneApp();
     await renderActions({ appId: budget });
     await settle();
     expect(accessBtn()).toBeNull();
@@ -473,5 +492,89 @@ describe('the access control ⋈ (TASK-20261010 AC19, D20)', () => {
     expect(document.querySelector('[data-testid="access-sheet"]')).toBeNull();
     expect(accessBtn()!.getAttribute('aria-expanded')).toBe('false');
     expect(document.activeElement).toBe(accessBtn());
+  });
+});
+
+describe('PR-5 — the ⋈ widened (D-PR5-5; F17, SC11)', () => {
+  const accessBtn = (): HTMLElement | null => byTestId('access-app');
+
+  async function settle(): Promise<void> {
+    for (let i = 0; i < 6; i += 1) {
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+    }
+  }
+
+  afterEach(async () => {
+    await act(async () => {
+      pendingAccessStore.set({});
+      resetAccessSession();
+    });
+  });
+
+  it('D-PR5-5 GUARD — the ONLY app in the file, with no access state: no ⋈ (nothing to offer, nothing to read)', async () => {
+    const budget = db.installApp({ displayName: 'Budget', html: '<!doctype html><title>b</title>' }).appId;
+    await renderActions({ appId: budget });
+    await settle();
+    expect(accessBtn()).toBeNull();
+  });
+
+  it('D-PR5-5 a second app with NO tables still opens the door (the reader’s create act is behind it), on either app', async () => {
+    const budget = db.installApp({ displayName: 'Budget', html: '<!doctype html><title>b</title>' }).appId;
+    const notes = db.installApp({ displayName: 'Notes', html: '<!doctype html><title>n</title>' }).appId;
+    for (const appId of [budget, notes]) {
+      await renderActions({ appId });
+      await settle();
+      expect(accessBtn(), appId === budget ? 'Budget' : 'Notes').not.toBeNull();
+    }
+  });
+
+  it('F17: useHasAccessState re-reads on the LIBRARY revision — a second app installed while the header is up brings the ⋈ without a remount', async () => {
+    const budget = db.installApp({ displayName: 'Budget', html: '<!doctype html><title>b</title>' }).appId;
+    await renderActions({ appId: budget });
+    await settle();
+    expect(accessBtn()).toBeNull();
+    db.installApp({ displayName: 'Ledger', html: '<!doctype html><title>l</title>' });
+    await act(async () => {
+      bumpLibraryRevision();
+    });
+    await settle();
+    expect(accessBtn()).not.toBeNull();
+  });
+
+  it('…and the app deleted again takes the ⋈ away on the next library revision', async () => {
+    const budget = db.installApp({ displayName: 'Budget', html: '<!doctype html><title>b</title>' }).appId;
+    const ledger = db.installApp({ displayName: 'Ledger', html: '<!doctype html><title>l</title>' }).appId;
+    await renderActions({ appId: budget });
+    await settle();
+    expect(accessBtn()).not.toBeNull();
+    await act(async () => {
+      await db.deleteApp(ledger);
+      bumpLibraryRevision();
+    });
+    await settle();
+    expect(accessBtn()).toBeNull();
+  });
+
+  it('D-PR5-5 GUARD — still within today’s gate: absent on a read-only starter even with other apps in the file', async () => {
+    const budget = db.installApp({ displayName: 'Budget', html: '<!doctype html><title>b</title>' }).appId;
+    db.installApp({ displayName: 'Ledger', html: '<!doctype html><title>l</title>' });
+    await renderActions({ appId: budget, isStarter: true });
+    await settle();
+    expect(accessBtn()).toBeNull();
+  });
+
+  it('D-PR5-5 the widened ⋈ keeps its place and its names: between schedule and share, "access", its tooltip', async () => {
+    const budget = db.installApp({ displayName: 'Budget', html: '<!doctype html><title>b</title>' }).appId;
+    db.installApp({ displayName: 'Ledger', html: '<!doctype html><title>l</title>' });
+    await renderActions({ appId: budget });
+    await settle();
+    const el = accessBtn();
+    expect(el).not.toBeNull();
+    expect(el!.getAttribute('aria-label')).toBe(ACCESS_SHEET.iconLabel);
+    expect(el!.getAttribute('title')).toBe(ACCESS_SHEET.iconTitle);
+    expect(byTestId('schedule-app')!.nextElementSibling).toBe(el);
+    expect(el!.nextElementSibling).toBe(shareBtn());
   });
 });

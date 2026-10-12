@@ -204,3 +204,49 @@ describe('PR-4 — a tools step costs {ai: 10, net: 8} (STEP_COST, the weekly es
     expect(defaultMissedPolicy([TOOLS])).toBe('ask');
   });
 });
+
+// ---------------------------------------------------------------------------------------------
+// TASK-20261010-host-broker PR-5 (AC39b; contract v2 D-PR5-19; F10). An *ask* step carrying
+// `refreshFirst` may first run up to REFRESH_FIRST_MAX_SOURCES (2) other apps' own fetch — each the
+// cost of a *run <app>* step — so it counts that many on top of its own: an honest "up to".
+// ---------------------------------------------------------------------------------------------
+
+describe('PR-5 D-PR5-19 — a refreshFirst step costs REFRESH_FIRST_MAX_SOURCES × the app-run step’s cost on top of its own (F10)', () => {
+  const FETCH_THINK = { ...THINK, refreshFirst: true } as unknown as ScheduleStep;
+  const FETCH_TOOLS = { kind: 'app-think', appId: 'ledger', prompt: 'sum it', context: { maxRows: 50 }, tools: true, refreshFirst: true } as unknown as ScheduleStep;
+
+  it('REFRESH_FIRST_MAX_SOURCES is the protocol’s 2', async () => {
+    const protocol = (await import('@snugprotocol/protocol')) as unknown as { REFRESH_FIRST_MAX_SOURCES?: number };
+    expect(protocol.REFRESH_FIRST_MAX_SOURCES).toBe(2);
+  });
+
+  it('stepCost: the tool-free ask step {1, 0} + 2 × app-run {0, 1} = {ai: 1, net: 2}', async () => {
+    const { stepCost } = await import('../schedule/floors.js');
+    const run = stepCost(RUN);
+    expect(stepCost(FETCH_THINK)).toEqual({ ai: stepCost(THINK).ai + 2 * run.ai, net: stepCost(THINK).net + 2 * run.net });
+    expect(stepCost(FETCH_THINK)).toEqual({ ai: 1, net: 2 });
+  });
+
+  it('stepCost: the tools step {10, 8} + 2 × app-run = {ai: 10, net: 10}', async () => {
+    const { stepCost } = await import('../schedule/floors.js');
+    expect(stepCost(FETCH_TOOLS)).toEqual({ ai: APP_AGENT_MAX_ROUND_TRIPS, net: APP_AGENT_MAX_TOOL_CALLS + 2 });
+  });
+
+  it('estimatedCallsPerWeek: daily, one refreshFirst ask step → {ai: 7, net: 14}', () => {
+    expect(estimatedCallsPerWeek(daily(), [FETCH_THINK], ANCHOR)).toEqual({ ai: 7, net: 14 });
+  });
+
+  it('the fetch is not a look-up: stepsLookUps counts only what the step’s own tools may make', async () => {
+    const { stepsLookUps } = await import('../schedule/floors.js');
+    expect(stepsLookUps([FETCH_THINK])).toBe(0);
+    expect(stepsLookUps([FETCH_TOOLS])).toBe(APP_AGENT_MAX_TOOL_CALLS);
+  });
+
+  it('GUARD: the same step without the seat costs what it did (negative twin)', () => {
+    expect(estimatedCallsPerWeek(daily(), [THINK], ANCHOR)).toEqual({ ai: 7, net: 0 });
+  });
+
+  it('a refreshFirst step spends, so the catch-up default asks', () => {
+    expect(defaultMissedPolicy([FETCH_THINK])).toBe('ask');
+  });
+});

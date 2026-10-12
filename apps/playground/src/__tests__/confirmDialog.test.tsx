@@ -370,3 +370,60 @@ describe('NetConfirmDialog — the scheduled bodies delimit the app name (TASK-2
     expect(DELEGATED_CONFIRM.afterRunBody('Weather', 'POST', 'api.example.com')).toContain('“Weather”');
   });
 });
+
+// ---------------------------------------------------------------------------------------------
+// TASK-20261010-host-broker PR-5 (AC39d; contract v2 D-PR5-17; D12(ii) — a PR-3 copy bug fixed).
+// The sticky after-run ask follows the POSTURE of the run that touched the frame: after a REFRESH
+// another app asked for ran in the open source, the dialog says the app *fetched new data here
+// earlier* (`DELEGATED_CONFIRM.afterFetchBody`) — never that it "ran a schedule here earlier", which
+// was false. The queue's tag keeps its shape (`{ afterRun: true, appName }` — refresh.test.ts pins
+// it); what the dialog reads is the touched record's posture, set by `beginDelegatedRun`.
+// ---------------------------------------------------------------------------------------------
+
+describe('NetConfirmDialog — the after-run words follow the posture (PR-5 D-PR5-17)', () => {
+  const REQUEST = { appId: 'ledger-pr5', host: 'api.example.com', method: 'POST' as const, url: 'https://api.example.com/v1/items' };
+  const touchedBy = async (posture: 'schedule' | 'refresh'): Promise<() => void> => {
+    const { beginDelegatedRun, endDelegatedRun, clearTouchedGeneration } = await import('../schedule/runPlacement.js');
+    expect(beginDelegatedRun({ appId: REQUEST.appId, appName: 'Ledger', runId: `run-${posture}`, taskId: posture === 'refresh' ? 'access-refresh' : 't1', title: 'x', generation: 0, posture }).ok).toBe(true);
+    endDelegatedRun(REQUEST.appId, `run-${posture}`);
+    return () => clearTouchedGeneration(REQUEST.appId, 0);
+  };
+
+  it('the words: *“Ledger” fetched new data here earlier, so Snug asks every time…* — the app name in typographic quotes, the method and host named', () => {
+    const body = DELEGATED_CONFIRM.afterFetchBody('Ledger', 'POST', 'api.example.com');
+    expect(body.startsWith('“Ledger” fetched new data here earlier, so Snug asks every time')).toBe(true);
+    expect(body).toContain('POST');
+    expect(body).toContain('api.example.com');
+    expect(body).not.toBe(DELEGATED_CONFIRM.afterRunBody('Ledger', 'POST', 'api.example.com'));
+  });
+
+  it('after a REFRESH touched the frame: the after-run variant renders `afterFetchBody` — never the schedule sentence', async () => {
+    const clear = await touchedBy('refresh');
+    try {
+      mount();
+      act(() => {
+        netConfirmStore.set({ request: REQUEST, resolve: () => undefined, scheduled: { afterRun: true, appName: 'Ledger' } });
+      });
+      const text = container.textContent ?? '';
+      expect(text).toContain(DELEGATED_CONFIRM.afterFetchBody('Ledger', 'POST', 'api.example.com'));
+      expect(text).not.toContain(DELEGATED_CONFIRM.afterRunBody('Ledger', 'POST', 'api.example.com'));
+      expect(container.querySelector('h2')?.textContent).toBe(DELEGATED_CONFIRM.title);
+      expect(container.querySelector('input[type="checkbox"]'), 'no remember box').toBeNull();
+    } finally {
+      clear();
+    }
+  });
+
+  it('GUARD: after a SCHEDULE touched the frame, the after-run variant keeps `afterRunBody`', async () => {
+    const clear = await touchedBy('schedule');
+    try {
+      mount();
+      act(() => {
+        netConfirmStore.set({ request: REQUEST, resolve: () => undefined, scheduled: { afterRun: true, appName: 'Ledger' } });
+      });
+      expect(container.textContent ?? '').toContain(DELEGATED_CONFIRM.afterRunBody('Ledger', 'POST', 'api.example.com'));
+    } finally {
+      clear();
+    }
+  });
+});

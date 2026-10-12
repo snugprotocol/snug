@@ -24,6 +24,11 @@
 // ONE outcome line (`access-history-undo-outcome`); a write access's row carries the badge
 // (`access-row-write`: *can also change rows*, past tense when ended) and still exactly ONE act.
 // New props, keys and the v2 record are LOCAL structural types until the modules export them.
+//
+// TASK-20261010-host-broker PR-5 (D-PR5-4/5/6a; AC34, AC35): the two direction headings with their
+// acts, the source's offer block (only with registered tables, a qualifying reader, no sidecar fact),
+// the reader's pair act, and `access-create` still the one reader-side creation act — the last
+// describe blocks.
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -39,7 +44,7 @@ import { ACCESS_ARM_MS, AccessConsentSheet } from '../access/AccessConsentSheet.
 import { AccessHistory } from '../access/AccessHistory.js';
 import { AccessSheet } from '../access/AccessSheet.js';
 import { collectSources, pendingAccessStore, reviewStore, type ConsentOutcome } from '../access/consent.js';
-import { ACCESS_SHEET, CONSENT_SHEET, allowLabel, grantStateCopy, historyLine } from '../access/copy.js';
+import { ACCESS_SHEET, CONSENT_SHEET, allowLabel, excludedFooter, grantStateCopy, historyLine } from '../access/copy.js';
 import {
   __setAccessDepsForTests,
   createGrantFromDecision,
@@ -981,5 +986,198 @@ describe('PR-3 — the write badge on a row, live and ended; still ONE act (D-PR
     const [row] = rowsIn('access-reads');
     expect(one('access-row-write', row)).toBeNull();
     expect(all('access-row-act', row)).toHaveLength(1);
+  });
+});
+
+// =========================================================================================
+// TASK-20261010-host-broker PR-5 (contract v2 D-PR5-4, D-PR5-5, D-PR5-6a; AC34, AC35; D6, D3)
+//
+// The ⋈ sheet gains its two DIRECTIONS as headings, each rendered whenever its act is (D6):
+//   - under `ACCESS_SHEET.reads(name)` — the reader's best PAIR act (D-PR5-4: `access-pair`, a
+//     `{declared, source}` ask pinned to that source) above the ONE creation act `access-create`;
+//   - under `ACCESS_SHEET.readBy(name)` — the source's OFFER block (`access/AccessOffer.tsx`), shown
+//     ONLY when this app has ≥ 1 registered table, is not a sidecar source, and ≥ 1 reader qualifies:
+//     heading `ACCESS_SHEET.offerTitle(source)`, `<select aria-label=ACCESS_SHEET.offerPick>`
+//     (`access-offer-pick`: the apps that may use access, not this one, without live access FROM
+//     it), and the button `ACCESS_SHEET.offer(reader, source)` (`access-offer` — never
+//     `access-create`) → `startUserAsk(reader, {source: appId, offer: true})`.
+// `access-create` stays the ONE reader-side creation act. Q (lane T-B): the pair act's test id is
+// `access-pair`; the act line's is `access-act-line`.
+// =========================================================================================
+
+const ACCESS_SHEET5 = ACCESS_SHEET as unknown as {
+  offerTitle(sourceName: string): string;
+  offerPick: string;
+  offer(readerName: string, sourceName: string): string;
+};
+
+/** The last <h3> before `el` in document order — the direction an act sits under. */
+function headingBefore(el: Element): string | undefined {
+  const headings = [...document.querySelectorAll('h3')].filter((h) => (h.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0);
+  return headings.at(-1)?.textContent ?? undefined;
+}
+const precedesEl = (a: Element, b: Element): boolean => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+
+function declaringHtml(title: string, wants: unknown): string {
+  const content = JSON.stringify(wants).replace(/&/g, '&amp;').replace(/'/g, '&apos;');
+  return `<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n<meta name="viewport" content="width=device-width, initial-scale=1">\n<meta name="snug:access-wants" content='${content}'>\n<title>${title}</title>\n</head>\n<body></body>\n</html>`;
+}
+const SPENDING5 = { purpose: 'to show spending by category', hints: { tables: ['transactions'], words: ['category'] } };
+
+describe('PR-5 — the two directions as headings, each with its act (D-PR5-5; D6)', () => {
+  it('D6: on an app with nothing, the creation act sits under "Budget reads"', async () => {
+    await renderSheet(budget);
+    const create = one('access-create')!;
+    expect(create).not.toBeNull();
+    expect(headingBefore(create)).toBe(ACCESS_SHEET.reads('Budget'));
+  });
+
+  it('D6: on a source with tables, the offer sits under "what reads Ledger" — after the reads direction and its create act', async () => {
+    await renderSheet(ledger);
+    const offerAct = one('access-offer');
+    expect(offerAct, 'Ledger has tables and readers qualify: the offer is there').not.toBeNull();
+    expect(headingBefore(offerAct!)).toBe(ACCESS_SHEET.readBy('Ledger'));
+    expect(precedesEl(one('access-create')!, offerAct!)).toBe(true);
+    expect(headingBefore(one('access-create')!)).toBe(ACCESS_SHEET.reads('Ledger'));
+  });
+
+  it('access-create stays the ONE reader-side creation act — on a source’s sheet too, and the offer is never it', async () => {
+    await renderSheet(ledger);
+    expect(all('access-create')).toHaveLength(1);
+    expect(one('access-create')!.textContent).toBe(ACCESS_SHEET.create('Ledger'));
+    expect(one('access-offer')?.getAttribute('data-testid')).toBe('access-offer');
+    expect(sheet()!.querySelectorAll('[data-testid="access-create"]')).toHaveLength(1);
+  });
+});
+
+describe('PR-5 — the source’s offer block (D-PR5-5; AC35)', () => {
+  it('its heading, its picker named "which app", and its act naming the picked reader and this app', async () => {
+    await renderSheet(ledger);
+    expect(sheet()!.textContent).toContain(ACCESS_SHEET5.offerTitle('Ledger'));
+    const pick = one('access-offer-pick') as HTMLSelectElement | null;
+    expect(pick).not.toBeNull();
+    expect(pick!.tagName).toBe('SELECT');
+    expect(pick!.getAttribute('aria-label')).toBe(ACCESS_SHEET5.offerPick);
+    const names = [...pick!.options].map((option) => option.textContent).sort();
+    expect(names).toEqual(['Budget', 'Pantry']);
+    const picked = [...pick!.options].find((option) => option.value === pick!.value)!.textContent!;
+    expect(one('access-offer')!.textContent).toBe(ACCESS_SHEET5.offer(picked, 'Ledger'));
+  });
+
+  it('picking another app renames the act', async () => {
+    await renderSheet(ledger);
+    const pick = one('access-offer-pick') as HTMLSelectElement;
+    await act(async () => {
+      pick.value = pantry;
+      pick.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await settle();
+    expect(one('access-offer')!.textContent).toBe(ACCESS_SHEET5.offer('Pantry', 'Ledger'));
+  });
+
+  it('an app that already has LIVE access from this source is not offered again', async () => {
+    await allow({ reader: budget, source: ledger });
+    await renderSheet(ledger);
+    const names = [...(one('access-offer-pick') as HTMLSelectElement).options].map((option) => option.textContent);
+    expect(names).toEqual(['Pantry']);
+  });
+
+  it('the act closes this sheet and starts the reader’s ask pinned to this source, offered by it', async () => {
+    const onClose = vi.fn();
+    await renderSheet(ledger, onClose);
+    const pick = one('access-offer-pick') as HTMLSelectElement;
+    await act(async () => {
+      pick.value = budget;
+      pick.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await settle();
+    await click(one('access-offer'));
+    await until(() => reviewStore.get() === budget, 'the review opens for the reader');
+    expect(onClose).toHaveBeenCalled();
+    const pending = pendingAccessStore.get()[budget] as ReturnType<typeof pendingAccessStore.get>[string] & { offeredBy?: string };
+    expect(pending.offeredBy).toBe('source');
+    expect(pending.provenance).toBe('user');
+    expect([...pending.candidates.matched, ...pending.candidates.rest].map((candidate) => candidate.appId)).toEqual([ledger]);
+  });
+
+  it('NEGATIVE: a table-less app shows no offer — no block, no picker, no "what reads" heading of its own', async () => {
+    const notes = db.installApp({ displayName: 'Notes', html: '<!doctype html><title>n</title>' }).appId;
+    await renderSheet(notes);
+    expect(one('access-offer')).toBeNull();
+    expect(one('access-offer-pick')).toBeNull();
+    expect(sheet()!.textContent).not.toContain(ACCESS_SHEET5.offerTitle('Notes'));
+    expect([...document.querySelectorAll('h3')].map((h) => h.textContent)).not.toContain(ACCESS_SHEET.readBy('Notes'));
+  });
+
+  it('NEGATIVE: no reader qualifies (every other app already has live access from it) — no offer', async () => {
+    await allow({ reader: budget, source: ledger });
+    await allow({ reader: pantry, source: ledger });
+    await renderSheet(ledger);
+    expect(one('access-offer')).toBeNull();
+  });
+
+  it('NEGATIVE: a source holding a WhatsApp fact offers nothing', async () => {
+    db.putDeclaredConnection(
+      ledger,
+      'whatsapp',
+      { slot: 'whatsapp', provider: { name: 'WhatsApp' }, kind: 'linked_device', declaredApiHosts: [SIDECAR_SYMBOLIC_HOST] } as Parameters<UserDb['putDeclaredConnection']>[2],
+      'starter',
+    );
+    await renderSheet(ledger);
+    expect(one('access-offer')).toBeNull();
+  });
+});
+
+describe('PR-5 — the reader’s pair act on its own sheet (D-PR5-4, D-PR5-5; D6)', () => {
+  beforeEach(() => {
+    db.saveAppVersion(budget, declaringHtml('Budget', [SPENDING5]));
+  });
+
+  it('a reader with a pair: the act sits under "Budget reads", ABOVE the creation act, naming the source', async () => {
+    await renderSheet(budget);
+    const pair = one('access-pair');
+    expect(pair, 'Budget declares a want Ledger’s registered table meets').not.toBeNull();
+    expect(headingBefore(pair!)).toBe(ACCESS_SHEET.reads('Budget'));
+    expect(precedesEl(pair!, one('access-create')!)).toBe(true);
+    expect(pair!.textContent).toContain('Ledger');
+  });
+
+  it('the act closes this sheet and starts the DECLARED ask pinned to that source', async () => {
+    const onClose = vi.fn();
+    await renderSheet(budget, onClose);
+    await click(one('access-pair'));
+    await until(() => reviewStore.get() === budget, 'the review opens');
+    expect(onClose).toHaveBeenCalled();
+    const pending = pendingAccessStore.get()[budget] as ReturnType<typeof pendingAccessStore.get>[string] & { askedIn?: string };
+    expect(pending.askedIn).toBe('declared');
+    expect(pending.purpose).toBe(SPENDING5.purpose);
+    expect(pending.preselect).toEqual({ appId: ledger, tables: ['transactions'] });
+  });
+
+  it('D-PR5-6a a not-offered answer keeps the sheet up and says why in the act line (role status)', async () => {
+    const onClose = vi.fn();
+    const real = db.exportAppRuntime.bind(db);
+    vi.spyOn(db, 'exportAppRuntime').mockImplementation(async (appId: string) => (appId === ledger ? new Uint8Array(32 * 1024 * 1024) : real(appId)));
+    await renderSheet(budget, onClose);
+    await click(one('access-pair'));
+    await until(() => one('access-act-line') !== null, 'the act line');
+    const line = one('access-act-line')!;
+    expect(line.getAttribute('role')).toBe('status');
+    expect(line.textContent).toContain(excludedFooter([{ displayName: 'Ledger', reason: 'too-large' }]));
+    expect(pendingAccessStore.get()[budget]).toBeUndefined();
+    expect(onClose).not.toHaveBeenCalled();
+    vi.restoreAllMocks();
+  });
+
+  it('no declaration, no pair act — the creation act alone under "Pantry reads"', async () => {
+    await renderSheet(pantry);
+    expect(one('access-pair')).toBeNull();
+    expect(headingBefore(one('access-create')!)).toBe(ACCESS_SHEET.reads('Pantry'));
+  });
+
+  it('a reader that already reads its best source has no pair act for it', async () => {
+    await allow({ reader: budget, source: ledger });
+    await renderSheet(budget);
+    expect(one('access-pair')).toBeNull();
   });
 });

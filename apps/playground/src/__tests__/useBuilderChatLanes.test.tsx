@@ -77,6 +77,22 @@ vi.mock('../state/webllm.js', async (importOriginal) => {
   };
 });
 
+// PR-5 (D-PR5-18, D-PR5-20): the chat's *fetch new data first* reaches `access/fetchFirst.ts` LAZILY
+// (through `agent/chatFetch.ts`). Named only here — a factory, never an import — so this file
+// transforms and its older rows run before the module exists; a turn without the option never reaches it.
+const fetchGate = vi.hoisted(() => ({
+  calls: [] as unknown[][],
+  events: [] as string[],
+  impl: undefined as ((...args: unknown[]) => Promise<unknown>) | undefined,
+}));
+vi.mock('../access/fetchFirst.js', () => ({
+  fetchFirst: (...args: unknown[]) => {
+    fetchGate.calls.push(args);
+    fetchGate.events.push('fetch');
+    return fetchGate.impl !== undefined ? fetchGate.impl(...args) : Promise.resolve({ asked: [], calls: { ai: 0, net: 0 } });
+  },
+}));
+
 // The provider lane's builder is a spy returning [] (its own suite proves the tools).
 vi.mock('../agent/providerTools.js', () => ({
   buildProviderTools: () => [],
@@ -698,4 +714,185 @@ describe('PR-2 — the ask card on the message (AC12)', () => {
     expect(forged).toBeDefined();
     expect(forged?.access).toBeUndefined();
   });
+});
+
+// =================================================================================================
+// TASK-20261010-host-broker PR-5 (AC39b; contract v2 D-PR5-20; D10, F9). `send(text, wire?,
+// {fetchFirst: true})` — the RailChat toggle's option. It is CONSUMED only when the turn opens the
+// data door: after routing, BEFORE `materialise` (a turn routed anywhere else runs no fetch and leaves
+// the toggle pressed — the option's `onConsumed` callback is how RailChat learns it, v2.1 question
+// T-D Q12). The fetch's outcome becomes a HOST note on the user's message (`fetchNote`, persisted in
+// the row's meta — the `directiveNote` precedent, T-D Q13), from `FETCH_FIRST`'s words, and the same
+// fact joins the turn's context as ONE host line. *stop* during the fetch stops the WHOLE turn —
+// nothing routed further, no brain call — the message kept with the stopped note. Never under the
+// webllm, demo or host brains (the door is shut there).
+// =================================================================================================
+
+describe('PR-5 D-PR5-20 — the chat’s *fetch new data first*', () => {
+  type SendWithFetch = (displayText: string, wireText: string | undefined, options: { fetchFirst: true; onConsumed?: () => void }) => void;
+  const FETCHED = { asked: [{ sourceAppId: 'app-ledger', sourceName: 'Ledger', outcome: 'fresh' }], calls: { ai: 0, net: 1 } };
+  const word = (value: unknown, ...args: unknown[]): string => (typeof value === 'function' ? (value as (...a: unknown[]) => string)(...args) : String(value));
+  const copy = (): Promise<typeof import('../access/copy.js')> => import('../access/copy.js');
+
+  async function sendFetching(text: string, onConsumed?: () => void): Promise<{ chat: () => BuilderChat }> {
+    const rendered = renderChat();
+    await act(async () => {
+      (rendered.chat().send as unknown as SendWithFetch)(text, undefined, { fetchFirst: true, ...(onConsumed !== undefined ? { onConsumed } : {}) });
+    });
+    await settleUntilIdle(rendered.chat);
+    return rendered;
+  }
+
+  /** The service spied as PR-2's rows do, with materialise recording WHEN it ran. */
+  async function spyDoor(): Promise<{ materialise: ReturnType<typeof vi.fn> }> {
+    const spied = await spyService();
+    spied.materialise.mockImplementation(async () => {
+      fetchGate.events.push('materialise');
+      return SHARED;
+    });
+    return { materialise: spied.materialise };
+  }
+
+  beforeEach(() => {
+    fetchGate.calls.length = 0;
+    fetchGate.events.length = 0;
+    fetchGate.impl = () => Promise.resolve(FETCHED);
+  });
+
+  afterEach(() => {
+    fetchGate.impl = undefined;
+  });
+
+  it('a DATA-lane turn under a local brain: the fetch runs ONCE for the chat caller, after routing and BEFORE materialise; the option is consumed', async () => {
+    await spyDoor();
+    modeStore.set('local');
+    intent = 'data_read';
+    const onConsumed = vi.fn();
+    await sendFetching('compare this with my ledger', onConsumed);
+    expect(fetchGate.calls).toHaveLength(1);
+    expect(fetchGate.calls[0]![2]).toMatchObject({ kind: 'chat', appId, threadId: THREAD });
+    expect((fetchGate.calls[0]![3] as { signal?: AbortSignal }).signal).toBeInstanceOf(AbortSignal);
+    expect(fetchGate.events).toEqual(['fetch', 'materialise']);
+    expect(onConsumed).toHaveBeenCalledTimes(1);
+    expect(sends).toHaveLength(1);
+  });
+
+  it('the outcome is a HOST note on the user’s message — `FETCH_FIRST.done(source)` — persisted in the row’s meta', async () => {
+    const { FETCH_FIRST } = await copy();
+    await spyDoor();
+    modeStore.set('local');
+    intent = 'data_read';
+    const { chat } = await sendFetching('compare this with my ledger');
+    const user = chat().messages.find((message) => message.role === 'user');
+    expect((user as { fetchNote?: string } | undefined)?.fetchNote).toBe(FETCH_FIRST.done('Ledger'));
+    const row = db.listChatMessages(THREAD).find((message) => message.role === 'user');
+    expect(row?.meta).toMatchObject({ fetchNote: FETCH_FIRST.done('Ledger') });
+  });
+
+  it('…and a reload re-renders the note on the user’s message', async () => {
+    const { FETCH_FIRST } = await copy();
+    await spyDoor();
+    modeStore.set('local');
+    intent = 'data_read';
+    await sendFetching('compare this with my ledger');
+    act(() => root?.unmount());
+    root = undefined;
+    container?.remove();
+    container = undefined;
+    const { chat } = renderChat();
+    const deadline = Date.now() + 5_000;
+    while (chat().messages.length === 0 && Date.now() < deadline) await settle();
+    const user = chat().messages.find((message) => message.role === 'user');
+    expect((user as { fetchNote?: string } | undefined)?.fetchNote).toBe(FETCH_FIRST.done('Ledger'));
+  });
+
+  it('the same fact joins the turn’s context as ONE host line', async () => {
+    const { FETCH_FIRST } = await copy();
+    await spyDoor();
+    modeStore.set('local');
+    intent = 'data_read';
+    await sendFetching('compare this with my ledger');
+    const block = sends[0]?.contextBlock ?? '';
+    expect(block).toContain(FETCH_FIRST.done('Ledger'));
+    expect(block.split(FETCH_FIRST.done('Ledger')).length - 1, 'once').toBe(1);
+  });
+
+  for (const [label, routed] of [
+    ['the answer lane', 'app_question'],
+    ['the feature lane', 'app_change'],
+    ['the schedule lane', 'schedule'],
+  ] as const) {
+    it(`${label}: NO fetch, the option NOT consumed (the toggle stays pressed)`, async () => {
+      await spyDoor();
+      modeStore.set('local');
+      intent = routed;
+      const onConsumed = vi.fn();
+      await sendFetching('a message', onConsumed);
+      expect(fetchGate.calls).toEqual([]);
+      expect(onConsumed).not.toHaveBeenCalled();
+      expect(sends).toHaveLength(1);
+    });
+  }
+
+  it('GUARD: a data-lane turn WITHOUT the option runs no fetch', async () => {
+    await spyDoor();
+    modeStore.set('local');
+    intent = 'data_read';
+    await sendAndSettle('compare this with my ledger');
+    expect(fetchGate.calls).toEqual([]);
+  });
+
+  it('*stop* during the fetch stops the WHOLE turn: no materialise, no brain call, nothing spins — the user’s message kept with the stopped note', async () => {
+    const { FETCH_FIRST } = await copy();
+    const { materialise } = await spyDoor();
+    fetchGate.impl = (...args: unknown[]) =>
+      new Promise((resolve) => {
+        const { signal } = args[3] as { signal: AbortSignal };
+        signal.addEventListener('abort', () => resolve({ asked: [{ sourceAppId: 'app-ledger', sourceName: 'Ledger', outcome: 'stopped' }], calls: { ai: 0, net: 0 } }), { once: true });
+      });
+    modeStore.set('local');
+    intent = 'data_read';
+    const { chat } = renderChat();
+    await act(async () => {
+      (chat().send as unknown as SendWithFetch)('compare this with my ledger', undefined, { fetchFirst: true });
+    });
+    // Bounded well inside the test's timeout, so a turn that never fetches fails here rather than hanging the suite.
+    const deadline = Date.now() + 1_500;
+    while (fetchGate.calls.length === 0 && Date.now() < deadline) await settle();
+    act(() => chat().stop());
+    expect(fetchGate.calls).toHaveLength(1);
+    await settleUntilIdle(chat);
+    expect(materialise).not.toHaveBeenCalled();
+    expect(sends, 'no brain call').toHaveLength(0);
+    expect(chat().busy).toBe(false);
+    expect(chat().messages.some((m) => m.streaming === true)).toBe(false);
+    const user = chat().messages.find((message) => message.role === 'user');
+    expect(user?.displayText).toBe('compare this with my ledger');
+    expect((user as { fetchNote?: string } | undefined)?.fetchNote).toBe(word(FETCH_FIRST.stopped, 'Ledger'));
+  });
+
+  for (const [label, arrange] of [
+    [
+      'the webllm brain',
+      () => {
+        webllmFlagStore.set(true);
+        webgpuStore.set('yes');
+      },
+    ],
+    ['the demo brain (byok with no key)', () => modeStore.set('byok')],
+    [
+      'the host brain',
+      () => {
+        brainGate.host = true;
+      },
+    ],
+  ] as const) {
+    it(`${label}: never a fetch, even with the option on a data-lane turn`, async () => {
+      await spyDoor();
+      arrange();
+      intent = 'data_read';
+      await sendFetching('how much did I spend?');
+      expect(fetchGate.calls).toEqual([]);
+    });
+  }
 });

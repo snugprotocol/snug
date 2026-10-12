@@ -972,3 +972,76 @@ describe('PR-4 Gate-5 — the editor’s and the result page’s new sentences (
     expect(MADE.undoEnded).toBe('undo ended after seven days');
   });
 });
+
+// ---------------------------------------------------------------------------------------------
+// TASK-20261010-host-broker PR-5 (AC39b, AC39d; contract v2 D-PR5-17, D-PR5-19, D-PR5-24). The new
+// schedule/ sentences — the fetching chip, the after-fetch dialog, the editor's tick and its two
+// lines, the consent row, the step fact's `none` — each in ONE schedule copy module, typographic
+// apostrophes, never *task*/*proposal*/*routine*/*automation*/*background*, and the fetch says
+// *new data*, never *look up*. The words built from `FETCH_FIRST` live in `access/copy.ts` and are
+// pinned in fetchFirst.test.ts; here only the schedule/ homes.
+// ---------------------------------------------------------------------------------------------
+
+describe('PR-5 — the fetch’s schedule/ sentences (D-PR5-17, D-PR5-19, D-PR5-24)', () => {
+  const PR5_FIXED: readonly string[] = [
+    // the chip (D-PR5-17)
+    'fetching in',
+    'stop waiting',
+    'it may still finish fetching',
+    // the after-run dialog, after a fetch (D-PR5-17; D12(ii))
+    'fetched new data here earlier, so Snug asks every time',
+    // the editor's tick and its lines (D-PR5-19)
+    'fetch new data first from the apps',
+    'counted on your daily limits',
+    'this does nothing until one does',
+    // the consent row (D-PR5-19)
+    'first asks the apps',
+    // the step fact's `none` (D-PR5-19)
+    'didn’t fetch first — no app lets',
+    'ask for new data any more',
+  ];
+
+  it.each(PR5_FIXED)('%j lives in a schedule copy module', (fragment) => {
+    expect(scheduleCopyText()).toContain(fragment);
+  });
+
+  it('none of them spells task, proposal, routine, automation, background or *look up*; each keeps the typographic apostrophe', () => {
+    for (const fragment of PR5_FIXED) {
+      expect(fragment, fragment).not.toMatch(INTERNAL_WORD);
+      expect(fragment, fragment).not.toMatch(FOREIGN_WORD);
+      expect(fragment, fragment).not.toMatch(/\bbackground\b/i);
+      expect(fragment, fragment).not.toMatch(/look(ed|ing)?[\s-]?up/i);
+      expect(fragment, fragment).not.toMatch(/[A-Za-z]'[A-Za-z]/);
+    }
+  });
+
+  it('RUNNING_CHIP gains fetchingIn / cancelFetch / stopWaiting / moreFetches — *fetching in Ledger*, *and 1 more fetch*; PR-3’s `fetching` stays', () => {
+    expect(RUNNING_CHIP.fetchingIn('Ledger')).toBe('fetching in Ledger');
+    expect(RUNNING_CHIP.moreFetches(1)).toBe('and 1 more fetch');
+    expect(RUNNING_CHIP.cancelFetch('Ledger')).toContain('Ledger');
+    expect(RUNNING_CHIP.cancelFetch('Ledger')).not.toMatch(INTERNAL_WORD);
+    expect(RUNNING_CHIP.stopWaiting).toBeDefined();
+    expect(RUNNING_CHIP.fetching('Ledger'), 'the PR-3 key keeps its bytes').toBe('fetching new data in Ledger');
+  });
+
+  it('DELEGATED_CONFIRM.afterFetchBody delimits the app name like afterRunBody (“Ledger”) and is its own sentence', () => {
+    const body = DELEGATED_CONFIRM.afterFetchBody('Ledger', 'POST', 'api.example.com');
+    expect(body).toContain('“Ledger”');
+    expect(body).not.toMatch(INTERNAL_WORD);
+    expect(body).not.toBe(DELEGATED_CONFIRM.afterRunBody('Ledger', 'POST', 'api.example.com'));
+  });
+
+  it('STEPS.fetchFirst — the tick’s words, in the editor’s copy module', async () => {
+    const editor = (await import('../schedule/copy.editor.js')) as unknown as { STEPS: Record<string, unknown> };
+    expect(editor.STEPS.fetchFirst).toBeDefined();
+  });
+
+  it('the walk sees PR-5’s new schedule/fetchFirstFacts.ts — and the scan BITES on it in memory', () => {
+    const file = path.join(PLAYGROUND_SRC, 'schedule', 'fetchFirstFacts.ts');
+    expect(existsSync(file), 'schedule/fetchFirstFacts.ts exists').toBe(true);
+    expect(uiFiles().map((f) => path.relative(PLAYGROUND_SRC, f))).toContain(path.join('schedule', 'fetchFirstFacts.ts'));
+    const original = readFileSync(file, 'utf8');
+    expect(internalWordsIn(original, ts.ScriptKind.TS)).toEqual([]);
+    expect(internalWordsIn(`${original}\nexport const VOCABULARY_PROBE = 'a proposal for this task';\n`, ts.ScriptKind.TS)).toEqual(['a proposal for this task']);
+  });
+});

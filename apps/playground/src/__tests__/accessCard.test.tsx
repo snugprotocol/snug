@@ -536,3 +536,91 @@ describe('PR-3 — the sheet’s write tick reaches the card’s outcome line (r
     expect(resolved.map((entry) => entry.resolution)).toEqual([{ kind: 'allowed', sourceName: 'Ledger', tables: ['transactions'], duration: 'day' }]);
   });
 });
+
+// =========================================================================================
+// TASK-20261010-host-broker PR-5 (contract v2 D-PR5-15; D15, D17): the ask carries `access`
+// =========================================================================================
+//
+// `AccessCardState.access?: 'write'` — persisted ONLY when `'write'` (a read ask keeps the PR-2 shape,
+// byte for byte); `metaToAccessCard` drops a card whose `access` is anything else. The card's title
+// is the sheet's own — `CONSENT_SHEET.userTitle(readerName, wantsWrite)` *let Budget read and change
+// another app's data* (straight apostrophe, access/copy.ts — DS22); *review* hands the ask's `access`
+// to `startUserAsk`, which parks `wantsWrite: true` and records a *don't allow* under the SAME
+// `accessRequestHash({ hints, access })` the tool's rung reads. When the ask wanted write and the
+// person ticked no *can also change rows*, the outcome is folded into the clause:
+// *Budget can now read — not change — Ledger's transactions · for a day*.
+
+describe('PR-5 D-PR5-15 — a write ask on the card', () => {
+  type WriteCard = AccessCardState & { access?: unknown };
+  const stageWrite = (access: 'read' | 'write'): WriteCard =>
+    stageAccessCard({ purpose: PURPOSE, hints: HINTS, access } as unknown as Parameters<typeof stageAccessCard>[0], { appId: budget, threadId: THREAD }) as WriteCard;
+  const userTitle2 = CONSENT_SHEET.userTitle as unknown as (readerName: string, wantsWrite?: boolean) => string;
+
+  function stagedWriteCard(): WriteCard {
+    const card = stageWrite('write');
+    const row = db.appendChatMessage(THREAD, 'assistant', 'I asked to change your ledger — it is waiting for your review.', { meta: accessCardToMeta(card) });
+    return { ...card, messageRowId: row.id };
+  }
+
+  it('a write ask stages access: write, persists it in meta.access and reads it back', () => {
+    const card = stageWrite('write');
+    expect(card.access).toBe('write');
+    const meta = accessCardToMeta(card) as { access: Record<string, unknown> };
+    expect(meta.access.access).toBe('write');
+    expect((metaToAccessCard(meta) as WriteCard | undefined)?.access).toBe('write');
+  });
+
+  it('a read ask persists NO access seat — the PR-2 shape, byte for byte (guard)', () => {
+    const card = stageWrite('read');
+    expect(card).not.toHaveProperty('access');
+    expect(accessCardToMeta(card).access).not.toHaveProperty('access');
+  });
+
+  it('metaToAccessCard drops a card whose access is anything but write', () => {
+    const good = accessCardToMeta(stageAccessCard({ purpose: PURPOSE, hints: HINTS }, { appId: budget, threadId: THREAD }));
+    for (const access of ['read', 'admin', 'WRITE', true, 1, null, ''] as const) {
+      expect(metaToAccessCard({ access: { ...good.access, access } }), JSON.stringify(access)).toBeUndefined();
+    }
+    expect(metaToAccessCard({ access: { ...good.access, access: 'write' } })).toBeDefined();
+  });
+
+  it('the title is the sheet’s write title — CONSENT_SHEET.userTitle(reader, true): “let Budget read and change another app’s data”', async () => {
+    expect(userTitle2('Budget', true)).toBe("let Budget read and change another app's data");
+    expect(userTitle2('Budget', false), 'the read title unchanged').toBe(CONSENT_SHEET.userTitle('Budget'));
+    await render(stagedWriteCard());
+    const text = container!.textContent ?? '';
+    expect(text).toContain(userTitle2('Budget', true));
+    expect(text.indexOf(ACCESS_CARD.lead)).toBeLessThan(text.indexOf(userTitle2('Budget', true)));
+  });
+
+  it('review hands the ask’s access to startUserAsk; the pending wants write; don’t allow records accessRequestHash({ hints, access: write })', async () => {
+    await render(stagedWriteCard());
+    await click(mustButton(ACCESS_CARD.review));
+    expect(spy().mock.calls[0]![1]).toEqual({ ask: { purpose: PURPOSE, hints: HINTS, access: 'write', settle: expect.any(Function) } });
+    expect((parked() as PendingAccessRequest & { wantsWrite?: boolean }).wantsWrite).toBe(true);
+    await act(async () => {
+      await parked()!.resolve({ kind: 'dont-allow' });
+    });
+    await settle();
+    expect(db.listAccessDeclines(budget).map((decline) => decline.hash)).toEqual([accessRequestHash({ hints: HINTS, access: 'write' })]);
+  });
+
+  it('allowed with NO table ticked to change, on a write ask: “Budget can now read — not change — Ledger’s transactions · for a day”', async () => {
+    await render(stagedWriteCard());
+    await click(mustButton(ACCESS_CARD.review));
+    await act(async () => {
+      await (parked()!.resolve as unknown as (decision: unknown) => Promise<unknown>)({
+        kind: 'allow',
+        sourceAppId: ledger,
+        tables: [{ name: 'transactions', withheld: [], write: false }],
+        duration: 'day',
+        unattended: false,
+        kv: false,
+        refresh: false,
+      });
+    });
+    await settle();
+    expect(outcome()?.dataset.outcome).toBe('allowed');
+    expect(outcome()?.textContent).toBe("Budget can now read — not change — Ledger's transactions · for a day");
+  });
+});

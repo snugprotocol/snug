@@ -272,3 +272,106 @@ describe('oneLine — the name folder the renderer and the data tools share (SEC
     for (const name of ['a\nb', 'a\r\nb', 'a\u2028b', 'a\u2029b', 'a\vb', 'a\fb']) expect(oneLine(name)).not.toMatch(/[\n\r\u2028\u2029\v\f]/);
   });
 });
+
+// =========================================================================================
+// TASK-20261010-host-broker PR-5 (contract v2 D-PR5-13 the DDL mark; F11)
+// =========================================================================================
+//
+// `renderSharedDdlParts(set, now, { changes? }) → { tables, closing }`: `closing` is the closing
+// sentence — `CHAT_DOOR.rule`, or `CHAT_DOOR.changes` when the turn may change something — followed
+// by the unreadable notes in today's order; `renderSharedDdl` is the parts JOINED, byte-identical for
+// `appThink` and any uncut block (so `intentContext` can cap the tables alone and the closing line is
+// never cut). Only a `data_write` turn passes `changes: true`; then a source with a table marked
+// `write` has its heading WITHOUT *read-only ·*, the marked table's line ends *· can be changed*, and
+// `CHAT_DOOR.changes` REPLACES the rule. Without `changes` the mark changes nothing.
+
+type DdlParts = { tables: string; closing: string };
+type PartsFn = (set: MaterialisedSet, now: number, options?: { changes?: boolean }) => DdlParts;
+type HeadingPr5 = (sourceName: string, duration: MaterialisedTable['duration'], expiresAt: string | undefined, now: number, writable?: boolean) => string;
+type TableLinePr5 = (name: string, columns: readonly string[], types: readonly string[], rows: number, truncated: boolean, totalRows?: number, write?: boolean) => string;
+
+async function partsFn(): Promise<PartsFn> {
+  const mod = (await import('../agent/sharedDdl.js')) as unknown as { renderSharedDdlParts?: PartsFn };
+  if (typeof mod.renderSharedDdlParts !== 'function') throw new Error('agent/sharedDdl.ts exports no renderSharedDdlParts yet (D-PR5-13)');
+  return mod.renderSharedDdlParts;
+}
+const changesSentence = (): string => {
+  const sentence = (CHAT_DOOR as unknown as { changes?: string }).changes;
+  if (typeof sentence !== 'string' || sentence === '') throw new Error('CHAT_DOOR.changes is not in access/copy.ts yet (D-PR5-13)');
+  return sentence;
+};
+const heading5 = CHAT_DOOR.heading as unknown as HeadingPr5;
+const tableLine7 = CHAT_DOOR.tableLine as unknown as TableLinePr5;
+/** A table marked by `materialiseGrants` for the chat caller (D-PR5-13). */
+const writable = (t: MaterialisedTable): MaterialisedTable => ({ ...t, write: true }) as MaterialisedTable;
+const joined = (parts: DdlParts): string => [parts.tables, parts.closing].filter((part) => part !== '').join('\n\n');
+
+const SKIPS: MaterialisedSet['skipped'] = [
+  { grantId: 'g-pantry', sourceAppId: 'pantry-app', sourceName: 'Pantry', reason: 'timeout' },
+  { grantId: 'g-garden', sourceAppId: 'garden-app', sourceName: 'Garden', reason: 'drift' },
+];
+
+describe('PR-5 D-PR5-13 — renderSharedDdlParts: { tables, closing }, and renderSharedDdl is the parts joined (F11)', () => {
+  it('renderSharedDdl is byte-identical to the parts joined — one source, two sources, with skips, skips only, empty', async () => {
+    const parts = await partsFn();
+    for (const s of [set([TRANSACTIONS]), set([TRANSACTIONS, ACCOUNTS, PANTRY_ITEMS]), set([TRANSACTIONS], SKIPS), set([], SKIPS), set([])]) {
+      expect(joined(parts(s, NOW))).toBe(renderSharedDdl(s, NOW));
+    }
+  });
+
+  it('closing = the rule, then the unreadable notes in today’s order; the tables part holds neither', async () => {
+    const out = (await partsFn())(set([TRANSACTIONS, PANTRY_ITEMS], SKIPS), NOW);
+    expect(out.closing).toBe([CHAT_DOOR.rule, CHAT_DOOR.unreadable('Pantry'), CHAT_DOOR.unreadable('Garden')].join('\n\n'));
+    expect(out.tables).not.toContain(CHAT_DOOR.rule);
+    expect(out.tables).not.toContain(CHAT_DOOR.unreadable('Pantry'));
+    expect(out.tables).toContain(lineFor(TRANSACTIONS));
+  });
+
+  it('a set holding only skips has no tables part and no rule — its closing is the notes', async () => {
+    const out = (await partsFn())(set([], SKIPS), NOW);
+    expect(out.tables).toBe('');
+    expect(out.closing).toBe([CHAT_DOOR.unreadable('Pantry'), CHAT_DOOR.unreadable('Garden')].join('\n\n'));
+  });
+
+  it('WITHOUT changes the mark changes nothing: a write-marked set renders byte-identical to the unmarked one (appThink, a data_read turn) — guard', () => {
+    expect(renderSharedDdl(set([writable(TRANSACTIONS), ACCOUNTS]), NOW)).toBe(renderSharedDdl(set([TRANSACTIONS, ACCOUNTS]), NOW));
+  });
+
+  it('changes: true with NO writable table is the read-only block, byte for byte (the rule stays)', async () => {
+    const parts = await partsFn();
+    expect(joined(parts(set([TRANSACTIONS, PANTRY_ITEMS]), NOW, { changes: true }))).toBe(renderSharedDdl(set([TRANSACTIONS, PANTRY_ITEMS]), NOW));
+  });
+});
+
+describe('PR-5 D-PR5-13 — a data_write turn: the heading, the table line and the closing say what may be changed', () => {
+  it('CHAT_DOOR.heading(…, writable) drops “read-only ·” — and only that', () => {
+    expect(heading5('Ledger', 'always', undefined, NOW, true)).toBe('### From Ledger (access until you stop it)');
+    expect(heading5('Ledger', 'session', undefined, NOW, true)).toBe("### From Ledger (access while it's open)");
+    expect(heading5('Ledger', 'always', undefined, NOW, false), 'not writable: today’s heading').toBe(CHAT_DOOR.heading('Ledger', 'always', undefined, NOW));
+  });
+
+  it('CHAT_DOOR.tableLine(…, write) appends “ · can be changed”', () => {
+    const t = TRANSACTIONS;
+    expect(tableLine7(t.name, t.columns, t.types, t.rows.length, t.truncated, t.totalRows, true)).toBe(`${lineFor(t)} · can be changed`);
+    expect(tableLine7(t.name, t.columns, t.types, t.rows.length, t.truncated, t.totalRows, false)).toBe(lineFor(t));
+  });
+
+  it('the writable source’s heading has no “read-only ·”, its marked table ends “· can be changed”, its unmarked table does not — and CHAT_DOOR.changes REPLACES the rule', async () => {
+    const out = (await partsFn())(set([writable(TRANSACTIONS), ACCOUNTS], SKIPS), NOW, { changes: true });
+    const lines = joined(out).split('\n');
+    expect(lines).toContain(heading5('Ledger', 'always', undefined, NOW, true));
+    expect(lines).not.toContain(CHAT_DOOR.heading('Ledger', 'always', undefined, NOW));
+    expect(lines).toContain(`${lineFor(TRANSACTIONS)} · can be changed`);
+    expect(lines).toContain(lineFor(ACCOUNTS));
+    expect(out.closing).toBe([changesSentence(), CHAT_DOOR.unreadable('Pantry'), CHAT_DOOR.unreadable('Garden')].join('\n\n'));
+    expect(joined(out)).not.toContain(CHAT_DOOR.rule);
+  });
+
+  it('a READ-ONLY source beside a writable one keeps its “read-only ·” heading and plain lines', async () => {
+    const out = (await partsFn())(set([writable(TRANSACTIONS), PANTRY_ITEMS]), NOW, { changes: true });
+    const lines = joined(out).split('\n');
+    expect(lines).toContain(CHAT_DOOR.heading('Pantry', 'day', EXPIRES, NOW));
+    expect(lines).toContain(lineFor(PANTRY_ITEMS));
+    expect(lines.filter((line) => line.endsWith(' · can be changed'))).toEqual([`${lineFor(TRANSACTIONS)} · can be changed`]);
+  });
+});

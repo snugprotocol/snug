@@ -442,3 +442,57 @@ describe('PR-4 D-PR4-6 / D-PR4-12 — the chat card’s own-app approval and its
     own.chat.unmount();
   });
 });
+
+/**
+ * TASK-20261010-host-broker PR-5 (contract v2 D-PR5-10; S3, S4): `metaToDataWrite` becomes
+ * ALLOW-LIST strict — any key outside the own card's own seats (appId, statements, params, summary,
+ * previewed, outcome, executed, undoId, undoable, messageRowId) drops the WHOLE card. Its
+ * allow-by-rebuild used to DROP an unknown key and keep the card, so a `dataWrite.target` — a
+ * cross-app change dressed as an own one — came back as an OWN card whose apply would run against
+ * the reader's own data (S4's core). Closed at the read seam: no card, so no apply.
+ */
+describe('PR-5 D-PR5-10 — metaToDataWrite is allow-list strict: a dataWrite with target, or any unknown key, is NO card', () => {
+  const PROPOSAL = {
+    appId: 'app-1',
+    statements: ["UPDATE expenses SET cents = 1300 WHERE label = 'lunch'"],
+    params: [[]],
+    summary: 'Fix the lunch',
+    previewed: [1],
+  };
+
+  async function rehydrated(threadId: string, dataWrite: Record<string, unknown>) {
+    const db = await installTestUserDb();
+    db.upsertThread(threadId, { appId: 'app-1' });
+    db.appendChatMessage(threadId, 'assistant', 'waiting for your approval', { meta: { dataWrite } });
+    const chat = renderChat(threadId);
+    await settle();
+    return chat;
+  }
+
+  it('a dataWrite carrying a cross-app target renders NO card — never an own card, never a cross-app one — and nothing can be applied', async () => {
+    const target = { grantId: '11111111-1111-4111-8111-111111111111', grantedAt: '2026-10-12T09:00:00.000Z', sourceAppId: 'app-ledger', table: 'transactions' };
+    const chat = await rehydrated('app:s4a', { ...PROPOSAL, target });
+    const messages = chat.chat().messages as unknown as Array<Record<string, unknown>>;
+    expect(messages.find((m) => m.dataWrite !== undefined), 'no own card').toBeUndefined();
+    expect(messages.find((m) => m.accessWrite !== undefined), 'no cross-app card either — that one has its own key').toBeUndefined();
+    chat.unmount();
+  });
+
+  for (const [label, extra] of [
+    ['an unknown seat', { extra: 1 }],
+    ['a sourceAppId', { sourceAppId: 'app-ledger' }],
+    ['a grantId', { grantId: '11111111-1111-4111-8111-111111111111' }],
+  ] as const) {
+    it(`a dataWrite with ${label} renders no card`, async () => {
+      const chat = await rehydrated(`app:s4-${label.replace(/\W+/g, '-')}`, { ...PROPOSAL, ...extra });
+      expect(chat.chat().messages.find((m) => m.dataWrite !== undefined)).toBeUndefined();
+      chat.unmount();
+    });
+  }
+
+  it('guard — every OWN seat is admitted: a resolved card with outcome, executed, undoId, undoable and the messageRowId the resolution persisted still renders', async () => {
+    const chat = await rehydrated('app:s4-own', { ...PROPOSAL, outcome: 'applied', executed: [1], undoId: UNDO_ID, undoable: true, messageRowId: 3 });
+    expect(chat.chat().messages.find((m) => m.dataWrite !== undefined)?.dataWrite).toMatchObject({ outcome: 'applied', executed: [1], undoId: UNDO_ID, undoable: true });
+    chat.unmount();
+  });
+});

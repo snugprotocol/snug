@@ -74,9 +74,13 @@ describe('the tool’s face', () => {
     expect(t.def.description).toBe(getToolPrompt('access-propose' as Parameters<typeof getToolPrompt>[0]));
   });
 
-  it('takes a required purpose and optional hints', () => {
-    const schema = tool().def.inputSchema as { properties?: Record<string, unknown>; required?: string[] };
-    expect(Object.keys(schema.properties ?? {}).sort()).toEqual(['hints', 'purpose']);
+  // INVERTED — D-PR5-15: the ask carries `access` — `{purpose, hints?, access?: 'read' | 'write'}` —
+  // so the face the model reads gains the optional `access` property (was: exactly ['hints', 'purpose']).
+  // The purpose stays the one required property.
+  it('takes a required purpose, optional hints and an optional access (D-PR5-15)', () => {
+    const schema = tool().def.inputSchema as { properties?: Record<string, { enum?: unknown }>; required?: string[] };
+    expect(Object.keys(schema.properties ?? {}).sort()).toEqual(['access', 'hints', 'purpose']);
+    expect(schema.properties?.access?.enum).toEqual(['read', 'write']);
     expect(schema.required).toEqual(['purpose']);
   });
 });
@@ -244,5 +248,59 @@ describe('nowhere to stage, no app', () => {
     await ask(tool(), { purpose: PURPOSE, hints: HINTS });
     expect(pendingAccessStore.get()[appId]).toBeUndefined();
     expect(db.listAccessDeclines(appId)).toEqual([]);
+  });
+});
+
+// =========================================================================================
+// TASK-20261010-host-broker PR-5 (contract v2 D-PR5-15; D15): the ask carries `access`
+// =========================================================================================
+//
+// `access_propose {purpose, hints?, access?: 'read' | 'write'}` — an unknown value is an `Error:`;
+// a write ask is staged WITH `access: 'write'` (the card persists it only when it is `'write'`), and
+// the decline rung hashes `accessRequestHash({ hints, access })` — the SAME hash `startChatAsk`
+// records — so a declined READ ask never blocks a WRITE ask, nor the reverse (D-PR3-4's rule, now at
+// the chat's door too).
+
+describe('PR-5 D-PR5-15 — access_propose carries access: read | write', () => {
+  it('a write ask is staged with access: write and the model is still told the user decides', async () => {
+    const out = await ask(tool(), { purpose: PURPOSE, hints: HINTS, access: 'write' });
+    expect(staged).toEqual([{ proposal: { purpose: PURPOSE, hints: HINTS, access: 'write' }, appId }]);
+    expect(out.startsWith('Suggested (NOT allowed')).toBe(true);
+  });
+
+  it('a read ask (or none) stages no write — absent or read, never write', async () => {
+    await ask(tool(), { purpose: PURPOSE, access: 'read' });
+    expect([undefined, 'read']).toContain((staged[0]?.proposal as { access?: unknown } | undefined)?.access);
+    expect(staged[0]?.proposal.purpose).toBe(PURPOSE);
+  });
+
+  for (const access of ['admin', 'WRITE', 'read-write', 1, true, ''] as const) {
+    it(`an unknown access value (${JSON.stringify(access)}) is an Error: — nothing staged`, async () => {
+      const out = await ask(tool(), { purpose: PURPOSE, access });
+      expect(out).toMatch(/^Error:/);
+      expect(out).toMatch(/access/);
+      expect(staged).toEqual([]);
+    });
+  }
+
+  it('a decline of the READ ask does not block the WRITE ask with the same hints (a different ask)', async () => {
+    db.addAccessDecline(appId, accessRequestHash({ hints: HINTS }), { purpose: 'read it', hints: HINTS, at: '2026-10-10T09:00:00.000Z' });
+    const out = await ask(tool(), { purpose: PURPOSE, hints: HINTS, access: 'write' });
+    expect(out).not.toContain('NOT staged');
+    expect(staged).toHaveLength(1);
+  });
+
+  it('a decline of the WRITE ask blocks the write ask — matched by accessRequestHash({ hints, access: write })', async () => {
+    db.addAccessDecline(appId, accessRequestHash({ hints: HINTS, access: 'write' }), { purpose: 'change it', hints: HINTS, at: '2026-10-10T09:00:00.000Z' });
+    const out = await ask(tool(), { purpose: PURPOSE, hints: HINTS, access: 'write' });
+    expect(out).toContain('the user said don’t allow to this ask');
+    expect(staged).toEqual([]);
+  });
+
+  it('…and a decline of the WRITE ask never blocks the READ ask (guard — the read hash is the 1.1 bytes)', async () => {
+    db.addAccessDecline(appId, accessRequestHash({ hints: HINTS, access: 'write' }), { purpose: 'change it', hints: HINTS, at: '2026-10-10T09:00:00.000Z' });
+    const out = await ask(tool(), { purpose: PURPOSE, hints: HINTS });
+    expect(out).not.toContain('NOT staged');
+    expect(staged).toHaveLength(1);
   });
 });

@@ -19,6 +19,13 @@
 // Beside them: the one row `30-bridge-protocol.md` gains, the one clause `00-summary.md`
 // gains, the trigger clause in `tools/app-builder.md`, and the skill's *Access between apps*
 // section with its references line (the Schedules section's shape).
+//
+// TASK-20261010-host-broker PR-5 (AC39; D-PR5-2): KB 87's new section on the access declaration
+// (the meta after the viewport, before any script or style, single-quoted, parsed by the protocol's
+// own schema; declare AND ask; never a bundle field), the falsified sentences gone from 87, 00-summary,
+// the skill and instructions.md, KB 85's fetch-first sentence, and KB 20's fence unchanged. The
+// heading-tree pin is AMENDED (the one new heading set aside; every old one still pinned in order).
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
@@ -41,10 +48,12 @@ import {
   ACCESS_SOURCE_CHANGED_EVENT,
   ACCESS_SQL_MAX_CHARS,
   ACCESS_TIMEOUT_STRIKES,
+  ACCESS_WANTS_MAX_BYTES,
   ACCESS_WRITE_MAX_ROWS,
   DATA_CHANGED_EVENT,
   FRAME_TYPES,
   PROTOCOL_VERSION,
+  accessWantsSchema,
 } from '@snugprotocol/protocol';
 
 import {
@@ -118,6 +127,9 @@ function section(text: string, heading: string): string {
 /** The prose a person or model reads as words: fenced code and inline code spans removed (they carry wire names). */
 const wordsOnly = (text: string): string => text.replace(/```[\s\S]*?```/g, ' ').replace(/`[^`\n]*`/g, ' ');
 
+/** TASK-20261010-host-broker PR-5 (AC39, D-PR5-2): the one section KB 87 gains. */
+const PR5_HEADING = '## Saying what your app would like to read';
+
 /** AC17's vocabulary, applied to the page's prose: the UI says *access* and *history*. */
 const INTERNAL_NOUNS = /\b(grants?|granted|readers?|scopes?|scoped|logs?|logged)\b/i;
 
@@ -133,7 +145,10 @@ describe('AC24 — the page is in the store, out of the inline core, with its he
 
   it('the heading tree is pinned — these are the retrieval keys (PR-3: "Four Ops" → "Seven Ops", moved together with the frames-table section key)', () => {
     const doc = getKnowledgeBase().find((entry) => entry.file === KB_FILE)!;
-    expect(doc.headingTree).toEqual([
+    // AMENDED — AC39 (D-PR5-2): KB 87 gains ONE section, "## Saying what your app would like to read"
+    // (its place is the KB lane's; its presence, once, is pinned in the PR-5 block below). Every
+    // heading that was here stays pinned, in order — only the new one is set aside for this check.
+    expect(doc.headingTree.filter((heading) => heading !== PR5_HEADING)).toEqual([
       '# Access Between Apps',
       "## Read Another App's Data Only With the User's Say",
       '## Ask After a User Act, Never on Load',
@@ -496,5 +511,149 @@ describe('AC24 retrieval delivery — build-time queries reach the teaching', ()
     expect(searchKnowledge('sendMessage').slice(0, 2).map((hit) => hit.file)).not.toContain(KB_FILE);
     expect(searchKnowledge('mandatory html template').slice(0, 1).map((hit) => hit.file)).not.toContain(KB_FILE);
     expect(searchKnowledge('persistence sql schema').slice(0, 1).map((hit) => hit.file)).not.toContain(KB_FILE);
+  });
+});
+
+// =========================================================================================
+// TASK-20261010-host-broker PR-5 — AC39 (contract v2 D-PR5-2, D-PR5-3, D-PR5-11, D-PR5-19)
+//
+// KB 87 gains ONE section, "## Saying what your app would like to read": the access DECLARATION —
+// a `<meta name="snug:access-wants" content='[…]'>` in the head, RIGHT AFTER the viewport meta and
+// BEFORE any `<script>`/`<style>` (the host's small grammar stops scanning at the first of those),
+// its content single-quoted JSON of 1..4 `{purpose, hints?}` — which the host derives from the app's
+// own HTML at every admission and shows before the app ever asks; it is never a bundle field, and
+// declaring is not asking: the app still ASKS at runtime, after a user act. The sentences PR-5
+// falsifies go: KB 87's "does not change the other app" (the chat may now propose a change the
+// user applies), 00-summary's chat clause (:12), the skill's chat sentence (:132-146), and
+// instructions.md's "asks for it itself, at runtime" (:42-45). KB 85 says the scheduler may fetch
+// new data first. KB 20's template fence is UNCHANGED (it sits in the inline core's byte budget —
+// the declaration is taught in 87, retrieved, never inlined).
+// =========================================================================================
+
+/** The KB 87 example's purpose — the one the consent sheet's declared says-line is pinned with (D4). */
+const KB_EXAMPLE_PURPOSE = 'to show spending by category';
+/** sha256 of KB 20's ```html fence as of PR-4's merge (main @ a133978) — unchanged by PR-5. */
+const KB20_FENCE_SHA256 = '1cb4a5028c11c965e797cb1ecf19b4791dc6edf8c8ddd3a536b03b76a647840f';
+
+/** The five entities the host's grammar decodes — and no other. */
+const decodeEntities = (text: string): string =>
+  text.replace(/&(quot|apos|lt|gt|amp);/g, (_m, name: string) => ({ quot: '"', apos: "'", lt: '<', gt: '>', amp: '&' })[name] as string);
+
+describe('PR-5 — KB 87’s section "Saying what your app would like to read" (AC39; D-PR5-2)', () => {
+  it('the section exists, once, in the rendered heading tree', () => {
+    const doc = getKnowledgeBase().find((entry) => entry.file === KB_FILE)!;
+    expect(doc.headingTree.filter((heading) => heading === PR5_HEADING)).toHaveLength(1);
+  });
+
+  it('its html example puts the meta RIGHT AFTER the viewport meta and BEFORE any <script> or <style>', () => {
+    const text = section(source(KB_FILE), PR5_HEADING);
+    const fence = /```html\r?\n([\s\S]*?)\r?\n```/.exec(text)?.[1];
+    expect(fence, 'an html fence in the section').toBeDefined();
+    const lines = fence!.split(/\r?\n/).filter((line) => line.trim() !== '');
+    const viewport = lines.findIndex((line) => /<meta\s+name="viewport"/i.test(line));
+    const meta = lines.findIndex((line) => /<meta\s+name=["']snug:access-wants["']/i.test(line));
+    expect(viewport, 'the viewport meta').toBeGreaterThanOrEqual(0);
+    expect(meta, 'the access-wants meta').toBe(viewport + 1);
+    const before = lines.slice(0, meta).join('\n');
+    expect(before).not.toMatch(/<script|<style/i);
+    expect(lines.filter((line) => /snug:access-wants/.test(line))).toHaveLength(1);
+  });
+
+  it('the content attribute is SINGLE-quoted JSON that parses under the protocol’s own schema — the example purpose is "to show spending by category"', () => {
+    const text = section(source(KB_FILE), PR5_HEADING);
+    const fence = /```html\r?\n([\s\S]*?)\r?\n```/.exec(text)?.[1] ?? '';
+    const metaLine = fence.split(/\r?\n/).find((line) => /snug:access-wants/.test(line)) ?? '';
+    const content = /\bcontent='([^']*)'/.exec(metaLine)?.[1];
+    expect(content, 'content is single-quoted').toBeDefined();
+    const parsed = accessWantsSchema.safeParse(JSON.parse(decodeEntities(content!)));
+    expect(parsed.success, parsed.success ? '' : JSON.stringify(parsed.error.issues)).toBe(true);
+    const wants = parsed.success ? parsed.data : [];
+    expect(wants[0]?.purpose).toBe(KB_EXAMPLE_PURPOSE);
+    expect(wants[0]?.hints?.tables?.length ?? 0, 'the example names a table (a pair needs a table-tier match)').toBeGreaterThan(0);
+    expect(JSON.stringify(wants).length).toBeLessThanOrEqual(ACCESS_WANTS_MAX_BYTES);
+  });
+
+  it('declare AND ask: the section says the app still asks at runtime, after a user act — declaring allows nothing', () => {
+    const words = prose(wordsOnly(section(rendered(KB_FILE), PR5_HEADING)));
+    expect(words).toMatch(/\bask/i);
+    expect(words).toMatch(/user act|after the user|the user (has )?done/i);
+    expect(words).toMatch(/(nothing|never)[^.]*(allow|read|grant)/i);
+  });
+
+  it('never a bundle field: the section says the declaration lives in the app’s HTML, not in the bundle', () => {
+    const words = prose(section(rendered(KB_FILE), PR5_HEADING));
+    expect(words).toMatch(/(never|not)[^.]*\bbundle\b|\bbundle\b[^.]*(never|not)/i);
+  });
+
+  it('says *access* and never grant, reader, scope or log in its prose (AC17’s vocabulary)', () => {
+    const words = wordsOnly(section(rendered(KB_FILE), PR5_HEADING));
+    expect(words.match(INTERNAL_NOUNS)?.[0]).toBeUndefined();
+  });
+
+  it('retrieval: "declare what my app would like to read" reaches THIS section of KB 87 in the top 3', () => {
+    const hits = searchKnowledge('declare what my app would like to read snug:access-wants').slice(0, 3);
+    expect(
+      hits.some((hit) => hit.file === KB_FILE && /would like to read/i.test(hit.heading)),
+      hits.map((h) => `${h.file}#${h.heading}`).join(' | '),
+    ).toBe(true);
+  });
+});
+
+describe('PR-5 — the sentences PR-5 falsifies are gone (AC39; AC39e grep)', () => {
+  it('KB 87 no longer says the chat "does not change the other app"', () => {
+    expect(prose(source(KB_FILE))).not.toContain('does not change the other app');
+    expect(prose(rendered(KB_FILE))).not.toContain('does not change the other app');
+  });
+
+  it('KB 87’s chat section now says the chat may propose a change the user applies', () => {
+    const words = prose(section(rendered(KB_FILE), '## Your App Need Not Read Another App Itself'));
+    expect(words).toMatch(/chang/i);
+    expect(words).toMatch(/appl(y|ies)/i);
+  });
+
+  it('00-summary (:12): the chat clause no longer says the chat only SEES what the user allowed — it may propose a change too; still ONE clause about another app’s data', () => {
+    const summary = prose(getKnowledgeSummary());
+    const chat = /the chat beside an app[^)]*\)/.exec(summary)?.[0] ?? '';
+    expect(chat, 'the chat clause').not.toBe('');
+    expect(chat).toMatch(/chang/i);
+    expect(summary.match(/another app's data/g)).toHaveLength(1);
+  });
+
+  it('SKILL (:132-146): the chat sentence says it may propose a change, and the section names the declaration meta', () => {
+    const skill = source(SKILL_FILE);
+    const access = prose(skill.split('## Access between apps')[1]?.split('## Schedules')[0] ?? '');
+    const chat = /The chat beside an app[^.]*\./.exec(access)?.[0] ?? '';
+    expect(chat, 'the chat sentence').not.toBe('');
+    expect(chat).toMatch(/chang/i);
+    expect(access).toContain('snug:access-wants');
+    // Still the user's: never on load, and the opening sentence unchanged.
+    expect(access).toMatch(/^ ?The user allows access between apps; an app never takes it, and neither do you\./);
+    expect(access).toMatch(/never on load/);
+  });
+
+  it('instructions.md (:42-45): "asks for it itself, at runtime" is amended — and it is still the ONE paragraph with its pins', () => {
+    const instructions = readFileSync(path.join(repoRoot, 'apps', 'host-mcp', 'src', 'instructions.md'), 'utf8');
+    const paragraphs = instructions.split(/\n(?=- |\n|#)/).map(prose).filter((p) => /each other's data/.test(p));
+    expect(paragraphs).toHaveLength(1);
+    const [paragraph] = paragraphs as [string];
+    expect(paragraph).not.toContain('asks for it itself, at runtime');
+    expect(paragraph).toContain("You never allow it on the user's behalf");
+    expect(paragraph).toContain('after the user has done something that needs it');
+    expect(paragraph.match(INTERNAL_NOUNS)?.[0]).toBeUndefined();
+  });
+});
+
+describe('PR-5 — KB 85 and KB 20 (AC39; D-PR5-19)', () => {
+  it('KB 85 says a scheduled step may fetch new data first — from the apps it may read while the user is away', () => {
+    const words = prose(rendered('knowledge-base/app-authoring/85-scheduled-runs.md'));
+    expect(words).toMatch(/fetch new data first/i);
+  });
+
+  it('KB 20’s template fence is UNCHANGED, byte for byte (the inline core’s budget; the declaration is taught in 87)', () => {
+    const text = source('knowledge-base/app-authoring/20-html-template.md');
+    const fences = [...text.matchAll(/```html\r?\n([\s\S]*?)\r?\n```/g)].map((m) => m[1] as string);
+    expect(fences).toHaveLength(1);
+    expect(createHash('sha256').update(fences[0]!, 'utf8').digest('hex')).toBe(KB20_FENCE_SHA256);
+    expect(fences[0]).not.toContain('snug:access-wants');
   });
 });

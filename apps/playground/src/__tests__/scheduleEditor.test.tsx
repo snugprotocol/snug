@@ -1357,3 +1357,148 @@ describe('PR-4 Gate-5 U5, U8, U9, U13 — an existing schedule’s authority and
     expect(saved[0]?.writeAuthority).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------------------------------------
+// TASK-20261010-host-broker PR-5 (AC39b; contract v2 D-PR5-19; D11, S15). An *ask* step may *fetch
+// new data first*: the tick `STEPS.fetchFirst(…)` — *fetch new data first from the apps Budget may
+// read while you’re away* — is OFFERED only when the step's app holds ≥ 1 live PERSISTED grant with
+// `refresh && unattended`; its hint names the sources NOW — *now: Ledger — runs Ledger’s own fetch
+// just before, through Ledger’s connections, counted on your daily limits*. A step that already
+// carries it keeps its tick visible when the condition fails, with *no app lets Budget ask for new
+// data now — this does nothing until one does*. The tick is the seat's one setter (every proposal
+// channel strips it). Test ids (v2.1 question T-D Q10): `step-N-fetch-first` (the checkbox),
+// `step-N-fetch-first-hint`, `step-N-fetch-first-stale`.
+// ---------------------------------------------------------------------------------------------
+
+describe('PR-5 D-PR5-19 — *fetch new data first* on an ask step', () => {
+  const TICK = 'fetch new data first from the apps Budget may read while you’re away';
+  const HINT = 'now: Ledger — runs Ledger’s own fetch just before, through Ledger’s connections, counted on your daily limits';
+  const STALE = 'no app lets Budget ask for new data now — this does nothing until one does';
+
+  const installBudget = (): string => db.installApp({ displayName: 'Budget', html: '<!doctype html><title>Budget</title>', usesDb: true }).appId;
+  const installSourceLedger = (): string => db.installApp({ displayName: 'Ledger', html: '<!doctype html><title>Ledger</title>', usesDb: true }).appId;
+
+  async function grantFor(reader: string, source: string, over: Record<string, unknown> = {}): Promise<void> {
+    const { accessGrantSchema } = await import('@snugprotocol/protocol');
+    const at = NOW.toISOString();
+    const { refresh = true, ...rest } = over as { refresh?: boolean } & Record<string, unknown>;
+    db.putAccessGrant(
+      accessGrantSchema.parse({
+        id: crypto.randomUUID(),
+        readerAppId: reader,
+        sourceAppId: source,
+        scope: { tables: [{ name: 'transactions', columns: ['id', 'amount'] }] },
+        access: 'read',
+        purpose: 'to show spending',
+        duration: { kind: 'always' },
+        unattended: true,
+        status: 'active',
+        provenance: 'app',
+        readerVersion: 1,
+        grantedAt: at,
+        updatedAt: at,
+        reads: 0,
+        timeouts: 0,
+        ...(refresh ? { refresh: true } : {}),
+        ...rest,
+      }),
+    );
+  }
+
+  const tickLabel = (): string => input('step-0-fetch-first').closest('label')?.textContent ?? '';
+
+  it('OFFERED with a live persisted grant carrying `refresh` and `unattended`: OFF, in the contract’s words', async () => {
+    const budget = installBudget();
+    await grantFor(budget, installSourceLedger());
+    await mount(`/schedule/new?app=${budget}`);
+    const tick = input('step-0-fetch-first');
+    expect(tick.type).toBe('checkbox');
+    expect(tick.checked).toBe(false);
+    expect(tickLabel()).toBe(TICK);
+  });
+
+  it('its hint names the sources NOW and what it costs', async () => {
+    const budget = installBudget();
+    await grantFor(budget, installSourceLedger());
+    await mount(`/schedule/new?app=${budget}`);
+    await click(input('step-0-fetch-first'));
+    expect(input('step-0-fetch-first').checked).toBe(true);
+    expect(must('step-0-fetch-first-hint').textContent).toBe(HINT);
+  });
+
+  it('ticked and saved: the consent says it (*first asks … (now: Ledger)*) and the task is written with refreshFirst: true', async () => {
+    const budget = installBudget();
+    await grantFor(budget, installSourceLedger());
+    await mount(`/schedule/new?app=${budget}`);
+    await type(input('schedule-title') as HTMLInputElement, 'morning sums');
+    await type(must('step-0-prompt') as HTMLTextAreaElement, 'sum it');
+    await click(input('step-0-fetch-first'));
+    await click(must('schedule-save'));
+    expect(must('consent-fetch-first-0').textContent).toBe('first asks the apps Budget may read while you’re away to fetch new data (now: Ledger)');
+    await click(must('consent-enable'));
+    await settleUntil(() => vi.mocked(createTask).mock.calls.length > 0, 'the create');
+    expect((vi.mocked(createTask).mock.calls[0]?.[0] as { steps: unknown[] }).steps[0]).toMatchObject({ kind: 'app-think', appId: budget, refreshFirst: true });
+  });
+
+  it('left OFF, the step is saved WITHOUT the seat (omit-default: never `false`)', async () => {
+    const budget = installBudget();
+    await grantFor(budget, installSourceLedger());
+    await mount(`/schedule/new?app=${budget}`);
+    await type(input('schedule-title') as HTMLInputElement, 'morning sums');
+    await type(must('step-0-prompt') as HTMLTextAreaElement, 'sum it');
+    await click(must('schedule-save'));
+    if (q('consent-enable') !== null) await click(must('consent-enable'));
+    await settleUntil(() => vi.mocked(createTask).mock.calls.length > 0, 'the create');
+    expect((vi.mocked(createTask).mock.calls[0]?.[0] as { steps: object[] }).steps[0]).not.toHaveProperty('refreshFirst');
+  });
+
+  for (const [label, over] of [
+    ['the grant is for when Budget is open only (no `unattended`)', { unattended: false }],
+    ['the grant does not let Budget ask for new data (no `refresh`)', { refresh: false }],
+    ['the grant was stopped', { status: 'revoked', revokedAt: '2026-10-09T12:00:00.000Z' }],
+  ] as const) {
+    it(`NEGATIVE: NOT offered when ${label}`, async () => {
+      const budget = installBudget();
+      await grantFor(budget, installSourceLedger(), over);
+      await mount(`/schedule/new?app=${budget}`);
+      expect(q('step-0-fetch-first')).toBeNull();
+      expect(must('step-0').textContent).not.toContain('fetch new data first');
+    });
+  }
+
+  it('NEGATIVE: NOT offered for an app with no access at all — nor for a SOURCE (the grant is another app’s to use)', async () => {
+    const budget = installBudget();
+    const ledger = installSourceLedger();
+    await grantFor(budget, ledger);
+    await mount(`/schedule/new?app=${ledger}`);
+    expect(q('step-0-fetch-first')).toBeNull();
+  });
+
+  it('NEGATIVE: a reminder or a run step has no such tick', async () => {
+    const budget = installBudget();
+    await grantFor(budget, installSourceLedger());
+    await mount(`/schedule/new?app=${budget}`);
+    await setSelect(select('step-0-kind'), 'app-run');
+    expect(q('step-0-fetch-first')).toBeNull();
+  });
+
+  it('the STALE form: a step already carrying it keeps its tick visible (checked) when no app lets Budget ask any more — and says so', async () => {
+    const budget = installBudget();
+    const result = await createTask({ title: 'morning sums', steps: [{ kind: 'app-think', appId: budget, prompt: 'sum it', context: { maxRows: 50 }, refreshFirst: true } as unknown as ScheduleStep], spec: { kind: 'daily', time: '08:00', tz: 'device' }, provenance: 'user' });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    vi.mocked(createTask).mockClear();
+    await mount(`/schedule/${result.task.id}`);
+    expect(input('step-0-fetch-first').checked).toBe(true);
+    expect(must('step-0-fetch-first-stale').textContent).toBe(STALE);
+  });
+
+  it('refreshFirst round-trips through draftsFromSteps / prepareSteps; a step without it stays without it', () => {
+    const withFetch = [{ kind: 'app-think', appId: 'budget', prompt: 'sum it', context: { maxRows: 50 }, refreshFirst: true } as unknown as ScheduleStep];
+    expect(prepareSteps(draftsFromSteps(withFetch))).toEqual({ ok: true, steps: withFetch });
+    const without = [ASK_LEDGER('budget')];
+    const back = prepareSteps(draftsFromSteps(without));
+    expect(back).toEqual({ ok: true, steps: without });
+    expect(back.ok && 'refreshFirst' in (back.steps[0] as object)).toBe(false);
+  });
+});

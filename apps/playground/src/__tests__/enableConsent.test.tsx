@@ -431,3 +431,47 @@ describe('PR-4 Gate-5 U13 — the look-up bound counts only the steps that may l
     expect(must('consent-cost').textContent).toContain('up to 20 AI calls and 16 look-ups each time');
   });
 });
+
+// ---------------------------------------------------------------------------------------------
+// TASK-20261010-host-broker PR-5 (AC39b; contract v2 D-PR5-19; F8). The consent says it when an
+// *ask* step fetches new data first: ONE row under the step — *first asks the apps Budget may read
+// while you’re away to fetch new data (now: Ledger)* — the sources from `schedule/fetchFirstFacts.ts`,
+// which every mount site calls and hands in as `fetchFirstByApp` (app id → the source names now;
+// v2.1 question T-D Q8). Whether the consent ALSO offers the tick (D-PR5-19 names "the user's tick in
+// the editor or EnableConsent") is left to the implementation lane — question T-D Q9.
+// ---------------------------------------------------------------------------------------------
+
+describe('PR-5 D-PR5-19 — the consent’s *fetch new data first* row', () => {
+  const FETCH_THINK = { kind: 'app-think', appId: 'budget', prompt: 'sum it', context: { maxRows: 50 }, refreshFirst: true } as unknown as ScheduleStep;
+  const PLAIN_THINK: ScheduleStep = { kind: 'app-think', appId: 'budget', prompt: 'sum it', context: { maxRows: 50 } };
+
+  async function renderWith(steps: ScheduleStep[], fetchFirstByApp: Readonly<Record<string, readonly string[]>>): Promise<void> {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    const extra = { fetchFirstByApp } as unknown as Partial<EnableConsentProps>;
+    await act(async () => {
+      root!.render(<EnableConsent spec={DAILY} now={NOW} appNames={{ budget: 'Budget' }} hostsByApp={{}} onEnable={() => undefined} onNotNow={() => undefined} steps={steps} {...extra} />);
+    });
+  }
+
+  it('a refreshFirst step: the row, in the contract’s words, naming the sources now', async () => {
+    await renderWith([FETCH_THINK], { budget: ['Ledger'] });
+    expect(must('consent-fetch-first-0').textContent).toBe('first asks the apps Budget may read while you’re away to fetch new data (now: Ledger)');
+  });
+
+  it('two sources now are both named', async () => {
+    await renderWith([FETCH_THINK], { budget: ['Ledger', 'Pantry'] });
+    const row = must('consent-fetch-first-0').textContent ?? '';
+    expect(row).toContain('Ledger');
+    expect(row).toContain('Pantry');
+    expect(row.startsWith('first asks the apps Budget may read while you’re away to fetch new data')).toBe(true);
+  });
+
+  it('NEGATIVE: a step without the seat shows no such row, whatever the sources', async () => {
+    await renderWith([PLAIN_THINK], { budget: ['Ledger'] });
+    expect(q('consent-fetch-first-0')).toBeNull();
+    expect(container?.textContent ?? '').not.toContain('fetch new data');
+  });
+
+});

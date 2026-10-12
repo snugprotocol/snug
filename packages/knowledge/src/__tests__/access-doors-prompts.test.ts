@@ -80,19 +80,58 @@ describe('tools/data-query.md — the shared tables by their exact names (DS-3)'
   });
 });
 
-describe('tools/data-propose-write.md — never a change to a shared table (DS-3, D-PR2-17)', () => {
-  const SENTENCE = flat(
+// INVERTED — D-PR5-15: the chat may now propose ONE change to a *From <Source>* table marked *can be
+// changed* (D-PR5-11/13), so PR-2's absolute sentence ("Never propose a change to a table listed under
+// *From <Source>* — those are read-only copies …") is false and must be GONE; the amended sentences take
+// its place, at the same position (after the first paragraph, before the "smallest set" guidance).
+describe('tools/data-propose-write.md — a change to a shared table only where it is marked *can be changed* (DS-3, D-PR2-17 → D-PR5-15)', () => {
+  const PR2_SENTENCE = flat(
     "Never propose a change to a table listed under *From <Source>* — those are read-only copies of another app's data; tell the user they can change it in that app.",
   );
+  const NEVER_UNMARKED = flat(
+    "Never propose a change to a table listed under *From <Source>* unless it is marked *can be changed* — the others are read-only copies of another app's data; tell the user they can change those in that app.",
+  );
+  const ONE_CHANGE = flat(
+    'A table marked *can be changed* takes ONE change per proposal: one statement on its own, naming the table exactly as shown (`ledger__transactions`), with its values written into the statement — no `params`.',
+  );
 
-  it('carries the sentence', () => {
-    expect(prompt('data-propose-write')).toContain(SENTENCE);
+  it('the PR-2 sentence the chat’s write makes false is gone', () => {
+    expect(prompt('data-propose-write')).not.toContain(PR2_SENTENCE);
+  });
+
+  it('carries the amended sentences — never a table not marked, ONE statement with the values written in for one that is', () => {
+    expect(prompt('data-propose-write')).toContain(NEVER_UNMARKED);
+    expect(prompt('data-propose-write')).toContain(ONE_CHANGE);
   });
 
   it('right after its first paragraph — before the "smallest set of statements" guidance', () => {
     const text = prompt('data-propose-write');
-    const at = text.indexOf(SENTENCE);
-    expect(at).toBeGreaterThan(text.indexOf('do not claim it is done.'));
-    expect(at).toBeLessThan(text.indexOf('Write the smallest set of statements'));
+    for (const sentence of [NEVER_UNMARKED, ONE_CHANGE]) {
+      const at = text.indexOf(sentence);
+      expect(at).toBeGreaterThan(text.indexOf('do not claim it is done.'));
+      expect(at).toBeLessThan(text.indexOf('Write the smallest set of statements'));
+    }
+  });
+});
+
+describe('tools/access-propose.md — ask with access: write when the user wants a change and no table is marked (D-PR5-15)', () => {
+  const EXCEPTION = flat(
+    "One exception: when the user wants to change another app's data and no table under *From <Source>* is marked *can be changed*, call it with `access: 'write'` — even if that section is there; the user still decides on the host's sheet, table by table.",
+  );
+
+  it('carries the exception, after the read rule it qualifies', () => {
+    const text = prompt('access-propose');
+    expect(text).toContain(EXCEPTION);
+    expect(text.indexOf(EXCEPTION)).toBeGreaterThan(text.indexOf('query it with data_query.'));
+  });
+
+  it('documents the access parameter: optional, read (the default) or write', () => {
+    const text = prompt('access-propose');
+    expect(text).toContain('### Parameter: access');
+    expect(text).toContain(flat("Optional: `read` (the default) or `write`. Ask for `write` only when the user wants to change the other app's data."));
+  });
+
+  it('still never tells the brain it may grant or allow anything itself (guard)', () => {
+    expect(prompt('access-propose')).not.toMatch(/\byou (?:can|may) (?:grant|allow)\b/i);
   });
 });
