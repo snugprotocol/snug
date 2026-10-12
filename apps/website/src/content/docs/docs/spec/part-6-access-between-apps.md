@@ -168,7 +168,8 @@ line carries `via: 'user'`, `tables` and `changes`; a `refreshed` line carries `
 the run failed, `reason` as ONE of `ACCESS_REFRESH_REASONS` (`no-handler` · `timeout` ·
 `capped` · `refused` · `failed`) — a machine token the host words for the person; a source
 handler's own text never reaches a line. Every `wrote`, `undone` and `refreshed` line has a
-grant: a write of an app's OWN data the user approved writes no line here. Consecutive `read`
+grant: a write of an app's OWN data — one change the user approved, or one a schedule the user
+let make its changes on its own made (§24.5) — writes no line here. Consecutive `read`
 entries coalesce ONLY on an identical `(grantId, sql)` pair within `ACCESS_LOG_COALESCE_MS`
 (60 s) into one entry with `count`; no other kind coalesces. Caps: `ACCESS_LOG_MAX_ENTRIES`
 (200) and `ACCESS_LOG_MAX_BYTES` (64 KiB) per source, `ACCESS_LOG_TOTAL_MAX_BYTES` (1 MiB)
@@ -321,8 +322,8 @@ an app that was closed learns on its next open), each as `snug:host-event`:
 - `access-read { grantId }` to the SOURCE's live frame after a read under that grant — the
   source learns it was read, never what;
 - `data-changed { table }` to the TARGET's own live frame after a brokered write or an undo
-  landed on its database, so an open app re-reads what another app — or its own chat —
-  changed.
+  landed on its database, so an open app re-reads what another app — or its own chat, or one
+  of its schedules — changed.
 
 No event carries a row, a value, a name or a count beyond the one id or table name. A hint
 is a hint: the reader re-queries, the source re-reads, nothing else is implied.
@@ -469,10 +470,17 @@ A host MUST:
 The column rule of item 19 is decided from the schema and the scope — never from a row's
 value — so a refusal tells the reader nothing it could not learn from a read; the table facts
 of item 20 are checked on the live database at the apply as well as at the dry run, and the
-apply's check is the rule. A write of an app's OWN data that the user approved one change at
-a time (the chat beside the app, a run's result page) goes through the same atomic path with
-the same counting and the same `data-changed` hint; it keeps no journal and writes no line
-at 1.2 — when §25's own-app undo lands, its entry and line carry `authority: 'approval'`.
+apply's check is the rule. A write of an app's OWN data — one change the user approved (the
+chat beside the app, a run's result page), or the changes a schedule the user let make its
+changes on its own proposed for its own app, made by the host after the run, at most
+`ACCESS_WRITE_MAX_ROWS` rows a run — goes through the same atomic path with the same counting
+and the same `data-changed` hint, and writes NO line on any history: it names no other app.
+Its rows are journaled host-internally — as data, never statement text — in
+`ownUndo:<appId>:<bucket>` (§8.1) under `authority: 'approval'` or `'task'`, so the user can put
+them back for seven days; a schedule's change that could not be put back is not made, and an
+approval that could not be captured is applied and says it cannot be undone. A schedule's
+authority covers its own app's data only: item 18 still refuses every scheduled write of
+another app's data.
 
 ### 24.6 Refresh
 
@@ -517,18 +525,22 @@ A builder-time access declaration (the `accessWants:<appId>` row is defined at �
 line and the pre-filled consent sheet are a later revision); grants inside shared bundles;
 linked-device sources; a source-initiated grant, and write on one (the source side offers
 READ); two-device history appends as a sync divergence; an app-level "arrived with an imported
-file" marker for the provenance line; the arming surface of the task write authority
-(`authority: 'task'` — a scheduled task's standing permission to apply its own changes,
-ADR-0033's shape, with its kill switches and its *undo* on the result); the chat's cross-app
-write through its proposal card and the three *fetch* affordances (the chat's, the
-scheduler's and the source sheet's *fetch now*) — the chat door is read-only at 1.2 and
-`refresh` is the frame's op; the undo surface for an app's OWN approved writes (§24.5); a
-per-op write grid (insert, update and delete as separate ticks — one toggle at 1.2); step
-chaining across apps inside one schedule.
+file" marker for the provenance line; a scheduled task's authority over ANOTHER app's data
+(`authority: 'task'` on a `wrote` line — item 18 keeps every scheduled write of another app's
+data `ACCESS_UNATTENDED`); the chat's cross-app write through its proposal card and the three
+*fetch* affordances (the chat's, the scheduler's and the source sheet's *fetch now*) — the
+chat door is read-only at 1.2 and `refresh` is the frame's op; a per-op write grid (insert,
+update and delete as separate ticks — one toggle at 1.2); step chaining across apps inside one
+schedule.
 
 Taken at 1.2 from the 1.1 list: write access, user-chosen columns, sharing `snug_kv`, the
 source→reader change hint, the count-only discovery answer, the hint to the source that it
 was read, and cross-app content in the chat data lane and the scheduler's think step (the
 doors, §21).
+
+Taken in the 1.2 editorial revision (2026-10-12, staged), both host-internal: the arming surface
+of the task write authority — a scheduled task's standing permission to make its changes to its
+OWN app's data, ADR-0033's shape, with its kill switches and its *undo* — and the undo surface
+for an app's OWN approved writes (§24.5).
 
 ---

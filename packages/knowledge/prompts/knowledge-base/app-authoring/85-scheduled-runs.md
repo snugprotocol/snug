@@ -208,6 +208,6 @@ supported*).
 A schedule that asks your app's AI can also leave changes to your app's data behind:
 
 - *changes it made* — when the user let that schedule make changes on its own, the host
-  applies them to your app's own tables after the run and lists them on the result, each with
-  an *undo* for seven days; every other change waits there for the user's OK. Your data can
+  applies them to your app's own tables after the run and lists them on the result with an
+  *undo* for seven days; every other change waits there for the user's OK. Your data can
   change while your app is closed, so show what is stored rather than a copy you kept.

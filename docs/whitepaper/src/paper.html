@@ -1,7 +1,11 @@
 <!--
-  paper.html — The Snug Protocol whitepaper, edition 5 — the 1.2 edition
-  (TASK-20261010-host-broker; edition 4 was TASK-20261010-cross-app-access, edition 3
-  TASK-20260822-spec-10-final, edition 2 TASK-20260820, edition 1 TASK-20260807).
+  paper.html — The Snug Protocol whitepaper, edition 6 — the 1.2 edition, an UNPUBLISHED
+  DRAFT: TASK-20261010-host-broker PR-4 staged it (the scheduled-work paragraph of §13 — a
+  schedule may look things up, and may make its own application's changes on its own, with an
+  undo), PR-5 completes it, and the owner publishes it ONCE with the staged spec revision; the
+  cover says "draft" until then (edition 5 was TASK-20261010-host-broker PR-3; edition 4
+  TASK-20261010-cross-app-access, edition 3 TASK-20260822-spec-10-final, edition 2
+  TASK-20260820, edition 1 TASK-20260807).
 
   Source of truth for every normative claim below is the specification:
   docs/spec-drafts/SPEC.md, plus the published schemas exported from
@@ -46,7 +50,7 @@
     </div>
     <div>
       <div class="k">Specification · Edition</div>
-      <div class="v">1.2 · edition 5</div>
+      <div class="v">1.2 · edition 6 (draft)</div>
     </div>
     <div>
       <div class="k">Date</div>
@@ -99,7 +103,7 @@
     <li><span class="num">11</span><span class="ttl">Conformance<span class="sub">What an implementation must do to claim the name</span></span><span class="pg">30</span></li>
     <li><span class="num">12</span><span class="ttl">Related work<span class="sub">MCP, vendor application platforms, local-first software</span></span><span class="pg">31</span></li>
     <li><span class="num">13</span><span class="ttl">Limitations and future work<span class="sub">What is unsolved, stated plainly</span></span><span class="pg">32</span></li>
-    <li><span class="num">14</span><span class="ttl">Conclusion</span><span class="pg">33</span></li>
+    <li><span class="num">14</span><span class="ttl">Conclusion</span><span class="pg">34</span></li>
     <li><span class="num">—</span><span class="ttl">Normative references</span><span class="pg">34</span></li>
     <li><span class="num">A</span><span class="ttl">Appendix: message schema summary</span><span class="pg">35</span></li>
   </ol>
@@ -1594,11 +1598,21 @@ it apart from the file, and — like the endpoint settings of §6.4 — it arriv
 import, because a task is executable intent. The limit is plain: a host runs a schedule
 only while it is open (none of the reference hosts is always-on), and on the next open it
 reconciles what fell due while every host was closed and reports what it could not run
-rather than implying that it ran. A scheduled run gains no new powers — a network call that
-would change something is refused and left for the user to run with the application in
-view — and a scheduled answer stays inside the data surface of §9.2: the agent's reply can
-propose changes to the application's data, with the verbatim statements and an affected-row
-preview, but never applies them.</p>
+rather than implying that it ran. A scheduled run gains no power the user did not give it. A
+network call that would change something is refused and left for the user to run with the
+application in view. A question to an application's agent may be allowed to look things up;
+the host then runs one bounded agent turn itself — the application never opens — over the
+application's own data, the tables the user let it read from other applications, and requests
+that only ask, never post, through the application's approved connections: counted, scrubbed,
+and refused for the rest of any turn that has read another application's data. A scheduled
+answer stays inside the data surface of §9.2: the agent proposes changes to the application's
+data, with the verbatim statements and an affected-row preview, and never applies one itself.
+They wait for the user — unless the user let that schedule make its changes on its own, a
+choice offered only for a schedule of one application, made only by the user's own act, and
+stripped from every schedule an imported file carries. Then the host makes the changes it can
+undo, after the run, to that application's own data and never another's, at most two hundred
+rows a run, each kept as data in the user's file so the user can put it back for seven days; a
+change it could not undo still waits for the user.</p>
 
 <p><strong>The pseudonymisation backstop has a stated class.</strong> It is anti-default
 and anti-naive, not anti-adversarial (§8), and the write-approval drift check compares row
