@@ -39,7 +39,8 @@
       }
     },
     "0.2.0": {
-      "published": false,
+      "published": true,
+      "integrity": "sha512-d+ucEkjFFuRoQpTdPeh5/99kO+WvZXWozAVDVKSfyxyB0Gw/RWLl/aFhqXUcCNdEPgLWyeQzmtoC7E9vKEYW5w==",
       "starters": {
         "adventure-quest": "+sPzUGcP7TcV6GA/4D9twxF6ZHVG9C8GMIMc60/rFQNpYGgEbIAtkHiXX98G761b",
         "chess": "2ysfrEsJ2te27ABN9mV9QthjOWYb9iPfmMQaffhU1CZUNRu59NroVQCP3WXI+bDh",
