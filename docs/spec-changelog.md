@@ -4,7 +4,7 @@ Every change pushed to `snugprotocol/spec`, newest first. Format: `## YYYY-MM-DD
 
 ---
 
-## 2026-10-12 — spec 1.3 — **STAGED, not yet pushed** — TASK-20261010-host-broker (PR-4 + PR-5) — the host's own surfaces of access between apps: the declaration written, a grant started from the source's side, the chat's change applied per card, the host doors' *fetch first*, the access history carried across a sync with a stop winning, the imported marker; PR-4's own-app writes absorbed
+## 2026-10-12 — spec 1.3 — **PUSHED** `aad0dd1` (spec + schemas + README) · `90b2bbf` (whitepaper edition 6) via snugprotocol/spec#4, rebase-merged so the two commits landed as two — TASK-20261010-host-broker (PR-4 + PR-5, merged as snug#204 and snug#205; owner's ask, 2026-10-13) — the host's own surfaces of access between apps: the declaration written, a grant started from the source's side, the chat's change applied per card, the host doors' *fetch first*, the access history carried across a sync with a stop winning, the imported marker; PR-4's own-app writes absorbed
 **The third post-1.0 minor, additive — 1.3, not a 1.2 editorial revision, because it changes
 conformance text (the spec's own rule: post-1.0, an additive change bumps the minor).** No
 frame, op, schema byte, capability flag or Appendix B constant changes; `PROTOCOL_VERSION`
@@ -118,12 +118,14 @@ spec; the checker now pins edition 6 / specification 1.3, requires the declarati
 started from the source's side, refuses a "(draft)" cover in `--spec` mode (the publish check)
 and checks that the spec's header version equals the newest versioned entry here. The website's
 spec banner reads "Specification 1.3 — normative".
-**Owner act, not performed:** the push to `snugprotocol/spec` needs an explicit ask in the
-session (PROCESS.md release rules) and happens ONCE, after PR-5 merges, carrying PR-4's text and
-PR-5's together as two commits (the spec + README; the whitepaper edition 6 PDF); on push THIS
-entry and PR-4's below are rewritten `**PUSHED**` with the SHAs by a docs PR here.
+Landed as TWO commits on `snugprotocol/spec` main: (1) `aad0dd1` — `SPEC.md` + `schemas/` +
+README; (2) `90b2bbf` — the whitepaper edition 6 PDF (A4, 36 pages) + its README. Pushed
+2026-10-13 on the owner's ask (the repo's `main` requires a pull request — snugprotocol/spec#4),
+carrying PR-4's editorial revision below and PR-5's text together; `SPEC.md` and the sixteen
+schemas byte-identical to snug `main` @ `f9e27ac`; `check-whitepaper --spec <clone>` 117/117;
+`check-public-scrub` OK.
 
-## 2026-10-12 — spec 1.2 editorial revision — **STAGED, not yet pushed** — TASK-20261010-host-broker (PR-4) — an app's OWN writes: the task write authority over its own app's data and the own-app undo, host-internal
+## 2026-10-12 — spec 1.2 editorial revision — **PUSHED inside spec 1.3** (`aad0dd1` · `90b2bbf` via snugprotocol/spec#4 — absorbed into the one Revision 1.3 note; see the entry above) — TASK-20261010-host-broker (PR-4) — an app's OWN writes: the task write authority over its own app's data and the own-app undo, host-internal
 **Prose only, version held at 1.2; pushed together with PR-5's revision by the owner, never on
 its own.** ADR-0076 §9 lands its own-app half: a schedule whose app steps all name ONE app may
 carry the user's authority to make its changes on its own — the host makes what a finished run
@@ -157,10 +159,8 @@ import. A run of an unchanged task, and a task that never used a new seat, are b
 to their pre-PR-4 form.
 The whitepaper moves to edition 6 as an UNPUBLISHED DRAFT (the scheduled-work paragraph of its
 limitations section rewritten true), rebuilt and checked; it is published with this revision.
-**Owner act, not performed:** the push to `snugprotocol/spec` needs an explicit ask in the
-session (PROCESS.md release rules) and happens ONCE, after PR-5, carrying this text and PR-5's
-as two commits (the spec + README; the whitepaper edition 6 PDF); on push this entry is
-rewritten `**PUSHED**` with the SHAs by a docs PR here.
+Pushed 2026-10-13 with PR-5's text as spec 1.3 (the entry above): `aad0dd1` (spec + schemas +
+README) · `90b2bbf` (whitepaper edition 6) via snugprotocol/spec#4.
 
 ## 2026-10-11 — spec 1.2 — **PUSHED** `761a406` (spec + schemas + README) · `133b16c` (whitepaper edition 5) via snugprotocol/spec#3, rebase-merged so the two commits landed as two — TASK-20261010-host-broker (PR-3, merged as snug#202; owner's ask, same day)
 **Writes with an undo, refresh on demand and discovery between apps (ADR-0076 §4–§8, §10) —
