@@ -59,6 +59,12 @@ export interface RouteChatMessageInput {
   message: string;
   threadId: string;
   adapter: AgentAdapter;
+  /**
+   * What other apps share with this one now (`access/service.ts` `sharedSourceSummaries`) — passed
+   * only where the chat door itself would open (TASK-20261013-rail-chat-access). Absent, the
+   * classifier is told nothing is shared.
+   */
+  sharedSummaries?: readonly string[];
   signal?: AbortSignal;
   onLlmEvent?: (event: AgentTurnEvent) => void;
 }
@@ -88,7 +94,7 @@ export function classifierApplies(input: {
 
 export async function routeChatMessage(input: RouteChatMessageInput): Promise<ChatRoute> {
   try {
-    const { db, appId, message, threadId, adapter, signal, onLlmEvent } = input;
+    const { db, appId, message, threadId, adapter, sharedSummaries, signal, onLlmEvent } = input;
     const app = db.getApp(appId);
     const docs = db.listAppDocs(appId);
     const recent = db
@@ -105,6 +111,7 @@ export async function routeChatMessage(input: RouteChatMessageInput): Promise<Ch
       // Approved connections, identity only (TASK-20260815): the classifier cannot tell
       // provider data from local-table data without knowing a connection exists.
       connectionSummaries: connectionSummaries(db, appId),
+      ...(sharedSummaries !== undefined ? { sharedSummaries } : {}),
       recentTurns: recent,
     });
 

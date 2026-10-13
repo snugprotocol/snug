@@ -904,12 +904,29 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
           // routes on that app's model like the build/chat turn that follows it.
           const live = await liveInferenceAdapter(contextTarget);
           if (live.ok) {
+            /**
+             * WHAT OTHER APPS SHARE (TASK-20261013-rail-chat-access) — told to the classifier only
+             * where THE CHAT DOOR below would open, with the door's own caller, so a question about
+             * granted data routes to the data lane instead of asking whether to add that data. A
+             * failure here is the old behaviour (nothing shared), never a failed turn.
+             */
+            let sharedSummaries: string[] | undefined;
+            if (appMayUseAccess(contextTarget) && chatDoorOpen(chatBrainRoute(db, contextTarget))) {
+              try {
+                const [{ sharedSourceSummaries }, { accessDeps, readerGeneration }] = await Promise.all([import('../access/service.js'), import('../access/grants.js')]);
+                const liveGeneration = readerGeneration(contextTarget);
+                sharedSummaries = sharedSourceSummaries(db, { kind: 'chat', appId: contextTarget, threadId, ...(liveGeneration !== undefined ? { liveGeneration } : {}) }, accessDeps().now());
+              } catch {
+                sharedSummaries = undefined;
+              }
+            }
             route = await routeChatMessage({
               db,
               appId: contextTarget,
               message: displayText,
               threadId,
               adapter: live.adapter,
+              ...(sharedSummaries !== undefined ? { sharedSummaries } : {}),
               signal: controller.signal,
               onLlmEvent,
             });

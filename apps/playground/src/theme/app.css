@@ -816,6 +816,19 @@
   background: linear-gradient(transparent, var(--bg) 30%);
 }
 
+/* The rail chat's composer (TASK-20261013-rail-chat-access). It used to be inline
+   `position: static` at the end of a `min-height: 100%` column: once a conversation existed the
+   column filled the rail body and the composer sat after it, below the fold by the height of the
+   tabs and thread picker above it — the chat "took one message and lost its input". It sticks to
+   the bottom of `.rail-body` (the scroller) on the rail's own surface instead. */
+.rail-composer {
+  position: sticky;
+  bottom: 0;
+  padding: var(--space-2) 0;
+  background: var(--surface);
+  z-index: 1;
+}
+
 .composer textarea {
   flex: 1;
   resize: none;
