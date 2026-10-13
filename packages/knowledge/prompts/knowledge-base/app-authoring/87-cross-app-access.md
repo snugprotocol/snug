@@ -249,14 +249,17 @@ honest fallback, and ask again without `access`.
 Section 7 of the copy-exactly hooks block — copied WITH section 6, whose `onHostEvent` it
 uses (see "The Mandatory HTML Template") — makes the exchange above for you:
 `const access = useSnugAccess()` in a component gives one stable object whose calls post the
-frames and ALWAYS resolve, errors as data. Keep what an ask answers under a name of its own —
-`grant` below, the view the user allowed — because `access` is already the hook (and the
-ask's option). Ask from something the user pressed, never from an effect on mount; read with
-bound params; change or fetch first only behind the view's flags; and answer the access hints
-through `access.on*`, never `useHostEvents` — the hook checks their ids:
+frames and ALWAYS resolve, errors as data. Use it in a component App renders only once
+`isReady` is true, as the template's App does — a call made before the host is ready answers
+`not connected to host yet`, and an effect on mount does not run again; the usage below takes
+`isReady` from App and waits for it as well. Keep what an ask answers under a name of its
+own — `grant` below, the view the user allowed — because `access` is already the hook (and
+the ask's option). Ask from something the user pressed, never from an effect on mount; read
+with bound params; change or fetch first only behind the view's flags; and answer the access
+hints through `access.on*`, never `useHostEvents` — the hook checks their ids:
 
 ```javascript
-function Spending() {
+function Spending({ isReady }) { // App renders this once isReady is true, and passes it in
   const access = useSnugAccess();
   const db = useAppDB();
   const [grant, setGrant] = useState(null); // the view the user allowed: { id, source, tables, refresh?, … }
@@ -264,7 +267,7 @@ function Spending() {
   const [budget, setBudget] = useState([]);
   const [notice, setNotice] = useState('');
 
-  // What this app already holds: on mount (a second visit may hold one), and after a stop or a pause.
+  // What this app already holds: once the host is ready (a second visit may hold one), and after a stop or a pause.
   const relist = useCallback(async () => {
     const held = await access.list();
     if (held.ok) setGrant(held.grants.find((view) => view.tables.some((t) => t.name === 'transactions')) || null);
@@ -284,7 +287,7 @@ function Spending() {
     setBudget(own.rows);
   }, [db]);
 
-  useEffect(() => { relist(); }, [relist]);
+  useEffect(() => { if (isReady) relist(); }, [isReady, relist]); // before host-ready, list() answers not connected to host yet
   useEffect(() => { readTotals(); }, [readTotals]);
   useEffect(() => {
     const offs = [

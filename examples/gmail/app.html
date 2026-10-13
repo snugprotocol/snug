@@ -1365,7 +1365,7 @@ function useSnugAccess() {
     const openUrlPending = new Map();
     window.addEventListener('message', (event) => {
       const data = event.data;
-      if (!data || data.v !== 1 || data.type !== 'snug:open-url-result') return;
+      if (event.source !== window.parent || !data || data.v !== 1 || data.type !== 'snug:open-url-result') return;
       const resolve = openUrlPending.get(data.requestId);
       if (!resolve) return;
       openUrlPending.delete(data.requestId);

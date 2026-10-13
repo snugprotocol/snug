@@ -235,10 +235,11 @@ follow are the whole of what you have here, and they are enough.
 App Catalog, Design Quality, Defensive Coding, Connected APIs, Scheduled Runs, Access
 Between Apps. Do not look for them and do not mention them — build from the five sections.
 Sections 6–7 are not in this template: never call \`useSnugSchedule\` or \`useSnugAccess\`, nor
-hand-roll their listeners — say so in one line and offer the app without them. **This host
-does not connect apps to external APIs:** never include the template's \`useConnectedFetch\` section
-(its presence alone marks the app as connected), and do not build an app whose point is an
-external service — say so in one line and offer the self-contained version instead.
+hand-roll their listeners — say in one line that this app will not take part in schedules or
+read other apps, and offer it without them. **This host does not connect apps to external
+APIs:** never include the template's \`useConnectedFetch\` section (its presence alone marks
+the app as connected), and do not build an app whose point is an external service — say so
+in one line and offer the self-contained version instead.
 
 **Persistence goes through the Snug hooks only.** The app runs in a sandboxed frame with a
 null origin, so \`localStorage\`, \`sessionStorage\`, cookies and IndexedDB do not work there.
@@ -315,7 +316,7 @@ simply runs. Steps 3-5 describe one agent round trip, and happen only when the a
 ## The SDK Hooks (the whole app-side API)
 
 These hooks — copy-exactly code in "The Mandatory HTML Template" — are the ONLY way an app
-talks to the host. The first three are always present; the rest only when the app needs them:
+talks to the host. The first two are always present; the rest only when the app needs them:
 
 - \`useSnugApp({appId, displayName, description, iconEmoji, iconColor})\` →
   \`{isReady, theme, isWaiting, lastResponse, sendMessage}\`; \`sendMessage(action, payload,

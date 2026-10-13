@@ -19,10 +19,11 @@ follow are the whole of what you have here, and they are enough.
 App Catalog, Design Quality, Defensive Coding, Connected APIs, Scheduled Runs, Access
 Between Apps. Do not look for them and do not mention them — build from the five sections.
 Sections 6–7 are not in this template: never call `useSnugSchedule` or `useSnugAccess`, nor
-hand-roll their listeners — say so in one line and offer the app without them. **This host
-does not connect apps to external APIs:** never include the template's `useConnectedFetch` section
-(its presence alone marks the app as connected), and do not build an app whose point is an
-external service — say so in one line and offer the self-contained version instead.
+hand-roll their listeners — say in one line that this app will not take part in schedules or
+read other apps, and offer it without them. **This host does not connect apps to external
+APIs:** never include the template's `useConnectedFetch` section (its presence alone marks
+the app as connected), and do not build an app whose point is an external service — say so
+in one line and offer the self-contained version instead.
 
 **Persistence goes through the Snug hooks only.** The app runs in a sandboxed frame with a
 null origin, so `localStorage`, `sessionStorage`, cookies and IndexedDB do not work there.

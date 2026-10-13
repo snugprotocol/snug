@@ -10,7 +10,8 @@
 //   node scripts/sync-starter-hooks.mjs --only=weather,gmail [...]     # a subset of the starters
 //
 // THE BLOCK. `packages/sdk/embedded/snug-hooks.js` is the copy-exactly hooks block, and every
-// starter carries it between the line after `<script type="text/babel">` and the `// ====` rule
+// starter carries it between the line after `<script type="text/babel">` (the ONE line whose
+// trimmed text IS the tag — a comment quoting it is not the opening) and the `// ====` rule
 // above the RESPONSE SCHEMA banner — byte-identical under the validator's per-line-trim
 // normalisation (`examples/validate.test.mjs`). The splice replaces exactly that region with the
 // embedded file re-indented to the page's own first-line indent (the starters store the block
@@ -27,8 +28,11 @@
 // sentences first, the starter's one extra item last), and `appHash` recomputed with the
 // validator's normalisation (CRLF → LF, trailing whitespace stripped, outer trim). A starter
 // whose newest entry IS this wave's (same title and date) is only re-hashed, so a hand edit made
-// after the first run (D-PR6-8's adoptions) rides the same release and a second run changes
-// nothing. A page that did not change is never released (ADR-0045: no empty entries).
+// after the first run (D-PR6-8's adoptions, a Gate-5 fold) rides the same release — and a second
+// run with the SAME --date changes nothing. Until the wave is published, a re-run after a fold
+// passes the wave's original date (PR-6's wave: --date=2026-10-12), so the edit is only
+// re-hashed; any other date releases the page again. A page that did not change is never
+// released (ADR-0045: no empty entries).
 import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -88,14 +92,25 @@ export function lastSection(embedded) {
 }
 
 /**
+ * The page's ONE opening-tag line: the line whose trimmed text IS `<script type="text/babel">`.
+ * A line that merely quotes the tag (a comment, as the e2e fixtures' headers do) is not one, and
+ * two bare opening-tag lines are a refusal — never a guess (RS-3, Gate 5).
+ */
+function babelOpenLine(lines) {
+  const opens = lines.flatMap((line, at) => (line.trim() === BABEL_OPEN ? [at] : []));
+  if (opens.length === 0) throw new Error(`no ${BABEL_OPEN} block`);
+  if (opens.length > 1) throw new Error(`${opens.length} ${BABEL_OPEN} lines (${opens.map((at) => at + 1).join(', ')}) — two make the cut a guess`);
+  return opens[0];
+}
+
+/**
  * Re-copy `embedded` into one page and renumber its two authored banners. Pure; throws (and so
  * writes nothing) when the page is not shaped the way every starter is.
  */
 export function splice(html, embedded) {
   if (html.includes('\r')) throw new Error('the page has CR line endings — convert it to LF first');
   const lines = html.split('\n');
-  const open = lines.findIndex((line) => line.includes(BABEL_OPEN));
-  if (open < 0) throw new Error(`no ${BABEL_OPEN} block`);
+  const open = babelOpenLine(lines);
   const close = lines.findIndex((line, at) => at > open && line.includes('</script>'));
   if (close < 0) throw new Error(`the ${BABEL_OPEN} block is never closed`);
 
@@ -133,8 +148,8 @@ export function splice(html, embedded) {
 /** The displayName the page announces through `useSnugApp` below its banner — the validator's own reading. */
 export function announcedDisplayName(html) {
   const lines = html.split('\n');
-  const open = lines.findIndex((line) => line.includes(BABEL_OPEN));
-  const banner = lines.findIndex((line, at) => open >= 0 && at > open && RESPONSE_SCHEMA_BANNER.test(line));
+  const open = babelOpenLine(lines);
+  const banner = lines.findIndex((line, at) => at > open && RESPONSE_SCHEMA_BANNER.test(line));
   if (banner < 0) throw new Error(`no RESPONSE SCHEMA banner in the ${BABEL_OPEN} block`);
   const authored = lines.slice(banner).join('\n');
   const name = /\buseSnugApp\s*\(\s*\{[\s\S]*?\bdisplayName:\s*(['"`])((?:(?!\1)[^\\])+)\1/.exec(authored)?.[2];

@@ -59,7 +59,7 @@ simply runs. Steps 3-5 describe one agent round trip, and happen only when the a
 ## The SDK Hooks (the whole app-side API)
 
 These hooks — copy-exactly code in "The Mandatory HTML Template" — are the ONLY way an app
-talks to the host. The first three are always present; the rest only when the app needs them:
+talks to the host. The first two are always present; the rest only when the app needs them:
 
 - `useSnugApp({appId, displayName, description, iconEmoji, iconColor})` →
   `{isReady, theme, isWaiting, lastResponse, sendMessage}`; `sendMessage(action, payload,

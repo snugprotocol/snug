@@ -121,4 +121,7 @@ the in-app versions panel.
 every `app.html` (re-indented to the page's own indent) and renumbers the two authored
 banners to follow the block's last section; `--release --date=YYYY-MM-DD` also bumps each
 changed starter's `version`, prepends the wave's changelog entry and recomputes `appHash`
-(a second run changes nothing; `--dry` reports without writing).
+(a second run with the SAME `--date` changes nothing; until the wave is published, a
+re-run after a later edit passes the wave's original date — this wave's is
+`--date=2026-10-12` — so the edit is only re-hashed, not released again; `--dry` reports
+without writing).
