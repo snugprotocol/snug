@@ -19,10 +19,12 @@ Reply with ONLY a JSON object:
 
 `intent` is exactly one of:
 
-- `data_read` — a question the app's OWN stored data can answer: totals, trends, lookups,
+- `data_read` — a question the app's stored data can answer: its OWN tables, or the tables
+  other apps share with it (the "Shared with this app" list) — totals, trends, lookups,
   comparisons, "what did I spend on food last month", "how many did I finish".
-- `data_write` — adding, correcting or removing the app's own data: "add a £12 lunch for
-  last Tuesday", "mark habit 3 done today", "delete the duplicate row".
+- `data_write` — adding, correcting or removing the app's own data, or a shared table marked
+  "can be changed": "add a £12 lunch for last Tuesday", "mark habit 3 done today", "delete
+  the duplicate row".
 - `schema_change` — the data's SHAPE must change: a new field to store, a new kind of
   record, "start tracking a category on each expense".
 - `app_change` — the app itself should change: a feature, a screen, a fix, a colour, "add
@@ -52,6 +54,10 @@ Rules that decide the hard cases:
   Adding a new FIELD to store is `schema_change`.
 - A question you could answer by querying the data is `data_read`, even if the app has no
   screen for it. The user is not limited to the app's menus.
+- Data another app SHARES with this one (the "Shared with this app" list) is this app's to
+  read: a question a shared table can answer is `data_read`, exactly as if the table were the
+  app's own. Do not ask whether to add, build or import data a shared table already holds —
+  the user granted it so the chat could read it.
 - WHERE the data lives decides data-vs-provider: the app's own tables (the Tables list)
   are the data lanes; the connected service's account, history, devices or catalogue (the
   Connections list) are the provider lanes. "How many entries did I log" reads the app's
@@ -81,6 +87,12 @@ A budget app, "how much did I spend on groceries in July?":
 
 ```json
 {"intent":"data_read","confidence":0.96}
+```
+
+A standup app with a weather app's `forecasts` table shared with it, "will it rain tomorrow?":
+
+```json
+{"intent":"data_read","confidence":0.92}
 ```
 
 A budget app, "add a £12.40 lunch on Tuesday":

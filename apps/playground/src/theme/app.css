@@ -816,6 +816,87 @@
   background: linear-gradient(transparent, var(--bg) 30%);
 }
 
+/* The rail chat (TASK-20261013-rail-chat-access): when the chat is the rail's content, the rail
+   body lays it out as a column so the chat fills what the tabs and the thread picker leave — the
+   log grows (`.chat-log` is flex: 1) and the composer sits at the bottom of a short chat; a long
+   one scrolls the rail body with the composer stuck to its bottom. */
+.rail-body:has(> .rail-chat) {
+  display: flex;
+  flex-direction: column;
+}
+
+.rail-chat {
+  flex: 1 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/* The rail chat's composer (TASK-20261013-rail-chat-access). It used to be inline
+   `position: static` at the end of a `min-height: 100%` column: once a conversation existed the
+   column filled the rail body and the composer sat after it, below the fold by the height of the
+   tabs and thread picker above it — the chat "took one message and lost its input". It sticks to
+   the bottom of `.rail-body` (the scroller) on the rail's own surface instead. */
+.rail-composer {
+  position: sticky;
+  bottom: 0;
+  /* The *fetch new data first* toggle wraps onto its own row above the input (AC6). */
+  flex-wrap: wrap;
+  /* At the bottom of the chat column even when nothing above it grows (the empty chat). */
+  margin-top: auto;
+  padding: var(--space-2) 0;
+  background: var(--surface);
+  z-index: 1;
+}
+
+/* *fetch new data first* (TASK-20261010-host-broker PR-5; TASK-20261013-rail-chat-access AC6/AC7).
+   Its own full-width row above the input: in the input's row its long label squeezed the input
+   until it was unusable. A press only ARMS the next send, so the pressed state must read at a
+   glance — the check mark and the ember border and tint — and the armed line says what it arranged. */
+.chat-fetch {
+  flex-basis: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.chat-fetch-toggle {
+  justify-content: flex-start;
+  max-width: 100%;
+  min-height: 36px;
+  padding: var(--space-1) var(--space-3);
+  border: 1px dashed var(--border-strong);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  text-align: start;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.chat-fetch-toggle::before {
+  content: '○';
+  flex: none;
+}
+
+.chat-fetch-toggle[aria-pressed='true'] {
+  border-style: solid;
+  border-color: var(--ember);
+  background: var(--ember-glow);
+  color: var(--fg);
+}
+
+.chat-fetch-toggle[aria-pressed='true']::before {
+  content: '✓';
+  color: var(--ember);
+}
+
+.chat-fetch-armed {
+  margin: 0;
+  font-size: var(--text-xs);
+}
+
 .composer textarea {
   flex: 1;
   resize: none;
@@ -2832,6 +2913,15 @@ img.identity-avatar {
     flex-direction: column;
     overflow-y: auto;
     padding: var(--space-3);
+  }
+}
+
+/* ≤760px the run layout's height is auto: the think view grows with its content and the PAGE
+   scrolls, so as a scroll box of its own it would never scroll — and the chat's sticky composer
+   would stick to nothing. Here the viewport is the scroller (TASK-20261013-rail-chat-access). */
+@media (max-width: 760px) {
+  .mobile-think {
+    overflow-y: visible;
   }
 }
 

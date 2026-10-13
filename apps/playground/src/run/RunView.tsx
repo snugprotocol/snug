@@ -1533,7 +1533,7 @@ export function RailChat({
   // The run view always works on an app that already exists, so its status copy is the
   // "adjusting" set, never the first-build one (AC10).
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)', minHeight: '100%' }}>
+    <div className="rail-chat">
       {messages.length === 0 ? (
         <EmptyState
           glyph="✎"
@@ -1561,7 +1561,11 @@ export function RailChat({
           onConnectionConnect={onConnectionConnect}
         />
       )}
-      <div className="composer" style={{ position: 'static', padding: 0, background: 'none' }}>
+      {/* The rail's own sticky composer (TASK-20261013-rail-chat-access): it sticks to the rail
+          body's bottom on the rail's surface, so a conversation never pushes it below the fold. */}
+      <div className="composer rail-composer">
+        {/* Its own row above the input, never between the input and *send* (AC6). */}
+        <ChatFetchToggle appId={appId} pressed={fetchPressed} onPress={() => setFetchPressedFor(fetchPressed ? undefined : fetchKey)} disabled={busy} />
         <textarea
           rows={1}
           value={draft}
@@ -1570,7 +1574,6 @@ export function RailChat({
           onChange={(event) => setDraft(event.target.value)}
           onKeyDown={onKeyDown}
         />
-        <ChatFetchToggle appId={appId} pressed={fetchPressed} onPress={() => setFetchPressedFor(fetchPressed ? undefined : fetchKey)} disabled={busy} />
         {busy ? (
           <Button variant="danger" onClick={onStop}>
             stop

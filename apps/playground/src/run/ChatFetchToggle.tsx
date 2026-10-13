@@ -1,7 +1,7 @@
 // run/ChatFetchToggle.tsx — *fetch new data first*, beside the run rail's *send*
 // (TASK-20261010-host-broker PR-5; contract v2 D-PR5-20 and its v2.1 answer T-D Q11; D10, F9).
 //
-// A `<button aria-pressed>` in RailChat's composer row, before *send*. Shown only when the chat's
+// A `<button aria-pressed>` on its own row above RailChat's input (TASK-20261013-rail-chat-access). Shown only when the chat's
 // data door is open for the app (it may use access, and its chat brain is one the data lane runs
 // on) and at least one live access the chat may use carries `refresh` — the access policy's own
 // answer for the chat caller (`refreshableReads`), so the toggle names exactly the apps the fetch
@@ -87,10 +87,19 @@ function useChatFetchSources(appId: string): readonly string[] {
 export function ChatFetchToggle({ appId, pressed, onPress, disabled = false }: ChatFetchToggleProps): ReactElement | null {
   const names = useChatFetchSources(appId);
   if (names.length === 0) return null;
-  // Pressed reads as the solid button beside a quiet one — the state itself is `aria-pressed`.
+  // Its own row above the input (TASK-20261013-rail-chat-access AC6). Pressed reads at a glance — the
+  // check mark and the ember border are `.chat-fetch-toggle[aria-pressed='true']`'s — and the line
+  // under it says what the press arranged (AC7), as a status, since the press itself only arms the next send.
   return (
-    <Button variant={pressed ? 'default' : 'ghost'} className="chat-fetch-toggle" aria-pressed={pressed} title={CHAT_FETCH.firstNamed(names)} disabled={disabled} onClick={onPress}>
-      {CHAT_FETCH.first(names)}
-    </Button>
+    <div className="chat-fetch">
+      <Button variant={pressed ? 'default' : 'ghost'} className="chat-fetch-toggle" aria-pressed={pressed} title={CHAT_FETCH.firstNamed(names)} disabled={disabled} onClick={onPress}>
+        {CHAT_FETCH.first(names)}
+      </Button>
+      {pressed ? (
+        <p className="hint chat-fetch-armed" role="status" data-testid="chat-fetch-armed">
+          {CHAT_FETCH.armed(names)}
+        </p>
+      ) : null}
+    </div>
   );
 }

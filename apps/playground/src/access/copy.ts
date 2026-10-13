@@ -1025,6 +1025,11 @@ export const CHAT_FETCH = {
     const rest = names.length - asked.length;
     return `fetch new data from ${listWords(asked)} first${rest > 0 ? ` (+${rest} not asked)` : ''}`;
   },
+  /**
+   * Under the PRESSED toggle (TASK-20261013-rail-chat-access AC7): what the press arranged — a press
+   * only arms the next send (D-PR5-20), and without this line it read as "nothing happened".
+   */
+  armed: (names: readonly string[]): string => `your next message asks ${listWords(names.slice(0, REFRESH_FIRST_MAX_SOURCES))} for new data first`,
   /** The toggle's title: the sources asked by name, then the ones it never asks. */
   firstNamed: (names: readonly string[]): string => {
     const asked = names.slice(0, REFRESH_FIRST_MAX_SOURCES);

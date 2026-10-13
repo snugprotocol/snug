@@ -106,7 +106,7 @@ import {
 import { dmlTargetTable, type UserDb } from '@snugprotocol/db';
 import type { AccessHandlerResult } from '@snugprotocol/runner';
 
-import { oneLine } from '../agent/sharedDdl.js';
+import { foldLine, oneLine } from '../agent/sharedDdl.js';
 import type { AppRunDeps } from '../schedule/appRun.js';
 import type { Calls } from '../schedule/protection.js';
 import { appHasSidecarFact } from '../state/sidecarLive.js';
@@ -299,6 +299,33 @@ export function refreshableReads(db: UserDb, caller: AccessCaller, now: number):
   return grantsForApp(db, caller.appId, now).reads.filter((row) => authorise(ctx, caller, { kind: 'refresh', grantId: row.grant.id }).ok);
 }
 
+/**
+ * The caller's rows the policy admits for `materialise` now, in grant order, performing nothing —
+ * the ONE admission behind the door's dump (`list` and `materialise` below) and the router's
+ * `sharedSourceSummaries`, so the classifier is told exactly what the door would open.
+ */
+function materialisableReads(db: UserDb, caller: AccessCaller, ctx: PolicyContext): LiveGrantRow[] {
+  return grantsForApp(db, caller.appId, ctx.now).reads.filter((row) => authorise(ctx, caller, { kind: 'materialise', grantId: row.grant.id }).ok);
+}
+
+/**
+ * What other apps share with the caller's app right now, as the chat router's classifier reads it
+ * (TASK-20261013-rail-chat-access): one `Source: table(col, col)` line per admitted grant, a table
+ * this app may change marked `· can be changed` (the data lane's own marker). Names and the
+ * granted columns only — what `grantView` already tells the reader — never rows; no Worker, no
+ * history line, no counter. Without it a question about granted data reads as a request to ADD
+ * that data, and never reaches the data lane that opens the chat door.
+ */
+export function sharedSourceSummaries(db: UserDb, caller: AccessCaller, now: number): string[] {
+  return materialisableReads(db, caller, policyContextFor(db, now)).map((row) => {
+    // Every name here is the source's authored text — folded to one line (Gate-5 SEC-1), so none adds a line of its own.
+    const tables = row.grant.scope.tables.map((table) => `${foldLine(table.name)}(${table.columns.map(foldLine).join(', ')})${table.write === true ? ' · can be changed' : ''}`);
+    // The door copies the source's settings too when the grant carries `kv` (`readScopeOf`) — read-only, never marked.
+    if (row.grant.kv === true) tables.push('snug_kv(key, value)');
+    return `${oneLine(row.sourceName)}: ${tables.join(', ')}`;
+  });
+}
+
 /** D-PR3-21: how many sources the library offers, as a class — the reader learns no name and no count. */
 function classOf(count: number): AccessCandidateClass {
   if (count === 0) return 'none';
@@ -368,8 +395,7 @@ function createAccessService(): AccessService {
    * absent (not owned, stopped, expired, nobody present for a grant that needs someone, the
    * source restricted) — never a skip, never a line. The policy is the only rule here.
    */
-  const admitted = (db: UserDb, caller: AccessCaller, ctx: PolicyContext): LiveGrantRow[] =>
-    grantsForApp(db, caller.appId, ctx.now).reads.filter((row) => authorise(ctx, caller, { kind: 'materialise', grantId: row.grant.id }).ok);
+  const admitted = (db: UserDb, caller: AccessCaller, ctx: PolicyContext): LiveGrantRow[] => materialisableReads(db, caller, ctx);
 
   /** Perform the ONE effect a `read` refusal names, on the grant it carried — where the handler did it. */
   async function perform(db: UserDb, caller: AccessCaller, verdict: Refusal, at: number): Promise<void> {

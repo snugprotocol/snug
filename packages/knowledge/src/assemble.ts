@@ -262,6 +262,13 @@ export function buildChatIntentClassifierPrompt(input: {
    * and provider display name only — never hosts, never credentials (C1).
    */
   connectionSummaries?: readonly string[];
+  /**
+   * Compact `Source: table(col, col)` lines for what other apps SHARE with this one right now
+   * (TASK-20261013-rail-chat-access): without them a question about granted data reads as a
+   * request to add that data, and never reaches the data lane that opens the chat door. Names
+   * and columns only — never rows. A source name is authored text, so it is defanged.
+   */
+  sharedSummaries?: readonly string[];
   /** The last few exchanges, oldest first, already trimmed by the caller. */
   recentTurns?: readonly { role: 'user' | 'assistant'; content: string }[];
 }): AuthSpecInferrerPrompt {
@@ -278,11 +285,16 @@ export function buildChatIntentClassifierPrompt(input: {
     input.connectionSummaries !== undefined && input.connectionSummaries.length > 0
       ? input.connectionSummaries.join('; ')
       : '(no connected services)';
+  const shared =
+    input.sharedSummaries !== undefined && input.sharedSummaries.length > 0
+      ? defangUserMessage(input.sharedSummaries.join('; '))
+      : '(nothing shared with this app)';
   const lines = [
     `App: ${input.appName ?? '(unnamed app)'}`,
     `Tables: ${tables}`,
     `Docs: ${docs}`,
     `Connections: ${connections}`,
+    `Shared with this app: ${shared}`,
   ];
   if (input.recentTurns !== undefined && input.recentTurns.length > 0) {
     lines.push(
