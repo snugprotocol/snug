@@ -1,15 +1,24 @@
 <!DOCTYPE html>
 <!--
   e2e/fixtures/schedule-app.html — the SCHEDULED-RUN fixture app (TASK-20261009-scheduling-framework
-  A8). Not a starter: the embedded hooks block below is the copy-exactly block of
-  packages/knowledge/prompts/knowledge-base/app-authoring/20-html-template.md, byte-identical after
-  the kb-sync normalisation (it is packages/sdk/embedded/snug-hooks.js, indented), and the schedule
-  listener beside it is the 85-scheduled-runs.md snippet, rendered. The app's one job: answer a
-  `schedule-run` hint by doing ONE connected GET through the net stub (stub.snug.test, the AL-03
-  fixture) when the run's input says {fetch:true}, ONE POST when it says {post:true} — which the
-  host's refusing gate denies unattended, so the run lands as *needs you* — and otherwise nothing,
-  answering { ok, summary } either way. A visible open shows the runs it answered and a button
-  that SUGGESTS a daily schedule (a user act — never on load).
+  A8; moved onto the hooks by TASK-20261010-host-broker PR-6, D-PR6-8 — with access-reader.html,
+  PR-6's real-host proof of sections 1 and 6). Not a starter. The hooks block below IS
+  packages/sdk/embedded/snug-hooks.js — all seven sections, indented — byte-identical after the
+  kb-sync normalisation (per-line trim, blank lines dropped) to that file, which is the copy-exactly
+  block of packages/knowledge/prompts/knowledge-base/app-authoring/20-html-template.md, rendered.
+  The app's one job: answer the host's `schedule-run` hint through section 6's hook —
+  `useSnugSchedule(onScheduledRun)`, mounted in App beside useSnugApp, before any early return —
+  by doing ONE connected GET through the net stub (stub.snug.test, the AL-03 fixture) when the
+  run's input says {fetch:true}, ONE POST when it says {post:true} — which the host's refusing gate
+  denies unattended, so the run lands as *needs you* — and otherwise nothing, answering
+  { ok, summary } either way (the hook reads the input, answers each runId once and posts the
+  result). A visible open lists the runs it answered (#runs) and a button that SUGGESTS a daily
+  schedule (a user act — never on load) through `proposeSchedule({...})`; #proposed shows the
+  boolean it answered — true means the suggestion was SENT, never that it was accepted — and
+  "suggested" is remembered only on true.
+  SYNC RULE: when packages/sdk/embedded/snug-hooks.js changes, re-copy it here WHOLE — everything
+  between the `<script type="text/babel">` line and the ==== rule above the RESPONSE SCHEMA banner,
+  indented as below — and never edit the block in place. The app's own code starts at that banner.
 -->
 <html lang="en">
 <head>
@@ -44,6 +53,8 @@
       pending: new Map(),    // requestId -> { resolve, onStream }
       dbPending: new Map(),  // requestId -> resolve
       netPending: new Map(), // requestId -> resolve
+      accessPending: new Map(), // requestId -> settle (section 7)
+      hostEventListeners: new Map(), // event -> Set of listeners (section 6)
       listeners: new Set(),  // re-render triggers for hooks
 
       post(frame) {
@@ -54,7 +65,7 @@
 
     window.addEventListener('message', (event) => {
       const data = event.data;
-      if (!data || data.v !== 1) return;
+      if (event.source !== window.parent || !data || data.v !== 1) return; // the host alone, never a sibling frame
 
       if (data.type === 'snug:host-ready') {
         SnugBridge.instanceId = data.instanceId;
@@ -100,12 +111,23 @@
         return;
       }
 
+      if (data.type === 'snug:access-response') {
+        const settle = SnugBridge.accessPending.get(data.requestId);
+        if (!settle) return; // unknown or already-answered requestId - ignore
+        SnugBridge.accessPending.delete(data.requestId); // terminal - exactly one per requestId
+        settle(data);
+        return;
+      }
+
       if (data.type === 'snug:host-event') {
         if (data.event === 'theme-change' && data.data && data.data.theme) {
           SnugBridge.theme = data.data.theme;
           SnugBridge.notify();
         }
         // Unknown host events MUST be ignored (the protocol is additive).
+        // Section 6's subscribers get theirs by name.
+        const subscribers = SnugBridge.hostEventListeners.get(data.event);
+        if (subscribers) for (const fn of [...subscribers]) fn(data.data);
       }
     });
 
@@ -282,31 +304,202 @@
     }
 
     // ============================================================
-    // 6. RESPONSE SCHEMA — this app never thinks; kept for the template's shape
+    // 6. useHostEvents + useSnugSchedule (copy exactly when the app listens to the host or takes part in schedules; omit otherwise)
+    // The host rings NAMED events on one channel — hints with ids, never content. onHostEvent is
+    // the primitive (returns the unsubscribe); useHostEvents subscribes a component to several by
+    // name; useSnugSchedule answers the host's scheduled runs; proposeSchedule suggests one — once.
+    // ============================================================
+    function onHostEvent(event, listener) {
+      let subscribers = SnugBridge.hostEventListeners.get(event);
+      if (!subscribers) { subscribers = new Set(); SnugBridge.hostEventListeners.set(event, subscribers); }
+      subscribers.add(listener);
+      return () => {
+        subscribers.delete(listener);
+        if (subscribers.size === 0) SnugBridge.hostEventListeners.delete(event);
+      };
+    }
+
+    function useHostEvents(handlers) {
+      const handlersRef = useRef(handlers);
+      useEffect(() => { handlersRef.current = handlers; });
+      const events = Object.keys(handlers).join('\n');
+      useEffect(() => {
+        const offs = events.split('\n').filter(Boolean).map((event) =>
+          onHostEvent(event, (data) => { const fn = handlersRef.current[event]; if (typeof fn === 'function') fn(data); }));
+        return () => { for (const off of offs) off(); };
+      }, [events]);
+    }
+
+    const SNUG_SCHEDULE_REMEMBERED = 128;  // answered runIds the page keeps before the oldest is forgotten
+    const snugScheduleAnswered = new Set(); // runIds answered (or in flight) on this page — the first answer stands
+    let snugScheduleProposed = false;       // one schedule-request per page
+
+    function scheduleInputKey(runId) { return 'snug:schedule:' + runId; }
+
+    // The result as the host parses it: ok a boolean, summary a non-empty string, notify only with
+    // both halves — the bounds are the protocol's; anything else is dropped (a summary, never data).
+    function snugScheduleResult(raw) {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { ok: false, summary: 'the handler returned no result' };
+      const out = { ok: raw.ok === true };
+      if (typeof raw.summary === 'string' && raw.summary !== '') out.summary = raw.summary.slice(0, 4096);
+      const n = raw.notify;
+      if (n && typeof n === 'object' && typeof n.title === 'string' && n.title !== '' && typeof n.body === 'string' && n.body !== '') {
+        out.notify = { title: n.title.slice(0, 80), body: n.body.slice(0, 120) };
+      }
+      return out;
+    }
+
+    async function snugAnswerScheduleHint(data, handler) {
+      if (!data || typeof data !== 'object' || typeof data.runId !== 'string' || data.runId === '' || typeof data.taskId !== 'string' || data.taskId === '') return; // not the host's shape — ignore
+      if (snugScheduleAnswered.has(data.runId)) return; // a repeated hint: the first answer stands
+      snugScheduleAnswered.add(data.runId); // BEFORE the kv round trip, so a duplicate arriving meanwhile is ignored too
+      if (snugScheduleAnswered.size > SNUG_SCHEDULE_REMEMBERED) snugScheduleAnswered.delete(snugScheduleAnswered.values().next().value);
+      const stored = await snugDbRequest('kvGet', { key: scheduleInputKey(data.runId) });
+      const input = stored.ok && stored.value && typeof stored.value === 'object' && !Array.isArray(stored.value) ? stored.value.input : undefined;
+      const run = { runId: data.runId, taskId: data.taskId };
+      if (input !== undefined) run.input = input;
+      let result;
+      try {
+        result = snugScheduleResult(await handler(run));
+      } catch (err) {
+        const message = err && err.message;
+        result = { ok: false, summary: typeof message === 'string' && message !== '' ? message.slice(0, 4096) : 'the scheduled run failed' };
+      }
+      SnugBridge.post({ type: 'snug:app-event', event: 'schedule-result', data: result });
+    }
+
+    function useSnugSchedule(handler) {
+      const handlerRef = useRef(handler);
+      useEffect(() => { handlerRef.current = handler; });
+      useEffect(() => onHostEvent('schedule-run', (data) => { snugAnswerScheduleHint(data, (run) => handlerRef.current(run)); }), []);
+    }
+
+    // Suggest a schedule for THIS app — once per page, after a user act, never on load. The shape is
+    // checked here; the host's strict parse decides. true means the suggestion was SENT, not accepted.
+    function proposeSchedule(proposal) {
+      if (!SnugBridge.ready || snugScheduleProposed) return false;
+      if (!proposal || typeof proposal !== 'object' || Array.isArray(proposal)) return false;
+      for (const key of Object.keys(proposal)) if (key !== 'title' && key !== 'steps' && key !== 'spec') return false;
+      if (typeof proposal.title !== 'string' || proposal.title === '' || !Array.isArray(proposal.steps) || proposal.steps.length === 0 ||
+          !proposal.steps.every((s) => s && typeof s === 'object') || !proposal.spec || typeof proposal.spec !== 'object') return false;
+      try {
+        SnugBridge.post({ type: 'snug:app-event', event: 'schedule-request', data: proposal });
+      } catch (err) {
+        return false;
+      }
+      snugScheduleProposed = true;
+      return true;
+    }
+
+    // ============================================================
+    // 7. useSnugAccess (copy exactly, WITH section 6, when the app reads or changes another app's data; omit otherwise)
+    // Reads — and, where the user ticked it, changes — ANOTHER app's tables through a user-granted,
+    // recorded, revocable access (see "Access Between Apps"). The app never names a source: it
+    // states a purpose and the user decides on host UI. Every call ALWAYS resolves — errors are data.
+    // ============================================================
+    function snugAccessCall(fields, settle) {
+      if (!SnugBridge.ready) return Promise.resolve({ ok: false, error: { code: 'HOST_ERROR', message: 'not connected to host yet', retryable: true } });
+      if (SnugBridge.capabilities.access !== true) return Promise.resolve({ ok: false, error: { code: 'HOST_ERROR', message: 'this host does not offer access between apps', retryable: false } });
+      return new Promise((resolve) => {
+        const requestId = crypto.randomUUID();
+        SnugBridge.accessPending.set(requestId, (frame) => resolve(settle(frame)));
+        try {
+          SnugBridge.post({ type: 'snug:access-request', requestId, ...fields });
+        } catch (err) {
+          SnugBridge.accessPending.delete(requestId);
+          resolve({ ok: false, error: { code: 'HOST_ERROR', message: 'the access request could not be posted', retryable: false } });
+        }
+      });
+    }
+
+    // Each settler hands back ONLY the seats the protocol defines for its answer. A success for a
+    // different op, or one missing its result, is a host fault answered as HOST_ERROR — never a
+    // mis-shaped success, never a hang.
+    function snugAccessFault(message) { return { ok: false, error: { code: 'HOST_ERROR', message, retryable: false } }; }
+    function snugAccessSettle(op, pick) {
+      return (frame) => {
+        if (frame.ok !== true) return frame.error && typeof frame.error === 'object' ? { ok: false, error: frame.error } : snugAccessFault('the host answered an access ' + op + ' with no error');
+        if (typeof frame.op !== 'string') return snugAccessFault('the host answered an access ' + op + ' without its result');
+        if (frame.op !== op) return snugAccessFault('the host answered an access ' + frame.op + ' to an access ' + op);
+        const result = pick(frame);
+        return result === undefined ? snugAccessFault('the host answered an access ' + op + ' without its result') : result;
+      };
+    }
+    const SNUG_ACCESS_SETTLE = {
+      request: snugAccessSettle('request', (f) => (f.grant && typeof f.grant === 'object' ? { ok: true, grant: f.grant } : undefined)),
+      query: snugAccessSettle('query', (f) => {
+        if (!Array.isArray(f.columns) || !Array.isArray(f.rows)) return undefined;
+        const out = { ok: true, columns: f.columns, rows: f.rows };
+        if (f.truncated !== undefined) out.truncated = f.truncated;
+        if (f.totalRows !== undefined) out.totalRows = f.totalRows;
+        return out;
+      }),
+      write: snugAccessSettle('write', (f) => (typeof f.changes === 'number' ? { ok: true, changes: f.changes } : undefined)),
+      refresh: snugAccessSettle('refresh', (f) => (typeof f.fresh !== 'boolean' ? undefined : f.reason !== undefined ? { ok: true, fresh: f.fresh, reason: f.reason } : { ok: true, fresh: f.fresh })),
+      list: snugAccessSettle('list', (f) => (Array.isArray(f.grants) ? { ok: true, grants: f.grants } : undefined)),
+      release: snugAccessSettle('release', () => ({ ok: true })),
+      discover: snugAccessSettle('discover', (f) => (f.candidates === 'none' || f.candidates === 'one' || f.candidates === 'several' ? { ok: true, candidates: f.candidates } : undefined)),
+    };
+
+    // The hints are ids only — { grantId } for three of them; data-changed is { table } or {} — and a malformed data seat is dropped.
+    function snugGrantHint(event) {
+      return (listener) => onHostEvent(event, (data) => {
+        if (data && typeof data === 'object' && typeof data.grantId === 'string' && data.grantId !== '') listener({ grantId: data.grantId });
+      });
+    }
+
+    function useSnugAccess() {
+      return useMemo(() => ({
+        request(purpose, opts) {
+          const fields = { op: 'request', purpose };
+          if (opts && opts.hints !== undefined) fields.hints = opts.hints;
+          if (opts && opts.renew !== undefined) fields.renew = opts.renew;
+          if (opts && opts.access !== undefined) fields.access = opts.access;
+          return snugAccessCall(fields, SNUG_ACCESS_SETTLE.request);
+        },
+        query(grantId, sql, params) { return snugAccessCall(params !== undefined ? { op: 'query', grantId, sql, params } : { op: 'query', grantId, sql }, SNUG_ACCESS_SETTLE.query); },
+        write(grantId, sql, params) { return snugAccessCall(params !== undefined ? { op: 'write', grantId, sql, params } : { op: 'write', grantId, sql }, SNUG_ACCESS_SETTLE.write); },
+        refresh(grantId) { return snugAccessCall({ op: 'refresh', grantId }, SNUG_ACCESS_SETTLE.refresh); },
+        list() { return snugAccessCall({ op: 'list' }, SNUG_ACCESS_SETTLE.list); },
+        release(grantId) { return snugAccessCall({ op: 'release', grantId }, SNUG_ACCESS_SETTLE.release); },
+        discover(hints) { return snugAccessCall(hints !== undefined ? { op: 'discover', hints } : { op: 'discover' }, SNUG_ACCESS_SETTLE.discover); },
+        onChange: snugGrantHint('access-changed'),
+        onSourceChanged: snugGrantHint('access-source-changed'),
+        onDataChanged(listener) {
+          return onHostEvent('data-changed', (data) => {
+            if (!data || typeof data !== 'object' || Array.isArray(data)) return;
+            if (data.table === undefined) listener({});
+            else if (typeof data.table === 'string' && data.table !== '') listener({ table: data.table });
+          });
+        },
+        onRead: snugGrantHint('access-read'),
+      }), []);
+    }
+
+    // ============================================================
+    // 8. RESPONSE SCHEMA — this app never thinks; kept for the template's shape
     // ============================================================
     const RESPONSE_SCHEMA = { message: 'string' };
 
     // ============================================================
-    // 7. YOUR APP
+    // 9. YOUR APP
     // ============================================================
     // The net stub of the AL-03 e2e (e2e/fixtures/net-stub.mjs), addressed by the name the
     // spec's resolver rule maps to 127.0.0.1; the connection the bundle declares freezes it.
     const STUB_URL = 'https://stub.snug.test:43120/data';
-    const RUN_LOG = []; // what this page answered, newest last — read by the visible open
-    const runListeners = new Set();
-    const noteRun = (entry) => { RUN_LOG.push(entry); for (const fn of runListeners) fn(); };
 
-    async function onScheduledRun({ runId, taskId, input }) {
+    /** One run's work: ONE GET when the input says {fetch:true}, ONE POST when {post:true}, otherwise nothing. */
+    async function runAgainstStub(net, input) {
       const wants = input && typeof input === 'object' ? input : {};
       if (wants.post) {
-        const res = await snugNetRequest({ url: STUB_URL, method: 'POST', body: '{}' });
+        const res = await net.fetch(STUB_URL, { method: 'POST', body: '{}' });
         // Unattended, the host refuses the write (NET_CONFIRM_DENIED): say what was tried.
         return res.ok
           ? { ok: true, summary: 'POST ' + res.status + ' — the stub took the digest' }
           : { ok: false, summary: 'post the digest to the stub — ' + (res.error && res.error.code) };
       }
       if (wants.fetch) {
-        const res = await snugNetRequest({ url: STUB_URL, method: 'GET' });
+        const res = await net.fetch(STUB_URL);
         if (!res.ok) return { ok: false, summary: 'GET failed: ' + (res.error && res.error.code) };
         let body = {};
         try { body = JSON.parse(res.body); } catch (err) { body = {}; }
@@ -319,36 +512,6 @@
       return { ok: true, summary: 'ran with no input' };
     }
 
-    // ============================================================
-    // SCHEDULED RUNS — the host's scheduler wakes this app; see "Scheduled Runs"
-    // ============================================================
-    const SCHEDULE_HANDLED = new Set(); // runIds already answered on this page
-
-    window.addEventListener('message', async (event) => {
-      const data = event.data;
-      if (event.source !== window.parent || !data || data.v !== 1) return;
-      if (data.type !== 'snug:host-event' || data.event !== 'schedule-run') return;
-      const hint = data.data;
-      if (!hint || typeof hint.runId !== 'string' || typeof hint.taskId !== 'string') return;
-      if (SCHEDULE_HANDLED.has(hint.runId)) return; // a repeated hint: the first answer stands
-      SCHEDULE_HANDLED.add(hint.runId);
-      const stored = await snugDbRequest('kvGet', { key: 'snug:schedule:' + hint.runId });
-      const input = stored.ok && stored.value && typeof stored.value === 'object' ? stored.value.input : undefined;
-      let result;
-      try {
-        result = await onScheduledRun({ runId: hint.runId, taskId: hint.taskId, input });
-      } catch (err) {
-        result = { ok: false, summary: (err && err.message) || 'the scheduled run failed' };
-      }
-      const answer = { ok: !!(result && result.ok) };
-      if (result && typeof result.summary === 'string' && result.summary) answer.summary = result.summary;
-      if (result && result.notify && result.notify.title && result.notify.body) {
-        answer.notify = { title: String(result.notify.title), body: String(result.notify.body) };
-      }
-      noteRun({ runId: hint.runId, input, ...answer });
-      SnugBridge.post({ type: 'snug:app-event', event: 'schedule-result', data: answer });
-    });
-
     function App() {
       const { isReady, theme } = useSnugApp({
         appId: 'e2e-schedule-app',
@@ -357,30 +520,35 @@
         iconEmoji: '⏰',
         iconColor: '#3ba36f',
       });
+      const net = useConnectedFetch();
       const [suggested, setSuggested] = usePersistedState('schedule-suggested', false);
-      const [, setTick] = useState(0);
-      useEffect(() => {
-        const rerender = () => setTick((n) => n + 1);
-        runListeners.add(rerender);
-        return () => runListeners.delete(rerender);
-      }, []);
+      const [proposed, setProposed] = useState(null); // what proposeSchedule last answered
+      const [runs, setRuns] = useState([]); // what this page answered, newest last — the visible #runs
+
+      // The host's scheduler wakes this app (section 6): the hook reads the run's input, calls this
+      // ONCE per runId and posts the { ok, summary, notify? } it returns — this only does the work.
+      const onScheduledRun = useCallback(async ({ runId, input }) => {
+        const result = await runAgainstStub(net, input);
+        setRuns((prev) => [...prev, { runId, ok: result.ok, summary: result.summary }]);
+        return result;
+      }, [net]);
+      useSnugSchedule(onScheduledRun);
+
       useEffect(() => {
         document.documentElement.dataset.theme = theme;
       }, [theme]);
 
       // A user act, once: the app SUGGESTS a daily run of itself; the host shows the strip.
+      // true means the suggestion was SENT (never that it was accepted) — remember it only then.
       const suggest = () => {
         if (suggested) return;
-        SnugBridge.post({
-          type: 'snug:app-event',
-          event: 'schedule-request',
-          data: {
-            title: 'Morning stub check',
-            steps: [{ kind: 'app-run', appId: 'e2e-schedule-app', input: { fetch: true } }],
-            spec: { kind: 'daily', time: '07:00', tz: 'device' },
-          },
+        const sent = proposeSchedule({
+          title: 'Morning stub check',
+          steps: [{ kind: 'app-run', appId: 'e2e-schedule-app', input: { fetch: true } }],
+          spec: { kind: 'daily', time: '07:00', tz: 'device' },
         });
-        setSuggested(true);
+        setProposed(sent);
+        if (sent) setSuggested(true);
       };
 
       if (!isReady) return <div id="status">connecting</div>;
@@ -390,8 +558,9 @@
           <button type="button" id="suggest" onClick={suggest} disabled={suggested}>
             {suggested ? 'suggested' : 'suggest a daily run'}
           </button>
+          <div id="proposed">{proposed === null ? '' : 'proposeSchedule: ' + proposed}</div>
           <ul id="runs">
-            {RUN_LOG.map((entry) => (
+            {runs.map((entry) => (
               <li key={entry.runId} data-run-id={entry.runId} data-ok={String(entry.ok)}>
                 {entry.summary || '(no summary)'}
               </li>
