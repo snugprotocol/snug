@@ -8,9 +8,10 @@
 //             `accounts` (the latter with an `api_key` column) through useAppDB and seeds rows;
 //   - Pantry  (the same document with its one naming line rewritten) — a second candidate the
 //             USER sees on the sheet and the reading app must never learn exists;
-//   - Budget  (e2e/fixtures/access-reader.html) — the copy-exactly hooks block plus the rendered
-//             87-cross-app-access helper; every ask is a button, and #status / #result / #view /
-//             #changed / #log print what the host answered, as text.
+//   - Budget  (e2e/fixtures/access-reader.html) — the copy-exactly hooks block, asking through
+//             section 7's `useSnugAccess()` (TASK-20261010-host-broker PR-6 retired the rendered
+//             87-cross-app-access helper it carried); every ask is a button, and #status /
+//             #result / #view / #changed / #log print what the host answered, as text.
 //
 // THE CLAUSES, one test each, SERIAL on ONE page because the state carries (the file is in OPFS
 // of an ephemeral context, so every route change after the first `goto` is a click — never a
@@ -42,7 +43,8 @@
 //      `wrote` row with *what it changed* → *undo* → the armed confirm → *yes, undo* → the `undone`
 //      row ("you") → back in Budget the query shows the OLD value.
 //  11. (PR-3, AC28) THE REFRESH WALK: a third source, Bank (e2e/fixtures/access-source-fetch.html
-//      — Ledger plus the KB 85 listener that counts the fetches another app asks for), is installed;
+//      — Ledger plus section 6's schedule hook, whose handler counts the fetches another app asks
+//      for; the KB 85 listener until PR-6), is installed;
 //      a read ask, Bank chosen with its `fetches` table, *fetch new data before reading it* ticked
 //      under more options (no egress line) → #refresh answers `fresh: true` and the counter moved
 //      (and names who asked) → #refresh again answers `fresh: false · recent` and nothing ran →
@@ -96,7 +98,7 @@ const hasApp = process.env.SNUG_E2E_HAS_APP === '1';
 const FIXTURES = path.join(playgroundDir(), 'e2e', 'fixtures');
 const READER_HTML = fs.readFileSync(path.join(FIXTURES, 'access-reader.html'), 'utf8');
 const SOURCE_HTML = fs.readFileSync(path.join(FIXTURES, 'access-source.html'), 'utf8');
-/** PR-3: the source that fetches on request (Ledger plus the KB 85 listener). */
+/** PR-3: the source that fetches on request (Ledger plus section 6's schedule hook — the KB 85 listener until PR-6). */
 const FETCH_SOURCE_HTML = fs.readFileSync(path.join(FIXTURES, 'access-source-fetch.html'), 'utf8');
 
 /** The source fixture's ONE naming line, and the second source made from it. */

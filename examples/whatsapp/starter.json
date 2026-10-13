@@ -1,7 +1,21 @@
 {
-  "version": 2,
-  "appHash": "c6f392f22f3277452fc4c0a8c51329839df144feab804a985f68216c6c054d02",
+  "version": 3,
+  "appHash": "85fa2b0c2330e225115896dbff8545134ced7616bb81696a3420f5a83be0ef0c",
   "changelog": [
+    {
+      "version": 3,
+      "date": "2026-10-12",
+      "title": "Up to date with Snug",
+      "sections": [
+        {
+          "title": "What changed",
+          "items": [
+            "Telepath works just as before: this release updates the built-in code every Snug app uses to talk to Snug to the version new apps are built with.",
+            "Customized your copy? You can skip this one — your version keeps working as it is."
+          ]
+        }
+      ]
+    },
     {
       "version": 2,
       "date": "2026-08-21",

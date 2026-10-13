@@ -129,13 +129,73 @@ export const INLINE_KNOWLEDGE_CORE_FILES: readonly string[] = [
   `${KB_PREFIX}80-cdn-compatibility.md`,
 ];
 
+/** The one core file the inline core does NOT serve as the tool would — it is cut (see `inlineTemplate`). */
+const INLINE_TEMPLATE_FILE = `${KB_PREFIX}20-html-template.md`;
+
 /**
- * The inline core, rendered — the SAME rendering `getKnowledgeBase()` serves the tool, in
- * `INLINE_KNOWLEDGE_CORE_FILES` order. A file missing from the store throws (a build
- * error, never a silently thinner prompt — the failure mode this task exists to fix).
+ * The ONE line that stands in for sections 6–7 of the hooks block in the inline core
+ * (TASK-20261010-host-broker PR-6, D-PR6-5). ASCII, in the TEMPLATE's voice — it never says
+ * a host lacks them (the artifact host schedules and offers access; the template is what is
+ * short). Indented like the banner rule it replaces.
+ */
+const INLINE_CUT_LINE =
+  '// 6-7. Not in this template (scheduled runs, access between apps): do not call useHostEvents, useSnugSchedule or useSnugAccess.';
+
+/** A banner block's rule line; group 1 is its indent. */
+const BANNER_RULE = /^(\s*)\/\/ =+\s*$/;
+const SECTION_SIX_BANNER = /^\s*\/\/ 6\. /;
+const RESPONSE_SCHEMA_BANNER = /^\s*\/\/ \d+\. RESPONSE SCHEMA/;
+
+/**
+ * The line index of the ONE banner `pattern` names, which must sit directly below its
+ * `// ====` rule. Throws when it is missing, appears twice, or carries no rule above it —
+ * a numbered comment alone is not a banner block.
+ */
+function bannerIndex(lines: readonly string[], pattern: RegExp, name: string): number {
+  const found = lines.flatMap((line, i) => (pattern.test(line) ? [i] : []));
+  if (found.length !== 1) {
+    throw new Error(`inlineTemplate: expected ONE ${name} banner in KB 20, found ${found.length} — the cut never guesses a region`);
+  }
+  const index = found[0] as number;
+  if (index < 1 || !BANNER_RULE.test(lines[index - 1] as string)) {
+    throw new Error(`inlineTemplate: the ${name} banner has no \`// ====\` rule directly above it — not a banner block`);
+  }
+  return index;
+}
+
+/**
+ * KB 20 as the inline core carries it (D-PR6-5, ADR-0066): the hooks block with sections
+ * 6–7 CUT. Replaces EXACTLY the lines from the `// ====` rule above `// 6.` up to (not
+ * including) the `// ====` rule above the RESPONSE SCHEMA banner with `INLINE_CUT_LINE`;
+ * every byte before and after is the served text's. Pure. THROWS — never serves a thinner
+ * or a wider prompt — when either banner block is missing, appears twice, or the two are
+ * out of order (a cut page has no section-6 banner, so it cannot be cut again).
+ *
+ * Exported for its tests only; deliberately NOT re-exported from `index.ts`.
+ */
+export function inlineTemplate(text: string): string {
+  const lines = text.split('\n');
+  const six = bannerIndex(lines, SECTION_SIX_BANNER, 'section-6');
+  const schema = bannerIndex(lines, RESPONSE_SCHEMA_BANNER, 'RESPONSE SCHEMA');
+  if (schema <= six) {
+    throw new Error('inlineTemplate: the RESPONSE SCHEMA banner is not below the section-6 banner — the cut never guesses a region');
+  }
+  const indent = (BANNER_RULE.exec(lines[six - 1] as string) as RegExpExecArray)[1] as string;
+  return [...lines.slice(0, six - 1), `${indent}${INLINE_CUT_LINE}`, ...lines.slice(schema - 1)].join('\n');
+}
+
+/**
+ * The inline core, rendered, in `INLINE_KNOWLEDGE_CORE_FILES` order — the SAME rendering
+ * `getKnowledgeBase()` serves the tool for four of the five; KB 20 goes through
+ * `inlineTemplate` (sections 6–7 of the hooks block cut to one line — the measured budget
+ * cannot carry them whole; the served template stays whole). A file missing from the store,
+ * or a KB 20 the cut cannot place, throws (a build error, never a silently thinner prompt —
+ * the failure mode TASK-20260906 exists to fix).
  */
 export function getInlineKnowledgeCore(): string[] {
-  return INLINE_KNOWLEDGE_CORE_FILES.map((file) => renderedFile(file));
+  return INLINE_KNOWLEDGE_CORE_FILES.map((file) =>
+    file === INLINE_TEMPLATE_FILE ? inlineTemplate(renderedFile(file)) : renderedFile(file),
+  );
 }
 
 /**

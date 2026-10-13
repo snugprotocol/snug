@@ -58,6 +58,8 @@ import { fileURLToPath } from 'node:url';
  */
 import { connectionRequirementSchema } from '@snugprotocol/protocol';
 
+import { authoredRegion } from './infer-connection.mjs';
+
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 /**
@@ -276,14 +278,11 @@ export function credentialIssues(authored) {
  */
 const CONNECTED_APPS = new Set(MANIFEST_APPS);
 
-/** The authored region: everything from the section-5 banner down. */
-function authoredRegion(html, name) {
-  const script = /<script type="text\/babel">\n([\s\S]*?)\n\s*<\/script>/.exec(html)?.[1] ?? '';
-  const lines = script.split('\n');
-  const bannerIndex = lines.findIndex((line) => line.includes('5. RESPONSE SCHEMA'));
-  assert.ok(bannerIndex >= 0, `${name}: has the section-5 RESPONSE SCHEMA banner`);
-  return lines.slice(bannerIndex).join('\n');
-}
+// The authored region — everything from the RESPONSE SCHEMA banner down — comes from the ONE
+// banner helper (`infer-connection.mjs`; TASK-20261010-host-broker D-PR6-7): the regex
+// `/\d+\. RESPONSE SCHEMA/`, so PR-6's renumber to `// 8.` cannot red these rows for the wrong
+// reason, and a missing (or doubled) banner is a hard failure. The local copy that looked for
+// the literal '5. RESPONSE SCHEMA' is gone.
 
 for (const folder of P4_STARTER_FOLDERS) {
   test(`P4-AC6: ${folder} authors no credential-bearing construct (AL-09 AC3, C1)`, () => {

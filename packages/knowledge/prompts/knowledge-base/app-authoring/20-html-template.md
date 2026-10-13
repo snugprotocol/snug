@@ -16,9 +16,10 @@ block; all logic lives in one `<script type="text/babel">` block.
 
 The template below has two zones:
 
-- **Copy exactly** — the bridge runtime and hooks (sections 1–4). Never rename, reorder,
-  edit, or "improve" this code. It is the app-side SDK and the host depends on its behavior.
-- **Yours** — the styles, the response schema, and the `App` component (sections 5–6).
+- **Copy exactly** — sections 1–7: 1–3 always; 4 and up only when the app needs them (SQL; an
+  approved API; host events or a schedule; another app's data — 7 needs 6). Never rename,
+  reorder, edit, or "improve" this code. It is the app-side SDK and the host depends on its behavior.
+- **Yours** — sections 8–9.
 
 ## Full Template
 
@@ -67,6 +68,8 @@ The template below has two zones:
       pending: new Map(),    // requestId -> { resolve, onStream }
       dbPending: new Map(),  // requestId -> resolve
       netPending: new Map(), // requestId -> resolve
+      accessPending: new Map(), // requestId -> settle (section 7)
+      hostEventListeners: new Map(), // event -> Set of listeners (section 6)
       listeners: new Set(),  // re-render triggers for hooks
 
       post(frame) {
@@ -77,7 +80,7 @@ The template below has two zones:
 
     window.addEventListener('message', (event) => {
       const data = event.data;
-      if (!data || data.v !== {{protocolVersion}}) return;
+      if (event.source !== window.parent || !data || data.v !== {{protocolVersion}}) return; // the host alone, never a sibling frame
 
       if (data.type === '{{frameType:hostReady}}') {
         SnugBridge.instanceId = data.instanceId;
@@ -123,12 +126,23 @@ The template below has two zones:
         return;
       }
 
+      if (data.type === '{{frameType:accessResponse}}') {
+        const settle = SnugBridge.accessPending.get(data.requestId);
+        if (!settle) return; // unknown or already-answered requestId - ignore
+        SnugBridge.accessPending.delete(data.requestId); // terminal - exactly one per requestId
+        settle(data);
+        return;
+      }
+
       if (data.type === '{{frameType:hostEvent}}') {
         if (data.event === 'theme-change' && data.data && data.data.theme) {
           SnugBridge.theme = data.data.theme;
           SnugBridge.notify();
         }
         // Unknown host events MUST be ignored (the protocol is additive).
+        // Section 6's subscribers get theirs by name.
+        const subscribers = SnugBridge.hostEventListeners.get(data.event);
+        if (subscribers) for (const fn of [...subscribers]) fn(data.data);
       }
     });
 
@@ -305,7 +319,180 @@ The template below has two zones:
     }
 
     // ============================================================
-    // 6. RESPONSE SCHEMA — describe the JSON the agent must return
+    // 6. useHostEvents + useSnugSchedule (copy exactly when the app listens to the host or takes part in schedules; omit otherwise)
+    // The host rings NAMED events on one channel — hints with ids, never content. onHostEvent is
+    // the primitive (returns the unsubscribe); useHostEvents subscribes a component to several by
+    // name; useSnugSchedule answers the host's scheduled runs; proposeSchedule suggests one — once.
+    // ============================================================
+    function onHostEvent(event, listener) {
+      let subscribers = SnugBridge.hostEventListeners.get(event);
+      if (!subscribers) { subscribers = new Set(); SnugBridge.hostEventListeners.set(event, subscribers); }
+      subscribers.add(listener);
+      return () => {
+        subscribers.delete(listener);
+        if (subscribers.size === 0) SnugBridge.hostEventListeners.delete(event);
+      };
+    }
+
+    function useHostEvents(handlers) {
+      const handlersRef = useRef(handlers);
+      useEffect(() => { handlersRef.current = handlers; });
+      const events = Object.keys(handlers).join('\n');
+      useEffect(() => {
+        const offs = events.split('\n').filter(Boolean).map((event) =>
+          onHostEvent(event, (data) => { const fn = handlersRef.current[event]; if (typeof fn === 'function') fn(data); }));
+        return () => { for (const off of offs) off(); };
+      }, [events]);
+    }
+
+    const SNUG_SCHEDULE_REMEMBERED = 128;  // answered runIds the page keeps before the oldest is forgotten
+    const snugScheduleAnswered = new Set(); // runIds answered (or in flight) on this page — the first answer stands
+    let snugScheduleProposed = false;       // one schedule-request per page
+
+    function scheduleInputKey(runId) { return 'snug:schedule:' + runId; }
+
+    // The result as the host parses it: ok a boolean, summary a non-empty string, notify only with
+    // both halves — the bounds are the protocol's; anything else is dropped (a summary, never data).
+    function snugScheduleResult(raw) {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { ok: false, summary: 'the handler returned no result' };
+      const out = { ok: raw.ok === true };
+      if (typeof raw.summary === 'string' && raw.summary !== '') out.summary = raw.summary.slice(0, {{scheduleSummaryMaxChars}});
+      const n = raw.notify;
+      if (n && typeof n === 'object' && typeof n.title === 'string' && n.title !== '' && typeof n.body === 'string' && n.body !== '') {
+        out.notify = { title: n.title.slice(0, {{scheduleTitleMaxChars}}), body: n.body.slice(0, {{scheduleNotifyBodyMaxChars}}) };
+      }
+      return out;
+    }
+
+    async function snugAnswerScheduleHint(data, handler) {
+      if (!data || typeof data !== 'object' || typeof data.runId !== 'string' || data.runId === '' || typeof data.taskId !== 'string' || data.taskId === '') return; // not the host's shape — ignore
+      if (snugScheduleAnswered.has(data.runId)) return; // a repeated hint: the first answer stands
+      snugScheduleAnswered.add(data.runId); // BEFORE the kv round trip, so a duplicate arriving meanwhile is ignored too
+      if (snugScheduleAnswered.size > SNUG_SCHEDULE_REMEMBERED) snugScheduleAnswered.delete(snugScheduleAnswered.values().next().value);
+      const stored = await snugDbRequest('kvGet', { key: scheduleInputKey(data.runId) });
+      const input = stored.ok && stored.value && typeof stored.value === 'object' && !Array.isArray(stored.value) ? stored.value.input : undefined;
+      const run = { runId: data.runId, taskId: data.taskId };
+      if (input !== undefined) run.input = input;
+      let result;
+      try {
+        result = snugScheduleResult(await handler(run));
+      } catch (err) {
+        const message = err && err.message;
+        result = { ok: false, summary: typeof message === 'string' && message !== '' ? message.slice(0, {{scheduleSummaryMaxChars}}) : 'the scheduled run failed' };
+      }
+      SnugBridge.post({ type: '{{frameType:appEvent}}', event: 'schedule-result', data: result });
+    }
+
+    function useSnugSchedule(handler) {
+      const handlerRef = useRef(handler);
+      useEffect(() => { handlerRef.current = handler; });
+      useEffect(() => onHostEvent('schedule-run', (data) => { snugAnswerScheduleHint(data, (run) => handlerRef.current(run)); }), []);
+    }
+
+    // Suggest a schedule for THIS app — once per page, after a user act, never on load. The shape is
+    // checked here; the host's strict parse decides. true means the suggestion was SENT, not accepted.
+    function proposeSchedule(proposal) {
+      if (!SnugBridge.ready || snugScheduleProposed) return false;
+      if (!proposal || typeof proposal !== 'object' || Array.isArray(proposal)) return false;
+      for (const key of Object.keys(proposal)) if (key !== 'title' && key !== 'steps' && key !== 'spec') return false;
+      if (typeof proposal.title !== 'string' || proposal.title === '' || !Array.isArray(proposal.steps) || proposal.steps.length === 0 ||
+          !proposal.steps.every((s) => s && typeof s === 'object') || !proposal.spec || typeof proposal.spec !== 'object') return false;
+      try {
+        SnugBridge.post({ type: '{{frameType:appEvent}}', event: 'schedule-request', data: proposal });
+      } catch (err) {
+        return false;
+      }
+      snugScheduleProposed = true;
+      return true;
+    }
+
+    // ============================================================
+    // 7. useSnugAccess (copy exactly, WITH section 6, when the app reads or changes another app's data; omit otherwise)
+    // Reads — and, where the user ticked it, changes — ANOTHER app's tables through a user-granted,
+    // recorded, revocable access (see "Access Between Apps"). The app never names a source: it
+    // states a purpose and the user decides on host UI. Every call ALWAYS resolves — errors are data.
+    // ============================================================
+    function snugAccessCall(fields, settle) {
+      if (!SnugBridge.ready) return Promise.resolve({ ok: false, error: { code: 'HOST_ERROR', message: 'not connected to host yet', retryable: true } });
+      if (SnugBridge.capabilities.access !== true) return Promise.resolve({ ok: false, error: { code: 'HOST_ERROR', message: 'this host does not offer access between apps', retryable: false } });
+      return new Promise((resolve) => {
+        const requestId = crypto.randomUUID();
+        SnugBridge.accessPending.set(requestId, (frame) => resolve(settle(frame)));
+        try {
+          SnugBridge.post({ type: '{{frameType:accessRequest}}', requestId, ...fields });
+        } catch (err) {
+          SnugBridge.accessPending.delete(requestId);
+          resolve({ ok: false, error: { code: 'HOST_ERROR', message: 'the access request could not be posted', retryable: false } });
+        }
+      });
+    }
+
+    // Each settler hands back ONLY the seats the protocol defines for its answer. A success for a
+    // different op, or one missing its result, is a host fault answered as HOST_ERROR — never a
+    // mis-shaped success, never a hang.
+    function snugAccessFault(message) { return { ok: false, error: { code: 'HOST_ERROR', message, retryable: false } }; }
+    function snugAccessSettle(op, pick) {
+      return (frame) => {
+        if (frame.ok !== true) return frame.error && typeof frame.error === 'object' ? { ok: false, error: frame.error } : snugAccessFault('the host answered an access ' + op + ' with no error');
+        if (typeof frame.op !== 'string') return snugAccessFault('the host answered an access ' + op + ' without its result');
+        if (frame.op !== op) return snugAccessFault('the host answered an access ' + frame.op + ' to an access ' + op);
+        const result = pick(frame);
+        return result === undefined ? snugAccessFault('the host answered an access ' + op + ' without its result') : result;
+      };
+    }
+    const SNUG_ACCESS_SETTLE = {
+      request: snugAccessSettle('request', (f) => (f.grant && typeof f.grant === 'object' ? { ok: true, grant: f.grant } : undefined)),
+      query: snugAccessSettle('query', (f) => {
+        if (!Array.isArray(f.columns) || !Array.isArray(f.rows)) return undefined;
+        const out = { ok: true, columns: f.columns, rows: f.rows };
+        if (f.truncated !== undefined) out.truncated = f.truncated;
+        if (f.totalRows !== undefined) out.totalRows = f.totalRows;
+        return out;
+      }),
+      write: snugAccessSettle('write', (f) => (typeof f.changes === 'number' ? { ok: true, changes: f.changes } : undefined)),
+      refresh: snugAccessSettle('refresh', (f) => (typeof f.fresh !== 'boolean' ? undefined : f.reason !== undefined ? { ok: true, fresh: f.fresh, reason: f.reason } : { ok: true, fresh: f.fresh })),
+      list: snugAccessSettle('list', (f) => (Array.isArray(f.grants) ? { ok: true, grants: f.grants } : undefined)),
+      release: snugAccessSettle('release', () => ({ ok: true })),
+      discover: snugAccessSettle('discover', (f) => (f.candidates === 'none' || f.candidates === 'one' || f.candidates === 'several' ? { ok: true, candidates: f.candidates } : undefined)),
+    };
+
+    // The hints are ids only — { grantId } for three of them; data-changed is { table } or {} — and a malformed data seat is dropped.
+    function snugGrantHint(event) {
+      return (listener) => onHostEvent(event, (data) => {
+        if (data && typeof data === 'object' && typeof data.grantId === 'string' && data.grantId !== '') listener({ grantId: data.grantId });
+      });
+    }
+
+    function useSnugAccess() {
+      return useMemo(() => ({
+        request(purpose, opts) {
+          const fields = { op: 'request', purpose };
+          if (opts && opts.hints !== undefined) fields.hints = opts.hints;
+          if (opts && opts.renew !== undefined) fields.renew = opts.renew;
+          if (opts && opts.access !== undefined) fields.access = opts.access;
+          return snugAccessCall(fields, SNUG_ACCESS_SETTLE.request);
+        },
+        query(grantId, sql, params) { return snugAccessCall(params !== undefined ? { op: 'query', grantId, sql, params } : { op: 'query', grantId, sql }, SNUG_ACCESS_SETTLE.query); },
+        write(grantId, sql, params) { return snugAccessCall(params !== undefined ? { op: 'write', grantId, sql, params } : { op: 'write', grantId, sql }, SNUG_ACCESS_SETTLE.write); },
+        refresh(grantId) { return snugAccessCall({ op: 'refresh', grantId }, SNUG_ACCESS_SETTLE.refresh); },
+        list() { return snugAccessCall({ op: 'list' }, SNUG_ACCESS_SETTLE.list); },
+        release(grantId) { return snugAccessCall({ op: 'release', grantId }, SNUG_ACCESS_SETTLE.release); },
+        discover(hints) { return snugAccessCall(hints !== undefined ? { op: 'discover', hints } : { op: 'discover' }, SNUG_ACCESS_SETTLE.discover); },
+        onChange: snugGrantHint('access-changed'),
+        onSourceChanged: snugGrantHint('access-source-changed'),
+        onDataChanged(listener) {
+          return onHostEvent('data-changed', (data) => {
+            if (!data || typeof data !== 'object' || Array.isArray(data)) return;
+            if (data.table === undefined) listener({});
+            else if (typeof data.table === 'string' && data.table !== '') listener({ table: data.table });
+          });
+        },
+        onRead: snugGrantHint('access-read'),
+      }), []);
+    }
+
+    // ============================================================
+    // 8. RESPONSE SCHEMA — describe the JSON the agent must return
     // ============================================================
     const RESPONSE_SCHEMA = {
       kind: "string: 'move' | 'game_over' | 'error'",
@@ -316,7 +503,7 @@ The template below has two zones:
     };
 
     // ============================================================
-    // 7. YOUR APP
+    // 9. YOUR APP
     // ============================================================
     function App() {
       const { isReady, theme, isWaiting, sendMessage } = useSnugApp({

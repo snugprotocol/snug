@@ -72,7 +72,7 @@ what it saves.
 **Contract.** One self-contained `app.html`. React 18 UMD + Babel standalone from the
 CDN allowlist. The embedded hooks block copied byte-identical from
 `packages/sdk/embedded/snug-hooks.js`, everything app-authored after the
-`// 5. RESPONSE SCHEMA` banner. Announce metadata, full state + `responseSchema` on every
+RESPONSE SCHEMA banner. Announce metadata, full state + `responseSchema` on every
 `sendMessage`, graceful `ok:false` handling and a local fallback for every agent lane
 (the app must be useful with no agent at all). No form elements, no browser storage, no
 direct `fetch`. Theme-aware via `data-theme`, usable at 375px, ≥44px touch targets,

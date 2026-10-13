@@ -4,7 +4,14 @@
 // jsdom notes: in a top-level jsdom window, `window.parent === window`, so frames the
 // hooks post via `window.parent.postMessage` arrive as ordinary (async) message events
 // on `window` — the host stub collects them there. Host→app frames are dispatched as
-// synchronous MessageEvents inside `act` so React state updates settle deterministically.
+// synchronous MessageEvents inside `act` so React state updates settle deterministically,
+// with `source: window` — the host IS `window.parent` here, and the bridge in both forms
+// accepts a frame only from `window.parent` (TASK-20261010-host-broker PR-6, D-PR6-2).
+// `foreign()` dispatches the same frame from a SIBLING frame (a jsdom <iframe>'s
+// contentWindow) — the negative rows of the source guard.
+//
+// jsdom's own postMessage never structured-clones (a function in a frame posts fine);
+// `cloneFaithfulPostMessage()` makes it clone like a browser so the DataCloneError arms run.
 import { act } from 'react';
 import { createElement, type FunctionComponent } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -13,6 +20,7 @@ import {
   PROTOCOL_VERSION,
   type ResponseError,
 } from '@snugprotocol/protocol';
+import { vi } from 'vitest';
 
 declare global {
   // eslint-disable-next-line no-var
@@ -78,8 +86,16 @@ export interface HostStub {
   dbRequests(op: string): AppFrame[];
   /** Net-request frames observed on the window (AL-03). */
   netRequests(): AppFrame[];
-  /** Dispatches a raw frame to the app side (inside act). */
+  /** Dispatches a raw frame to the app side (inside act), FROM the host: `source` is `window` (= `window.parent` in jsdom). */
   post(frame: Record<string, unknown>): void;
+  /**
+   * Dispatches the same raw frame from a SIBLING frame in the same document — `source` is a jsdom
+   * `<iframe>`'s contentWindow, never `window.parent` (D-PR6-2's negative rows). The bridge must
+   * ignore it whole.
+   */
+  foreign(frame: Record<string, unknown>): void;
+  /** The sibling frame's window `foreign()` posts from (created on first use, removed on dispose). */
+  siblingWindow(): Window;
   /** Posts a valid host-ready frame (instanceId 'ins-1' unless overridden). */
   ready(over?: Record<string, unknown>): void;
   streaming(requestId: string, text: string, seq: number): void;
@@ -98,8 +114,36 @@ export interface HostStub {
   dispose(): void;
 }
 
+/** A message event as the browser delivers it: `data` plus the posting window as `source`. */
+function messageFrom(source: Window, data: unknown): MessageEvent {
+  try {
+    return new MessageEvent('message', { data, source });
+  } catch {
+    const event = new MessageEvent('message', { data });
+    Object.defineProperty(event, 'source', { value: source });
+    return event;
+  }
+}
+
+/**
+ * Makes `window.parent.postMessage` structured-clone its message first, like a browser: a value
+ * `structuredClone` refuses (a function, a symbol) throws `DataCloneError` and posts nothing.
+ * jsdom's own postMessage never clones. Returns the restore; the spy is also undone by
+ * `vi.restoreAllMocks()`.
+ */
+export function cloneFaithfulPostMessage(): () => void {
+  const target = window.parent;
+  const original = target.postMessage.bind(target) as (message: unknown, targetOrigin: string) => void;
+  const spy = vi.spyOn(target, 'postMessage').mockImplementation(((message: unknown, targetOrigin: string) => {
+    structuredClone(message); // throws DataCloneError exactly where a browser would
+    original(message, targetOrigin);
+  }) as never);
+  return () => spy.mockRestore();
+}
+
 export function hostStub(): HostStub {
   const fromApp: AppFrame[] = [];
+  let sibling: HTMLIFrameElement | undefined;
   const listener = (event: MessageEvent): void => {
     const data = event.data as AppFrame | null;
     if (data && typeof data.type === 'string' && APP_ORIGIN_TYPES.has(data.type)) fromApp.push(data);
@@ -120,7 +164,23 @@ export function hostStub(): HostStub {
     netRequests: () => fromApp.filter((f) => f.type === FRAME_TYPES.netRequest),
     post(frame) {
       act(() => {
-        window.dispatchEvent(new MessageEvent('message', { data: frame }));
+        window.dispatchEvent(messageFrom(window, frame));
+      });
+    },
+    siblingWindow() {
+      if (!sibling) {
+        sibling = document.createElement('iframe');
+        document.body.appendChild(sibling);
+      }
+      const win = sibling.contentWindow;
+      if (!win) throw new Error('jsdom <iframe> has no contentWindow');
+      if (win === window.parent) throw new Error('the sibling frame must not be window.parent');
+      return win;
+    },
+    foreign(frame) {
+      const source = stub.siblingWindow();
+      act(() => {
+        window.dispatchEvent(messageFrom(source, frame));
       });
     },
     ready(over = {}) {
@@ -173,6 +233,8 @@ export function hostStub(): HostStub {
     },
     dispose() {
       window.removeEventListener('message', listener);
+      sibling?.remove();
+      sibling = undefined;
     },
   };
   return stub;

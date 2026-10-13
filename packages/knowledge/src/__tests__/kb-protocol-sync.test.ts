@@ -4,6 +4,12 @@
 // rows/columns/value/bytesBase64 top-level, NOT under .data), read hostEvent payloads
 // from `.data` ({event, data} per hostEventSchema), and guard sendMessage pre-ready
 // (appMessageSchema requires a non-empty instanceId, which only exists after host-ready).
+//
+// TASK-20261010-host-broker PR-6 (contract v2 D-PR6-2; security S1): section 1 gains the SOURCE guard
+// (a frame from a sibling frame in the same document is ignored) and the access-response arm (settled
+// by requestId, deleted first — terminal once), and the host-event arm dispatches `.data` to section
+// 6's subscribers AFTER the theme code. The theme pin above stays exactly as it was.
+import { FRAME_TYPES, PROTOCOL_VERSION } from '@snugprotocol/protocol';
 import { describe, expect, it } from 'vitest';
 
 import { getKnowledgeBase } from '../index.js';
@@ -41,5 +47,32 @@ describe('KB template ≡ protocol wire shapes (20-html-template.md, rendered)',
 
   it('guards sendMessage against posting before host-ready', () => {
     expect(code).toContain('not connected');
+  });
+
+  it('PR-6: the bridge listener accepts a frame ONLY from the parent window — the source guard is its first line', () => {
+    const guard = `if (event.source !== window.parent || !data || data.v !== ${PROTOCOL_VERSION}) return;`;
+    expect(code).toContain(guard);
+    // It is the bridge listener's FIRST statement after reading the data: nothing runs before it.
+    expect(code).toMatch(new RegExp(`window\\.addEventListener\\('message', \\(event\\) => \\{\\s*const data = event\\.data;\\s*${guard.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+    // NEGATIVE: the unguarded line is gone.
+    expect(code).not.toMatch(/^\s*if \(!data \|\| data\.v !== \d+\) return;$/m);
+  });
+
+  it('PR-6: the access-response arm settles by requestId from the TOP-LEVEL frame — deleted before it is settled, an unknown id ignored', () => {
+    const at = code.indexOf(`if (data.type === '${FRAME_TYPES.accessResponse}') {`);
+    expect(at, 'the access-response arm').toBeGreaterThan(0);
+    const arm = code.slice(at);
+    expect(arm).toContain('const settle = SnugBridge.accessPending.get(data.requestId);');
+    expect(arm).toMatch(/if \(!settle\) return;/);
+    expect(arm.indexOf('SnugBridge.accessPending.delete(data.requestId);')).toBeGreaterThan(0);
+    expect(arm.indexOf('SnugBridge.accessPending.delete(data.requestId);')).toBeLessThan(arm.indexOf('settle(data);'));
+  });
+
+  it('PR-6: the host-event arm keeps the theme code FIRST and hands section 6’s subscribers the `.data` payload from a copy of the set', () => {
+    const theme = code.indexOf('data.data && data.data.theme');
+    const dispatch = code.indexOf('const subscribers = SnugBridge.hostEventListeners.get(data.event);');
+    expect(dispatch, 'the dispatch to subscribers').toBeGreaterThan(0);
+    expect(dispatch, 'after the theme code').toBeGreaterThan(theme);
+    expect(code).toContain('if (subscribers) for (const fn of [...subscribers]) fn(data.data);');
   });
 });

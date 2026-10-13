@@ -1,34 +1,33 @@
 <!DOCTYPE html>
 <!--
   e2e/fixtures/access-reader.html — "Budget", the READER fixture of the access-between-apps e2e
-  (TASK-20261010-cross-app-access AC22; e2e/access.spec.ts). Not a starter. Two blocks are copied,
-  never retyped:
-    - sections 1–3 below are the copy-exactly hooks block of
-      packages/knowledge/prompts/knowledge-base/app-authoring/20-html-template.md, RENDERED
-      (getKnowledgeBase() of @snugprotocol/knowledge — byte-identical to the same sections of
-      schedule-app.html, which is packages/sdk/embedded/snug-hooks.js indented);
-    - the ACCESS BETWEEN APPS block is the cross-app helper of
-      packages/knowledge/prompts/knowledge-base/app-authoring/87-cross-app-access.md, RENDERED the
-      same way ({{frameType:…}} and {{protocolVersion}} injected from @snugprotocol/protocol), with
-      only `onAccessChanged`'s body written for this app — exactly what the KB page asks of an app.
-  SYNC RULE: when 20-html-template.md's hooks or 87-cross-app-access.md's helper change, re-render
-  them (node -e "import('@snugprotocol/knowledge').then(k => …getKnowledgeBase()…)" after
-  `pnpm --filter @snugprotocol/knowledge build`) and paste them here again — never edit them in place.
-  The app: every ask is a USER act (a button), never on load. #status prints the last op and its
-  answer (`request: ok` / `query: ACCESS_REVOKED` / `access-changed <grantId>`), #result the rows
-  or the refusal, #view the last access the host answered (kept with usePersistedState so it
-  survives a reopen), #changed the last access-changed hint, and #log EVERY access answer and
-  access-changed hint this page ever received — the whole of what the reader learned, so the spec
-  can prove it never saw the user's other apps.
-  TASK-20261010-host-broker PR-3 (AC28; D-PR3-4/14): five more user acts, each a button — #ask-write
-  asks with `access: 'write'` (the plain #ask stays the read ask every earlier clause and the mobile
-  and kit specs use), #write sends ONE literal-valued UPDATE of `transactions` whose WHERE names a
-  granted column (`op: 'write'` → #result "changes: N"), #refresh asks the source to fetch first
-  (`op: 'refresh'` → #result "fresh: true" / "fresh: false · recent"), and #peek / #fetches READ
-  (a query) what the write and the fetch changed into #peeked. The helper block IS KB 87 v2's
-  render — `snugAccessRequest(op, fields)` carries every op, and the three listener arms
-  (`access-source-changed`, `data-changed`, `access-read`) are its; re-render it from that page
-  per the SYNC RULE whenever the page changes.
+  (TASK-20261010-cross-app-access AC22; e2e/access.spec.ts, e2e/mobile.spec.ts and
+  apps/host/e2e/kit-access.spec.ts). Not a starter. Moved onto the hooks by
+  TASK-20261010-host-broker PR-6 (D-PR6-8) — with schedule-app.html, PR-6's real-host proof of
+  sections 1 and 7: the retired cross-app helper (its pending map, its request function, its four
+  stubs and its listener) is gone, and the hooks block below IS packages/sdk/embedded/snug-hooks.js
+  — all seven sections, indented — byte-identical after the kb-sync normalisation (per-line trim,
+  blank lines dropped) to that file, which is the copy-exactly block of
+  packages/knowledge/prompts/knowledge-base/app-authoring/20-html-template.md, rendered.
+  SYNC RULE: when packages/sdk/embedded/snug-hooks.js changes, re-copy it here WHOLE — everything
+  between the `<script type="text/babel">` line and the ==== rule above the RESPONSE SCHEMA banner,
+  indented as below — and never edit the block in place. The app's own code starts at that banner.
+  The app: every ask is a USER act (a button), never on load, and goes through section 7's hook —
+  `const access = useSnugAccess()` in App: #ask → access.request(purpose, { hints }) (the plain
+  read ask every earlier clause and the mobile and kit specs use), #ask-write → the same with
+  `access: 'write'`, #query / #query-accounts / #bomb / #requery / #peek / #fetches →
+  access.query(id, sql), #write → access.write(id, sql) (ONE literal-valued UPDATE of
+  `transactions` whose WHERE names a granted column → #result "changes: N"), #refresh →
+  access.refresh(id) (#result "fresh: true" / "fresh: false · recent"), #list → access.list().
+  The four access hints are subscribed through access.onChange / onSourceChanged / onDataChanged /
+  onRead in ONE effect that hands back their unsubscribes; only access-changed has work here.
+  #status prints the last op and its answer (`request: ok` / `query: ACCESS_REVOKED` /
+  `access-changed <grantId>`), #result the rows or the refusal, #view the last access the host
+  answered (kept with usePersistedState so it survives a reopen), #changed the last access-changed
+  hint, #peeked what #peek / #fetches read back, and #log EVERY access-response and access-changed
+  frame the host posted to this page, as posted — recorded by the spec's instrument (a listener
+  that is not app code), the whole of what the reader could learn, so the spec can prove it never
+  saw the user's other apps.
 -->
 <html lang="en">
 <head>
@@ -63,6 +62,8 @@
       pending: new Map(),    // requestId -> { resolve, onStream }
       dbPending: new Map(),  // requestId -> resolve
       netPending: new Map(), // requestId -> resolve
+      accessPending: new Map(), // requestId -> settle (section 7)
+      hostEventListeners: new Map(), // event -> Set of listeners (section 6)
       listeners: new Set(),  // re-render triggers for hooks
 
       post(frame) {
@@ -73,7 +74,7 @@
 
     window.addEventListener('message', (event) => {
       const data = event.data;
-      if (!data || data.v !== 1) return;
+      if (event.source !== window.parent || !data || data.v !== 1) return; // the host alone, never a sibling frame
 
       if (data.type === 'snug:host-ready') {
         SnugBridge.instanceId = data.instanceId;
@@ -119,12 +120,23 @@
         return;
       }
 
+      if (data.type === 'snug:access-response') {
+        const settle = SnugBridge.accessPending.get(data.requestId);
+        if (!settle) return; // unknown or already-answered requestId - ignore
+        SnugBridge.accessPending.delete(data.requestId); // terminal - exactly one per requestId
+        settle(data);
+        return;
+      }
+
       if (data.type === 'snug:host-event') {
         if (data.event === 'theme-change' && data.data && data.data.theme) {
           SnugBridge.theme = data.data.theme;
           SnugBridge.notify();
         }
         // Unknown host events MUST be ignored (the protocol is additive).
+        // Section 6's subscribers get theirs by name.
+        const subscribers = SnugBridge.hostEventListeners.get(data.event);
+        if (subscribers) for (const fn of [...subscribers]) fn(data.data);
       }
     });
 
@@ -257,78 +269,229 @@
     }
 
     // ============================================================
-    // ACCESS BETWEEN APPS — read another app's data; see "Access Between Apps"
+    // 4. useAppDB (copy exactly when the app needs SQL; omit otherwise)
     // ============================================================
-    const SNUG_ACCESS_PENDING = new Map(); // requestId -> resolve
+    function useAppDB() {
+      return useMemo(() => ({
+        async exec(sql, params) {
+          const result = await snugDbRequest('exec', { sql, params });
+          if (!result.ok) throw new Error((result.error && result.error.message) || 'db exec failed');
+          return { rows: result.rows, columns: result.columns }; // { rows: unknown[][], columns: string[] }
+        },
+        async exportDb() {
+          const result = await snugDbRequest('export', {});
+          if (!result.ok) throw new Error((result.error && result.error.message) || 'db export failed');
+          return result.bytesBase64;
+        },
+        async importDb(bytesBase64) {
+          const result = await snugDbRequest('import', { bytesBase64 });
+          if (!result.ok) throw new Error((result.error && result.error.message) || 'db import failed');
+        },
+      }), []);
+    }
 
-    function snugAccessRequest(op, fields) {
+    // ============================================================
+    // 5. useConnectedFetch (copy exactly when the app calls an approved API; omit otherwise)
+    // The sandboxed app has NO network of its own. This reaches ONLY your app's APPROVED
+    // hosts THROUGH the host, which injects your saved credentials, caps sizes, asks you
+    // before any write, and scrubs the response. You never see a token.
+    // A connection whose host only the USER knows (a device on their network): address it as
+    // snug-connection://<slot>/<path> — the host resolves the approved address; you never learn it.
+    // ALWAYS resolves: { ok:true, status, headers, body } or { ok:false, error }.
+    // ============================================================
+    function useConnectedFetch() {
+      return useMemo(() => ({
+        fetch(url, opts) {
+          return snugNetRequest({
+            url,
+            method: (opts && opts.method) || 'GET',
+            headers: opts && opts.headers,
+            body: opts && opts.body,
+          });
+        },
+      }), []);
+    }
+
+    // ============================================================
+    // 6. useHostEvents + useSnugSchedule (copy exactly when the app listens to the host or takes part in schedules; omit otherwise)
+    // The host rings NAMED events on one channel — hints with ids, never content. onHostEvent is
+    // the primitive (returns the unsubscribe); useHostEvents subscribes a component to several by
+    // name; useSnugSchedule answers the host's scheduled runs; proposeSchedule suggests one — once.
+    // ============================================================
+    function onHostEvent(event, listener) {
+      let subscribers = SnugBridge.hostEventListeners.get(event);
+      if (!subscribers) { subscribers = new Set(); SnugBridge.hostEventListeners.set(event, subscribers); }
+      subscribers.add(listener);
+      return () => {
+        subscribers.delete(listener);
+        if (subscribers.size === 0) SnugBridge.hostEventListeners.delete(event);
+      };
+    }
+
+    function useHostEvents(handlers) {
+      const handlersRef = useRef(handlers);
+      useEffect(() => { handlersRef.current = handlers; });
+      const events = Object.keys(handlers).join('\n');
+      useEffect(() => {
+        const offs = events.split('\n').filter(Boolean).map((event) =>
+          onHostEvent(event, (data) => { const fn = handlersRef.current[event]; if (typeof fn === 'function') fn(data); }));
+        return () => { for (const off of offs) off(); };
+      }, [events]);
+    }
+
+    const SNUG_SCHEDULE_REMEMBERED = 128;  // answered runIds the page keeps before the oldest is forgotten
+    const snugScheduleAnswered = new Set(); // runIds answered (or in flight) on this page — the first answer stands
+    let snugScheduleProposed = false;       // one schedule-request per page
+
+    function scheduleInputKey(runId) { return 'snug:schedule:' + runId; }
+
+    // The result as the host parses it: ok a boolean, summary a non-empty string, notify only with
+    // both halves — the bounds are the protocol's; anything else is dropped (a summary, never data).
+    function snugScheduleResult(raw) {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { ok: false, summary: 'the handler returned no result' };
+      const out = { ok: raw.ok === true };
+      if (typeof raw.summary === 'string' && raw.summary !== '') out.summary = raw.summary.slice(0, 4096);
+      const n = raw.notify;
+      if (n && typeof n === 'object' && typeof n.title === 'string' && n.title !== '' && typeof n.body === 'string' && n.body !== '') {
+        out.notify = { title: n.title.slice(0, 80), body: n.body.slice(0, 120) };
+      }
+      return out;
+    }
+
+    async function snugAnswerScheduleHint(data, handler) {
+      if (!data || typeof data !== 'object' || typeof data.runId !== 'string' || data.runId === '' || typeof data.taskId !== 'string' || data.taskId === '') return; // not the host's shape — ignore
+      if (snugScheduleAnswered.has(data.runId)) return; // a repeated hint: the first answer stands
+      snugScheduleAnswered.add(data.runId); // BEFORE the kv round trip, so a duplicate arriving meanwhile is ignored too
+      if (snugScheduleAnswered.size > SNUG_SCHEDULE_REMEMBERED) snugScheduleAnswered.delete(snugScheduleAnswered.values().next().value);
+      const stored = await snugDbRequest('kvGet', { key: scheduleInputKey(data.runId) });
+      const input = stored.ok && stored.value && typeof stored.value === 'object' && !Array.isArray(stored.value) ? stored.value.input : undefined;
+      const run = { runId: data.runId, taskId: data.taskId };
+      if (input !== undefined) run.input = input;
+      let result;
+      try {
+        result = snugScheduleResult(await handler(run));
+      } catch (err) {
+        const message = err && err.message;
+        result = { ok: false, summary: typeof message === 'string' && message !== '' ? message.slice(0, 4096) : 'the scheduled run failed' };
+      }
+      SnugBridge.post({ type: 'snug:app-event', event: 'schedule-result', data: result });
+    }
+
+    function useSnugSchedule(handler) {
+      const handlerRef = useRef(handler);
+      useEffect(() => { handlerRef.current = handler; });
+      useEffect(() => onHostEvent('schedule-run', (data) => { snugAnswerScheduleHint(data, (run) => handlerRef.current(run)); }), []);
+    }
+
+    // Suggest a schedule for THIS app — once per page, after a user act, never on load. The shape is
+    // checked here; the host's strict parse decides. true means the suggestion was SENT, not accepted.
+    function proposeSchedule(proposal) {
+      if (!SnugBridge.ready || snugScheduleProposed) return false;
+      if (!proposal || typeof proposal !== 'object' || Array.isArray(proposal)) return false;
+      for (const key of Object.keys(proposal)) if (key !== 'title' && key !== 'steps' && key !== 'spec') return false;
+      if (typeof proposal.title !== 'string' || proposal.title === '' || !Array.isArray(proposal.steps) || proposal.steps.length === 0 ||
+          !proposal.steps.every((s) => s && typeof s === 'object') || !proposal.spec || typeof proposal.spec !== 'object') return false;
+      try {
+        SnugBridge.post({ type: 'snug:app-event', event: 'schedule-request', data: proposal });
+      } catch (err) {
+        return false;
+      }
+      snugScheduleProposed = true;
+      return true;
+    }
+
+    // ============================================================
+    // 7. useSnugAccess (copy exactly, WITH section 6, when the app reads or changes another app's data; omit otherwise)
+    // Reads — and, where the user ticked it, changes — ANOTHER app's tables through a user-granted,
+    // recorded, revocable access (see "Access Between Apps"). The app never names a source: it
+    // states a purpose and the user decides on host UI. Every call ALWAYS resolves — errors are data.
+    // ============================================================
+    function snugAccessCall(fields, settle) {
       if (!SnugBridge.ready) return Promise.resolve({ ok: false, error: { code: 'HOST_ERROR', message: 'not connected to host yet', retryable: true } });
       if (SnugBridge.capabilities.access !== true) return Promise.resolve({ ok: false, error: { code: 'HOST_ERROR', message: 'this host does not offer access between apps', retryable: false } });
       return new Promise((resolve) => {
         const requestId = crypto.randomUUID();
-        SNUG_ACCESS_PENDING.set(requestId, resolve);
-        SnugBridge.post({ type: 'snug:access-request', requestId, op, ...fields });
+        SnugBridge.accessPending.set(requestId, (frame) => resolve(settle(frame)));
+        try {
+          SnugBridge.post({ type: 'snug:access-request', requestId, ...fields });
+        } catch (err) {
+          SnugBridge.accessPending.delete(requestId);
+          resolve({ ok: false, error: { code: 'HOST_ERROR', message: 'the access request could not be posted', retryable: false } });
+        }
       });
     }
 
-    function onAccessChanged(grantId) {
-      // This app's own work (the KB leaves this body to the app): note the hint; the visible
-      // page says it heard it, and *read again after the change* reads with that id.
-      HEARD.changed = grantId;
-      noteHeard();
+    // Each settler hands back ONLY the seats the protocol defines for its answer. A success for a
+    // different op, or one missing its result, is a host fault answered as HOST_ERROR — never a
+    // mis-shaped success, never a hang.
+    function snugAccessFault(message) { return { ok: false, error: { code: 'HOST_ERROR', message, retryable: false } }; }
+    function snugAccessSettle(op, pick) {
+      return (frame) => {
+        if (frame.ok !== true) return frame.error && typeof frame.error === 'object' ? { ok: false, error: frame.error } : snugAccessFault('the host answered an access ' + op + ' with no error');
+        if (typeof frame.op !== 'string') return snugAccessFault('the host answered an access ' + op + ' without its result');
+        if (frame.op !== op) return snugAccessFault('the host answered an access ' + frame.op + ' to an access ' + op);
+        const result = pick(frame);
+        return result === undefined ? snugAccessFault('the host answered an access ' + op + ' without its result') : result;
+      };
+    }
+    const SNUG_ACCESS_SETTLE = {
+      request: snugAccessSettle('request', (f) => (f.grant && typeof f.grant === 'object' ? { ok: true, grant: f.grant } : undefined)),
+      query: snugAccessSettle('query', (f) => {
+        if (!Array.isArray(f.columns) || !Array.isArray(f.rows)) return undefined;
+        const out = { ok: true, columns: f.columns, rows: f.rows };
+        if (f.truncated !== undefined) out.truncated = f.truncated;
+        if (f.totalRows !== undefined) out.totalRows = f.totalRows;
+        return out;
+      }),
+      write: snugAccessSettle('write', (f) => (typeof f.changes === 'number' ? { ok: true, changes: f.changes } : undefined)),
+      refresh: snugAccessSettle('refresh', (f) => (typeof f.fresh !== 'boolean' ? undefined : f.reason !== undefined ? { ok: true, fresh: f.fresh, reason: f.reason } : { ok: true, fresh: f.fresh })),
+      list: snugAccessSettle('list', (f) => (Array.isArray(f.grants) ? { ok: true, grants: f.grants } : undefined)),
+      release: snugAccessSettle('release', () => ({ ok: true })),
+      discover: snugAccessSettle('discover', (f) => (f.candidates === 'none' || f.candidates === 'one' || f.candidates === 'several' ? { ok: true, candidates: f.candidates } : undefined)),
+    };
+
+    // The hints are ids only — { grantId } for three of them; data-changed is { table } or {} — and a malformed data seat is dropped.
+    function snugGrantHint(event) {
+      return (listener) => onHostEvent(event, (data) => {
+        if (data && typeof data === 'object' && typeof data.grantId === 'string' && data.grantId !== '') listener({ grantId: data.grantId });
+      });
     }
 
-    function onAccessSourceChanged(grantId) {
-      // YOUR WORK: the other app's data changed under this access. Read it again where the
-      // app shows it — snugAccessRequest('query', …) — never ask for access from here.
+    function useSnugAccess() {
+      return useMemo(() => ({
+        request(purpose, opts) {
+          const fields = { op: 'request', purpose };
+          if (opts && opts.hints !== undefined) fields.hints = opts.hints;
+          if (opts && opts.renew !== undefined) fields.renew = opts.renew;
+          if (opts && opts.access !== undefined) fields.access = opts.access;
+          return snugAccessCall(fields, SNUG_ACCESS_SETTLE.request);
+        },
+        query(grantId, sql, params) { return snugAccessCall(params !== undefined ? { op: 'query', grantId, sql, params } : { op: 'query', grantId, sql }, SNUG_ACCESS_SETTLE.query); },
+        write(grantId, sql, params) { return snugAccessCall(params !== undefined ? { op: 'write', grantId, sql, params } : { op: 'write', grantId, sql }, SNUG_ACCESS_SETTLE.write); },
+        refresh(grantId) { return snugAccessCall({ op: 'refresh', grantId }, SNUG_ACCESS_SETTLE.refresh); },
+        list() { return snugAccessCall({ op: 'list' }, SNUG_ACCESS_SETTLE.list); },
+        release(grantId) { return snugAccessCall({ op: 'release', grantId }, SNUG_ACCESS_SETTLE.release); },
+        discover(hints) { return snugAccessCall(hints !== undefined ? { op: 'discover', hints } : { op: 'discover' }, SNUG_ACCESS_SETTLE.discover); },
+        onChange: snugGrantHint('access-changed'),
+        onSourceChanged: snugGrantHint('access-source-changed'),
+        onDataChanged(listener) {
+          return onHostEvent('data-changed', (data) => {
+            if (!data || typeof data !== 'object' || Array.isArray(data)) return;
+            if (data.table === undefined) listener({});
+            else if (typeof data.table === 'string' && data.table !== '') listener({ table: data.table });
+          });
+        },
+        onRead: snugGrantHint('access-read'),
+      }), []);
     }
-
-    function onDataChanged(table) {
-      // YOUR WORK: another app, or the chat, changed this table of YOUR app under an access
-      // the user allowed (or the user undid such a change). Re-read it where the app shows it.
-    }
-
-    function onAccessRead(grantId) {
-      // YOUR WORK (optional): one of this app's tables was read under an access this app is
-      // the source of. The id only — the runner's history has the rest. Most apps do nothing.
-    }
-
-    window.addEventListener('message', (event) => {
-      const data = event.data;
-      if (event.source !== window.parent || !data || data.v !== 1) return;
-      if (data.type === 'snug:access-response') {
-        const resolve = SNUG_ACCESS_PENDING.get(data.requestId);
-        if (!resolve) return; // not ours, or already answered
-        SNUG_ACCESS_PENDING.delete(data.requestId);
-        // The answer's fields (grant / columns, rows, truncated, totalRows / changes / fresh, reason / grants / candidates) are at the TOP LEVEL.
-        resolve(data.ok ? data : { ok: false, error: data.error });
-        return;
-      }
-      if (data.type === 'snug:host-event' && data.event === 'access-changed') {
-        const change = data.data;
-        if (change && typeof change.grantId === 'string' && change.grantId) onAccessChanged(change.grantId);
-      }
-      if (data.type === 'snug:host-event' && data.event === 'access-source-changed') {
-        const change = data.data;
-        if (change && typeof change.grantId === 'string' && change.grantId) onAccessSourceChanged(change.grantId);
-      }
-      if (data.type === 'snug:host-event' && data.event === 'data-changed') {
-        const change = data.data;
-        if (change && typeof change.table === 'string' && change.table) onDataChanged(change.table);
-      }
-      if (data.type === 'snug:host-event' && data.event === 'access-read') {
-        const change = data.data;
-        if (change && typeof change.grantId === 'string' && change.grantId) onAccessRead(change.grantId);
-      }
-    });
 
     // ============================================================
-    // 6. RESPONSE SCHEMA — this app never thinks; kept for the template's shape
+    // 8. RESPONSE SCHEMA — this app never thinks; kept for the template's shape
     // ============================================================
     const RESPONSE_SCHEMA = { message: 'string' };
 
     // ============================================================
-    // 7. YOUR APP
+    // 9. YOUR APP
     // ============================================================
     const SPENDING_SQL = 'SELECT amount, category FROM transactions ORDER BY amount DESC';
     /** A table this app is never allowed (the user ticks transactions only): it must be ABSENT. */
@@ -342,17 +505,19 @@
     /** The fetching source's counter (access-source-fetch.html): how many fetches, and who asked last. */
     const FETCHES_SQL = 'SELECT n, asked_by FROM fetches';
 
-    // What this page has heard from the host about access — the module-level store the
-    // listeners above write and the component reads.
-    const HEARD = { log: [], changed: null };
+    // THE SPEC'S INSTRUMENT — not app code: the app hears the host only through its hooks
+    // (useSnugAccess, in App below). This records every access-response and access-changed frame
+    // the host posted to this page AS POSTED — the whole frame reaches the app's realm, while the
+    // hook hands back only the seats the protocol defines — so #log is the whole of what the
+    // reader could learn, and the spec can prove it never learned the user's other apps.
+    const HEARD = { log: [] };
     const heardListeners = new Set();
-    const noteHeard = () => { for (const fn of heardListeners) fn(); };
     window.addEventListener('message', (event) => {
       const data = event.data;
-      if (event.source !== window.parent || !data || data.v !== 1) return;
+      if (event.source !== window.parent || !data || data.v !== 1) return; // the host alone, as section 1
       if (data.type === 'snug:access-response' || (data.type === 'snug:host-event' && data.event === 'access-changed')) {
         HEARD.log.push(JSON.stringify(data));
-        noteHeard();
+        for (const fn of heardListeners) fn();
       }
     });
 
@@ -368,11 +533,13 @@
         iconEmoji: '💸',
         iconColor: '#2f7de1',
       });
+      const access = useSnugAccess();
       // The last access the host answered — kept, so a reopened Budget can still name it.
       const [held, setHeld] = usePersistedState('access-held', null);
       const [status, setStatus] = useState('ready');
       const [result, setResult] = useState('');
       const [peeked, setPeeked] = useState('');
+      const [changed, setChanged] = useState(null); // the id the last access-changed hint carried
       const [, setTick] = useState(0);
       useEffect(() => {
         const rerender = () => setTick((n) => n + 1);
@@ -382,16 +549,35 @@
       useEffect(() => {
         document.documentElement.dataset.theme = theme;
       }, [theme]);
+
+      // The host's access hints — ids only, each checked by the hook — subscribed once, with their
+      // unsubscribes handed back.
       useEffect(() => {
-        if (HEARD.changed) setStatus('access-changed ' + HEARD.changed);
-      }, [HEARD.changed]);
+        const offs = [
+          // An access was stopped or paused: note the id — the page says it heard it, and *read
+          // again after the change* reads with that id.
+          access.onChange(({ grantId }) => setChanged(grantId)),
+          // YOUR WORK: the other app's data changed under this access. Read it again where the
+          // app shows it — access.query(…) — never ask for access from here.
+          access.onSourceChanged(() => {}),
+          // YOUR WORK: another app, or the chat, changed a table of YOUR app under an access the
+          // user allowed (or the user undid such a change); { table } or {} — re-read what you show.
+          access.onDataChanged(() => {}),
+          // YOUR WORK (optional): one of this app's tables was read under an access this app is
+          // the source of. The id only — the runner's history has the rest. Most apps do nothing.
+          access.onRead(() => {}),
+        ];
+        return () => { for (const off of offs) off(); };
+      }, [access]);
+      useEffect(() => {
+        if (changed) setStatus('access-changed ' + changed);
+      }, [changed]);
 
       // A user act: ask to read another app's data (PR-3: or to read AND change it). Never on load.
       const ask = async (wantsWrite) => {
         setStatus('request: waiting');
         setResult('');
-        const asked = await snugAccessRequest('request', {
-          purpose: 'to show spending by category',
+        const asked = await access.request('to show spending by category', {
           hints: { tables: ['transactions'], words: ['spending', 'category'] },
           ...(wantsWrite === true ? { access: 'write' } : {}),
         });
@@ -412,7 +598,7 @@
         }
         setStatus('query: waiting');
         setResult('');
-        const answer = await snugAccessRequest('query', { grantId, sql });
+        const answer = await access.query(grantId, sql);
         if (!answer.ok) {
           setStatus('query: ' + answer.error.code);
           setResult(describeError(answer.error));
@@ -430,7 +616,7 @@
         }
         setStatus('write: waiting');
         setResult('');
-        const answer = await snugAccessRequest('write', { grantId, sql: WRITE_SQL });
+        const answer = await access.write(grantId, WRITE_SQL);
         if (!answer.ok) {
           setStatus('write: ' + answer.error.code);
           setResult(describeError(answer.error));
@@ -448,7 +634,7 @@
         }
         setStatus('refresh: waiting');
         setResult('');
-        const answer = await snugAccessRequest('refresh', { grantId });
+        const answer = await access.refresh(grantId);
         if (!answer.ok) {
           setStatus('refresh: ' + answer.error.code);
           setResult(describeError(answer.error));
@@ -465,7 +651,7 @@
           return;
         }
         setPeeked('waiting');
-        const answer = await snugAccessRequest('query', { grantId, sql });
+        const answer = await access.query(grantId, sql);
         if (!answer.ok) {
           setPeeked(answer.error.code);
           return;
@@ -475,7 +661,7 @@
 
       const list = async () => {
         setStatus('list: waiting');
-        const answer = await snugAccessRequest('list', {});
+        const answer = await access.list();
         if (!answer.ok) {
           setStatus('list: ' + answer.error.code);
           setResult(describeError(answer.error));
@@ -496,7 +682,7 @@
             <button type="button" id="query" onClick={() => read(heldId, SPENDING_SQL)}>show spending</button>
             <button type="button" id="query-accounts" onClick={() => read(heldId, ACCOUNTS_SQL)}>read accounts</button>
             <button type="button" id="bomb" onClick={() => read(heldId, BOMB_SQL)}>count forever</button>
-            <button type="button" id="requery" disabled={!HEARD.changed} onClick={() => read(HEARD.changed, SPENDING_SQL)}>read again after the change</button>
+            <button type="button" id="requery" disabled={!changed} onClick={() => read(changed, SPENDING_SQL)}>read again after the change</button>
             <button type="button" id="list" onClick={list}>what can I read</button>
             <button type="button" id="write" onClick={() => write(heldId)}>mark the music row checked</button>
             <button type="button" id="peek" onClick={() => peek(heldId, NOTE_SQL, (row) => 'note: ' + row[0])}>show the music note</button>
@@ -506,7 +692,7 @@
           <div id="status">{status}</div>
           <div id="result">{result}</div>
           <div id="held">{heldId || 'none'}</div>
-          <div id="changed">{HEARD.changed ? 'access-changed ' + HEARD.changed : ''}</div>
+          <div id="changed">{changed ? 'access-changed ' + changed : ''}</div>
           <div id="peeked">{peeked}</div>
           <pre id="view">{held ? JSON.stringify(held) : ''}</pre>
           <pre id="log">{HEARD.log.join('\n')}</pre>

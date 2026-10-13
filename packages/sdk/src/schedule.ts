@@ -26,8 +26,11 @@
 // One request per page: the host keeps one pending per frame generation and there is no
 // acknowledgement to clear it, so a second call answers `false` and posts nothing.
 //
-// The EMBEDDED form has no hook (Q7: the copy-exactly block changes in the starter release
-// wave); the knowledge base ships this same shape as a listener snippet beside the block.
+// Both forms carry the hook (Q7 landed in TASK-20261010-host-broker PR-6): section 6 of the
+// embedded copy-exactly block is the same `useSnugSchedule` and `proposeSchedule`, with the same
+// bounds, under one contract (contract-schedule.ts runs against each). The forms differ only where
+// the module has zod: its `proposeSchedule` posts only a proposal `scheduleProposalSchema` admits,
+// the embedded one only a structurally strict one — the host's strict parse is the gate for both.
 import { useEffect, useRef } from 'react';
 import {
   FRAME_TYPES,
@@ -97,7 +100,17 @@ function remember(runId: string): void {
   }
 }
 
-const messageOf = (err: unknown): string => (err instanceof Error && err.message !== '' ? err.message : 'the scheduled run failed');
+/**
+ * The summary a THROW answers — the embedded form's exact rule (D-PR6-3; contract v2.1 N4): the
+ * thrown value's `message`, when it is a non-empty string, cut to the step-summary bound — whatever
+ * was thrown (an Error, a plain object); anything else answers the fixed sentence. The host drops an
+ * over-long or non-string summary and the run would read *failed* at its bound, so the throw path
+ * is bounded like the result.
+ */
+const messageOf = (err: unknown): string => {
+  const message: unknown = err ? (err as { message?: unknown }).message : undefined;
+  return typeof message === 'string' && message !== '' ? message.slice(0, SCHEDULE_STEP_SUMMARY_MAX_CHARS) : 'the scheduled run failed';
+};
 
 /**
  * The result as the host will parse it: `ok` a boolean, `summary` a non-empty string capped
@@ -138,7 +151,8 @@ async function answerHint(data: unknown, handler: SnugScheduleHandler): Promise<
  * nobody is present, and ASKED once in the host's own dialog when the app is open; either way
  * the host records a refusal as *needs you*, so a scheduled handler reads and summarises, and
  * treats a refused write as an ordinary outcome) — and answers `{ ok, summary?,
- * notify? }`. A throw becomes `{ ok: false, summary: <message> }`; nothing escapes.
+ * notify? }`. A throw becomes `{ ok: false, summary: <message> }` (bounded; the fixed sentence when
+ * there is no usable message); nothing escapes.
  */
 export function useSnugSchedule(handler: SnugScheduleHandler): void {
   const handlerRef = useRef(handler);
@@ -157,11 +171,12 @@ export function useSnugSchedule(handler: SnugScheduleHandler): void {
 
 /**
  * Suggests a schedule for THIS app — once per page, after a user act or a first successful
- * fetch, never on load. Posts `app-event 'schedule-request'` and answers `true`; answers
- * `false` and posts nothing before host-ready, for a proposal the protocol's shape refuses
- * (steps may name only this app — the host enforces the sender), or once a request has
- * already gone out on this page. The user decides on the host's strip; nothing runs until
- * they say so, and a declined suggestion is remembered by the host.
+ * fetch, never on load. Posts `app-event 'schedule-request'` and answers `true` — POSTED, never
+ * accepted: the host's strict parse decides; answers `false` and posts nothing before host-ready,
+ * for a proposal the protocol's shape refuses (steps may name only this app — the host enforces
+ * the sender), once a request has already gone out on this page, or when the browser refuses the
+ * post (the page's one request then stays free). The user decides on the host's strip; nothing
+ * runs until they say so, and a declined suggestion is remembered by the host.
  * The steps name THIS app by the `appId` the app announced (`useSnugApp({ appId })`): the host
  * maps it to the id it holds the app under, so an app never needs to know that one.
  */
@@ -170,8 +185,12 @@ export function proposeSchedule(proposal: ScheduleProposal): boolean {
   if (!bridge.ready || proposalSent) return false;
   const parsed = scheduleProposalSchema.safeParse(proposal);
   if (!parsed.success) return false;
-  proposalSent = true;
-  postToHost({ type: FRAME_TYPES.appEvent, event: SCHEDULE_REQUEST_EVENT, data: parsed.data });
+  try {
+    postToHost({ type: FRAME_TYPES.appEvent, event: SCHEDULE_REQUEST_EVENT, data: parsed.data });
+  } catch {
+    return false; // the browser refused the post (DataCloneError): nothing was sent, the slot stays free
+  }
+  proposalSent = true; // only AFTER a successful post — `true` means POSTED
   return true;
 }
 

@@ -1,9 +1,12 @@
-// Access between apps, app side (TASK-20261010-cross-app-access AC5; ADR-0075 §1, §9). MODULE-ONLY
-// rows: the embedded hooks block is UNCHANGED (Q9 — the knowledge base ships a listener snippet
-// beside it), so these do not join the shared contract suite. A fake host plays the other side on
-// the same jsdom window (app-harness.tsx): it collects the `snug:access-request` frames the hook
-// posts — every one PARSED with the protocol's own `accessRequestSchema`, never eyeballed — and
-// answers them with `snug:access-response` frames, in any order it likes.
+// Access between apps, app side (TASK-20261010-cross-app-access AC5; ADR-0075 §1, §9). The MODULE
+// form's rows. Since TASK-20261010-host-broker PR-6 the embedded hooks block carries the same hook
+// (section 7, `useSnugAccess`), and the behaviour BOTH forms share lives in contract-access.ts,
+// registered for each form; the rows here stay module-only where the forms legitimately differ
+// (D-PR6-4: the module's parser drops a frame the protocol refuses and the call waits; zod strips
+// unknown keys inside a grant) or pin the module's own exports and types. A fake host plays the
+// other side on the same jsdom window (app-harness.tsx): it collects the `snug:access-request`
+// frames the hook posts — every one PARSED with the protocol's own `accessRequestSchema`, never
+// eyeballed — and answers them with `snug:access-response` frames, in any order it likes.
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import {
@@ -401,6 +404,28 @@ describe('useSnugAccess — reading another app’s data through a user-granted 
     host.accessFail(requestId, { code: 'ACCESS_REVOKED' });
     await flush();
     expect(state.value()).toEqual({ ok: true, grants: [] });
+    expect(bridge.accessPending.size).toBe(0);
+  });
+
+  it('module only (D-PR6-4, the reversal word "wait"): every success the protocol parser refuses — a non-string op, no op, ok:false with no error object, a discover class outside the three, a seat of the wrong kind — is ignored and the call waits for a valid terminal frame', async () => {
+    const access = await connected();
+    const calls = [
+      { call: access.list(), bad: { ok: true, op: 5, grants: [] }, good: { op: 'list', grants: [] }, result: { ok: true, grants: [] } },
+      { call: access.query(GRANT_ID, 'SELECT 1'), bad: { ok: true, columns: ['1'], rows: [[1]] }, good: { op: 'query', columns: ['1'], rows: [[1]] }, result: { ok: true, columns: ['1'], rows: [[1]] } },
+      { call: access.release(GRANT_ID), bad: { ok: false }, good: { op: 'release' }, result: { ok: true } },
+      { call: access.discover(), bad: { ok: true, op: 'discover', candidates: 'many' }, good: { op: 'discover', candidates: 'none' }, result: { ok: true, candidates: 'none' } },
+      { call: access.write(GRANT_ID, 'DELETE FROM t WHERE id = 1'), bad: { ok: true, op: 'write', changes: '3' }, good: { op: 'write', changes: 3 }, result: { ok: true, changes: 3 } },
+      { call: access.request('to show spending'), bad: { ok: true, op: 'request' }, good: { op: 'request', grant: VIEW }, result: { ok: true, grant: VIEW } },
+    ];
+    const states = calls.map(({ call }) => track(call));
+    await flush();
+    const frames = host.accessRequests().map(parsedRequest);
+    frames.forEach((frame, i) => host.post({ v: PROTOCOL_VERSION, type: FRAME_TYPES.accessResponse, requestId: frame.requestId, ...calls[i]!.bad }));
+    await flush();
+    expect(states.map((state) => state.settled())).toEqual(calls.map(() => false));
+    expect(bridge.accessPending.size).toBe(calls.length);
+    frames.forEach((frame, i) => host.accessSucceed(frame.requestId, calls[i]!.good));
+    await expect(Promise.all(calls.map(({ call }) => call))).resolves.toEqual(calls.map(({ result }) => result));
     expect(bridge.accessPending.size).toBe(0);
   });
 
@@ -829,10 +854,19 @@ describe('the public surface — @snugprotocol/sdk index and types (AC5)', () =>
     expect([ACCESS_SOURCE_CHANGED_EVENT, DATA_CHANGED_EVENT, ACCESS_READ_EVENT]).toEqual(['access-source-changed', 'data-changed', 'access-read']);
   });
 
-  it('the embedded hooks block is UNCHANGED by access (Q9): it posts no access frame and names no access hook', () => {
+  // INVERTED by TASK-20261010-host-broker PR-6 (AC40b; Q9 landed): was "the embedded hooks block is
+  // UNCHANGED by access (Q9): it posts no access frame and names no access hook".
+  it('the embedded block now posts the access frame and names the access hook (PR-6 section 7; Q9 landed)', () => {
     const embedded = readFileSync(path.resolve(process.cwd(), 'embedded/snug-hooks.js'), 'utf8');
-    expect(embedded).not.toContain(FRAME_TYPES.accessRequest);
-    expect(embedded).not.toContain('useSnugAccess');
-    expect(embedded).not.toContain(ACCESS_CHANGED_EVENT);
+    expect(embedded).toContain(`'${FRAME_TYPES.accessRequest}'`);
+    expect(embedded).toContain(`'${FRAME_TYPES.accessResponse}'`);
+    expect(embedded).toMatch(/^function useSnugAccess\(\)/m);
+    expect(embedded).toContain(`'${ACCESS_CHANGED_EVENT}'`);
+  });
+
+  it('PR-6 (AC40c): exports useHostEvents beside onHostEvent — the module twin of section 6', () => {
+    const exported = sdk as Record<string, unknown>;
+    expect(typeof exported.onHostEvent).toBe('function');
+    expect(typeof exported.useHostEvents, 'useHostEvents is exported from the index').toBe('function');
   });
 });

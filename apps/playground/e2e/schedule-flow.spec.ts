@@ -4,8 +4,9 @@
 // the net stub, in the real playground app under a faked clock (ADR-0074 §3 the kv handshake,
 // §5 catch-up, §6 the unattended posture).
 //
-//   1. A GET run: the fixture app (e2e/fixtures/schedule-app.html — the copy-exactly hooks block
-//      plus the KB's schedule listener) is installed from a `.snug` bundle through Settings, its
+//   1. A GET run: the fixture app (e2e/fixtures/schedule-app.html — the copy-exactly hooks block,
+//      answering through section 6's `useSnugSchedule` since TASK-20261010-host-broker PR-6) is
+//      installed from a `.snug` bundle through Settings, its
 //      declared connection to the stub is approved in the wizard, a *run Schedule App* schedule
 //      with input {fetch:true} is created every hour through the editor, the clock jumps past the
 //      hour, and the result row reads *done* with the app's own summary of the scrubbed GET.
@@ -43,7 +44,7 @@ import path from 'node:path';
 
 import { expect, test, type Locator, type Page } from '@playwright/test';
 
-import { CONSENT, MISSED_ACTIONS, RESULT_STATUS_WORD, missedHeadline, missedRow, needsYou, stepLabel } from '../src/schedule/copy';
+import { CONSENT, MISSED_ACTIONS, RESULT_STATUS_WORD, missedHeadline, missedRow, needsYou, stepLabel, suggestionStrip } from '../src/schedule/copy';
 // The ADR-0077 sentences arrive with PR-1's copy; read through the namespace so a missing one is a
 // red at its assertion, never a link error that takes the whole file down.
 import * as scheduleCopy from '../src/schedule/copy';
@@ -280,6 +281,35 @@ test.describe('A8 — a scheduled Run [app] against the net stub', () => {
     // (the feed lists finished results only), so the feed stays empty until the user acts.
     const results = page.getByTestId('schedule-result');
     await expect(results).toHaveCount(0);
+  });
+});
+
+// F3 (TASK-20261010-host-broker PR-6, Gate 5) — proposeSchedule END TO END: the fixture's #suggest
+// is a user act that calls the embedded block's proposeSchedule; true means the suggestion was SENT
+// (the app-event schedule-request reached the host), and the host's suggestion strip shows it for
+// this app. The strip's title is the host's words — "<app> suggests: <when>" — not the proposal's own
+// title, so the clause reads the strip's lead (the copy function, never retyped) and the app it names.
+test.describe('proposeSchedule — the app suggests, the host shows the strip (PR-6, F3)', () => {
+  test.skip(!hasApp, AWAITS_INTEGRATION);
+
+  test('a click on #suggest: proposeSchedule answers true, the button reads suggested, and the host shows the suggestion strip for this app', async ({ page }) => {
+    test.setTimeout(90_000);
+    const appId = await installFixture(page);
+    const frame = page.frameLocator('[data-testid="frame-wrap"] iframe[sandbox="allow-scripts"]');
+    const suggest = frame.locator('#suggest');
+    await expect(suggest).toHaveText('suggest a daily run');
+    await expect(page.getByTestId('schedule-suggestion'), 'no strip before the user act').toHaveCount(0);
+
+    await suggest.click();
+    await expect(frame.locator('#proposed'), 'true means SENT').toHaveText('proposeSchedule: true', { timeout: 10_000 });
+    await expect(suggest).toHaveText('suggested');
+    await expect(suggest).toBeDisabled();
+
+    const strip = page.getByTestId('schedule-suggestion');
+    await expect(strip, 'the host shows the app’s suggestion').toBeVisible({ timeout: 10_000 });
+    await expect(strip).toHaveAttribute('data-app', appId);
+    await expect(strip.getByTestId('schedule-suggestion-title')).toContainText(suggestionStrip(APP_NAME, ''));
+    await expect(strip.getByTestId('schedule-suggestion-accept')).toBeVisible();
   });
 });
 

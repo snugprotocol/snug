@@ -43,11 +43,20 @@ import { connectionRequirementSchema } from '@snugprotocol/protocol';
 
 import { inferConnectionForFolder } from './infer-connection.mjs';
 
-/** A folder that reaches CoinGecko through the governed seam — the crypto-portfolio shape. */
-function fixtureFolder() {
+/**
+ * A folder that reaches CoinGecko through the governed seam — the crypto-portfolio shape.
+ *
+ * `banners` are the RESPONSE SCHEMA banner lines the babel script carries, in order (default:
+ * ONE, numbered the way PR-6 renumbers every starter — `// 8.`; TASK-20261010-host-broker
+ * D-PR6-7). `aboveBanner` is scaffold text placed ABOVE the first banner — where the
+ * copy-exactly hooks block lives — so a row can prove the authored region starts AT the
+ * banner and not at the top of the script.
+ */
+function fixtureFolder({ banners = ['// 8. RESPONSE SCHEMA'], aboveBanner = [] } = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), 'snug-infer-'));
   const folder = path.join(dir, 'crypto-portfolio');
   mkdirSync(folder);
+  const [first, ...rest] = banners;
   writeFileSync(
     path.join(folder, 'app.html'),
     [
@@ -55,8 +64,10 @@ function fixtureFolder() {
       '<html><head><title>crypto portfolio</title></head><body>',
       '<div id="root"></div>',
       '<script type="text/babel">',
-      '// 5. RESPONSE SCHEMA',
+      ...aboveBanner,
+      ...(first === undefined ? [] : [first]),
       'const RESPONSE_SCHEMA = null;',
+      ...rest,
       'const api = useConnectedFetch();',
       'const res = await api.fetch("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin");',
       '</script></body></html>',
@@ -168,5 +179,60 @@ test('P4-AC8: a refused inference writes NOTHING', () => {
       () => statSync(path.join(folder, 'connection.json')),
       'a failed run must not leave a half-written manifest behind',
     );
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────────
+// TASK-20261010-host-broker PR-6 (D-PR6-7, AC40g) — the banner is read by ONE regex, never
+// a literal, and a missing banner is a HARD refusal.
+//
+// Until PR-6 this script looked for the LITERAL '5. RESPONSE SCHEMA' and, finding none, fell
+// back to the WHOLE script — so after the renumber (every starter's banner becomes `// 8.`)
+// it would silently scan the copy-exactly hooks block and the scaffold comments as if they
+// were the app's API surface: a wrong host list, reported with confidence. The rows below
+// hold the script to the shared helper's discipline: `/\d+\. RESPONSE SCHEMA/`, exactly one
+// banner line, and no banner → refused before any model is asked.
+// ───────────────────────────────────────────────────────────────────────────────
+
+/** A completion seam that records whether it was ever asked. */
+function countingComplete() {
+  const seam = async () => {
+    seam.calls += 1;
+    return stubComplete();
+  };
+  seam.calls = 0;
+  return seam;
+}
+
+for (const banner of ['// 5. RESPONSE SCHEMA', '// 8. RESPONSE SCHEMA — describe the JSON the agent must return']) {
+  test(`PR-6: the authored region starts AT the banner, whatever its number (${banner.slice(0, 21)})`, () => {
+    // A host named only ABOVE the banner (where the hooks block and scaffold comments live)
+    // is not the app's API surface and must not be observed.
+    const folder = fixtureFolder({ banners: [banner], aboveBanner: ['// scaffold note: https://decoy.example.com/docs'] });
+    return inferConnectionForFolder(folder, { complete: stubComplete }).then((result) => {
+      assert.ok(result.ok, `inference failed: ${result.message ?? ''}`);
+      assert.deepEqual(result.observedHosts, ['api.coingecko.com'], 'only the hosts the authored region dials');
+    });
+  });
+}
+
+test('PR-6: a page with NO RESPONSE SCHEMA banner is refused — never scanned whole — and the model is never asked', () => {
+  const complete = countingComplete();
+  const folder = fixtureFolder({ banners: [], aboveBanner: ['// scaffold note: https://decoy.example.com/docs'] });
+  return inferConnectionForFolder(folder, { complete, write: true }).then((result) => {
+    assert.equal(result.ok, false, 'a banner-less page has no authored region to infer from');
+    assert.match(String(result.message), /RESPONSE SCHEMA/, 'the refusal names the missing banner');
+    assert.equal(complete.calls, 0, 'refused before any model call');
+    assert.throws(() => statSync(path.join(folder, 'connection.json')), 'and nothing is written');
+  });
+});
+
+test('PR-6: a page with TWO RESPONSE SCHEMA banners is refused — the cut would be ambiguous', () => {
+  const complete = countingComplete();
+  const folder = fixtureFolder({ banners: ['// 5. RESPONSE SCHEMA', '// 8. RESPONSE SCHEMA'] });
+  return inferConnectionForFolder(folder, { complete }).then((result) => {
+    assert.equal(result.ok, false, 'two banners: which one starts the authored region is a guess');
+    assert.match(String(result.message), /RESPONSE SCHEMA/);
+    assert.equal(complete.calls, 0, 'refused before any model call');
   });
 });

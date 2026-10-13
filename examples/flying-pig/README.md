@@ -23,5 +23,5 @@ anywhere in the loop.
 ## Files
 
 - `app.html` — the whole app. Hook block is byte-identical to
-  `packages/sdk/embedded/snug-hooks.js`; everything after the `// 5. RESPONSE SCHEMA`
-  banner is app code.
+  `packages/sdk/embedded/snug-hooks.js`; everything after the RESPONSE SCHEMA banner is
+  app code.

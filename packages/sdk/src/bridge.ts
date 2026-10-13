@@ -74,6 +74,12 @@ function notify(): void {
 }
 
 function onMessage(event: MessageEvent): void {
+  // The host alone, never a sibling frame (TASK-20261010-host-broker PR-6, D-PR6-2): another frame
+  // in the same document can reach this window (`parent.frames[i].postMessage`) and, under the null
+  // origin, `event.origin` says nothing — so the SOURCE is the check, before anything is parsed. A
+  // sibling's frame settles no call, rings no subscriber, drives no scheduled run and rewrites no
+  // instanceId, theme or capabilities. The embedded form's listener opens with the same check.
+  if (event.source !== window.parent) return;
   const parsed = parseFrame(event.data);
   if (!parsed.ok) return; // non-snug traffic, malformed, or foreign-version frames — ignore (R2)
   const frame = parsed.frame;

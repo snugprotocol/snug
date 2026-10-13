@@ -6,7 +6,9 @@
   reduction of pushed events from CONTENT to HINTS, forced by two verified facts about the
   frame layer (256 KB class + silent oversize drop; no `instanceId` on host-event frames).
   Threat surface: the surface-v2 addendum in
-  `docs/security/threat-model-delta-whatsapp-sidecar.md`.
+  `docs/security/threat-model-delta-whatsapp-sidecar.md`. **Follow-up landed 2026-10-12**
+  (TASK-20261010-host-broker PR-6): the `useHostEvents` hook recorded under Consequences ships
+  in BOTH forms — see the note there.
 - **Date:** 2026-08-17
 - **Task:** TASK-20260817-telepath
 
@@ -77,6 +79,12 @@ live WebSocket to WhatsApp; the platform already has an open additive host→app
   (hints only), and that unmount/epoch supersession stops it.
 - `connection-event` becomes the second consumer of `snug:host-event`; an SDK `useHostEvents`
   hook is recorded in next-steps as a follow-up (Telepath hand-rolls its listener outside the
-  byte-checked embedded block).
+  byte-checked embedded block). *(Landed 2026-10-12, TASK-20261010-host-broker PR-6: the module
+  SDK's `useHostEvents(handlers)` (`packages/sdk/src/hostEvents.ts`, over `onHostEvent`) and the
+  embedded block's section 6 carry the same hook, held to one contract suite for both forms
+  (`packages/sdk/src/__tests__/contract-host-events.ts`); KB 90 teaches it with the wizard's
+  `connection-event { slot, verified, requestRefresh }`; Inbox Copilot (gmail) moved onto it.
+  Telepath's LIVE-DOORBELL stays hand-rolled — its extraction test owns the shape — and the
+  other sample-mode starters adopt the refresh signal on their next releases (next-steps).)*
 - Media size posture: refuse-don't-truncate at the sidecar, cap-while-reading in Rust (unchanged),
   thumbnail as the graceful floor.

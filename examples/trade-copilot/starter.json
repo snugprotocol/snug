@@ -1,7 +1,21 @@
 {
-  "version": 2,
-  "appHash": "9d6b20ebb65740cc094eea7517798edcf304eef8414b1e326a1fb8220d571eab",
+  "version": 3,
+  "appHash": "eb4e67ad450f78df8326c22823f62fba5729299c89e0ac7da796132e3a9afc78",
   "changelog": [
+    {
+      "version": 3,
+      "date": "2026-10-12",
+      "title": "Up to date with Snug",
+      "sections": [
+        {
+          "title": "What changed",
+          "items": [
+            "Coinbase Trade Copilot works just as before: this release updates the built-in code every Snug app uses to talk to Snug to the version new apps are built with.",
+            "Customized your copy? You can skip this one — your version keeps working as it is."
+          ]
+        }
+      ]
+    },
     {
       "version": 2,
       "date": "2026-08-21",

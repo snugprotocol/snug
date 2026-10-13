@@ -25,6 +25,15 @@
 // own schema; declare AND ask; never a bundle field), the falsified sentences gone from 87, 00-summary,
 // the skill and instructions.md, KB 85's fetch-first sentence, and KB 20's fence unchanged. The
 // heading-tree pin is AMENDED (the one new heading set aside; every old one still pinned in order).
+//
+// TASK-20261010-host-broker PR-6 (contract v2 D-PR6-4, D-PR6-6; AC40f): the cross-app HELPER and its
+// second `message` listener are RETIRED — section 7 of the copy-exactly hooks block (`useSnugAccess()`,
+// over section 6's `onHostEvent`) is the one way an app reads another app. So: "## The Cross-App
+// Helper (copy beside the hooks block)" becomes "## The Access Hook" with ONE javascript fence (the
+// usage); the helper rows are RE-HOMED on the embedded file (`packages/sdk/embedded/snug-hooks.js`) —
+// the guards' messages still read from `packages/sdk/src/bridge.ts`; `data-changed` is taught as
+// `{ table }` or `{}`; and the PR-5 pin that KB 20's fence is UNCHANGED is INVERTED: it carries
+// sections 6 and 7 now.
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -75,6 +84,53 @@ const SDK_ACCESS_SOURCE = readFileSync(path.join(repoRoot, 'packages', 'sdk', 's
 const SDK_BRIDGE_SOURCE = readFileSync(path.join(repoRoot, 'packages', 'sdk', 'src', 'bridge.ts'), 'utf8');
 const SDK_INDEX_SOURCE = readFileSync(path.join(repoRoot, 'packages', 'sdk', 'src', 'index.ts'), 'utf8');
 const SDK_TYPES_SOURCE = readFileSync(path.join(repoRoot, 'packages', 'sdk', 'src', 'types.ts'), 'utf8');
+/** The copy-exactly hooks block every app carries (PR-6: sections 1–7) — the form the KB teaches. */
+const EMBEDDED_HOOKS = readFileSync(path.join(repoRoot, 'packages', 'sdk', 'embedded', 'snug-hooks.js'), 'utf8');
+
+/**
+ * One numbered section of the embedded hooks block: from the `// ====` line above `// <n>.` to the
+ * line before the `// ====` line above the next numbered banner (or the end of the file).
+ * `undefined` while the section does not exist — a red row, never a thrown suite.
+ */
+function embeddedSection(n: number): string | undefined {
+  const lines = EMBEDDED_HOOKS.split('\n');
+  const at = lines.findIndex((line) => line.trim().startsWith(`// ${n}. `));
+  if (at < 1) return undefined;
+  const next = lines.findIndex((line, i) => i > at && /^\s*\/\/ \d+\. /.test(line));
+  return lines.slice(at - 1, next === -1 ? undefined : next - 1).join('\n');
+}
+
+/**
+ * The text of every call to `callee` in `code`, from the callee to its balancing `)`. The fences
+ * carry no unbalanced parenthesis inside a string, so a paren count is enough here.
+ */
+function callBlocks(code: string, callee: string): { index: number; text: string }[] {
+  const out: { index: number; text: string }[] = [];
+  for (const match of code.matchAll(new RegExp(`(?<![\\w.])${callee}\\(`, 'g'))) {
+    const start = match.index as number;
+    let depth = 0;
+    let end = start + callee.length;
+    for (; end < code.length; end += 1) {
+      if (code[end] === '(') depth += 1;
+      else if (code[end] === ')' && --depth === 0) break;
+    }
+    out.push({ index: start, text: code.slice(start, end + 1) });
+  }
+  return out;
+}
+
+/** The Snug names a page teaches — the hooks and the helpers an app calls — never React's own hooks. */
+const SNUG_NAMES = /\b(use(?:Snug\w*|PersistedState|AppDB|ConnectedFetch|HostEvents)|proposeSchedule|scheduleInputKey|onHostEvent)\b/g;
+
+/** The retired PR-5 snippet's top-level names (anchor 6): no page may teach them as code to copy. */
+const RETIRED_HELPER_NAMES = ['snugAccessRequest', 'onAccessChanged', 'onAccessSourceChanged', 'onAccessRead'] as const;
+
+/** PR-6 (D-PR6-6): the one migration sentence, verbatim. */
+const ACCESS_MIGRATION =
+  'An app that still carries the older access helper and its listener: delete them, `SNUG_ACCESS_PENDING` included, when you copy sections 6–7.';
+
+/** PR-6 (D-PR6-6): the hook's heading, in place of "## The Cross-App Helper (copy beside the hooks block)". */
+const HOOK_HEADING = '## The Access Hook';
 
 /** The two HOST_ERROR messages the SDK's `accessRequest` answers before host-ready / without the capability. */
 const SDK_GUARD_MESSAGES = (() => {
@@ -143,7 +199,7 @@ describe('AC24 — the page is in the store, out of the inline core, with its he
     expect(INLINE_KNOWLEDGE_CORE_FILES).not.toContain(KB_FILE);
   });
 
-  it('the heading tree is pinned — these are the retrieval keys (PR-3: "Four Ops" → "Seven Ops", moved together with the frames-table section key)', () => {
+  it('the heading tree is pinned — these are the retrieval keys (PR-3: "Four Ops" → "Seven Ops", moved together with the frames-table section key; PR-6: "## The Access Hook")', () => {
     const doc = getKnowledgeBase().find((entry) => entry.file === KB_FILE)!;
     // AMENDED — AC39 (D-PR5-2): KB 87 gains ONE section, "## Saying what your app would like to read"
     // (its place is the KB lane's; its presence, once, is pinned in the PR-5 block below). Every
@@ -157,7 +213,8 @@ describe('AC24 — the page is in the store, out of the inline core, with its he
       '## Query: One Read-Only SELECT',
       '## When It Stops, Pauses or Ends',
       '## What Each Refusal Means',
-      '## The Cross-App Helper (copy beside the hooks block)',
+      // PR-6 (D-PR6-6): "## The Cross-App Helper (copy beside the hooks block)" → the hook.
+      HOOK_HEADING,
       '## Your App Need Not Read Another App Itself',
       '## Rules for Reading Another App',
     ]);
@@ -186,63 +243,124 @@ describe('AC24 content sync — the exchange the KB teaches is the one the proto
     expect(text).toContain('{{frameType:accessRequest}}');
     expect(text).toContain('{{frameType:accessResponse}}');
     expect(text).toContain('{{frameType:hostEvent}}');
-    expect(text).toContain('{{protocolVersion}}');
+    // PR-6: `{{protocolVersion}}` is no longer pinned here — the only place 87 used it was the retired
+    // helper listener's `data.v !==` guard (D-PR6-6); the bridge's guard is section 1's now.
     for (const literal of Object.values(FRAME_TYPES)) expect(text, `source retypes ${literal}`).not.toContain(literal);
   });
 
-  it('the RENDERED helper posts the real request frame through SnugBridge.post with a fresh requestId, and answers each requestId once', () => {
-    const [helper] = fencedJs(rendered(KB_FILE));
-    expect(helper).toBeDefined();
-    expect(helper).toContain('function snugAccessRequest(op, fields)');
-    expect(helper).toContain('const requestId = crypto.randomUUID();');
-    expect(helper).toContain(`SnugBridge.post({ type: '${FRAME_TYPES.accessRequest}', requestId, op, ...fields });`);
-    // requestId → resolve, deleted on the one terminal answer.
-    expect(helper).toContain('SNUG_ACCESS_PENDING.set(requestId, resolve);');
-    expect(helper).toContain('SNUG_ACCESS_PENDING.delete(data.requestId);');
+  // ---- PR-6: the helper rows RE-HOMED on the embedded file (sections 1 and 7) -------------------
+  it('PR-6: section 7 posts the real request frame through SnugBridge.post with a fresh requestId, and section 1 settles each requestId once', () => {
+    const seven = embeddedSection(7);
+    expect(seven, 'the embedded hooks block has a section 7').toBeDefined();
+    const code = seven as string;
+    expect(code).toContain('function snugAccessCall(fields, settle)');
+    expect(code).toContain('const requestId = crypto.randomUUID();');
+    expect(code).toContain(`SnugBridge.post({ type: '${FRAME_TYPES.accessRequest}', requestId, ...fields });`);
+    // requestId → settle, deleted on the one terminal answer (section 1's arm), and on a failed post.
+    expect(code).toContain('SnugBridge.accessPending.set(requestId,');
+    const one = embeddedSection(1) ?? '';
+    expect(one).toContain('const settle = SnugBridge.accessPending.get(data.requestId);');
+    expect(one).toContain('SnugBridge.accessPending.delete(data.requestId);');
+    expect(one.indexOf('SnugBridge.accessPending.delete(data.requestId);'), 'deleted BEFORE it is settled — terminal once').toBeLessThan(one.indexOf('settle(data);'));
     // No plumbing of its own: the bridge's post, never a hand-rolled postMessage.
-    expect(helper).not.toContain('postMessage(');
+    expect(code).not.toContain('postMessage(');
   });
 
-  it('the RENDERED listener filters on the parent window, the wire version, the real response type and the event name the SDK subscribes with', () => {
-    const [helper] = fencedJs(rendered(KB_FILE));
-    expect(helper).toContain("addEventListener('message'");
-    expect(helper).toContain('event.source !== window.parent');
-    expect(helper).toContain(`data.v !== ${PROTOCOL_VERSION}`);
-    expect(helper).toContain(`data.type === '${FRAME_TYPES.accessResponse}'`);
-    expect(helper).toContain(`data.type === '${FRAME_TYPES.hostEvent}' && data.event === '${ACCESS_CHANGED_EVENT}'`);
-    // The SDK's onChange subscribes with the same constant — through grantHint — so the snippet and the hook hear the same event.
+  it('PR-6: section 1 accepts a frame only from the parent window at the wire version, settles the real response type, and section 7 hears the event the SDK subscribes with — ids only', () => {
+    const one = embeddedSection(1) ?? '';
+    expect(one).toContain(`if (event.source !== window.parent || !data || data.v !== ${PROTOCOL_VERSION}) return;`);
+    expect(one).toContain(`if (data.type === '${FRAME_TYPES.accessResponse}') {`);
+    const seven = embeddedSection(7) ?? '';
+    expect(seven).toContain(`onChange: snugGrantHint('${ACCESS_CHANGED_EVENT}')`);
+    // The SDK's onChange subscribes with the same constant — through grantHint — so the block and the module hear the same event.
     expect(SDK_ACCESS_SOURCE).toContain('onChange: grantHint(ACCESS_CHANGED_EVENT)');
     // …and grantHint subscribes through the bridge's onHostEvent with the event it was handed (the one place).
     expect(SDK_ACCESS_SOURCE).toContain('onHostEvent(event,');
-    // ids only: the hint carries a grantId and the helper reads nothing else from it.
-    expect(helper).toContain("typeof change.grantId === 'string'");
-    expect(helper).toContain('onAccessChanged(change.grantId)');
+    // ids only: the hint carries a grantId and the hook hands the listener nothing else.
+    expect(seven).toContain("typeof data.grantId === 'string' && data.grantId !== ''");
+    expect(seven).toContain('listener({ grantId: data.grantId })');
   });
 
-  it('answers the SDK’s two guard results with nothing posted: HOST_ERROR before host-ready (retryable) and without capabilities.access (not retryable)', () => {
-    const [helper] = fencedJs(rendered(KB_FILE));
+  it('answers the SDK’s two guard results with nothing posted: HOST_ERROR before host-ready (retryable) and without capabilities.access (not retryable) — PR-6: in section 7', () => {
+    const seven = embeddedSection(7) ?? '';
     expect(SDK_GUARD_MESSAGES.notReady.retryable).toBe(true);
     expect(SDK_GUARD_MESSAGES.noCapability.retryable).toBe(false);
-    expect(helper).toContain(
+    expect(seven).toContain(
       `if (!SnugBridge.ready) return Promise.resolve({ ok: false, error: { code: 'HOST_ERROR', message: '${SDK_GUARD_MESSAGES.notReady.message}', retryable: true } });`,
     );
-    expect(helper).toContain(
+    expect(seven).toContain(
       `if (SnugBridge.capabilities.access !== true) return Promise.resolve({ ok: false, error: { code: 'HOST_ERROR', message: '${SDK_GUARD_MESSAGES.noCapability.message}', retryable: false } });`,
     );
+    // Both guards come before the post: nothing is posted, nothing is pending.
+    expect(seven.indexOf('if (!SnugBridge.ready)')).toBeLessThan(seven.indexOf('SnugBridge.post('));
+    expect(seven.indexOf('if (SnugBridge.capabilities.access !== true)')).toBeLessThan(seven.indexOf('SnugBridge.accessPending.set('));
   });
 
-  it('the usage snippet asks from a user act with a purpose and hints, then queries with bound params by the id it was given', () => {
-    const [, usage] = fencedJs(rendered(KB_FILE));
+  // ---- PR-6: the ONE fence — the usage of the hook ----------------------------------------------
+  it('PR-6: the usage is `const access = useSnugAccess()` in the component — the granted view named `grant`, never `access`', () => {
+    const [usage] = fencedJs(rendered(KB_FILE));
     expect(usage).toBeDefined();
-    expect(usage).toMatch(/^async function on\w+Click\(\)/); // a click handler — never on load
-    expect(usage).toContain("snugAccessRequest('request', {");
-    expect(usage).toMatch(/purpose: '[^']{1,200}'/);
-    expect(usage).toMatch(/hints: \{ words: \[[^\]]+\], tables: \[[^\]]+\] \}/);
-    expect(usage).toContain("snugAccessRequest('query', {");
-    expect(usage).toContain('grantId: access.id');
-    expect(usage).toMatch(/sql: 'SELECT [^']+\?[^']*'/);
-    expect(usage).toMatch(/params: \[/);
-    expect(usage).not.toMatch(/useEffect|setTimeout|setInterval/);
+    const code = usage as string;
+    expect(code).toContain('const access = useSnugAccess();');
+    const accessDeclarations = [...code.matchAll(/\b(?:const|let|var)\s+access\b[^\n]*/g)].map((m) => m[0]);
+    expect(accessDeclarations, 'access names the hook and nothing else').toEqual(['const access = useSnugAccess();']);
+    expect(code, 'the granted view is named grant').toMatch(/\b(?:const|let)\s+(?:\[\s*)?grant\b/);
+    expect(code).toMatch(/\.grant\b/);
+    // NEGATIVE: the retired helper is not taught here.
+    for (const name of RETIRED_HELPER_NAMES) expect(code, name).not.toContain(name);
+    expect(code).not.toContain('SNUG_ACCESS_PENDING');
+    expect(code).not.toContain("addEventListener('message'");
+    expect(code).not.toContain('SnugBridge');
+  });
+
+  it('PR-6: access.request from a user act with a purpose and hints, never in an effect; then access.query with bound params by grant.id', () => {
+    const code = fencedJs(rendered(KB_FILE))[0] ?? '';
+    const requests = callBlocks(code, 'access.request');
+    expect(requests.length, 'one ask').toBeGreaterThanOrEqual(1);
+    expect(requests[0]?.text, 'the purpose is one plain line').toMatch(/^access\.request\(\s*'[^']{1,200}'/);
+    expect(code).toMatch(/hints: \{ words: \[[^\]]+\], tables: \[[^\]]+\] \}/);
+    for (const effect of callBlocks(code, 'useEffect')) expect(effect.text, 'never asks from an effect').not.toContain('access.request(');
+    expect(code).toMatch(/\bon[A-Z]\w*Click\b/); // a click handler — never on load
+    expect(code).toMatch(/access\.query\(\s*grant\.id,\s*'SELECT [^']*\?[^']*',\s*\[/);
+    expect(code).not.toMatch(/setTimeout|setInterval/);
+  });
+
+  it('PR-6: access.write and access.refresh sit behind their flags — a table’s `write`, the view’s `refresh`', () => {
+    const code = fencedJs(rendered(KB_FILE))[0] ?? '';
+    expect(code).toMatch(/access\.write\(\s*grant\.id,/);
+    expect(code).toMatch(/access\.refresh\(\s*grant\.id\s*\)/);
+    expect(code, 'a table’s write flag is read').toMatch(/\.write(?!\s*\()\b/);
+    expect(code, 'the view’s refresh flag is read').toMatch(/grant\.refresh(?!\s*\()\b/);
+    for (const effect of callBlocks(code, 'useEffect')) {
+      expect(effect.text).not.toContain('access.write(');
+      expect(effect.text).not.toContain('access.refresh(');
+    }
+  });
+
+  it('PR-6: the four on* subscriptions live in ONE useEffect whose deps list the useCallbacks it calls, and it returns their unsubscribes', () => {
+    const code = fencedJs(rendered(KB_FILE))[0] ?? '';
+    const subscriptions = ['access.onChange(', 'access.onSourceChanged(', 'access.onDataChanged(', 'access.onRead('];
+    const effects = callBlocks(code, 'useEffect').filter((effect) => subscriptions.some((s) => effect.text.includes(s)));
+    expect(effects, 'one effect subscribes').toHaveLength(1);
+    const effect = effects[0]?.text ?? '';
+    for (const subscription of subscriptions) expect(effect, subscription).toContain(subscription);
+    // Each subscription's unsubscribe is kept — never a bare statement (whatever precedes the call is
+    // an assignment, an array or an argument, not the end of a statement) — and the effect returns a cleanup.
+    const effectCode = effect.replace(/\/\/[^\n]*/g, ''); // line comments out — they are words, not statements
+    for (const subscription of subscriptions) {
+      const at = effectCode.indexOf(subscription);
+      const before = effectCode.slice(0, at).trimEnd();
+      expect(before.slice(-1), `${subscription}'s unsubscribe is kept`).not.toMatch(/[;{}]/);
+    }
+    expect(effect).toMatch(/return \(\) =>/);
+    // The deps list the useCallbacks the effect calls.
+    const deps = /\],?\s*\)$/.test(effect) ? (/\[([^[\]]*)\]\s*\)$/.exec(effect)?.[1] ?? '') : '';
+    const callbacks = [...code.matchAll(/const (\w+) = useCallback\(/g)].map((m) => m[1] as string).filter((name) => new RegExp(`\\b${name}\\b`).test(effect.replace(/\[[^[\]]*\]\s*\)$/, '')));
+    expect(callbacks.length, 'the effect calls at least one useCallback').toBeGreaterThan(0);
+    for (const name of callbacks) expect(deps, `the deps list ${name}`).toMatch(new RegExp(`\\b${name}\\b`));
+    // The hint names belong to the hook, never the usage — and never useHostEvents.
+    for (const event of [ACCESS_CHANGED_EVENT, ACCESS_SOURCE_CHANGED_EVENT, DATA_CHANGED_EVENT, ACCESS_READ_EVENT]) expect(code, event).not.toContain(`'${event}'`);
+    expect(code).not.toContain('useHostEvents');
   });
 
   it('teaches the seven ops of the request — ACCESS_OPS exactly — in the frames table (PR-3: the section is "…Seven Ops", moved with the heading tree)', () => {
@@ -312,7 +430,7 @@ describe('AC24 content sync — the exchange the KB teaches is the one the proto
     expect(query).toContain("Every read is recorded in the other app's history");
   });
 
-  it('teaches the access-changed hint as ids only and the re-list, and names the module SDK by its real exports (PR-3: SnugAccess has eleven methods, each named in the helper prose)', () => {
+  it('teaches the access-changed hint as ids only and the re-list, and names the hook’s eleven methods (PR-3: SnugAccess has eleven methods; PR-6: named in "## The Access Hook")', () => {
     const changes = prose(section(rendered(KB_FILE), '## When It Stops, Pauses or Ends'));
     expect(changes).toContain(`\`event: '${ACCESS_CHANGED_EVENT}'\``);
     expect(changes).toContain('`data: { grantId }` — ids only');
@@ -320,13 +438,16 @@ describe('AC24 content sync — the exchange the KB teaches is the one the proto
     // W6 finding 36 — the engine never rings on expiry (spec §23.3): the page must not promise it.
     expect(changes).toContain('An expiry is not announced');
     expect(changes).toContain('`ACCESS_EXPIRED`');
-    const helperCode = section(rendered(KB_FILE), '## The Cross-App Helper (copy beside the hooks block)');
-    expect(helperCode).toContain('an access was stopped or paused');
-    expect(helperCode).not.toMatch(/ran out/);
+    // PR-6: re-homed from the retired helper section on the hook's section (W6 finding 36 — the
+    // onChange hint means stopped or paused; an expiry is never announced).
+    const hookCode = section(rendered(KB_FILE), HOOK_HEADING);
+    expect(hookCode).toContain('an access was stopped or paused');
+    expect(hookCode).not.toMatch(/ran out/);
     expect(SDK_INDEX_SOURCE).toMatch(/export \{[^}]*\buseSnugAccess\b[^}]*\} from '\.\/access\.js'/);
-    const helper = prose(section(rendered(KB_FILE), '## The Cross-App Helper (copy beside the hooks block)'));
-    expect(helper).toContain("`useSnugAccess()` from `@snugprotocol/sdk`");
-    for (const method of SDK_ACCESS_METHODS) expect(helper, `SnugAccess.${method}`).toContain(`\`${method}(`);
+    const hook = prose(section(rendered(KB_FILE), HOOK_HEADING));
+    // PR-6 (D-PR6-6, :346-352): the module sentence as the contract words it.
+    expect(hook).toContain("the hook's eleven methods (typed in `@snugprotocol/sdk`):");
+    for (const method of SDK_ACCESS_METHODS) expect(hook, `SnugAccess.${method}`).toContain(`\`${method}(`);
     expect(SDK_ACCESS_METHODS.sort()).toEqual(
       ['discover', 'list', 'onChange', 'onDataChanged', 'onRead', 'onSourceChanged', 'query', 'refresh', 'release', 'request', 'write'],
     );
@@ -365,24 +486,30 @@ describe('PR-3 — KB 87 v2: write, refresh, discover, the three hints, the fall
     expect(rules).not.toContain('**Read, never write.**');
   });
 
-  it('the page keeps exactly two javascript fences: the helper first (replaced in place), the usage second', () => {
+  // PR-6 (D-PR6-6; AC40f) INVERTS PR-3's "exactly two fences: the helper, then the usage": the helper
+  // is retired, and the page keeps ONE javascript fence — the usage of the hook, under its heading.
+  it('PR-6: the page keeps exactly ONE javascript fence — the usage of useSnugAccess(), under "## The Access Hook"', () => {
     const fences = fencedJs(rendered(KB_FILE));
-    expect(fences).toHaveLength(2);
-    expect(fences[0]).toContain('function snugAccessRequest(op, fields)');
-    expect(fences[1]).toMatch(/^async function on\w+Click\(\)/);
+    expect(fences).toHaveLength(1);
+    expect(fences[0]).toContain('useSnugAccess()');
+    expect(fences[0]).not.toContain('function snugAccessRequest(op, fields)');
+    expect(fencedJs(section(rendered(KB_FILE), HOOK_HEADING))).toHaveLength(1);
   });
 
-  it('the RENDERED helper hears the three new hints — an arm for access-source-changed, data-changed and access-read, the event names the SDK subscribes with', () => {
-    const [helper, usage] = fencedJs(rendered(KB_FILE));
+  it('PR-6: section 7 hears the three new hints by name — access-source-changed, data-changed and access-read, the event names the SDK subscribes with (re-homed from the retired helper)', () => {
+    const seven = embeddedSection(7) ?? '';
+    const [usage] = fencedJs(rendered(KB_FILE));
     expect([ACCESS_SOURCE_CHANGED_EVENT, DATA_CHANGED_EVENT, ACCESS_READ_EVENT]).toEqual(['access-source-changed', 'data-changed', 'access-read']);
+    expect(seven).toContain(`onSourceChanged: snugGrantHint('${ACCESS_SOURCE_CHANGED_EVENT}')`);
+    expect(seven).toContain(`return onHostEvent('${DATA_CHANGED_EVENT}',`);
+    expect(seven).toContain(`onRead: snugGrantHint('${ACCESS_READ_EVENT}')`);
     for (const event of [ACCESS_SOURCE_CHANGED_EVENT, DATA_CHANGED_EVENT, ACCESS_READ_EVENT]) {
-      expect(helper, `the helper's ${event} arm`).toContain(`data.event === '${event}'`);
-      expect(usage, `${event} belongs to the helper, not the usage`).not.toContain(`'${event}'`);
+      expect(usage ?? '', `${event} belongs to the hook, not the usage`).not.toContain(`'${event}'`);
     }
-    // The 1.1 arm stays (pinned verbatim above), and the SDK subscribes to the same three constants:
+    // The 1.1 hint stays (pinned above), and the SDK subscribes to the same three constants:
     // the two { grantId } hints through grantHint (which calls onHostEvent(event, …), pinned above);
     // data-changed directly, since its listener reads the data shape, not a grantId (SEC-5).
-    expect(helper).toContain(`data.event === '${ACCESS_CHANGED_EVENT}'`);
+    expect(seven).toContain(`onChange: snugGrantHint('${ACCESS_CHANGED_EVENT}')`);
     const sdkSubscriptions: ReadonlyArray<readonly [string, string]> = [
       ['ACCESS_SOURCE_CHANGED_EVENT', 'onSourceChanged: grantHint(ACCESS_SOURCE_CHANGED_EVENT)'],
       ['DATA_CHANGED_EVENT', 'onHostEvent(DATA_CHANGED_EVENT,'],
@@ -653,12 +780,24 @@ describe('PR-5 — KB 85 and KB 20 (AC39; D-PR5-19)', () => {
     expect(words).toMatch(/fetch new data first/i);
   });
 
-  it('KB 20’s template fence is UNCHANGED, byte for byte (the inline core’s budget; the declaration is taught in 87)', () => {
+  // PR-6 (D-PR6-6; AC40f) INVERTS this row: KB 20's fence carries sections 6 and 7 now — the hooks
+  // block grew, the declaration is STILL taught in 87 and never in the template.
+  it('PR-6: KB 20’s fence carries sections 6 and 7 (the banners, the names), the authored banners renumbered 8 and 9 — and still no declaration meta', () => {
     const text = source('knowledge-base/app-authoring/20-html-template.md');
     const fences = [...text.matchAll(/```html\r?\n([\s\S]*?)\r?\n```/g)].map((m) => m[1] as string);
     expect(fences).toHaveLength(1);
-    expect(createHash('sha256').update(fences[0]!, 'utf8').digest('hex')).toBe(KB20_FENCE_SHA256);
+    expect(createHash('sha256').update(fences[0]!, 'utf8').digest('hex'), 'the fence changed from PR-5’s').not.toBe(KB20_FENCE_SHA256);
     expect(fences[0]).not.toContain('snug:access-wants');
+    const renderedFence = /```html\r?\n([\s\S]*?)\r?\n```/.exec(rendered('knowledge-base/app-authoring/20-html-template.md'))?.[1] ?? '';
+    const banners = renderedFence.split('\n').map((line) => line.trim()).filter((line) => /^\/\/ \d+\. /.test(line));
+    expect(banners[5]).toBe('// 6. useHostEvents + useSnugSchedule (copy exactly when the app listens to the host or takes part in schedules; omit otherwise)');
+    expect(banners[6]).toBe("// 7. useSnugAccess (copy exactly, WITH section 6, when the app reads or changes another app's data; omit otherwise)");
+    expect(banners[7]).toMatch(/^\/\/ 8\. RESPONSE SCHEMA/);
+    expect(banners[8]).toMatch(/^\/\/ 9\. YOUR APP/);
+    expect(banners).toHaveLength(9);
+    for (const name of ['onHostEvent', 'useHostEvents', 'useSnugSchedule', 'proposeSchedule', 'scheduleInputKey', 'snugAccessCall', 'useSnugAccess']) {
+      expect(renderedFence, name).toContain(`function ${name}(`);
+    }
   });
 });
 
@@ -709,5 +848,78 @@ describe('G5-16 (ii-11) — declare AND ask, with the same purpose and the same 
 
   it('G5-16 (ii-11) the purpose-only sentence is gone', () => {
     expect(prose(source(KB_FILE))).not.toContain('with the same purpose words');
+  });
+});
+
+// =========================================================================================
+// TASK-20261010-host-broker PR-6 (contract v2 D-PR6-4, D-PR6-6; AC40f): KB 87 reads true against
+// the access hook. The three "the helper below" lines (:27, :94, :370) say "the access hook";
+// `data-changed` is `{ table }` or `{}`; the page never names the retired helper except the ONE
+// migration sentence (which names `SNUG_ACCESS_PENDING` so an author can find and delete it); the
+// hints are answered through `access.on*`, never `useHostEvents`; KB 10's Section Map names the page.
+// =========================================================================================
+describe('PR-6 — KB 87 reads true against the access hook (D-PR6-6)', () => {
+  it('teaches data-changed as "{ table }, or {} when the host could not name it — re-read everything you show"', () => {
+    const stops = prose(section(rendered(KB_FILE), '## When It Stops, Pauses or Ends'));
+    expect(stops).toMatch(/`(?:data: )?\{ table \}`, or `(?:data: )?\{\}` when the host could not name it — re-read everything you show/);
+    // …and section 7 delivers it: `{}` when the host sent no table (the retired helper DROPPED those).
+    const seven = embeddedSection(7) ?? '';
+    expect(seven).toContain('if (data.table === undefined) listener({});');
+    expect(seven).toContain("else if (typeof data.table === 'string' && data.table !== '') listener({ table: data.table });");
+  });
+
+  it('"the helper below" is gone — the three places say "the access hook"', () => {
+    const text = rendered(KB_FILE);
+    expect(prose(text)).not.toMatch(/helper below/);
+    expect(prose(section(text, "## Read Another App's Data Only With the User's Say"))).toContain('the access hook');
+    expect(prose(section(text, PR5_HEADING))).toContain('the access hook');
+    expect(prose(section(text, '## Your App Need Not Read Another App Itself'))).toContain('the access hook');
+  });
+
+  it('carries the migration sentence exactly once, verbatim — the ONLY place the retired names appear', () => {
+    const text = prose(rendered(KB_FILE));
+    expect(text.split(ACCESS_MIGRATION).length - 1).toBe(1);
+    expect(text.split('SNUG_ACCESS_PENDING').length - 1, 'SNUG_ACCESS_PENDING only in the migration sentence').toBe(1);
+    for (const name of RETIRED_HELPER_NAMES) {
+      expect(text, `${name} is never taught`).not.toContain(name);
+      expect(source(KB_FILE), `${name} is not in the source`).not.toContain(name);
+    }
+    // The page teaches no second listener of its own.
+    expect(text).not.toContain("addEventListener('message'");
+  });
+
+  it('answers the access hints through access.on*, never useHostEvents — the hook checks their ids', () => {
+    expect(prose(rendered(KB_FILE))).toMatch(/[Aa]nswer the access hints through `access\.on\*`, never `useHostEvents` — the hook checks their ids/);
+  });
+
+  it('every Snug hook the page names is a function the embedded hooks block defines', () => {
+    const names = new Set([...rendered(KB_FILE).matchAll(SNUG_NAMES)].map((m) => m[1] as string));
+    expect(names, '87 teaches useSnugAccess').toContain('useSnugAccess');
+    for (const name of names) expect(EMBEDDED_HOOKS, `embedded/snug-hooks.js defines ${name}`).toContain(`function ${name}(`);
+  });
+
+  it('section 7’s banner says it needs section 6 — the hook calls section 6’s onHostEvent', () => {
+    const seven = embeddedSection(7) ?? '';
+    expect(seven).toContain("// 7. useSnugAccess (copy exactly, WITH section 6, when the app reads or changes another app's data; omit otherwise)");
+    expect(seven).toContain('onHostEvent(');
+    expect(embeddedSection(6) ?? '', 'section 6 defines what section 7 calls').toContain('function onHostEvent(event, listener)');
+  });
+
+  // R-docs-1 (Gate 5): a call made before host-ready answers the not-ready guard, host-ready always
+  // arrives AFTER the first commit's effects, and useSnugAccess is memoised — so an un-gated effect on
+  // mount never lists an access from an earlier visit. The prose says to render the component only
+  // once isReady is true (naming the guard's own message), and the fence's on-mount list is gated.
+  it('the hook section says to use it once isReady is true — naming the not-ready answer — and the fence’s on-mount list waits for isReady', () => {
+    const hook = section(rendered(KB_FILE), HOOK_HEADING);
+    const words = prose(hook.replace(/```[\s\S]*?```/g, ' '));
+    expect(words, 'the prose names isReady').toMatch(/\bisReady\b/);
+    expect(words, 'the prose names the not-ready answer, read from bridge.ts').toContain(SDK_GUARD_MESSAGES.notReady.message);
+    const [usage] = fencedJs(hook);
+    expect(usage ?? '', 'the on-mount list is gated by isReady').toMatch(/useEffect\(\(\) => \{\s*if \(isReady\) relist\(\);\s*\}, \[isReady, relist\]\);/);
+    expect(usage ?? '', 'no un-gated on-mount list').not.toMatch(/useEffect\(\(\) => \{\s*relist\(\);\s*\}, \[relist\]\);/);
+  });
+
+  it('KB 10’s Section Map names "Access Between Apps"', () => {
+    expect(rendered('knowledge-base/app-authoring/10-overview-and-contract.md')).toContain('- "Access Between Apps" —');
   });
 });

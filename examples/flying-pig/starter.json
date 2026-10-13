@@ -1,7 +1,21 @@
 {
-  "version": 2,
-  "appHash": "4f1ab6206ec7d2289be35ed077ff1852087f571f569ecbda08222b91cdf34982",
+  "version": 3,
+  "appHash": "3461004fc47093fd370ddae6c606fc2af8c3b0873fa4d51c545eb8fad9d4afc3",
   "changelog": [
+    {
+      "version": 3,
+      "date": "2026-10-12",
+      "title": "Up to date with Snug",
+      "sections": [
+        {
+          "title": "What changed",
+          "items": [
+            "Flying Pig Feed! works just as before: this release updates the built-in code every Snug app uses to talk to Snug to the version new apps are built with.",
+            "Customized your copy? You can skip this one — your version keeps working as it is."
+          ]
+        }
+      ]
+    },
     {
       "version": 2,
       "date": "2026-08-21",

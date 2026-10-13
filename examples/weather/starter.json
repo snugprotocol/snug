@@ -1,7 +1,22 @@
 {
-  "version": 3,
-  "appHash": "38f4c962b0ee826b558509165b5c2dabde56c0061767ce7ab68736bf4622e94e",
+  "version": 4,
+  "appHash": "47337aa1b5f7b93216f552395030eef45e84f75e7468a6352502996220bf4270",
   "changelog": [
+    {
+      "version": 4,
+      "date": "2026-10-12",
+      "title": "Up to date with Snug",
+      "sections": [
+        {
+          "title": "What changed",
+          "items": [
+            "Should I? works just as before: this release updates the built-in code every Snug app uses to talk to Snug to the version new apps are built with.",
+            "Customized your copy? You can skip this one — your version keeps working as it is.",
+            "The morning forecast and its one-time suggestion run on that updated code and work as before."
+          ]
+        }
+      ]
+    },
     {
       "version": 3,
       "date": "2026-10-09",

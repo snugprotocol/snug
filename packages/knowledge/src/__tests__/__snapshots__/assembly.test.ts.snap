@@ -232,11 +232,14 @@ memory, and do not stop to say you could not retrieve anything — the five sect
 follow are the whole of what you have here, and they are enough.
 
 **What is NOT here.** The overview's Section Map names sections this host does not carry:
-App Catalog, Design Quality, Defensive Coding, Connected APIs. Do not look for them and do
-not mention them — build from the five sections. **This host does not connect apps to
-external APIs:** never include the template's \`useConnectedFetch\` section (its presence
-alone marks the app as connected), and do not build an app whose point is an external
-service — say so in one line and offer the self-contained version instead.
+App Catalog, Design Quality, Defensive Coding, Connected APIs, Scheduled Runs, Access
+Between Apps. Do not look for them and do not mention them — build from the five sections.
+Sections 6–7 are not in this template: never call \`useSnugSchedule\` or \`useSnugAccess\`, nor
+hand-roll their listeners — say in one line that this app will not take part in schedules or
+read other apps, and offer it without them. **This host does not connect apps to external
+APIs:** never include the template's \`useConnectedFetch\` section (its presence alone marks
+the app as connected), and do not build an app whose point is an external service — say so
+in one line and offer the self-contained version instead.
 
 **Persistence goes through the Snug hooks only.** The app runs in a sandboxed frame with a
 null origin, so \`localStorage\`, \`sessionStorage\`, cookies and IndexedDB do not work there.
@@ -285,7 +288,7 @@ App Type" for deciding, per app, whether a turn needs the model at all. Every su
 is a USER act — never send one from a timer, an interval, or on load: a host may bill the
 viewer for each call (see "Never Think on a Timer" under CDN Compatibility). The host's
 scheduler is the one timer: when the user has scheduled a run of the app, the host wakes it
-itself, and the schedule listener in "Scheduled Runs" is the only way an app takes part.
+itself, and the schedule hook in "Scheduled Runs" is the only way an app takes part.
 
 An app cannot: call \`fetch\`/\`XMLHttpRequest\` (network is blocked by CSP), use browser
 storage (the sandbox has a null origin — storage exists only via the host bridge), open
@@ -312,20 +315,20 @@ simply runs. Steps 3-5 describe one agent round trip, and happen only when the a
 
 ## The SDK Hooks (the whole app-side API)
 
-These hooks — included as copy-exactly code in the HTML template (see "The Mandatory HTML
-Template") — are the ONLY way an app talks to the host. The first three are always
-present; the fourth appears only in apps that call an external API:
+These hooks — copy-exactly code in "The Mandatory HTML Template" — are the ONLY way an app
+talks to the host. The first two are always present; the rest only when the app needs them:
 
 - \`useSnugApp({appId, displayName, description, iconEmoji, iconColor})\` →
-  \`{isReady, theme, isWaiting, lastResponse, sendMessage}\`. \`sendMessage(action, payload,
-  opts?)\` returns a Promise resolving \`{ok: true, data}\` or \`{ok: false, error}\`.
-- \`usePersistedState(key, initial)\` → \`[state, setState]\` — host-brokered key-value
-  persistence with automatic hydrate-and-merge.
+  \`{isReady, theme, isWaiting, lastResponse, sendMessage}\`; \`sendMessage(action, payload,
+  opts?)\` resolves \`{ok: true, data}\` or \`{ok: false, error}\`.
+- \`usePersistedState(key, initial)\` → \`[state, setState]\` — host-brokered key-value state,
+  merged with the initial value.
 - \`useAppDB()\` → \`{exec(sql, params?), exportDb(), importDb(bytesBase64)}\` — a per-app SQL
-  database brokered by the host.
-- \`useConnectedFetch()\` → \`{fetch(url, opts?)}\` — host-mediated calls to the app's
-  approved external hosts; always resolves \`{ok: true, status, headers, body}\` or
-  \`{ok: false, error}\`. See "Connected APIs".
+  database, brokered by the host.
+- \`useConnectedFetch()\` → \`{fetch(url, opts?)}\` — the app's approved external hosts, through
+  the host; resolves \`{ok: true, status, headers, body}\` or \`{ok: false, error}\`.
+- \`useHostEvents\`, \`useSnugSchedule\`, \`useSnugAccess\` — host events, "Scheduled Runs",
+  "Access Between Apps".
 
 ## Hard Rules
 
@@ -348,7 +351,8 @@ present; the fourth appears only in apps that call an external API:
 - "Defensive Coding" — what NOT to do; crash-proofing rules
 - "CDN Compatibility" — UMD vs ESM and the pinned known-good library table
 - "Connected APIs" — \`useConnectedFetch\`, declaring auth, credentials the host holds
-- "Scheduled Runs" — the host's scheduler as the one timer, the run handshake, suggesting a schedule
+- "Scheduled Runs" — the one timer: answering a run, suggesting a schedule
+- "Access Between Apps" — reading another app's data the user allowed
 
 
 ---
@@ -364,9 +368,10 @@ block; all logic lives in one \`<script type="text/babel">\` block.
 
 The template below has two zones:
 
-- **Copy exactly** — the bridge runtime and hooks (sections 1–4). Never rename, reorder,
-  edit, or "improve" this code. It is the app-side SDK and the host depends on its behavior.
-- **Yours** — the styles, the response schema, and the \`App\` component (sections 5–6).
+- **Copy exactly** — sections 1–7: 1–3 always; 4 and up only when the app needs them (SQL; an
+  approved API; host events or a schedule; another app's data — 7 needs 6). Never rename,
+  reorder, edit, or "improve" this code. It is the app-side SDK and the host depends on its behavior.
+- **Yours** — sections 8–9.
 
 ## Full Template
 
@@ -415,6 +420,8 @@ The template below has two zones:
       pending: new Map(),    // requestId -> { resolve, onStream }
       dbPending: new Map(),  // requestId -> resolve
       netPending: new Map(), // requestId -> resolve
+      accessPending: new Map(), // requestId -> settle (section 7)
+      hostEventListeners: new Map(), // event -> Set of listeners (section 6)
       listeners: new Set(),  // re-render triggers for hooks
 
       post(frame) {
@@ -425,7 +432,7 @@ The template below has two zones:
 
     window.addEventListener('message', (event) => {
       const data = event.data;
-      if (!data || data.v !== 1) return;
+      if (event.source !== window.parent || !data || data.v !== 1) return; // the host alone, never a sibling frame
 
       if (data.type === 'snug:host-ready') {
         SnugBridge.instanceId = data.instanceId;
@@ -471,12 +478,23 @@ The template below has two zones:
         return;
       }
 
+      if (data.type === 'snug:access-response') {
+        const settle = SnugBridge.accessPending.get(data.requestId);
+        if (!settle) return; // unknown or already-answered requestId - ignore
+        SnugBridge.accessPending.delete(data.requestId); // terminal - exactly one per requestId
+        settle(data);
+        return;
+      }
+
       if (data.type === 'snug:host-event') {
         if (data.event === 'theme-change' && data.data && data.data.theme) {
           SnugBridge.theme = data.data.theme;
           SnugBridge.notify();
         }
         // Unknown host events MUST be ignored (the protocol is additive).
+        // Section 6's subscribers get theirs by name.
+        const subscribers = SnugBridge.hostEventListeners.get(data.event);
+        if (subscribers) for (const fn of [...subscribers]) fn(data.data);
       }
     });
 
@@ -652,8 +670,9 @@ The template below has two zones:
       }), []);
     }
 
+    // 6-7. Not in this template (scheduled runs, access between apps): do not call useHostEvents, useSnugSchedule or useSnugAccess.
     // ============================================================
-    // 6. RESPONSE SCHEMA — describe the JSON the agent must return
+    // 8. RESPONSE SCHEMA — describe the JSON the agent must return
     // ============================================================
     const RESPONSE_SCHEMA = {
       kind: "string: 'move' | 'game_over' | 'error'",
@@ -664,7 +683,7 @@ The template below has two zones:
     };
 
     // ============================================================
-    // 7. YOUR APP
+    // 9. YOUR APP
     // ============================================================
     function App() {
       const { isReady, theme, isWaiting, sendMessage } = useSnugApp({
@@ -1008,7 +1027,7 @@ artifact the viewer's own Claude answers, and the first call asks their consent)
 page that spends usage on load or on a clock is the defect the shared-preview rule already
 guards against. Poll your own state locally as often as you like; ask the agent only when
 the user did something. The ONE timer is the host's scheduler: a schedule the user created
-wakes the app through a host event, and the schedule listener in "Scheduled Runs" is the
+wakes the app through a host event, and the schedule hook in "Scheduled Runs" is the
 only way an app takes part — an app never arms a timer of its own to think, fetch or remind.
 
 ## UMD vs ESM: Why Libraries Break

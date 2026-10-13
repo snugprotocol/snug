@@ -1,7 +1,21 @@
 {
-  "version": 2,
-  "appHash": "49409ce980d85434e4208fefe823f56afed25fd94727ebe497cc839f16c9378b",
+  "version": 3,
+  "appHash": "ba1511d44a00309bac6618246967338319f0ca374c3b2fa3b3e6488f436242f7",
   "changelog": [
+    {
+      "version": 3,
+      "date": "2026-10-12",
+      "title": "Up to date with Snug",
+      "sections": [
+        {
+          "title": "What changed",
+          "items": [
+            "Ledger works just as before: this release updates the built-in code every Snug app uses to talk to Snug to the version new apps are built with.",
+            "Customized your copy? You can skip this one — your version keeps working as it is."
+          ]
+        }
+      ]
+    },
     {
       "version": 2,
       "date": "2026-08-21",

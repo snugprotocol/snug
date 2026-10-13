@@ -1,7 +1,21 @@
 {
-  "version": 2,
-  "appHash": "7fc2e4fa00ac1717748bb816b2729bafa9c3edddc3033dd759ca3099bac60b03",
+  "version": 3,
+  "appHash": "4415ca51601f89eb169465b1442b0b6989c6f9b1b914184cd9f3702dbe983b35",
   "changelog": [
+    {
+      "version": 3,
+      "date": "2026-10-12",
+      "title": "Up to date with Snug",
+      "sections": [
+        {
+          "title": "What changed",
+          "items": [
+            "Moodboard works just as before: this release updates the built-in code every Snug app uses to talk to Snug to the version new apps are built with.",
+            "Customized your copy? You can skip this one — your version keeps working as it is."
+          ]
+        }
+      ]
+    },
     {
       "version": 2,
       "date": "2026-08-21",

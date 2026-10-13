@@ -116,7 +116,7 @@ exports[`KB retrieval structure stability > heading tree per file is locked (edi
       "# Scheduled Runs",
       "## The Host's Scheduler Is the One Timer",
       "## The Scheduled-Run Handshake",
-      "## The Schedule Listener (copy beside the hooks block)",
+      "## The Schedule Hook",
       "## Rules for a Scheduled Handler",
       "## Suggesting a Schedule",
       "## What the Host Shows",
@@ -134,7 +134,7 @@ exports[`KB retrieval structure stability > heading tree per file is locked (edi
       "## Query: One Read-Only SELECT",
       "## When It Stops, Pauses or Ends",
       "## What Each Refusal Means",
-      "## The Cross-App Helper (copy beside the hooks block)",
+      "## The Access Hook",
       "## Your App Need Not Read Another App Itself",
       "## Rules for Reading Another App",
     ],
@@ -142,7 +142,7 @@ exports[`KB retrieval structure stability > heading tree per file is locked (edi
   {
     "file": "knowledge-base/app-authoring/90-auth-and-connected-apis.md",
     "headingTree": [
-      "## Connected APIs: calling an external API with auth, login, and credentials",
+      "## Connected APIs: calling an external API with auth, login, an access token, and credentials",
       "### Design the app against useConnectedFetch (it must work before it is connected)",
       "### Research the provider's authentication before you declare it",
       "### Addressing a connection whose host only the user knows (connection-relative URLs)",

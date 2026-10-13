@@ -86,9 +86,11 @@ async function mountIntegration(): Promise<IntegrationCtx> {
   const target = iframe.contentWindow;
   if (!target) throw new Error('jsdom iframe has no contentWindow');
 
-  // host → app: frames posted at the iframe surface on the top window, async like real postMessage
+  // host → app: frames posted at the iframe surface on the top window, async like real postMessage,
+  // FROM the host — `source: window` (= `window.parent` in jsdom): the bridge accepts a frame only
+  // from `window.parent` (TASK-20261010-host-broker PR-6, D-PR6-2)
   vi.spyOn(target, 'postMessage').mockImplementation(((data: unknown) => {
-    setTimeout(() => window.dispatchEvent(new MessageEvent('message', { data })), 0);
+    setTimeout(() => window.dispatchEvent(new MessageEvent('message', { data, source: window })), 0);
   }) as never);
   // app → host: forge the iframe as `source` so the host's R4 source check accepts them
   vi.spyOn(window, 'postMessage').mockImplementation(((data: unknown) => {

@@ -135,8 +135,8 @@ The user allows access between apps; an app never takes it, and neither do you. 
 read another app's data — a budget reading the ledger — or change it, when the user ticked
 that — only after the user allows it in the runner, for as long as the user chose, and the
 user can stop it at any moment and undo any change from the other app's history. An app
-you build asks through the helper in `references/87-cross-app-access.md`, at runtime, only
-after the user has done something that needs the other app's data — never on load — and the
+you build asks through the access hook (section 7 of its hooks block), taught in
+`references/87-cross-app-access.md`, at runtime, only after the user has done something that needs the other app's data — never on load — and the
 runner shows the ask as a strip the user reviews or declines. The app learns only what the
 user allowed and reads it with one read-only query. Never promise the user that an app
 already reads another, and never put another app's data into the bundle: the runner holds
@@ -156,7 +156,7 @@ The runner schedules; the app never does, and neither do you. A user creates a *
 on the runner's Schedule page — a reminder, a question to an app's AI, or a run of an app —
 and the runner's scheduler is the one timer there is. An app you build may take part in two
 ways, both in `references/85-scheduled-runs.md`: it answers a scheduled run through the
-schedule listener copied beside the hooks block, and it may SUGGEST a schedule for itself
+schedule hook in its hooks block, and it may SUGGEST a schedule for itself
 at runtime, once, after the user has done something — the runner shows the suggestion as a
 strip the user accepts or declines. Never hand-roll a reminder with `setInterval` or
 `setTimeout`, never think or fetch on a timer, and never write a schedule into the bundle:

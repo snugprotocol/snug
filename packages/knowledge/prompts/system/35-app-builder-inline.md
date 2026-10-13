@@ -1,6 +1,6 @@
 <!--
 layer: system
-destination: host system prompt block, injection order 35; the 30-slot's TOOL-FREE sibling — included only when the app-builder capability is enabled AND the caller passes knowledge 'inline' (a pinned host brain that cannot call tools, e.g. a Claude artifact's `sample`); mutually exclusive with 30-app-builder-summary; the loader appends the five core knowledge-base files (10 overview, 20 template, 30 bridge, 40 persistence, 80 cdn) as their own blocks immediately below this one. ASSUMES the host has no connected apps (ADR-0065 D4 — every tool-free host brain today is Binding A); a future tool-free host WITH connections needs a sibling layer, not an edit here
+destination: host system prompt block, injection order 35; the 30-slot's TOOL-FREE sibling — included only when the app-builder capability is enabled AND the caller passes knowledge 'inline' (a pinned host brain that cannot call tools, e.g. a Claude artifact's `sample`); mutually exclusive with 30-app-builder-summary; the loader appends the five core knowledge-base files (10 overview, 20 template, 30 bridge, 40 persistence, 80 cdn) as their own blocks immediately below this one — KB 20 with its hooks block cut after section 5 (`inlineTemplate`, TASK-20261010-host-broker PR-6; this layer names the cut). ASSUMES the host has no connected apps (ADR-0065 D4 — every tool-free host brain today is Binding A); a future tool-free host WITH connections needs a sibling layer, not an edit here
 blast-radius: what a tool-free brain is told BEFORE the 37 KB of authoring rules that follow — this layer must never name a tool (there is none to call) and must never say "fetch the rules" (TASK-20260906: that sentence produced a self-contained localStorage app with no bridge hooks, which rendered as a white page); deleting it leaves the core unframed and the model free to skim it
 source: written for TASK-20260906-tool-free-kb-inlining (ADR-0066); the tool-free rewrite of 30-app-builder-summary — schema/docs doctrine kept where the app can carry it itself
 -->
@@ -16,11 +16,14 @@ memory, and do not stop to say you could not retrieve anything — the five sect
 follow are the whole of what you have here, and they are enough.
 
 **What is NOT here.** The overview's Section Map names sections this host does not carry:
-App Catalog, Design Quality, Defensive Coding, Connected APIs. Do not look for them and do
-not mention them — build from the five sections. **This host does not connect apps to
-external APIs:** never include the template's `useConnectedFetch` section (its presence
-alone marks the app as connected), and do not build an app whose point is an external
-service — say so in one line and offer the self-contained version instead.
+App Catalog, Design Quality, Defensive Coding, Connected APIs, Scheduled Runs, Access
+Between Apps. Do not look for them and do not mention them — build from the five sections.
+Sections 6–7 are not in this template: never call `useSnugSchedule` or `useSnugAccess`, nor
+hand-roll their listeners — say in one line that this app will not take part in schedules or
+read other apps, and offer it without them. **This host does not connect apps to external
+APIs:** never include the template's `useConnectedFetch` section (its presence alone marks
+the app as connected), and do not build an app whose point is an external service — say so
+in one line and offer the self-contained version instead.
 
 **Persistence goes through the Snug hooks only.** The app runs in a sandboxed frame with a
 null origin, so `localStorage`, `sessionStorage`, cookies and IndexedDB do not work there.
