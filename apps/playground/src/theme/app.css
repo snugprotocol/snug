@@ -816,6 +816,22 @@
   background: linear-gradient(transparent, var(--bg) 30%);
 }
 
+/* The rail chat (TASK-20261013-rail-chat-access): when the chat is the rail's content, the rail
+   body lays it out as a column so the chat fills what the tabs and the thread picker leave — the
+   log grows (`.chat-log` is flex: 1) and the composer sits at the bottom of a short chat; a long
+   one scrolls the rail body with the composer stuck to its bottom. */
+.rail-body:has(> .rail-chat) {
+  display: flex;
+  flex-direction: column;
+}
+
+.rail-chat {
+  flex: 1 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
 /* The rail chat's composer (TASK-20261013-rail-chat-access). It used to be inline
    `position: static` at the end of a `min-height: 100%` column: once a conversation existed the
    column filled the rail body and the composer sat after it, below the fold by the height of the
@@ -824,6 +840,8 @@
 .rail-composer {
   position: sticky;
   bottom: 0;
+  /* At the bottom of the chat column even when nothing above it grows (the empty chat). */
+  margin-top: auto;
   padding: var(--space-2) 0;
   background: var(--surface);
   z-index: 1;
@@ -2845,6 +2863,15 @@ img.identity-avatar {
     flex-direction: column;
     overflow-y: auto;
     padding: var(--space-3);
+  }
+}
+
+/* ≤760px the run layout's height is auto: the think view grows with its content and the PAGE
+   scrolls, so as a scroll box of its own it would never scroll — and the chat's sticky composer
+   would stick to nothing. Here the viewport is the scroller (TASK-20261013-rail-chat-access). */
+@media (max-width: 760px) {
+  .mobile-think {
+    overflow-y: visible;
   }
 }
 

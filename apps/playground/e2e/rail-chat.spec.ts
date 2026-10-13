@@ -30,8 +30,36 @@ test.describe('AC5 — the rail chat’s composer stays inside the visible rail'
 
     await composer.fill('what does this app do?');
     await composer.press('Enter');
-    await expect(page.locator('.rail').getByText('what does this app do?')).toBeVisible({ timeout: 20_000 });
+    await expect(page.locator('.rail .chat-log').getByText('what does this app do?')).toBeVisible({ timeout: 20_000 });
     await expect(composer).toBeInViewport();
     await expect(composer).toBeEditable();
+  });
+
+  test('a short conversation keeps the composer at the rail’s bottom, not floating under the last message', async ({ page }) => {
+    await page.goto('/build');
+    const idea = page.getByRole('textbox', { name: 'describe your app' });
+    await idea.fill('build me a habit tracker');
+    await idea.press('Enter');
+    const card = page.getByTestId('artifact-card');
+    await expect(card).toBeVisible({ timeout: 20_000 });
+    await card.getByRole('link', { name: /run it/i }).click();
+    await expect(page).toHaveURL(/\/run\//);
+    const composer = page.getByRole('textbox', { name: 'message the agent' });
+    await expect(composer).toBeInViewport({ timeout: 20_000 });
+    // A FRESH thread — the build conversation alone already fills the rail, which proves nothing here.
+    await page.getByRole('button', { name: '+ new' }).click();
+    await expect(page.locator('.rail').getByText('keep talking')).toBeVisible();
+    const gapBelow = async (): Promise<number> => {
+      const railBody = (await page.locator('.rail-body').boundingBox())!;
+      const box = (await composer.boundingBox())!;
+      return railBody.y + railBody.height - (box.y + box.height);
+    };
+    // Anchored to the bottom: within the rail body's padding and the composer's own (≤ 40 px), never mid-rail.
+    expect(await gapBelow(), 'the empty chat').toBeLessThanOrEqual(40);
+    await composer.fill('what does this app do?');
+    await composer.press('Enter');
+    await expect(page.locator('.rail .chat-log').getByText('what does this app do?')).toBeVisible({ timeout: 20_000 });
+    await expect(composer).toBeEditable({ timeout: 20_000 });
+    expect(await gapBelow(), 'one exchange').toBeLessThanOrEqual(40);
   });
 });

@@ -106,7 +106,7 @@ import {
 import { dmlTargetTable, type UserDb } from '@snugprotocol/db';
 import type { AccessHandlerResult } from '@snugprotocol/runner';
 
-import { oneLine } from '../agent/sharedDdl.js';
+import { foldLine, oneLine } from '../agent/sharedDdl.js';
 import type { AppRunDeps } from '../schedule/appRun.js';
 import type { Calls } from '../schedule/protection.js';
 import { appHasSidecarFact } from '../state/sidecarLive.js';
@@ -318,8 +318,11 @@ function materialisableReads(db: UserDb, caller: AccessCaller, ctx: PolicyContex
  */
 export function sharedSourceSummaries(db: UserDb, caller: AccessCaller, now: number): string[] {
   return materialisableReads(db, caller, policyContextFor(db, now)).map((row) => {
-    const tables = row.grant.scope.tables.map((table) => `${table.name}(${table.columns.join(', ')})${table.write === true ? ' · can be changed' : ''}`);
-    return `${row.sourceName}: ${tables.join(', ')}`;
+    // Every name here is the source's authored text — folded to one line (Gate-5 SEC-1), so none adds a line of its own.
+    const tables = row.grant.scope.tables.map((table) => `${foldLine(table.name)}(${table.columns.map(foldLine).join(', ')})${table.write === true ? ' · can be changed' : ''}`);
+    // The door copies the source's settings too when the grant carries `kv` (`readScopeOf`) — read-only, never marked.
+    if (row.grant.kv === true) tables.push('snug_kv(key, value)');
+    return `${oneLine(row.sourceName)}: ${tables.join(', ')}`;
   });
 }
 

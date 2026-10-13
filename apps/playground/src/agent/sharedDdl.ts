@@ -52,9 +52,14 @@ const PLAIN_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const FOLDED = /[\u0000-\u001f\u007f\u0080-\u009f\u2028\u2029\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]+/g;
 const UNNAMED = '(unnamed app)';
 
+/** Any authored name folded to one line — the fold `oneLine` applies, without its cap or its fallback (a table's or a column's name). */
+export function foldLine(name: string): string {
+  return name.replace(FOLDED, ' ').replace(/\s+/g, ' ').trim();
+}
+
 /** Another app's display name as ONE line of host text (the header): folded, trimmed, capped, never empty. */
 export function oneLine(name: string): string {
-  return name.replace(FOLDED, ' ').replace(/\s+/g, ' ').trim().slice(0, LIMITS.DISPLAY_NAME_CHARS) || UNNAMED;
+  return foldLine(name).slice(0, LIMITS.DISPLAY_NAME_CHARS) || UNNAMED;
 }
 
 /** Verbatim when plain, else "double-quoted" with its own quotes doubled — SQL's spelling. */

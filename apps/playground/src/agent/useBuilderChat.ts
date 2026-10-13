@@ -911,14 +911,14 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
              * failure here is the old behaviour (nothing shared), never a failed turn.
              */
             let sharedSummaries: string[] | undefined;
-            if (appMayUseAccess(contextTarget) && chatDoorOpen(chatBrainRoute(db, contextTarget))) {
-              try {
+            try {
+              if (appMayUseAccess(contextTarget) && chatDoorOpen(chatBrainRoute(db, contextTarget))) {
                 const [{ sharedSourceSummaries }, { accessDeps, readerGeneration }] = await Promise.all([import('../access/service.js'), import('../access/grants.js')]);
                 const liveGeneration = readerGeneration(contextTarget);
                 sharedSummaries = sharedSourceSummaries(db, { kind: 'chat', appId: contextTarget, threadId, ...(liveGeneration !== undefined ? { liveGeneration } : {}) }, accessDeps().now());
-              } catch {
-                sharedSummaries = undefined;
               }
+            } catch {
+              sharedSummaries = undefined;
             }
             route = await routeChatMessage({
               db,

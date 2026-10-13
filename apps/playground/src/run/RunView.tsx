@@ -1533,7 +1533,7 @@ export function RailChat({
   // The run view always works on an app that already exists, so its status copy is the
   // "adjusting" set, never the first-build one (AC10).
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+    <div className="rail-chat">
       {messages.length === 0 ? (
         <EmptyState
           glyph="✎"

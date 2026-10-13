@@ -75,6 +75,21 @@ async function renderRail(): Promise<HTMLDivElement> {
 }
 
 describe('AC5 — the rail’s composer stays on screen', () => {
+  it('the chat column is `.rail-chat`, and the rail body lays it out as a column that fills the rail (the composer at the bottom of a short chat)', async () => {
+    const el = await renderRail();
+    expect(el.querySelector('.rail-chat'), 'RailChat’s root is .rail-chat').not.toBeNull();
+    const css = readFileSync(path.resolve(__dirname, '../theme/app.css'), 'utf8');
+    expect(css).toMatch(/\.rail-body:has\(> \.rail-chat\)\s*\{[^}]*flex-direction:\s*column/);
+    expect(/\.rail-chat\s*\{([^}]*)\}/.exec(css)?.[1] ?? '').toMatch(/flex:\s*1/);
+  });
+
+  it('at phone width the think view is not its own scroll box, so the composer sticks to the viewport', () => {
+    const css = readFileSync(path.resolve(__dirname, '../theme/app.css'), 'utf8');
+    // AFTER the ≤1000px block that makes it a scroll box — same specificity, so the later rule wins.
+    const after = css.slice(css.indexOf('@media (max-width: 1000px)'));
+    expect(after).toMatch(/@media \(max-width: 760px\)\s*\{\s*\.mobile-think\s*\{[^}]*overflow-y:\s*visible/);
+  });
+
   it('the composer is the rail’s own sticky composer — never an inline `position: static`', async () => {
     const el = await renderRail();
     const composer = el.querySelector<HTMLElement>('.composer');

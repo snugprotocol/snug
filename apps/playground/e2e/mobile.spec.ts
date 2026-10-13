@@ -159,6 +159,29 @@ test.describe('375px viewport', () => {
     await expect(toggle).toHaveAttribute('aria-pressed', 'false');
     await expectNoHorizontalScroll(page);
   });
+
+  test('the think view’s chat keeps its composer on screen with a conversation in it (TASK-20261013-rail-chat-access AC5)', async ({ page }) => {
+    // The owner's bug on the desktop rail, at 375px: here the think view grows with its content and
+    // the page scrolls, so the composer must stick to the VIEWPORT, not to a box that never scrolls.
+    await page.goto('/build');
+    const idea = page.getByRole('textbox', { name: 'describe your app' });
+    await idea.fill('build me a habit tracker');
+    await idea.press('Enter');
+    const card = page.getByTestId('artifact-card');
+    await expect(card).toBeVisible({ timeout: 20_000 });
+    await card.getByRole('link', { name: /run it/i }).click();
+    await expect(page).toHaveURL(/\/run\//);
+    await page.getByTestId('mobile-view-toggle').tap();
+    const composer = page.getByTestId('mobile-think').getByRole('textbox', { name: 'message the agent' });
+    await expect(composer).toBeAttached({ timeout: 20_000 });
+    for (const text of ['make the button blue', 'add a title at the top']) {
+      await composer.fill(text);
+      await composer.press('Enter');
+      await expect(page.getByTestId('mobile-think').getByText(text)).toBeAttached({ timeout: 20_000 });
+    }
+    await expect(composer).toBeInViewport();
+    await expectNoHorizontalScroll(page);
+  });
 });
 
 // TASK-20260823 (owner report): a real phone in LANDSCAPE (~850px) and an iPad in
