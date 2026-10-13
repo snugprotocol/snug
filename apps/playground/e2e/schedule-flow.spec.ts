@@ -4,8 +4,9 @@
 // the net stub, in the real playground app under a faked clock (ADR-0074 §3 the kv handshake,
 // §5 catch-up, §6 the unattended posture).
 //
-//   1. A GET run: the fixture app (e2e/fixtures/schedule-app.html — the copy-exactly hooks block
-//      plus the KB's schedule listener) is installed from a `.snug` bundle through Settings, its
+//   1. A GET run: the fixture app (e2e/fixtures/schedule-app.html — the copy-exactly hooks block,
+//      answering through section 6's `useSnugSchedule` since TASK-20261010-host-broker PR-6) is
+//      installed from a `.snug` bundle through Settings, its
 //      declared connection to the stub is approved in the wizard, a *run Schedule App* schedule
 //      with input {fetch:true} is created every hour through the editor, the clock jumps past the
 //      hour, and the result row reads *done* with the app's own summary of the scrubbed GET.

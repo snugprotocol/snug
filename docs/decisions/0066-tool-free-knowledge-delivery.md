@@ -1,6 +1,6 @@
 # 0066 — Tool-free brains carry the authoring knowledge in the prompt: one `knowledge` seat, three deliveries
 
-- **Status:** accepted (the owner confirmed all seven interview points on 2026-09-06) — **amended 2026-10-04** (TASK-20261003-host-bindings-complete; [ADR-0071](0071-the-brain-registry.md), [ADR-0072](0072-one-kit-every-binding.md)): A8's chat-brain item is closed by that brain's removal, and decision 1's "never changes mid-session" does not hold on Binding B — see the amendment at the end
+- **Status:** accepted (the owner confirmed all seven interview points on 2026-09-06) — **amended 2026-10-04** (TASK-20261003-host-bindings-complete; [ADR-0071](0071-the-brain-registry.md), [ADR-0072](0072-one-kit-every-binding.md)): A8's chat-brain item is closed by that brain's removal, and decision 1's "never changes mid-session" does not hold on Binding B — see the amendment at the end; **noted 2026-10-12** (TASK-20261010-host-broker PR-6): the inline core renders KB 20 through `inlineTemplate` — the hooks block's sections 6–7 cut to one visible line, the served template whole — see the second amendment
 - **Date:** 2026-09-06
 - **Task:** TASK-20260906-tool-free-kb-inlining (child of TASK-20260905-binding-a-artifacts / TASK-20260904-skill-only-snug)
 
@@ -65,3 +65,30 @@ Inlining the whole KB is not an option: rendered, it is 78,019 bytes against `sa
   (`apps/host/src/local/compose-local.ts`), so the delivery follows the brain that will answer
   the next build turn — the host arm (`tools: false`) gets `'inline'`, the demo brain `'tool'`.
   One brain's delivery still never changes mid-session, so ADR-0012's discipline holds per brain.
+
+### Amendment (2026-10-12, TASK-20261010-host-broker PR-6 — the hooks block grew past the inline budget)
+
+- **The inline core is no longer byte-identical to what the tool serves — for KB 20 only.**
+  PR-6 added sections 6 (`useHostEvents`, `useSnugSchedule`, `proposeSchedule`) and 7
+  (`useSnugAccess`) to the copy-exactly hooks block, ≈ 11.3 KB rendered; the inline assembly had
+  1,396 B left under `HOST_BUILDER_SYSTEM_MAX_BYTES` (45,056 B), and the ceiling cannot rise
+  (the 65,536 B fallback cap minus the ceiling must stay ≥ the 20,480 B reserved minimum — it is
+  exactly that today).
+  `getInlineKnowledgeCore()` (`packages/knowledge/src/layers.ts`) therefore renders KB 20 through
+  `inlineTemplate`: the region from the `// ====` rule above section 6 to the rule above the
+  RESPONSE SCHEMA banner becomes ONE visible comment line, in the template's voice —
+  *"6-7. Not in this template (scheduled runs, access between apps): do not call useHostEvents,
+  useSnugSchedule or useSnugAccess."* — never a claim that the host lacks them (the artifact host
+  schedules and offers access). It throws on a missing, doubled or out-of-order banner (a build
+  error, never a silently thinner prompt), and the prefix and suffix around the cut are the
+  served text byte for byte. The other four core files are served exactly as the tool would, and
+  the served KB 20 (the tool, `searchKnowledge`, the kit's store) stays whole.
+- **The 35 layer names the cut** in its "What is NOT here" paragraph (Scheduled Runs and Access
+  Between Apps join the list): a tool-free build says in one line that the app will not take
+  part in schedules or read other apps, and offers it without them.
+- **Measured:** 44,911 B on the wire after the PR-6 fold — 145 B under the ceiling. Any later
+  edit to an inline-core file (KB 10, 20, 30, 40, 80, layer 35, or sections 1–5 of the block) is
+  re-measured against it (`apps/host/src/__tests__/brains.test.ts`); the fallback is trimming
+  comment bytes, never widening the cut or raising the ceiling. Pinned by
+  `packages/knowledge/src/__tests__/inline-template.test.ts` and
+  `tool-free-assembly.test.ts`; the sdk runs the four-hook contract over sections 1–5 alone.
