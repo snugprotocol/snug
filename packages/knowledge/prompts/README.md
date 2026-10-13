@@ -34,9 +34,10 @@ prompts/
 │       ├── 80-cdn-compatibility.md  ← incl. pinned known-good CDN table (DATA section)      ★
 │       │                               ★ = the INLINE CORE (ADR-0066): these five, and only these, ride whole as
 │       │                                   system blocks to a tool-free brain (knowledge 'inline'; pinned by name in
-│       │                                   `INLINE_KNOWLEDGE_CORE_FILES`)
+│       │                                   `INLINE_KNOWLEDGE_CORE_FILES`) — except 20's hooks block, cut after
+│       │                                   section 5 to one line by `inlineTemplate` (layers.ts; the measured budget)
 │       ├── 85-scheduled-runs.md     ← the host's scheduler as the one timer: the kv + host-event run handshake, the schedule
-│       │                               listener snippet beside the copy-exactly block, suggesting a schedule once (TASK-20261009,
+│       │                               hook (section 6 of the copy-exactly block), suggesting a schedule once (TASK-20261009,
 │       │                               ADR-0074 §3/§4); NOT in the inline core — headings are retrieval-tested
 │       └── 90-auth-and-connected-apis.md  ← connected APIs: useConnectedFetch design + the connection_requirement directive contract, completeness bar, edit skip-rules (AL-05, rewritten by Dynamic Auth v2 P2; headings are retrieval-tested)
 ├── tools/                           ← tool + parameter descriptions

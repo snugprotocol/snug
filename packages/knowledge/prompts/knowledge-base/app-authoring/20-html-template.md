@@ -16,9 +16,10 @@ block; all logic lives in one `<script type="text/babel">` block.
 
 The template below has two zones:
 
-- **Copy exactly** — the bridge runtime and hooks (sections 1–4). Never rename, reorder,
-  edit, or "improve" this code. It is the app-side SDK and the host depends on its behavior.
-- **Yours** — the styles, the response schema, and the `App` component (sections 5–6).
+- **Copy exactly** — sections 1–7: 1–3 always; 4 and up only when the app needs them (SQL; an
+  approved API; host events or a schedule; another app's data — 7 needs 6). Never rename,
+  reorder, edit, or "improve" this code. It is the app-side SDK and the host depends on its behavior.
+- **Yours** — sections 8–9.
 
 ## Full Template
 

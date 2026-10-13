@@ -2,7 +2,7 @@
 layer: knowledge-base
 destination: served (whole or as ##-sections via searchKnowledge) by the {{appBuilderToolName}} tool when the host LLM is asked for an app that reads ANOTHER app's data — a budget that reads the ledger's transactions, a meal planner that reads the pantry, two apps the user built that should work together — or that changes it where the user ticked that; NOT in the inline core (a tool-free brain gets only the one row in 30's frame table); reachable only when the app-builder capability is enabled
 blast-radius: whether a generated app can read — or change — another app's tables at all; a wrong frame shape here produces apps whose asks the runner answers MALFORMED or never answers, an ask on load produces apps that nag on every open, an app that assumes its access is permanent breaks the day the user stops it, and a write shaped outside the one plain statement the runner brokers is refused every time
-source: written for TASK-20261010-cross-app-access (ADR-0075 §1 the frame pair, §4 the strip and its answers, §5 what the app learns, §6 the scoped read and its bounds, §9 revocation; spec 1.1 Part VI); v2 for TASK-20261010-host-broker PR-3 (ADR-0076 §4–§8 the brokered write, the undo journal, the refresh, the discover class and the three hints; spec 1.2 §24.5–§24.7); the helper mirrors packages/sdk/src/access.ts, the module-form hook; v3 for TASK-20261010-host-broker PR-5 (ADR-0076 §5, §7: the access declaration the host reads from the app's own head, and the chat's proposed change the user applies — spec 1.3)
+source: written for TASK-20261010-cross-app-access (ADR-0075 §1 the frame pair, §4 the strip and its answers, §5 what the app learns, §6 the scoped read and its bounds, §9 revocation; spec 1.1 Part VI); v2 for TASK-20261010-host-broker PR-3 (ADR-0076 §4–§8 the brokered write, the undo journal, the refresh, the discover class and the three hints; spec 1.2 §24.5–§24.7); v3 for TASK-20261010-host-broker PR-5 (ADR-0076 §5, §7: the access declaration the host reads from the app's own head, and the chat's proposed change the user applies — spec 1.3); v4 for TASK-20261010-host-broker PR-6: the copied helper and its second listener retired — the access hook is section 7 of the copy-exactly hooks block (packages/sdk/embedded/snug-hooks.js), its module twin packages/sdk/src/access.ts; this page teaches its usage
 -->
 
 # Access Between Apps
@@ -24,8 +24,9 @@ tables too, ticks which tables it may change. Your app learns only what the user
 
 Build the app so it is complete without it: reading another app is something the user adds,
 never a feature the app depends on. When the user wants your app to read another app's data,
-use the helper below. On a host that does not offer it (`capabilities.access` is not `true` in
-`{{frameType:hostReady}}`), show what the app does on its own.
+use the access hook (section 7 of the hooks block). On a host that does not offer it
+(`capabilities.access` is not `true` in `{{frameType:hostReady}}`), show what the app does
+on its own.
 
 ## Ask After a User Act, Never on Load
 
@@ -91,7 +92,7 @@ shows it to the user BEFORE your app asks anything: on a shared app's preview ("
 like to read data like transactions and accounts from your other apps — nothing is read until
 you allow it"), and among the apps that could work together, where the user may start the
 access themselves. Declaring allows nothing and reads nothing: your app still ASKS at runtime,
-through the helper below, after the user has done something that needs the other app's data —
+through the access hook, after the user has done something that needs the other app's data —
 declare AND ask, with the same purpose and the same hints. It lives in the app's HTML, never in
 the bundle; a meta the host cannot read — two of them, an unquoted value, JSON the schema refuses,
 past the limits — is simply no declaration, and the app installs all the same.
@@ -206,9 +207,10 @@ access back yourself, `release` it.
 Three more hints, each ids only, each only while your app is open: `event:
 'access-source-changed'` with `data: { grantId }` when the other app's data changed under
 an access you hold (its own writes, the chat's, another app's — read again when your app
-shows it); `event: 'data-changed'` with `data: { table }` when another app, or the chat,
-changed one of YOUR app's tables under an access the user allowed, or the user undid such
-a change — re-read that table; and `event: 'access-read'` with `data: { grantId }` when one
+shows it); `event: 'data-changed'` when another app, or the chat, changed one of YOUR app's
+tables under an access the user allowed, or the user undid such a change — its data is
+`{ table }`, or `{}` when the host could not name it — re-read everything you show (only that
+table, when it is named); and `event: 'access-read'` with `data: { grantId }` when one
 of your tables was read under an access your app is the source of — the id only; most apps
 do nothing with it. None of them carries a row, a value, a name or a count.
 
@@ -242,113 +244,96 @@ show the app without the other app's data. A `MALFORMED` answer to `write`, `ref
 `discover`, or to an ask that carried `access`, means the runner predates 1.2 — show the
 honest fallback, and ask again without `access`.
 
-## The Cross-App Helper (copy beside the hooks block)
+## The Access Hook
 
-Add this AFTER the copy-exactly hook sections (it belongs in "your" zone of the template,
-beside the response schema — never inside sections 1–5, which must stay byte-identical). It
-is a second `message` listener next to the bridge's own, filtered to the access answer and
-the four access hints (`access-changed`, and the three the runner rings about data moving),
-and it posts through the bridge's `SnugBridge.post` rather than plumbing of its own:
-
-```javascript
-// ============================================================
-// ACCESS BETWEEN APPS — read another app's data; see "Access Between Apps"
-// ============================================================
-const SNUG_ACCESS_PENDING = new Map(); // requestId -> resolve
-
-function snugAccessRequest(op, fields) {
-  if (!SnugBridge.ready) return Promise.resolve({ ok: false, error: { code: 'HOST_ERROR', message: 'not connected to host yet', retryable: true } });
-  if (SnugBridge.capabilities.access !== true) return Promise.resolve({ ok: false, error: { code: 'HOST_ERROR', message: 'this host does not offer access between apps', retryable: false } });
-  return new Promise((resolve) => {
-    const requestId = crypto.randomUUID();
-    SNUG_ACCESS_PENDING.set(requestId, resolve);
-    SnugBridge.post({ type: '{{frameType:accessRequest}}', requestId, op, ...fields });
-  });
-}
-
-function onAccessChanged(grantId) {
-  // YOUR WORK: an access was stopped or paused. Ask what the app still holds —
-  // snugAccessRequest('list') — and show it. Never ask for access again from here.
-}
-
-function onAccessSourceChanged(grantId) {
-  // YOUR WORK: the other app's data changed under this access. Read it again where the
-  // app shows it — snugAccessRequest('query', …) — never ask for access from here.
-}
-
-function onDataChanged(table) {
-  // YOUR WORK: another app, or the chat, changed this table of YOUR app under an access
-  // the user allowed (or the user undid such a change). Re-read it where the app shows it.
-}
-
-function onAccessRead(grantId) {
-  // YOUR WORK (optional): one of this app's tables was read under an access this app is
-  // the source of. The id only — the runner's history has the rest. Most apps do nothing.
-}
-
-window.addEventListener('message', (event) => {
-  const data = event.data;
-  if (event.source !== window.parent || !data || data.v !== {{protocolVersion}}) return;
-  if (data.type === '{{frameType:accessResponse}}') {
-    const resolve = SNUG_ACCESS_PENDING.get(data.requestId);
-    if (!resolve) return; // not ours, or already answered
-    SNUG_ACCESS_PENDING.delete(data.requestId);
-    // The answer's fields (grant / columns, rows, truncated, totalRows / changes / fresh, reason / grants / candidates) are at the TOP LEVEL.
-    resolve(data.ok ? data : { ok: false, error: data.error });
-    return;
-  }
-  if (data.type === '{{frameType:hostEvent}}' && data.event === 'access-changed') {
-    const change = data.data;
-    if (change && typeof change.grantId === 'string' && change.grantId) onAccessChanged(change.grantId);
-  }
-  if (data.type === '{{frameType:hostEvent}}' && data.event === 'access-source-changed') {
-    const change = data.data;
-    if (change && typeof change.grantId === 'string' && change.grantId) onAccessSourceChanged(change.grantId);
-  }
-  if (data.type === '{{frameType:hostEvent}}' && data.event === 'data-changed') {
-    const change = data.data;
-    if (change && typeof change.table === 'string' && change.table) onDataChanged(change.table);
-  }
-  if (data.type === '{{frameType:hostEvent}}' && data.event === 'access-read') {
-    const change = data.data;
-    if (change && typeof change.grantId === 'string' && change.grantId) onAccessRead(change.grantId);
-  }
-});
-```
-
-Then ask from something the user pressed — never from a `useEffect` on mount:
+Section 7 of the copy-exactly hooks block — copied WITH section 6, whose `onHostEvent` it
+uses (see "The Mandatory HTML Template") — makes the exchange above for you:
+`const access = useSnugAccess()` in a component gives one stable object whose calls post the
+frames and ALWAYS resolve, errors as data. Keep what an ask answers under a name of its own —
+`grant` below, the view the user allowed — because `access` is already the hook (and the
+ask's option). Ask from something the user pressed, never from an effect on mount; read with
+bound params; change or fetch first only behind the view's flags; and answer the access hints
+through `access.on*`, never `useHostEvents` — the hook checks their ids:
 
 ```javascript
-async function onUseLedgerClick() {
-  const asked = await snugAccessRequest('request', {
-    purpose: 'to show spending by category',
-    hints: { words: ['spending', 'transactions'], tables: ['transactions'] },
-  });
-  if (!asked.ok) return setNotice(asked.error.message); // declined, nothing to read, … — carry on without it
-  const access = asked.grant; // { id, source: { displayName }, tables: [{ name, columns }], duration }
-  const read = await snugAccessRequest('query', {
-    grantId: access.id,
-    sql: 'SELECT category, SUM(amount) AS total FROM transactions WHERE date >= ? GROUP BY category',
-    params: ['2026-10-01'],
-  });
-  if (read.ok) setTotals({ from: access.source.displayName, columns: read.columns, rows: read.rows });
-  else setNotice(read.error.message);
+function Spending() {
+  const access = useSnugAccess();
+  const db = useAppDB();
+  const [grant, setGrant] = useState(null); // the view the user allowed: { id, source, tables, refresh?, … }
+  const [totals, setTotals] = useState(null);
+  const [budget, setBudget] = useState([]);
+  const [notice, setNotice] = useState('');
+
+  // What this app already holds: on mount (a second visit may hold one), and after a stop or a pause.
+  const relist = useCallback(async () => {
+    const held = await access.list();
+    if (held.ok) setGrant(held.grants.find((view) => view.tables.some((t) => t.name === 'transactions')) || null);
+  }, [access]);
+
+  // ONE SELECT through the view, values bound through params — never spliced into the SQL.
+  const readTotals = useCallback(async () => {
+    if (!grant) return setTotals(null);
+    const read = await access.query(grant.id, 'SELECT category, SUM(amount) AS total FROM transactions WHERE date >= ? GROUP BY category', ['2026-10-01']);
+    if (read.ok) setTotals({ from: grant.source.displayName, columns: read.columns, rows: read.rows });
+    else setNotice(read.error.message); // ACCESS_REVOKED, ACCESS_EXPIRED, … are ordinary outcomes
+  }, [access, grant]);
+
+  // This app's OWN rows, which another app or the chat may change under an access the user allowed.
+  const reloadOwn = useCallback(async () => {
+    const own = await db.exec('SELECT category, amount FROM budget');
+    setBudget(own.rows);
+  }, [db]);
+
+  useEffect(() => { relist(); }, [relist]);
+  useEffect(() => { readTotals(); }, [readTotals]);
+  useEffect(() => {
+    const offs = [
+      access.onChange(relist), // an access was stopped or paused: show what is left; never ask again from here
+      access.onSourceChanged(readTotals), // the other app's data changed under this access: read it again
+      access.onDataChanged(reloadOwn), // { table }, or {} when the host could not name it
+      access.onRead(() => {}), // one of YOUR tables was read under an access this app is the source of
+    ];
+    return () => { for (const off of offs) off(); };
+  }, [access, relist, readTotals, reloadOwn]);
+
+  const onUseLedgerClick = async () => {
+    const asked = await access.request('to show spending by category', {
+      hints: { words: ['spending', 'transactions'], tables: ['transactions'] },
+    });
+    if (asked.ok) setGrant(asked.grant);
+    else setNotice(asked.error.message); // declined, nothing to read, … — carry on without it
+  };
+  const onMarkFoodClick = async (id) => {
+    const changed = await access.write(grant.id, 'UPDATE transactions SET category = ? WHERE id = ?', ['food', id]);
+    if (changed.ok) readTotals();
+    else setNotice(changed.error.message);
+  };
+  const onFetchLatestClick = async () => {
+    const fetched = await access.refresh(grant.id); // { fresh } — read what is there either way
+    if (!fetched.ok) setNotice(fetched.error.message);
+    readTotals();
+  };
+
+  const canChange = grant && grant.tables.some((t) => t.name === 'transactions' && t.write);
+  return (
+    <section>
+      {!grant && <button onClick={onUseLedgerClick}>Use my ledger</button>}
+      {totals && <p>From {totals.from}</p>}
+      {canChange && <button onClick={() => onMarkFoodClick(7)}>Mark #7 as food</button>}
+      {grant && grant.refresh && <button onClick={onFetchLatestClick}>Fetch the latest</button>}
+      {notice && <p role="status">{notice}</p>}
+    </section>
+  );
 }
 ```
 
-A change, when the user ticked *can change* for the table, is the same call with
-`'write'`: `snugAccessRequest('write', { grantId: access.id, sql: 'UPDATE transactions SET
-category = ? WHERE id = ?', params: ['food', 7] })` answers `{ ok: true, changes: 1 }`; a
-fetch first, when the view says `refresh: true`, is `snugAccessRequest('refresh', { grantId:
-access.id })` — both from a button, never on load.
-
-Write `onAccessChanged`, `onAccessSourceChanged` and `onDataChanged` for the app (leave
-`onAccessRead` empty unless the app shows who read it); leave the helper and the listener
-as they are. Bundler-built apps on the module SDK get the same exchange typed as
-`useSnugAccess()` from `@snugprotocol/sdk`: `request(purpose, { hints, renew, access })`,
+Bundler-built apps on the module SDK get the same hook; the hook's eleven methods (typed in
+`@snugprotocol/sdk`): `request(purpose, { hints, renew, access })`,
 `query(grantId, sql, params)`, `write(grantId, sql, params)`, `refresh(grantId)`, `list()`,
 `release(grantId)`, `discover(hints)`, `onChange(listener)`, `onSourceChanged(listener)`,
-`onDataChanged(listener)` and `onRead(listener)`.
+`onDataChanged(listener)` and `onRead(listener)` — each `on*` returns its unsubscribe. An app
+that still carries the older access helper and its listener: delete them, `SNUG_ACCESS_PENDING`
+included, when you copy sections 6–7.
 
 ## Your App Need Not Read Another App Itself
 
@@ -367,7 +352,7 @@ can undo it from the other app's history; nothing changes until they do.
 
 None of this needs code in your app, and none of it reaches your app's frame: the rows go to
 the user's own AI, never to your `query`. Build for what your app does on its own; when the
-user wants your app itself to show the other app's data, use the helper below. The other
+user wants your app itself to show the other app's data, use the access hook. The other
 app's history shows every such read as YOUR app's read — the app the user allowed — with
 the tables and the rows copied.
 

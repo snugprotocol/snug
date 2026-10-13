@@ -153,7 +153,7 @@ describe('the five-file core is pinned by name (D2)', () => {
     for (const section of getKnowledgeBase()) expect(section.text, section.file).not.toContain(CUT_LINE);
     expect(tooled).not.toContain(CUT_LINE);
     // The template's voice, never the host's: nothing says THIS HOST lacks them (the artifact host schedules and offers access).
-    expect(CUT_LINE).not.toMatch(/host/i);
+    expect(CUT_LINE).not.toMatch(/\bhosts?\b/i) // the word, not the hook's name (useHostEvents) — Gate-4 sanctioned fix;
   });
 
   it('PR-6 (AC40e): the inline KB 20 hooks block normalises to the embedded file’s sections 1–5, then the cut line; the served page’s to the WHOLE file', () => {

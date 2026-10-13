@@ -31,7 +31,7 @@ App Type" for deciding, per app, whether a turn needs the model at all. Every su
 is a USER act — never send one from a timer, an interval, or on load: a host may bill the
 viewer for each call (see "Never Think on a Timer" under CDN Compatibility). The host's
 scheduler is the one timer: when the user has scheduled a run of the app, the host wakes it
-itself, and the schedule listener in "Scheduled Runs" is the only way an app takes part.
+itself, and the schedule hook in "Scheduled Runs" is the only way an app takes part.
 
 An app cannot: call `fetch`/`XMLHttpRequest` (network is blocked by CSP), use browser
 storage (the sandbox has a null origin — storage exists only via the host bridge), open
@@ -58,20 +58,20 @@ simply runs. Steps 3-5 describe one agent round trip, and happen only when the a
 
 ## The SDK Hooks (the whole app-side API)
 
-These hooks — included as copy-exactly code in the HTML template (see "The Mandatory HTML
-Template") — are the ONLY way an app talks to the host. The first three are always
-present; the fourth appears only in apps that call an external API:
+These hooks — copy-exactly code in "The Mandatory HTML Template" — are the ONLY way an app
+talks to the host. The first three are always present; the rest only when the app needs them:
 
 - `useSnugApp({appId, displayName, description, iconEmoji, iconColor})` →
-  `{isReady, theme, isWaiting, lastResponse, sendMessage}`. `sendMessage(action, payload,
-  opts?)` returns a Promise resolving `{ok: true, data}` or `{ok: false, error}`.
-- `usePersistedState(key, initial)` → `[state, setState]` — host-brokered key-value
-  persistence with automatic hydrate-and-merge.
+  `{isReady, theme, isWaiting, lastResponse, sendMessage}`; `sendMessage(action, payload,
+  opts?)` resolves `{ok: true, data}` or `{ok: false, error}`.
+- `usePersistedState(key, initial)` → `[state, setState]` — host-brokered key-value state,
+  merged with the initial value.
 - `useAppDB()` → `{exec(sql, params?), exportDb(), importDb(bytesBase64)}` — a per-app SQL
-  database brokered by the host.
-- `useConnectedFetch()` → `{fetch(url, opts?)}` — host-mediated calls to the app's
-  approved external hosts; always resolves `{ok: true, status, headers, body}` or
-  `{ok: false, error}`. See "Connected APIs".
+  database, brokered by the host.
+- `useConnectedFetch()` → `{fetch(url, opts?)}` — the app's approved external hosts, through
+  the host; resolves `{ok: true, status, headers, body}` or `{ok: false, error}`.
+- `useHostEvents`, `useSnugSchedule`, `useSnugAccess` — host events, "Scheduled Runs",
+  "Access Between Apps".
 
 ## Hard Rules
 
@@ -94,4 +94,5 @@ present; the fourth appears only in apps that call an external API:
 - "Defensive Coding" — what NOT to do; crash-proofing rules
 - "CDN Compatibility" — UMD vs ESM and the pinned known-good library table
 - "Connected APIs" — `useConnectedFetch`, declaring auth, credentials the host holds
-- "Scheduled Runs" — the host's scheduler as the one timer, the run handshake, suggesting a schedule
+- "Scheduled Runs" — the one timer: answering a run, suggesting a schedule
+- "Access Between Apps" — reading another app's data the user allowed
