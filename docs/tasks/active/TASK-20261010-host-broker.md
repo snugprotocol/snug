@@ -1259,6 +1259,304 @@ Notes that DECIDE or CHANGE something:
 - **N9 — the kit stub drift (T-C):** `apps/host/src/stubs/accessCard.ts` lacks `resolution.write` since PR-3 — I-2b aligns it with the real type while adding `access` (the new type-mirror row fails `tsc` until then).
 - **N10 — build order:** the playground resolves `@snugprotocol/*` to `dist` — I-1 rebuilds protocol and db before the parallel lanes; I-2b rebuilds knowledge after `gen:content`; no lane builds while another lane's tests run (one shared tree).
 
+## PR-6 — Gate-2 contract v1 (2026-10-12; written from the pickup's seam read — every anchor below opened at the line; the four fresh-context plan reviews on Opus 5.5 xhigh fold it into v2. The test lanes write against v2; the implementation lanes implement v2.)
+
+### What the code says today (the anchors; each a claim checked at the line)
+
+1. **The embedded block** `packages/sdk/embedded/snug-hooks.js` (9,429 B) has five sections — 1 `SnugBridge` + the one `message` listener (host-ready · app-response · db-response · net-response · host-event, theme only) · 2 `useSnugApp` · 3 `usePersistedState` · 4 `useAppDB` · 5 `useConnectedFetch`. No access-response arm, no named subscribers, no schedule or access code. Byte-locked to the rendered KB 20 fence by `packages/sdk/src/__tests__/kb-sync.test.ts:23-34` (the cut is the tolerant `/\d+\. RESPONSE SCHEMA/`) and `:50-58` (five names pinned; `RESPONSE_SCHEMA` and `ReactDOM` must stay absent); locked to every starter by `examples/validate.test.mjs:213-219` (`hookBlock` cuts at the LITERAL `'5. RESPONSE SCHEMA'` — every starter's banner still reads `// 5. RESPONSE SCHEMA` while the template's reads `6.` since AL-03) and `:234-236`. Last changed 2026-08-14 (`d2ac31e`, two lines; the AL-03 wave `e543844` added section 5 to the template, the file and every starter in one commit — the precedent for this wave).
+2. **The module form** — `packages/sdk/src/bridge.ts`: `hostEventListeners: Map<string, Set>`, `onHostEvent(event, listener)` (idempotent listener install; returns the unsubscribe; the set deleted when empty), the host-event arm handles `theme-change` FIRST then dispatches to a COPY of the set; `accessPending` settled by the PARSED frame (`parseFrame` — a frame the parser rejects is ignored and the call waits, `access.test.ts:407`); `accessRequest(fields, settle)` with the two guard results (`'not connected to host yet'` retryable · `'this host does not offer access between apps'` not retryable — `cross-app-access-kb.test.ts:222` reads both from this source) and the DataCloneError arm (`'the access request could not be posted'`). `schedule.ts`: `useSnugSchedule(handler)` (`answeredRuns` insertion-ordered, `REMEMBERED_RUNS` 128, remembered BEFORE the kv read, `normalizeScheduleResult` under `SCHEDULE_STEP_SUMMARY_MAX_CHARS` 4096 / `SCHEDULE_TITLE_MAX_CHARS` 80 / `SCHEDULE_NOTIFY_BODY_MAX_CHARS` 120, a throw → `{ok:false, summary}`), `proposeSchedule` (once per page, `scheduleProposalSchema`), `scheduleInputKey`. `access.ts`: `useSnugAccess()` — eleven methods, per-op settlers that hand back ONLY the protocol's seats, `mismatch()` → non-retryable HOST_ERROR, `grantHint`/`readDataChange`. `hooks.ts`: the four hooks. **No `useHostEvents` exists** (ADR-0034:78 promised one; `docs/next-steps.md:250` "NOW DUE"; gmail and whatsapp hand-roll it).
+3. **The contract suite** `packages/sdk/src/__tests__/contract-suite.ts` (`ContractHookApi` = the four hooks; 14 rows) is registered twice — `contract-embedded.test.ts` (`new Function('React', code + 'return {…}')`) and `contract-module.test.ts`. `schedule.test.ts` (372 lines) and `access.test.ts` (838) are MODULE-ONLY; `access.test.ts:832` pins "the embedded hooks block is UNCHANGED by access (Q9): it posts no access frame and names no access hook". `app-harness.tsx` plays the host side (`hostStub`, `renderProbe`, `flush`).
+4. **KB 20** `20-html-template.md`: the intro says "Copy exactly — sections 1–4 … Yours — sections 5–6" (STALE since AL-03: 5 is `useConnectedFetch`, 6 the schema, 7 the app); the fence's banners `// 6. RESPONSE SCHEMA`, `// 7. YOUR APP`. Rendered 15,626 B. **The inline core** (`packages/knowledge/src/layers.ts:124-130`: 10, 20, 30, 40, 80; `getInlineKnowledgeCore()` at `:137`) renders 38,831 B; the inline builder system text (`buildHostSystemPrompt({appBuilder, artifacts:false, platform:'host', knowledge:'inline'})`) measures **43,122 B** + the 7 B separator + the ≈ 550 B WebLLM build suffix against `HOST_BUILDER_SYSTEM_MAX_BYTES = 45_056` (`apps/playground/src/agent/promptBudget.ts:38`; pinned by `apps/host/src/__tests__/brains.test.ts:484-495`, which also pins `DEFAULT_MAX_PROMPT_BYTES 65,536 − ceiling ≥ HOST_BUILDER_RESERVED_MIN_BYTES 20,480` — the ceiling cannot rise). **Headroom ≈ 1.4 KB; sections 6–7 are ≈ 7–8 KB rendered.** `35-app-builder-inline.md:21` already tells the tool-free brain to omit `useConnectedFetch`; KB 85 and 87 are NOT in the core.
+5. **KB 85** `85-scheduled-runs.md:55-120` "## The Schedule Listener (copy beside the hooks block)" — the window-level listener snippet (weather copied it: `examples/weather/app.html:936-999`) and `:119-120` the module sentence; `:160-175` "## Suggesting a Schedule" posts `SnugBridge.post({type: appEvent, event: 'schedule-request', …})` raw (weather `:1125-1131`). Pinned by `packages/knowledge/src/__tests__/scheduled-runs-kb.test.ts:99-110` (heading tree), `:122-165` (the listener's rows), `:147` (the suggestion snippet), `:168` (rules by name).
+6. **KB 87** `87-cross-app-access.md:245-352` "## The Cross-App Helper (copy beside the hooks block)" — `snugAccessRequest(op, fields)` + `SNUG_ACCESS_PENDING` + four `onAccess*` stubs + the second listener (first fence), the usage snippet (second fence), the module sentence `:346-352`. Pinned by `cross-app-access-kb.test.ts:146-165` (heading tree), `:193-246` (helper rows), `:315` (SnugAccess's eleven named in the helper prose), `:368-395` ("exactly two fences", the three hints), `:656` ("KB 20's template fence is UNCHANGED, byte for byte").
+7. **Hand-rolled listeners in the starters**: gmail `examples/gmail/app.html:1644-1656` (`connection-event`, `payload.slot === 'gmail' && payload.requestRefresh` → `sync()`, inside `useEffect(…, [sync])`); whatsapp `:828-854` (the LIVE-DOORBELL block — extracted VERBATIM between markers and driven through a window stub by `examples/whatsapp-analysis.test.mjs:335-372`; a fan-out set `liveListeners` consumed at `:1408`); weather `:936-999` (KB 85's listener + `SCHEDULE_HANDLED`) and `:1125-1131` (the raw proposal post).
+8. **The starters**: twelve; versions adventure-quest 2 · chess 3 · flying-pig 2 · github 2 · gmail 3 · hue 2 · ledger 2 · quiz-me 2 · spotify 2 · trade-copilot 2 · weather 3 · whatsapp 2; `starter.json` carries `appHash` = sha-256 of the normalized html (`validate.test.mjs:644-658`; CRLF→LF, trailing whitespace stripped, trimmed — the vouch's rule). `examples/starters-package.json` pins **0.1.1** (published 2026-10-09; the lock holds 0.1.0 and 0.1.1 `published: true`); `check-starters-pin` ok. The kit e2e INTERCEPTS `@snugprotocol/starters@<v>/<file>` and serves the local `starters-pkg` build (`apps/host/e2e/helpers.ts:46-62`), so an unpublished pin does not red it; `apps/host/starters-pkg/` is a build output (untracked).
+9. **The publish order** (ADR-0073 §6; `scripts/publish-starters.mjs`; `docs/runbooks/publish-starters.md`): `--stage` builds from `git archive HEAD` (a clean tree — the lock itself may be dirty) and writes the lock's unpublished entry; `--publish` refuses a HEAD that is not a freshly fetched `origin/main`. So the order is **merge → the owner publishes from `origin/main` → the lock-marking PR** — the 0.1.1 precedent (TASK-20261009 PR-C #195, then #196). The plan line above ("Merge ONLY after the owner publishes 0.2.0") cannot hold literally and is corrected by D-PR6-9.
+10. **Protocol**: untouched. `packages/protocol/src/__tests__/frames.test.ts:171` pins NO `accessOps` key on host-ready (D-PR3-5); the four access hint names are `ACCESS_CHANGED_EVENT` · `ACCESS_SOURCE_CHANGED_EVENT` · `ACCESS_READ_EVENT` · `DATA_CHANGED_EVENT` (`packages/protocol/src/access.ts:209-215`); the schedule event names live in the SDK (`schedule.ts`: `schedule-run` · `schedule-result` · `schedule-request`).
+11. **Scanners the new code must satisfy**: `placeholder-integrity.test.ts:35` (no raw source retypes a `snug:` frame literal — the template uses `{{frameType:…}}`), `:57` (no unresolved placeholder in the rendered store), `frame-literal-sync.test.ts` (every `snug:*` literal in the rendered KB is a `FRAME_TYPES` value), `kb-protocol-sync.test.ts` (pins `data.data && data.data.theme`, top-level db seats, `not connected`), `content-drift.test.ts` (`src/generated/content.ts` equals a fresh `gen:content` — regenerate before believing any KB test, lesson 2026-10-10). `render.ts` `STATIC_SUBSTITUTIONS` holds no schedule bound today.
+12. **Threat model** v3.12; `check-threat-model` TM3 pins delta files, TM4 pins each invariant row's enforcement and test paths; the row at `docs/threat-model.md:324` names the SDK hook's schedule behaviours with the module test alone.
+13. **The kit**: 2,692,402 B at PR-5's close (57,598 B under `KIT_SIZE_CEILING_BYTES`); the kit bundles the knowledge content (the template once in `content.ts`); `scripts/check-host-kit.mjs` measures `apps/host/dist/snug-host.html` — rebuild first (lesson 2026-10-12).
+
+### PR-6 decisions (v1 — each reversible by one word, in brackets)
+
+- **D-PR6-1 Scope = AC40, exactly.** The hooks block gains sections 6 and 7; the module SDK gains their twin; KB 85 and 87 retire their snippets in favour of the hooks; the twelve starters re-copy the block and the two that hand-roll what the hooks now do adopt them (weather, gmail); 0.2.0 is staged. **Not in PR-6, each named**: the Hue sunset *Run [app]* (`examples/hue/authoring/docs/next-tasks.md` "dusk arriving on its own") — a mutating connected call inside a scheduled run is refused while nobody is present (ADR-0074 §6; KB 85 "Reads, not writes, while unattended"), so a sunset mood could only ever run with the app open, which is not "on its own"; it waits on standing approvals for unattended connected writes (next-steps 2026-10-09) and is queued with that item ["sunset"]; a starter that reads another app and so declares `snug:access-wants` — none does and PR-6 adds no cross-app feature to a starter, so the "starter-note" mount of `AccessWantsNote` (D-PR5-3) stays queued with the first declaring starter ["declare"]; `accessOps` on host-ready — a wire change (spec 1.4) for a PR that touches no schema byte; the embedded helper mirrors the module's MALFORMED fallback (D-PR3-5) ["accessOps"]; whatsapp's LIVE-DOORBELL stays hand-rolled — its extraction test owns the shape and it is a fan-out to many subscribers, not one handler ["whatsapp"].
+- **D-PR6-2 Section 1 (the bridge) changes — once, for the wave.** `SnugBridge` gains `accessPending: new Map()` (requestId → settle) and `hostEventListeners: new Map()` (event → Set); the listener gains the `{{frameType:accessResponse}}` arm (settle by requestId, deleted first — terminal exactly once; an unknown id ignored) and, in the host-event arm AFTER the theme code (`data.data && data.data.theme` kept verbatim for `kb-protocol-sync`), the dispatch to a COPY of the event's subscriber set — the module bridge's order. Every starter re-copies the block (the validator's byte identity stands; one blessed block in the wild). ["prefix" — the validator would accept a sections-1–5 prefix and only the adopting starters release; rejected because two blessed blocks would exist and the KB says "copy exactly" of one]
+- **D-PR6-3 Section 6 — `onHostEvent` · `useHostEvents` · `useSnugSchedule` · `proposeSchedule` · `scheduleInputKey`.** `onHostEvent(event, listener)` is the primitive (returns the unsubscribe; the set deleted when empty — the module's). `useHostEvents(handlers)` is ONE hook over a record `{ [event]: (data) => void }`: subscribes per key on mount (re-subscribes when the key set changes — the keys joined are the effect's dependency), calls the LATEST render's handler through a ref, unsubscribes on unmount; a key whose value is not a function is ignored. `useSnugSchedule(handler)` — module parity: an insertion-ordered answered set capped at 128, remembered BEFORE the kv read, the input read under `scheduleInputKey(runId)` (`'snug:schedule:' + runId`), ONE `schedule-result` per runId, the result normalised under the protocol's bounds injected as three NEW placeholders `{{scheduleSummaryMaxChars}}` · `{{scheduleTitleMaxChars}}` · `{{scheduleNotifyBodyMaxChars}}` (render.ts `STATIC_SUBSTITUTIONS`; the constants exist), a throw → `{ ok: false, summary: <message> }`, the latest render's handler, an unmounted hook answers nothing. `proposeSchedule(proposal)` — once per page, after host-ready, after a STRUCTURAL check (`title` a non-empty string, `steps` a non-empty array of objects, `spec` an object; the host's strict parse is the real gate — the embedded form has no zod; the module keeps `scheduleProposalSchema`); answers the boolean, posts `{{frameType:appEvent}}` `'schedule-request'` with the proposal as given. **The module SDK gains `useHostEvents`** (`packages/sdk/src/hostEvents.ts` over `onHostEvent`, exported from `index.ts`; `HostEventListener` reused) so both forms expose the same names. ["single" — `useHostEvent(event, listener)` per subscription instead of the record]
+- **D-PR6-4 Section 7 — `useSnugAccess()`.** The eleven methods of `SnugAccess`, one memoised object (the `useConnectedFetch` shape). `snugAccessRequest(fields, settle)` with the module's two guard results (SAME messages — pinned from bridge.ts) and the DataCloneError arm; a fresh `crypto.randomUUID()` per call; `request` posts `hints`/`renew`/`access` ONLY when given (absent, not undefined — the protocol's request is strict), `query`/`write` post `params` only when given, `discover` posts `hints` only when given. Per-op settlers hand back ONLY the protocol's seats: request → `grant`; query → `columns`, `rows`, `truncated?`, `totalRows?`; write → `changes`; refresh → `fresh`, `reason?`; list → `grants`; release → `{ ok: true }`; discover → `candidates`. A success for a DIFFERENT op → the mismatch HOST_ERROR (`'the host answered an access <answered> to an access <asked>'`, not retryable). **The embedded form has no parser**, so where the module ignores a frame the parser rejects and waits (`access.test.ts:407`), the embedded settler answers a success frame MISSING its op's seat (a query without `rows`/`columns`, a write without a numeric `changes`, a refresh without a boolean `fresh`, a request without an object `grant`, a list without an array `grants`, a discover without a string `candidates`) with a non-retryable HOST_ERROR `'the host answered an access <op> without its result'` — never a mis-shaped success, never a hang; a `ok: false` frame without an `error` object answers `HOST_ERROR 'the host answered an access <op> with no error'` (not retryable). The four hints through `onHostEvent` with the data seat validated (`{ grantId }` a non-empty string → exactly that; `data-changed` → `{}` when `table` is absent, `{ table }` when a non-empty string, dropped otherwise); a malformed seat is dropped. The module's parser-reject row stays module-only. ["wait" — the embedded settler ignores a seat-less success and waits, like the module]
+- **D-PR6-5 The inline core carries sections 1–5 and SAYS so.** `layers.ts` renders KB 20 for `getInlineKnowledgeCore()` through a pure, exported `inlineTemplate(text)` that replaces the region from the section-6 banner block (the `// ====` line above `// 6.`) up to the line before the RESPONSE SCHEMA banner block with ONE comment line — `// 6–7. useHostEvents, useSnugSchedule, useSnugAccess — not carried on this host: schedules and access between apps need the full template` — so the numbering stays coherent and the cut is visible (no silent cap); the served template (`getKnowledgeBase()`, `searchKnowledge`, the tool, the kit's store) is whole; `35-app-builder-inline.md:21` gains the sibling sentence ("never include sections 6–7 — this host carries neither schedules nor access between apps for a tool-free brain"). Pinned: the inline template's hooks block normalises to the embedded file's sections 1–5 exactly; the served template's block to the whole file; the cut line present once in the inline core and absent from the served page; `brains.test.ts:484` stays green — MEASURED after I-1, never assumed. Why: 1.4 KB of headroom against ≈ 7–8 KB; the ceiling cannot rise (the reserved minimum); a tool-free brain is not taught 85 or 87 (not in the core), so the sections would be dead bytes on every tool-free turn, where the owner's 2026-09-06 decision already spends 43 KB. ["whole" — then the ceiling conversation is the owner's before any test]
+- **D-PR6-6 KB 85 and 87 retire their snippets; the hooks are taught by name.** 85: "## The Schedule Listener (copy beside the hooks block)" → "## The Schedule Hook" — mount `useSnugSchedule(onScheduledRun)` beside `useSnugApp`, the handler's shape (`{ runId, taskId, input? }` → `{ ok, summary?, notify? }`), one sentence "the hook is section 6 of your hooks block — copy it exactly, never edit it"; "## Suggesting a Schedule" calls `proposeSchedule({ title, steps, spec })` (one fence; the raw `SnugBridge.post` gone); the module sentence stays. 87: "## The Cross-App Helper (copy beside the hooks block)" → "## The Access Hook" — `const access = useSnugAccess()` in the component, the usage fence rewritten over `access.request` / `access.query` / `access.write` / `access.refresh`, the four `on*` subscriptions shown as calls from a `useEffect` with their unsubscribes returned; the module sentence stays (the same eleven). Every heading-tree pin, fence-count pin and snippet-row pin in `scheduled-runs-kb.test.ts` and `cross-app-access-kb.test.ts` is INVERTED by name (the test lane lists each inversion in its report); the content-sync rows re-home on the embedded file — the hooks the KB names are the functions `snug-hooks.js` defines, and the bounds the KB states are the protocol's (read from the rendered file, the sdk kb-sync precedent). Retrieval pins ("schedule" ranks 85 first; "read another app's data" ranks 87 first; the top-5 phrasings) stay green. KB 20's intro: "Copy exactly — sections 1–7 (4–7 only when the app needs them: SQL, an approved API, host events or a schedule, another app's data) · Yours — 8–9"; `cross-app-access-kb.test.ts:656`'s "KB 20 UNCHANGED" pin inverted to "KB 20's fence carries sections 6 and 7". The skill's `:159` "schedule listener copied beside the hooks block" → "the schedule hook in its hooks block"; `snug-skill.test.ts` re-pinned. ["snippets" — keep the snippets beside the hooks as a second way in; rejected: two ways to answer one hint]
+- **D-PR6-7 The twelve releases (ADR-0045).** Every starter: `version` + 1, a changelog entry dated 2026-10-12, `appHash` recomputed, the block re-copied byte-for-byte, the banner renumbered `// 8. RESPONSE SCHEMA` (app-authored; renumbered because every file changes anyway and the KB says 8). `validate.test.mjs` `hookBlock` and the posture test cut at `/\d+\. RESPONSE SCHEMA/` (the sdk test's regex — one definition); the second-listener fixture's banner `8.`; `examples/README.md:37-39,:88` say "the RESPONSE SCHEMA banner" and name seven sections. **Release notes**: ONE "What changed" item shared in substance across the wave — honest, because it is one change (*"Keeps up with the runner: the app's built-in bridge is now the current Snug SDK — host events, scheduled runs and access between apps reach it through the standard hooks. Nothing changes in how you use the app."*) — plus a "What's new" item ONLY where something is user-visible: weather (*"Morning forecast now answers through the SDK's own schedule hook, and the one-time suggestion goes the same way"*), gmail (*"The wizard's 'load my real data' signal now arrives through the SDK's host-events hook"*). No invented per-app copy. ["notes" — a per-app sentence for each of the twelve]
+- **D-PR6-8 Adoption.** weather: `useSnugSchedule(onScheduledRun)` mounted in `App` beside `useSnugApp`; the window-level listener `:977-999` and `SCHEDULE_HANDLED` removed; the raw `schedule-request` post `:1125-1131` → `proposeSchedule({...})` with the same proposal and its boolean honoured where the old code assumed success. gmail: `useHostEvents({ 'connection-event': (payload) => { if (payload && payload.slot === 'gmail' && payload.requestRefresh) void sync(); } })` replaces the `useEffect([sync])` listener `:1644-1656` (the latest render's `sync` is reached through the hook's ref). Pins: the authored region of weather and of gmail carries no `addEventListener('message'`; weather's authored region has no `SCHEDULE_HANDLED`; `useSnugSchedule(` and `proposeSchedule(` appear in weather, `useHostEvents(` in gmail; the playground e2e `schedule-flow.spec.ts` (the weather walk) stays green. ["keep" — weather and gmail keep their listeners and only re-copy the block]
+- **D-PR6-9 0.2.0 and the order of acts.** `examples/starters-package.json` → `0.2.0` in the examples commit; then `node scripts/publish-starters.mjs --stage` (Node 22, a clean tree) writes the lock's `0.2.0` entry (unpublished) in its own commit; `check-starters-pin` then holds `examples/` to it (a later starter edit in this PR → re-stage). After this PR: **the owner merges → the owner publishes 0.2.0 from `origin/main`** (the runbook; ONE line from the agent, wait for a yes — never in this session, never before the merge: the script refuses a HEAD ≠ `origin/main`) **→ the lock-marking docs PR** (`published: true` + the registry integrity by the script, next-steps pruned, this task file's done-move with its `done/INDEX.md` line). The plan line "merge ONLY after the owner publishes" is corrected in the plan section to this order. ["lock-first" — none viable]
+- **D-PR6-10 Threat model → v3.13, no delta file.** No new host power: the hooks are app-side code the host already answers; the sandbox, the gates and the records are untouched. The row at `threat-model.md:324` names BOTH forms' tests (the shared contract files) in its test column; one "What v3.13 added" line (the embedded SDK form carries the schedule and access hooks and a named host-event subscription; the inline template on a tool-free host shows the cut; starters re-released as 0.2.0). `check-threat-model` green (TM3 has no new delta to pin; TM4 reads the new test paths). ["delta"]
+- **D-PR6-11 No spec, no website sync.** No protocol byte, no `docs/spec-changelog.md` entry; `check-website-sync` is still run at Gate 5 (nothing it syncs changes).
+- **D-PR6-12 The kit is measured, not estimated.** After I-1 and after the lanes: `pnpm --filter host build` FIRST, then `check-host-kit`; expected delta = the template's growth − the two retired snippets (≈ +3 KB net); the 57,598 B headroom stands; a crossing is the owner's conversation, not a silent bump.
+- **D-PR6-13 The estimate and the review partitions.** sdk ≈ +350 lines (embedded +≈ 250 · `hostEvents.ts` +≈ 40 · index/types +≈ 30) · sdk tests ≈ +550 (three shared contract files, the two registrations, kb-sync widenings, `access.test.ts:832` inverted) · knowledge ≈ ±320 (20/85/87/35/SKILL; `render.ts` +3; `layers.ts` +≈ 25; `content.ts` regenerated) · knowledge tests ≈ ±300 · examples: 12 × ≈ 260 identical block lines + weather/gmail ±90 + 12 `starter.json` + `validate.test.mjs` ±20 + README ±6 + the pin + the lock — ≈ 4k lines of which ≈ 3.1k are the one block, PROVED mechanically (`validate.test.mjs` already asserts every block normalises to the embedded file; the review reads one). Gate-5 partitions: **R-code** (sdk + knowledge src + layers + render), **R-starters** (weather, gmail, one representative starter's diff, every `starter.json`, the validator, the lock), **R-docs** (KB prose, SKILL, README, docs/, ADR notes, threat model), **R-security** (section 1's two new arms, section 7's guards and settlers, the inline cut — can a frame from a sibling origin settle an access call? can a subscriber see a frame that is not the host's? what crosses a settler that should not?).
+
+### Acceptance criteria (v1; AC40 expanded — each a test, `→` its home)
+
+- **AC40a** The embedded file carries sections 1–7 with the section-1 arms (D-PR6-2); `kb-sync.test.ts`'s byte identity holds against the WHOLE rendered fence; the SEVEN copy-exactly names pinned (`SnugBridge`, `function useSnugApp`, `function usePersistedState`, `function useAppDB`, `function useConnectedFetch`, `function useHostEvents`, `function useSnugSchedule`, `function useSnugAccess`, plus `function onHostEvent` and `function proposeSchedule`); `RESPONSE_SCHEMA` and `ReactDOM` still absent; no unresolved placeholder; the three bounds in the embedded file equal the protocol constants → `kb-sync.test.ts`.
+- **AC40b** ONE contract, two forms — registered for BOTH by the two existing registration files: `contract-host-events.ts` (per-key subscribe; the latest handler; unsubscribe on unmount; the bridge still flips theme with a subscriber mounted and a `theme-change` subscriber merely observes; an unknown event reaches nobody; a subscriber unsubscribing mid-dispatch does not break the others; a re-render with the same keys does not re-subscribe, a changed key set does) · `contract-schedule.ts` (hint → kv read under the SDK's key → ONE handler run → ONE `schedule-result`; a repeated hint ignored, even mid-flight; distinct runIds each answered; a missing kv record → no `input`; a throw → `ok:false` with the message; extra keys dropped and the bounds applied; `notify` needs both halves; the latest render's handler; an unmounted hook answers nothing; the hook may be the first to mount; `proposeSchedule`: false before ready, true once, false the second time, a structurally wrong proposal never posted) · `contract-access.ts` (the eleven on one stable object; each op posts the strict shape `accessRequestSchema` parses, with absent optional keys ABSENT; the seats; fresh requestIds; two in flight answered out of order; errors as data for every op; the mismatch for every pair; the two guards with nothing posted; the DataCloneError arm; a response answered twice changes nothing; the four hints with their validated seats and their unsubscribes; `data-changed` with `table` absent → `{}`) → `packages/sdk/src/__tests__/`; `contract-embedded.test.ts`'s factory returns the new names; module-only rows stay in `schedule.test.ts`/`access.test.ts`; `access.test.ts:832` INVERTED ("the embedded block now posts the access frame and names the access hook").
+- **AC40c** The module SDK exports `useHostEvents` (`hostEvents.ts`) with `HostEventListener`; `index.ts`'s three comment blocks no longer say the embedded form "has no hook"; the public-surface rows (`access.test.ts:773-831`) extended → `access.test.ts`, `contract-host-events.ts`.
+- **AC40d** `render.ts` knows the three schedule-bound placeholders and nothing else new; `placeholder-integrity` and `frame-literal-sync` green; `content.ts` regenerated and drift-free → `placeholder-integrity.test.ts`, `content-drift.test.ts`.
+- **AC40e** The inline cut (D-PR6-5): `inlineTemplate` is pure and exported; the inline core's KB 20 hooks block normalises to the embedded sections 1–5; the served KB 20's to the whole file; the cut line once in the inline core, absent from the served page; `35-app-builder-inline.md` carries the sibling sentence; `brains.test.ts:484` green and the measured figure journaled → `tool-free-assembly.test.ts`, `binding-a-rules.test.ts`, `apps/host/src/__tests__/brains.test.ts` (unchanged, measured).
+- **AC40f** KB 85, 87 and 20 read as D-PR6-6; the heading trees re-pinned; 85 has ONE javascript fence (the proposal) and 87 ONE (the usage); the hook names each page teaches are functions the embedded file defines; the bounds 85 and 87 state equal the protocol's; retrieval pins green; the skill's sentence → `scheduled-runs-kb.test.ts`, `cross-app-access-kb.test.ts`, `snug-skill.test.ts`.
+- **AC40g** Examples: all twelve hooks blocks byte-identical to the embedded file (the validator's existing row, now over seven sections); every banner `8.`; every `starter.json` `version` + 1 with a 2026-10-12 entry whose newest version matches and whose `appHash` is the recomputed one; weather and gmail per D-PR6-8; the second-listener fixture on the new banner; `whatsapp-analysis.test.mjs` unchanged and green → `examples/validate.test.mjs`.
+- **AC40h** `starters-package.json` 0.2.0; the lock's staged, unpublished 0.2.0 entry with twelve hashes; `check-starters-pin` ok; `check-host-kit` ok with the kit measured and journaled → root `check-host-kit`.
+- **AC40i** Docs (Gate 6): KB prose; SKILL; `examples/README.md`; `docs/architecture.md` (the SDK's two forms carry seven sections; the inline cut); `docs/code-map.md:116,121` (the hooks' homes; "Q9: the embedded hooks block UNCHANGED" retired); `docs/glossary.md` (*hooks block* if absent); ADR-0034 (the promised `useHostEvents` landed — a status note), ADR-0074 (Q7 landed), ADR-0075/0076 (Q9 landed), ADR-0073 (the 0.2.0 line); `docs/next-steps.md` pruned (`:14` the PR-6 plan line, `:29` accessOps decided, `:65(5)` the stale PR-C line, `:66` the starter wave, `:249`, `:250`; the sunset, the starter-note and the hue item queued by name); threat model v3.13; lessons; this journal; the plan line of D-PR6-9 corrected.
+- **AC40j** After the merge, the owner's acts, one line each, wait for a yes: publish 0.2.0 (runbook); then the lock-marking PR with the done-move. Never in this session.
+
+### Module contracts (exact — the test lanes read these as the spec; the implementation lane lands them byte-for-byte modulo the Gate-2 folds)
+
+**Section 1 — the two new seats and the two new arms** (the template source uses `{{frameType:…}}`; shown rendered):
+
+```javascript
+const SnugBridge = {
+  instanceId: null,
+  theme: 'light',
+  capabilities: {},
+  ready: false,
+  pending: new Map(),            // requestId -> { resolve, onStream }
+  dbPending: new Map(),          // requestId -> resolve
+  netPending: new Map(),         // requestId -> resolve
+  accessPending: new Map(),      // requestId -> settle(frame)   — section 7
+  hostEventListeners: new Map(), // event -> Set<listener>       — section 6
+  listeners: new Set(),          // re-render triggers for hooks
+  …
+};
+// inside the one message listener, after the net-response arm:
+  if (data.type === 'snug:access-response') {
+    const settle = SnugBridge.accessPending.get(data.requestId);
+    if (!settle) return; // unknown or already-answered requestId — ignore
+    SnugBridge.accessPending.delete(data.requestId); // terminal — exactly one per requestId
+    settle(data);
+    return;
+  }
+
+  if (data.type === 'snug:host-event') {
+    if (data.event === 'theme-change' && data.data && data.data.theme) {
+      SnugBridge.theme = data.data.theme;
+      SnugBridge.notify();
+    }
+    // Unknown host events MUST be ignored (the protocol is additive) — by the bridge. A
+    // subscriber that asked for an event by name (section 6) gets its data; nothing else changes.
+    const subscribers = SnugBridge.hostEventListeners.get(data.event);
+    if (subscribers) for (const fn of [...subscribers]) fn(data.data);
+  }
+```
+
+**Section 6** (rendered; the source carries `{{frameType:appEvent}}` and the three bound placeholders):
+
+```javascript
+// ============================================================
+// 6. useHostEvents + useSnugSchedule (copy exactly when the app listens to the host or takes part in schedules; omit otherwise)
+// The host rings NAMED events on one channel — hints with ids, never content. onHostEvent is
+// the primitive (returns the unsubscribe); useHostEvents subscribes a component to several by
+// name; useSnugSchedule answers the host's scheduled runs; proposeSchedule suggests one — once.
+// ============================================================
+function onHostEvent(event, listener) {
+  let subscribers = SnugBridge.hostEventListeners.get(event);
+  if (!subscribers) { subscribers = new Set(); SnugBridge.hostEventListeners.set(event, subscribers); }
+  subscribers.add(listener);
+  return () => {
+    subscribers.delete(listener);
+    if (subscribers.size === 0) SnugBridge.hostEventListeners.delete(event);
+  };
+}
+
+function useHostEvents(handlers) {
+  const handlersRef = useRef(handlers);
+  useEffect(() => { handlersRef.current = handlers; });
+  const events = Object.keys(handlers).join('\n');
+  useEffect(() => {
+    const offs = events.split('\n').filter(Boolean).map((event) =>
+      onHostEvent(event, (data) => { const fn = handlersRef.current[event]; if (typeof fn === 'function') fn(data); }));
+    return () => { for (const off of offs) off(); };
+  }, [events]);
+}
+
+const SNUG_SCHEDULE_REMEMBERED = 128;  // answered runIds the page keeps before the oldest is forgotten
+const snugScheduleAnswered = new Set(); // runIds answered (or in flight) on this page — the first answer stands
+let snugScheduleProposed = false;       // one schedule-request per page
+
+function scheduleInputKey(runId) { return 'snug:schedule:' + runId; }
+
+// The result as the host parses it: ok a boolean, summary a non-empty string, notify only with
+// both halves — the bounds are the protocol's; anything else is dropped (a summary, never data).
+function snugScheduleResult(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { ok: false, summary: 'the handler returned no result' };
+  const out = { ok: raw.ok === true };
+  if (typeof raw.summary === 'string' && raw.summary !== '') out.summary = raw.summary.slice(0, 4096);
+  const n = raw.notify;
+  if (n && typeof n === 'object' && typeof n.title === 'string' && n.title !== '' && typeof n.body === 'string' && n.body !== '') {
+    out.notify = { title: n.title.slice(0, 80), body: n.body.slice(0, 120) };
+  }
+  return out;
+}
+
+async function snugAnswerScheduleHint(data, handler) {
+  if (!data || typeof data !== 'object' || typeof data.runId !== 'string' || data.runId === '' || typeof data.taskId !== 'string' || data.taskId === '') return; // not the host's shape — ignore
+  if (snugScheduleAnswered.has(data.runId)) return; // a repeated hint: the first answer stands
+  snugScheduleAnswered.add(data.runId); // BEFORE the kv round trip, so a duplicate arriving meanwhile is ignored too
+  if (snugScheduleAnswered.size > SNUG_SCHEDULE_REMEMBERED) snugScheduleAnswered.delete(snugScheduleAnswered.values().next().value);
+  const stored = await snugDbRequest('kvGet', { key: scheduleInputKey(data.runId) });
+  const input = stored.ok && stored.value && typeof stored.value === 'object' && !Array.isArray(stored.value) ? stored.value.input : undefined;
+  const run = { runId: data.runId, taskId: data.taskId };
+  if (input !== undefined) run.input = input;
+  let result;
+  try {
+    result = snugScheduleResult(await handler(run));
+  } catch (err) {
+    result = { ok: false, summary: (err && err.message) || 'the scheduled run failed' };
+  }
+  SnugBridge.post({ type: 'snug:app-event', event: 'schedule-result', data: result });
+}
+
+function useSnugSchedule(handler) {
+  const handlerRef = useRef(handler);
+  useEffect(() => { handlerRef.current = handler; });
+  useEffect(() => onHostEvent('schedule-run', (data) => { snugAnswerScheduleHint(data, (run) => handlerRef.current(run)); }), []);
+}
+
+// Suggest a schedule for THIS app — once per page, after a user act, never on load. The host's
+// strict parse is the gate; this checks the shape and answers whether the request went out.
+function proposeSchedule(proposal) {
+  if (!SnugBridge.ready || snugScheduleProposed) return false;
+  if (!proposal || typeof proposal !== 'object' || typeof proposal.title !== 'string' || proposal.title === '' ||
+      !Array.isArray(proposal.steps) || proposal.steps.length === 0 || !proposal.steps.every((s) => s && typeof s === 'object') ||
+      !proposal.spec || typeof proposal.spec !== 'object') return false;
+  snugScheduleProposed = true;
+  SnugBridge.post({ type: 'snug:app-event', event: 'schedule-request', data: proposal });
+  return true;
+}
+```
+
+**Section 7** (rendered; the source carries `{{frameType:accessRequest}}`):
+
+```javascript
+// ============================================================
+// 7. useSnugAccess (copy exactly when the app reads another app's data; omit otherwise)
+// Reads — and, where the user ticked it, changes — ANOTHER app's tables through a user-granted,
+// recorded, revocable access (see "Access Between Apps"). The app never names a source: it
+// states a purpose and the user decides on host UI. Every call ALWAYS resolves — errors are data.
+// ============================================================
+function snugAccessRequest(fields, settle) {
+  if (!SnugBridge.ready) return Promise.resolve({ ok: false, error: { code: 'HOST_ERROR', message: 'not connected to host yet', retryable: true } });
+  if (SnugBridge.capabilities.access !== true) return Promise.resolve({ ok: false, error: { code: 'HOST_ERROR', message: 'this host does not offer access between apps', retryable: false } });
+  return new Promise((resolve) => {
+    const requestId = crypto.randomUUID();
+    SnugBridge.accessPending.set(requestId, (frame) => resolve(settle(frame)));
+    try {
+      SnugBridge.post({ type: 'snug:access-request', requestId, ...fields });
+    } catch (err) {
+      SnugBridge.accessPending.delete(requestId);
+      resolve({ ok: false, error: { code: 'HOST_ERROR', message: 'the access request could not be posted', retryable: false } });
+    }
+  });
+}
+
+// Each settler hands back ONLY the seats the protocol defines for its answer. A success for a
+// different op, or one missing its result, is a host fault answered as HOST_ERROR — never a
+// mis-shaped success, never a hang.
+function snugAccessFault(message) { return { ok: false, error: { code: 'HOST_ERROR', message, retryable: false } }; }
+function snugAccessSettle(op, pick) {
+  return (frame) => {
+    if (frame.ok !== true) return frame.error && typeof frame.error === 'object' ? { ok: false, error: frame.error } : snugAccessFault('the host answered an access ' + op + ' with no error');
+    if (frame.op !== op) return snugAccessFault('the host answered an access ' + frame.op + ' to an access ' + op);
+    const result = pick(frame);
+    return result === undefined ? snugAccessFault('the host answered an access ' + op + ' without its result') : result;
+  };
+}
+const SNUG_ACCESS_SETTLE = {
+  request: snugAccessSettle('request', (f) => (f.grant && typeof f.grant === 'object' ? { ok: true, grant: f.grant } : undefined)),
+  query: snugAccessSettle('query', (f) => {
+    if (!Array.isArray(f.columns) || !Array.isArray(f.rows)) return undefined;
+    const out = { ok: true, columns: f.columns, rows: f.rows };
+    if (f.truncated !== undefined) out.truncated = f.truncated;
+    if (f.totalRows !== undefined) out.totalRows = f.totalRows;
+    return out;
+  }),
+  write: snugAccessSettle('write', (f) => (typeof f.changes === 'number' ? { ok: true, changes: f.changes } : undefined)),
+  refresh: snugAccessSettle('refresh', (f) => (typeof f.fresh !== 'boolean' ? undefined : f.reason !== undefined ? { ok: true, fresh: f.fresh, reason: f.reason } : { ok: true, fresh: f.fresh })),
+  list: snugAccessSettle('list', (f) => (Array.isArray(f.grants) ? { ok: true, grants: f.grants } : undefined)),
+  release: snugAccessSettle('release', () => ({ ok: true })),
+  discover: snugAccessSettle('discover', (f) => (typeof f.candidates === 'string' ? { ok: true, candidates: f.candidates } : undefined)),
+};
+
+// The hints are ids only — { grantId } for three of them; data-changed is { table } or {} — and a malformed data seat is dropped.
+function snugGrantHint(event) {
+  return (listener) => onHostEvent(event, (data) => {
+    if (data && typeof data === 'object' && typeof data.grantId === 'string' && data.grantId !== '') listener({ grantId: data.grantId });
+  });
+}
+
+function useSnugAccess() {
+  return useMemo(() => ({
+    request(purpose, opts) {
+      const fields = { op: 'request', purpose };
+      if (opts && opts.hints !== undefined) fields.hints = opts.hints;
+      if (opts && opts.renew !== undefined) fields.renew = opts.renew;
+      if (opts && opts.access !== undefined) fields.access = opts.access;
+      return snugAccessRequest(fields, SNUG_ACCESS_SETTLE.request);
+    },
+    query(grantId, sql, params) { return snugAccessRequest(params !== undefined ? { op: 'query', grantId, sql, params } : { op: 'query', grantId, sql }, SNUG_ACCESS_SETTLE.query); },
+    write(grantId, sql, params) { return snugAccessRequest(params !== undefined ? { op: 'write', grantId, sql, params } : { op: 'write', grantId, sql }, SNUG_ACCESS_SETTLE.write); },
+    refresh(grantId) { return snugAccessRequest({ op: 'refresh', grantId }, SNUG_ACCESS_SETTLE.refresh); },
+    list() { return snugAccessRequest({ op: 'list' }, SNUG_ACCESS_SETTLE.list); },
+    release(grantId) { return snugAccessRequest({ op: 'release', grantId }, SNUG_ACCESS_SETTLE.release); },
+    discover(hints) { return snugAccessRequest(hints !== undefined ? { op: 'discover', hints } : { op: 'discover' }, SNUG_ACCESS_SETTLE.discover); },
+    onChange: snugGrantHint('access-changed'),
+    onSourceChanged: snugGrantHint('access-source-changed'),
+    onDataChanged(listener) {
+      return onHostEvent('data-changed', (data) => {
+        if (!data || typeof data !== 'object' || Array.isArray(data)) return;
+        if (data.table === undefined) listener({});
+        else if (typeof data.table === 'string' && data.table !== '') listener({ table: data.table });
+      });
+    },
+    onRead: snugGrantHint('access-read'),
+  }), []);
+}
+```
+
+**The module twin** — `packages/sdk/src/hostEvents.ts`:
+
+```ts
+export function useHostEvents(handlers: Readonly<Record<string, HostEventListener>>): void
+// subscribes per key through onHostEvent on mount (dependency: the keys joined by '\n'),
+// the latest render's handler via a ref, unsubscribes on unmount; a non-function value ignored.
+```
+`index.ts` exports it beside `onHostEvent`; the three "the EMBEDDED form has no hook" comment blocks (`schedule.ts`, `access.ts`, `index.ts`) are rewritten to "both forms carry it".
+
+**`render.ts`** — three new `STATIC_SUBSTITUTIONS`: `scheduleSummaryMaxChars` · `scheduleTitleMaxChars` · `scheduleNotifyBodyMaxChars` (from the protocol's `SCHEDULE_STEP_SUMMARY_MAX_CHARS` · `SCHEDULE_TITLE_MAX_CHARS` · `SCHEDULE_NOTIFY_BODY_MAX_CHARS`).
+
+**`layers.ts`** — `export function inlineTemplate(text: string): string` (pure; the cut of D-PR6-5, anchored on the banner lines by regex, throwing loudly when either banner is missing so the cut never silently shrinks or widens); `getInlineKnowledgeCore()` applies it to the KB 20 entry only.
+
+### File ownership (no file in two lanes — a script diffing each lane's `git diff --name-only` proves it before Gate 5)
+
+| Lane | Files |
+|---|---|
+| T-A / I-1 (sdk) | `packages/sdk/embedded/snug-hooks.js`, `packages/sdk/src/hostEvents.ts` (new), `index.ts`, `types.ts` (a `HostEventHandlers` type), `schedule.ts`/`access.ts` comment blocks; tests `contract-host-events.ts`, `contract-schedule.ts`, `contract-access.ts` (new), `contract-embedded.test.ts`, `contract-module.test.ts`, `kb-sync.test.ts`, `access.test.ts`, `app-harness.tsx` (host-stub seats if needed) |
+| T-B / I-2a (knowledge + host) | `packages/knowledge/prompts/knowledge-base/app-authoring/20-html-template.md` (I-1 owns the FENCE; I-2a the prose), `85-scheduled-runs.md`, `87-cross-app-access.md`, `packages/knowledge/prompts/system/35-app-builder-inline.md`, `packages/knowledge/prompts/skills/snug/SKILL.md`, `packages/knowledge/src/render.ts` (I-1), `layers.ts`, `src/generated/content.ts` (regenerated by whoever edits prompts LAST — I-2a), tests `scheduled-runs-kb.test.ts`, `cross-app-access-kb.test.ts`, `tool-free-assembly.test.ts`, `binding-a-rules.test.ts`, `placeholder-integrity.test.ts`, `snug-skill.test.ts`, `kb-protocol-sync.test.ts` |
+| T-C / I-2b (examples) | `examples/*/app.html` (twelve), `examples/*/starter.json` (twelve), `examples/validate.test.mjs`, `examples/README.md`, `examples/starters-package.json` |
+| I-3 (orchestrator, sequential) | `examples/starters-lock.json` (by `--stage` only), the kit measurement, the task file |
+| Gate 6 docs lane | `docs/*`, ADRs, threat model, next-steps, lessons |
+
+### Lanes
+
+- **Gate 3 (Opus 5.5 high, one workflow, three lanes in parallel — T-A · T-B · T-C; disjoint files; red by design; exact counts; every question a numbered v2.x note before Gate 4).** No production file touched. A pin the contract makes red outside a lane's list → reported under deviations, the pin moved, never the behaviour (lesson 2026-10-10).
+- **Gate 4 (Opus 5.5 xhigh).** **I-1** sequential — the shared seam: the embedded file, the KB 20 fence (the source with placeholders), `render.ts`, `gen:content`, the module `hostEvents.ts` + exports + comment blocks; `kb-sync` and the three contract files green for both forms; the kit measured. Then **I-2a ∥ I-2b**. Then **I-3** (orchestrator): the examples committed → `--stage` → the lock committed → `check-starters-pin` → the kit measured again → the Opus high verification lane (root `pnpm test`, `check-host-kit`, `check-threat-model`, `check-website-sync`, `check-sandbox-guard`, playground e2e `schedule-flow` + `access`, host kit e2e).
+- **Gate 5 (Opus 5.5 xhigh).** The four partitions of D-PR6-13 as fresh-context diff reviews in one workflow → the fold record → pins first (Opus high) → the code folds (Opus xhigh) → re-verification.
+- **Gate 6.** The docs lane (D-PR6-10, AC40i) → `/close-session` → push → open the PR (NOT merged) → stop. The owner's acts (AC40j) are named in the PR body.
+
+### Residual risks the review should weigh
+
+- The twelve near-identical diffs hide a wrong byte in one starter only to a reader; the validator's byte identity is the real reviewer — Gate 5's R-starters reads ONE representative diff and the mechanical proof.
+- An installed starter sees "update · vN" for a release whose only change is the block (nine of twelve) — honest notes (D-PR6-7), the owner's call to reverse ("prefix").
+- The embedded settlers judge seats by shape, not by schema: a tolerant host answer that the module's parser would admit is admitted here too; what crosses is still only the named seats.
+- `useHostEvents` gives every app a named subscription to any host-event — the bridge already delivered every event's `data` to any listener an app hand-rolled; nothing new crosses the frame boundary (ids-only hints are the host's obligation, ADR-0034).
+- The inline cut makes a tool-free brain's template differ from the served one by two sections; the cut line says so in the template's own voice.
+
 ## Decisions & surprises
 
 - **D1 (2026-10-10)** The owner's framing "rather than letting app A directly read from app B" describes a design that never existed: the host has always brokered the read. The plan therefore does not move the broker; it gives the broker two more doors (chat, scheduler) and three more verbs (write, refresh, discover). Said plainly in the Spec so the fresh session does not look for app-to-app code to remove.
@@ -1599,3 +1897,8 @@ Notes that DECIDE or CHANGE something:
 - Spec 1.3 published per SPEC_SYNC step 8 on the owner's explicit ask ("push the spec … DO it now"): `check-public-scrub` OK; branch `spec-1.3-host-broker` in the clone with two commits (`SPEC.md` + the sixteen schemas, byte-identical to snug `main`, + the README's version strings and access line; the edition-6 PDF, byte-identical to the website's copy, + `whitepaper/README.md`); `check-whitepaper --spec <clone>` 117/117; snugprotocol/spec#4 opened and rebase-merged on the owner's ask → **`aad0dd1`** (spec + schemas + README) · **`90b2bbf`** (whitepaper edition 6); the merged tree identical to the pushed one; `check-whitepaper --spec` 117/117 again against the published `main`.
 - This branch (`fix/TASK-20261010-host-broker-spec-13-push-record`, docs only) rewrites both staged changelog entries **PUSHED** with the SHAs (PR-4's 1.2 editorial revision as "pushed inside spec 1.3"), prunes next-steps' push item and updates this status line. The website hold is lifted: its sources already carry 1.3 and edition 6, so a deploy now publishes nothing ahead of the spec repo (the deploy itself stays the owner's act).
 - Next step: the owner merges this record PR; then PR-6 (the starter wave — `@snugprotocol/starters` 0.2.0, the owner's publish) via `/pickup TASK-20261010-host-broker` in a fresh session off a refreshed `main`.
+### 2026-10-12 — Claude (Fable 5.1 orchestrating; Opus 5.5 lanes) — PR-5 + #206 merged; PR-6 Gate 2 started (pickup)
+- Done: `/pickup` re-read the task file (the Spec's PR-6 block AC40, the PR-6 plan, "What a fresh session does first", the PR-5 contract's D-PR5-3/D-PR5-4/D-PR5-16 and D-PR3-5 for the PR-6 riders), ADR-0073, ADR-0045, next-steps' PR-6 lines (`:14`, `:29`, `:65(5)`, `:66`, `:249`, `:250`), the hue next-tasks, the lessons of 2026-10-10…12. `main` @ `d0b5066` = `origin/main` (PR #205 and the #206 record PR merged; the PR-5 and record branches auto-deleted). Branch `feat/TASK-20261010-host-broker-pr6` cut from it. Baseline on `main` (Node 22): sdk **110/110** · knowledge **411/411** · examples **170/170** · `check-starters-pin` ok (`@0.1.1` matches the lock). No lost context: `main` carries nothing beyond the two squashes, and the journal ends where the record session stopped.
+- The owner's routing for THIS session (restated at pickup, the owner's pickup words): tests written and run on **Opus 5.5 high**; planning, decisions, judgement, implementation and review on **Opus 5.5 xhigh**; dynamic workflows; STOP after PR-6's PR is opened — the merge, the 0.2.0 publish and the lock-marking PR are the owner's.
+- The seam read measured the one number that shapes PR-6: the inline builder system text is **43,122 B** against the 45,056 B ceiling (`brains.test.ts:484`), ≈ 1.4 KB of headroom for ≈ 7–8 KB of new hooks — so the contract's D-PR6-5 cuts sections 6–7 from the INLINE core only (and says so in the template's voice); the served template, the kit's store and every starter carry the whole block. The publish order is corrected (D-PR6-9: merge → the owner publishes from `origin/main` → the lock PR; the script refuses any other HEAD). Contract v1 written above ("## PR-6 — Gate-2 contract v1") with the embedded code for sections 1, 6 and 7 spelled out as the lanes' spec.
+- Next: four fresh-context plan reviews (security · feasibility · design · scope) in one workflow on Opus 5.5 xhigh → fold into v2 → self-sign-off → the three Opus 5.5 high test lanes.
