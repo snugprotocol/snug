@@ -1,9 +1,12 @@
 // The scheduled-run handshake, app side (TASK-20261009-scheduling-framework A7; ADR-0074 §3,
-// §4). MODULE-ONLY rows: the embedded form has no hook (Q7 — the copy-exactly block changes in
-// the starter release wave), so these do not join the shared contract suite. A fake host plays
-// the other side on the same jsdom window (app-harness.ts): it posts the `schedule-run` hint,
-// answers the kv read with the record the real host writes (`{ taskId, runId, input }`), and
-// collects the one `schedule-result` app-event the hook must post — exactly once per runId.
+// §4). The MODULE form's rows. Since TASK-20261010-host-broker PR-6 the embedded hooks block
+// carries the same hook (section 6 — Q7 landed), and the behaviour BOTH forms share lives in
+// contract-schedule.ts, registered for each form; the rows here pin the module's own exports
+// (`normalizeScheduleResult`, the event-name constants), the proposals only zod refuses
+// (D-PR6-14), and the module bridge's source guard and bounded throw path (AC40c). A fake host
+// plays the other side on the same jsdom window (app-harness.ts): it posts the `schedule-run`
+// hint, answers the kv read with the record the real host writes (`{ taskId, runId, input }`),
+// and collects the one `schedule-result` app-event the hook must post — exactly once per runId.
 import { act } from 'react';
 import {
   FRAME_TYPES,
@@ -178,6 +181,37 @@ describe('useSnugSchedule — the app side of a scheduled run (module form)', ()
     expect(results(host)[0]!.data).toEqual({ ok: false, summary: 'the API said no' });
   });
 
+  it('PR-6 (D-PR6-3, AC40c): the throw path is BOUNDED — a 5,000-char message is cut to the step-summary bound; a non-string or empty message answers the fixed sentence; a plain object’s string message is used', async () => {
+    const throws: Record<string, () => never> = {
+      'run-long': () => {
+        throw new Error('y'.repeat(5000));
+      },
+      'run-number': () => {
+        throw { message: 5 };
+      },
+      'run-object': () => {
+        throw { message: 'a plain object said no' };
+      },
+      'run-empty': () => {
+        throw new Error('');
+      },
+      'run-undefined': () => {
+        throw undefined;
+      },
+    };
+    await connected((run) => throws[run.runId]!());
+    for (const runId of Object.keys(throws)) hint(host, runId);
+    await flush();
+    for (const runId of Object.keys(throws)) await answerKv(runId, { taskId: 'task-1', runId });
+    expect(results(host).map((f) => f.data)).toEqual([
+      { ok: false, summary: 'y'.repeat(SCHEDULE_STEP_SUMMARY_MAX_CHARS) },
+      { ok: false, summary: 'the scheduled run failed' },
+      { ok: false, summary: 'a plain object said no' },
+      { ok: false, summary: 'the scheduled run failed' },
+      { ok: false, summary: 'the scheduled run failed' },
+    ]);
+  });
+
   it('a malformed hint (no runId, a non-object, a number) is ignored — the channel is additive', async () => {
     const handler = vi.fn<SnugScheduleHandler>(() => ({ ok: true }));
     await connected(handler);
@@ -328,6 +362,83 @@ describe('proposeSchedule — the app SUGGESTS, once per page (ADR-0074 §4)', (
     await flush();
     expect(requests(host)).toHaveLength(0);
     expect(proposeSchedule(proposal)).toBe(true); // a refusal did not spend the page's one request
+  });
+
+  // D-PR6-3 [S5] (AC40c): `true` means POSTED. The module posts zod's PARSED proposal — `z.json()`
+  // admits only JSON values, so no proposal the schema admits can make a real postMessage throw a
+  // DataCloneError; the post's failure is therefore driven directly (postMessage throws once).
+  it('PR-6: a post that throws answers false — never an exception — and leaves the page’s one request free; the next call posts and answers true', async () => {
+    const probe = await renderProbe(() => useSnugApp(META));
+    probes.push(probe as Probe<unknown>);
+    await flush();
+    host.ready();
+    await flush();
+    const post = vi.spyOn(window.parent, 'postMessage').mockImplementationOnce(() => {
+      throw new DOMException('the proposal could not be cloned.', 'DataCloneError');
+    });
+    try {
+      let answer: boolean | undefined;
+      expect(() => {
+        answer = proposeSchedule(proposal);
+      }).not.toThrow();
+      expect(answer).toBe(false);
+      expect(post).toHaveBeenCalledTimes(1);
+    } finally {
+      post.mockRestore();
+    }
+    await flush();
+    expect(requests(host)).toHaveLength(0);
+    expect(proposeSchedule(proposal)).toBe(true); // the flag was never set: the slot is free
+    await flush();
+    expect(requests(host)).toHaveLength(1);
+  });
+});
+
+describe('the module bridge’s source guard (PR-6 D-PR6-2, AC40c) — a frame only from window.parent', () => {
+  let host: HostStub;
+
+  beforeEach(async () => {
+    await drainMessageQueue();
+    __resetSnugBridgeForTests();
+    __resetSnugScheduleForTests();
+    host = hostStub();
+  });
+
+  afterEach(() => {
+    host.dispose();
+  });
+
+  const READY = {
+    v: PROTOCOL_VERSION,
+    type: FRAME_TYPES.hostReady,
+    instanceId: 'ins-sibling',
+    protocolVersions: [PROTOCOL_VERSION],
+    capabilities: { streaming: true, db: true, auth: false, access: true },
+    theme: 'dark',
+  };
+
+  it('a host-ready from a sibling frame leaves bridge.ready false and rewrites nothing; the twin from window.parent connects', async () => {
+    const off = onHostEvent('noop', () => undefined); // installs the bridge's one listener, like any hook
+    host.foreign(READY);
+    expect(bridge.ready).toBe(false);
+    expect(bridge.instanceId).toBeNull();
+    expect(bridge.theme).toBe('light');
+    expect(bridge.capabilities).toEqual({});
+    expect(proposeSchedule({ title: 'x', steps: [{ kind: 'notify', title: 'x', body: 'y' }], spec: { kind: 'daily', time: '07:00', tz: 'device' } })).toBe(false);
+    host.post(READY); // the positive twin
+    expect(bridge.ready).toBe(true);
+    expect(bridge.instanceId).toBe('ins-sibling');
+    off();
+  });
+
+  it('a sibling’s schedule-run reaches no subscriber; the twin from window.parent does', () => {
+    const seen: unknown[] = [];
+    const off = onHostEvent(SCHEDULE_RUN_EVENT, (data) => seen.push(data));
+    host.foreign({ v: PROTOCOL_VERSION, type: FRAME_TYPES.hostEvent, event: SCHEDULE_RUN_EVENT, data: { taskId: 't', runId: 'r' } });
+    expect(seen).toEqual([]);
+    host.post({ v: PROTOCOL_VERSION, type: FRAME_TYPES.hostEvent, event: SCHEDULE_RUN_EVENT, data: { taskId: 't', runId: 'r' } });
+    expect(seen).toEqual([{ taskId: 't', runId: 'r' }]);
+    off();
   });
 });
 

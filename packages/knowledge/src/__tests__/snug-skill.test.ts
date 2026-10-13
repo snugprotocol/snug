@@ -211,6 +211,25 @@ describe('the Snug skill says who schedules (TASK-20261009 P5; ADR-0074 §4, §6
   });
 });
 
+// TASK-20261010-host-broker PR-6 (contract v2 D-PR6-6; AC40f): the skill names the HOOKS, never the
+// retired snippets — :138 (Access between apps) "through the access hook (section 7 of its hooks
+// block)", :159 (Schedules) "the schedule hook in its hooks block". The Schedules rows above stay.
+describe('the Snug skill names the hooks, never the retired snippets (PR-6)', () => {
+  const schedules = (): string => said(skillSource()).split('## Schedules')[1]?.split('## Never')[0] ?? '';
+  const access = (): string => said(skillSource()).split('## Access between apps')[1]?.split('## Schedules')[0] ?? '';
+
+  it('Access between apps: an app asks through the access hook (section 7 of its hooks block) — never "the helper"', () => {
+    expect(access()).toContain('through the access hook (section 7 of its hooks block)');
+    expect(access()).not.toMatch(/\bhelper\b/);
+  });
+
+  it('Schedules: an app answers a scheduled run through the schedule hook in its hooks block — never a listener copied beside it', () => {
+    expect(schedules()).toContain('the schedule hook in its hooks block');
+    expect(schedules()).not.toMatch(/\blistener\b/);
+    expect(schedules()).not.toContain('copied beside the hooks block');
+  });
+});
+
 describe('the Snug skill keeps its shape', () => {
   it('carries the store header, then the frontmatter the skill ships with', () => {
     const source = skillSource();

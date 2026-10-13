@@ -17,6 +17,8 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
+import { authoredRegion } from './infer-connection.mjs';
+
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const APP_HTML = path.join(HERE, 'gmail', 'app.html');
 
@@ -566,7 +568,10 @@ test('NEGATIVE: no error path in the app renders a raw object', () => {
   // the defect was a CALL SITE that never used it. Any `.error ||` fallback is the exact
   // shape that produced "[object Object]" on screen.
   const html = readFileSync(APP_HTML, 'utf8');
-  const authored = html.slice(html.indexOf('5. RESPONSE SCHEMA'));
+  // The ONE banner helper (TASK-20261010-host-broker D-PR6-7): a regex with a hard assert —
+  // the old `html.slice(html.indexOf('5. RESPONSE SCHEMA'))` sliced one character on a
+  // renumbered banner and this sweep passed vacuously.
+  const authored = authoredRegion(html, 'gmail');
   const raw = [...authored.matchAll(/(\w+)\.error\s*\|\|/g)].map((m) => m[0]);
   assert.deepEqual(raw, [], `these error sites bypass netErrorText: ${raw.join(', ')}`);
 });

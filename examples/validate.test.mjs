@@ -42,7 +42,12 @@ import { fileURLToPath } from 'node:url';
  * resolve (verified: with `packages/protocol/dist` deleted, `turbo run test
  * --filter=examples` rebuilds protocol BEFORE this file runs).
  */
-import { connectionRequirementSchema, FRAME_TYPES, isRfc1918Ipv4Literal, PROTOCOL_VERSION, runtimeContractSchema } from '@snugprotocol/protocol';
+import { connectionRequirementSchema, isRfc1918Ipv4Literal, runtimeContractSchema } from '@snugprotocol/protocol';
+
+// The ONE RESPONSE SCHEMA banner helper (TASK-20261010-host-broker D-PR6-7) — homed in the
+// example tooling so every reader (this suite, connection-manifests, gmail-analysis and the
+// inference script itself) shares it; see its comment for why a test file cannot be its home.
+import { authoredRegion, RESPONSE_SCHEMA_BANNER, responseSchemaBanner } from './infer-connection.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..');
@@ -212,135 +217,244 @@ const normalize = (code) =>
 
 /**
  * The hook portion of an app: the `<script type="text/babel">` body, cut before the
- * section-5 RESPONSE SCHEMA banner (app-authored code starts there). Mirrors the sdk
- * kb-sync test's extraction so all three checks share one definition of "the hook block".
+ * RESPONSE SCHEMA banner (app-authored code starts there). Mirrors the sdk kb-sync test's
+ * extraction so all three checks share one definition of "the hook block".
+ *
+ * The banner is found by the ONE banner helper (`infer-connection.mjs`;
+ * TASK-20261010-host-broker D-PR6-7): the regex `/\d+\. RESPONSE SCHEMA/` — the kb-sync
+ * test's own — with a missing or doubled banner a HARD failure. It used to look for the
+ * LITERAL '5. RESPONSE SCHEMA'; PR-6 renumbers every starter's banner to `// 8.`.
  */
 function hookBlock(html, name) {
-  const script = /<script type="text\/babel">\n([\s\S]*?)\n\s*<\/script>/.exec(html)?.[1];
-  assert.ok(script, `${name}: has a <script type="text/babel"> block`);
-  const lines = script.split('\n');
-  const bannerIndex = lines.findIndex((line) => line.includes('5. RESPONSE SCHEMA'));
-  assert.ok(bannerIndex >= 1, `${name}: has the section-5 RESPONSE SCHEMA banner delimiting the hook block`);
-  return lines.slice(0, bannerIndex - 1).join('\n'); // also drops the ==== line above the banner
+  const { lines, index } = responseSchemaBanner(html, name);
+  assert.ok(
+    index >= 1 && /^\s*\/\/ =+$/.test(lines[index - 1]),
+    `${name}: the RESPONSE SCHEMA banner sits under its ==== line, below the hook block`,
+  );
+  return lines.slice(0, index - 1).join('\n'); // also drops the ==== line above the banner
 }
 
 const expectedHooks = normalize(readFileSync(EMBEDDED_HOOKS, 'utf8'));
+
+// ── The per-app HTML rules, one named function each ───────────────────────────────
+// TASK-20261010-host-broker PR-6 (D-PR6-7, AC40g): the per-app loop below calls these, and
+// so do the fixture rows further down ("a listener after the banner", "an app-authored
+// region that calls useSnugAccess()", the planted `useSnugApp` property fixture) — so a
+// fixture that "passes every per-app rule" runs the SAME rules the twelve starters face,
+// never a hand-picked subset that could drift from the loop. The folder-bound rules (the
+// size limit, runtime-contract.json) stay in the loop: they read the folder, not the page.
+
+/**
+ * The value `useSnugApp` returns, DERIVED from `packages/sdk/embedded/snug-hooks.js` rather
+ * than restated, so it cannot drift from the hook (see the property-check test's comment).
+ */
+function useSnugAppReturns() {
+  const hooks = readFileSync(EMBEDDED_HOOKS, 'utf8');
+  // The single `return { ... }` inside useSnugApp — sliced from the function body so a
+  // later hook gaining another object literal cannot widen the set by accident.
+  const hookBody = /function useSnugApp\([\s\S]*?\n}\n/.exec(hooks)?.[0] ?? '';
+  assert.ok(hookBody, 'located useSnugApp in the SDK hooks file');
+  const returned = /return \{([\s\S]*?)\};/.exec(hookBody)?.[1] ?? '';
+  const allowed = new Set([...returned.matchAll(/^\s*(\w+)\s*[:,]/gm)].map(([, key]) => key));
+  assert.ok(allowed.size >= 4, `derived an implausibly small hook surface: ${[...allowed]}`);
+  return allowed;
+}
+
+function ruleSingleFile(html, name, declaredHosts) {
+  assert.match(html, /^<!DOCTYPE html>/i, 'starts with <!DOCTYPE html>');
+  // Every absolute URL in the file must sit on the CDN allowlist — or, for a
+  // connected app, be a host that app's own connection.json declares (the URL it is
+  // entitled to call through the governed seam). Undeclared hosts still fail.
+  for (const [url] of html.matchAll(/https?:\/\/[^\s"'<>)]+/g)) {
+    assert.ok(urlAllowed(url, declaredHosts), `URL ${url} is on the CDN allowlist or declared by this app`);
+  }
+  // …and may only appear as a <script src>. No stylesheets, imports, images, or
+  // fetches. NOTE the deliberate asymmetry: a DECLARED host is permitted as a URL
+  // literal above, but never here — a declared API host must not become executable
+  // code or any subresource load, so this check stays CDN-only.
+  for (const m of html.matchAll(/(src|href)\s*=\s*["']([^"']*)["']/g)) {
+    const [, attr, value] = m;
+    assert.equal(attr, 'src', `${value}: no href-based external references`);
+    assert.ok(
+      CDN_ALLOWLIST.some((cdn) => value.startsWith(cdn + '/')),
+      `src ${value} is an allowlisted CDN script`,
+    );
+  }
+  assert.doesNotMatch(html, /<link\b/i, 'no <link> elements');
+  assert.doesNotMatch(html, /@import\b/, 'no CSS @import');
+  assert.doesNotMatch(html, /url\(\s*['"]?https?:/i, 'no remote url() in CSS');
+  // The no-network-APIs rule applies to the APP-AUTHORED region: the canonical hook
+  // block is byte-locked to sdk/embedded by the sync test below, and since AL-03 it
+  // legitimately DEFINES a `fetch(url, opts)` method on the useConnectedFetch handle
+  // — that method posts a snug:net-request frame; connect-src stays blocked, so it
+  // is the governed seam, not a network API call. Anything an APP writes is still
+  // fully checked (AL-04 repair of the AL-03 rule conflict this suite carried,
+  // masked until now by turbo's own-files cache key).
+  const appAuthored = html.replace(hookBlock(html, name), '');
+  // AL-03-rule repair #2 (cherry-picked from TASK-20260807-starters-auth-spectrum so
+  // the two tasks cannot fork on a security literal — 2026-08-03 shared-literal
+  // lesson): `useConnectedFetch()` hands the app an object whose `.fetch(url)` METHOD
+  // is the governed net seam, so a METHOD call (`api.fetch(`) is legal app code while
+  // a BARE network call stays forbidden. `\bfetch` treated the dot as a boundary and
+  // flagged the seam itself.
+  //
+  // THE TWO ASSERTIONS ARE A PAIR — neither ships without the other. The bare-call
+  // regex below uses `(?<![.\w])`, which by design no longer matches `window.fetch(`;
+  // the old single regex caught that case incidentally via `\b`. Assertion 2 is what
+  // keeps window-qualified calls forbidden. Deleting it opens a real hole.
+  assert.doesNotMatch(appAuthored, DIRECT_NETWORK_API, 'no direct network APIs (connect-src is blocked)');
+  assert.doesNotMatch(appAuthored, QUALIFIED_NETWORK_API, 'no window-qualified network APIs either');
+}
+
+function ruleHooksByteIdentical(html, name) {
+  assert.equal(normalize(hookBlock(html, name)), expectedHooks);
+}
+
+function ruleAnnounce(html) {
+  for (const field of ['appId', 'displayName', 'description', 'iconEmoji', 'iconColor']) {
+    assert.match(html, new RegExp(`${field}:\\s*['"\`]`), `announce field ${field} present with a literal value`);
+  }
+  assert.match(html, /useSnugApp\(\{/, 'announces via useSnugApp');
+}
+
+function ruleNoBrowserStorage(html) {
+  for (const banned of ['localStorage', 'sessionStorage', 'indexedDB', 'document.cookie']) {
+    assert.ok(!html.includes(banned), `does not reference ${banned}`);
+  }
+}
+
+function ruleNoForms(html) {
+  // C2's sandbox is allow-scripts only — no allow-forms. Chromium blocks a form
+  // submission at initiation ("Blocked form submission to ''…"), so a React
+  // onSubmit handler NEVER RUNS: the pattern looks fine in jsdom and is dead in
+  // every real browser (found live by the AL-08 Playwright spec). Buttons with
+  // onClick + an Enter keydown on the input are the working equivalent.
+  assert.doesNotMatch(html, /<form\b/i, 'no <form> — submission is sandbox-blocked before any handler runs');
+}
+
+function ruleParses(html) {
+  assert.match(html, /<html\b[^>]*>/i, 'has <html>');
+  assert.match(html, /<\/html>\s*$/i, 'closes </html>');
+  assert.match(html, /<title>[^<]+<\/title>/i, 'has a non-empty <title>');
+  assert.match(html, /<div id="root"><\/div>/, 'has the #root mount node');
+  assert.match(html, /<meta name="viewport"/, 'has a viewport meta (mobile-usable)');
+  if (JSDOM) {
+    const dom = new JSDOM(html); // scripts NOT executed — parse only
+    const doc = dom.window.document;
+    assert.ok(doc.getElementById('root'), 'jsdom: #root exists');
+    // The three RUNTIME scripts are mandatory and exact; past them, an app may load
+    // ONLY builds from the KB's known-good table (80-cdn-compatibility.md) — pinned
+    // here as patterns so "on the CDN allowlist" can never quietly become "any script
+    // the CDN hosts" (TASK-20260817-telepath widened this from exactly-three when
+    // Telepath's charts brought in Chart.js 4, the first KB-blessed extra).
+    const scripts = [...doc.querySelectorAll('script[src]')].map((node) => node.getAttribute('src'));
+    for (const required of [
+      /^https:\/\/cdn\.jsdelivr\.net\/npm\/react@18\//,
+      /^https:\/\/cdn\.jsdelivr\.net\/npm\/react-dom@18\//,
+      /^https:\/\/cdn\.jsdelivr\.net\/npm\/@babel\/standalone@7\//,
+    ]) {
+      assert.ok(scripts.some((src) => required.test(src)), `jsdom: runtime script ${required} present`);
+    }
+    const KNOWN_GOOD_EXTRA_CDN_SCRIPTS = [
+      /^https:\/\/cdn\.jsdelivr\.net\/npm\/chart\.js@4\//,
+      /^https:\/\/cdn\.jsdelivr\.net\/npm\/d3@7\//,
+    ];
+    const extras = scripts.filter((src) =>
+      !/^https:\/\/cdn\.jsdelivr\.net\/npm\/(react@18|react-dom@18|@babel\/standalone@7)\//.test(src));
+    for (const extra of extras) {
+      assert.ok(
+        KNOWN_GOOD_EXTRA_CDN_SCRIPTS.some((pattern) => pattern.test(extra)),
+        `jsdom: extra script ${extra} is a KB known-good pinned build`,
+      );
+    }
+    assert.equal(doc.querySelectorAll('script[type="text/babel"]').length, 1, 'jsdom: exactly one babel script');
+    assert.ok(doc.querySelector('style'), 'jsdom: inline styles present');
+  }
+}
+
+function ruleLiteralSql(html) {
+  // Adversarial-review NOTE on AL-08: a statement assembled from strings at the call
+  // site ('DELETE FROM ' + table) is the habit that graduates into injection. Apps
+  // that run agent-authored SQL pass a validated VARIABLE (allowed); apps issuing
+  // their own statements write them as literals.
+  assert.doesNotMatch(html, /\.exec\(\s*['"][^'"]*['"]\s*\+/, 'no concatenated SQL literal at an exec() call site');
+}
+
+function rulePosture(html, name, llmFree) {
+  // The authored region: everything from the RESPONSE SCHEMA banner to the end of the
+  // babel script — the hook block above it is contract code and legitimately DEFINES
+  // sendMessage, so posture is only meaningful below the banner. (The ONE banner helper —
+  // a missing banner is a hard failure, never an empty region.)
+  const authored = authoredRegion(html, name);
+  if (llmFree) {
+    assert.match(authored, /const RESPONSE_SCHEMA = null/, 'LLM-free: RESPONSE_SCHEMA is null');
+    assert.doesNotMatch(authored, /\bsendMessage\s*\(/, 'LLM-free: authored code never calls sendMessage');
+  } else {
+    assert.match(authored, /\bsendMessage\s*\(/, 'agent-driven: authored code calls sendMessage');
+    assert.match(authored, /responseSchema:/, 'agent-driven: a responseSchema travels with the request');
+  }
+}
+
+/**
+ * Every property the page reads off a WHOLE-OBJECT `useSnugApp` binding is one the hook
+ * returns (the rule and its history: the "apps read only properties useSnugApp actually
+ * returns" test below). The authored region comes from the ONE banner helper: the old
+ * `html.slice(html.indexOf('5. RESPONSE SCHEMA'))` sliced ONE character when the literal was
+ * absent, so after a renumber this check would have passed for every app, vacuously — the
+ * planted fixture below proves it can fail.
+ */
+function ruleUseSnugAppProperties(html, name, allowed = useSnugAppReturns()) {
+  // Find `const <name> = useSnugApp(` — the whole-object style.
+  const binding = /(?:const|let)\s+(\w+)\s*=\s*useSnugApp\s*\(/.exec(html)?.[1];
+  if (!binding) return; // destructured, or LLM-free: nothing to check
+  const authored = authoredRegion(html, name);
+  for (const [, prop] of authored.matchAll(new RegExp(`\\b${binding}\\.(\\w+)`, 'g'))) {
+    assert.ok(
+      allowed.has(prop),
+      `${name}: reads \`${binding}.${prop}\`, which useSnugApp does not return (it returns ${[...allowed].join(', ')}) — a misspelled property is undefined, not an error, so this fails silently at runtime`,
+    );
+  }
+}
+
+/** Every per-app HTML rule, in the loop's order — what a fixture must pass to be a legal app. */
+function assertEveryPerAppHtmlRule(html, name, { llmFree, declaredHosts = null }) {
+  ruleSingleFile(html, name, declaredHosts);
+  ruleHooksByteIdentical(html, name);
+  ruleAnnounce(html);
+  ruleNoBrowserStorage(html);
+  ruleNoForms(html);
+  ruleParses(html);
+  ruleLiteralSql(html);
+  rulePosture(html, name, llmFree);
+  ruleUseSnugAppProperties(html, name);
+}
 
 for (const app of APPS) {
   const file = path.join(HERE, app, 'app.html');
   const html = readFileSync(file, 'utf8');
 
   test(`${app}: single-file HTML with no external refs beyond allowlisted CDN scripts`, () => {
-    assert.match(html, /^<!DOCTYPE html>/i, 'starts with <!DOCTYPE html>');
-    // Every absolute URL in the file must sit on the CDN allowlist — or, for a
-    // connected app, be a host that app's own connection.json declares (the URL it is
-    // entitled to call through the governed seam). Undeclared hosts still fail.
-    const declaredHosts = readDeclaredHosts(app);
-    for (const [url] of html.matchAll(/https?:\/\/[^\s"'<>)]+/g)) {
-      assert.ok(urlAllowed(url, declaredHosts), `URL ${url} is on the CDN allowlist or declared by this app`);
-    }
-    // …and may only appear as a <script src>. No stylesheets, imports, images, or
-    // fetches. NOTE the deliberate asymmetry: a DECLARED host is permitted as a URL
-    // literal above, but never here — a declared API host must not become executable
-    // code or any subresource load, so this check stays CDN-only.
-    for (const m of html.matchAll(/(src|href)\s*=\s*["']([^"']*)["']/g)) {
-      const [, attr, value] = m;
-      assert.equal(attr, 'src', `${value}: no href-based external references`);
-      assert.ok(
-        CDN_ALLOWLIST.some((cdn) => value.startsWith(cdn + '/')),
-        `src ${value} is an allowlisted CDN script`,
-      );
-    }
-    assert.doesNotMatch(html, /<link\b/i, 'no <link> elements');
-    assert.doesNotMatch(html, /@import\b/, 'no CSS @import');
-    assert.doesNotMatch(html, /url\(\s*['"]?https?:/i, 'no remote url() in CSS');
-    // The no-network-APIs rule applies to the APP-AUTHORED region: the canonical hook
-    // block is byte-locked to sdk/embedded by the sync test below, and since AL-03 it
-    // legitimately DEFINES a `fetch(url, opts)` method on the useConnectedFetch handle
-    // — that method posts a snug:net-request frame; connect-src stays blocked, so it
-    // is the governed seam, not a network API call. Anything an APP writes is still
-    // fully checked (AL-04 repair of the AL-03 rule conflict this suite carried,
-    // masked until now by turbo's own-files cache key).
-    const appAuthored = html.replace(hookBlock(html, app), '');
-    // AL-03-rule repair #2 (cherry-picked from TASK-20260807-starters-auth-spectrum so
-    // the two tasks cannot fork on a security literal — 2026-08-03 shared-literal
-    // lesson): `useConnectedFetch()` hands the app an object whose `.fetch(url)` METHOD
-    // is the governed net seam, so a METHOD call (`api.fetch(`) is legal app code while
-    // a BARE network call stays forbidden. `\bfetch` treated the dot as a boundary and
-    // flagged the seam itself.
-    //
-    // THE TWO ASSERTIONS ARE A PAIR — neither ships without the other. The bare-call
-    // regex below uses `(?<![.\w])`, which by design no longer matches `window.fetch(`;
-    // the old single regex caught that case incidentally via `\b`. Assertion 2 is what
-    // keeps window-qualified calls forbidden. Deleting it opens a real hole.
-    assert.doesNotMatch(appAuthored, DIRECT_NETWORK_API, 'no direct network APIs (connect-src is blocked)');
-    assert.doesNotMatch(appAuthored, QUALIFIED_NETWORK_API, 'no window-qualified network APIs either');
+    ruleSingleFile(html, app, readDeclaredHosts(app));
   });
 
   test(`${app}: embedded hooks block is byte-identical to sdk/embedded/snug-hooks.js (normalized)`, () => {
-    assert.equal(normalize(hookBlock(html, app)), expectedHooks);
+    ruleHooksByteIdentical(html, app);
   });
 
   test(`${app}: announce metadata is complete`, () => {
-    for (const field of ['appId', 'displayName', 'description', 'iconEmoji', 'iconColor']) {
-      assert.match(html, new RegExp(`${field}:\\s*['"\`]`), `announce field ${field} present with a literal value`);
-    }
-    assert.match(html, /useSnugApp\(\{/, 'announces via useSnugApp');
+    ruleAnnounce(html);
   });
 
   test(`${app}: no direct browser storage (sandboxed iframe has a null origin)`, () => {
-    for (const banned of ['localStorage', 'sessionStorage', 'indexedDB', 'document.cookie']) {
-      assert.ok(!html.includes(banned), `does not reference ${banned}`);
-    }
+    ruleNoBrowserStorage(html);
   });
 
   test(`${app}: no <form> elements (sandbox blocks submission BEFORE the submit event fires)`, () => {
-    // C2's sandbox is allow-scripts only — no allow-forms. Chromium blocks a form
-    // submission at initiation ("Blocked form submission to ''…"), so a React
-    // onSubmit handler NEVER RUNS: the pattern looks fine in jsdom and is dead in
-    // every real browser (found live by the AL-08 Playwright spec). Buttons with
-    // onClick + an Enter keydown on the input are the working equivalent.
-    assert.doesNotMatch(html, /<form\b/i, 'no <form> — submission is sandbox-blocked before any handler runs');
+    ruleNoForms(html);
   });
 
   test(`${app}: parses as HTML`, () => {
-    assert.match(html, /<html\b[^>]*>/i, 'has <html>');
-    assert.match(html, /<\/html>\s*$/i, 'closes </html>');
-    assert.match(html, /<title>[^<]+<\/title>/i, 'has a non-empty <title>');
-    assert.match(html, /<div id="root"><\/div>/, 'has the #root mount node');
-    assert.match(html, /<meta name="viewport"/, 'has a viewport meta (mobile-usable)');
-    if (JSDOM) {
-      const dom = new JSDOM(html); // scripts NOT executed — parse only
-      const doc = dom.window.document;
-      assert.ok(doc.getElementById('root'), 'jsdom: #root exists');
-      // The three RUNTIME scripts are mandatory and exact; past them, an app may load
-      // ONLY builds from the KB's known-good table (80-cdn-compatibility.md) — pinned
-      // here as patterns so "on the CDN allowlist" can never quietly become "any script
-      // the CDN hosts" (TASK-20260817-telepath widened this from exactly-three when
-      // Telepath's charts brought in Chart.js 4, the first KB-blessed extra).
-      const scripts = [...doc.querySelectorAll('script[src]')].map((node) => node.getAttribute('src'));
-      for (const required of [
-        /^https:\/\/cdn\.jsdelivr\.net\/npm\/react@18\//,
-        /^https:\/\/cdn\.jsdelivr\.net\/npm\/react-dom@18\//,
-        /^https:\/\/cdn\.jsdelivr\.net\/npm\/@babel\/standalone@7\//,
-      ]) {
-        assert.ok(scripts.some((src) => required.test(src)), `jsdom: runtime script ${required} present`);
-      }
-      const KNOWN_GOOD_EXTRA_CDN_SCRIPTS = [
-        /^https:\/\/cdn\.jsdelivr\.net\/npm\/chart\.js@4\//,
-        /^https:\/\/cdn\.jsdelivr\.net\/npm\/d3@7\//,
-      ];
-      const extras = scripts.filter((src) =>
-        !/^https:\/\/cdn\.jsdelivr\.net\/npm\/(react@18|react-dom@18|@babel\/standalone@7)\//.test(src));
-      for (const extra of extras) {
-        assert.ok(
-          KNOWN_GOOD_EXTRA_CDN_SCRIPTS.some((pattern) => pattern.test(extra)),
-          `jsdom: extra script ${extra} is a KB known-good pinned build`,
-        );
-      }
-      assert.equal(doc.querySelectorAll('script[type="text/babel"]').length, 1, 'jsdom: exactly one babel script');
-      assert.ok(doc.querySelector('style'), 'jsdom: inline styles present');
-    }
+    ruleParses(html);
   });
 
   test(`${app}: within the ${MAX_ARTIFACT_BYTES / (1024 * 1024)} MB artifact limit`, () => {
@@ -348,29 +462,11 @@ for (const app of APPS) {
   });
 
   test(`${app}: SQL at exec() call sites is literal, never string-built`, () => {
-    // Adversarial-review NOTE on AL-08: a statement assembled from strings at the call
-    // site ('DELETE FROM ' + table) is the habit that graduates into injection. Apps
-    // that run agent-authored SQL pass a validated VARIABLE (allowed); apps issuing
-    // their own statements write them as literals.
-    assert.doesNotMatch(html, /\.exec\(\s*['"][^'"]*['"]\s*\+/, 'no concatenated SQL literal at an exec() call site');
+    ruleLiteralSql(html);
   });
 
   test(`${app}: declares its ADR-0011 LLM posture honestly`, () => {
-    // The authored region: everything from the section-5 banner to the end of the
-    // babel script — the hook block above it is contract code and legitimately
-    // DEFINES sendMessage, so posture is only meaningful below the banner.
-    const script = /<script type="text\/babel">\n([\s\S]*?)\n\s*<\/script>/.exec(html)?.[1] ?? '';
-    const lines = script.split('\n');
-    const bannerIndex = lines.findIndex((line) => line.includes('5. RESPONSE SCHEMA'));
-    assert.ok(bannerIndex >= 0, 'has the section-5 banner');
-    const authored = lines.slice(bannerIndex).join('\n');
-    if (LLM_FREE_APPS.has(app)) {
-      assert.match(authored, /const RESPONSE_SCHEMA = null/, 'LLM-free: RESPONSE_SCHEMA is null');
-      assert.doesNotMatch(authored, /\bsendMessage\s*\(/, 'LLM-free: authored code never calls sendMessage');
-    } else {
-      assert.match(authored, /\bsendMessage\s*\(/, 'agent-driven: authored code calls sendMessage');
-      assert.match(authored, /responseSchema:/, 'agent-driven: a responseSchema travels with the request');
-    }
+    rulePosture(html, app, LLM_FREE_APPS.has(app));
   });
 
   test(`${app}: runtime contract matches its LLM posture (ADR-0018)`, () => {
@@ -392,141 +488,152 @@ for (const app of APPS) {
   });
 }
 
-// ── Lean runtime requests (ADR-0018) ───────────────────────────────────────────────
-/**
- * TASK-20261009-scheduling-framework A7: an `app.html` MAY carry a SECOND `message`
- * listener beside the bridge's own — the schedule listener the KB teaches
- * (`85-scheduled-runs.md`, copied beside the copy-exactly block) — as long as the hooks
- * block itself stays byte-identical. Pinned on a tiny fixture here BEFORE any starter
- * uses it (the embedded block is unchanged this task — Q7), so the rule is the suite's
- * own and not an accident of where `hookBlock` happens to cut. The pair below is the
- * rule and its mutant: a listener AFTER the banner passes every per-app check this
- * suite applies; the same listener INSIDE the block (before the banner) is a hooks edit
- * and reds the byte-compare.
- */
-const SECOND_LISTENER = `window.addEventListener('message', async (event) => {
-      const data = event.data;
-      if (event.source !== window.parent || !data || data.v !== 1) return;
-      if (data.type !== 'snug:host-event' || data.event !== 'schedule-run') return;
-      const stored = await snugDbRequest('kvGet', { key: 'snug:schedule:' + data.data.runId });
-      SnugBridge.post({ type: 'snug:app-event', event: 'schedule-result', data: { ok: true, summary: String(stored.value && stored.value.input) } });
-    });`;
+// ── The banner helper, tested directly (TASK-20261010-host-broker D-PR6-7) ──────────────
+// A green suite of compliant starters cannot tell a working banner reader from a broken one.
+// The helper must read ANY section number (PR-6 renumbers `// 5.` → `// 8.`), and must FAIL —
+// never return an empty or whole-script region — when the banner is missing or doubled.
+test('the banner helper reads any section number and hard-fails on a missing or doubled banner', () => {
+  const page = (...lines) => `<!DOCTYPE html>\n<script type="text/babel">\n${lines.join('\n')}\n</script>\n`;
+  assert.equal(RESPONSE_SCHEMA_BANNER.source, String.raw`\d+\. RESPONSE SCHEMA`, 'the kb-sync regex, not a literal');
+  for (const banner of ['// 5. RESPONSE SCHEMA — describe the JSON', '    // 8. RESPONSE SCHEMA — describe the JSON', '// 12. RESPONSE SCHEMA']) {
+    const html = page('// ====', 'const hook = 1;', '// ====', banner, 'const RESPONSE_SCHEMA = null;');
+    assert.equal(authoredRegion(html, 'any-number'), `${banner}\nconst RESPONSE_SCHEMA = null;`, `the region starts AT ${banner.trim()}`);
+    assert.equal(normalize(hookBlock(html, 'any-number')), '// ====\nconst hook = 1;', 'the hook block ends above the banner\'s ==== line');
+  }
+  // Not found: a HARD failure for every reader — never `indexOf → slice`.
+  const bannerless = page('// ====', 'const hook = 1;', '// ====', '// RESPONSE SCHEMA', 'const RESPONSE_SCHEMA = null;');
+  assert.throws(() => authoredRegion(bannerless, 'bannerless'), /RESPONSE SCHEMA banner/);
+  assert.throws(() => hookBlock(bannerless, 'bannerless'), /RESPONSE SCHEMA banner/);
+  assert.throws(() => rulePosture(bannerless, 'bannerless', true), /RESPONSE SCHEMA banner/);
+  // Doubled: which one starts the authored region would be a guess.
+  const doubled = page('// ====', '// 5. RESPONSE SCHEMA', '// ====', '// 8. RESPONSE SCHEMA', 'const RESPONSE_SCHEMA = null;');
+  assert.throws(() => authoredRegion(doubled, 'doubled'), /exactly one RESPONSE SCHEMA banner/);
+  // No ==== line above the banner: the hook-block cut would eat a line of hook code.
+  const unruled = page('const hook = 1;', '// 8. RESPONSE SCHEMA', 'const RESPONSE_SCHEMA = null;');
+  assert.throws(() => hookBlock(unruled, 'unruled'), /under its ==== line/);
+  // No babel script at all.
+  assert.throws(() => authoredRegion('<!DOCTYPE html><p>no script</p>', 'scriptless'), /text\/babel/);
+});
 
-function secondListenerFixture({ inside }) {
+// ── A complete, legal fixture page (PR-6) ─────────────────────────────────────────────
+// The embedded hooks block, optionally followed by `inside` (a hooks EDIT), then the
+// RESPONSE SCHEMA banner (on `8.` — the number PR-6 gives every starter) and an authored
+// region. Carries every structural element the per-app rules require (viewport, the three
+// runtime scripts, an inline style, #root), so a fixture row can run EVERY per-app rule.
+const FIXTURE_BANNER = '    // ============================================================\n    // 8. RESPONSE SCHEMA — describe the JSON the agent must return\n    // ============================================================';
+
+function fixturePage({ authored, inside = '' }) {
   const hooks = readFileSync(EMBEDDED_HOOKS, 'utf8');
-  const banner = '    // ============================================================\n    // 5. RESPONSE SCHEMA\n    // ============================================================';
-  const appAuthored = `const RESPONSE_SCHEMA = { message: 'string' };
-    function App() {
-      const { isReady } = useSnugApp({ appId: 'second-listener', displayName: 'Second Listener', description: 'fixture', iconEmoji: '⏰', iconColor: '#333' });
-      return isReady ? <main /> : null;
-    }
-    ReactDOM.createRoot(document.getElementById('root')).render(<App />);`;
   return `<!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8" /><title>fixture</title>
+<html lang="en"><head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1" /><title>fixture</title>
 <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7/babel.min.js"></script>
+<style>body { margin: 0; }</style>
 </head><body><div id="root"></div>
 <script type="text/babel">
-${hooks}${inside ? `\n    ${SECOND_LISTENER}\n` : '\n'}${banner}
-    ${appAuthored}
-    ${inside ? '' : SECOND_LISTENER}
+${hooks}${inside ? `\n    ${inside}\n` : '\n'}${FIXTURE_BANNER}
+    ${authored}
 </script>
 </body></html>`;
 }
 
-test('an app.html may add a second `message` listener AFTER the hooks block (the KB schedule listener) and still pass every per-app rule', () => {
+/**
+ * A SECOND `message` listener AFTER the banner is legal app code (originally
+ * TASK-20261009-scheduling-framework A7, written for KB 85's schedule listener — which
+ * PR-6 retires: the schedule hook in section 6 of the block now answers those hints, and an
+ * app carrying both would answer twice). The rule stands on its own and has a live user:
+ * whatsapp's LIVE-DOORBELL (`examples/whatsapp/app.html`, the `connection-event` listener
+ * `whatsapp-analysis.test.mjs` extracts and drives) and gmail's open-url bridge are
+ * hand-rolled listeners after the banner. So the fixture is a doorbell-shaped listener, and
+ * the pair below is the rule and its mutant: a listener AFTER the banner passes every
+ * per-app rule; the same listener INSIDE the block (before the banner) is a hooks edit and
+ * reds the byte-compare.
+ */
+const SECOND_LISTENER = `window.addEventListener('message', (event) => {
+      const data = event.data;
+      if (event.source !== window.parent || !data || data.v !== 1) return;
+      if (data.type !== 'snug:host-event' || data.event !== 'connection-event') return;
+      for (const ring of doorbellRings) ring(data.data);
+    });`;
+
+function secondListenerFixture({ inside }) {
+  const authored = `const RESPONSE_SCHEMA = null;
+    const doorbellRings = new Set();
+    function App() {
+      const { isReady } = useSnugApp({ appId: 'second-listener', displayName: 'Second Listener', description: 'fixture', iconEmoji: '🔔', iconColor: '#333' });
+      return isReady ? <main /> : null;
+    }
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+    ${inside ? '' : SECOND_LISTENER}`;
+  return fixturePage({ authored, inside: inside ? SECOND_LISTENER : '' });
+}
+
+test('an app.html may add a second `message` listener AFTER the hooks block (a doorbell like whatsapp\'s) and still pass every per-app rule', () => {
   const html = secondListenerFixture({ inside: false });
   assert.equal((html.match(/addEventListener\('message'/g) ?? []).length, 2, 'the fixture carries exactly two message listeners');
-  // The rule: the hooks block is still byte-identical to the SDK reference …
-  assert.equal(normalize(hookBlock(html, 'second-listener')), expectedHooks);
-  // … and the app-authored region (the second listener included) passes the storage and network rules.
-  const appAuthored = html.replace(hookBlock(html, 'second-listener'), '');
-  assert.ok(appAuthored.includes("data.event !== 'schedule-run'"), 'the second listener is in the app-authored region');
-  assert.doesNotMatch(appAuthored, DIRECT_NETWORK_API);
-  assert.doesNotMatch(appAuthored, QUALIFIED_NETWORK_API);
-  for (const banned of ['localStorage', 'sessionStorage', 'indexedDB', 'document.cookie']) assert.ok(!html.includes(banned));
+  // The rule: every per-app rule the starters face — the hooks block still byte-identical to
+  // the SDK reference, the app-authored region (the second listener included) clean …
+  assertEveryPerAppHtmlRule(html, 'second-listener', { llmFree: true });
+  // … and the second listener really is in the app-authored region.
+  assert.ok(authoredRegion(html, 'second-listener').includes("data.event !== 'connection-event'"), 'the second listener is in the app-authored region');
 });
 
 test('the mutant: the same listener INSIDE the hooks block (before the banner) is a hooks edit and fails the byte-compare', () => {
   const html = secondListenerFixture({ inside: true });
   assert.equal((html.match(/addEventListener\('message'/g) ?? []).length, 2);
   assert.notEqual(normalize(hookBlock(html, 'second-listener-inside')), expectedHooks);
+  assert.throws(() => ruleHooksByteIdentical(html, 'second-listener-inside'));
 });
 
-/**
- * TASK-20261010-cross-app-access AC5 (moved to W3c by the journal's correction (b)): the
- * access helper the KB teaches (`87-cross-app-access.md`, "The Cross-App Helper (copy beside
- * the hooks block)") is the second schedule-listener twin — a `snugAccessRequest` helper plus
- * a second `message` listener, copied AFTER the banner while the embedded block stays
- * unchanged (Q9). The snippet is READ from the knowledge package's source, never retyped, and
- * rendered here the way `packages/knowledge/src/render.ts` renders it: `{{frameType:<key>}}`
- * from FRAME_TYPES and `{{protocolVersion}}` from PROTOCOL_VERSION — any other placeholder is
- * a failure, so a snippet that grows one cannot slip through half-rendered. (`examples`
- * depends on `@snugprotocol/protocol` only; importing the built knowledge package would make
- * this suite's pass depend on a build its turbo chain does not order.)
+/*
+ * RETIRED (TASK-20261010-host-broker PR-6, D-PR6-7 / AC40g): the access-helper fixture pair
+ * that stood here — "an app.html may add the KB access helper AFTER the hooks block" and its
+ * mutant (TASK-20261010-cross-app-access AC5). Both rendered the `snugAccessRequest` helper
+ * out of KB 87's "## The Cross-App Helper (copy beside the hooks block)" section, on the
+ * premise that the embedded block stays unchanged (Q9). PR-6 removes that helper from KB 87
+ * and carries access in the block itself (section 7, `useSnugAccess`), so the snippet the
+ * pair rendered no longer exists and its premise is reversed. This suite no longer reads
+ * the knowledge package at all. The generic "a listener after the banner" rule lives on in
+ * the pair above; the row below is what replaces the access pair: an app that reads another
+ * app's data through the HOOK is a legal app.
  */
-const ACCESS_KB_FILE = path.join(REPO_ROOT, 'packages', 'knowledge', 'prompts', 'knowledge-base', 'app-authoring', '87-cross-app-access.md');
-
-function renderedAccessHelper() {
-  const source = readFileSync(ACCESS_KB_FILE, 'utf8');
-  const section = source.split('## The Cross-App Helper (copy beside the hooks block)')[1];
-  assert.ok(section, '87-cross-app-access.md still has its copy-beside-the-block section');
-  const snippet = /```javascript\n([\s\S]*?)\n```/.exec(section)?.[1];
-  assert.ok(snippet, 'the section opens with a ```javascript helper');
-  return snippet.replace(/\{\{([A-Za-z0-9_:-]+)\}\}/g, (_match, name) => {
-    if (name === 'protocolVersion') return String(PROTOCOL_VERSION);
-    const key = name.startsWith('frameType:') ? name.slice('frameType:'.length) : undefined;
-    assert.ok(key !== undefined && Object.hasOwn(FRAME_TYPES, key), `the helper carries an unknown placeholder {{${name}}}`);
-    return FRAME_TYPES[key];
-  });
-}
-
-function accessListenerFixture({ inside }) {
-  const helper = renderedAccessHelper();
-  const hooks = readFileSync(EMBEDDED_HOOKS, 'utf8');
-  const banner = '    // ============================================================\n    // 5. RESPONSE SCHEMA\n    // ============================================================';
-  const appAuthored = `const RESPONSE_SCHEMA = { message: 'string' };
+test('an app whose authored region calls useSnugAccess() — the block\'s section 7 — passes every per-app rule', () => {
+  const authored = `const RESPONSE_SCHEMA = null;
     function App() {
-      const { isReady } = useSnugApp({ appId: 'access-listener', displayName: 'Access Listener', description: 'fixture', iconEmoji: '⋈', iconColor: '#333' });
-      return isReady ? <button onClick={() => snugAccessRequest('list')}>read</button> : null;
+      const { isReady } = useSnugApp({ appId: 'access-reader', displayName: 'Access Reader', description: 'fixture', iconEmoji: '⋈', iconColor: '#333' });
+      const access = useSnugAccess();
+      const [grant, setGrant] = useState(null);
+      const [rows, setRows] = useState([]);
+      const ask = useCallback(async () => {
+        const asked = await access.request('show the recipes I saved');
+        if (asked.ok) setGrant(asked.grant);
+      }, [access]);
+      const read = useCallback(async () => {
+        if (!grant) return;
+        const result = await access.query(grant.grantId, 'SELECT title FROM recipes WHERE rating >= ?', [4]);
+        if (result.ok) setRows(result.rows);
+      }, [access, grant]);
+      useEffect(() => {
+        const offs = [access.onChange(() => { void read(); }), access.onDataChanged(() => { void read(); })];
+        return () => { for (const off of offs) off(); };
+      }, [access, read]);
+      if (!isReady) return null;
+      return grant ? <ul>{rows.map((row) => <li key={row[0]}>{row[0]}</li>)}</ul> : <button onClick={ask}>Use my recipes</button>;
     }
     ReactDOM.createRoot(document.getElementById('root')).render(<App />);`;
-  return `<!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8" /><title>fixture</title>
-<script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
-</head><body><div id="root"></div>
-<script type="text/babel">
-${hooks}${inside ? `\n${helper}\n` : '\n'}${banner}
-    ${appAuthored}
-${inside ? '' : helper}
-</script>
-</body></html>`;
-}
-
-test('an app.html may add the KB access helper AFTER the hooks block (a second `message` listener) and still pass every per-app rule', () => {
-  const helper = renderedAccessHelper();
-  // The rendered helper is the real exchange: the request type posted, the response type and the host-event heard.
-  assert.ok(helper.includes(`type: '${FRAME_TYPES.accessRequest}'`), 'the helper posts the access request frame type');
-  assert.ok(helper.includes(`data.type === '${FRAME_TYPES.accessResponse}'`), 'the helper hears the access response frame type');
-  assert.ok(helper.includes(`data.type === '${FRAME_TYPES.hostEvent}' && data.event === 'access-changed'`), 'the helper hears access-changed');
-  assert.doesNotMatch(helper, /\{\{|\}\}/, 'no placeholder survives the render');
-  const html = accessListenerFixture({ inside: false });
-  assert.equal((html.match(/addEventListener\('message'/g) ?? []).length, 2, 'the fixture carries exactly two message listeners');
-  // The rule: the hooks block is still byte-identical to the SDK reference …
-  assert.equal(normalize(hookBlock(html, 'access-listener')), expectedHooks);
-  // … and the app-authored region (the helper included) passes the storage and network rules.
-  const appAuthored = html.replace(hookBlock(html, 'access-listener'), '');
-  assert.ok(appAuthored.includes('function snugAccessRequest(op, fields)'), 'the helper is in the app-authored region');
-  assert.doesNotMatch(appAuthored, DIRECT_NETWORK_API);
-  assert.doesNotMatch(appAuthored, QUALIFIED_NETWORK_API);
-  for (const banned of ['localStorage', 'sessionStorage', 'indexedDB', 'document.cookie']) assert.ok(!html.includes(banned));
+  const html = fixturePage({ authored });
+  // The hook the region calls is one the copy-exactly block DEFINES (section 7) — RED until
+  // the embedded file carries it (AC40a; D-PR6-4).
+  assert.match(hookBlock(html, 'access-reader'), /\bfunction useSnugAccess\s*\(/, 'the hooks block defines useSnugAccess (section 7)');
+  assert.match(authoredRegion(html, 'access-reader'), /\buseSnugAccess\s*\(\s*\)/, 'the authored region calls the hook');
+  // No second listener is needed any more: the block's own bridge carries the access frames.
+  assert.equal((html.match(/addEventListener\('message'/g) ?? []).length, 1, 'only the bridge\'s own message listener');
+  assert.doesNotMatch(html, /\bsnugAccessRequest\b|\bSNUG_ACCESS_PENDING\b/, 'none of the retired helper\'s names');
+  assertEveryPerAppHtmlRule(html, 'access-reader', { llmFree: true });
 });
 
-test('the access mutant: the same helper INSIDE the hooks block (before the banner) is a hooks edit and fails the byte-compare', () => {
-  const html = accessListenerFixture({ inside: true });
-  assert.equal((html.match(/addEventListener\('message'/g) ?? []).length, 2);
-  assert.notEqual(normalize(hookBlock(html, 'access-listener-inside')), expectedHooks);
-});
-
+// ── Lean runtime requests (ADR-0018) ───────────────────────────────────────────────
 test('chess sends its board state ONCE, not in both payload and state', () => {
   // The measured over-send this task fixed: `fen` appeared in the payload AND in
   // `state`, and `state.history` was unbounded while the payload copy was capped.
@@ -968,30 +1075,175 @@ test('hue drives the real bridge through connection-relative URLs — no dummy d
  * way; the destructuring style every other starter uses is already compile-checked by
  * being a plain binding. That asymmetry is the point — the object style is the one with
  * no safety net, which is exactly how this bug survived to a browser.
+ *
+ * The rule itself is `ruleUseSnugAppProperties` (above), which reads the authored region
+ * through the ONE banner helper; the planted fixture after this test proves it can fail.
  */
 test('apps read only properties useSnugApp actually returns', () => {
-  const hooks = readFileSync(EMBEDDED_HOOKS, 'utf8');
-  // The single `return { ... }` inside useSnugApp — sliced from the function body so a
-  // later hook gaining another object literal cannot widen the set by accident.
-  const hookBody = /function useSnugApp\([\s\S]*?\n}\n/.exec(hooks)?.[0] ?? '';
-  assert.ok(hookBody, 'located useSnugApp in the SDK hooks file');
-  const returned = /return \{([\s\S]*?)\};/.exec(hookBody)?.[1] ?? '';
-  const allowed = new Set(
-    [...returned.matchAll(/^\s*(\w+)\s*[:,]/gm)].map(([, key]) => key),
-  );
-  assert.ok(allowed.size >= 4, `derived an implausibly small hook surface: ${[...allowed]}`);
-
+  const allowed = useSnugAppReturns();
   for (const app of APPS) {
-    const html = readFileSync(path.join(HERE, app, 'app.html'), 'utf8');
-    // Find `const <name> = useSnugApp(` — the whole-object style.
-    const binding = /(?:const|let)\s+(\w+)\s*=\s*useSnugApp\s*\(/.exec(html)?.[1];
-    if (!binding) continue; // destructured, or LLM-free: nothing to check
-    const authored = html.slice(html.indexOf('5. RESPONSE SCHEMA'));
-    for (const [, prop] of authored.matchAll(new RegExp(`\\b${binding}\\.(\\w+)`, 'g'))) {
-      assert.ok(
-        allowed.has(prop),
-        `${app}: reads \`${binding}.${prop}\`, which useSnugApp does not return (it returns ${[...allowed].join(', ')}) — a misspelled property is undefined, not an error, so this fails silently at runtime`,
-      );
-    }
+    ruleUseSnugAppProperties(readFileSync(path.join(HERE, app, 'app.html'), 'utf8'), app, allowed);
   }
 });
+
+/**
+ * The planted fixture (TASK-20261010-host-broker D-PR6-7, AC40g): the property check above
+ * CAN fail. Until PR-6 its authored region was `html.slice(html.indexOf('5. RESPONSE
+ * SCHEMA'))`; on a page whose banner is `// 8.` that is `slice(-1)` — ONE character — and
+ * the check passed for every app, vacuously, right when PR-6 renumbers every banner. Gmail
+ * (the only whole-object starter) is the app it exists for.
+ */
+test('the planted fixture: a whole-object app reading app.nope below an `// 8.` banner reds the property check', () => {
+  const allowed = useSnugAppReturns();
+  const reading = (prop) => `const RESPONSE_SCHEMA = null;
+    function App() {
+      const app = useSnugApp({ appId: 'planted', displayName: 'Planted', description: 'fixture', iconEmoji: '🪴', iconColor: '#333' });
+      return app.${prop} ? <main /> : null;
+    }
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);`;
+  const planted = fixturePage({ authored: reading('nope') });
+  assert.ok(!allowed.has('nope'), 'nope is not a useSnugApp property');
+  assert.match(planted, /\/\/ 8\. RESPONSE SCHEMA/, 'the planted page carries the renumbered banner');
+  assert.throws(
+    () => ruleUseSnugAppProperties(planted, 'planted', allowed),
+    /reads `app\.nope`, which useSnugApp does not return/,
+    'a property the hook does not return reds the check',
+  );
+  // The evidence for why the reader changed: the old literal reader saw one character here.
+  assert.equal(planted.slice(planted.indexOf('5. RESPONSE SCHEMA')).length, 1, 'indexOf → slice was vacuous on this page');
+  // The positive twin: the same page reading a real property passes …
+  assert.ok(allowed.has('isReady'));
+  ruleUseSnugAppProperties(fixturePage({ authored: reading('isReady') }), 'honest', allowed);
+  // … and the same planted page with no numbered banner is a HARD failure, never a pass.
+  const bannerless = planted.replace('// 8. RESPONSE SCHEMA', '// RESPONSE SCHEMA');
+  assert.throws(() => ruleUseSnugAppProperties(bannerless, 'planted-bannerless', allowed), /RESPONSE SCHEMA banner/);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────────────
+// TASK-20261010-host-broker PR-6 — the twelve releases (D-PR6-7, D-PR6-8; AC40g)
+// ─────────────────────────────────────────────────────────────────────────────────────
+//
+// PR-6 grows the copy-exactly hooks block to seven sections (6: onHostEvent · useHostEvents
+// · useSnugSchedule · proposeSchedule; 7: useSnugAccess) and every starter re-copies it as a
+// release (ADR-0045). The byte-compare above already reds the moment the embedded file
+// changes; these rows pin what the re-copy must ALSO carry — the block's new names, both
+// authored banners renumbered, the user's release-note words — and the two adoptions
+// (weather's schedule, gmail's refresh), so a re-copy cannot quietly drop or widen either.
+// Version bumps are NOT pinned here: the I-3 mechanical proof compares against the
+// merge-base.
+
+/** The copy-exactly names the re-copied block must define (AC40a's eight + the two section-6 functions). */
+const BLOCK_DEFINITIONS = [
+  /\bconst SnugBridge = \{/,
+  /\bfunction useSnugApp\s*\(/,
+  /\bfunction usePersistedState\s*\(/,
+  /\bfunction useAppDB\s*\(/,
+  /\bfunction useConnectedFetch\s*\(/,
+  /\bfunction useHostEvents\s*\(/,
+  /\bfunction useSnugSchedule\s*\(/,
+  /\bfunction useSnugAccess\s*\(/,
+  /\bfunction onHostEvent\s*\(/,
+  /\bfunction proposeSchedule\s*\(/,
+];
+
+/** The nine starters that carry a YOUR APP banner (the contract's anchor 7) — `// 9.` after PR-6. */
+const YOUR_APP_STARTERS = new Set(['adventure-quest', 'chess', 'github', 'hue', 'ledger', 'quiz-me', 'spotify', 'weather', 'whatsapp']);
+
+/** The release notes, in the user's words (D-PR6-7). `<Name>` is the app's announced displayName. */
+const RELEASE_TITLE = 'Up to date with Snug';
+const RELEASE_DATE = '2026-10-12';
+const RELEASE_SECTION = 'What changed';
+const releaseItems = (displayName) => [
+  `${displayName} works just as before: this release updates the built-in code every Snug app uses to talk to Snug to the version new apps are built with.`,
+  'Customized your copy? You can skip this one — your version keeps working as it is.',
+];
+const RELEASE_EXTRA_ITEM = {
+  weather: 'The morning forecast and its one-time suggestion run on that updated code and work as before.',
+  gmail: "'Load my real data' after connecting Gmail runs on that updated code and works as before.",
+};
+
+/** The displayName the page announces through useSnugApp — the `<Name>` in the shared sentence. */
+function announcedDisplayName(html, name) {
+  const authored = authoredRegion(html, name);
+  const displayName = /\buseSnugApp\s*\(\s*\{[\s\S]*?\bdisplayName:\s*(['"`])((?:(?!\1)[^\\])+)\1/.exec(authored)?.[2];
+  assert.ok(displayName, `${name}: announces a literal displayName through useSnugApp`);
+  return displayName;
+}
+
+const MESSAGE_LISTENER = /addEventListener\(\s*['"]message['"]/g;
+/** A call to any of section 6's or 7's functions. */
+const NEW_HOOK_CALL = /\b(useHostEvents|useSnugSchedule|useSnugAccess|proposeSchedule|onHostEvent)\s*\(/;
+
+for (const app of APPS) {
+  const html = readFileSync(path.join(HERE, app, 'app.html'), 'utf8');
+
+  test(`PR-6: ${app}'s hooks block carries sections 6–7 (the seven hooks, onHostEvent, proposeSchedule)`, () => {
+    const block = hookBlock(html, app);
+    for (const definition of BLOCK_DEFINITIONS) {
+      assert.match(block, definition, `${app}: the re-copied hooks block defines ${definition.source}`);
+    }
+  });
+
+  test(`PR-6: ${app} renumbers its authored banners (// 8. RESPONSE SCHEMA${YOUR_APP_STARTERS.has(app) ? ', // 9. YOUR APP' : ''})`, () => {
+    const { lines, index } = responseSchemaBanner(html, app);
+    assert.match(lines[index].trim(), /^\/\/ 8\. RESPONSE SCHEMA\b/, `${app}: the RESPONSE SCHEMA banner is section 8`);
+    const yourApp = lines.flatMap((line, at) => (/\d+\. YOUR APP\b/.test(line) ? [at] : []));
+    if (YOUR_APP_STARTERS.has(app)) {
+      assert.equal(yourApp.length, 1, `${app}: exactly one YOUR APP banner`);
+      assert.match(lines[yourApp[0]].trim(), /^\/\/ 9\. YOUR APP\b/, `${app}: the YOUR APP banner is section 9`);
+      assert.ok(yourApp[0] > index, `${app}: YOUR APP follows RESPONSE SCHEMA`);
+    } else {
+      assert.equal(yourApp.length, 0, `${app}: carries no YOUR APP banner (none to renumber)`);
+    }
+  });
+
+  test(`PR-6: ${app}'s release notes are the user's words (D-PR6-7)`, () => {
+    const meta = JSON.parse(readFileSync(path.join(HERE, app, 'starter.json'), 'utf8'));
+    const entry = meta.changelog[0];
+    assert.equal(entry.title, RELEASE_TITLE, `${app}: changelog[0] is titled "${RELEASE_TITLE}"`);
+    assert.equal(entry.date, RELEASE_DATE, `${app}: changelog[0] is dated ${RELEASE_DATE}`);
+    assert.ok(
+      entry.sections.every((section) => section.title !== "What's new"),
+      `${app}: no "What's new" section — nothing is new for the user in this release`,
+    );
+    assert.deepEqual(entry.sections.map((section) => section.title), [RELEASE_SECTION], `${app}: ONE "${RELEASE_SECTION}" section`);
+    const expected = [...releaseItems(announcedDisplayName(html, app)), ...(RELEASE_EXTRA_ITEM[app] ? [RELEASE_EXTRA_ITEM[app]] : [])];
+    assert.deepEqual(
+      [...entry.sections[0].items].sort(),
+      [...expected].sort(),
+      `${app}: the two shared sentences${RELEASE_EXTRA_ITEM[app] ? ' and its one extra item' : ''}, nothing else`,
+    );
+  });
+
+  test(`PR-6: ${app}'s authored region adopts exactly what D-PR6-8 says`, () => {
+    const authored = authoredRegion(html, app);
+    const listeners = [...authored.matchAll(MESSAGE_LISTENER)];
+    // D-PR6-1: no starter reads another app's data — none calls the access hook.
+    assert.doesNotMatch(authored, /\buseSnugAccess\s*\(/, `${app}: no starter calls useSnugAccess (none reads another app)`);
+    if (app === 'weather') {
+      // The window-level schedule listener and its SCHEDULE_HANDLED set are gone — the hook answers.
+      assert.equal(listeners.length, 0, 'weather: no `message` listener of its own');
+      assert.doesNotMatch(authored, /\bSCHEDULE_HANDLED\b/, 'weather: no SCHEDULE_HANDLED');
+      assert.doesNotMatch(authored, /event:\s*['"]schedule-(request|result)['"]/, 'weather: no raw schedule-request / schedule-result post — the hooks own both frames');
+      assert.match(authored, /\buseSnugSchedule\s*\(/, 'weather: mounts useSnugSchedule');
+      assert.match(authored, /\bproposeSchedule\s*\(/, 'weather: suggests through proposeSchedule');
+    } else if (app === 'gmail') {
+      // The hand-rolled connection-event listener is gone; the open-url bridge stays.
+      assert.doesNotMatch(authored, /['"`]snug:host-event['"`]/, "gmail: no 'snug:host-event' literal");
+      assert.equal(listeners.length, 1, 'gmail: exactly one `message` listener of its own');
+      assert.ok(
+        authored.slice(listeners[0].index, listeners[0].index + 400).includes('snug:open-url-result'),
+        'gmail: the one listener left is the open-url bridge',
+      );
+      assert.match(authored, /\buseHostEvents\s*\(/, 'gmail: subscribes through useHostEvents');
+      const call = authored.slice(authored.search(/\buseHostEvents\s*\(/), authored.search(/\buseHostEvents\s*\(/) + 400);
+      for (const kept of ["'connection-event'", "'gmail'", 'requestRefresh', 'sync()']) {
+        assert.ok(call.includes(kept), `gmail: the useHostEvents call keeps the refresh behaviour (${kept})`);
+      }
+      assert.doesNotMatch(authored, /\b(useSnugSchedule|proposeSchedule)\s*\(/, 'gmail: adopts useHostEvents only');
+    } else {
+      // The ten others only re-copy the block.
+      assert.doesNotMatch(authored, NEW_HOOK_CALL, `${app}: calls none of the block's new functions — it only re-copies the block`);
+    }
+  });
+}

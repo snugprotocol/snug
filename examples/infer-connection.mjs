@@ -27,6 +27,7 @@
 // USAGE:
 //   pnpm --filter examples infer-connection <folder> [--write]
 
+import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -56,15 +57,55 @@ export function observedHosts(source) {
 }
 
 /**
- * The authored region — everything from the section-5 banner down, matching the region
- * the examples validate suite lints. Scanning the WHOLE file would pick up hosts from the
+ * THE ONE RESPONSE SCHEMA BANNER HELPER (TASK-20261010-host-broker PR-6, D-PR6-7 / AC40g).
+ *
+ * Every reader of "where app-authored code starts" — `validate.test.mjs` (the hooks-block
+ * cut, the posture lint, the `useSnugApp` property check), `connection-manifests.test.mjs`,
+ * `gmail-analysis.test.mjs` and this script — goes through these three functions. HOMED
+ * HERE, not in `validate.test.mjs`, because a sibling that imported a test file would
+ * re-register all of that file's tests in its own process; this module is side-effect free
+ * when imported (the CLI below runs only as the entry point).
+ *
+ * WHY A REGEX AND A HARD ASSERT. The readers used to look for the LITERAL
+ * '5. RESPONSE SCHEMA' and treat not-found softly: `html.slice(html.indexOf(…))` sliced ONE
+ * character on −1 and every check over the "authored region" passed vacuously; this script
+ * fell back to the whole script. PR-6 renumbers the banner to `// 8.` (the hooks block grows
+ * to seven sections), which would have turned those soft readers into silent no-ops. So: the
+ * kb-sync test's own regex `/\d+\. RESPONSE SCHEMA/` (any section number), exactly ONE banner
+ * line (two make the cut a guess), and not-found THROWS.
+ */
+export const RESPONSE_SCHEMA_BANNER = /\d+\. RESPONSE SCHEMA/;
+
+/** The `<script type="text/babel">` body of an app page. Throws when the page has none. */
+export function babelScript(html, name) {
+  const script = /<script type="text\/babel">\n([\s\S]*?)\n\s*<\/script>/.exec(html)?.[1];
+  assert.ok(script, `${name}: has a <script type="text/babel"> block`);
+  return script;
+}
+
+/**
+ * The babel script's lines and the index of its ONE RESPONSE SCHEMA banner line. Throws when
+ * the banner is missing or appears more than once.
+ */
+export function responseSchemaBanner(html, name) {
+  const lines = babelScript(html, name).split('\n');
+  const hits = [];
+  lines.forEach((line, index) => {
+    if (RESPONSE_SCHEMA_BANNER.test(line)) hits.push(index);
+  });
+  assert.ok(hits.length > 0, `${name}: has the RESPONSE SCHEMA banner (${RESPONSE_SCHEMA_BANNER}) — the line app-authored code starts at`);
+  assert.equal(hits.length, 1, `${name}: carries exactly one RESPONSE SCHEMA banner line (found ${hits.length}) — two make the cut a guess`);
+  return { lines, index: hits[0] };
+}
+
+/**
+ * The authored region — everything from the RESPONSE SCHEMA banner down, the region the
+ * examples validate suite lints. Scanning the WHOLE file would pick up hosts from the
  * scaffold's own comments and the CDN script tags, which are not the app's API surface.
  */
-function authoredRegion(html) {
-  const script = /<script type="text\/babel">\n([\s\S]*?)\n\s*<\/script>/.exec(html)?.[1] ?? html;
-  const lines = script.split('\n');
-  const bannerIndex = lines.findIndex((line) => line.includes('5. RESPONSE SCHEMA'));
-  return bannerIndex >= 0 ? lines.slice(bannerIndex).join('\n') : script;
+export function authoredRegion(html, name) {
+  const { lines, index } = responseSchemaBanner(html, name);
+  return lines.slice(index).join('\n');
 }
 
 /**
@@ -105,7 +146,14 @@ export async function inferConnectionForFolder(folder, deps = {}) {
     return { ok: false, message: `no app.html in ${dir}` };
   }
 
-  const authored = authoredRegion(html);
+  let authored;
+  try {
+    authored = authoredRegion(html, path.basename(dir));
+  } catch (error) {
+    // No (or an ambiguous) banner: there is no authored region to infer from. Refused —
+    // never the whole script — and before any model is asked.
+    return { ok: false, message: error instanceof Error ? error.message : String(error) };
+  }
   const hosts = observedHosts(authored);
 
   const complete = deps.complete;
