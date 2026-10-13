@@ -117,43 +117,52 @@ describe('inlineTemplate — the exported, pure cut (D-PR6-5)', () => {
 describe('inlineTemplate THROWS rather than serve a wrong prompt (S4)', () => {
   it('throws when the section-6 banner block is missing', () => {
     expect(inlineTemplate).toBeTypeOf('function');
-    expect(() => cut(page([FIVE, SEVEN, SCHEMA, APP]))).toThrow();
+    expect(() => cut(page([FIVE, SEVEN, SCHEMA, APP]))).toThrow(/expected ONE section-6 banner in KB 20, found 0/);
   });
 
   it('throws when `// 6.` carries no `// ====` rule above it — a numbered comment is not a banner block', () => {
     expect(inlineTemplate).toBeTypeOf('function');
     const bare = [`    // ${SIX[1]!.trim().slice(3)}`, '    function onHostEvent() {}'];
-    expect(() => cut(page([FIVE, bare, SEVEN, SCHEMA, APP]))).toThrow();
+    expect(() => cut(page([FIVE, bare, SEVEN, SCHEMA, APP]))).toThrow(/the section-6 banner has no `\/\/ ====` rule directly above it/);
+  });
+
+  // RC-3 (Gate 5): each throw row names its own message — a bare toThrow() passed on the TypeError a
+  // removed rule check leaves behind. And the RESPONSE SCHEMA banner needs its rule too.
+  it('throws when the RESPONSE SCHEMA banner carries no `// ====` rule above it', () => {
+    expect(inlineTemplate).toBeTypeOf('function');
+    const bare = [`    // ${SCHEMA[1]!.trim().slice(3)}`, '    const RESPONSE_SCHEMA = {};'];
+    expect(bare[0]).toMatch(/^\s*\/\/ 8\. RESPONSE SCHEMA/);
+    expect(() => cut(page([FIVE, SIX, SEVEN, bare, APP]))).toThrow(/the RESPONSE SCHEMA banner has no `\/\/ ====` rule directly above it/);
   });
 
   it('throws when the RESPONSE SCHEMA banner block is missing', () => {
     expect(inlineTemplate).toBeTypeOf('function');
-    expect(() => cut(page([FIVE, SIX, SEVEN, APP]))).toThrow();
+    expect(() => cut(page([FIVE, SIX, SEVEN, APP]))).toThrow(/expected ONE RESPONSE SCHEMA banner in KB 20, found 0/);
   });
 
   it('throws when the two are out of order (RESPONSE SCHEMA above section 6)', () => {
     expect(inlineTemplate).toBeTypeOf('function');
-    expect(() => cut(page([FIVE, SCHEMA, SIX, SEVEN, APP]))).toThrow();
+    expect(() => cut(page([FIVE, SCHEMA, SIX, SEVEN, APP]))).toThrow(/not below the section-6 banner/);
   });
 
   it('throws when the section-6 banner appears twice', () => {
     expect(inlineTemplate).toBeTypeOf('function');
-    expect(() => cut(page([FIVE, SIX, SEVEN, SIX, SCHEMA, APP]))).toThrow();
+    expect(() => cut(page([FIVE, SIX, SEVEN, SIX, SCHEMA, APP]))).toThrow(/expected ONE section-6 banner in KB 20, found 2/);
   });
 
   it('throws when the RESPONSE SCHEMA banner appears twice', () => {
     expect(inlineTemplate).toBeTypeOf('function');
-    expect(() => cut(page([FIVE, SIX, SEVEN, SCHEMA, SCHEMA, APP]))).toThrow();
+    expect(() => cut(page([FIVE, SIX, SEVEN, SCHEMA, SCHEMA, APP]))).toThrow(/expected ONE RESPONSE SCHEMA banner in KB 20, found 2/);
   });
 
   it('a cut page cannot be cut again — the cut line is not a section-6 banner', () => {
     const once = cut(page([FIVE, SIX, SEVEN, SCHEMA, APP]));
-    expect(() => cut(once)).toThrow();
+    expect(() => cut(once)).toThrow(/expected ONE section-6 banner in KB 20, found 0/);
   });
 
   it('NEGATIVE twin: today’s five-section template (RESPONSE SCHEMA numbered 6) is refused — the cut never guesses a region', () => {
     expect(inlineTemplate).toBeTypeOf('function');
     const fiveSection = page([FIVE, [...banner('6. RESPONSE SCHEMA — describe the JSON the agent must return'), '    const RESPONSE_SCHEMA = {};'], [...banner('7. YOUR APP')]]);
-    expect(() => cut(fiveSection)).toThrow();
+    expect(() => cut(fiveSection)).toThrow(/not below the section-6 banner/);
   });
 });

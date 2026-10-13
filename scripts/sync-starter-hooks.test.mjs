@@ -198,6 +198,24 @@ test('splice: refuses a page it would have to guess about', () => {
   refuses(good.replace('    // 3. RESPONSE SCHEMA — describe the JSON the agent must return', "    const label = '3. RESPONSE SCHEMA';"), /is not a `\/\/ N\. RESPONSE SCHEMA` comment/, 'a banner that is not a comment');
   refuses(good.replace(/\n/g, '\r\n'), /CR line endings/, 'CRLF');
   assert.throws(() => splice(good, 'const x = 1;\n'), /no numbered section banner/, 'an embedded file without sections');
+  // F1 (Gate 5): the block's sections are numbered 1..N in order, or the authored banners' numbers are a guess.
+  assert.throws(() => lastSection(EMBEDDED.replace('// 2. useSnugApp', '// 3. useSnugApp')), /not numbered 1\.\.3 in order \(found 1, 3, 3\)/, 'a skipped number');
+  assert.throws(() => splice(good, EMBEDDED.replace('// 2. useSnugApp', '// 3. useSnugApp')), /not numbered 1\.\.3 in order/, 'the splice refuses it too');
+});
+
+// RS-3 (Gate 5): `line.includes(BABEL_OPEN)` let a decoy — the tag quoted in a comment above the
+// script, as the e2e fixtures' headers quote it — become the opening line: the splice then deleted
+// everything from the decoy to the real tag (the real tag included) and still passed its
+// post-condition. The opening tag is the ONE line whose trimmed text IS the tag.
+test('splice: a decoy babel tag — one quoted in a comment is ignored (the real tag kept); a second bare opening-tag line is a refusal', () => {
+  const good = page();
+  const decoy = '<!-- the app lives in the <script type="text/babel"> block below -->';
+  const withDecoy = good.replace('<html><body><div id="root"></div>', `${decoy}\n<html><body><div id="root"></div>`);
+  const out = splice(withDecoy, EMBEDDED);
+  assert.equal(out, splice(good, EMBEDDED).replace('<html><body><div id="root"></div>', `${decoy}\n<html><body><div id="root"></div>`), 'only the hooks block moved — the decoy and the lines after it are untouched');
+  assert.equal(out.split('\n').filter((line) => line.trim() === '<script type="text/babel">').length, 1, 'the real opening tag is kept');
+  const doubled = good.replace('  <script type="text/babel">', '  <script type="text/babel">\n  <script type="text/babel">');
+  assert.throws(() => splice(doubled, EMBEDDED), (err) => err instanceof Error && err.message.includes('<script type="text/babel">'), 'two opening-tag lines make the cut a guess');
 });
 
 test('the banner regex is the examples’ ONE banner helper’s regex (examples/infer-connection.mjs)', () => {
@@ -267,6 +285,24 @@ test('--release: refuses a bad date and a same-date wave entry in other words', 
   const reworded = structuredClone(released);
   reworded.changelog[0].sections[0].items.pop();
   assert.throws(() => releaseStarterMeta(reworded, { folder: 'alpha', html, date: DATE }), /not this wave's — fix it by hand/);
+  // F1 (Gate 5): the same words at another version (the file bumped by hand after the wave) are not this wave's either.
+  const bumped = structuredClone(released);
+  bumped.version += 1;
+  assert.throws(() => releaseStarterMeta(bumped, { folder: 'alpha', html, date: DATE }), /not this wave's — fix it by hand/);
+});
+
+// F1 (Gate 5): the wave's marker is its title AND its date — a later wave with the same title is a
+// new release, never a re-hash of the earlier one.
+test('--release: a later wave (same title, another date) is a new release — version + 1 and a second "Up to date with Snug" entry', () => {
+  const html = splice(page(), EMBEDDED);
+  const first = releaseStarterMeta(meta(2), { folder: 'alpha', html, date: DATE }).meta;
+  const edited = html.replace('return app.isReady', 'return app && app.isReady');
+  const later = releaseStarterMeta(first, { folder: 'alpha', html: edited, date: '2026-11-02' });
+  assert.equal(later.action, 'released');
+  assert.equal(later.meta.version, 4);
+  assert.deepEqual(later.meta.changelog.filter((entry) => entry.title === 'Up to date with Snug').map((entry) => [entry.version, entry.date]), [[4, '2026-11-02'], [3, DATE]]);
+  assert.deepEqual(later.meta.changelog.slice(1), first.changelog);
+  assert.equal(later.meta.appHash, appHtmlHash(edited));
 });
 
 test('announcedDisplayName: read from the useSnugApp call below the banner, as the validator reads it', () => {
@@ -350,4 +386,30 @@ test('parseArgs: --release needs --date=YYYY-MM-DD; --date only with --release; 
   assert.throws(() => parseArgs(['--release', '--date=2026-10']), UsageError);
   assert.throws(() => parseArgs([`--date=${DATE}`]), UsageError);
   assert.throws(() => parseArgs(['--write']), UsageError);
+});
+
+// ── The e2e fixtures (F2 / RS-2, Gate 5) ──────────────────────────────────────────────────────
+
+/**
+ * The four playground e2e fixtures carry the hooks block by their SYNC RULE ("re-copy it here
+ * WHOLE … never edit the block in place"); nothing else holds them to it. The block is the lines
+ * between the ONE opening-tag line (the line whose trimmed text IS the tag — the fixtures' header
+ * comments quote the tag) and the `// ====` rule above the ONE RESPONSE SCHEMA banner.
+ */
+test('the e2e fixtures’ hooks blocks normalise to snug-hooks.js (apps/playground/e2e/fixtures)', () => {
+  const embedded = readFileSync(DEFAULT_EMBEDDED_FILE, 'utf8');
+  for (const fixture of ['schedule-app', 'access-reader', 'access-source', 'access-source-fetch']) {
+    const file = `apps/playground/e2e/fixtures/${fixture}.html`;
+    const lines = readFileSync(path.join(REPO, file), 'utf8').split('\n');
+    const opens = lines.flatMap((line, at) => (line.trim() === '<script type="text/babel">' ? [at] : []));
+    assert.equal(opens.length, 1, `${file}: exactly one <script type="text/babel"> line`);
+    const open = opens[0];
+    const close = lines.findIndex((line, at) => at > open && line.trim() === '</script>');
+    assert.ok(close > open, `${file}: the babel script is closed`);
+    const banners = lines.flatMap((line, at) => (at > open && at < close && RESPONSE_SCHEMA_BANNER.test(line) ? [at] : []));
+    assert.equal(banners.length, 1, `${file}: exactly one RESPONSE SCHEMA banner in the babel script`);
+    const rule = banners[0] - 1;
+    assert.match(lines[rule], /^\s*\/\/ =+$/, `${file}: a // ==== rule directly above the banner`);
+    assert.equal(normalizeHooks(lines.slice(open + 1, rule).join('\n')), normalizeHooks(embedded), `${file}: re-copy snug-hooks.js (its SYNC RULE)`);
+  }
 });

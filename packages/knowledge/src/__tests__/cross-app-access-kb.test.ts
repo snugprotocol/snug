@@ -905,6 +905,20 @@ describe('PR-6 — KB 87 reads true against the access hook (D-PR6-6)', () => {
     expect(embeddedSection(6) ?? '', 'section 6 defines what section 7 calls').toContain('function onHostEvent(event, listener)');
   });
 
+  // R-docs-1 (Gate 5): a call made before host-ready answers the not-ready guard, host-ready always
+  // arrives AFTER the first commit's effects, and useSnugAccess is memoised — so an un-gated effect on
+  // mount never lists an access from an earlier visit. The prose says to render the component only
+  // once isReady is true (naming the guard's own message), and the fence's on-mount list is gated.
+  it('the hook section says to use it once isReady is true — naming the not-ready answer — and the fence’s on-mount list waits for isReady', () => {
+    const hook = section(rendered(KB_FILE), HOOK_HEADING);
+    const words = prose(hook.replace(/```[\s\S]*?```/g, ' '));
+    expect(words, 'the prose names isReady').toMatch(/\bisReady\b/);
+    expect(words, 'the prose names the not-ready answer, read from bridge.ts').toContain(SDK_GUARD_MESSAGES.notReady.message);
+    const [usage] = fencedJs(hook);
+    expect(usage ?? '', 'the on-mount list is gated by isReady').toMatch(/useEffect\(\(\) => \{\s*if \(isReady\) relist\(\);\s*\}, \[isReady, relist\]\);/);
+    expect(usage ?? '', 'no un-gated on-mount list').not.toMatch(/useEffect\(\(\) => \{\s*relist\(\);\s*\}, \[relist\]\);/);
+  });
+
   it('KB 10’s Section Map names "Access Between Apps"', () => {
     expect(rendered('knowledge-base/app-authoring/10-overview-and-contract.md')).toContain('- "Access Between Apps" —');
   });

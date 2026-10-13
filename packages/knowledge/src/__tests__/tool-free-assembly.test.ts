@@ -60,9 +60,13 @@ const TOOL_CITATIONS = [
 /** PR-6 (D-PR6-5): the ONE line that replaces sections 6–7 in the inline core — verbatim. */
 const CUT_LINE =
   '// 6-7. Not in this template (scheduled runs, access between apps): do not call useHostEvents, useSnugSchedule or useSnugAccess.';
-/** PR-6 (D-PR6-5): the 35-layer's sibling sentence — verbatim. */
+/**
+ * PR-6 (D-PR6-5): the 35-layer's sibling sentence — verbatim. R-docs-4 (Gate 5, folded): its tail
+ * says what THIS APP will not do — never that the host lacks schedules or access (the artifact host
+ * schedules and offers access; the old tail followed a list of what "this host does not carry").
+ */
 const SIBLING_SENTENCE =
-  'Sections 6–7 are not in this template: never call `useSnugSchedule` or `useSnugAccess`, nor hand-roll their listeners — say so in one line and offer the app without them.';
+  'Sections 6–7 are not in this template: never call `useSnugSchedule` or `useSnugAccess`, nor hand-roll their listeners — say in one line that this app will not take part in schedules or read other apps, and offer it without them.';
 const TEMPLATE_FILE = 'knowledge-base/app-authoring/20-html-template.md';
 const EMBEDDED_HOOKS = readFileSync(path.join(repoRoot, 'packages', 'sdk', 'embedded', 'snug-hooks.js'), 'utf8');
 
@@ -362,6 +366,17 @@ describe('PR-6 — the inline pages read true against seven sections (D-PR6-6)',
     for (const hook of ['useSnugApp', 'usePersistedState', 'useAppDB', 'useConnectedFetch', 'useHostEvents', 'useSnugSchedule', 'useSnugAccess']) {
       expect(hooks, hook).toContain(hook);
     }
+  });
+
+  // R-docs-3 (Gate 5): the list opens useSnugApp, usePersistedState, useAppDB — so "the first three"
+  // took useAppDB in, against KB 20's "1–3 always; 4 and up only when needed" (3 is usePersistedState's
+  // section, 4 useAppDB's). The two always present are the first two the list names.
+  it('says "The first two are always present" — useSnugApp and usePersistedState — never "the first three"', () => {
+    const hooks = prose(sdkHooksSection());
+    expect(hooks).toContain('The first two are always present');
+    expect(hooks).not.toContain('The first three are always present');
+    const listed = [...hooks.matchAll(/- `(use\w+)\(/g)].map((m) => m[1]);
+    expect(listed.slice(0, 2)).toEqual(['useSnugApp', 'usePersistedState']);
   });
 
   it('…and the section did NOT grow — at most the 1,017 UTF-8 bytes it measured before PR-6 (2026-10-12, Node 22)', () => {

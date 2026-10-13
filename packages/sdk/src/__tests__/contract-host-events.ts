@@ -133,15 +133,28 @@ export function registerHostEventsContract(formName: string, fresh: () => Contra
     const hostEvent = (event: string, data?: unknown): void => host.post(hostEventFrame(event, data));
     const foreignEvent = (event: string, data?: unknown): void => host.foreign(hostEventFrame(event, data));
 
+    // RC-1 (Gate 5): jsdom CATCHES an exception thrown inside a message listener (the bridge's),
+    // reports it as a window 'error' event and carries on — so a guard that throws would pass any
+    // row asserting only "nothing happened". Every such report fails the row that caused it.
+    const errors: string[] = [];
+    const onError = (e: ErrorEvent): void => {
+      errors.push(String(e.error ?? e.message));
+      e.preventDefault();
+    };
+
     beforeEach(async () => {
       await drainMessageQueue();
       host = hostStub();
+      errors.length = 0;
+      window.addEventListener('error', onError);
     });
 
     afterEach(() => {
       while (probes.length > 0) probes.pop()?.unmount();
       host.dispose();
       vi.restoreAllMocks();
+      window.removeEventListener('error', onError);
+      expect(errors, 'an exception thrown inside a listener (jsdom reported it and carried on)').toEqual([]);
     });
 
     describe('useHostEvents — a component subscribes to several named host-events', () => {
@@ -332,6 +345,26 @@ export function registerHostEventsContract(formName: string, fresh: () => Contra
         hostEvent('ping');
         hostEvent('ping');
         expect(seen).toEqual(['a', 'b', 'b']);
+      });
+
+      // RC-4 / RS-5 (Gate 5): the row above passes without the dispatch's subscriber-set COPY (Set
+      // iteration tolerates deleting a visited entry). A subscriber ADDED mid-dispatch is what the
+      // copy is for: live Set iteration visits it, so without the copy it would take the in-flight ping.
+      it('a subscriber added mid-dispatch does NOT receive the in-flight event — it receives the next one, exactly once', () => {
+        const api = fresh();
+        const onHostEvent = need(api, 'onHostEvent');
+        const seen: string[] = [];
+        const offs: Array<() => void> = [];
+        const offA = onHostEvent('ping', () => {
+          seen.push('a');
+          offA();
+          offs.push(onHostEvent('ping', () => seen.push('c'))); // the newcomer
+        });
+        offs.push(onHostEvent('ping', () => seen.push('b')));
+        hostEvent('ping');
+        hostEvent('ping');
+        expect(seen).toEqual(['a', 'b', 'b', 'c']);
+        for (const off of offs) off();
       });
 
       it('a subscription needs no host-ready: it delivers before the handshake', () => {

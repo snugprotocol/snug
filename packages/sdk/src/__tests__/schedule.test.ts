@@ -7,6 +7,8 @@
 // plays the other side on the same jsdom window (app-harness.ts): it posts the `schedule-run`
 // hint, answers the kv read with the record the real host writes (`{ taskId, runId, input }`),
 // and collects the one `schedule-result` app-event the hook must post — exactly once per runId.
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { act } from 'react';
 import {
   FRAME_TYPES,
@@ -429,6 +431,18 @@ describe('the module bridge’s source guard (PR-6 D-PR6-2, AC40c) — a frame o
     expect(bridge.ready).toBe(true);
     expect(bridge.instanceId).toBe('ins-sibling');
     off();
+  });
+
+  // RC-2 (Gate 5): in jsdom window.parent === window, so the mutant `event.source !== window`
+  // passes every behavioural row. The guard's TEXT is pinned instead: onMessage's first statement
+  // (after its comment) compares the source with window.parent — and the embedded listener's too.
+  it('the guard compares event.source with window.parent — onMessage’s first statement (and the embedded listener’s)', () => {
+    const src = readFileSync(path.resolve(process.cwd(), 'src/bridge.ts'), 'utf8');
+    expect(src).toMatch(/function onMessage\(event: MessageEvent\): void \{(\s*\/\/[^\n]*)*\s*if \(event\.source !== window\.parent\) return;/);
+    const embedded = readFileSync(path.resolve(process.cwd(), 'embedded/snug-hooks.js'), 'utf8');
+    expect(embedded).toMatch(
+      /window\.addEventListener\('message', \(event\) => \{\s*const data = event\.data;\s*if \(event\.source !== window\.parent \|\| !data \|\| data\.v !== 1\) return;/,
+    );
   });
 
   it('a sibling’s schedule-run reaches no subscriber; the twin from window.parent does', () => {

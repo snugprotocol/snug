@@ -611,7 +611,7 @@ test('an app whose authored region calls useSnugAccess() — the block\'s sectio
       }, [access]);
       const read = useCallback(async () => {
         if (!grant) return;
-        const result = await access.query(grant.grantId, 'SELECT title FROM recipes WHERE rating >= ?', [4]);
+        const result = await access.query(grant.id, 'SELECT title FROM recipes WHERE rating >= ?', [4]);
         if (result.ok) setRows(result.rows);
       }, [access, grant]);
       useEffect(() => {
@@ -1234,6 +1234,13 @@ for (const app of APPS) {
       assert.ok(
         authored.slice(listeners[0].index, listeners[0].index + 400).includes('snug:open-url-result'),
         'gmail: the one listener left is the open-url bridge',
+      );
+      // RS-4 (Gate 5): sequential requestIds — a sibling frame could resolve a pending unsubscribe-link
+      // request. The listener answers only window.parent, like the block's own bridge (D-PR6-2).
+      assert.match(
+        authored.slice(listeners[0].index, listeners[0].index + 400),
+        /\(event\) => \{\s*const data = event\.data;\s*if \(event\.source !== window\.parent \|\| !data \|\| data\.v !== 1 \|\| data\.type !== 'snug:open-url-result'\) return;/,
+        'gmail: the open-url listener carries the source guard',
       );
       assert.match(authored, /\buseHostEvents\s*\(/, 'gmail: subscribes through useHostEvents');
       const call = authored.slice(authored.search(/\buseHostEvents\s*\(/), authored.search(/\buseHostEvents\s*\(/) + 400);

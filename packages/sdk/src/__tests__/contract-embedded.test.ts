@@ -33,3 +33,15 @@ registerContractSuite(FORM, evalEmbedded);
 registerHostEventsContract(FORM, evalEmbedded);
 registerScheduleContract(FORM, evalEmbedded);
 registerAccessContract(FORM, 'embedded', evalEmbedded);
+
+// RC-5 (Gate 5): the inline core's block — and every app that needs neither section 6 nor 7 — is
+// sections 1–5 ALONE. The four-hook contract runs against exactly that cut: the lines above the
+// '// ====' rule that opens '// 6.'.
+const lines = code.split('\n');
+const sixHeading = lines.findIndex((line) => line.startsWith('// 6. '));
+const sixRule = sixHeading - 1;
+if (sixHeading < 1 || !lines[sixRule]!.startsWith('// ====')) throw new Error('embedded/snug-hooks.js: no "// ====" rule directly above "// 6."');
+
+registerContractSuite('embedded sections 1–5 only (the inline core / an app without 6–7)', () =>
+  new Function('React', `${lines.slice(0, sixRule).join('\n')}\nreturn { useSnugApp, usePersistedState, useAppDB, useConnectedFetch };`)(React),
+);

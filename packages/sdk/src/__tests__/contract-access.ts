@@ -139,15 +139,28 @@ export function registerAccessContract(formName: string, form: ContractFormName,
     const foreignEvent = (event: string, data?: unknown): void => host.foreign(hostEventFrame(event, data));
     const posted = (): AccessRequestFrame[] => host.accessRequests().map(parsedRequest);
 
+    // RC-1 (Gate 5): jsdom CATCHES an exception thrown inside a message listener (the bridge's),
+    // reports it as a window 'error' event and carries on — so a guard that throws would pass any
+    // row asserting only "nothing happened". Every such report fails the row that caused it.
+    const errors: string[] = [];
+    const onError = (e: ErrorEvent): void => {
+      errors.push(String(e.error ?? e.message));
+      e.preventDefault();
+    };
+
     beforeEach(async () => {
       await drainMessageQueue();
       host = hostStub();
+      errors.length = 0;
+      window.addEventListener('error', onError);
     });
 
     afterEach(() => {
       while (probes.length > 0) probes.pop()?.unmount();
       host.dispose();
       vi.restoreAllMocks();
+      window.removeEventListener('error', onError);
+      expect(errors, 'an exception thrown inside a listener (jsdom reported it and carried on)').toEqual([]);
     });
 
     it(`the factory says which form it is (${form})`, () => {

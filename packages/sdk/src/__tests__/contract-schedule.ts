@@ -80,15 +80,28 @@ export function registerScheduleContract(formName: string, fresh: () => Contract
       return probe;
     };
 
+    // RC-1 (Gate 5): jsdom CATCHES an exception thrown inside a message listener (the bridge's),
+    // reports it as a window 'error' event and carries on — so a guard that throws would pass any
+    // row asserting only "nothing happened". Every such report fails the row that caused it.
+    const errors: string[] = [];
+    const onError = (e: ErrorEvent): void => {
+      errors.push(String(e.error ?? e.message));
+      e.preventDefault();
+    };
+
     beforeEach(async () => {
       await drainMessageQueue();
       host = hostStub();
+      errors.length = 0;
+      window.addEventListener('error', onError);
     });
 
     afterEach(() => {
       while (probes.length > 0) probes.pop()?.unmount();
       host.dispose();
       vi.restoreAllMocks();
+      window.removeEventListener('error', onError);
+      expect(errors, 'an exception thrown inside a listener (jsdom reported it and carried on)').toEqual([]);
     });
 
     describe('useSnugSchedule — the app side of a scheduled run', () => {
@@ -134,6 +147,37 @@ export function registerScheduleContract(formName: string, fresh: () => Contract
         expect(kvGets('run-dup')).toHaveLength(1);
         expect(handler).toHaveBeenCalledTimes(1);
         expect(results()).toHaveLength(1);
+      });
+
+      // RS-1 (Gate 5): the page remembers 128 answered runIds and forgets the OLDEST — never the
+      // newest, never all of them (both mutants passed every other row).
+      it('the 128-runId memory forgets the OLDEST: after run-0…run-128, run-1…run-128 stay answered and only run-0 is read and run again', async () => {
+        const api = fresh();
+        const handler = vi.fn(async (run: ContractScheduledRun) => ({ ok: true, summary: run.runId }));
+        await connected(api, handler);
+        const ids = Array.from({ length: 129 }, (_, i) => `run-${i}`);
+        for (const runId of ids) hint(runId);
+        await flush();
+        expect(host.dbRequests('kvGet')).toHaveLength(129);
+        for (const runId of ids) host.dbSucceed(kvGets(runId)[0]!.requestId!, { value: { taskId: 'task-1', runId } });
+        await flush();
+        expect(handler).toHaveBeenCalledTimes(129);
+        expect(results()).toHaveLength(129);
+
+        for (const runId of ids.slice(1)) hint(runId); // the 128 newest: still remembered
+        await flush();
+        expect(host.dbRequests('kvGet')).toHaveLength(129);
+        expect(results()).toHaveLength(129);
+
+        hint('run-0'); // the oldest: forgotten when run-128 arrived
+        await flush();
+        expect(kvGets('run-0')).toHaveLength(2);
+        expect(host.dbRequests('kvGet')).toHaveLength(130);
+        host.dbSucceed(kvGets('run-0')[1]!.requestId!, { value: { taskId: 'task-1', runId: 'run-0' } });
+        await flush();
+        expect(handler).toHaveBeenCalledTimes(130);
+        expect(results()).toHaveLength(130);
+        expect(results().at(-1)!.data).toEqual({ ok: true, summary: 'run-0' });
       });
 
       it('distinct runIds each get their own read, run and result', async () => {
