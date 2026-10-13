@@ -18,6 +18,9 @@ import {
   FRAME_TYPES,
   LIMITS,
   PROTOCOL_VERSION,
+  SCHEDULE_NOTIFY_BODY_MAX_CHARS,
+  SCHEDULE_STEP_SUMMARY_MAX_CHARS,
+  SCHEDULE_TITLE_MAX_CHARS,
   SNUG_APP_REQUEST_TAG,
   STANDARD_APP_DOC_SLUGS,
 } from '@snugprotocol/protocol';
@@ -71,6 +74,11 @@ const STATIC_SUBSTITUTIONS: Readonly<Record<string, string>> = {
   // states and the host enforces — one home, never retyped in the prompt.
   appAgentMaxToolCalls: String(APP_AGENT_MAX_TOOL_CALLS),
   appAgentMaxRoundTrips: String(APP_AGENT_MAX_ROUND_TRIPS),
+  // TASK-20261010-host-broker PR-6 (AC40d): the scheduled result's bounds, which section 6 of the
+  // copy-exactly hooks block applies (KB 20) — the protocol's, never retyped in the template.
+  scheduleSummaryMaxChars: String(SCHEDULE_STEP_SUMMARY_MAX_CHARS),
+  scheduleTitleMaxChars: String(SCHEDULE_TITLE_MAX_CHARS),
+  scheduleNotifyBodyMaxChars: String(SCHEDULE_NOTIFY_BODY_MAX_CHARS),
 };
 
 const FRAME_TYPE_PREFIX = 'frameType:';

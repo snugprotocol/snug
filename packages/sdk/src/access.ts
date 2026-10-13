@@ -34,8 +34,11 @@
 // Each settler hands back ONLY the seats the protocol defines for its answer: the response is
 // tolerant, so a host may send more (an undo id, a summary, a count), and none of it crosses.
 //
-// The EMBEDDED form has no hook (Q9: the copy-exactly block changes in the starter release
-// wave); the knowledge base ships this same shape as a snippet beside the block.
+// Both forms carry the hook (Q9 landed in TASK-20261010-host-broker PR-6): section 7 of the
+// embedded copy-exactly block is the same `useSnugAccess()` — the eleven methods, the same guards
+// and settlers — under one contract (contract-access.ts runs against each). Where they differ the
+// module has zod: it ignores a response frame the protocol refuses and the call waits, and strips
+// unknown keys inside a grant; the embedded settler answers such a frame as a HOST_ERROR.
 import { useMemo } from 'react';
 import {
   ACCESS_CHANGED_EVENT,
