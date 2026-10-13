@@ -1564,6 +1564,8 @@ export function RailChat({
       {/* The rail's own sticky composer (TASK-20261013-rail-chat-access): it sticks to the rail
           body's bottom on the rail's surface, so a conversation never pushes it below the fold. */}
       <div className="composer rail-composer">
+        {/* Its own row above the input, never between the input and *send* (AC6). */}
+        <ChatFetchToggle appId={appId} pressed={fetchPressed} onPress={() => setFetchPressedFor(fetchPressed ? undefined : fetchKey)} disabled={busy} />
         <textarea
           rows={1}
           value={draft}
@@ -1572,7 +1574,6 @@ export function RailChat({
           onChange={(event) => setDraft(event.target.value)}
           onKeyDown={onKeyDown}
         />
-        <ChatFetchToggle appId={appId} pressed={fetchPressed} onPress={() => setFetchPressedFor(fetchPressed ? undefined : fetchKey)} disabled={busy} />
         {busy ? (
           <Button variant="danger" onClick={onStop}>
             stop

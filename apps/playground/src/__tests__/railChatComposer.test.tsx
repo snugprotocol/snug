@@ -111,4 +111,20 @@ describe('AC5 — the rail’s composer stays on screen', () => {
     expect(rule).toMatch(/bottom:\s*0/);
     expect(rule).toMatch(/var\(--surface\)/);
   });
+
+  it('AC6: the fetch toggle takes its own row ABOVE the input — before the textarea in RailChat, a full-width row in a wrapping composer', () => {
+    const source = readFileSync(path.resolve(__dirname, '../run/RunView.tsx'), 'utf8');
+    const rail = source.slice(source.indexOf('export function RailChat('));
+    expect(rail.indexOf('<ChatFetchToggle'), 'mounted').toBeGreaterThan(0);
+    expect(rail.indexOf('<ChatFetchToggle'), 'before the input').toBeLessThan(rail.indexOf('<textarea'));
+    const css = readFileSync(path.resolve(__dirname, '../theme/app.css'), 'utf8');
+    expect(/\.rail-composer\s*\{([^}]*)\}/.exec(css)?.[1] ?? '').toMatch(/flex-wrap:\s*wrap/);
+    expect(/\.chat-fetch\s*\{([^}]*)\}/.exec(css)?.[1] ?? '').toMatch(/flex-basis:\s*100%/);
+  });
+
+  it('AC7: the pressed toggle reads at a glance — a check mark and the ember border', () => {
+    const css = readFileSync(path.resolve(__dirname, '../theme/app.css'), 'utf8');
+    expect(css).toMatch(/\.chat-fetch-toggle\[aria-pressed='true'\]\s*\{[^}]*var\(--ember\)/);
+    expect(css).toMatch(/\.chat-fetch-toggle\[aria-pressed='true'\]::before\s*\{[^}]*content:\s*'✓'/);
+  });
 });

@@ -393,3 +393,37 @@ describe('G5-20 (P3-11) RailChat — press, consume, reset (rendered)', () => {
     expect(pressed(el)).toBe('false');
   });
 });
+
+// =========================================================================================
+// TASK-20261013-rail-chat-access AC7 — the owner: "clicking on the button does nothing". By design
+// (D-PR5-20) a press only ARMS the next send, and the armed state was a ghost button turning into
+// a barely lighter one on the dark rail. Pressed now says what it arranged, in words, as a status.
+// =========================================================================================
+describe('AC7 — a press says what it arranged', () => {
+  it('unpressed: no armed line', async () => {
+    grant(ledger);
+    const el = await render({ pressed: false });
+    expect(el.querySelector('[data-testid="chat-fetch-armed"]')).toBeNull();
+  });
+
+  it('pressed: one status line under the toggle — your next message asks <source> for new data first', async () => {
+    grant(ledger);
+    const el = await render({ pressed: true });
+    const armed = el.querySelector<HTMLElement>('[data-testid="chat-fetch-armed"]');
+    expect(armed, 'the armed line').not.toBeNull();
+    expect(armed!.getAttribute('role')).toBe('status');
+    expect(armed!.textContent).toBe(CHAT_FETCH.armed(['Ledger']));
+    expect(CHAT_FETCH.armed(['Ledger'])).toBe('your next message asks Ledger for new data first');
+    expect(el.querySelectorAll('button'), 'still the one button').toHaveLength(1);
+  });
+
+  it('pressed with three sources: the line names only the two a fetch asks', async () => {
+    grant(ledger);
+    grant(pantry);
+    grant(notes);
+    const el = await render({ pressed: true });
+    const text = el.querySelector('[data-testid="chat-fetch-armed"]')?.textContent ?? '';
+    expect(text.startsWith('your next message asks ')).toBe(true);
+    expect(text.match(/Ledger|Pantry|Notes/g)).toHaveLength(2);
+  });
+});
