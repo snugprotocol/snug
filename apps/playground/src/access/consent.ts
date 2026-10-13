@@ -46,6 +46,22 @@
 // decline a later write ask, nor the reverse. The chat's ask (`askedIn: 'chat'`) now writes
 // `provenance: 'chat'` on the GRANT (the log admits it at 1.2; R-86 closes) while the pending
 // stays the user's (`provenance: 'user'` drives the strip and the dismiss rules as before).
+//
+// PR-5 (TASK-20261010-host-broker; contract v2 D-PR5-3/5/9/15; v2.1 TB-Q10…Q16) — two new user
+// asks, both parked by `userAsk.ts`. DECLARED (`askedIn: 'declared'`): started from what the app
+// says it would like to read — the sheet quotes the app's purpose, while the access it writes
+// persists the HOST's words (`grantPurpose`, S16c), and *don't allow* is offered only when the
+// want had hints to record a no against (`declinable`). OFFERED (`offeredBy: 'source'`, memory
+// only): a source offered itself from its own ⋈ sheet — the consent writer refuses ANY write on it,
+// fail closed, whatever the decision claims. Both arrive pinned (`preselect` given, the candidates
+// cut to the one source). The reader's provenance line reads the imported marker (D-PR5-9), and an
+// allow that wanted write but changes nothing says so (`notChange`, D-PR5-15).
+//
+// Gate-5 fold (G5-15). A DECLARED ask is table-tier only wherever it is parked (IB-6): the pending
+// carries `tableTierOnly` with the want's hints, so the sheet ticks only the TABLE tier of any
+// source the person picks, and the park never falls back to the every-table rule for it. A PINNED
+// ask describes only its source (`collectSource`, IB-5): the other apps were never on offer, and
+// exporting each of them on the main thread to offer one froze the tap for seconds.
 
 import { ACCESS_REQUEST_MIN_GAP_MS, ACCESS_SOURCE_MAX_BYTES, accessRequestHash, type AccessDuration, type AccessHints, type AccessRequestSemantics } from '@snugprotocol/protocol';
 import type { AppRecord, UserDb } from '@snugprotocol/db';
@@ -58,8 +74,8 @@ import { appHasSidecarFact } from '../state/sidecarLive.js';
 import { createStore, type Store } from '../state/store.js';
 import { egressFor, type EgressLine, type EgressOptions } from './egress.js';
 import { accessDeps, armAccessListeners, bumpAccessRevision, createGrantFromDecision, readerGeneration, revokeAccess, type AnyAccessGrant, type TableChoice } from './grants.js';
-import { nameCollides, provenanceLine } from './provenance.js';
-import { preselectedTables, rankSources, type RankedSource, type RankedSources, type SourceInput } from './relevance.js';
+import { importedMarkerOf, nameCollides, provenanceLine } from './provenance.js';
+import { preselectedTables, rankSources, tableTierTables, type RankedSource, type RankedSources, type SourceInput } from './relevance.js';
 
 // ------------------------------------------------------------------------------------- types
 
@@ -75,9 +91,13 @@ export type ConsentDecision =
   | { kind: 'stop-asking' }
   | { kind: 'dismissed' };
 
-/** What the act came to — the strip's outcome line reads it (`allowed` carries the id its *stop* undoes, and `write`, the tables the reader may change — empty for a read access). */
+/**
+ * What the act came to — the strip's outcome line reads it (`allowed` carries the id its *stop*
+ * undoes, and `write`, the tables the reader may change — empty for a read access; `notChange`
+ * when the ask wanted to change rows and none was ticked, D-PR5-15).
+ */
 export type ConsentOutcome =
-  | { kind: 'allowed'; grantId: string; sourceAppId: string; sourceName: string; tables: string[]; duration: AccessDuration; write: string[] }
+  | { kind: 'allowed'; grantId: string; sourceAppId: string; sourceName: string; tables: string[]; duration: AccessDuration; write: string[]; notChange?: true }
   | { kind: 'not-now' }
   | { kind: 'declined' }
   | { kind: 'muted' }
@@ -96,8 +116,19 @@ export interface PendingAccessRequest {
   /** Shown quoted under "Budget says:", never trusted. */
   purpose: string;
   provenance: 'app' | 'user';
-  /** The user's ask, made by the chat's AI from its card (PR-2): the sheet quotes the purpose as the AI's and offers *don't allow*. */
-  askedIn?: 'chat';
+  /**
+   * The user's ask, made by the chat's AI from its card (PR-2): the sheet quotes the purpose as the AI's and offers *don't allow*.
+   * PR-5 (D-PR5-3): `declared` — started from what the app says it would like to read; the sheet quotes the app's purpose.
+   */
+  askedIn?: 'chat' | 'declared';
+  /** PR-5 (D-PR5-5): a source offered itself from its own ⋈ sheet — the sheet is pinned to it and nothing it allows can change rows. Memory only. */
+  offeredBy?: 'source';
+  /** PR-5 (D-PR5-3): a declared ask whose want had hints — *don't allow* records its hash. Without hints there is nothing to record a no against, so the sheet does not offer it. */
+  declinable?: true;
+  /** G5-15 (IB-6, S10): a declared ask — whatever source the person picks, the sheet ticks only its TABLE-tier tables for `hints`, never a column match or every table. */
+  tableTierOnly?: true;
+  /** The want's hints, for `tableTierOnly` (declared asks only). */
+  hints?: AccessHints;
   /** A grant this ask renews (one of THIS reader's). */
   renew?: string;
   /** The app's ask carried `access: 'write'` (D-PR3-4): the title says so and the sheet's options open at once — the toggle itself stays off until the person ticks it. */
@@ -139,7 +170,7 @@ export const pendingAccessStore: Store<Readonly<Record<string, PendingAccessRequ
 export const reviewStore: Store<string | undefined> = createStore<string | undefined>(undefined);
 
 /** The yield rule: no sheet while a network or open-url confirm is waiting for the user. */
-function mayOpenReview(): boolean {
+export function mayOpenReview(): boolean {
   return netConfirmStore.get() === null && openUrlConfirmStore.get() === null;
 }
 
@@ -166,35 +197,46 @@ const describedApp = (app: AppRecord) => ({
 });
 
 /**
- * Every app in the file as a candidate for `readerAppId`, ranked for the hints: described
- * (`describeAppData` — tables, columns with `sensitive`, row counts), or marked unusable — a
- * WhatsApp fact (`appHasSidecarFact`) → `sidecar`, a runtime over `ACCESS_SOURCE_MAX_BYTES` →
- * `too-large`; the reader itself lands in `excluded` as `reader`. An app the file cannot
- * describe right now (deleted under us) is left out.
+ * One app as a candidate for `readerAppId`: described (`describeAppData` — tables, columns with
+ * `sensitive`, row counts), or marked unusable — a WhatsApp fact (`appHasSidecarFact`) → `sidecar`,
+ * a runtime over `ACCESS_SOURCE_MAX_BYTES` → `too-large`; the reader itself is listed with no tables
+ * (`rankSources` puts it in `excluded` as `reader`). `undefined`: the file cannot describe it right
+ * now (deleted under us) — never offered.
  */
+async function sourceInput(db: UserDb, readerAppId: string, app: AppRecord): Promise<SourceInput | undefined> {
+  if (app.appId === readerAppId) return { ...describedApp(app), tables: [] };
+  if (appHasSidecarFact(db, app.appId)) return { appId: app.appId, displayName: app.displayName, excluded: 'sidecar' };
+  try {
+    const described = await db.describeAppData(app.appId);
+    if (described.tables.length > 0 && (await db.exportAppRuntime(app.appId)).byteLength > ACCESS_SOURCE_MAX_BYTES) {
+      return { appId: app.appId, displayName: app.displayName, excluded: 'too-large' };
+    }
+    return { ...describedApp(app), tables: described.tables };
+  } catch {
+    // gone, or unreadable this moment: never offered
+    return undefined;
+  }
+}
+
+/** Every app in the file as a candidate for `readerAppId` (`sourceInput`'s rules), ranked for the hints. */
 export async function collectSources(db: UserDb, readerAppId: string, hints?: AccessHints): Promise<RankedSources> {
   const inputs: SourceInput[] = [];
   for (const app of db.listApps()) {
-    if (app.appId === readerAppId) {
-      inputs.push({ ...describedApp(app), tables: [] });
-      continue;
-    }
-    if (appHasSidecarFact(db, app.appId)) {
-      inputs.push({ appId: app.appId, displayName: app.displayName, excluded: 'sidecar' });
-      continue;
-    }
-    try {
-      const described = await db.describeAppData(app.appId);
-      if (described.tables.length > 0 && (await db.exportAppRuntime(app.appId)).byteLength > ACCESS_SOURCE_MAX_BYTES) {
-        inputs.push({ appId: app.appId, displayName: app.displayName, excluded: 'too-large' });
-        continue;
-      }
-      inputs.push({ ...describedApp(app), tables: described.tables });
-    } catch {
-      // gone, or unreadable this moment: never offered
-    }
+    const input = await sourceInput(db, readerAppId, app);
+    if (input !== undefined) inputs.push(input);
   }
   return rankSources({ readerAppId, apps: inputs, ...(hints !== undefined ? { hints } : {}) });
+}
+
+/**
+ * The candidates of an ask PINNED to `sourceAppId` (G5-15, IB-5): that one app, by the same rules
+ * as `collectSources` — the reader itself still lands in `excluded` as `reader` — and no other app
+ * described or exported. Not in the file: nothing.
+ */
+export async function collectSource(db: UserDb, readerAppId: string, sourceAppId: string, hints?: AccessHints): Promise<RankedSources> {
+  const app = db.getApp(sourceAppId);
+  const input = app === undefined ? undefined : await sourceInput(db, readerAppId, app);
+  return rankSources({ readerAppId, apps: input === undefined ? [] : [input], ...(hints !== undefined ? { hints } : {}) });
 }
 
 // ---------------------------------------------------------------------------------- the pending
@@ -205,8 +247,14 @@ export interface ParkAccessRequestInput {
   generation: number;
   purpose: string;
   provenance: 'app' | 'user';
-  /** The chat's AI asked, from its card (PR-2). */
-  askedIn?: 'chat';
+  /** The chat's AI asked, from its card (PR-2); PR-5: `declared` — the person started it from what the app would like to read. */
+  askedIn?: 'chat' | 'declared';
+  /** PR-5 (D-PR5-5): the source offered itself — the consent writer refuses any change toggle on it. */
+  offeredBy?: 'source';
+  /** PR-5 (D-PR5-3, S16c): the purpose the ACCESS persists when it is not the one the sheet quotes — a declared ask's host words, never the app's. */
+  grantPurpose?: string;
+  /** PR-5 (D-PR5-3/4/5): the choice the sheet starts on, decided by the caller — an offer's source with nothing ticked. Absent: the ranking's own (a declared ask's: the table tier only). */
+  preselect?: { appId: string; tables: string[] };
   /** The frame's ask said `access: 'write'` (D-PR3-4) — threaded to the pending as `wantsWrite`. */
   wantsWrite?: boolean;
   candidates: RankedSources;
@@ -222,10 +270,17 @@ export interface ParkAccessRequestInput {
 const offered = (candidates: RankedSources, appId: string): RankedSource | undefined =>
   [...candidates.matched, ...candidates.rest].find((candidate) => candidate.appId === appId);
 
-function preselectionFor(candidates: RankedSources, renew: ParkAccessRequestInput['renew']): PendingAccessRequest['preselect'] {
+/**
+ * Where the sheet starts when the caller decided nothing: a renewal's own source and tables; else
+ * the best-ranked source (or the only one) with the tables a hint matched — or every offerable
+ * table. A DECLARED ask ticks only that source's TABLE tier, never the fallback (S10; G5-15 IB-6).
+ */
+function preselectionFor(input: ParkAccessRequestInput): PendingAccessRequest['preselect'] {
+  const { candidates, renew } = input;
   if (renew !== undefined && offered(candidates, renew.sourceAppId) !== undefined) return { appId: renew.sourceAppId, tables: renew.tables };
   const first = candidates.matched[0] ?? (candidates.matched.length === 0 && candidates.rest.length === 1 ? candidates.rest[0] : undefined);
-  return first === undefined ? undefined : { appId: first.appId, tables: preselectedTables(first) };
+  if (first === undefined) return undefined;
+  return { appId: first.appId, tables: input.askedIn === 'declared' ? tableTierTables(first, input.hints) : preselectedTables(first) };
 }
 
 /** Clear `pending` from the store (only if it is still the one there) and close its sheet. */
@@ -241,6 +296,11 @@ async function carryOut(input: ParkAccessRequestInput, pending: PendingAccessReq
     case 'allow': {
       const source = offered(pending.candidates, decision.sourceAppId);
       if (source === undefined) return { outcome: { kind: 'failed', message: 'that app was not offered' } };
+      // D-PR5-5: an access a SOURCE offered is read-only by construction — the sheet shows no
+      // write toggle, and a decision that claims one anyway writes nothing at all (fail closed).
+      if (pending.offeredBy === 'source' && decision.tables.some((table) => typeof table !== 'string' && table.write)) {
+        return { outcome: { kind: 'failed', message: 'an offer never lets an app change rows' } };
+      }
       const generation = input.provenance === 'app' ? pending.generation : readerGeneration(pending.readerAppId);
       const grant = await createGrantFromDecision(db, {
         readerAppId: pending.readerAppId,
@@ -248,7 +308,8 @@ async function carryOut(input: ParkAccessRequestInput, pending: PendingAccessReq
         tables: decision.tables,
         duration: decision.duration,
         unattended: decision.unattended,
-        purpose: pending.purpose,
+        // S16c: a declared ask's access persists the host's words — the app's purpose was only quoted.
+        purpose: input.grantPurpose ?? pending.purpose,
         // The GRANT says the chat asked (D-PR3-23; R-86); the pending stays the user's.
         provenance: pending.askedIn === 'chat' ? 'chat' : input.provenance,
         ...(generation !== undefined ? { generation } : {}),
@@ -263,6 +324,7 @@ async function carryOut(input: ParkAccessRequestInput, pending: PendingAccessReq
       if (input.renew !== undefined && grant.id !== input.renew.grantId && grant.sourceAppId === input.renew.sourceAppId) {
         await revokeAccess(input.renew.grantId);
       }
+      const write = grant.scope.tables.filter((table) => table.write === true).map((table) => table.name);
       return {
         outcome: {
           kind: 'allowed',
@@ -271,7 +333,9 @@ async function carryOut(input: ParkAccessRequestInput, pending: PendingAccessReq
           sourceName: source.displayName,
           tables: grant.scope.tables.map((table) => table.name),
           duration: decision.duration,
-          write: grant.scope.tables.filter((table) => table.write === true).map((table) => table.name),
+          write,
+          // D-PR5-15: the ask wanted to change rows and the person let it change none — the line says so.
+          ...(pending.wantsWrite === true && write.length === 0 ? { notChange: true as const } : {}),
         },
         grant,
       };
@@ -306,16 +370,25 @@ export function parkAccessRequest(input: ParkAccessRequestInput): PendingAccessR
     ...(reader.iconEmoji !== undefined ? { emoji: reader.iconEmoji } : {}),
     ...(reader.iconColor !== undefined ? { color: reader.iconColor } : {}),
   };
-  const preselect = preselectionFor(input.candidates, input.renew);
+  const preselect = input.preselect ?? preselectionFor(input);
+  // D-PR5-9: an app an imported file brought in reads as imported, whatever its install source claims.
+  const imported = importedMarkerOf(db, reader.appId);
   const pending: PendingAccessRequest = {
     readerAppId: reader.appId,
     readerName: reader.displayName,
     ...(Object.keys(icon).length > 0 ? { readerIcon: icon } : {}),
-    readerProvenance: provenanceLine(reader, { collides: nameCollides(db.listApps(), reader.appId), now: accessDeps().now() }),
+    readerProvenance: provenanceLine(reader, {
+      collides: nameCollides(db.listApps(), reader.appId),
+      now: accessDeps().now(),
+      ...(imported !== undefined ? { imported } : {}),
+    }),
     generation: input.generation,
     purpose: input.purpose,
     provenance: input.provenance,
     ...(input.askedIn !== undefined ? { askedIn: input.askedIn } : {}),
+    ...(input.offeredBy !== undefined ? { offeredBy: input.offeredBy } : {}),
+    ...(input.askedIn === 'declared' && input.hash !== undefined ? { declinable: true as const } : {}),
+    ...(input.askedIn === 'declared' ? { tableTierOnly: true as const, ...(input.hints !== undefined ? { hints: input.hints } : {}) } : {}),
     ...(input.renew !== undefined ? { renew: input.renew.grantId } : {}),
     ...(input.wantsWrite === true ? { wantsWrite: true } : {}),
     candidates: input.candidates,

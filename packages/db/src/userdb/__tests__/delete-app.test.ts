@@ -60,6 +60,9 @@ import {
   accessGrantSettingKey,
   accessLogSettingKey,
   accessMutedSettingKey,
+  accessWantsSettingKey,
+  // TASK-20261010-host-broker PR-5 (D-PR5-9): undefined until app-settings-keys.ts exports it.
+  appProvenanceKey,
   scheduleDeclinedSettingKey,
   scheduleMutedSettingKey,
   scheduleRunsSettingKey,
@@ -689,5 +692,54 @@ describe('deleteApp — access grants, history, declines and the mute (TASK-2026
     expect(db.listAccessLog(goner)).toHaveLength(1);
     expect(db.listAccessDeclines(goner)).toHaveLength(1);
     expect(db.isAccessMuted(goner)).toBe(true);
+  });
+});
+
+// TASK-20261010-host-broker PR-5 (contract v2 D-PR5-9, D-PR5-2; AC38) — two more per-app rows the cascade
+// owes: the imported marker `appProvenance:<appId>` (an equality delete — no edit clears it, only the
+// delete does) and the derived declaration `accessWants:<appId>` (already swept by PR-3; PR-5 makes it a
+// row every declaring app HAS, derived from its html at install). A sibling's rows are untouched.
+describe('deleteApp — the imported marker and the declaration (PR-5 D-PR5-9, D-PR5-2)', () => {
+  const DECLARING = `<!doctype html><html><head><meta charset="utf-8"><meta name="snug:access-wants" content='[{"purpose":"to compare results","hints":{"tables":["games"]}}]'></head><body></body></html>`;
+
+  it("D-PR5-9 removes the app's appProvenance:<appId> marker and leaves a sibling's", async () => {
+    const goner = await seedFullApp('goner');
+    const keeper = await seedFullApp('keeper');
+    const marker = { imported: true, at: '2026-10-03T09:00:00.000Z' };
+    db.setSetting(appProvenanceKey(goner), marker);
+    db.setSetting(appProvenanceKey(keeper), marker);
+
+    await db.deleteApp(goner);
+
+    await expectRowsGone([appProvenanceKey(goner)]);
+    expect(db.getSetting(appProvenanceKey(keeper))).toEqual(marker);
+  });
+
+  it("D-PR5-2 removes the app's DERIVED accessWants:<appId> row and leaves a declaring sibling's", async () => {
+    const goner = db.installApp({ displayName: 'goner', html: DECLARING }).appId;
+    const keeper = db.installApp({ displayName: 'keeper', html: DECLARING }).appId;
+    expect(db.getSetting(accessWantsSettingKey(goner)), 'derived at install').toEqual([{ purpose: 'to compare results', hints: { tables: ['games'] } }]);
+
+    await db.deleteApp(goner);
+
+    await expectRowsGone([accessWantsSettingKey(goner)]);
+    expect(db.getSetting(accessWantsSettingKey(keeper))).toEqual([{ purpose: 'to compare results', hints: { tables: ['games'] } }]);
+  });
+
+  it('D-PR5-9 the marker sweep runs INSIDE the cascade transaction: a failed delete leaves it in place', async () => {
+    const goner = await seedFullApp('goner');
+    const marker = { imported: true, at: '2026-10-03T09:00:00.000Z' };
+    db.setSetting(appProvenanceKey(goner), marker);
+    const bytes = await db.exportUserDb({ includeSecrets: true });
+    const SQL = await initSqlJs({ locateFile: locateWasm });
+    const doctored = new SQL.Database(bytes);
+    doctored.run(`CREATE TRIGGER test_block_app_delete BEFORE DELETE ON ${USERDB_TABLES.apps} BEGIN SELECT RAISE(ABORT, 'injected failure'); END`);
+    const doctoredBytes = doctored.export();
+    doctored.close();
+    await db.importUserDb(doctoredBytes, { trustedOrigin: true });
+
+    await expect(db.deleteApp(goner)).rejects.toThrow();
+
+    expect(db.getSetting(appProvenanceKey(goner))).toEqual(marker);
   });
 });

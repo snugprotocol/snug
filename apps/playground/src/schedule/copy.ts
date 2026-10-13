@@ -498,13 +498,28 @@ export const EMPTY = {
 /**
  * The chip that says a run is in flight, with its one act (security F15); `inApp` when the run is
  * delegated to the OPEN app (ADR-0077 §2); `fetching` when what runs is a fetch another app asked
- * for (TASK-20261010-host-broker PR-3, D-PR3-19) — that chip has no act in PR-3 (the run is bounded).
+ * for (TASK-20261010-host-broker PR-3, D-PR3-19). PR-5 (D-PR5-17; D13) gives the fetch its own chip
+ * and its act: *cancel* on a fetch out of sight, *stop waiting* on one in the open app — where the
+ * app's own code may still finish what it started, so the act says only what is true. Its short
+ * label stays visible on a narrow screen; more than one fetch folds into *+N*.
  */
 export const RUNNING_CHIP = {
   label: `a ${WORDS.item} is running`,
   cancel: 'cancel',
   inApp: (appName: string): string => `running in ${appName}`,
   fetching: (appName: string): string => `fetching new data in ${appName}`,
+  /** The fetch chip's label: "fetching in Ledger". */
+  fetchingIn: (appName: string): string => `fetching in ${appName}`,
+  /** The accessible name of *cancel* on a fetch out of sight. */
+  cancelFetch: (appName: string): string => `cancel fetching in ${appName}`,
+  /** The act on a fetch in the open app: the person stops waiting; the app may not stop. */
+  stopWaiting: 'stop waiting',
+  /** Its accessible name. */
+  stopWaitingFor: (appName: string): string => `stop waiting for ${appName} — it may still finish fetching`,
+  /** The visible fold of the fetches beyond the first: "+1". */
+  moreFetchesShort: (n: number): string => `+${n}`,
+  /** Its accessible name: "and 1 more fetch". */
+  moreFetches: (n: number): string => `and ${n} more ${n === 1 ? 'fetch' : 'fetches'}`,
 } as const;
 
 // ---------------------------------------------------------------------------------------------
@@ -526,6 +541,12 @@ export const DELEGATED_CONFIRM = {
     `“${title}” is running “${appName}” and wants to send a ${method} request to ${host}. You didn’t click this — allow it once, or don’t. Nothing is remembered; no answer in a minute means nothing is sent.`,
   afterRunBody: (appName: string, method: string, host: string): string =>
     `“${appName}” ran a ${WORDS.item} here earlier, so Snug asks every time: it wants to send a ${method} request to ${host}. Allow it once, or don’t — nothing is remembered until you reopen the app.`,
+  /**
+   * The same sticky variant when what ran in the frame was a fetch another app asked for
+   * (TASK-20261010-host-broker PR-5, D-PR5-17; D12(ii)) — never that it ran a schedule.
+   */
+  afterFetchBody: (appName: string, method: string, host: string): string =>
+    `“${appName}” fetched new data here earlier, so Snug asks every time: it wants to send a ${method} request to ${host}. Allow it once, or don’t — nothing is remembered until you reopen the app.`,
   allow: 'allow once',
   deny: 'don’t send',
 } as const;

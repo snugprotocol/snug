@@ -27,7 +27,10 @@
 /* On the consent sheet the quote is its OWN block — a tinted panel with a rule at its start — so
    where the app's words end is drawn by the host, never told by a quote glyph the app can also
    type (a purpose that "closes" the quote and appends host-sounding words stays inside the
-   panel; W6 finding 4). The one-line strip keeps the inline quote. */
+   panel; W6 finding 4). The one-line strip keeps the inline quote. `.access-quote-block` is the
+   same panel anywhere else — the shared install preview's (TASK-20261010-host-broker PR-5, Gate-5
+   IB-9), where a stranger's bundle speaks before it is installed. */
+.access-quote-block,
 .access-sheet .access-quote {
   display: block;
   margin-top: var(--space-2);

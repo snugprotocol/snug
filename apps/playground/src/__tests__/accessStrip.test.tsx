@@ -12,6 +12,10 @@
 // says "can now read and change …" (every table) or "… and change <t>" (some); and the undo's
 // line says "no longer reads or changes" for such an access. The real-engine rows answer in the
 // decision v2 (a LOCAL structural type until consent.ts exports it).
+//
+// TASK-20261010-host-broker PR-5 (D-PR5-5/15; AC35): a write ask allowed with no write ticked says
+// "can now read — not change —" in the one clause, and the source's offer leaves its outcome on BOTH
+// strips (the reader's and the source's) — the last two describe blocks.
 
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -34,6 +38,7 @@ import {
 import { CONSENT_UI, STRIP, STRIP_OUTCOME } from '../access/copy.js';
 import { __setAccessDepsForTests, grantsForApp, resetAccessSession } from '../access/grants.js';
 import { answerAccess } from '../access/outcome.js';
+import { startUserAsk } from '../access/userAsk.js';
 import { netConfirmStore, type PendingNetConfirm } from '../state/net.js';
 import { openUrlConfirmStore } from '../state/openUrl.js';
 import { installTestUserDb } from './userdbTestHelper.js';
@@ -494,5 +499,203 @@ describe('PR-3 — allowed with write, and its stop (the real engine; D-PR3-23)'
     expect(q('access-ask-outcome')!.getAttribute('data-outcome')).toBe('stopped');
     expect(q('access-ask-outcome')!.textContent).toBe(stopped3('Budget', 'Ledger', ['transactions'], ['transactions']));
     expect(stopped3('Budget', 'Ledger', ['transactions'], ['transactions'])).toBe("stopped — Budget no longer reads or changes Ledger's transactions");
+  });
+});
+
+// =========================================================================================
+// TASK-20261010-host-broker PR-5 (contract v2 D-PR5-5, D-PR5-15; AC35; D17)
+//
+//  - an ask that WANTED write (`wantsWrite` — an app's `access: 'write'`, or the chat's ask carrying
+//    `access: 'write'`) allowed with NO table ticked *can also change rows* says so in the one clause:
+//    `STRIP_OUTCOME.allowed(…, {notChange: true})` — *Budget can now read — not change — Ledger's
+//    transactions · for a day*; a read ask, and a write ask allowed with a write, keep their lines;
+//  - the source's OFFER records its outcome under BOTH ids: the reader's strip and the source's strip
+//    each show the allowed line.
+// =========================================================================================
+
+const allowed5 = STRIP_OUTCOME.allowed as unknown as (
+  readerName: string,
+  sourceName: string,
+  tables: readonly string[],
+  duration: AllowV2['duration'],
+  write?: readonly string[],
+  opts?: { notChange?: boolean },
+) => string;
+
+describe('PR-5 — the ask wanted change, none was allowed: "can now read — not change —" (D-PR5-15; D17)', () => {
+  let db: UserDb;
+  let budget: string;
+  let ledger: string;
+
+  beforeEach(async () => {
+    await act(async () => {
+      resetAccessSession();
+      db = await installTestUserDb();
+    });
+    __setAccessDepsForTests({ getDb: () => Promise.resolve(db) });
+    budget = db.installApp({ displayName: 'Budget', html: '<!doctype html><title>b</title>' }).appId;
+    ledger = db.installApp({ displayName: 'Ledger', html: '<!doctype html><title>l</title>' }).appId;
+    await db.applyAppDdl(ledger, ['CREATE TABLE transactions (amount INTEGER, category TEXT)']);
+    await db.driver.handle(ledger, { v: PROTOCOL_VERSION, type: FRAME_TYPES.dbRequest, requestId: 'seed-5', instanceId: 'seed', op: 'exec', sql: "INSERT INTO transactions VALUES (450, 'food')" });
+  });
+
+  afterEach(() => {
+    act(() => resetAccessSession());
+    __setAccessDepsForTests();
+  });
+
+  async function allowFrom(park: { provenance: 'app' | 'user'; askedIn?: 'chat'; wantsWrite?: boolean }, write: boolean): Promise<void> {
+    const candidates = await collectSources(db, budget, { tables: ['transactions'] });
+    mount(budget);
+    let pending: PendingAccessRequest | undefined;
+    act(() => {
+      pending = parkAccessRequest({
+        db,
+        reader: db.getApp(budget)!,
+        generation: 0,
+        purpose: 'to tidy the categories',
+        provenance: park.provenance,
+        ...(park.askedIn !== undefined ? { askedIn: park.askedIn } : {}),
+        ...(park.wantsWrite === true ? { wantsWrite: true } : {}),
+        candidates,
+        hash: '0123456789abcdef',
+      });
+    });
+    await act(async () => {
+      await answerV2(pending!, { kind: 'allow', sourceAppId: ledger, tables: [{ name: 'transactions', withheld: [], write }], duration: 'day', unattended: false, kv: false, refresh: false });
+    });
+  }
+
+  it('an APP’s write ask allowed read-only: "Budget can now read — not change — Ledger\'s transactions · for a day"', async () => {
+    await allowFrom({ provenance: 'app', wantsWrite: true }, false);
+    expect(q('access-ask-outcome')!.getAttribute('data-outcome')).toBe('allowed');
+    expect(q('access-ask-outcome-words')!.textContent).toBe(allowed5('Budget', 'Ledger', ['transactions'], 'day', [], { notChange: true }));
+    expect(q('access-ask-outcome-words')!.textContent).toBe("Budget can now read — not change — Ledger's transactions · for a day");
+  });
+
+  it('the CHAT’s write ask (access: write) allowed read-only says the same', async () => {
+    await allowFrom({ provenance: 'user', askedIn: 'chat', wantsWrite: true }, false);
+    expect(q('access-ask-outcome-words')!.textContent).toBe(allowed5('Budget', 'Ledger', ['transactions'], 'day', [], { notChange: true }));
+    expect(q('access-ask-outcome-words')!.textContent).toContain('— not change —');
+  });
+
+  it('GUARD — a write ask allowed WITH the write keeps the "read and change" line', async () => {
+    await allowFrom({ provenance: 'app', wantsWrite: true }, true);
+    expect(q('access-ask-outcome-words')!.textContent).toBe(allowed3('Budget', 'Ledger', ['transactions'], 'day', ['transactions']));
+  });
+
+  it('GUARD — a READ ask allowed read-only keeps today’s line, byte for byte (no "not change")', async () => {
+    await allowFrom({ provenance: 'app' }, false);
+    expect(q('access-ask-outcome-words')!.textContent).toBe(STRIP_OUTCOME.allowed('Budget', 'Ledger', ['transactions'], 'day'));
+    expect(q('access-ask-outcome-words')!.textContent).not.toContain('not change');
+  });
+});
+
+describe('PR-5 — the source’s offer: its outcome on BOTH strips (D-PR5-5)', () => {
+  let db: UserDb;
+  let budget: string;
+  let ledger: string;
+
+  beforeEach(async () => {
+    await act(async () => {
+      resetAccessSession();
+      db = await installTestUserDb();
+    });
+    __setAccessDepsForTests({ getDb: () => Promise.resolve(db) });
+    budget = db.installApp({ displayName: 'Budget', html: '<!doctype html><title>b</title>' }).appId;
+    ledger = db.installApp({ displayName: 'Ledger', html: '<!doctype html><title>l</title>' }).appId;
+    await db.applyAppDdl(ledger, ['CREATE TABLE transactions (amount INTEGER, category TEXT)']);
+  });
+
+  afterEach(() => {
+    act(() => resetAccessSession());
+    __setAccessDepsForTests();
+  });
+
+  const outcomeIn = (appId: string): HTMLElement | null => document.querySelector<HTMLElement>(`[data-testid="access-ask-outcome"][data-app="${appId}"]`);
+
+  it('allowed from the offer: the reader’s strip AND the source’s strip each say "Budget can now read Ledger\'s transactions"', async () => {
+    act(() =>
+      root!.render(
+        <>
+          <AccessStrip appId={budget} />
+          <AccessStrip appId={ledger} />
+        </>,
+      ),
+    );
+    await act(async () => {
+      await (startUserAsk as unknown as (id: string, opts: { source: string; offer: true }) => Promise<unknown>)(budget, { source: ledger, offer: true });
+    });
+    const pending = pendingAccessStore.get()[budget] as (PendingAccessRequest & { offeredBy?: string }) | undefined;
+    expect(pending?.offeredBy, 'the offer parked').toBe('source');
+    await act(async () => {
+      await answerV2(pending!, { kind: 'allow', sourceAppId: ledger, tables: [{ name: 'transactions', withheld: [], write: false }], duration: 'day', unattended: false, kv: false, refresh: false });
+    });
+    const words = STRIP_OUTCOME.allowed('Budget', 'Ledger', ['transactions'], 'day');
+    expect(outcomeIn(budget)?.getAttribute('data-outcome')).toBe('allowed');
+    expect(outcomeIn(budget)?.textContent).toContain(words);
+    expect(outcomeIn(ledger)?.getAttribute('data-outcome'), 'the source’s strip hears it too').toBe('allowed');
+    expect(outcomeIn(ledger)?.textContent).toContain(words);
+  });
+
+  it('GUARD — a reader-side user ask records under the reader only (the source’s strip stays silent)', async () => {
+    act(() =>
+      root!.render(
+        <>
+          <AccessStrip appId={budget} />
+          <AccessStrip appId={ledger} />
+        </>,
+      ),
+    );
+    await act(async () => {
+      await startUserAsk(budget);
+    });
+    const pending = pendingAccessStore.get()[budget]!;
+    await act(async () => {
+      await answerV2(pending, { kind: 'allow', sourceAppId: ledger, tables: [{ name: 'transactions', withheld: [], write: false }], duration: 'day', unattended: false, kv: false, refresh: false });
+    });
+    expect(outcomeIn(budget)?.getAttribute('data-outcome')).toBe('allowed');
+    expect(outcomeIn(ledger)).toBeNull();
+  });
+});
+
+// =========================================================================================
+// TASK-20261010-host-broker PR-5 — Gate-5 fold G5-12 (IB-1): a DECLARED-form *don't allow* is
+// recorded as a strip outcome on the reader. The ⋈ sheet's pair act closes the sheet before the
+// review opens (`beforeOpen`), so the act's own settle is unmounted with it; `worthALine` dropped
+// every user-provenance `declined`, so the person saw no line anywhere. `worthALine` now admits
+// `declined` when `askedIn: 'declared'`, and the reader's strip says `wontAskAgain(reader)`.
+// =========================================================================================
+
+describe('G5-12 a declared-form decline leaves the reader’s strip a line', () => {
+  type PendingDeclared = PendingAccessRequest & { askedIn?: 'chat' | 'declared' };
+
+  it('G5-12 askedIn declared + don’t allow → the strip says "Budget won’t ask this again…" (data-outcome declined)', async () => {
+    mount();
+    const pending = fakePending({ provenance: 'user', askedIn: 'declared' } as Partial<PendingDeclared>);
+    await act(async () => {
+      await answerAccess(pending, { kind: 'dont-allow' });
+    });
+    const line = q('access-ask-outcome');
+    expect(line?.getAttribute('data-outcome')).toBe('declined');
+    expect(line?.textContent).toContain(STRIP_OUTCOME.wontAskAgain('Budget'));
+  });
+
+  it('G5-12 guard: a BARE user ask declined still leaves no line (only the declared form is admitted)', async () => {
+    mount();
+    const pending = fakePending({ provenance: 'user' });
+    await act(async () => {
+      await answerAccess(pending, { kind: 'dont-allow' });
+    });
+    expect(q('access-ask-outcome')).toBeNull();
+  });
+
+  it('G5-12 guard: a declared-form NOT NOW leaves no line (only the decline is admitted)', async () => {
+    mount();
+    const pending = fakePending({ provenance: 'user', askedIn: 'declared' } as Partial<PendingDeclared>);
+    await act(async () => {
+      await answerAccess(pending, { kind: 'not-now' });
+    });
+    expect(q('access-ask-outcome')).toBeNull();
   });
 });

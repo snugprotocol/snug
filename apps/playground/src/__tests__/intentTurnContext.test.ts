@@ -295,3 +295,94 @@ describe('the chat door — shared tables in the data lane’s context (PR-2)', 
     expect(block.length).toBeLessThan(2 * CONTEXT_CAPS.schema);
   });
 });
+
+/**
+ * TASK-20261010-host-broker PR-5 (contract v2 D-PR5-13; F11): the data lane's block emits
+ * `capText(parts.tables) + '\n\n' + parts.closing` — the closing sentence (`CHAT_DOOR.rule`, or
+ * `CHAT_DOOR.changes` on a `data_write` turn with a writable table) and the unreadable notes are
+ * NEVER cut by the schema cap. Only a `data_write` turn passes `changes: true`: a `data_read` turn
+ * over a write-marked set is byte-identical to today's.
+ */
+describe('PR-5 D-PR5-13 — the closing line is never cut; only a data_write turn says what may be changed', () => {
+  const NOW = Date.parse('2026-10-11T09:00:00.000Z');
+  type Set = import('../access/service.js').MaterialisedSet;
+  type Table = import('../access/service.js').MaterialisedTable;
+  const base: Table = {
+    grantId: 'g-1',
+    sourceAppId: 'app-ledger',
+    sourceName: 'Ledger',
+    alias: 'ledger',
+    name: 'ledger__transactions',
+    table: 'transactions',
+    columns: ['id', 'amount', 'note'],
+    types: ['INTEGER', 'REAL', 'TEXT'],
+    rows: [[1, 12.5, 'coffee']],
+    truncated: false,
+    duration: 'always',
+  };
+  const SKIP = { grantId: 'g-2', sourceAppId: 'app-pantry', sourceName: 'Pantry', reason: 'timeout' as const };
+  /** 400 wide tables — far past the schema cap — and one skipped source. */
+  const hugeSet = (write: boolean): Set => {
+    const tables = Array.from({ length: 400 }, (_, i) => ({
+      ...base,
+      name: `ledger__table_${i}`,
+      table: `table_${i}`,
+      columns: Array.from({ length: 12 }, (__, c) => `column_${c}`),
+      types: Array.from({ length: 12 }, () => 'TEXT'),
+      ...(write && i === 0 ? { write: true } : {}),
+    })) as Table[];
+    return { tables, skipped: [SKIP], readOnlyTables: tables.map((t) => t.name).sort() };
+  };
+  const changesSentence = async (): Promise<string> => {
+    const { CHAT_DOOR } = await import('../access/copy.js');
+    const sentence = (CHAT_DOOR as unknown as { changes?: string }).changes;
+    if (typeof sentence !== 'string' || sentence === '') throw new Error('CHAT_DOOR.changes is not in access/copy.ts yet (D-PR5-13)');
+    return sentence;
+  };
+
+  it('a shared block over the schema cap is cut — and STILL ends with the rule and the unreadable note, each once, after the cut', async () => {
+    const { CHAT_DOOR } = await import('../access/copy.js');
+    const { db, appId } = await seededDb();
+    const block = (await buildIntentTurnContext(db, appId, 'data_read', `app:${appId}`, { shared: hugeSet(false), now: NOW })).contextBlock ?? '';
+    const cut = block.lastIndexOf('[truncated to fit the context budget]');
+    expect(cut).toBeGreaterThan(-1);
+    expect(block.split(CHAT_DOOR.rule)).toHaveLength(2);
+    expect(block.indexOf(CHAT_DOOR.rule)).toBeGreaterThan(cut);
+    expect(block.split(CHAT_DOOR.unreadable('Pantry'))).toHaveLength(2);
+    expect(block.indexOf(CHAT_DOOR.unreadable('Pantry'))).toBeGreaterThan(block.indexOf(CHAT_DOOR.rule));
+  });
+
+  it('a data_write turn over a cut writable block ends with CHAT_DOOR.changes and the note — never cut, never the rule', async () => {
+    const { CHAT_DOOR } = await import('../access/copy.js');
+    const changes = await changesSentence();
+    const { db, appId } = await seededDb();
+    const block = (await buildIntentTurnContext(db, appId, 'data_write', `app:${appId}`, { shared: hugeSet(true), now: NOW })).contextBlock ?? '';
+    const cut = block.lastIndexOf('[truncated to fit the context budget]');
+    expect(cut).toBeGreaterThan(-1);
+    expect(block.split(changes)).toHaveLength(2);
+    expect(block.indexOf(changes)).toBeGreaterThan(cut);
+    expect(block).not.toContain(CHAT_DOOR.rule);
+    expect(block.indexOf(CHAT_DOOR.unreadable('Pantry'))).toBeGreaterThan(block.indexOf(changes));
+  });
+
+  it('data_write over a writable table: the heading without “read-only ·”, the line “· can be changed”, CHAT_DOOR.changes instead of the rule', async () => {
+    const { CHAT_DOOR } = await import('../access/copy.js');
+    const changes = await changesSentence();
+    const { db, appId } = await seededDb();
+    const shared: Set = { tables: [{ ...base, write: true } as Table], skipped: [], readOnlyTables: ['ledger__transactions'] };
+    const block = (await buildIntentTurnContext(db, appId, 'data_write', `app:${appId}`, { shared, now: NOW })).contextBlock ?? '';
+    expect(block).toContain('### From Ledger (access until you stop it)');
+    expect(block).toContain(`${CHAT_DOOR.tableLine('ledger__transactions', ['id', 'amount', 'note'], ['INTEGER', 'REAL', 'TEXT'], 1, false)} · can be changed`);
+    expect(block).toContain(changes);
+    expect(block).not.toContain(CHAT_DOOR.rule);
+  });
+
+  it('data_read over the SAME write-marked set is today’s read-only block, byte for byte (only data_write passes changes) — guard', async () => {
+    const { db, appId } = await seededDb();
+    const marked: Set = { tables: [{ ...base, write: true } as Table], skipped: [], readOnlyTables: ['ledger__transactions'] };
+    const plain: Set = { tables: [base], skipped: [], readOnlyTables: ['ledger__transactions'] };
+    const withMark = (await buildIntentTurnContext(db, appId, 'data_read', `app:${appId}`, { shared: marked, now: NOW })).contextBlock;
+    const without = (await buildIntentTurnContext(db, appId, 'data_read', `app:${appId}`, { shared: plain, now: NOW })).contextBlock;
+    expect(withMark).toBe(without);
+  });
+});

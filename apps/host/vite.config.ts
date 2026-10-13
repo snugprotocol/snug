@@ -2,12 +2,15 @@
 // own source aliased in, as the desktop does (ADR-0021 D9); what differs is the OUTPUT: one
 // self-contained page. Every chunk is inlined (`inlineDynamicImports`), every asset becomes
 // a data URL, the entry script and the stylesheet are folded into the html by
-// `inlineSingleFile`, and eight modules are swapped by resolved path (`swapResolved`, whose
+// `inlineSingleFile`, and ten modules are swapped by resolved path (`swapResolved`, whose
 // dead-swap guard fails the build if a swap stops being hit): the starter source (the ≈ 1 MB
 // of starter bytes load on click — AC14), the sql.js locator (the engine rides as bytes — P4),
 // and the chat's data lane — `agent/chatRouter`, `agent/laneTools`, `agent/accessProposeTool`,
 // `agent/accessCard` and `access/AccessCard` (TASK-20261010-host-broker PR-2, the owner's
-// kit-ceiling cut of 2026-10-11) — and the scheduled agent, `schedule/appAgent` (PR-4). The
+// kit-ceiling cut of 2026-10-11) — the scheduled agent, `schedule/appAgent` (PR-4), and the chat's
+// cross-app card, `agent/accessWriteCard` and `access/AccessWriteCard` (PR-5, D-PR5-16; the chat's
+// write verbs, `access/chatWrite`, are imported only by it and `agent/laneTools`, so no kit byte
+// reaches them). The
 // invariant that cut stands on: every kit binding pins the HOST brain, composed `tools: false`, or
 // the DEMO brain, so no kit turn is ever routed to a lane, the data lane — PR-2's chat door and
 // the brain's ask on it included — never runs here, and the scheduler's brain gates refuse or
@@ -17,7 +20,8 @@
 // The knowledge package's content module is rewritten without the prompt files nothing
 // shipped reads — everything under `skills/` and the store's `README.md` (`dropPromptFiles`,
 // whose dead-rule guard fails the build the same way; TASK-20261010-host-broker PR-3,
-// `kitDeadPrompts.test.ts`).
+// `kitDeadPrompts.test.ts`), and since PR-5 (D-PR5-16) the scheduled agent's three prompt files,
+// read only on the swapped `schedule/appAgent` path.
 // The playground and the desktop keep the real modules and the whole prompt store — they are
 // not built from this config.
 // WebLLM is aliased to a stub so the lazily imported 6 MB engine never enters the bundle.
@@ -71,9 +75,14 @@ export default defineConfig({
       // The scheduled agent → a stub that names the fact: every kit brain is refused or degraded
       // before the executors' lazy import reaches it (TASK-20261010-host-broker PR-4, D-PR4-15).
       [`${playgroundSrc}/schedule/appAgent.ts`]: here('./src/stubs/appAgent.ts'),
+      // The chat's cross-app card → stubs that render no card and refuse the apply by name: no kit
+      // turn reaches the data lane that stages one (TASK-20261010-host-broker PR-5, D-PR5-16).
+      [`${playgroundSrc}/agent/accessWriteCard.ts`]: here('./src/stubs/accessWriteCard.ts'),
+      [`${playgroundSrc}/access/AccessWriteCard.tsx`]: here('./src/stubs/AccessWriteCard.tsx'),
     }),
-    // The prompt files nothing shipped reads (everything under `skills/`, the store's README)
-    // → out of the page (the header; TASK-20261010-host-broker PR-3, `kitDeadPrompts.test.ts`).
+    // The prompt files nothing shipped reads (everything under `skills/`, the store's README, and
+    // the scheduled agent's three — PR-5, D-PR5-16) → out of the page (the header;
+    // TASK-20261010-host-broker PR-3, `kitDeadPrompts.test.ts`).
     dropPromptFiles({ contentModule: here('../../packages/knowledge/dist/generated/content.js') }),
     startersIndexPlugin(here('./starters-pkg/index.json')),
     react(),

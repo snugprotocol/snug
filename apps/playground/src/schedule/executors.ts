@@ -50,27 +50,50 @@
 // graph loads only when a step needs it, and the host kit — whose brains never pass these gates —
 // swaps the module for a loud stub. A composition without `brainRouteFor` (the unit seam) runs every
 // *ask* step tool-free, exactly as before PR-4.
+//
+// *FETCH NEW DATA FIRST* (TASK-20261010-host-broker PR-5, D-PR5-19; F2, F7, D11). An *ask* step
+// carrying `refreshFirst` asks the apps its app may read while the person is away to fetch new data
+// BEFORE either branch reads them — after the brain gate (a step no brain may answer fetches
+// nothing), and on the unit seam too. `access/fetchFirst.ts` is reached through a LAZY import (the
+// load-order rule, F6), for the SCHEDULE caller, with the run's seams (`deps.appRun`), the run's
+// signal and its spend so far. THE TWO CLOCKS (F2): the fetch's time is measured on the run's clock
+// (`ctx.now`, `ctx.boundAt`) — what is left before the queue's bound, less the agent's margin and the
+// time the answer itself still needs — and handed over on the dispatchers' clock (`Date.now()`), no
+// longer than one app run's own bound; nothing left → nothing dispatched. THE AI RE-CHECK (F7): the
+// queue asked the day's ceiling for one AI call before the step; whenever the fetch ASKED a source,
+// the day is read again with the fetch's own calls before the brain is — none left → `refused`,
+// `capped: 'ai'`. Whenever, not only when the fetch spent AI calls itself (Gate-5 fold P3-4, SB-4): a
+// step that JOINED another door's fetch hears no calls while that fetch folded its own into the day.
+// The fetch's calls ride EVERY outcome (a branch that throws, an abort, a refusal) and the step's
+// `ctx.spent` counts them, so the agent's own ceiling sees them too. A fetch that failed never fails
+// the step: what it came to rides the `fetched` seat (`none` when no app lets it ask any more; a
+// `recent` fetch that had itself failed is `failed` — P3-3 — so the result never says new data came
+// when it did not), and `summary` stays exactly the AI's text.
 
 import type { UserDb } from '@snugprotocol/db';
 import {
+  APP_AGENT_DEADLINE_MARGIN_MS,
   SCHEDULE_STEP_SUMMARY_MAX_CHARS,
   STEP_SAW_MAX_ENTRIES,
   STEP_SAW_NAME_MAX_CHARS,
   findScheduleCredential,
   type ScheduleProposalItem,
   type ScheduleStep,
+  type StepFetched,
   type StepSaw,
 } from '@snugprotocol/protocol';
 import type { AgentTransport } from '@snugprotocol/runner';
 
 import { chatBrainRoute, chatDoorOpen, type ReaderBrainRoute } from '../access/egress.js';
+import type { FetchedSource, FetchFirstResult } from '../access/fetchFirst.js';
 import type { MaterialisedSet } from '../access/service.js';
 import { oneLine } from '../agent/sharedDdl.js';
 import { appHasSidecarFact } from '../state/sidecarLive.js';
 import { defaultAppRunDeps, executeAppRun, type AppRunDeps } from './appRun.js';
 import { CANCELLED_SUMMARY, defaultTransportFor, executeAppThink, keylessBrainGate, type AppThinkDeps, type AppThinkStep } from './appThink.js';
+import { capped } from './copy.js';
 import type { StepContext, StepExecutor, StepOutcome } from './engine-types.js';
-import { ZERO_CALLS } from './protection.js';
+import { ZERO_CALLS, countersSoFar, wouldExceedCeiling, type Calls } from './protection.js';
 import { WITHHELD_SUMMARY, scrubOrWithhold } from './scrub.js';
 import { messageOf } from './taskShape.js';
 
@@ -118,6 +141,12 @@ export async function defaultSharedFor(appId: string, ctx: StepContext): Promise
   return { tables, skipped: [...set.skipped, ...refused], readOnlyTables: tables.map((table) => table.name).sort() };
 }
 
+/**
+ * What the step's answer still needs after its fetch (F2): the fetch may use the time before the
+ * queue's bound less the agent's own margin AND this much, so the brain is always asked in time.
+ */
+export const FETCH_FIRST_ANSWER_RESERVE_MS = 30_000;
+
 /** The `store` policy, then the cap. An empty string stays empty — no sentence is invented. */
 function safeText(text: string): string {
   const safe = scrubOrWithhold(text, 'store');
@@ -128,6 +157,11 @@ function safeText(text: string): string {
 function safeSaw(saw: readonly StepSaw[]): StepSaw[] {
   const cut = (text: string): string => oneLine(text).slice(0, STEP_SAW_NAME_MAX_CHARS);
   return saw.slice(0, STEP_SAW_MAX_ENTRIES).map(({ source, table }) => ({ source: cut(source), table: cut(table) }));
+}
+
+/** What the fetch came to, as the run row may hold it: one line per source, capped (the `saw` precedent). */
+function safeFetched(fetched: readonly StepFetched[]): StepFetched[] {
+  return fetched.slice(0, STEP_SAW_MAX_ENTRIES).map(({ source, outcome }) => ({ source: oneLine(source).slice(0, STEP_SAW_NAME_MAX_CHARS), outcome }));
 }
 
 function safeProposal(item: ScheduleProposalItem): ScheduleProposalItem | undefined {
@@ -151,25 +185,86 @@ export function finalizeOutcome(outcome: StepOutcome): StepOutcome {
   // PR-4's host facts (D-PR4-17), each only when it has something to say.
   if (outcome.inOpenApp === true) out.inOpenApp = true;
   if (outcome.saw !== undefined && outcome.saw.length > 0) out.saw = safeSaw(outcome.saw);
+  if (outcome.fetched !== undefined && outcome.fetched.length > 0) out.fetched = safeFetched(outcome.fetched);
   if (outcome.tools !== undefined) out.tools = outcome.tools;
   if (outcome.blockedBy !== undefined) out.blockedBy = outcome.blockedBy;
   return out;
 }
 
+const plus = (a: Calls, b: Calls): Calls => ({ ai: a.ai + b.ai, net: a.net + b.net });
+
 /**
- * An *Ask the AI* step under the production gates (see the module comment): refused for a keyless
- * brain, degraded to the tool-free step where tools cannot run, else the agent — lazily.
+ * One source's answer as the step result says it — a door's own stop is a fetch that did not finish,
+ * and so is a fetch inside the cooldown whose last dispatch did not deliver (P3-3): the step's words
+ * for `recent` say new data was used, which would be false.
  */
-async function executeAsk(step: AppThinkStep, ctx: StepContext, deps: StepExecutorDeps): Promise<StepOutcome> {
-  const route = deps.brainRouteFor?.(ctx.db, step.appId);
-  if (route === undefined) return executeAppThink(step, ctx, deps);
-  const refused = keylessBrainGate(ctx.db, step.appId, route);
-  if (refused !== undefined) return refused;
-  if (step.tools !== true) return executeAppThink(step, ctx, deps);
+const fetchedOutcome = (source: FetchedSource): StepFetched['outcome'] =>
+  source.outcome === 'stopped' || (source.outcome === 'recent' && source.lastOk === false) ? 'failed' : source.outcome;
+
+/** The `fetched` seat: one entry per source asked — or `none`, under the step's own app, when no app lets it ask any more. */
+function fetchedSeat(asked: readonly FetchedSource[], appName: string): StepFetched[] {
+  if (asked.length === 0) return [{ source: appName, outcome: 'none' }];
+  return asked.map((source) => ({ source: source.sourceName, outcome: fetchedOutcome(source) }));
+}
+
+/**
+ * *fetch new data first* for one *ask* step (D-PR5-19): the apps its app may read while the person is
+ * away, asked through `fetchFirst` within the time the run has left (F2). `undefined` when the fetch
+ * could not even be reached — then nothing was asked, and the step says nothing about it.
+ */
+async function fetchFirstFor(step: AppThinkStep, ctx: StepContext, deps: StepExecutorDeps): Promise<FetchFirstResult | undefined> {
+  // Measured on the run's clock, handed over on the dispatchers' (F2) — never longer than one app run's own bound.
+  const left = ctx.boundAt === undefined ? Number.POSITIVE_INFINITY : ctx.boundAt - APP_AGENT_DEADLINE_MARGIN_MS - FETCH_FIRST_ANSWER_RESERVE_MS - ctx.now().getTime();
+  const deadline = Date.now() + Math.min(deps.appRun.resultTimeoutMs, left);
+  try {
+    const { fetchFirst } = await import('../access/fetchFirst.js');
+    return await fetchFirst(ctx.db, deps.appRun, { kind: 'schedule', appId: step.appId, taskId: ctx.task.id, runId: ctx.run.id }, { signal: ctx.signal, run: { spent: () => ctx.spent?.() ?? { ...ZERO_CALLS }, deadline } });
+  } catch {
+    return undefined; // a fetch that could not run is never the step's failure
+  }
+}
+
+/** The branch the step takes once the brain gate let it through: tool-free, degraded, or the agent — lazily. */
+async function answerAsk(step: AppThinkStep, ctx: StepContext, deps: StepExecutorDeps, route: ReaderBrainRoute | undefined): Promise<StepOutcome> {
+  if (route === undefined || step.tools !== true) return executeAppThink(step, ctx, deps);
   const unavailable = !chatDoorOpen(route) ? 'brain' : appHasSidecarFact(ctx.db, step.appId) ? 'sidecar' : undefined;
   if (unavailable !== undefined) return { ...(await executeAppThink(step, ctx, deps)), tools: { unavailable } };
   const { executeAppAgent } = await import('./appAgent.js');
   return executeAppAgent(step, ctx);
+}
+
+/**
+ * An *Ask the AI* step under the production gates (see the module comment): refused for a keyless
+ * brain, then — when it asks — the fetch first, then degraded to the tool-free step where tools
+ * cannot run, else the agent. The fetch's calls ride whatever the branch answers, a throw included.
+ */
+async function executeAsk(step: AppThinkStep, ctx: StepContext, deps: StepExecutorDeps): Promise<StepOutcome> {
+  const route = deps.brainRouteFor?.(ctx.db, step.appId);
+  if (route !== undefined) {
+    const refused = keylessBrainGate(ctx.db, step.appId, route);
+    if (refused !== undefined) return refused;
+  }
+  if (step.refreshFirst !== true) return answerAsk(step, ctx, deps, route);
+
+  const fetched = await fetchFirstFor(step, ctx, deps);
+  const calls = fetched?.calls ?? { ...ZERO_CALLS };
+  const seat: Pick<StepOutcome, 'fetched'> = fetched === undefined ? {} : { fetched: fetchedSeat(fetched.asked, ctx.db.getApp(step.appId)?.displayName ?? step.appId) };
+  if (ctx.signal.aborted) return { status: 'failed', summary: CANCELLED_SUMMARY, calls, ...seat };
+  const spent = (): Calls => plus(ctx.spent?.() ?? ZERO_CALLS, calls);
+  // F7: the queue asked for one AI call's headroom before the step; a fetch that asked any source asks
+  // again, the day read fresh — a flight it joined folded its own calls there (P3-4).
+  const asked = fetched?.asked.some((source) => source.outcome !== 'skipped') === true;
+  if (asked && wouldExceedCeiling(countersSoFar(ctx.db, spent(), ZERO_CALLS, ctx.now().toISOString()), { ai: 1 }) === 'ai') {
+    return { status: 'refused', capped: 'ai', summary: capped('AI call'), calls, ...seat };
+  }
+  let outcome: StepOutcome;
+  try {
+    // The branch counts the fetch as spent by the run — the agent's own ceiling sees it.
+    outcome = await answerAsk(step, { ...ctx, spent }, deps, route);
+  } catch (err) {
+    outcome = { status: 'failed', summary: messageOf(err), calls: { ...ZERO_CALLS } };
+  }
+  return { ...outcome, calls: plus(outcome.calls, calls), ...seat };
 }
 
 async function dispatch(step: ScheduleStep, ctx: StepContext, deps: StepExecutorDeps): Promise<StepOutcome> {

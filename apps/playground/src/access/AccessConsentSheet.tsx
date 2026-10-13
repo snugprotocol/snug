@@ -46,6 +46,20 @@
 // changes* exactly while a write is ticked (`canChange` passed only then). The allow answers the
 // decision v2: per table `{ name, withheld, write }` — the unticked columns in the source's order
 // — and `kv` / `refresh` as ticked.
+//
+// PR-5 (TASK-20261010-host-broker; contract v2 D-PR5-3/5/15; D4, D7, D17). The says-line gains a
+// FOURTH branch: an ask the person started from what the app says it would like to read
+// (`askedIn: 'declared'`) reads "what Budget says it's for:" with the app's purpose quoted and
+// isolated like an app's — never "would like to: “to …”" — under the person's own title, and
+// offers *don't allow* only when the want had hints (`declinable`: it records that want's no). A
+// SOURCE's offer (`offeredBy: 'source'`) is the same one sheet, pinned to that source and titled
+// for what the person lets happen ("let Budget read Ledger's data"); it is READ-ONLY by
+// construction — `canChange={false}` flows to `SourcePicker` and `TableChooser`, so no write toggle
+// exists anywhere, *more options…* describes only settings & notes and the fetch, and the allow
+// answers every table unwritten (the consent writer refuses a write on an offer too). The chat's
+// ask that wanted to change rows is titled for it ("let Budget read and change another app's data").
+// Gate-5 G5-15 (IB-6, S10): on a declared ask (`tableTierOnly`), ANY source the person picks starts
+// with only its TABLE-tier tables for the want's hints ticked — never a column match or every table.
 
 import type { MouseEvent as ReactMouseEvent, ReactElement } from 'react';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
@@ -66,7 +80,7 @@ import type { EgressOptions } from './egress.js';
 import { EgressNote } from './EgressNote.js';
 import type { TableChoice } from './grants.js';
 import { answerAccess } from './outcome.js';
-import { isOfferable, preselectedTables, type RankedSource, type SourceTable } from './relevance.js';
+import { isOfferable, preselectedTables, tableTierTables, type RankedSource, type SourceTable } from './relevance.js';
 import { SourcePicker, type SourceOptions } from './SourcePicker.js';
 import type { TableTick } from './TableChooser.js';
 import { sheetSeedOf } from './userAsk.js';
@@ -241,6 +255,11 @@ function ConsentSheetBody({ pending }: { pending: PendingAccessRequest }): React
   // A memory access is never usable while away (D30): the box is not even offered then.
   const unattended = duration !== 'session' && away;
 
+  // D-PR5-5: an offer can never change rows — no toggle is drawn, and none is ever answered.
+  const changeOffered = pending.offeredBy !== 'source';
+  /** The pinned source's name, for an offer's title (its only candidate, preselected). */
+  const offeredFrom = pending.offeredBy === 'source' ? sourceOf(preselect?.appId)?.displayName : undefined;
+
   const sourceName = chosen?.displayName;
   const lines = useMemo(() => {
     // `canChange` only while a write is ticked (U-Q7): the closing then says *reads and changes*.
@@ -257,10 +276,12 @@ function ConsentSheetBody({ pending }: { pending: PendingAccessRequest }): React
   };
   const notNow = (): void => answer({ kind: 'not-now' });
 
+  /** The tables a source starts with when the person picks it: a declared ask's TABLE tier only (S10), else the ranking's own. */
+  const startingTables = (source: RankedSource): string[] => (pending.tableTierOnly === true ? tableTierTables(source, pending.hints) : preselectedTables(source));
   const choose = (appId: string): void => {
     setChosenAppId(appId);
     const source = sourceOf(appId);
-    if (source !== undefined && ticked[appId] === undefined) setTicked({ ...ticked, [appId]: ticksFor(source, preselectedTables(source)) });
+    if (source !== undefined && ticked[appId] === undefined) setTicked({ ...ticked, [appId]: ticksFor(source, startingTables(source)) });
   };
   const toggle = (appId: string, table: string, on: boolean): void => {
     const { [table]: _was, ...rest } = ticked[appId] ?? {};
@@ -283,7 +304,8 @@ function ConsentSheetBody({ pending }: { pending: PendingAccessRequest }): React
     if (!armed || !ready || chosen === undefined) return;
     // A pointer activation (detail > 0) whose press began before this sheet existed is not consent.
     if (event.detail > 0 && lastPointerDownAt !== undefined && lastPointerDownAt < renderedAt) return;
-    answer({ kind: 'allow', sourceAppId: chosen.appId, tables, duration, unattended, kv: chosenOptions.kv, refresh: chosenOptions.refresh });
+    const allowed = changeOffered ? tables : tables.map((table) => ({ ...table, write: false }));
+    answer({ kind: 'allow', sourceAppId: chosen.appId, tables: allowed, duration, unattended, kv: chosenOptions.kv, refresh: chosenOptions.refresh });
   };
 
   const tileStyle = { '--tile-color': pending.readerIcon?.color ?? 'var(--ember)' } as CSSProperties;
@@ -296,8 +318,12 @@ function ConsentSheetBody({ pending }: { pending: PendingAccessRequest }): React
         </span>
         <div>
           <h2 id={titleId} className="net-confirm-title" data-testid="access-sheet-title">
-            {/* An ask the USER started is theirs — never a want put in the app's mouth (W6 finding 35); an app's write ask says so (DS2). */}
-            {pending.provenance === 'user' ? CONSENT_SHEET.userTitle(readerName) : CONSENT_SHEET.title(readerName, pending.wantsWrite === true)}
+            {/* An ask the USER started is theirs — never a want put in the app's mouth (W6 finding 35); a write ask says so (DS2, D-PR5-15); an offer names what the person lets happen (D-PR5-5). */}
+            {offeredFrom !== undefined
+              ? CONSENT_SHEET.offerTitle(readerName, offeredFrom)
+              : pending.provenance === 'user'
+                ? CONSENT_SHEET.userTitle(readerName, pending.wantsWrite === true)
+                : CONSENT_SHEET.title(readerName, pending.wantsWrite === true)}
           </h2>
           <p className="access-provenance" data-testid="access-sheet-provenance">
             {pending.readerProvenance}
@@ -310,6 +336,14 @@ function ConsentSheetBody({ pending }: { pending: PendingAccessRequest }): React
           <p className="access-says" data-testid="access-sheet-says">
             {/* The AI's words, quoted and isolated exactly as an app's would be — never the host's own line (DS-15). */}
             {CONSENT_SHEET.askedInChat(readerName)}{' '}
+            <q className="access-quote" data-testid="access-sheet-quote">
+              {CONSENT_SHEET.quote(pending.purpose)}
+            </q>
+          </p>
+        ) : pending.askedIn === 'declared' ? (
+          <p className="access-says" data-testid="access-sheet-says">
+            {/* What the app said it would like to read — its words quoted and isolated, never "would like to: “to …”" (D4). */}
+            {CONSENT_SHEET.declaredSays(readerName)}{' '}
             <q className="access-quote" data-testid="access-sheet-quote">
               {CONSENT_SHEET.quote(pending.purpose)}
             </q>
@@ -349,6 +383,7 @@ function ConsentSheetBody({ pending }: { pending: PendingAccessRequest }): React
             onShowMore={() => setShowMore(true)}
             groupName={sourcesName}
             labelledBy={fromId}
+            canChange={changeOffered}
           />
         </section>
 
@@ -364,7 +399,7 @@ function ConsentSheetBody({ pending }: { pending: PendingAccessRequest }): React
             {chosen === undefined ? CONSENT_SHEET.pickAnApp : tables.length === 0 ? CONSENT_SHEET.pickATable : CONSENT_SHEET.pickAColumn}
           </p>
         ) : null}
-        {pending.provenance === 'app' || pending.askedIn === 'chat' ? (
+        {pending.provenance === 'app' || pending.askedIn === 'chat' || (pending.askedIn === 'declared' && pending.declinable === true) ? (
           <Button variant="ghost" onClick={() => answer({ kind: 'dont-allow' })} data-testid="access-dont-allow">
             {CONSENT_SHEET.dontAllow}
           </Button>

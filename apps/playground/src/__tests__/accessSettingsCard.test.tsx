@@ -11,18 +11,23 @@
 // TASK-20261010-host-broker PR-3 (D-PR3-24; DS14, DS21): a write access's row carries the write
 // badge here too (`access-row-write`, *can also change rows*) beside its ONE act, and the card's
 // intro and *clear history* hint say changes too — their new bytes pinned through the export.
+//
+// TASK-20261010-host-broker PR-5 (D-PR5-4/6a; AC34): *apps that could work together* — the section,
+// its ≤ 5 rows, *review…* — and the act line that says every outcome of the ask it starts.
 
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { UserDb } from '@snugprotocol/db';
-import { FRAME_TYPES, PROTOCOL_VERSION } from '@snugprotocol/protocol';
+import { ACCESS_SOURCE_MAX_BYTES, FRAME_TYPES, PROTOCOL_VERSION } from '@snugprotocol/protocol';
 
 import { AccessSettingsCard } from '../access/AccessSettingsCard.js';
 import { NO_ACCESS_ASKS_KEY, accessAsksOff, collectSources, pendingAccessStore, reviewStore } from '../access/consent.js';
-import { ACCESS_SHEET, SETTINGS_CARD } from '../access/copy.js';
+import { ACCESS_SHEET, CONSENT_UI, SETTINGS_CARD, STRIP_OUTCOME, excludedFooter } from '../access/copy.js';
 import { __setAccessDepsForTests, createGrantFromDecision, resetAccessSession, type AnyAccessGrant } from '../access/grants.js';
+import { answerAccess } from '../access/outcome.js';
+import { netConfirmStore, type PendingNetConfirm } from '../state/net.js';
 import { installTestUserDb } from './userdbTestHelper.js';
 
 declare global {
@@ -302,5 +307,247 @@ describe('PR-3 — the write badge in Settings, and the intro and hint that say 
     await renderCard();
     expect(one('access-settings-intro')?.textContent).toBe(SETTINGS_CARD.intro);
     expect(one('access-clear-history-hint')?.textContent).toBe(SETTINGS_CARD.clearHistoryHint);
+  });
+});
+
+// =========================================================================================
+// TASK-20261010-host-broker PR-5 (contract v2 D-PR5-4, D-PR5-6a; AC34; D1, D3)
+//
+// Settings gains *apps that could work together* (`SETTINGS_CARD.pairsTitle`): at most `PAIRS_MAX`
+// (5) rows from `listPairSuggestions`, each `SETTINGS_CARD.pairRow(reader, source, matchedTables)`
+// — *Budget could read Ledger's transactions* — with the want's purpose quoted below it (a
+// bidi-isolated `<q>`) and the act *review…* (aria: the row sentence + " — review"), which starts
+// `startUserAsk(reader, {declared: want, source})`. Every outcome of that ask is SAID, in the act
+// line (`access/AccessActLine.tsx`, role=status, tabIndex −1, taking focus when its trigger has
+// unmounted): allowed → `STRIP_OUTCOME.allowed(…)` with *stop*; a declared-form decline →
+// `STRIP_OUTCOME.wontAskAgain(reader)`; not offered → `excludedFooter([{displayName, reason}])`;
+// answer-other-first → `CONSENT_UI.answerOtherFirst`; *not now* → no line, focus back on the act.
+//
+// Q (lane T-B — test ids the contract leaves open): the section `access-pairs`, a row
+// `access-pair-row`, its act `access-pair-review`, the act line `access-act-line`.
+// =========================================================================================
+
+const SETTINGS5 = SETTINGS_CARD as unknown as { pairsTitle: string; pairRow(readerName: string, sourceName: string, tables: readonly string[]): string };
+const SPENDING_WANT = { purpose: 'to show spending by category', hints: { tables: ['transactions'] } };
+
+function declaringPage(title: string, wants: unknown): string {
+  const content = JSON.stringify(wants).replace(/&/g, '&amp;').replace(/'/g, '&apos;');
+  return `<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n<meta name="viewport" content="width=device-width, initial-scale=1">\n<meta name="snug:access-wants" content='${content}'>\n<title>${title}</title>\n</head>\n<body></body>\n</html>`;
+}
+
+/** The user's answer on the sheet, as the sheet gives it (the decision v2). */
+async function answerPending(reader: string, decision: Record<string, unknown>): Promise<void> {
+  const pending = pendingAccessStore.get()[reader];
+  if (pending === undefined) throw new Error('no pending ask');
+  await act(async () => {
+    await answerAccess(pending, decision as Parameters<typeof answerAccess>[1]);
+  });
+  await settle();
+}
+const ALLOW_DAY = { kind: 'allow', tables: [{ name: 'transactions', withheld: [], write: false }], duration: 'day', unattended: false, kv: false, refresh: false };
+
+describe('PR-5 — *apps that could work together* (D-PR5-4; D3)', () => {
+  beforeEach(() => {
+    db.saveAppVersion(budget, declaringPage('Budget', [SPENDING_WANT]));
+  });
+
+  it('D-PR5-4 the section, titled by the copy, with one row: the sentence, the purpose quoted below it, and *review…*', async () => {
+    await renderCard();
+    const section = one('access-pairs');
+    expect(section, 'a pair exists: the section is there').not.toBeNull();
+    expect(section!.textContent).toContain(SETTINGS5.pairsTitle);
+    const rows = all('access-pair-row', section!);
+    expect(rows).toHaveLength(1);
+    const sentence = SETTINGS5.pairRow('Budget', 'Ledger', ['transactions']);
+    expect(rows[0]!.textContent).toContain(sentence);
+    const quote = rows[0]!.querySelector('q');
+    expect(quote, 'the purpose is quoted').not.toBeNull();
+    expect(quote!.textContent).toContain(SPENDING_WANT.purpose);
+    const review = one('access-pair-review', rows[0])!;
+    expect(review.textContent).toBe('review…');
+    expect(review.getAttribute('aria-label')).toBe(`${sentence} — review`);
+  });
+
+  it('no pair: no section at all', async () => {
+    db.saveAppVersion(budget, '<!doctype html><title>b</title>');
+    await renderCard();
+    expect(one('access-pairs')).toBeNull();
+  });
+
+  it('at most PAIRS_MAX (5) rows, however many pairs the file holds', async () => {
+    for (const name of ['Alpha', 'Beta', 'Gamma', 'Delta', 'Epsilon', 'Zeta']) db.installApp({ displayName: name, html: declaringPage(name, [SPENDING_WANT]) });
+    await renderCard();
+    expect(all('access-pair-row')).toHaveLength(5);
+  });
+
+  it('*review…* starts the declared ask pinned to the source and opens the review', async () => {
+    await renderCard();
+    await click(one('access-pair-review'));
+    await until(() => reviewStore.get() === budget, 'the review opens');
+    const pending = pendingAccessStore.get()[budget] as ReturnType<typeof pendingAccessStore.get>[string] & { askedIn?: string };
+    expect(pending.askedIn).toBe('declared');
+    expect(pending.preselect).toEqual({ appId: ledger, tables: ['transactions'] });
+  });
+});
+
+describe('PR-5 — the act line: every ask from host chrome has a visible outcome (D-PR5-6a; D1)', () => {
+  beforeEach(() => {
+    db.saveAppVersion(budget, declaringPage('Budget', [SPENDING_WANT]));
+  });
+
+  const line = (): HTMLElement | null => one('access-act-line');
+
+  it('allowed: the allowed line with *stop* — role status, focusable — and *stop* stops it', async () => {
+    await renderCard();
+    await click(one('access-pair-review'));
+    await until(() => pendingAccessStore.get()[budget] !== undefined, 'the ask is parked');
+    await answerPending(budget, { ...ALLOW_DAY, sourceAppId: ledger });
+    await until(() => line() !== null, 'the act line');
+    expect(line()!.getAttribute('role')).toBe('status');
+    expect(line()!.tabIndex).toBe(-1);
+    expect(line()!.textContent).toContain(STRIP_OUTCOME.allowed('Budget', 'Ledger', ['transactions'], 'day'));
+    const stop = [...line()!.querySelectorAll('button')].find((button) => button.textContent === STRIP_OUTCOME.undo);
+    expect(stop, 'the line carries *stop*').toBeDefined();
+    await click(stop!);
+    await until(() => db.listAccessGrants().every((grant) => grant.status === 'revoked'), 'the access is stopped');
+    expect(db.listAccessGrants()).toHaveLength(1);
+  });
+
+  it('allowed: the pair (and its *review…*) is gone — the act line takes focus', async () => {
+    await renderCard();
+    await click(one('access-pair-review'));
+    await until(() => pendingAccessStore.get()[budget] !== undefined, 'the ask is parked');
+    await answerPending(budget, { ...ALLOW_DAY, sourceAppId: ledger });
+    await until(() => line() !== null, 'the act line');
+    await until(() => one('access-pair-review') === null, 'the pair is gone: Budget now reads Ledger');
+    expect(document.activeElement).toBe(line());
+  });
+
+  it('a declared-form decline: "Budget won\'t ask for this again" — the copy’s wontAskAgain', async () => {
+    await renderCard();
+    await click(one('access-pair-review'));
+    await until(() => pendingAccessStore.get()[budget] !== undefined, 'the ask is parked');
+    await answerPending(budget, { kind: 'dont-allow' });
+    await until(() => line() !== null, 'the act line');
+    expect(line()!.textContent).toContain(STRIP_OUTCOME.wontAskAgain('Budget'));
+  });
+
+  it('not offered (the source is over the copy cap): the footer’s words, nothing parked', async () => {
+    const real = db.exportAppRuntime.bind(db);
+    vi.spyOn(db, 'exportAppRuntime').mockImplementation(async (appId: string) => (appId === ledger ? new Uint8Array(ACCESS_SOURCE_MAX_BYTES + 1) : real(appId)));
+    await renderCard();
+    await click(one('access-pair-review'));
+    await until(() => line() !== null, 'the act line');
+    expect(line()!.textContent).toContain(excludedFooter([{ displayName: 'Ledger', reason: 'too-large' }]));
+    expect(pendingAccessStore.get()[budget]).toBeUndefined();
+    vi.restoreAllMocks();
+  });
+
+  it('another question is open first: "answer the open question first, then review" — nothing parked', async () => {
+    netConfirmStore.set({ request: {} as PendingNetConfirm['request'], resolve: () => undefined });
+    try {
+      await renderCard();
+      await click(one('access-pair-review'));
+      await until(() => line() !== null, 'the act line');
+      expect(line()!.textContent).toContain(CONSENT_UI.answerOtherFirst);
+      expect(pendingAccessStore.get()[budget]).toBeUndefined();
+    } finally {
+      netConfirmStore.set(null);
+    }
+  });
+
+  it('*not now*: no line — focus goes back to the act', async () => {
+    await renderCard();
+    const review = one('access-pair-review')!;
+    review.focus();
+    await click(review);
+    await until(() => pendingAccessStore.get()[budget] !== undefined, 'the ask is parked');
+    (document.activeElement as HTMLElement | null)?.blur();
+    await answerPending(budget, { kind: 'not-now' });
+    expect(line()).toBeNull();
+    expect(document.activeElement).toBe(one('access-pair-review'));
+  });
+});
+
+// =========================================================================================
+// TASK-20261010-host-broker PR-5 — Gate-5 fold G5-15 on Settings' act line.
+//
+// IB-4 *stop* on the act line keeps focus on the line: the focused *stop* unmounts with the allowed
+//      settle, and (Settings) the pair reappears and the line remounts in the row — focus fell to
+//      <body> on every surface.
+// IB-5 `useAccessAct` ignores a second `start` in flight (a ref) and exposes `busy` (the act renders
+//      `disabled`): two rapid taps parked twice, the second dismissing the first (T1) and restarting
+//      the review's arming under the person's finger.
+// =========================================================================================
+
+/** Every distinct pending parked for `reader` while `run` runs. */
+async function distinctPendings(reader: string, run: () => Promise<void>): Promise<number> {
+  const seen = new Set<unknown>();
+  const off = pendingAccessStore.subscribe(() => {
+    const pending = pendingAccessStore.get()[reader];
+    if (pending !== undefined) seen.add(pending);
+  });
+  try {
+    await run();
+  } finally {
+    off();
+  }
+  return seen.size;
+}
+
+describe('G5-15 Settings’ act line: focus after *stop*, and one ask per tap in flight', () => {
+  beforeEach(() => {
+    db.saveAppVersion(budget, declaringPage('Budget', [SPENDING_WANT]));
+  });
+
+  const line = (): HTMLElement | null => one('access-act-line');
+
+  it('G5-15 (IB-4) keyboard *stop* on the allowed line: focus lands on the act line, never <body>', async () => {
+    await renderCard();
+    await click(one('access-pair-review'));
+    await until(() => pendingAccessStore.get()[budget] !== undefined, 'the ask is parked');
+    await answerPending(budget, { ...ALLOW_DAY, sourceAppId: ledger });
+    await until(() => line() !== null, 'the act line');
+    const stop = [...line()!.querySelectorAll('button')].find((button) => button.textContent === STRIP_OUTCOME.undo)!;
+    stop.focus();
+    expect(document.activeElement).toBe(stop);
+    await click(stop);
+    await until(() => line()?.getAttribute('data-outcome') === 'stopped', 'the line says stopped');
+    expect(document.activeElement).not.toBe(document.body);
+    expect(document.activeElement).toBe(line());
+  });
+
+  it('G5-15 (IB-5) two rapid taps on *review…* park exactly ONE ask', async () => {
+    await renderCard();
+    const review = one('access-pair-review')!;
+    const parked = await distinctPendings(budget, async () => {
+      await act(async () => {
+        review.click();
+        review.click();
+      });
+      await until(() => reviewStore.get() === budget, 'the review opens');
+      await settle();
+    });
+    expect(parked).toBe(1);
+  });
+
+  it('G5-15 (IB-5) while the ask is in flight the act is disabled', async () => {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const real = db.exportAppRuntime.bind(db);
+    vi.spyOn(db, 'exportAppRuntime').mockImplementation(async (appId: string) => {
+      await gate;
+      return real(appId);
+    });
+    await renderCard();
+    await act(async () => {
+      one('access-pair-review')!.click();
+    });
+    await settle();
+    expect((one('access-pair-review') as HTMLButtonElement | null)?.disabled, 'busy while the ask is collected').toBe(true);
+    release();
+    await until(() => reviewStore.get() === budget, 'the review opens');
   });
 });

@@ -1,12 +1,16 @@
 import { useEffect, useState } from 'react';
-import type { ReactElement } from 'react';
+import type { ReactElement, ReactNode } from 'react';
 import { Link } from 'react-router';
 
+import type { ChatFetchFact } from '@snugprotocol/protocol';
+
 import { AccessCard, type ResolveAccessCard } from '../access/AccessCard.js';
+import { AccessWriteCard } from '../access/AccessWriteCard.js';
 import { OwnUndoAct } from '../access/OwnUndoAct.js';
 import type { UndoOutcome } from '../access/writeBroker.js';
+import type { AccessWriteCardState } from '../agent/accessWriteCard.js';
 import { sanitizeCardText, type ChatCardState } from '../agent/cards.js';
-import { DATA_WRITE_CARD } from '../agent/copy.dataWrite.js';
+import { DATA_WRITE_CARD, FETCH_FACTS } from '../agent/copy.dataWrite.js';
 import type { BuildStepView, ChatMessage, DataWriteCardState } from '../agent/useBuilderChat.js';
 import { CONNECTIONS_UNAVAILABLE } from '../platform/availability.js';
 import { allows } from '../platform/platform.js';
@@ -97,6 +101,12 @@ export interface ChatLogProps {
    * card's acts render disabled (the schedule card's rule: an answer with nowhere to go asks nobody).
    */
   onResolveAccess?: ResolveAccessCard;
+  /**
+   * The chat's CROSS-APP card's acts (TASK-20261010-host-broker PR-5, D-PR5-14): *apply to Ledger*
+   * and *cancel*, carried out by the hook. Absent ⇒ the card offers no act.
+   */
+  onApproveAccessWrite?: (card: AccessWriteCardState, messageId: number) => void;
+  onDeclineAccessWrite?: (card: AccessWriteCardState, messageId: number) => void;
 }
 
 /**
@@ -106,6 +116,20 @@ export interface ChatLogProps {
  * a mode switch.
  */
 export const DEMO_TURN_TAG = 'scripted demo — not an AI response';
+
+/**
+ * What *fetch new data first* came to (TASK-20261010-host-broker PR-5, D-PR5-20; Gate-5 G5-17), from
+ * the message's FACTS — never a sentence a row carried: the one wording (`FETCH_FACTS.note`,
+ * `FETCH_FIRST`'s words), composed with a NUL-fenced index in place of each fact's name — no copy
+ * sentence holds a NUL, and no fact's name can — and each name put back in its own `<bdi>`, so a
+ * right-to-left name can never reorder the host's words.
+ */
+function fetchNoteFrom(facts: readonly ChatFetchFact[], now: number): ReactNode[] {
+  const marked = facts.map((fact, index) => ({ ...fact, source: `\u0000${index}\u0000` }));
+  return FETCH_FACTS.note(marked, now)
+    .split(/\u0000(\d+)\u0000/)
+    .map((part, index) => (index % 2 === 1 ? <bdi key={index}>{facts[Number(part)]?.source}</bdi> : part));
+}
 
 /** The streamed conversation: user bubbles, streaming agent text with a soft caret,
     error notes as data, and the artifact card with its "run it" CTA. */
@@ -126,6 +150,8 @@ export function ChatLog({
   onSelectCardOption,
   onResolveSchedule,
   onResolveAccess,
+  onApproveAccessWrite,
+  onDeclineAccessWrite,
 }: ChatLogProps): ReactElement {
   // Under a platform-pinned HOST brain the chat has no classifier and no `schedule` lane
   // (TASK-20261009 P2): the deterministic offer is the route, and its line says so.
@@ -147,6 +173,12 @@ export function ChatLog({
               </div>
             ) : null}
             {message.directiveNote !== undefined ? <div className="hint">{message.directiveNote}</div> : null}
+            {/* TASK-20261010-host-broker PR-5 (D-PR5-20; G5-17): what *fetch new data first* came to — the host's words, from the facts, on the person's own message. */}
+            {message.role === 'user' && message.fetched !== undefined ? (
+              <div className="hint" data-testid="chat-fetch-note">
+                {fetchNoteFrom(message.fetched, Date.now())}
+              </div>
+            ) : null}
             {message.role === 'agent' && message.brainKind === 'demo' ? (
               <div className="demo-turn-tag" data-testid="demo-turn-tag">
                 <span aria-hidden="true">🧪</span> {DEMO_TURN_TAG}
@@ -296,6 +328,20 @@ export function ChatLog({
           */}
           {message.access !== undefined && allows('access') ? (
             <AccessCard card={message.access} messageId={message.id} busy={busy} onResolve={onResolveAccess} />
+          ) : null}
+          {/*
+            The CROSS-APP CARD (TASK-20261010-host-broker PR-5, D-PR5-14; `access/AccessWriteCard.tsx`):
+            a change the chat's AI proposed to another app's table, applied only from the card's own act
+            — carried out by the hook, never by the card. Only where the host allows access between apps.
+          */}
+          {message.accessWrite !== undefined && allows('access') ? (
+            <AccessWriteCard
+              card={message.accessWrite}
+              messageId={message.id}
+              busy={busy}
+              {...(onApproveAccessWrite !== undefined ? { onApply: onApproveAccessWrite } : {})}
+              {...(onDeclineAccessWrite !== undefined ? { onCancel: onDeclineAccessWrite } : {})}
+            />
           ) : null}
           {message.artifact !== undefined ? (
             <Card className="artifact-card" data-testid="artifact-card">

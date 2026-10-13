@@ -218,3 +218,83 @@ describe('enableProposedTask — the writer (P7)', () => {
     expect(db.listScheduledTasks()).toHaveLength(0);
   });
 });
+
+// ---------------------------------------------------------------------------------------------
+// TASK-20261010-host-broker PR-5 (AC39b; contract v2 D-PR5-19; S15). `refreshFirst` runs ANOTHER
+// app's code unattended — so, like an authority, NO proposal channel may carry it: an app's
+// suggestion, the builder's and the chat's proposals (they share `scheduleProposalSchema.steps`) all
+// STRIP it; the user's tick in the editor or the consent is its ONLY setter. RED until the protocol
+// admits the seat (today the strict step refuses the key, so the writer answers "can't be read") and
+// the channels strip it.
+// ---------------------------------------------------------------------------------------------
+
+describe('PR-5 D-PR5-19 — every proposal channel STRIPS refreshFirst (S15)', () => {
+  let db: UserDb;
+  let ledger: string;
+
+  beforeEach(async () => {
+    __resetSchedulerForTests();
+    db = await installTestUserDb();
+    ledger = db.installApp({ displayName: 'Ledger', html: '<!doctype html><title>l</title>', usesDb: true }).appId;
+  });
+
+  afterEach(async () => {
+    __resetSchedulerForTests();
+    const request = await import('../schedule/scheduleRequest.js');
+    request.__resetScheduleRequestsForTests();
+    request.__setScheduleRequestDepsForTests();
+  });
+
+  const fetchingThink = (appId: string) => ({ kind: 'app-think' as const, appId, prompt: 'Sum it up.', context: { maxRows: 50 }, refreshFirst: true as const });
+  const daily = { kind: 'daily' as const, time: '08:00', tz: 'device' as const };
+
+  it('the writer (builder, chat, app): the proposal is admitted and the task is written WITHOUT refreshFirst — on the tool-free and the tools step', async () => {
+    for (const provenance of ['builder', 'chat', 'app'] as const) {
+      for (const extra of [{}, { tools: true as const }]) {
+        const result = await enableProposedTask({ proposal: { title: `via ${provenance}`, steps: [{ ...fetchingThink(ledger), ...extra }], spec: daily }, provenance, ownerAppId: ledger });
+        expect(result.ok, `${provenance} ${JSON.stringify(extra)}`).toBe(true);
+        if (!result.ok) continue;
+        expect(result.task.steps[0], provenance).not.toHaveProperty('refreshFirst');
+        expect(result.task.steps[0]).toMatchObject({ kind: 'app-think', appId: ledger, prompt: 'Sum it up.', ...extra });
+      }
+    }
+    for (const task of db.listScheduledTasks()) expect(JSON.stringify(task.steps)).not.toContain('refreshFirst');
+  });
+
+  it('an APP’s suggestion: the strip’s intake accepts it, and the pending proposal it renders carries no refreshFirst', async () => {
+    const request = await import('../schedule/scheduleRequest.js');
+    request.__setScheduleRequestDepsForTests({ getDb: () => Promise.resolve(db), now: () => Date.parse('2026-10-12T09:00:00.000Z'), noSuggestions: () => false });
+    const decision = await request.consumeScheduleRequest({
+      appId: ledger,
+      generation: 1,
+      event: request.SCHEDULE_REQUEST_EVENT,
+      data: { title: 'morning sums', steps: [fetchingThink(ledger)], spec: daily },
+    });
+    expect(decision).toBe('accepted');
+    const pending = request.pendingSuggestionFor(ledger);
+    expect(pending).toBeDefined();
+    expect(pending!.proposal.steps[0]).not.toHaveProperty('refreshFirst');
+    // …and *schedule it* writes it without the seat too.
+    const accepted = await request.acceptSuggestion(ledger);
+    expect(accepted.ok).toBe(true);
+    if (accepted.ok) expect(accepted.task.steps[0]).not.toHaveProperty('refreshFirst');
+  });
+
+  it('GUARD — the chat’s `schedule_propose`: a step naming refreshFirst stages a proposal WITHOUT it (the tool rebuilds each step field by field)', async () => {
+    const { buildScheduleProposeTool } = await import('../agent/scheduleProposeTool.js');
+    const staged: unknown[] = [];
+    const tool = buildScheduleProposeTool({
+      getDb: () => Promise.resolve(db),
+      resolveAppId: () => Promise.resolve(ledger),
+      now: () => new Date('2026-10-12T09:00:00.000Z'),
+      onProposal: (proposal) => {
+        staged.push(proposal);
+        return true;
+      },
+    });
+    const answer = await tool.run({ title: 'morning sums', when: 'daily at 8', steps: [{ kind: 'app-think', prompt: 'Sum it up.', refreshFirst: true }] });
+    expect(String(answer)).not.toMatch(/^Error/);
+    expect(staged).toHaveLength(1);
+    expect(JSON.stringify(staged[0])).not.toContain('refreshFirst');
+  });
+});

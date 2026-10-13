@@ -26,6 +26,14 @@
 // never add a line of its own to a brain's context. The data tools and the service fold the same
 // name the same way wherever a brain reads it (`CHAT_DOOR.ended`, `.readOnly`, the reader's own
 // name in a service-level skip).
+//
+// TWO PARTS, ONE BLOCK (TASK-20261010-host-broker PR-5, D-PR5-13; F11): `renderSharedDdlParts`
+// answers the TABLES (every heading and table line) apart from the CLOSING (the closing sentence,
+// then the unreadable notes in today's order), so the chat's context can cap the tables alone and
+// the closing sentence is never cut; `renderSharedDdl` is the two joined, byte-identical to before
+// for the scheduled step and any uncut block. Only a `data_write` turn passes `changes: true`, and
+// only a table `materialiseGrants` marked `write` changes anything: its source's heading drops
+// *read-only ·*, its line ends *· can be changed*, and `CHAT_DOOR.changes` REPLACES the rule.
 
 import { LIMITS } from '@snugprotocol/protocol';
 
@@ -34,8 +42,14 @@ import type { MaterialisedSet, MaterialisedTable } from '../access/service.js';
 
 const PLAIN_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
-/** What a name may not carry into a line: C0 controls and DEL, the C1 controls (U+0080–U+009F — NEL among them, a line break to some tokenizers), U+2028/9, the bidi marks (U+200E/F), embeddings and overrides (U+202A–E) and isolates (U+2066–9). */
-const FOLDED = /[\u0000-\u001f\u007f\u0080-\u009f\u2028\u2029\u200e\u200f\u202a-\u202e\u2066-\u2069]+/g;
+/**
+ * What a name may not carry into a line: C0 controls and DEL, the C1 controls (U+0080–U+009F — NEL
+ * among them, a line break to some tokenizers), U+2028/9, the bidi marks (U+061C ALM, U+200E/F),
+ * embeddings and overrides (U+202A–E) and isolates (U+2066–9) — exactly what the protocol's fetch-fact
+ * rule refuses in a source name (`chat-cards.ts`, Gate-5 G5-17), so every name a brain or a fact reads
+ * is folded the same way.
+ */
+const FOLDED = /[\u0000-\u001f\u007f\u0080-\u009f\u2028\u2029\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]+/g;
 const UNNAMED = '(unnamed app)';
 
 /** Another app's display name as ONE line of host text (the header): folded, trimmed, capped, never empty. */
@@ -57,16 +71,33 @@ function byGrant(tables: readonly MaterialisedTable[]): Array<{ first: Materiali
   return groups;
 }
 
-/** The host's framing of a materialised set — see the header. '' for an empty set. */
-export function renderSharedDdl(set: MaterialisedSet, now: number): string {
+/** The block's two parts (D-PR5-13): the headings and table lines, and the closing — each '' when it has nothing to say. */
+export interface SharedDdlParts {
+  tables: string;
+  closing: string;
+}
+
+/** The host's framing of a materialised set in its two parts — see the header. A `data_write` turn passes `changes: true`. */
+export function renderSharedDdlParts(set: MaterialisedSet, now: number, options: { changes?: boolean } = {}): SharedDdlParts {
   const groups = byGrant(set.tables);
-  const blocks: string[] = groups.map(({ first, tables }) =>
-    [
-      CHAT_DOOR.heading(oneLine(first.sourceName), first.duration, first.expiresAt, now),
-      ...tables.map((table) => CHAT_DOOR.tableLine(table.name, table.columns.map(columnName), table.types, table.rows.length, table.truncated, table.totalRows)),
-    ].join('\n'),
-  );
-  if (groups.length > 0) blocks.push(CHAT_DOOR.rule);
-  for (const skip of set.skipped) blocks.push(CHAT_DOOR.unreadable(oneLine(skip.sourceName)));
-  return blocks.join('\n\n');
+  // What may be changed is said only on a turn that may propose a change, and only when a table is marked.
+  const changes = options.changes === true && set.tables.some((table) => table.write === true);
+  const tables = groups
+    .map(({ first, tables: own }) =>
+      [
+        CHAT_DOOR.heading(oneLine(first.sourceName), first.duration, first.expiresAt, now, changes && own.some((table) => table.write === true)),
+        ...own.map((table) =>
+          CHAT_DOOR.tableLine(table.name, table.columns.map(columnName), table.types, table.rows.length, table.truncated, table.totalRows, changes && table.write === true),
+        ),
+      ].join('\n'),
+    )
+    .join('\n\n');
+  const closing = [...(groups.length > 0 ? [changes ? CHAT_DOOR.changes : CHAT_DOOR.rule] : []), ...set.skipped.map((skip) => CHAT_DOOR.unreadable(oneLine(skip.sourceName)))].join('\n\n');
+  return { tables, closing };
+}
+
+/** The host's framing of a materialised set — the two parts joined; '' for an empty set. */
+export function renderSharedDdl(set: MaterialisedSet, now: number): string {
+  const { tables, closing } = renderSharedDdlParts(set, now);
+  return [tables, closing].filter((part) => part !== '').join('\n\n');
 }

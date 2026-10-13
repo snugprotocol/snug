@@ -1667,3 +1667,244 @@ describe('PR-4 — ownCapturable(sql): a pure predicate over the literal grammar
     expect(typeof index.ownCapturable).toBe('function');
   });
 });
+
+// =================================================================================================
+// TASK-20261010-host-broker PR-5 (contract v2 D-PR5-11 step 4; AC39a's db half) — `renameDmlTarget`.
+//
+// The chat's cross-app change is written against the SHARED ALIAS the chat sees (`ledger__tx`); the
+// host renames the ONE DML target to the source's own table before planning. Pure, exported from
+// `brokered-write.ts`, `(sql, from, to) → {ok: true, sql} | {ok: false, rule}`:
+//  - the head `^[ \t\n\f\r]*(INSERT[ \t\n\f\r]+INTO|UPDATE|DELETE[ \t\n\f\r]+FROM)[ \t\n\f\r]+IDENT`
+//    (keywords ASCII-case-insensitive), IDENT bare `[A-Za-z_][A-Za-z0-9_$]*` or ONE quoted form
+//    (`"…"`, `` `…` ``, `[…]`) whose unescaped value equals `from` ASCII-case-insensitively;
+//  - the character after IDENT is `[ \t\n\f\r(]` or a comment opener, else rule `statement`;
+//  - any code point ≥ U+0080 outside a string literal → refused (NBSP, U+3000 — the tokenizer's `\s`
+//    would admit them);
+//  - the alias appearing ANYWHERE outside the head → rule `qualified` (`ledger__tx.id`);
+//  - a comment before the head, `OR …`, `REPLACE` → refused;
+//  - the output — IDENT replaced by `"to"` — must satisfy BOTH `parseBrokeredStatement(out).table
+//    === to` AND `dmlTargetTable(out) === to` (the double re-parse), else refused.
+// Every refusal becomes `CHAT_DOOR.plainChange(source)` in the playground (T-C); nothing here words it.
+// The OUTPUT pins (the exact renamed text) are this lane's choice: only the IDENT span is replaced by
+// the double-quoted target; everything else is the statement as written.
+// =================================================================================================
+
+type RenameResult = { ok: true; sql: string } | { ok: false; rule: string };
+type RenameDmlTarget = (sql: string, from: string, to: string) => RenameResult;
+
+async function renameDmlTarget(): Promise<RenameDmlTarget> {
+  const mod = (await brokered()) as unknown as { renameDmlTarget?: RenameDmlTarget };
+  if (typeof mod.renameDmlTarget !== 'function') throw new Error('brokered-write.ts does not export renameDmlTarget (D-PR5-11 step 4)');
+  return mod.renameDmlTarget;
+}
+
+const ALIAS = 'ledger__tx';
+const TABLE = 'transactions';
+
+describe('renameDmlTarget — the three heads, bare and quoted (D-PR5-11 step 4)', () => {
+  it('D-PR5-11 an UPDATE on the bare alias is renamed to the double-quoted table; the rest is kept as written', async () => {
+    const rename = await renameDmlTarget();
+    expect(rename("UPDATE ledger__tx SET note = 'lunch' WHERE id = 7", ALIAS, TABLE)).toEqual({ ok: true, sql: `UPDATE "transactions" SET note = 'lunch' WHERE id = 7` });
+  });
+
+  it('D-PR5-11 INSERT INTO and DELETE FROM — keywords ASCII-case-insensitive, their spelling kept', async () => {
+    const rename = await renameDmlTarget();
+    expect(rename("insert into ledger__tx (note, amount) values ('tea', 3)", ALIAS, TABLE)).toEqual({ ok: true, sql: `insert into "transactions" (note, amount) values ('tea', 3)` });
+    expect(rename('Delete From ledger__tx WHERE id = 2', ALIAS, TABLE)).toEqual({ ok: true, sql: 'Delete From "transactions" WHERE id = 2' });
+  });
+
+  it('D-PR5-11 the alias matches ASCII-case-insensitively', async () => {
+    const rename = await renameDmlTarget();
+    expect(rename("UPDATE LEDGER__TX SET note = 'x' WHERE id = 1", ALIAS, TABLE)).toEqual({ ok: true, sql: `UPDATE "transactions" SET note = 'x' WHERE id = 1` });
+  });
+
+  it('D-PR5-11 each ONE quoted form — "…", `…`, […] — whose unescaped value is the alias', async () => {
+    const rename = await renameDmlTarget();
+    for (const quoted of ['"ledger__tx"', '`ledger__tx`', '[ledger__tx]', '"LEDGER__TX"']) {
+      expect(rename(`UPDATE ${quoted} SET note = 'x' WHERE id = 1`, ALIAS, TABLE), quoted).toEqual({ ok: true, sql: `UPDATE "transactions" SET note = 'x' WHERE id = 1` });
+    }
+  });
+
+  it('D-PR5-11 ASCII whitespace before the head and between its words is admitted and kept', async () => {
+    const rename = await renameDmlTarget();
+    expect(rename("\n\t UPDATE\tledger__tx\nSET note = 'x' WHERE id = 1", ALIAS, TABLE)).toEqual({ ok: true, sql: `\n\t UPDATE\t"transactions"\nSET note = 'x' WHERE id = 1` });
+    expect(rename('INSERT \r\n INTO\fledger__tx (note) VALUES (1)', ALIAS, TABLE)).toEqual({ ok: true, sql: 'INSERT \r\n INTO\f"transactions" (note) VALUES (1)' });
+  });
+
+  it('D-PR5-11 the character after IDENT may be "(" or a comment opener', async () => {
+    const rename = await renameDmlTarget();
+    expect(rename("INSERT INTO ledger__tx(note) VALUES ('x')", ALIAS, TABLE)).toEqual({ ok: true, sql: `INSERT INTO "transactions"(note) VALUES ('x')` });
+    const commented = rename("UPDATE ledger__tx/* from the chat */SET note = 'x' WHERE id = 1", ALIAS, TABLE);
+    expect(commented).toEqual({ ok: true, sql: `UPDATE "transactions"/* from the chat */SET note = 'x' WHERE id = 1` });
+  });
+
+  it('D-PR5-11 the renamed statement passes the double re-parse — parseBrokeredStatement AND dmlTargetTable name the table', async () => {
+    const rename = await renameDmlTarget();
+    const { dmlTargetTable, parseBrokeredStatement } = await brokered();
+    const out = rename("UPDATE [ledger__tx] SET note = 'x' WHERE id = 1", ALIAS, TABLE);
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    const parsed = parseBrokeredStatement(out.sql);
+    expect(parsed.ok && parsed.parsed.table).toBe(TABLE);
+    expect(dmlTargetTable(out.sql)).toBe(TABLE);
+  });
+
+  it('D-PR5-11 a non-ASCII code point INSIDE a string literal is a value, not a name — admitted', async () => {
+    const rename = await renameDmlTarget();
+    expect(rename("UPDATE ledger__tx SET note = 'café crème' WHERE id = 1", ALIAS, TABLE)).toEqual({ ok: true, sql: `UPDATE "transactions" SET note = 'café crème' WHERE id = 1` });
+  });
+});
+
+describe('renameDmlTarget — every refusal (D-PR5-11 step 4; S8, F18)', () => {
+  const refusedBy = (result: RenameResult, rule?: string): void => {
+    expect(result.ok).toBe(false);
+    if (rule !== undefined && !result.ok) expect(result.rule).toBe(rule);
+  };
+
+  it('D-PR5-11 a target that is not the alias — bare or quoted — is refused', async () => {
+    const rename = await renameDmlTarget();
+    expect(rename("UPDATE ledger__tx SET note = 'x' WHERE id = 1", ALIAS, TABLE).ok, 'the passing twin').toBe(true);
+    refusedBy(rename("UPDATE other__tx SET note = 'x' WHERE id = 1", ALIAS, TABLE));
+    refusedBy(rename(`UPDATE "other" SET note = 'x' WHERE id = 1`, ALIAS, TABLE));
+    refusedBy(rename(`UPDATE "ledger__tx2" SET note = 'x' WHERE id = 1`, ALIAS, TABLE));
+    refusedBy(rename("UPDATE ledger__tx_more SET note = 'x' WHERE id = 1", ALIAS, TABLE));
+    // A schema-qualified head names `main`, never the alias.
+    refusedBy(rename("UPDATE main.ledger__tx SET note = 'x' WHERE id = 1", ALIAS, TABLE));
+  });
+
+  it('D-PR5-11 a character after IDENT outside [ \\t\\n\\f\\r(] and the comment openers → rule statement', async () => {
+    const rename = await renameDmlTarget();
+    refusedBy(rename(`UPDATE "ledger__tx"SET note = 'x' WHERE id = 1`, ALIAS, TABLE), 'statement');
+    refusedBy(rename(`UPDATE ledger__tx.note SET note = 'x' WHERE id = 1`, ALIAS, TABLE), 'statement');
+    refusedBy(rename(`UPDATE [ledger__tx]; SET note = 'x' WHERE id = 1`, ALIAS, TABLE), 'statement');
+  });
+
+  it('D-PR5-11 NBSP and U+3000 are not whitespace here — before the head, inside it, or after IDENT', async () => {
+    const rename = await renameDmlTarget();
+    for (const space of [' ', '　']) {
+      refusedBy(rename(`${space}UPDATE ledger__tx SET note = 'x' WHERE id = 1`, ALIAS, TABLE));
+      refusedBy(rename(`UPDATE${space}ledger__tx SET note = 'x' WHERE id = 1`, ALIAS, TABLE));
+      refusedBy(rename(`INSERT${space}INTO ledger__tx (note) VALUES (1)`, ALIAS, TABLE));
+      refusedBy(rename(`UPDATE ledger__tx${space}SET note = 'x' WHERE id = 1`, ALIAS, TABLE));
+      refusedBy(rename(`UPDATE ledger__tx SET note = 'x' WHERE${space}id = 1`, ALIAS, TABLE));
+    }
+  });
+
+  it('D-PR5-11 any code point ≥ U+0080 outside a string literal is refused — a name, an operator, a bidi mark', async () => {
+    const rename = await renameDmlTarget();
+    refusedBy(rename(`UPDATE ledger__tx SET café = 'x' WHERE id = 1`, ALIAS, TABLE));
+    refusedBy(rename(`UPDATE ledger__tx SET note = 'x' WHERE id ≠ 1`, ALIAS, TABLE));
+    refusedBy(rename(`UPDATE ledger__tx SET note = 'x' WHERE id = 1 ‎`, ALIAS, TABLE));
+    refusedBy(rename(`UPDATE "ledgeré" SET note = 'x' WHERE id = 1`, 'ledgeré', TABLE));
+  });
+
+  it('D-PR5-11 the alias anywhere outside the head → rule qualified (ledger__tx.id, quoted, any case)', async () => {
+    const rename = await renameDmlTarget();
+    refusedBy(rename("UPDATE ledger__tx SET note = 'x' WHERE ledger__tx.id = 1", ALIAS, TABLE), 'qualified');
+    refusedBy(rename(`UPDATE ledger__tx SET note = 'x' WHERE "ledger__tx".id = 1`, ALIAS, TABLE), 'qualified');
+    refusedBy(rename("UPDATE ledger__tx SET note = 'x' WHERE LEDGER__TX.id = 1", ALIAS, TABLE), 'qualified');
+    refusedBy(rename("DELETE FROM ledger__tx WHERE id IN (SELECT id FROM ledger__tx)", ALIAS, TABLE), 'qualified');
+  });
+
+  it('D-PR5-11 a comment BEFORE the head is refused (the head must be the first token)', async () => {
+    const rename = await renameDmlTarget();
+    refusedBy(rename("/* hi */ UPDATE ledger__tx SET note = 'x' WHERE id = 1", ALIAS, TABLE));
+    refusedBy(rename("-- hi\nUPDATE ledger__tx SET note = 'x' WHERE id = 1", ALIAS, TABLE));
+  });
+
+  it('D-PR5-11 a conflict clause (OR …) and REPLACE are refused', async () => {
+    const rename = await renameDmlTarget();
+    refusedBy(rename("INSERT OR REPLACE INTO ledger__tx (note) VALUES ('x')", ALIAS, TABLE));
+    refusedBy(rename("INSERT OR IGNORE INTO ledger__tx (note) VALUES ('x')", ALIAS, TABLE));
+    refusedBy(rename("UPDATE OR ROLLBACK ledger__tx SET note = 'x' WHERE id = 1", ALIAS, TABLE));
+    refusedBy(rename("REPLACE INTO ledger__tx (note) VALUES ('x')", ALIAS, TABLE));
+  });
+
+  it('D-PR5-11 a second statement is refused', async () => {
+    const rename = await renameDmlTarget();
+    refusedBy(rename("UPDATE ledger__tx SET note = 'x' WHERE id = 1; SELECT 1", ALIAS, TABLE));
+    refusedBy(rename("UPDATE ledger__tx SET note = 'x' WHERE id = 1; DROP TABLE accounts", ALIAS, TABLE));
+  });
+
+  it('D-PR5-11 the double re-parse refuses an output the parser refuses (a function, a missing WHERE, an INSERT … SELECT)', async () => {
+    const rename = await renameDmlTarget();
+    refusedBy(rename("UPDATE ledger__tx SET note = lower('X') WHERE id = 1", ALIAS, TABLE));
+    refusedBy(rename("UPDATE ledger__tx SET note = 'x'", ALIAS, TABLE));
+    refusedBy(rename('INSERT INTO ledger__tx (note) SELECT note FROM accounts', ALIAS, TABLE));
+    refusedBy(rename('UPDATE ledger__tx', ALIAS, TABLE));
+  });
+
+  it('D-PR5-11 not a DML at all — a SELECT, an empty text — is refused, never thrown', async () => {
+    const rename = await renameDmlTarget();
+    for (const sql of ['SELECT * FROM ledger__tx', '', '   ', 'DROP TABLE ledger__tx', 'UPDATE', '"']) {
+      expect(() => rename(sql, ALIAS, TABLE), JSON.stringify(sql)).not.toThrow();
+      refusedBy(rename(sql, ALIAS, TABLE));
+    }
+  });
+
+  it('D-PR5-11 is exported from the package index', async () => {
+    const index = (await import('../index.js')) as Record<string, unknown>;
+    expect(typeof index.renameDmlTarget).toBe('function');
+  });
+});
+
+// =================================================================================================
+// TASK-20261010-host-broker PR-5 Gate 5 — G5-10 [ii-1, the db half]: when the rename itself is fine
+// but the DOUBLE RE-PARSE fails with a PARSER rule, `renameDmlTarget` passes that rule out —
+// `{ok: false, rule: 'parse', parseRule}` — so the chat's tool answers the parser's own words
+// (`ACCESS_APP_MESSAGES.writeRefused(parseRule)`) instead of *one plain change*, which points at the
+// wrong fault. The rename keeps `statement | target | text | qualified` for ITS OWN rules (the head,
+// the target, the code points, the alias past the head) and for a re-parse that succeeds on the
+// wrong table. `parseRule` is EXACTLY what `parseBrokeredStatement` answers for the renamed text —
+// whatever it is (a parser `statement`, e.g. a second statement or a function, included).
+// =================================================================================================
+
+type RenameWithParse = { ok: true; sql: string } | { ok: false; rule: string; parseRule?: string };
+
+describe('G5-10 — renameDmlTarget answers rule \'parse\' with the parser\'s own rule (ii-1)', () => {
+  /** What the parser answers for the renamed text — the rule the rename must pass out. */
+  async function parserRuleOf(renamed: string): Promise<string> {
+    const { parseBrokeredStatement } = await brokered();
+    const parsed = parseBrokeredStatement(renamed);
+    if (parsed.ok) throw new Error(`fixture: the parser admits ${renamed}`);
+    return parsed.rule;
+  }
+
+  it('G5-10 a DELETE with no WHERE → {rule: parse, parseRule: no-where} (never the rename\'s statement)', async () => {
+    const rename = (await renameDmlTarget()) as unknown as (sql: string, from: string, to: string) => RenameWithParse;
+    expect(rename('DELETE FROM ledger__tx', ALIAS, TABLE)).toEqual({ ok: false, rule: 'parse', parseRule: 'no-where' });
+  });
+
+  it('G5-10 an UPDATE with no WHERE → {rule: parse, parseRule: no-where}', async () => {
+    const rename = (await renameDmlTarget()) as unknown as (sql: string, from: string, to: string) => RenameWithParse;
+    expect(rename('UPDATE ledger__tx SET amount = 1', ALIAS, TABLE)).toEqual({ ok: false, rule: 'parse', parseRule: 'no-where' });
+  });
+
+  it('G5-10 arithmetic, a function, a conflict clause, a second statement → rule parse with the PARSER\'s rule for the renamed text', async () => {
+    const rename = (await renameDmlTarget()) as unknown as (sql: string, from: string, to: string) => RenameWithParse;
+    for (const [sql, renamed] of [
+      ['UPDATE ledger__tx SET amount = amount + 5 WHERE id = 3', 'UPDATE "transactions" SET amount = amount + 5 WHERE id = 3'],
+      ["UPDATE ledger__tx SET at = datetime('now') WHERE id = 3", `UPDATE "transactions" SET at = datetime('now') WHERE id = 3`],
+      ["INSERT INTO ledger__tx (note) VALUES ('x') ON CONFLICT DO NOTHING", `INSERT INTO "transactions" (note) VALUES ('x') ON CONFLICT DO NOTHING`],
+      ["UPDATE ledger__tx SET note = 'x' WHERE id = 1; SELECT 1", `UPDATE "transactions" SET note = 'x' WHERE id = 1; SELECT 1`],
+      ['INSERT INTO ledger__tx (note) SELECT note FROM accounts', 'INSERT INTO "transactions" (note) SELECT note FROM accounts'],
+    ] as const) {
+      expect(rename(sql, ALIAS, TABLE), sql).toEqual({ ok: false, rule: 'parse', parseRule: await parserRuleOf(renamed) });
+    }
+  });
+
+  it('G5-10 guard: the rename\'s OWN refusals keep their rule and carry no parseRule', async () => {
+    const rename = (await renameDmlTarget()) as unknown as (sql: string, from: string, to: string) => RenameWithParse;
+    expect(rename('SELECT * FROM ledger__tx', ALIAS, TABLE)).toEqual({ ok: false, rule: 'statement' });
+    expect(rename("/* hi */ UPDATE ledger__tx SET note = 'x' WHERE id = 1", ALIAS, TABLE)).toEqual({ ok: false, rule: 'statement' });
+    expect(rename(`UPDATE ledger__tx.note SET note = 'x' WHERE id = 1`, ALIAS, TABLE)).toEqual({ ok: false, rule: 'statement' });
+    expect(rename("UPDATE other__tx SET note = 'x' WHERE id = 1", ALIAS, TABLE)).toEqual({ ok: false, rule: 'target' });
+    expect(rename(`UPDATE ledger__tx SET café = 'x' WHERE id = 1`, ALIAS, TABLE)).toEqual({ ok: false, rule: 'text' });
+    expect(rename("UPDATE ledger__tx SET note = 'x' WHERE ledger__tx.id = 1", ALIAS, TABLE)).toEqual({ ok: false, rule: 'qualified' });
+  });
+
+  it('G5-10 guard: a statement the parser admits is still renamed as before', async () => {
+    const rename = (await renameDmlTarget()) as unknown as (sql: string, from: string, to: string) => RenameWithParse;
+    expect(rename("UPDATE ledger__tx SET note = 'lunch' WHERE id = 7", ALIAS, TABLE)).toEqual({ ok: true, sql: `UPDATE "transactions" SET note = 'lunch' WHERE id = 7` });
+  });
+});

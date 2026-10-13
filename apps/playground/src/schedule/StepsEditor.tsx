@@ -23,6 +23,12 @@
 // cannot look things up, said under a ticked step; `tools` — nothing to say. Each line that explains
 // a control is attached to it (`aria-describedby`, U11): the tick names the lines under it that are
 // on screen, the kind select its one hint — a screen reader hears them with the control.
+//
+// *FETCH NEW DATA FIRST* (TASK-20261010-host-broker PR-5, D-PR5-19; D11). An *ask* step whose app may
+// ask other apps to fetch new data while the person is away (`fetchFirstFor` — the editor hands the
+// ONE derivation, `fetchFirstFacts.ts`) is offered the tick, OFF; ticked, the line under it names the
+// sources NOW and what it costs. A step that already carries it keeps its tick on screen when no app
+// lets it ask any more, and says so (the stale form) — so the person can see it and take it off.
 
 import type { ReactElement } from 'react';
 import { useId } from 'react';
@@ -54,6 +60,8 @@ export interface StepsEditorProps {
   onChange: (steps: StepDraft[]) => void;
   /** What the brain an app's *ask* step runs on now can do there (`askBrainFor`). Absent: it can look things up. */
   brainFor?: (appId: string) => AskBrain;
+  /** The apps an app's *ask* step could ask to fetch new data first, now (`fetchFirstSources`). Absent: none — the tick is never offered. */
+  fetchFirstFor?: (appId: string) => readonly string[];
 }
 
 /** The ids among `ids` whose line is on screen, as one `aria-describedby` — `undefined` when none is. */
@@ -65,7 +73,7 @@ const describedBy = (ids: ReadonlyArray<string | false>): string | undefined => 
 /** The app a hint names: the step's app, the template's missing one, or "this app" before one is chosen. */
 const HINT_APP_FALLBACK = 'this app';
 
-export function StepsEditor({ steps, apps, onChange, brainFor }: StepsEditorProps): ReactElement {
+export function StepsEditor({ steps, apps, onChange, brainFor, fetchFirstFor }: StepsEditorProps): ReactElement {
   const id = useId();
   const appName = (appId: string): string | undefined => apps.find((app) => app.appId === appId)?.displayName;
   const replace = (index: number, step: StepDraft): void => onChange(steps.map((s, i) => (i === index ? step : s)));
@@ -84,7 +92,10 @@ export function StepsEditor({ steps, apps, onChange, brainFor }: StepsEditorProp
           const brain = step.kind === 'app-think' && step.appId !== '' && missing === undefined ? brainFor?.(step.appId) : undefined;
           const blocked = brain === 'blocked';
           const noTools = step.kind === 'app-think' && step.tools && brain === 'no-tools';
-          const lineIds = { blocked: `${key}-brain-blocked`, tools: `${key}-tools-line`, noTools: `${key}-tools-unavailable` };
+          const lineIds = { blocked: `${key}-brain-blocked`, tools: `${key}-tools-line`, noTools: `${key}-tools-unavailable`, fetchFirst: `${key}-fetch-first-line` };
+          // *fetch new data first*: offered when the app may ask any app now, or kept on screen when the step already asks (the stale form).
+          const fetchSources = step.kind === 'app-think' && step.appId !== '' && missing === undefined ? (fetchFirstFor?.(step.appId) ?? []) : [];
+          const fetchOffered = step.kind === 'app-think' && (fetchSources.length > 0 || step.refreshFirst);
           return (
             <li key={key} className={off ? 'card schedule-step schedule-step-off' : 'card schedule-step'} data-testid={`step-${index}`} data-kind={step.kind}>
               <div className="field-row field-row-wrap schedule-step-head">
@@ -334,6 +345,31 @@ export function StepsEditor({ steps, apps, onChange, brainFor }: StepsEditorProp
                         </div>
                       </div>
                     </div>
+                  ) : null}
+                  {fetchOffered ? (
+                    <>
+                      <label className="check-label">
+                        <input
+                          type="checkbox"
+                          checked={step.refreshFirst}
+                          aria-describedby={step.refreshFirst ? lineIds.fetchFirst : undefined}
+                          data-testid={`step-${index}-fetch-first`}
+                          onChange={(event) => replace(index, { ...step, refreshFirst: event.target.checked })}
+                        />
+                        {STEPS.fetchFirst(missing ?? appName(step.appId) ?? HINT_APP_FALLBACK)}
+                      </label>
+                      {step.refreshFirst ? (
+                        fetchSources.length > 0 ? (
+                          <p className="hint" id={lineIds.fetchFirst} data-testid={`step-${index}-fetch-first-hint`}>
+                            {STEPS.fetchFirstHint(fetchSources)}
+                          </p>
+                        ) : (
+                          <p className="hint" role="note" id={lineIds.fetchFirst} data-testid={`step-${index}-fetch-first-stale`}>
+                            {STEPS.fetchFirstStale(missing ?? appName(step.appId) ?? HINT_APP_FALLBACK)}
+                          </p>
+                        )
+                      ) : null}
+                    </>
                   ) : null}
                 </fieldset>
               ) : null}

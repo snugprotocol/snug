@@ -23,6 +23,14 @@
 //   4. no source the kit compiles reaches a dropped file: the six skill loaders are named
 //      nowhere outside the knowledge package's own definitions, and nothing names the README.
 // `kitDeadPromptsSmoke.test.ts` runs every assembly the kit can make against the CUT store.
+//
+// Gate-5 fold (D-PR5-16, the next-steps kit-dead prompt cut, ≈ 9 KB — the owner's 2026-10-11
+// pattern, taken because PR-5 crossed its 60 KB budget): the rule ALSO drops the scheduled agent's
+// three prompt files — `system/50-scheduled-agent.md`, `tools/fetch-connection.md` and
+// `tools/data-propose-write-scheduled.md`. They are read only by the scheduled agent
+// (`schedule/appAgent.ts`, swapped out of the kit since PR-4) and by the data lane's scheduled seat
+// it alone builds; section 5 below pins that no source the kit compiles asks for them. The chat's
+// `tools/data-propose-write.md` stays.
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
@@ -48,6 +56,10 @@ type DropPlugin = {
   buildEnd: (this: PluginCtx) => void;
 };
 type PluginCtx = { error: (message: string) => never };
+
+/** Gate-5 fold (D-PR5-16): the scheduled agent's three prompt files, cut from the kit by exact name. */
+const SCHEDULED_AGENT_PROMPTS = ['system/50-scheduled-agent.md', 'tools/data-propose-write-scheduled.md', 'tools/fetch-connection.md'] as const;
+const isCut = (file: string): boolean => file.startsWith('skills/') || file === 'README.md' || (SCHEDULED_AGENT_PROMPTS as readonly string[]).includes(file);
 type PluginModule = {
   KIT_DEAD_PROMPTS: Rule;
   isKitDeadPrompt: (file: string) => boolean;
@@ -86,17 +98,19 @@ const ctx = (): PluginCtx => ({
 });
 
 describe('the rule — exactly the files no shipped code reads', () => {
-  it('names skills/** and README.md, and nothing else', async () => {
+  it('names skills/**, README.md and the scheduled agent’s three prompt files, and nothing else (Gate-5 fold D-PR5-16)', async () => {
     const { KIT_DEAD_PROMPTS } = await loadPlugin();
-    expect(KIT_DEAD_PROMPTS).toEqual({ prefixes: ['skills/'], exact: ['README.md'] });
+    expect(KIT_DEAD_PROMPTS.prefixes).toEqual(['skills/']);
+    expect([...KIT_DEAD_PROMPTS.exact].sort()).toEqual(['README.md', ...SCHEDULED_AGENT_PROMPTS].sort());
   });
 
-  it('over the REAL store: drops the 26 skill and README files and keeps every other layer whole', async () => {
+  it('over the REAL store: drops the 26 skill and README files and the scheduled agent’s 3, and keeps every other file whole (Gate-5 fold D-PR5-16)', async () => {
     const { filterPromptFiles, isKitDeadPrompt } = await loadPlugin();
     const store = await realStore();
     const { kept, dropped } = filterPromptFiles(store);
-    const expected = Object.keys(store).filter((file) => file.startsWith('skills/') || file === 'README.md').sort();
-    expect(expected.length).toBe(26);
+    for (const file of SCHEDULED_AGENT_PROMPTS) expect(store[file], `${file} is in the real store`).toBeTypeOf('string');
+    const expected = Object.keys(store).filter(isCut).sort();
+    expect(expected.length).toBe(26 + 3);
     expect([...dropped].sort()).toEqual(expected);
     expect(Object.keys(kept).length + dropped.length).toBe(Object.keys(store).length);
     for (const [file, text] of Object.entries(kept)) {
@@ -104,10 +118,14 @@ describe('the rule — exactly the files no shipped code reads', () => {
       expect(text).toBe(store[file]); // kept files are byte-identical
     }
     for (const layer of ['system/', 'knowledge-base/', 'tools/', 'templates/', 'ui/']) {
-      const inStore = Object.keys(store).filter((file) => file.startsWith(layer));
+      const inStore = Object.keys(store).filter((file) => file.startsWith(layer) && !isCut(file));
       expect(inStore.length, layer).toBeGreaterThan(0);
       for (const file of inStore) expect(kept[file], file).toBe(store[file]);
     }
+    // Gate-5 fold D-PR5-16: the chat's own data_propose_write prompt and the runtime layer stay.
+    expect(kept['tools/data-propose-write.md']).toBe(store['tools/data-propose-write.md']);
+    expect(kept['system/45-app-runtime.md']).toBe(store['system/45-app-runtime.md']);
+    for (const file of SCHEDULED_AGENT_PROMPTS) expect(kept[file], file).toBeUndefined();
   });
 
   it('matches by prefix and exact name only — a look-alike survives', async () => {
@@ -119,6 +137,13 @@ describe('the rule — exactly the files no shipped code reads', () => {
     expect(isKitDeadPrompt('tools/skills.md')).toBe(false);
     expect(isKitDeadPrompt('skills')).toBe(false);
     expect(isKitDeadPrompt('system/10-host-identity.md')).toBe(false);
+    // Gate-5 fold D-PR5-16: the three by exact name; their chat and runtime neighbours survive.
+    for (const file of SCHEDULED_AGENT_PROMPTS) expect(isKitDeadPrompt(file), file).toBe(true);
+    expect(isKitDeadPrompt('tools/data-propose-write.md')).toBe(false);
+    expect(isKitDeadPrompt('tools/data-query.md')).toBe(false);
+    expect(isKitDeadPrompt('system/45-app-runtime.md')).toBe(false);
+    expect(isKitDeadPrompt('system/50-scheduled-agent.md.bak')).toBe(false);
+    expect(isKitDeadPrompt('tools/fetch-connection')).toBe(false);
   });
 });
 
@@ -140,6 +165,11 @@ describe('the plugin — rewrites the one module, and fails the build rather tha
     expect(Object.keys(namespace)).toEqual(['PROMPT_FILES']);
     expect(namespace.PROMPT_FILES).toEqual(filterPromptFiles(await realStore()).kept);
     expect(code!).not.toContain('skill-creator');
+    // Gate-5 fold D-PR5-16: the scheduled agent's three files are out of the page too.
+    for (const file of SCHEDULED_AGENT_PROMPTS) expect(Object.keys(namespace.PROMPT_FILES as Record<string, string>), file).not.toContain(file);
+    expect(code!).not.toContain('You Are Answering a Scheduled Question');
+    expect(code!).not.toContain('## Tool: fetch connection');
+    expect(code!).toMatch(/^\/\/ drop-prompt-files: \d+ of \d+ prompt files dropped from the kit page\./);
     expect(() => plugin.buildEnd.call(ctx())).not.toThrow();
   });
 
@@ -168,6 +198,17 @@ describe('the plugin — rewrites the one module, and fails the build rather tha
     const plugin = dropPromptFiles({ contentModule: CONTENT_MODULE });
     const code = `export const PROMPT_FILES = ${JSON.stringify({ 'skills/modes/create.md': 'x', 'system/10-host-identity.md': 'hi' })};\n`;
     await expect(plugin.transform.call(ctx(), code, CONTENT_MODULE)).rejects.toThrow(/README\.md/);
+  });
+
+  it('fails when one of the scheduled agent’s files is renamed away even though every other rule matches (Gate-5 fold D-PR5-16)', async () => {
+    const { dropPromptFiles } = await loadPlugin();
+    for (const missing of SCHEDULED_AGENT_PROMPTS) {
+      const plugin = dropPromptFiles({ contentModule: CONTENT_MODULE });
+      const store: Record<string, string> = { 'README.md': 'r', 'skills/modes/create.md': 'x', 'system/10-host-identity.md': 'hi' };
+      for (const file of SCHEDULED_AGENT_PROMPTS) if (file !== missing) store[file] = 'y';
+      const code = `export const PROMPT_FILES = ${JSON.stringify(store)};\n`;
+      await expect(plugin.transform.call(ctx(), code, CONTENT_MODULE), missing).rejects.toThrow(new RegExp(missing.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')));
+    }
   });
 
   it('fails when the content module grows a second export (it would be lost)', async () => {
@@ -263,5 +304,138 @@ describe('no source the kit compiles reaches a dropped file', () => {
       if (/['"`]README\.md['"`]/.test(stripComments(read(file)))) hits.push(path.relative(REPO, file));
     }
     expect(hits).toEqual([]);
+  });
+
+  // -------------------------------------------------------------------------------------------
+  // Gate-5 fold (D-PR5-16): the scheduled agent's three prompt files are dead in the kit. They are
+  // read only by `buildHostSystemPrompt({scheduledAgent: true})` (system/50), `buildFetchConnectionTool`
+  // (tools/fetch-connection) and `buildDataTools` with a `scheduled` seat (tools/data-propose-write-
+  // scheduled) — and every such call lives in a module the kit SWAPS for a stub (`schedule/appAgent.ts`;
+  // `agent/laneTools.ts` holds the chat's buildDataTools). The swapped real modules are not compiled
+  // into the page, so the scan skips them; the stubs (under src/stubs/) are scanned like any source.
+  // -------------------------------------------------------------------------------------------
+  describe('Gate-5 fold D-PR5-16 — no source the kit compiles asks for the scheduled agent’s prompts', () => {
+    const PLAYGROUND = path.join(REPO, 'apps/playground/src');
+    const config = stripComments(read(path.join(HOST, 'vite.config.ts')));
+    const table = config.slice(config.indexOf('swapResolved({'), config.indexOf('}),', config.indexOf('swapResolved({')));
+    /** The real playground modules the kit swaps out — not compiled into the page. */
+    const SWAPPED = [...table.matchAll(/\[`\$\{playgroundSrc\}\/([^`]+)`\]\s*:/g)].map((match) => path.join(PLAYGROUND, match[1]!));
+    const kitSources = (): string[] => KIT_ROOTS.flatMap(sources).filter((file) => !SWAPPED.includes(file));
+    const APP_AGENT = path.join(PLAYGROUND, 'schedule/appAgent.ts');
+
+    /** The text between an opener at `open` ('(' or '{') and its matching closer (comments already blanked). */
+    function balanced(code: string, open: number): string {
+      const pair: Record<string, string> = { '(': ')', '{': '}' };
+      const opener = code[open]!;
+      const closer = pair[opener];
+      if (closer === undefined) throw new Error(`no opener at ${open}`);
+      let depth = 0;
+      for (let i = open; i < code.length; i += 1) {
+        if (code[i] === opener) depth += 1;
+        else if (code[i] === closer && (depth -= 1) === 0) return code.slice(open + 1, i);
+      }
+      throw new Error('unbalanced');
+    }
+
+    /** Every CALL of `name` in a source (a definition `function name(` is not a call): its argument text. */
+    function callArgs(code: string, name: string): string[] {
+      const out: string[] = [];
+      for (const match of code.matchAll(new RegExp(String.raw`(?<!function\s+)\b${name}\s*\(`, 'g'))) {
+        out.push(balanced(code, match.index! + match[0].length - 1));
+      }
+      return out;
+    }
+
+    /** The calls a source makes that would read one of the three files. */
+    function scheduledPromptCalls(code: string): string[] {
+      const hits: string[] = [];
+      for (const args of callArgs(code, 'buildHostSystemPrompt')) if (/\bscheduledAgent\b/.test(args)) hits.push('buildHostSystemPrompt({scheduledAgent})');
+      for (const _args of callArgs(code, 'buildFetchConnectionTool')) hits.push('buildFetchConnectionTool(…)');
+      for (const args of callArgs(code, 'buildDataTools')) if (/\bscheduled\b/.test(args)) hits.push('buildDataTools({scheduled})');
+      return hits;
+    }
+
+    it('the kit swaps schedule/appAgent.ts and agent/laneTools.ts, and the scan skips exactly the swapped modules', () => {
+      expect(SWAPPED).toContain(APP_AGENT);
+      expect(SWAPPED).toContain(path.join(PLAYGROUND, 'agent/laneTools.ts'));
+      for (const file of SWAPPED) expect(statSync(file).isFile(), file).toBe(true);
+      const scanned = kitSources();
+      expect(scanned.length).toBeGreaterThan(300);
+      for (const file of SWAPPED) expect(scanned, file).not.toContain(file);
+      // The modules that DEFINE the readers are compiled (and scanned): only their calls are dead.
+      expect(scanned).toContain(path.join(PLAYGROUND, 'agent/fetchConnectionTool.ts'));
+      expect(scanned).toContain(path.join(PLAYGROUND, 'agent/dataTools.ts'));
+    });
+
+    it('positive control: the scanner FINDS all three calls in the swapped scheduled agent (schedule/appAgent.ts)', () => {
+      expect(scheduledPromptCalls(stripComments(read(APP_AGENT))).sort()).toEqual(['buildDataTools({scheduled})', 'buildFetchConnectionTool(…)', 'buildHostSystemPrompt({scheduledAgent})']);
+    });
+
+    it('no kit source calls buildHostSystemPrompt with scheduledAgent, buildFetchConnectionTool, or buildDataTools with a scheduled seat', () => {
+      const hits: string[] = [];
+      for (const file of kitSources()) {
+        for (const hit of scheduledPromptCalls(stripComments(read(file)))) hits.push(`${path.relative(REPO, file)}: ${hit}`);
+      }
+      expect(hits).toEqual([]);
+    });
+
+    it('…nor names `scheduledAgent` or `buildFetchConnectionTool` at all outside its one definition (a spread options object cannot hide the call)', () => {
+      const hits: string[] = [];
+      const definer = path.join(PLAYGROUND, 'agent/fetchConnectionTool.ts');
+      for (const file of kitSources()) {
+        const code = stripComments(read(file));
+        if (/\bscheduledAgent\b/.test(code)) hits.push(`${path.relative(REPO, file)}: scheduledAgent`);
+        const fetchTool = [...code.matchAll(/\bbuildFetchConnectionTool\b/g)].length;
+        const allowed = file === definer ? (code.match(/export function buildFetchConnectionTool\(/g) ?? []).length : 0;
+        if (fetchTool !== allowed) hits.push(`${path.relative(REPO, file)}: buildFetchConnectionTool ×${fetchTool}`);
+      }
+      expect(hits).toEqual([]);
+    });
+
+    it('the prompt names the kit compiles sit only inside the dead readers: fetch-connection in buildFetchConnectionTool, data-propose-write-scheduled in scheduledProposeDef (chosen only under a scheduled seat)', () => {
+      const literal = /['"`](?:system\/)?(?:50-)?scheduled-agent(?:\.md)?['"`]|['"`](?:tools\/)?fetch-connection(?:\.md)?['"`]|['"`](?:tools\/)?data-propose-write-scheduled(?:\.md)?['"`]/g;
+      const named: string[] = [];
+      // The rule itself names the three (KIT_DEAD_PROMPTS.exact, pinned above) — a Vite plugin run at
+      // build time, never in the page; skipped as the README pin skips it (code lane, Gate-5 D-PR5-16).
+      const rule = path.join(HOST, 'src/plugins/drop-prompt-files.ts');
+      for (const file of kitSources()) {
+        if (file === rule) continue;
+        for (const match of stripComments(read(file)).matchAll(literal)) named.push(`${path.relative(PLAYGROUND, file)}: ${match[0]}`);
+      }
+      expect(named.sort()).toEqual([`agent${path.sep}dataTools.ts: 'data-propose-write-scheduled'`, `agent${path.sep}fetchConnectionTool.ts: 'fetch-connection'`]);
+
+      const fetchTool = stripComments(read(path.join(PLAYGROUND, 'agent/fetchConnectionTool.ts')));
+      const fetchStart = fetchTool.indexOf('export function buildFetchConnectionTool(');
+      expect(fetchStart).toBeGreaterThan(-1);
+      const fetchBody = balanced(fetchTool, fetchTool.indexOf('{', fetchTool.indexOf(')', fetchStart)));
+      expect(fetchBody).toContain("getToolPrompt('fetch-connection')");
+
+      const dataTools = stripComments(read(path.join(PLAYGROUND, 'agent/dataTools.ts')));
+      const defStart = dataTools.indexOf('const scheduledProposeDef =');
+      expect(defStart).toBeGreaterThan(-1);
+      const defBody = balanced(dataTools, dataTools.indexOf('(', dataTools.indexOf('=>', defStart)));
+      expect(defBody).toContain("getToolPrompt('data-propose-write-scheduled')");
+      // scheduledProposeDef is called once, and only when buildDataTools was handed a scheduled seat.
+      expect(callArgs(dataTools, 'scheduledProposeDef')).toHaveLength(1);
+      expect(dataTools).toMatch(/scheduled\s*===\s*undefined\s*\?\s*chatProposeDef\(\)\s*:\s*scheduledProposeDef\(\)/);
+    });
+
+    it('inside knowledge, system/50 is assembled only on the scheduledAgent branch of buildHostSystemPrompt', () => {
+      const KNOWLEDGE = path.join(REPO, 'packages/knowledge/src');
+      const assemble = stripComments(read(path.join(KNOWLEDGE, 'assemble.ts')));
+      const branch = assemble.indexOf('if (opts.scheduledAgent === true)');
+      expect(branch).toBeGreaterThan(-1);
+      const body = balanced(assemble, assemble.indexOf('{', branch));
+      expect(body).toContain("getSystemLayer('scheduled-agent')");
+      const hits: string[] = [];
+      for (const file of sources(KNOWLEDGE)) {
+        const code = stripComments(read(file));
+        const uses = [...code.matchAll(/getSystemLayer\(\s*'scheduled-agent'\s*\)/g)].length;
+        if (uses === 0) continue;
+        if (file === path.join(KNOWLEDGE, 'assemble.ts') && uses === 1) continue;
+        hits.push(`${path.relative(KNOWLEDGE, file)} ×${uses}`);
+      }
+      expect(hits).toEqual([]);
+    });
   });
 });

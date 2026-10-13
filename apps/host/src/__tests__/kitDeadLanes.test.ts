@@ -30,10 +30,18 @@
 // composed `tools: false` — has no data lane (`chatDoorOpen` is false for it), so a tools step
 // degrades to the tool-free step. The swap is pinned with that invariant; the stub keeps the real
 // module's runtime names and throws the one loud sentence.
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, expectTypeOf, it } from 'vitest';
+
+// PR-5 (D-PR5-16, F20): the stubs' shapes against the real modules' — type-only, erased at runtime.
+import type { AccessCardState as RealAccessCardState } from '@playground/agent/accessCard.js';
+import type { AccessProposal as RealAccessProposal } from '@playground/agent/accessProposeTool.js';
+import type { AccessWriteCardState as RealAccessWriteCardState } from '@playground/agent/accessWriteCard.js';
+import type { AccessCardState as StubAccessCardState } from '../stubs/accessCard.js';
+import type { AccessProposal as StubAccessProposal } from '../stubs/accessProposeTool.js';
+import type { AccessWriteCardState as StubAccessWriteCardState } from '../stubs/accessWriteCard.js';
 
 const HOST = path.resolve(__dirname, '../..');
 const PLAYGROUND = path.resolve(HOST, '../playground/src');
@@ -219,5 +227,108 @@ describe('5 — the scheduled agent (schedule/appAgent.ts) is swapped for a loud
     const { chatDoorOpen } = await import('@playground/access/egress.js');
     expect(chatDoorOpen({ kind: 'host', provider: 'mock', keyMissing: false, hostLabel: 'kit' })).toBe(false);
     expect(chatDoorOpen({ kind: 'demo', provider: 'mock', keyMissing: false })).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// 6 — TASK-20261010-host-broker PR-5: the chat's cross-app write rides out of the kit too (D-PR5-16)
+// ---------------------------------------------------------------------------------------------
+//
+// The chat's cross-app card — its state module `agent/accessWriteCard.ts` (which exports
+// `approveCrossAppWrite`) and its surface `access/AccessWriteCard.tsx` — is swapped for stubs the
+// same way: no kit turn is ever routed to the data lane (sections 2 and 5), so no card is ever staged
+// and a persisted one from another host renders as NO card. The chat's write verbs
+// (`access/chatWrite.ts`) stay OUTSIDE the kit graph by construction: their ONLY importers are
+// `agent/laneTools.ts` and `agent/accessWriteCard.ts`, both swapped (D-PR5-12, SC13). The stubs
+// mirror the real modules' TYPES (`expectTypeOf`, checked by the package's `tsc -p
+// tsconfig.test.json` step) so a shape that drifts on one side reds here, not in a page.
+
+const SWAPS_PR5 = [
+  { real: 'agent/accessWriteCard.ts', stub: 'src/stubs/accessWriteCard.ts' },
+  { real: 'access/AccessWriteCard.tsx', stub: 'src/stubs/AccessWriteCard.tsx' },
+] as const;
+
+const NUMBER_WORDS: Readonly<Record<number, string>> = { 8: 'eight', 9: 'nine', 10: 'ten', 11: 'eleven', 12: 'twelve' };
+
+describe('6 — PR-5 D-PR5-16: the cross-app card is swapped for loud stubs, and the chat’s write verbs are reachable only through swapped modules', () => {
+  const raw = read(path.join(HOST, 'vite.config.ts'));
+  const config = stripComments(raw);
+  const table = config.slice(config.indexOf('swapResolved({'), config.indexOf('}),', config.indexOf('swapResolved({')));
+
+  it.each(SWAPS_PR5)('vite.config.ts swaps $real for $stub by resolved path, inside the swapResolved table', ({ real, stub: target }) => {
+    const realPath = real.replace(/\./g, '\\.');
+    const targetPath = target.replace(/^src\//, '').replace(/\./g, '\\.');
+    expect(config).toMatch(new RegExp(String.raw`\[\`\$\{playgroundSrc\}/${realPath}\`\]\s*:\s*here\('\./src/${targetPath}'\)`));
+    expect(table).toContain(`/${real}\``);
+  });
+
+  it('the header’s count of swapped modules is the table’s: ten (was eight)', () => {
+    const entries = [...table.matchAll(/\[`\$\{playgroundSrc\}\/[^`]+`\]\s*:/g)].length;
+    expect(entries).toBe(10);
+    expect(raw).toContain(`${NUMBER_WORDS[entries]} modules are swapped by resolved path`);
+  });
+
+  it.each(SWAPS_PR5)('$stub exports every runtime name $real exports', ({ real, stub: target }) => {
+    const realNames = valueExports(read(path.join(PLAYGROUND, real)));
+    const stubNames = valueExports(read(path.join(HOST, target)));
+    expect(realNames.length).toBeGreaterThan(0);
+    expect(stubNames).toEqual(expect.arrayContaining(realNames));
+  });
+
+  it.each(SWAPS_PR5)('$stub imports no value from the playground and none of the card’s graph', ({ stub: target }) => {
+    const code = stripComments(read(path.join(HOST, target)));
+    const valueImports = [...code.matchAll(/^import\s+(?!type\b)[^'"]*from\s+['"]([^'"]+)['"]/gm)].map((match) => match[1]!);
+    expect(valueImports.filter((spec) => spec.startsWith('@playground') || spec.includes('playground/src'))).toEqual([]);
+    expect(importSpecifiers(code).filter((spec) => /chatWrite|writeBroker|accessWriteCard|AccessWriteCard|AccessSheet|dataTools|grants/.test(spec) && !/^\.\//.test(spec))).toEqual([]);
+  });
+
+  it('accessWriteCard: a persisted cross-app card renders as NO card; approving refuses by name', async () => {
+    const mod = await stub<{ metaToAccessWrite: (meta: unknown) => unknown; approveCrossAppWrite: (...args: unknown[]) => Promise<unknown> }>('src/stubs/accessWriteCard.ts');
+    const persisted = {
+      accessWrite: {
+        appId: 'app-1',
+        target: { grantId: '11111111-1111-4111-8111-111111111111', grantedAt: '2026-10-12T09:00:00.000Z', sourceAppId: 'app-2', table: 'transactions' },
+        sql: 'UPDATE "transactions" SET amount = 1 WHERE id = 1',
+        previewed: 1,
+      },
+    };
+    expect(mod.metaToAccessWrite(persisted)).toBeUndefined();
+    await expect(Promise.resolve().then(() => mod.approveCrossAppWrite({} as never, {} as never))).rejects.toThrow(LOUD);
+    await expect(Promise.resolve().then(() => mod.approveCrossAppWrite({} as never, {} as never))).rejects.toThrow(/accessWriteCard\.approveCrossAppWrite/);
+  });
+
+  it('AccessWriteCard: renders nothing', async () => {
+    const mod = await stub<{ AccessWriteCard: (props: Record<string, unknown>) => unknown }>('src/stubs/AccessWriteCard.tsx');
+    expect(mod.AccessWriteCard({ card: {} as never, messageId: 1, busy: false })).toBeNull();
+  });
+
+  it('SC13 — access/chatWrite.ts exists and its ONLY importers in the playground are agent/laneTools.ts and agent/accessWriteCard.ts (both swapped)', () => {
+    const target = path.join(PLAYGROUND, 'access', 'chatWrite.ts');
+    expect(existsSync(target), 'access/chatWrite.ts exists (D-PR5-12)').toBe(true);
+    const importers: string[] = [];
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          if (entry.name !== '__tests__' && entry.name !== 'node_modules') walk(full);
+          continue;
+        }
+        if (!/\.tsx?$/.test(entry.name) || full === target) continue;
+        const specs = importSpecifiers(read(full));
+        const reaches = specs.some((spec) => spec.startsWith('.') && path.resolve(path.dirname(full), spec.replace(/\.js$/, '.ts')) === target);
+        if (reaches) importers.push(path.relative(PLAYGROUND, full));
+      }
+    };
+    walk(PLAYGROUND);
+    expect(importers.sort()).toEqual([path.join('agent', 'accessWriteCard.ts'), path.join('agent', 'laneTools.ts')]);
+    // …and both importers are swapped out of the kit, so no kit byte reaches the verbs.
+    const swapped = [...SWAPS, ...SWAPS_PR5].map((swap) => swap.real);
+    for (const importer of importers) expect(swapped, importer).toContain(importer.split(path.sep).join('/'));
+  });
+
+  it('F20 — the stubs mirror the real modules’ TYPES: AccessCardState, AccessProposal, AccessWriteCardState (checked by tsc)', () => {
+    expectTypeOf<StubAccessCardState>().toEqualTypeOf<RealAccessCardState>();
+    expectTypeOf<StubAccessProposal>().toEqualTypeOf<RealAccessProposal>();
+    expectTypeOf<StubAccessWriteCardState>().toEqualTypeOf<RealAccessWriteCardState>();
   });
 });

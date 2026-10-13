@@ -84,10 +84,12 @@
 //
 //  THE STEP'S HOST FACTS (D-PR4-17) ride the row as the executor finalised them, each omitted when
 //  it has nothing to say: `inOpenApp`, `saw` (only when non-empty — R-88's disclosure), `tools`,
-//  `blockedBy`. A step's context carries `boundAt`, when the bound aborts the run, so a step that
-//  may look things up stops itself first and answers WITH what it spent (D-PR4-15); a step that
-//  loses the race anyway has its calls folded into the day when it finally settles — its answer is
-//  dropped, but what it spent is the user's budget all the same.
+//  `blockedBy` — and, since TASK-20261010-host-broker PR-5 (D-PR5-19), `fetched` (what an *ask*
+//  step's *fetch new data first* came to; only when it asked). A step's context carries `boundAt`,
+//  when the bound aborts the run, so a step that may look things up stops itself first and answers
+//  WITH what it spent (D-PR4-15); a step that loses the race anyway has its calls folded into the
+//  day when it finally settles — its answer is dropped, but what it spent is the user's budget all
+//  the same.
 //
 // EVERYTHING IS INJECTED — the db, the executor, the clock, the host, the seat, the bounds —
 // so the suite runs a recording executor against a REAL memory-backed user db and never a
@@ -211,6 +213,8 @@ function toStepResult(outcome: StepOutcome): StepResult {
     ...(outcome.inOpenApp === true ? { inOpenApp: true } : {}),
     ...(outcome.saw !== undefined && outcome.saw.length > 0 ? { saw: outcome.saw } : {}),
     ...(outcome.tools !== undefined ? { tools: outcome.tools } : {}),
+    // PR-5 (D-PR5-19): what its *fetch new data first* came to — a host fact beside `summary`.
+    ...(outcome.fetched !== undefined && outcome.fetched.length > 0 ? { fetched: outcome.fetched } : {}),
     ...(outcome.blockedBy !== undefined ? { blockedBy: outcome.blockedBy } : {}),
   };
 }

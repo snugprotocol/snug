@@ -32,7 +32,7 @@ import type { UserDb } from '@snugprotocol/db';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
-import { SCHEDULE_STEP_SUMMARY_MAX_CHARS, SIDECAR_SYMBOLIC_HOST, parseAppRequest, type ScheduleStep, type ScheduledTask } from '@snugprotocol/protocol';
+import { SCHEDULE_DAILY_CEILINGS, SCHEDULE_STEP_SUMMARY_MAX_CHARS, SIDECAR_SYMBOLIC_HOST, parseAppRequest, type ScheduleStep, type ScheduledTask } from '@snugprotocol/protocol';
 import type { AgentTransport } from '@snugprotocol/runner';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -58,6 +58,24 @@ vi.mock('../schedule/appAgent.js', () => ({
   executeAppAgent: (...args: unknown[]) => {
     h.agentCalls.push(args);
     return h.agent !== undefined ? h.agent(...args) : Promise.reject(new Error('the scheduled agent was not expected here'));
+  },
+}));
+
+// PR-5 (D-PR5-18, D-PR5-19): *fetch new data first* — `access/fetchFirst.ts`, which the executors
+// reach LAZILY. Named only here (a factory, never an import) — the appAgent precedent — so this file
+// transforms and runs before the module exists. Every row that sets no `refreshFirst` never reaches it.
+const ff = vi.hoisted(() => ({
+  calls: [] as unknown[][],
+  /** What every call answers; a row replaces it. */
+  impl: undefined as ((...args: unknown[]) => Promise<unknown>) | undefined,
+  /** The order things happened in, across the fetch, the transport and the agent. */
+  events: [] as string[],
+}));
+vi.mock('../access/fetchFirst.js', () => ({
+  fetchFirst: (...args: unknown[]) => {
+    ff.calls.push(args);
+    ff.events.push('fetch');
+    return ff.impl !== undefined ? ff.impl(...args) : Promise.resolve({ asked: [], calls: { ai: 0, net: 0 } });
   },
 }));
 
@@ -112,6 +130,8 @@ function fakeDb(overrides: Partial<UserDb> = {}): UserDb {
     // The production gates (PR-4) read the brain route — key rows from the file — and the app's connection rows.
     getSecret: () => undefined,
     listConnections: () => [],
+    // Gate-5 fold G5-19 [P3-4]: the executor reads the scheduler's state (the fetch's own seat); none by default.
+    getSchedulerState: () => undefined,
     ...overrides,
   };
   return db as UserDb;
@@ -649,5 +669,296 @@ describe('PR-4 Gate-5 J11 — WITHHELD_SUMMARY in scrub.ts, ONE ZERO_CALLS in pr
     expect(source('appAgent.ts')).not.toMatch(ownZero);
     expect(strip(readFileSync(path.resolve(__dirname, '../agent/gatedAdapter.ts'), 'utf8'))).not.toMatch(ownZero);
     expect(source('protection.ts')).toMatch(/export const ZERO_CALLS\b/);
+  });
+});
+
+// =================================================================================================
+// TASK-20261010-host-broker PR-5 (AC39b; contract v2 D-PR5-19; F2, F7, D11) — *fetch new data first*
+// on an *ask* step (`app-think` + `refreshFirst: true`). `executeAsk` runs `fetchFirst` AFTER
+// `keylessBrainGate` and BEFORE both branches (the tool-free step, the agent — and the unit seam that
+// has no brain route), with `deps.appRun` and `{signal: ctx.signal, run: {spent, deadline}}`. THE TWO
+// CLOCKS (F2): the budget is measured on the ctx clock and anchored on the dispatchers' —
+// `budget = min(appRun.resultTimeoutMs, boundAt === undefined ? ∞ : boundAt − APP_AGENT_DEADLINE_MARGIN_MS
+// − 30 s − ctx.now())`, `deadline = Date.now() + budget`, a budget ≤ 0 → nothing dispatched. After the
+// fetch the AI ceiling is asked AGAIN with the fetch's calls (F7) → `refused`, `capped: 'ai'`, the
+// transport never called. Both branches wrapped: a throw keeps the fetch's calls; the fetch's calls
+// ride EVERY outcome; a refresh failure never fails the step; the facts ride the NEW `fetched` seat;
+// `summary` stays exactly the AI's text.
+// =================================================================================================
+
+describe('PR-5 D-PR5-19 — *fetch new data first* in executeAsk', () => {
+  const RESULT_TIMEOUT_MS = 90_000;
+  const appRunWithBound = (): AppRunDeps => ({ ...blockedAppRunDeps(), resultTimeoutMs: RESULT_TIMEOUT_MS });
+  const fetchThink = { ...think, refreshFirst: true } as unknown as ScheduleStep;
+  const fetchAgentThink = { ...agentThink, refreshFirst: true } as unknown as ScheduleStep;
+  const FETCHED = { asked: [{ sourceAppId: 'src-ledger', sourceName: 'Ledger', outcome: 'fresh' }], calls: { ai: 0, net: 1 } };
+  type FetchOpts = { signal: AbortSignal; run?: { spent: () => { ai: number; net: number }; deadline: number } };
+  const optsOf = (n = 0): FetchOpts => ff.calls[n]![3] as FetchOpts;
+
+  /** The tool-free step's transport, recording WHEN it was sent relative to the fetch. */
+  const orderedTransport = (answer = 'from the AI'): AgentTransport & { wires: string[] } => {
+    const wires: string[] = [];
+    return {
+      wires,
+      send: (wire) => {
+        ff.events.push('send');
+        wires.push(wire);
+        return Promise.resolve({ ok: true as const, text: JSON.stringify({ answer }) });
+      },
+    };
+  };
+
+  beforeEach(() => {
+    ff.calls.length = 0;
+    ff.events.length = 0;
+    ff.impl = () => Promise.resolve(FETCHED);
+    h.agentCalls.length = 0;
+    h.agent = undefined;
+    setAccessService({ materialise: vi.fn(() => Promise.resolve({ tables: [], skipped: [], readOnlyTables: [] })), recordRead: vi.fn(() => Promise.resolve({ recorded: [], refused: [] })) } as never);
+  });
+
+  afterEach(() => {
+    ff.impl = undefined;
+    h.transport = undefined;
+    h.agent = undefined;
+    modeStore.set('byok');
+    providerStore.set('mock');
+    setAccessService();
+  });
+
+  it('GUARD: a step WITHOUT refreshFirst never reaches fetchFirst', async () => {
+    const execute = createStepExecutor({ appRun: appRunWithBound(), transportFor: () => orderedTransport() });
+    await execute(think, context([think]));
+    expect(ff.calls).toEqual([]);
+  });
+
+  it('the unit seam (no brain route): fetchFirst runs ONCE, BEFORE the transport, for the SCHEDULE caller, with deps.appRun and {signal, run}', async () => {
+    const appRun = appRunWithBound();
+    const transport = orderedTransport();
+    const ctx = context([fetchThink]);
+    const outcome = await createStepExecutor({ appRun, transportFor: () => transport })(fetchThink, ctx);
+    expect(ff.calls).toHaveLength(1);
+    expect(ff.events).toEqual(['fetch', 'send']);
+    const [db, deps, caller, opts] = ff.calls[0]! as [UserDb, AppRunDeps, unknown, FetchOpts];
+    expect(db).toBe(ctx.db);
+    expect(deps).toBe(appRun);
+    expect(caller).toEqual({ kind: 'schedule', appId: 'app-1', taskId: 'task-1', runId: 'run-1' });
+    expect(opts.signal).toBe(ctx.signal);
+    expect(typeof opts.run?.spent).toBe('function');
+    expect(typeof opts.run?.deadline).toBe('number');
+    expect(outcome.status).toBe('ok');
+  });
+
+  it('the outcome: `summary` is EXACTLY the AI’s text; the fetch’s calls are merged in; the facts ride the `fetched` seat', async () => {
+    const outcome = await createStepExecutor({ appRun: appRunWithBound(), transportFor: () => orderedTransport('nothing changed overnight') })(fetchThink, context([fetchThink]));
+    expect(outcome.summary).toBe('nothing changed overnight');
+    expect(outcome.calls).toEqual({ ai: 1, net: 1 });
+    expect((outcome as { fetched?: unknown }).fetched).toEqual([{ source: 'Ledger', outcome: 'fresh' }]);
+  });
+
+  it('no app lets it ask any more (nothing to fetch from) → the seat says `none`; the step still answers', async () => {
+    ff.impl = () => Promise.resolve({ asked: [], calls: { ai: 0, net: 0 } });
+    const outcome = await createStepExecutor({ appRun: appRunWithBound(), transportFor: () => orderedTransport() })(fetchThink, context([fetchThink]));
+    expect(outcome.status).toBe('ok');
+    expect(((outcome as { fetched?: Array<{ outcome: string }> }).fetched ?? []).map((entry) => entry.outcome)).toEqual(['none']);
+  });
+
+  it('a refresh failure NEVER fails the step: a source that could not fetch → the step is still `ok`, the seat says `failed`', async () => {
+    ff.impl = () => Promise.resolve({ asked: [{ sourceAppId: 'src-ledger', sourceName: 'Ledger', outcome: 'failed' }], calls: { ai: 0, net: 1 } });
+    const outcome = await createStepExecutor({ appRun: appRunWithBound(), transportFor: () => orderedTransport('answered from what it had') })(fetchThink, context([fetchThink]));
+    expect(outcome.status).toBe('ok');
+    expect(outcome.summary).toBe('answered from what it had');
+    expect((outcome as { fetched?: unknown }).fetched).toEqual([{ source: 'Ledger', outcome: 'failed' }]);
+  });
+
+  it('the AI re-check AFTER the fetch (F7): the fetch spent the last AI call of the day → `refused`, capped `ai`, the transport NEVER called; the fetch’s calls kept', async () => {
+    ff.impl = () => Promise.resolve({ asked: [{ sourceAppId: 'src-ledger', sourceName: 'Ledger', outcome: 'fresh' }], calls: { ai: 1, net: 0 } });
+    const transport = orderedTransport();
+    const db = fakeDb({ getSchedulerState: () => ({ watermark: NOW, globalPause: false, daily: { date: NOW.slice(0, 10), ai: 99, net: 0 } }) } as Partial<UserDb>);
+    const outcome = await createStepExecutor({ appRun: appRunWithBound(), transportFor: () => transport })(fetchThink, context([fetchThink], { db }));
+    expect(outcome.status).toBe('refused');
+    expect(outcome.capped).toBe('ai');
+    expect(transport.wires).toEqual([]);
+    expect(outcome.calls).toEqual({ ai: 1, net: 0 });
+  });
+
+  // ---------------------------------------------------------------------------------------------
+  // TASK-20261010-host-broker PR-5 — Gate-5 fold G5-19 (P3-3, P3-4/SB-4).
+  //   P3-3 a `recent` whose last fetch FAILED (`lastOk: false`) is stored `failed` on the step's seat —
+  //        before the fold the result page said "Ledger had fetched new data just before — used that"
+  //        about a fetch that failed. (`stopped` → `failed` already.)
+  //   P3-4 the F7 AI re-check runs whenever the fetch ASKED anything (a source not `skipped`), reading the
+  //        day fresh — a step that JOINED another door's flight hears `calls: nothing()` while that
+  //        flight folded its AI call into the day itself; before the fold the re-check was skipped and
+  //        the tool-free brain call ran past the ceiling.
+  // ---------------------------------------------------------------------------------------------
+
+  it('G5-19 (P3-3) a `recent` whose last fetch FAILED is stored `failed` on the seat', async () => {
+    ff.impl = () => Promise.resolve({ asked: [{ sourceAppId: 'src-ledger', sourceName: 'Ledger', outcome: 'recent', at: NOW, lastOk: false }], calls: { ai: 0, net: 0 } });
+    const outcome = await createStepExecutor({ appRun: appRunWithBound(), transportFor: () => orderedTransport() })(fetchThink, context([fetchThink]));
+    expect(outcome.status).toBe('ok');
+    expect((outcome as { fetched?: unknown }).fetched).toEqual([{ source: 'Ledger', outcome: 'failed' }]);
+  });
+
+  it('G5-19 (P3-3) guard: a `recent` whose last fetch delivered stays `recent`', async () => {
+    ff.impl = () => Promise.resolve({ asked: [{ sourceAppId: 'src-ledger', sourceName: 'Ledger', outcome: 'recent', at: NOW, lastOk: true }], calls: { ai: 0, net: 0 } });
+    const outcome = await createStepExecutor({ appRun: appRunWithBound(), transportFor: () => orderedTransport() })(fetchThink, context([fetchThink]));
+    expect(((outcome as { fetched?: Array<{ outcome: string }> }).fetched ?? []).map((entry) => entry.outcome)).toEqual(['recent']);
+  });
+
+  it('G5-19 (P3-4) the fetch JOINED a flight that folded the day’s last AI call (calls.ai 0) → still re-checked: `refused`, capped `ai`, the transport NEVER called', async () => {
+    const day = { watermark: NOW, globalPause: false, daily: { date: NOW.slice(0, 10), ai: SCHEDULE_DAILY_CEILINGS.ai - 1, net: 0 } };
+    ff.impl = () => {
+      // The flight this step joined folded ITS OWN AI call into the day before answering the joiner.
+      day.daily = { ...day.daily, ai: SCHEDULE_DAILY_CEILINGS.ai };
+      return Promise.resolve({ asked: [{ sourceAppId: 'src-ledger', sourceName: 'Ledger', outcome: 'fresh' }], calls: { ai: 0, net: 0 } });
+    };
+    const transport = orderedTransport();
+    const db = fakeDb({ getSchedulerState: () => day } as Partial<UserDb>);
+    const outcome = await createStepExecutor({ appRun: appRunWithBound(), transportFor: () => transport })(fetchThink, context([fetchThink], { db }));
+    expect(outcome.status).toBe('refused');
+    expect(outcome.capped).toBe('ai');
+    expect(transport.wires).toEqual([]);
+  });
+
+  it('G5-19 (P3-4) guard: every source SKIPPED (nothing asked) and the day under the ceiling → the step answers', async () => {
+    ff.impl = () => Promise.resolve({ asked: [{ sourceAppId: 'src-ledger', sourceName: 'Ledger', outcome: 'skipped' }], calls: { ai: 0, net: 0 } });
+    const transport = orderedTransport();
+    const outcome = await createStepExecutor({ appRun: appRunWithBound(), transportFor: () => transport })(fetchThink, context([fetchThink]));
+    expect(outcome.status).toBe('ok');
+    expect(transport.wires).toHaveLength(1);
+  });
+
+  it('a THROWING branch still carries the fetch’s calls (the transport could not even be built)', async () => {
+    const outcome = await createStepExecutor({
+      appRun: appRunWithBound(),
+      transportFor: () => {
+        throw new Error('no transport today');
+      },
+    })(fetchThink, context([fetchThink]));
+    expect(outcome.status).toBe('failed');
+    expect(outcome.calls).toEqual({ ai: 0, net: 1 });
+  });
+
+  it('an ABORT while the step runs keeps the fetch’s calls on the cancelled outcome', async () => {
+    const controller = new AbortController();
+    const transport: AgentTransport = {
+      send: () => {
+        controller.abort();
+        return Promise.resolve({ ok: true as const, text: '{"answer":"too late"}' });
+      },
+    };
+    const outcome = await createStepExecutor({ appRun: appRunWithBound(), transportFor: () => transport })(fetchThink, context([fetchThink], { signal: controller.signal }));
+    expect(outcome.summary).toBe(CANCELLED_SUMMARY);
+    expect(outcome.calls.net).toBe(1);
+  });
+
+  describe('the two clocks (F2): the ctx clock frozen at 2020-01-01, the dispatchers on Date.now()', () => {
+    const FROZEN = new Date('2020-01-01T00:00:00.000Z');
+    const frozen = (boundAt: number | undefined): Partial<StepContext> => ({ now: () => new Date(FROZEN), boundAt });
+
+    it('boundAt = ctx + 300 s → the deadline is Date.now() + resultTimeoutMs (± 1 s) — measured on the ctx clock, anchored on the dispatchers’', async () => {
+      await createStepExecutor({ appRun: appRunWithBound(), transportFor: () => orderedTransport() })(fetchThink, context([fetchThink], frozen(FROZEN.getTime() + 300_000)));
+      expect(ff.calls).toHaveLength(1);
+      const left = optsOf().run!.deadline - Date.now();
+      expect(left).toBeGreaterThan(RESULT_TIMEOUT_MS - 1_000);
+      expect(left).toBeLessThanOrEqual(RESULT_TIMEOUT_MS + 1_000);
+    });
+
+    it('boundAt = ctx + 300 s with a long resultTimeoutMs → the bound wins: 300 − 30 − 30 = 240 s (± 1 s)', async () => {
+      const appRun = { ...blockedAppRunDeps(), resultTimeoutMs: 600_000 };
+      await createStepExecutor({ appRun, transportFor: () => orderedTransport() })(fetchThink, context([fetchThink], frozen(FROZEN.getTime() + 300_000)));
+      const left = optsOf().run!.deadline - Date.now();
+      expect(left).toBeGreaterThan(240_000 - 1_000);
+      expect(left).toBeLessThanOrEqual(240_000 + 1_000);
+    });
+
+    it('boundAt = ctx + 59 s → no budget: NOTHING is dispatched (no fetch with time left) and the step still answers', async () => {
+      const transport = orderedTransport('answered anyway');
+      const outcome = await createStepExecutor({ appRun: appRunWithBound(), transportFor: () => transport })(fetchThink, context([fetchThink], frozen(FROZEN.getTime() + 59_000)));
+      for (const call of ff.calls) expect((call[3] as FetchOpts).run!.deadline, 'any fetch asked has no time left').toBeLessThanOrEqual(Date.now());
+      expect(transport.wires).toHaveLength(1);
+      expect(outcome.status).toBe('ok');
+      expect(outcome.summary).toBe('answered anyway');
+    });
+
+    it('boundAt undefined → the budget is resultTimeoutMs', async () => {
+      await createStepExecutor({ appRun: appRunWithBound(), transportFor: () => orderedTransport() })(fetchThink, context([fetchThink], frozen(undefined)));
+      const left = optsOf().run!.deadline - Date.now();
+      expect(left).toBeGreaterThan(RESULT_TIMEOUT_MS - 1_000);
+      expect(left).toBeLessThanOrEqual(RESULT_TIMEOUT_MS + 1_000);
+    });
+  });
+
+  it('run.spent() hands the fetch what the run already spent (ctx.spent)', async () => {
+    await createStepExecutor({ appRun: appRunWithBound(), transportFor: () => orderedTransport() })(fetchThink, context([fetchThink], { spent: () => ({ ai: 4, net: 2 }) }));
+    expect(optsOf().run!.spent()).toEqual({ ai: 4, net: 2 });
+  });
+
+  describe('the PRODUCTION executor — after keylessBrainGate, before BOTH branches', () => {
+    it('a keyless brain is refused FIRST: no fetch at all', async () => {
+      recordingTransport();
+      const outcome = await executeStep(fetchThink, context([fetchThink]));
+      expect(outcome).toMatchObject({ status: 'refused', blockedBy: 'brain' });
+      expect(ff.calls).toEqual([]);
+    });
+
+    it('a local brain, the tool-free step: the fetch, THEN the send', async () => {
+      modeStore.set('local');
+      h.transport = orderedTransport('tool-free');
+      const outcome = await executeStep(fetchThink, context([fetchThink]));
+      expect(ff.events).toEqual(['fetch', 'send']);
+      expect(outcome.summary).toBe('tool-free');
+    });
+
+    it('a local brain, the step that may look things up: the fetch, THEN the agent — and the agent’s ctx.spent sees the fetch’s calls', async () => {
+      modeStore.set('local');
+      recordingTransport();
+      let seen: { ai: number; net: number } | undefined;
+      h.agent = (...args: unknown[]) => {
+        ff.events.push('agent');
+        seen = (args[1] as StepContext).spent?.();
+        return Promise.resolve({ status: 'ok', summary: 'looked', calls: { ai: 2, net: 0 }, tools: { used: 0 } });
+      };
+      const outcome = await executeStep(fetchAgentThink, context([fetchAgentThink], { spent: () => ({ ai: 3, net: 0 }) }));
+      expect(ff.events).toEqual(['fetch', 'agent']);
+      expect(seen, 'the gated adapter counts the run’s calls AND the fetch’s').toEqual({ ai: 3, net: 1 });
+      expect(outcome.calls).toEqual({ ai: 2, net: 1 });
+      expect(outcome.summary).toBe('looked');
+    });
+
+    it('an agent that THROWS still carries the fetch’s calls', async () => {
+      modeStore.set('local');
+      recordingTransport();
+      h.agent = () => Promise.reject(new Error('agent fell over'));
+      const outcome = await executeStep(fetchAgentThink, context([fetchAgentThink]));
+      expect(outcome.status).toBe('failed');
+      expect(outcome.calls).toEqual({ ai: 0, net: 1 });
+    });
+
+    it('a brain with no data lane degrades the tools step — and still fetched first', async () => {
+      modeStore.set('subscription');
+      h.transport = orderedTransport('degraded');
+      const outcome = await executeStep(fetchAgentThink, context([fetchAgentThink]));
+      expect(ff.events).toEqual(['fetch', 'send']);
+      expect(outcome).toMatchObject({ status: 'ok', tools: { unavailable: 'brain' } });
+    });
+  });
+});
+
+describe('PR-5 D-PR5-19 — finalizeOutcome carries the `fetched` seat, made safe to store', () => {
+  it('rides through when present; absent stays absent', () => {
+    expect(finalizeOutcome({ status: 'ok', calls: ZERO, fetched: [{ source: 'Ledger', outcome: 'fresh' }] } as never)).toEqual({ status: 'ok', calls: ZERO, fetched: [{ source: 'Ledger', outcome: 'fresh' }] });
+    expect(finalizeOutcome({ status: 'ok', calls: ZERO })).not.toHaveProperty('fetched');
+  });
+
+  it('each source folded to one line and capped at 64, at most 8 entries (the `saw` precedent — the run row must parse)', () => {
+    const many = Array.from({ length: 10 }, (_, i) => ({ source: `App ${i}\nline two ${'x'.repeat(80)}`, outcome: 'fresh' }));
+    const out = finalizeOutcome({ status: 'ok', calls: ZERO, fetched: many } as never) as { fetched?: Array<{ source: string; outcome: string }> };
+    expect(out.fetched).toHaveLength(8);
+    for (const entry of out.fetched!) {
+      expect(entry.source.length).toBeLessThanOrEqual(64);
+      expect(entry.source).not.toMatch(/[\r\n]/);
+    }
   });
 });

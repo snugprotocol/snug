@@ -293,9 +293,11 @@ export {
   APP_AGENT_DEADLINE_MARGIN_MS,
   APP_AGENT_MAX_ROUND_TRIPS,
   APP_AGENT_MAX_TOOL_CALLS,
+  FETCHED_OUTCOMES,
   FETCH_CONNECTION_MAX_CHARS,
   MISSED_POLICIES,
   PAUSED_REASONS,
+  REFRESH_FIRST_MAX_SOURCES,
   RUN_STATUSES,
   RUN_TRIGGERS,
   SCHEDULED_TASK_MAX_BYTES,
@@ -359,6 +361,7 @@ export {
   schedulerStateSchema,
   stepResultSchema,
   type AlertKind,
+  type FetchedOutcome,
   type MissedPolicy,
   type PausedReason,
   type RunStatus,
@@ -381,6 +384,7 @@ export {
   type ScheduledTask,
   type SchedulerState,
   type StepResult,
+  type StepFetched,
   type StepResultStatus,
   type StepSaw,
   type StepTools,
@@ -404,6 +408,30 @@ export {
   type OwnUndoVia,
   type OwnWriteAuthority,
 } from './own-undo.js';
+
+// The imported marker (TASK-20261010-host-broker PR-5, D-PR5-9): `appProvenance:<appId>` says an
+// app arrived with a file the user imported. Internal draft, OUT of the json-schemas SOURCES.
+export { appProvenanceSchema, type AppProvenance } from './app-provenance.js';
+
+// The chat cards' answer vocabularies and the chat's fetch facts (TASK-20261010-host-broker PR-5
+// Gate 5, G5-1/G5-17): "answered" is a value both the playground's readers and the db's untrusted
+// import accept, spelled once. Internal draft, OUT of the json-schemas SOURCES.
+export {
+  ACCESS_CARD_RESOLUTIONS,
+  ACCESS_WRITE_OUTCOMES,
+  CHAT_FETCH_FACTS_MAX,
+  CHAT_FETCH_OUTCOMES,
+  CHAT_FETCH_SOURCE_MAX_CHARS,
+  DATA_WRITE_OUTCOMES,
+  SCHEDULE_CARD_RESOLUTIONS,
+  chatFetchFactsSchema,
+  type AccessCardResolutionKind,
+  type AccessWriteOutcome,
+  type ChatFetchFact,
+  type ChatFetchOutcome,
+  type DataWriteOutcome,
+  type ScheduleCardResolution,
+} from './chat-cards.js';
 
 // The guards every persisted record shares (TASK-20261010-cross-app-access D8): the SQL
 // statement rules, the ONE credential walk, and the record-identity helpers. `isReadOnlySelect`

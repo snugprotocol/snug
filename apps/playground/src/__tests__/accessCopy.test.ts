@@ -47,6 +47,14 @@
 // `limits.ts` (deleted — its limits moved to the protocol, D-PR3-26) and the planted-sentence proof
 // runs over the three modules PR-3 adds (`writeBroker.ts`, `refresh.ts`, `doorbell.ts`) in memory,
 // SKIPPED with its reason while a module is absent — never created here.
+//
+// TASK-20261010-host-broker PR-5 (contract v2 D-PR5-3…24): the discovery, declaration, offer, tile,
+// imported-marker, chat-write and fetch sentences — bytes where the contract gives them, shape
+// where it names only a key (each such case a lane question) — the straight apostrophe outside
+// EGRESS/CHAT_DOOR, no user-facing "declaration", no "works with", and the vocabulary scan's
+// planted proof over each module PR-5 adds under access/ — RED while a module is absent (never
+// skipped, never created). ONE existing pin is INVERTED in place: REFRESH_HISTORY_WORDS.failed
+// reads "Ledger's fetch didn't finish" (D-PR5-17 — true of a failure and of a stop).
 import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
@@ -515,6 +523,8 @@ describe('the access sheet, history and the Settings card (AC19 copy)', () => {
       refreshNoHandler: 'the other app does not fetch on request',
       refreshFailed: expect.any(Function),
       refreshOff: 'schedules are off for this file',
+      // PR-5 (D-PR5-17; v2.2 note (a)): a refresh the user stopped answers the frame with its own words.
+      refreshStopped: "the other app's fetch was stopped before it finished",
     });
   });
 });
@@ -897,7 +907,9 @@ describe('PR-3 — history rows for a change, its undo and a fetch (D-PR3-6/24; 
     expect(words('timeout')).toBe('took too long');
     expect(words('capped')).toBe('Ledger is at the daily limit');
     expect(words('refused')).toBe('a change Ledger tried to send was refused');
-    expect(words('failed')).toBe("Ledger's fetch failed");
+    // INVERTED — D-PR5-17: a refresh the user CANCELLED also ends `refreshed` with `reason: 'failed'`
+    // (no new token), so the words must be true of a failure AND a stop: "didn't finish", not "failed".
+    expect(words('failed')).toBe("Ledger's fetch didn't finish");
   });
 
   it('the read kinds keep their words under the new signature (the reader’s name changes nothing there)', () => {
@@ -1212,5 +1224,393 @@ describe('PR-4 — OWN_UNDO: the own-app undo’s armed question, once, in acces
 
   it('the shared walker is the one this file scans with (D-PR4-21) — a JSX text node is a sentence', () => {
     expect(literalsIn('export const A = () => <p>the reader may read</p>;').map((literal) => literal.text)).toEqual(['the reader may read']);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// TASK-20261010-host-broker PR-5 — discovery, declarations, the offer, the tile, the imported
+// marker, the chat's write and the fetch (contract v2 D-PR5-3/4/5/6/6a/7/9/15/17/18/20/24). Every
+// new key's bytes are pinned where the contract gives them in italics; a key the contract names
+// without words is pinned by shape and listed as a question in the lane report. The keys do not
+// exist yet: they are reached through the LOCAL structural type `CopyV5` (the implementation lane
+// may swap the casts for the real exports). Straight apostrophes everywhere outside `EGRESS` /
+// `CHAT_DOOR` (D-PR5-24, DS22).
+// ---------------------------------------------------------------------------------------------
+
+/** LOCAL structural type — the PR-5 keys and signatures of access/copy.ts (D-PR5-*), until copy.ts exports them. */
+interface CopyV5 {
+  ACCESS_WANTS: {
+    /** D-PR5-3: `names` = the union of hint tables (falling back to hint words), at most 3; `more` = how many beyond them. */
+    preview(appName: string, names: readonly string[], more: number): string;
+    forWhat(appName: string): string;
+  };
+  HUB_TILE: {
+    accessWords(reads: number, readBy: number): string;
+    couldRead(sourceName: string): string;
+    couldReadName(appName: string, sourceName: string): string;
+  };
+  SETTINGS_CARD: {
+    pairsTitle: string;
+    pairRow(readerName: string, sourceName: string, tables: readonly string[]): string;
+    /** Q (lane T-B): the contract gives the act's words (*review…*) but no key — `pairReview` proposed. */
+    pairReview: string;
+  };
+  ACCESS_SHEET: {
+    offerTitle(sourceName: string): string;
+    offerPick: string;
+    offer(readerName: string, sourceName: string): string;
+    declaredPurpose(readerName: string): string;
+  };
+  CONSENT_SHEET: {
+    offerTitle(readerName: string, sourceName: string): string;
+    declaredSays(readerName: string): string;
+    userTitle(readerName: string, wantsWrite?: boolean): string;
+  };
+  STRIP_OUTCOME: {
+    /** Q (lane T-B): `{ notChange }` rides as a SIXTH argument after `write`. */
+    allowed(readerName: string, sourceName: string, tables: readonly string[], duration: 'session' | 'day' | 'week' | 'always', write?: readonly string[], opts?: { notChange?: boolean }): string;
+  };
+  PROVENANCE: {
+    /** `day` is the provenance line's own `dayMonth` form ("3 Oct"); absent → the dateless form. */
+    imported(day?: string): string;
+  };
+  CHAT_DOOR: Record<'changes' | 'oneChange' | 'valuesIn' | 'unsafeText', string> & {
+    readOnlyTable(sourceName: string, table: string): string;
+    busy(sourceName: string): string;
+    noRows(sourceName: string): string;
+    plainChange(sourceName: string): string;
+  };
+  ACCESS_APP_MESSAGES: { refreshStopped: string };
+  FETCH_FIRST: {
+    done(sourceName: string): string;
+    /** Q (lane T-B): `when` is the relative-time words ("4 min ago"), `ok` whether that fetch delivered. */
+    recent(sourceName: string, when: string, ok: boolean): string;
+    askedRecently(sourceName: string, when: string): string;
+    failed(sourceName: string): string;
+    skipped(sourceName: string): string;
+    stopped: string | ((sourceName: string) => string);
+  };
+  CHAT_FETCH: { first(names: readonly string[]): string };
+}
+const V5 = copy as unknown as CopyV5;
+/** A key that may be a constant or a function of the source's name (the contract does not say which for `stopped`). */
+const wordsOf = (value: string | ((sourceName: string) => string) | undefined): string | undefined => (typeof value === 'function' ? value('Ledger') : value);
+
+describe('PR-5 — the shared install preview: ACCESS_WANTS (D-PR5-3; D5)', () => {
+  it('D-PR5-3 preview: ONE sentence naming the hint tables, ending "nothing is read until you allow it"', () => {
+    expect(V5.ACCESS_WANTS.preview('Budget', ['transactions', 'accounts'], 0)).toBe(
+      'Budget would like to read data like transactions and accounts from your other apps — nothing is read until you allow it',
+    );
+    expect(V5.ACCESS_WANTS.preview('Budget', ['transactions'], 0)).toBe('Budget would like to read data like transactions from your other apps — nothing is read until you allow it');
+  });
+
+  it('D-PR5-3 preview: at most three names, then "and N more" (Q: the contract gives the clause, not the sentence)', () => {
+    expect(V5.ACCESS_WANTS.preview('Budget', ['transactions', 'accounts', 'budgets'], 2)).toBe(
+      'Budget would like to read data like transactions, accounts, budgets and 2 more from your other apps — nothing is read until you allow it',
+    );
+  });
+
+  it('D-PR5-3 preview with no hint anywhere: "Budget may ask to read your other apps\' data — nothing is read until you allow it"', () => {
+    expect(V5.ACCESS_WANTS.preview('Budget', [], 0)).toBe("Budget may ask to read your other apps' data — nothing is read until you allow it");
+  });
+
+  it('D-PR5-3 every form says nothing is read until the user allows it', () => {
+    for (const sentence of [V5.ACCESS_WANTS.preview('Budget', [], 0), V5.ACCESS_WANTS.preview('Budget', ['a'], 0), V5.ACCESS_WANTS.preview('Budget', ['a', 'b', 'c'], 9)]) {
+      expect(sentence.endsWith(' — nothing is read until you allow it'), sentence).toBe(true);
+    }
+  });
+
+  it('D-PR5-3 forWhat: "what Budget says it\'s for:" — the one line before the quoted purpose', () => {
+    expect(V5.ACCESS_WANTS.forWhat('Budget')).toBe("what Budget says it's for:");
+  });
+});
+
+describe('PR-5 — the Hub tile: HUB_TILE (D-PR5-6, D-PR5-7)', () => {
+  it('D-PR5-6 accessWords: reads / read by / both, counting distinct apps', () => {
+    expect(V5.HUB_TILE.accessWords(1, 0)).toBe('reads 1 other app');
+    expect(V5.HUB_TILE.accessWords(2, 0)).toBe('reads 2 other apps');
+    expect(V5.HUB_TILE.accessWords(0, 2)).toBe('read by 2 apps');
+    expect(V5.HUB_TILE.accessWords(0, 1)).toBe('read by 1 app');
+    expect(V5.HUB_TILE.accessWords(1, 2)).toBe('reads 1 other app · read by 2 apps');
+  });
+
+  it('D-PR5-7 couldRead: the visible words; couldReadName: the aria naming both apps — never "works with"', () => {
+    expect(V5.HUB_TILE.couldRead('Ledger')).toBe("could read Ledger's data — review…");
+    expect(V5.HUB_TILE.couldReadName('Budget', 'Ledger')).toBe("Budget could read Ledger's data — review");
+    for (const sentence of [V5.HUB_TILE.couldRead('Ledger'), V5.HUB_TILE.couldReadName('Budget', 'Ledger')]) expect(sentence).not.toMatch(/works with/i);
+  });
+});
+
+describe('PR-5 — Settings: apps that could work together (D-PR5-4)', () => {
+  it('D-PR5-4 the section title and the row sentence', () => {
+    expect(V5.SETTINGS_CARD.pairsTitle).toBe('apps that could work together');
+    expect(V5.SETTINGS_CARD.pairRow('Budget', 'Ledger', ['transactions'])).toBe("Budget could read Ledger's transactions");
+    expect(V5.SETTINGS_CARD.pairRow('Budget', 'Ledger', ['transactions', 'accounts'])).toBe(`Budget could read ${tablesPhrase('Ledger', ['transactions', 'accounts'])}`);
+  });
+
+  it('D-PR5-4 the row act reads "review…" (Q: key name pairReview)', () => {
+    expect(V5.SETTINGS_CARD.pairReview).toBe('review…');
+  });
+});
+
+describe('PR-5 — the ⋈ sheet and the consent sheet: the offer and the declared form (D-PR5-3, D-PR5-5, D-PR5-15)', () => {
+  it('D-PR5-5 the offer block: its heading, its picker, its act — and the direction headings are today’s keys', () => {
+    expect(V5.ACCESS_SHEET.offerTitle('Ledger')).toBe("let another app read Ledger's data");
+    expect(V5.ACCESS_SHEET.offerPick).toBe('which app');
+    expect(V5.ACCESS_SHEET.offer('Budget', 'Ledger')).toBe('let Budget read Ledger…');
+    // The two direction headings reuse the keys the sheet already has (no respelling).
+    expect(ACCESS_SHEET.reads('Budget')).toBe('Budget reads');
+    expect(ACCESS_SHEET.readBy('Ledger')).toBe('what reads Ledger');
+  });
+
+  it('D-PR5-5 the offer’s consent sheet title: "let Budget read Ledger\'s data"', () => {
+    expect(V5.CONSENT_SHEET.offerTitle('Budget', 'Ledger')).toBe("let Budget read Ledger's data");
+  });
+
+  it('D-PR5-3 the declared form: the says-line names the app and the grant’s purpose is the host’s own words', () => {
+    expect(V5.CONSENT_SHEET.declaredSays('Budget')).toBe("what Budget says it's for:");
+    expect(V5.ACCESS_SHEET.declaredPurpose('Budget')).toBe('you started this from what Budget said it would like to read');
+    // Never "would like to: “to …”" — the says-line ends on a colon that a "to …" purpose reads after naturally.
+    expect(`${V5.CONSENT_SHEET.declaredSays('Budget')} ${CONSENT_SHEET.quote('to show spending by category')}`).not.toContain('to: “to');
+  });
+
+  it('D-PR5-15 userTitle(readerName, wantsWrite): the write form — and the read form stays today’s bytes', () => {
+    expect(V5.CONSENT_SHEET.userTitle('Budget', true)).toBe("let Budget read and change another app's data");
+    expect(V5.CONSENT_SHEET.userTitle('Budget', false)).toBe("let Budget read another app's data");
+    expect(V5.CONSENT_SHEET.userTitle('Budget')).toBe(CONSENT_SHEET.userTitle('Budget'));
+  });
+
+  it('D-PR5-15 STRIP_OUTCOME.allowed(…, {notChange: true}): the ask wanted change, none was ticked — folded into the clause', () => {
+    expect(V5.STRIP_OUTCOME.allowed('Budget', 'Ledger', ['transactions'], 'day', [], { notChange: true })).toBe("Budget can now read — not change — Ledger's transactions · for a day");
+    // Without the option the line is today's, byte for byte.
+    expect(V5.STRIP_OUTCOME.allowed('Budget', 'Ledger', ['transactions'], 'day', [])).toBe(STRIP_OUTCOME.allowed('Budget', 'Ledger', ['transactions'], 'day'));
+  });
+});
+
+describe('PR-5 — the imported marker’s provenance words (D-PR5-9; D16)', () => {
+  it('D-PR5-9 PROVENANCE.imported(day): the dated form and the dateless form', () => {
+    expect(V5.PROVENANCE.imported('3 Oct')).toBe("arrived with a file you imported on 3 Oct · Snug can't tell who made it");
+    expect(V5.PROVENANCE.imported()).toBe("arrived with a file you imported · Snug can't tell who made it");
+  });
+});
+
+describe('PR-5 — the chat’s cross-app change: CHAT_DOOR’s new keys (D-PR5-11, D-PR5-13) — shape (Q: the contract names the keys, not their words)', () => {
+  it('D-PR5-11 the source-naming refusals name the source (and the table where they take one)', () => {
+    expect(V5.CHAT_DOOR.readOnlyTable('Ledger', 'transactions')).toContain('Ledger');
+    expect(V5.CHAT_DOOR.readOnlyTable('Ledger', 'transactions')).toContain('transactions');
+    for (const key of ['busy', 'noRows', 'plainChange'] as const) expect(V5.CHAT_DOOR[key]('Ledger'), key).toContain('Ledger');
+  });
+
+  it('D-PR5-11/13 the fixed sentences exist, are distinct, and are not today’s read-only refusal or rule', () => {
+    const fixed = (['changes', 'oneChange', 'valuesIn', 'unsafeText'] as const).map((key) => V5.CHAT_DOOR[key]);
+    for (const sentence of fixed) {
+      expect(typeof sentence).toBe('string');
+      expect(sentence.length).toBeGreaterThan(0);
+    }
+    expect(new Set(fixed).size).toBe(fixed.length);
+    expect(V5.CHAT_DOOR.changes).not.toBe(CHAT_DOOR.rule);
+  });
+
+  it('D-PR5-11 today’s read-only refusal stays byte-identical (every AC11 pin holds)', () => {
+    expect(CHAT_DOOR.readOnly('Ledger')).toBe('Ledger’s data can’t be part of a change here — read it with data_query and propose the change with the values');
+  });
+});
+
+describe('PR-5 — the fetch’s words: FETCH_FIRST, CHAT_FETCH, refreshStopped (D-PR5-17, D-PR5-18, D-PR5-20)', () => {
+  it('D-PR5-18 FETCH_FIRST — one home for the chat note and the step fact', () => {
+    expect(V5.FETCH_FIRST.done('Ledger')).toBe('fetched new data from Ledger first');
+    expect(V5.FETCH_FIRST.recent('Ledger', '4 min ago', true)).toBe('Ledger fetched new data 4 min ago — used that');
+    expect(V5.FETCH_FIRST.recent('Ledger', '4 min ago', false)).toBe("Ledger couldn't fetch new data 4 min ago — used what it had");
+    expect(V5.FETCH_FIRST.askedRecently('Ledger', '4 min ago')).toBe('Ledger was asked for new data 4 min ago');
+    expect(V5.FETCH_FIRST.failed('Ledger')).toBe("Ledger couldn't fetch new data — answered from what it had");
+  });
+
+  it('D-PR5-18 skipped and stopped exist (shape — Q: no words given)', () => {
+    expect(V5.FETCH_FIRST.skipped('Ledger')).toContain('Ledger');
+    expect((wordsOf(V5.FETCH_FIRST.stopped) ?? '').length).toBeGreaterThan(0);
+  });
+
+  // G5-19 (P3-6): RE-PINNED to the orchestrator's copy edit — three or more name the asked prefix
+  // (REFRESH_FIRST_MAX_SOURCES) and count the rest as not asked (was 'fetch new data from 3 apps first').
+  it('D-PR5-20 CHAT_FETCH.first: up to two names; three or more → the asked two by name (+N not asked) (G5-19 P3-6)', () => {
+    expect(V5.CHAT_FETCH.first(['Ledger', 'Pantry', 'Notes'])).toBe('fetch new data from Ledger and Pantry first (+1 not asked)');
+    expect(V5.CHAT_FETCH.first(['Ledger'])).toBe('fetch new data from Ledger first');
+    expect(V5.CHAT_FETCH.first(['Ledger', 'Pantry'])).toBe('fetch new data from Ledger and Pantry first');
+  });
+
+  it('D-PR5-24 the fetch’s words say "new data", never "look up"', () => {
+    const sentences = [
+      V5.FETCH_FIRST.done('Ledger'),
+      V5.FETCH_FIRST.recent('Ledger', '4 min ago', true),
+      V5.FETCH_FIRST.recent('Ledger', '4 min ago', false),
+      V5.FETCH_FIRST.askedRecently('Ledger', '4 min ago'),
+      V5.FETCH_FIRST.failed('Ledger'),
+      V5.FETCH_FIRST.skipped('Ledger'),
+      wordsOf(V5.FETCH_FIRST.stopped) ?? '',
+      V5.CHAT_FETCH.first(['Ledger']),
+      V5.CHAT_FETCH.first(['Ledger', 'Pantry', 'Notes']),
+    ];
+    for (const sentence of sentences) expect(sentence, sentence).not.toMatch(/look(s|ed|ing)? (it )?up/i);
+  });
+
+  it('D-PR5-17 ACCESS_APP_MESSAGES.refreshStopped: the app-facing answer to a stopped fetch — no source fact, no internal word', () => {
+    expect(typeof V5.ACCESS_APP_MESSAGES.refreshStopped).toBe('string');
+    expect(V5.ACCESS_APP_MESSAGES.refreshStopped.length).toBeGreaterThan(0);
+    expect(V5.ACCESS_APP_MESSAGES.refreshStopped).not.toMatch(INTERNAL_WORD);
+    expect(V5.ACCESS_APP_MESSAGES.refreshStopped).not.toContain('Ledger');
+  });
+
+  it('D-PR5-24 the existing CONSENT_SHEET.fetchFirst bytes are unchanged (the sheet’s option keeps its words)', () => {
+    expect(CONSENT_SHEET.fetchFirst('Ledger')).toBe('may ask Ledger to fetch new data before reading it');
+  });
+
+  it('D-PR5-17 REFRESH_HISTORY_WORDS.failed is "didn’t finish" — the other four reasons keep their words (no new token)', () => {
+    expect(V3.REFRESH_HISTORY_WORDS.failed && sourceWords(V3.REFRESH_HISTORY_WORDS.failed, 'Ledger')).toBe("Ledger's fetch didn't finish");
+    expect(Object.keys(V3.REFRESH_HISTORY_WORDS).sort()).toEqual([...REFRESH_REASONS].sort());
+  });
+});
+
+describe('PR-5 — every new sentence keeps the straight apostrophe and the person’s words (D-PR5-24, DS22)', () => {
+  /** Every sentence PR-5 adds to access/copy.ts outside EGRESS.* / CHAT_DOOR.*. */
+  const sentences = (): string[] => [
+    V5.ACCESS_WANTS.preview('Budget', ['transactions', 'accounts'], 0),
+    V5.ACCESS_WANTS.preview('Budget', ['a', 'b', 'c'], 2),
+    V5.ACCESS_WANTS.preview('Budget', [], 0),
+    V5.ACCESS_WANTS.forWhat('Budget'),
+    V5.HUB_TILE.accessWords(1, 2),
+    V5.HUB_TILE.couldRead('Ledger'),
+    V5.HUB_TILE.couldReadName('Budget', 'Ledger'),
+    V5.SETTINGS_CARD.pairsTitle,
+    V5.SETTINGS_CARD.pairRow('Budget', 'Ledger', ['transactions']),
+    V5.SETTINGS_CARD.pairReview,
+    V5.ACCESS_SHEET.offerTitle('Ledger'),
+    V5.ACCESS_SHEET.offerPick,
+    V5.ACCESS_SHEET.offer('Budget', 'Ledger'),
+    V5.ACCESS_SHEET.declaredPurpose('Budget'),
+    V5.CONSENT_SHEET.offerTitle('Budget', 'Ledger'),
+    V5.CONSENT_SHEET.declaredSays('Budget'),
+    V5.CONSENT_SHEET.userTitle('Budget', true),
+    V5.STRIP_OUTCOME.allowed('Budget', 'Ledger', ['transactions'], 'day', [], { notChange: true }),
+    V5.PROVENANCE.imported('3 Oct'),
+    V5.PROVENANCE.imported(),
+    V5.ACCESS_APP_MESSAGES.refreshStopped,
+    V5.FETCH_FIRST.done('Ledger'),
+    V5.FETCH_FIRST.recent('Ledger', '4 min ago', true),
+    V5.FETCH_FIRST.recent('Ledger', '4 min ago', false),
+    V5.FETCH_FIRST.askedRecently('Ledger', '4 min ago'),
+    V5.FETCH_FIRST.failed('Ledger'),
+    V5.FETCH_FIRST.skipped('Ledger'),
+    wordsOf(V5.FETCH_FIRST.stopped) ?? '',
+    V5.CHAT_FETCH.first(['Ledger']),
+    V5.CHAT_FETCH.first(['Ledger', 'Pantry', 'Notes']),
+    sourceWords(V3.REFRESH_HISTORY_WORDS.failed, 'Ledger') ?? '',
+  ];
+
+  it('no curly apostrophe in any of them', () => {
+    for (const sentence of sentences()) expect(sentence, sentence).not.toContain('’');
+  });
+
+  it('none spells grant, reader, scope or log', () => {
+    for (const sentence of sentences()) expect(sentence.match(INTERNAL_WORD)?.[0], sentence).toBeUndefined();
+  });
+
+  it('D-PR5-2 no user-facing sentence in copy.ts says "declaration" (a guard today — it must stay true when the PR-5 keys land)', () => {
+    const literals = stringLiterals(readFileSync(COPY_FILE, 'utf8'), ts.ScriptKind.TS);
+    expect(literals.filter((text) => /\bdeclarations?\b/i.test(text))).toEqual([]);
+  });
+
+  it('D-PR5-2 …the host says "would like to read" instead', () => {
+    expect(V5.ACCESS_WANTS.preview('Budget', ['transactions'], 0)).toContain('would like to read');
+  });
+
+  it('D-PR5-7 no sentence in copy.ts says "works with" — an access that is not yet true is "could read"', () => {
+    const literals = stringLiterals(readFileSync(COPY_FILE, 'utf8'), ts.ScriptKind.TS);
+    expect(literals.filter((text) => /works with/i.test(text))).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// PR-5 — the vocabulary scan reaches every module PR-5 adds under access/ (D-PR5-24)
+// ---------------------------------------------------------------------------------------------
+
+/** The modules PR-5 adds under access/ (contract v2 D-PR5-4/5/6/6a/12/14/17/18/24). An absent one is RED here — never created. */
+const PR5_ACCESS_MODULES = [
+  'pairs.ts',
+  'AccessOffer.tsx',
+  'AccessActLine.tsx',
+  'AccessTileBadge.tsx',
+  'AccessWantsNote.tsx',
+  'AccessWriteCard.tsx',
+  'chatWrite.ts',
+  'fetchFirst.ts',
+  'refreshRuns.ts',
+] as const;
+
+describe('PR-5 — the vocabulary scan sees and bites on every new access/ module (D-PR5-24)', () => {
+  it('D-PR5-24 the walk sees the nine modules PR-5 adds under access/', () => {
+    const files = accessFiles().map((file) => path.relative(ACCESS_DIR, file));
+    for (const name of PR5_ACCESS_MODULES) expect(files, name).toContain(name);
+  });
+
+  it.each(PR5_ACCESS_MODULES)('D-PR5-24 the scan BITES on %s’s bytes: clean as shipped, red with a sentence planted in memory — the file is never written', (name) => {
+    const file = path.join(ACCESS_DIR, name);
+    // Never CREATE the module here: an absent one is red, not stubbed.
+    expect(existsSync(file), `${name} exists`).toBe(true);
+    const original = readFileSync(file, 'utf8');
+    const kind = scriptKindOf(file);
+    const plant = name.endsWith('.tsx')
+      ? '\nexport const VocabularyProbe = () => <p>the reader keeps a log of every grant</p>;\n'
+      : "\nexport const VOCABULARY_PROBE = 'the reader keeps a log of every grant';\n";
+    expect(internalWordsIn(original, kind)).toEqual([]);
+    expect(internalWordsIn(`${original}${plant}`, kind)).toEqual(['the reader keeps a log of every grant']);
+    expect(readFileSync(file, 'utf8'), 'the proof reads the file and never writes it').toBe(original);
+  });
+
+  it('D-PR5-24 refresh.ts, fetchFirst.ts and refreshRuns.ts hold no literal spelling grant, reader, scope or log — with MACHINE_TOKENS unchanged', () => {
+    expect([...MACHINE_TOKENS].sort()).toEqual(['reader', 'reader-misbehaved', 'reader-updated']);
+    for (const name of ['refresh.ts', 'fetchFirst.ts', 'refreshRuns.ts']) {
+      const file = path.join(ACCESS_DIR, name);
+      expect(existsSync(file), `${name} exists`).toBe(true);
+      expect(internalWordsIn(readFileSync(file, 'utf8'), scriptKindOf(file)), name).toEqual([]);
+    }
+  });
+});
+
+// =========================================================================================
+// TASK-20261010-host-broker PR-5 — Gate-5 fold (IB-8; G5-12…G5-15's copy): the pair sentence is
+// spelled ONCE. `SETTINGS_CARD.pairRow` is the row sentence; every review act's accessible name is
+// that sentence + ' — review' (D-PR5-4) and the sheet's act its clause + ' — review…'; the Hub's
+// `couldReadName` is the app's name + `couldRead`'s clause + ' — review'. Identities, over twisted
+// inputs, so an edit to one spelling can never leave another behind. (Guards: the orchestrator's
+// copy edit composes them already — these stay green.)
+// =========================================================================================
+
+describe('IB-8 the pair sentence is single-homed — identities', () => {
+  const CASES: Array<[string, string, string[]]> = [
+    ['Budget', 'Ledger', ['transactions']],
+    ['Budget', 'Ledger', ['transactions', 'accounts']],
+    ['B — r', "Ledger's", ['a_b', 'c', 'd']],
+  ];
+  const SHEET = ACCESS_SHEET as unknown as { pair(s: string, t: readonly string[]): string; pairName(r: string, s: string, t: readonly string[]): string };
+  const CARD = SETTINGS_CARD as unknown as { pairRow(r: string, s: string, t: readonly string[]): string; pairReviewName(r: string, s: string, t: readonly string[]): string };
+
+  it('IB-8 SETTINGS_CARD.pairReviewName(r, s, t) === pairRow(r, s, t) + " — review"', () => {
+    for (const [r, s, t] of CASES) expect(CARD.pairReviewName(r, s, t)).toBe(`${CARD.pairRow(r, s, t)} — review`);
+  });
+
+  it('IB-8 ACCESS_SHEET.pairName(r, s, t) === pairRow(r, s, t) + " — review"', () => {
+    for (const [r, s, t] of CASES) expect(SHEET.pairName(r, s, t)).toBe(`${CARD.pairRow(r, s, t)} — review`);
+  });
+
+  it('IB-8 ACCESS_SHEET.pair(s, t) is pairRow’s clause (without the reader) + " — review…"', () => {
+    for (const [r, s, t] of CASES) expect(`${r} ${SHEET.pair(s, t)}`).toBe(`${CARD.pairRow(r, s, t)} — review…`);
+  });
+
+  it('IB-8 HUB_TILE.couldReadName(a, s) === a + " " + couldRead(s) without its trailing "…"', () => {
+    for (const [a, s] of CASES) {
+      const visible = V5.HUB_TILE.couldRead(s);
+      expect(visible.endsWith('…')).toBe(true);
+      expect(V5.HUB_TILE.couldReadName(a, s)).toBe(`${a} ${visible.slice(0, -1)}`);
+    }
   });
 });

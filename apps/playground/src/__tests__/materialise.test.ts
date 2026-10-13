@@ -826,3 +826,113 @@ describe('D-PR2-10 namesTable — the whole-identifier match', () => {
     }
   });
 });
+
+// =========================================================================================
+// TASK-20261010-host-broker PR-5 (contract v2 D-PR5-13 the DDL mark; D-PR5-11 (6) the counting line)
+// =========================================================================================
+//
+// `MaterialisedTable.write?: true` is set by `materialiseGrants` ONLY for the CHAT caller and a scope
+// table carrying `write` — never `snug_kv`, never for a schedule — and OMITTED otherwise, so every
+// `toEqual` pin above holds and the scheduler's DDL is byte-identical. `recordRead(caller, set, {
+// grantIds, sql, counting: true })` is the chat's counting line for a proposed change (S18): ONE
+// `read` line whose `tables` is the ONE table the statement changes, `attended`, and NO `sql`, NO
+// `rows` — no DML ever sits on a read line; a declined card leaves an honest *read transactions*.
+
+describe('PR-5 D-PR5-13 — the DDL mark: write: true only for the chat caller and a table the user let it change', () => {
+  /** Budget may read Ledger's transactions AND change them, read its accounts, and read its settings & notes. */
+  async function writeGrant(over: { unattended?: boolean; duration?: 'day' | 'always' } = {}): Promise<AnyAccessGrant> {
+    const ranked = await collectSources(db, budget);
+    const source = [...ranked.matched, ...ranked.rest].find((candidate) => candidate.appId === ledger)!;
+    const input = {
+      readerAppId: budget,
+      source,
+      tables: [
+        { name: 'transactions', withheld: [], write: true },
+        { name: 'accounts', withheld: [], write: false },
+      ],
+      duration: over.duration ?? 'day',
+      unattended: over.unattended ?? false,
+      kv: true,
+      purpose: 'to tidy my spending',
+      provenance: 'user',
+      now: clock.now,
+    };
+    return createGrantFromDecision(db, input as unknown as CreateGrantInput);
+  }
+  const byName = (set: MaterialisedSet): Map<string, Record<string, unknown>> => new Map(set.tables.map((table) => [table.name, table as unknown as Record<string, unknown>]));
+
+  it('the chat’s set marks the writable table write: true — and ONLY it', async () => {
+    await writeGrant();
+    const tables = byName(await accessService().materialise(chatClosed()));
+    expect(tables.get('ledger__transactions')?.write).toBe(true);
+  });
+
+  it('a read-only table of the same grant and the grant’s snug_kv carry NO write seat at all (omitted, never false)', async () => {
+    await writeGrant();
+    const tables = byName(await accessService().materialise(chatClosed()));
+    expect(tables.get('ledger__accounts')).toBeDefined();
+    expect(tables.get('ledger__accounts')).not.toHaveProperty('write');
+    expect(tables.get('ledger__snug_kv')).toBeDefined();
+    expect(tables.get('ledger__snug_kv'), 'snug_kv is never writable').not.toHaveProperty('write');
+  });
+
+  it('a read-only grant’s tables carry no write seat (guard — the toEqual pins above hold)', async () => {
+    await grantFor({ tables: ['transactions', 'accounts'] });
+    for (const table of (await accessService().materialise(chatClosed())).tables) expect(table, table.name).not.toHaveProperty('write');
+  });
+
+  it('the SCHEDULE caller never gets the mark, even on an away grant with write (its DDL byte-identical)', async () => {
+    await writeGrant({ unattended: true, duration: 'always' });
+    const set = await accessService().materialise(scheduled());
+    expect(set.tables.map((table) => table.name).sort()).toEqual(['ledger__accounts', 'ledger__snug_kv', 'ledger__transactions']);
+    for (const table of set.tables) expect(table, table.name).not.toHaveProperty('write');
+  });
+});
+
+describe('PR-5 D-PR5-11 (6) / S18 — recordRead’s counting line: the one table, attended, NO sql, NO rows', () => {
+  async function writeGrant(): Promise<AnyAccessGrant> {
+    const ranked = await collectSources(db, budget);
+    const source = [...ranked.matched, ...ranked.rest].find((candidate) => candidate.appId === ledger)!;
+    const input = {
+      readerAppId: budget,
+      source,
+      tables: [
+        { name: 'transactions', withheld: [], write: true },
+        { name: 'accounts', withheld: [], write: false },
+      ],
+      duration: 'day',
+      unattended: false,
+      purpose: 'to tidy my spending',
+      provenance: 'user',
+      now: clock.now,
+    };
+    return createGrantFromDecision(db, input as unknown as CreateGrantInput);
+  }
+  type CountingRecordRead = (caller: AccessCaller, set: MaterialisedSet, input: { grantIds: readonly string[]; sql?: string; counting?: true }) => ReturnType<ReturnType<typeof accessService>['recordRead']>;
+
+  it('ONE read line: tables = the ONE table the statement changes (never every granted table), attended true, no sql seat, no rows seat — and the read is counted', async () => {
+    const grant = await writeGrant();
+    const svc = accessService();
+    const set = await svc.materialise(chatClosed());
+    clock.now += 5_000;
+    const sql = 'UPDATE "transactions" SET amount = 0 WHERE id = 1';
+    const outcome = await (svc.recordRead as unknown as CountingRecordRead)(chatClosed(), set, { grantIds: [grant.id], sql, counting: true });
+    expect(outcome).toEqual({ recorded: [grant.id], refused: [] });
+    const line = db.listAccessLog(ledger)[0] as AccessLogEntry | undefined;
+    expect(line).toMatchObject({ at: iso(clock.now), kind: 'read', grantId: grant.id, readerAppId: budget, readerName: 'Budget', tables: ['transactions'], attended: true });
+    expect(line).not.toHaveProperty('sql');
+    expect(line).not.toHaveProperty('rows');
+    expect(db.getAccessGrant(grant.id)).toMatchObject({ reads: 1, lastReadAt: iso(clock.now) });
+  });
+
+  it('without counting the line is today’s (guard): every granted table, the rows handed over, the statement', async () => {
+    const grant = await writeGrant();
+    const svc = accessService();
+    const set = await svc.materialise(chatClosed());
+    const sql = 'SELECT * FROM ledger__transactions';
+    await svc.recordRead(chatClosed(), set, { grantIds: [grant.id], sql });
+    const line = db.listAccessLog(ledger)[0] as AccessLogEntry | undefined;
+    expect([...(line?.tables ?? [])].sort()).toEqual(['accounts', 'transactions']);
+    expect(line).toMatchObject({ kind: 'read', sql, rows: 3, attended: true });
+  });
+});

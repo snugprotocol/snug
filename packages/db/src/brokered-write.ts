@@ -148,6 +148,11 @@
 // after `INSERT [OR …] INTO`, `REPLACE INTO`, `UPDATE [OR …]` or `DELETE FROM`, comment-
 // stripped and unquoted; `undefined` when the text cannot say.
 //
+// `renameDmlTarget` (TASK-20261010-host-broker PR-5, D-PR5-11) renames the chat's cross-app change
+// from the shared alias it was written against to the source's own table — a narrow head grammar
+// and a double re-parse (`parseBrokeredStatement` AND `dmlTargetTable`), refusing by rule; a parser
+// refusal of the renamed text passes the PARSER's rule out (`rule: 'parse'`, `parseRule`; G5-10).
+//
 // REFUSALS NAME THEIR RULE. Beside `reason: 'refused'` every refusal of the parser, the facts,
 // the column rule or the value walk carries `rule` — `statement` · `no-where` · `table` ·
 // `column` · `computed` · `value` — so the engine words it (`ACCESS_APP_MESSAGES.writeRefused`,
@@ -774,6 +779,149 @@ export function dmlTargetTable(sql: string): string | undefined {
   const match = DML_TARGET.exec(stripSqlComments(sql));
   if (match === null) return undefined;
   return match[1]?.replace(/""/g, '"') ?? match[2]?.replace(/``/g, '`') ?? match[3] ?? match[4];
+}
+
+// ------------------------------------------------------------------------------- renameDmlTarget
+
+/**
+ * Why `renameDmlTarget` refused: the statement's shape, its target is not the alias, a code point SQL
+ * names have no use for, the alias named again past the head — or `parse`, the renamed text failing
+ * the parser on one of the PARSER's rules, carried as `parseRule` (PR-5 Gate 5, G5-10).
+ */
+export type RenameRefusalRule = 'statement' | 'target' | 'text' | 'qualified' | 'parse';
+export type RenameDmlTargetResult =
+  | { ok: true; sql: string }
+  | { ok: false; rule: Exclude<RenameRefusalRule, 'parse'> }
+  | { ok: false; rule: 'parse'; parseRule: BrokeredRefusalRule };
+
+/** The ONE head a renamed statement may open with — ASCII whitespace only (the tokenizer's `\s` would admit NBSP), no comment before it, no `OR …`, no `REPLACE`. */
+const RENAME_HEAD = /^[ \t\n\f\r]*(?:INSERT[ \t\n\f\r]+INTO|UPDATE|DELETE[ \t\n\f\r]+FROM)[ \t\n\f\r]+/i;
+const BARE_NAME = /[A-Za-z_][A-Za-z0-9_$]*/y;
+/** What may follow the target's name: ASCII whitespace, `(`, a comment opener — or the end of the text (the parser then words what is missing). */
+const AFTER_TARGET = /^(?:[ \t\n\f\r(]|\/\*|--|$)/;
+const NON_ASCII = /[^\x00-\x7F]/;
+
+const asciiLower = (text: string): string => text.replace(/[A-Z]/g, (ch) => ch.toLowerCase());
+
+/** A quoted name at `start` (`"…"`, `` `…` ``, `[…]`): its unescaped value and the index past it — or `undefined` when it never closes. */
+function quotedNameAt(sql: string, start: number): { value: string; end: number } | undefined {
+  const close = sql[start] === '[' ? ']' : (sql[start] ?? '');
+  let value = '';
+  let i = start + 1;
+  for (;;) {
+    const at = sql.indexOf(close, i);
+    if (at === -1) return undefined;
+    value += sql.slice(i, at);
+    i = at + 1;
+    if (close !== ']' && sql[i] === close) {
+      value += close; // a doubled quote is one quote
+      i += 1;
+      continue;
+    }
+    return { value, end: i };
+  }
+}
+
+/**
+ * Every name the statement spells — bare or quoted — with where it starts, or `'text'` when a code
+ * point ≥ U+0080 sits anywhere outside a string literal (a name, an operator, a comment, a bidi
+ * mark). String literals are values, not names: skipped, and free to hold any text.
+ */
+function namesOf(sql: string): Array<{ at: number; value: string }> | 'text' {
+  const names: Array<{ at: number; value: string }> = [];
+  let i = 0;
+  const outside = (from: number, to: number): boolean => !NON_ASCII.test(sql.slice(from, to));
+  while (i < sql.length) {
+    const ch = sql[i] ?? '';
+    if (ch === "'") {
+      let j = i + 1;
+      for (;;) {
+        const at = sql.indexOf("'", j);
+        if (at === -1) {
+          j = sql.length;
+          break;
+        }
+        j = at + 1;
+        if (sql[j] !== "'") break;
+        j += 1; // a doubled quote is one quote
+      }
+      i = j;
+      continue;
+    }
+    if (ch === '"' || ch === '`' || ch === '[') {
+      const quoted = quotedNameAt(sql, i);
+      const end = quoted?.end ?? sql.length;
+      if (!outside(i, end)) return 'text';
+      if (quoted !== undefined) names.push({ at: i, value: quoted.value });
+      i = end;
+      continue;
+    }
+    if (sql.startsWith('--', i) || sql.startsWith('/*', i)) {
+      const close = sql.startsWith('--', i) ? sql.indexOf('\n', i) : sql.indexOf('*/', i + 2);
+      const end = close === -1 ? sql.length : close + (sql.startsWith('--', i) ? 1 : 2);
+      if (!outside(i, end)) return 'text';
+      i = end;
+      continue;
+    }
+    BARE_NAME.lastIndex = i;
+    const word = BARE_NAME.exec(sql);
+    if (word !== null) {
+      names.push({ at: i, value: word[0] });
+      i += word[0].length;
+      continue;
+    }
+    if (ch.charCodeAt(0) >= 0x80) return 'text';
+    i += 1;
+  }
+  return names;
+}
+
+/**
+ * The chat's cross-app change renamed from the SHARED ALIAS it was written against (`ledger__tx`)
+ * to the source's own table (TASK-20261010-host-broker PR-5, contract v2 D-PR5-11 step 4; S8,
+ * F18). PURE, and narrow on purpose — a refusal is an answer (*one plain change* for the rename's
+ * own rules, the parser's words for `parse`), never a repair:
+ *  - the head is `INSERT INTO`, `UPDATE` or `DELETE FROM` (ASCII-case-insensitive) at the very
+ *    start after ASCII whitespace, then ONE name — bare, or one quoted form whose unescaped value
+ *    is `from` (ASCII-case-insensitive) — else `statement` / `target`;
+ *  - the character after that name is ASCII whitespace, `(` or a comment opener, or the text ends
+ *    there — else `statement` (a `.` would make it a qualifier, a quote a second name);
+ *  - no code point ≥ U+0080 outside a string literal — else `text`;
+ *  - `from` named nowhere past the head (`ledger__tx.id`, a subquery over it) — else `qualified`;
+ *  - the name is replaced by `"to"` and nothing else moves; the result must parse as a brokered
+ *    statement — else `parse`, with the parser's own rule as `parseRule` (`no-where`, `computed`,
+ *    `value`, its `statement` for a second statement or a function …), so the caller words the
+ *    fault the parser found rather than the rename's (G5-10) — on `to`, AND say `to` to
+ *    `dmlTargetTable` (the two readers the write path asks) — else `statement`.
+ */
+export function renameDmlTarget(sql: string, from: string, to: string): RenameDmlTargetResult {
+  const head = RENAME_HEAD.exec(sql);
+  if (head === null) return { ok: false, rule: 'statement' };
+  const start = head[0].length;
+  let end: number;
+  let name: string;
+  const opener = sql[start];
+  if (opener === '"' || opener === '`' || opener === '[') {
+    const quoted = quotedNameAt(sql, start);
+    if (quoted === undefined) return { ok: false, rule: 'statement' };
+    ({ value: name, end } = quoted);
+  } else {
+    BARE_NAME.lastIndex = start;
+    const bare = BARE_NAME.exec(sql);
+    if (bare === null) return { ok: false, rule: 'statement' };
+    name = bare[0];
+    end = start + name.length;
+  }
+  if (asciiLower(name) !== asciiLower(from)) return { ok: false, rule: 'target' };
+  if (!AFTER_TARGET.test(sql.slice(end, end + 2))) return { ok: false, rule: 'statement' };
+  const names = namesOf(sql);
+  if (names === 'text') return { ok: false, rule: 'text' };
+  if (names.some(({ at, value }) => at >= end && asciiLower(value) === asciiLower(from))) return { ok: false, rule: 'qualified' };
+  const renamed = `${sql.slice(0, start)}"${to.replace(/"/g, '""')}"${sql.slice(end)}`;
+  const parsed = parseBrokeredStatement(renamed);
+  if (!parsed.ok) return { ok: false, rule: 'parse', parseRule: parsed.rule };
+  if (parsed.parsed.table !== to || dmlTargetTable(renamed) !== to) return { ok: false, rule: 'statement' };
+  return { ok: true, sql: renamed };
 }
 
 // ------------------------------------------------------------------------------- tableFacts

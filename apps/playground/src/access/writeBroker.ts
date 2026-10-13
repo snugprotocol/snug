@@ -40,7 +40,7 @@
 //      target cleared → the doorbells (`data-changed { table }` to the target's live frame,
 //      `access-source-changed { grantId }` to every OTHER live reader — never the writer) → the
 //      answer `{ ok, op: 'write', changes }` and nothing else (DS16: no undo id on the wire).
-// The refusals, every one in the reader's words from copy.ts and none naming a source fact (DS19):
+// The frame's refusals (`wireRefusal`), every one in the reader's words from copy.ts and none naming a source fact (DS19):
 // a parse, column, facts, value or cap refusal → `ACCESS_WRITE_REFUSED` with its rule's token
 // (E1-Q1); `busy` and a strict `drifted` → `ACCESS_BUSY` (retryable, no count — S15); the plan's
 // `not-granted` → `ACCESS_NOT_GRANTED`; `drift` → the read's `sourceChanged` after the grant is
@@ -122,6 +122,15 @@
 // bumps the access revision (Gate-5 ENG-4): a done undo wrote a line, a `gone` marked the entry,
 // and the sheet re-reads on the other three too — it never bumps on its own.
 //
+// ONE STRICT CORE, TWO DOORS (TASK-20261010-host-broker PR-5; contract v2 D-PR5-12; F5): strict mode's
+// body is `brokeredWriteCore(db, req, { mode, expectChanges? })` — the frame's `write` and the chat's
+// two verbs (`chatWrite.ts`) share it. `plan` stops after (2) and answers the plan's count and table
+// (the seat is never reached); `apply` runs every step, and with `expectChanges` — the count the user
+// saw on the chat's card — a fresh plan that differs is `drifted` BEFORE the room check and the seat.
+// Its refusals are tokens (`BrokeredCoreRefusal`), every named effect (the timeout strike, the
+// drift's pause, the expiry mark) performed INSIDE the core; the frame maps them through
+// `wireRefusal`, so the wire bytes are exactly what they were before the extraction.
+//
 // `clearSourceReadCaches(db, target)` drops the cached bytes of every grant whose source is the
 // target — the refresh engine calls it after a result too (D-PR3-17 (9)).
 //
@@ -166,6 +175,7 @@ import {
 } from '@snugprotocol/db';
 import type { AccessHandlerResult } from '@snugprotocol/runner';
 
+import { DATA_WRITE_CARD } from '../agent/copy.dataWrite.js';
 import type { ExecuteApprovedWriteOutcome, PendingWriteProposal } from '../agent/dataTools.js';
 import { ACCESS_APP_MESSAGES, ACCESS_SHEET, OWN_UNDO, appMidChange, type UndoFailureReason, type WriteRefusalRule } from './copy.js';
 import { ringDataChanged, ringSourceChanged } from './doorbell.js';
@@ -192,6 +202,31 @@ export interface BrokeredWriteRequest {
 
 /** What the user's undo answers (E1-Q2): done, or the reason's token with its sentence. */
 export type UndoOutcome = { ok: true } | { ok: false; reason: UndoFailureReason; message: string };
+
+/**
+ * Why the strict core did not plan or apply (D-PR5-12; TC-Q9) — a token per answer the frame tells
+ * apart, each with its effect already performed. `drifted` carries the count the statement made when
+ * it moved (the fresh plan's, or the seat's); a driver failure keeps its `retryable`.
+ */
+export type BrokeredCoreRefusal =
+  | { ok: false; reason: 'busy' | 'not-granted' | 'expired' | 'paused' | 'revoked' | 'source-changed' | 'waiting' | 'timeout' | 'unavailable' | 'source-too-large' }
+  | { ok: false; reason: 'drifted'; current?: number }
+  | { ok: false; reason: 'refused'; rule: WriteRefusalRule }
+  | { ok: false; reason: 'failed'; retryable?: true };
+
+/** The strict core's plan: how many rows of which table, nothing seated. */
+export type BrokeredCorePlanned = { ok: true; phase: 'plan'; changes: number; table: string };
+/** The strict core's change made, with the undo it can be put back by. */
+export type BrokeredCoreApplied = { ok: true; phase: 'applied'; changes: number; undoable: boolean; undoId?: string };
+
+/** What the strict core answers: the plan alone, the change made (with the undo it can be put back by), or the refusal. */
+export type BrokeredCoreAnswer = BrokeredCorePlanned | BrokeredCoreApplied | BrokeredCoreRefusal;
+
+/** `plan` stops before the seat; `apply` with `expectChanges` halts when the fresh plan's count is not the one the user saw. */
+export interface BrokeredCoreOptions {
+  mode: 'plan' | 'apply';
+  expectChanges?: number;
+}
 
 /**
  * One OWN write as its two callers hand it over (TASK-20261010-host-broker PR-4, D-PR4-3/4/11): the
@@ -250,13 +285,16 @@ const ACCESS_UNDO_ENTRY_RESERVE_BYTES = 1024;
 /** The caps every strict write runs under — the protocol's (D-PR3-15 (5), E1-Q12), the undo bytes less the entry's reserve (SEC-1). The plan and the apply share them, so the dry run refuses `too-large` before any live handle is touched. */
 const STRICT_CAPS: BrokeredCaps = { maxChanges: ACCESS_WRITE_MAX_ROWS, maxUndoBytes: ACCESS_UNDO_MAX_BYTES - ACCESS_UNDO_ENTRY_RESERVE_BYTES };
 
-const refuse = (code: string, message: string, retryable: boolean): AccessHandlerResult => ({ ok: false, code, message, retryable });
+/** A refusal as the wire carries it — the handler result's failure shape. */
+export type WireRefusal = Extract<AccessHandlerResult, { ok: false }>;
+
+const refuse = (code: string, message: string, retryable: boolean): WireRefusal => ({ ok: false, code, message, retryable });
 /** `ACCESS_WRITE_REFUSED` with the rule's sentence — the service's spelling too, for the statement that names no table (ENG-2). */
-export const writeRefused = (rule: WriteRefusalRule): AccessHandlerResult => refuse(C.ACCESS_WRITE_REFUSED, M.writeRefused(rule), false);
-const writeNotGranted = (): AccessHandlerResult => refuse(C.ACCESS_NOT_GRANTED, M.writeNotGranted, false);
-const busy = (): AccessHandlerResult => refuse(C.ACCESS_BUSY, M.busy, true);
+export const writeRefused = (rule: WriteRefusalRule): WireRefusal => refuse(C.ACCESS_WRITE_REFUSED, M.writeRefused(rule), false);
+const writeNotGranted = (): WireRefusal => refuse(C.ACCESS_NOT_GRANTED, M.writeNotGranted, false);
+const busy = (): WireRefusal => refuse(C.ACCESS_BUSY, M.busy, true);
 /** A failure of the engine or the seat: the read's sentence, never the engine's message (a constraint's name is the source's). */
-const queryFailed = (message: string = M.queryFailed, retryable = false): AccessHandlerResult => refuse(C.ACCESS_QUERY_FAILED, message, retryable);
+const queryFailed = (message: string = M.queryFailed, retryable = false): WireRefusal => refuse(C.ACCESS_QUERY_FAILED, message, retryable);
 
 const now = (): number => accessDeps().now();
 const sum = (counts: readonly number[]): number => counts.reduce((total, count) => total + count, 0);
@@ -319,67 +357,105 @@ export function clearSourceReadCaches(db: UserDb, targetAppId: string): void {
 /**
  * The grant ended, or lost the table's write seat, while the write waited or planned: a stop or a
  * pause wins (the read's `endedMeanwhile`), an expiry is marked once, and a scope renewed in place
- * without the table's `write` answers rule 7's sentence.
+ * without the table's `write` answers rule 7's token.
  */
-function endedWrite(db: UserDb, caller: AccessCaller, grantId: string, at: number): AccessHandlerResult {
+function endedWrite(db: UserDb, caller: AccessCaller, grantId: string, at: number): BrokeredCoreRefusal {
   const found = findAccessGrant(db, grantId);
   const current = found !== undefined && ownsGrant(caller, found) ? found : undefined;
   if (current !== undefined && current.grant.status === 'active') {
-    if (!isExpired(current.grant, at)) return writeNotGranted();
+    if (!isExpired(current.grant, at)) return { ok: false, reason: 'not-granted' };
     markExpiredOnce(db, current.grant, at);
-    return refuse(C.ACCESS_EXPIRED, M.expired, false);
+    return { ok: false, reason: 'expired' };
   }
-  return refuse(C.ACCESS_REVOKED, current?.grant.status === 'suspended' ? M.paused : M.revoked, false);
+  return { ok: false, reason: current?.grant.status === 'suspended' ? 'paused' : 'revoked' };
 }
 
-/** A plan that did not answer a plan, as the reader hears it (D-PR3-15) — every effect a read performs at the same seat, performed. */
-async function refusePlan(db: UserDb, input: BrokeredWriteRequest, outcome: Exclude<PlanOutcome, { ok: true }>, at: number): Promise<AccessHandlerResult> {
+/** A plan that did not answer a plan (D-PR3-15) — every effect a read performs at the same seat, performed here. */
+async function refusePlan(db: UserDb, input: BrokeredWriteRequest, outcome: Exclude<PlanOutcome, { ok: true }>, at: number): Promise<BrokeredCoreRefusal> {
   const grantId = input.grant.grant.id;
   switch (outcome.reason) {
     case 'ended':
       return endedWrite(db, input.caller, grantId, at);
     case 'unavailable':
-      return queryFailed(M.noWorker);
+      return { ok: false, reason: 'unavailable' };
     case 'timeout':
       if (noteTimeout(db, grantId) >= ACCESS_TIMEOUT_STRIKES) await suspendAccess(db, grantId, 'reader-misbehaved', iso(at));
-      return queryFailed(M.tookTooLong);
+      return { ok: false, reason: 'timeout' };
     case 'refused':
-      return writeRefused(outcome.rule);
+      return { ok: false, reason: 'refused', rule: outcome.rule };
     case 'not-granted':
-      return writeNotGranted();
+      return { ok: false, reason: 'not-granted' };
     case 'too-many':
-      return writeRefused('too-many');
+      return { ok: false, reason: 'refused', rule: 'too-many' };
     case 'too-large':
-      return writeRefused('too-large');
+      return { ok: false, reason: 'refused', rule: 'too-large' };
     case 'unsafe':
-      return writeRefused('value');
+      return { ok: false, reason: 'refused', rule: 'value' };
     case 'drift':
       await suspendAccess(db, grantId, 'source-changed', iso(at));
-      return refuse(C.ACCESS_REVOKED, M.sourceChanged, false);
+      return { ok: false, reason: 'source-changed' };
     case 'copy-failed':
     case 'failed':
-      return queryFailed();
+      return { ok: false, reason: 'failed' };
   }
 }
 
-/** The seat's refusal as the reader hears it: the app's open transaction and a count that drifted are both "try again" (S15). */
-function refuseApply(applied: Exclude<BrokeredWriteResult, { ok: true }>): AccessHandlerResult {
-  if (!('reason' in applied)) return queryFailed(M.queryFailed, applied.retryable);
+/** The seat's refusal as a token: an open transaction and a count that drifted stay apart here — the frame hears both as "try again" (S15). */
+function refuseApply(applied: Exclude<BrokeredWriteResult, { ok: true }>): BrokeredCoreRefusal {
+  if (!('reason' in applied)) return applied.retryable ? { ok: false, reason: 'failed', retryable: true } : { ok: false, reason: 'failed' };
   switch (applied.reason) {
+    case 'busy':
+      return { ok: false, reason: 'busy' };
+    case 'drifted': {
+      const moved = applied.current?.at(-1);
+      return { ok: false, reason: 'drifted', ...(moved !== undefined ? { current: moved } : {}) };
+    }
+    case 'refused':
+      return { ok: false, reason: 'refused', rule: applied.rule };
+    case 'too-many':
+      return { ok: false, reason: 'refused', rule: 'too-many' };
+    case 'too-large':
+      return { ok: false, reason: 'refused', rule: 'too-large' };
+    case 'unsafe':
+      return { ok: false, reason: 'refused', rule: 'value' };
+    case 'cannot-undo': // own mode's alone — a strict write requires its undo and refuses by cell instead
+    case 'failed':
+      return { ok: false, reason: 'failed' };
+  }
+}
+
+/**
+ * A core refusal as the FRAME hears it (D-PR5-12, F5) — byte for byte what strict mode answered
+ * before the core was extracted: a token per sentence, a busy target and a drifted count both
+ * `ACCESS_BUSY`, never a source fact (DS19).
+ */
+export function wireRefusal(refusal: BrokeredCoreRefusal): WireRefusal {
+  switch (refusal.reason) {
     case 'busy':
     case 'drifted':
       return busy();
+    case 'not-granted':
+      return writeNotGranted();
+    case 'expired':
+      return refuse(C.ACCESS_EXPIRED, M.expired, false);
+    case 'paused':
+      return refuse(C.ACCESS_REVOKED, M.paused, false);
+    case 'revoked':
+      return refuse(C.ACCESS_REVOKED, M.revoked, false);
+    case 'source-changed':
+      return refuse(C.ACCESS_REVOKED, M.sourceChanged, false);
     case 'refused':
-      return writeRefused(applied.rule);
-    case 'too-many':
-      return writeRefused('too-many');
-    case 'too-large':
-      return writeRefused('too-large');
-    case 'unsafe':
-      return writeRefused('value');
-    case 'cannot-undo': // own mode's alone — a strict write requires its undo and refuses by cell instead
+      return writeRefused(refusal.rule);
+    case 'waiting':
+      return writeRefused('waiting');
+    case 'timeout':
+      return queryFailed(M.tookTooLong);
+    case 'unavailable':
+      return queryFailed(M.noWorker);
+    case 'source-too-large':
+      return queryFailed(M.tooLarge);
     case 'failed':
-      return queryFailed();
+      return queryFailed(M.queryFailed, refusal.retryable === true);
   }
 }
 
@@ -415,13 +491,19 @@ function journalHasRoom(db: UserDb, targetAppId: string, readerAppId: string): b
   return utf8ByteLength(JSON.stringify(live)) + ACCESS_UNDO_MAX_BYTES <= ACCESS_UNDO_MAX_ROW_BYTES;
 }
 
-/** Strict mode: one plain statement of another app's table, planned afresh, applied through the seat, journaled, logged, rung — see the header. */
-export async function brokeredWrite(db: UserDb, input: BrokeredWriteRequest): Promise<AccessHandlerResult> {
+/**
+ * Strict mode's ONE body (D-PR5-12): one plain statement of another app's table, planned afresh —
+ * and, in `apply` mode, applied through the seat, journaled, logged and rung — see the header. Never
+ * reached without the policy's write verdict; every refusal's effect is performed here.
+ */
+export function brokeredWriteCore(db: UserDb, input: BrokeredWriteRequest, options: BrokeredCoreOptions & { mode: 'plan' }): Promise<BrokeredCorePlanned | BrokeredCoreRefusal>;
+export function brokeredWriteCore(db: UserDb, input: BrokeredWriteRequest, options: BrokeredCoreOptions & { mode: 'apply' }): Promise<BrokeredCoreApplied | BrokeredCoreRefusal>;
+export async function brokeredWriteCore(db: UserDb, input: BrokeredWriteRequest, options: BrokeredCoreOptions): Promise<BrokeredCoreAnswer> {
   const { grant } = input.grant;
   const { table } = input;
   // FIRST — the driver's record, before any queue or export (D-FIX-1): the plan's fresh export
   // discards the target's open transaction, so only a read of the record can answer busy for it.
-  if (await db.driver.inTransaction(input.targetAppId)) return busy();
+  if (await db.driver.inTransaction(input.targetAppId)) return { ok: false, reason: 'busy' };
   const find = (id: string): FoundAccessGrant | undefined => findAccessGrant(db, id);
   const writable = (): boolean => stillWritable(find, input.caller, grant.id, table, now()) !== undefined;
 
@@ -437,16 +519,19 @@ export async function brokeredWrite(db: UserDb, input: BrokeredWriteRequest): Pr
       stillLive: writable,
     });
   } catch (err) {
-    return err instanceof SourceTooLarge ? queryFailed(M.tooLarge) : queryFailed();
+    return { ok: false, reason: err instanceof SourceTooLarge ? 'source-too-large' : 'failed' };
   }
   const at = now();
   if (!planned.ok) return refusePlan(db, input, planned, at);
+  const { plan } = planned;
+  if (options.mode === 'plan') return { ok: true, phase: 'plan', changes: plan.previewChanges, table: plan.table };
   // (3) The plan took time: a stop, a pause or an expiry that landed meanwhile wins — nothing is applied (S8).
   if (!writable()) return endedWrite(db, input.caller, grant.id, at);
+  // (3′) The count the user saw on the card (D-PR5-12): a fresh plan that moved halts before the room check and the seat.
+  if (options.expectChanges !== undefined && plan.previewChanges !== options.expectChanges) return { ok: false, reason: 'drifted', current: plan.previewChanges };
   // (4) The reader's room in the target's journal — a live entry is never evicted (S9).
-  if (!journalHasRoom(db, input.targetAppId, input.caller.appId)) return writeRefused('waiting');
+  if (!journalHasRoom(db, input.targetAppId, input.caller.appId)) return { ok: false, reason: 'waiting' };
   // (5) The seat.
-  const { plan } = planned;
   const applied = await db.driver.brokeredWrite(input.targetAppId, { plans: [plan], caps: STRICT_CAPS, expectChanges: [plan.previewChanges], requireUndo: true, capture: true });
   if (!applied.ok) return refuseApply(applied);
   // (6) After the commit: the entry, the line, the caches, the doorbells, the answer.
@@ -475,7 +560,14 @@ export async function brokeredWrite(db: UserDb, input: BrokeredWriteRequest): Pr
   clearSourceReadCaches(db, input.targetAppId);
   ringDataChanged(input.targetAppId, plan.table);
   ringSourceChanged(db, input.targetAppId, { except: input.caller.appId });
-  return { ok: true, op: 'write', changes };
+  return { ok: true, phase: 'applied', changes, undoable: undoId !== undefined, ...(undoId !== undefined ? { undoId } : {}) };
+}
+
+/** The frame's `write` (D-PR3-15): the core in `apply` mode, answered on the wire — `{ ok, op: 'write', changes }` and nothing else (DS16: no undo id). */
+export async function brokeredWrite(db: UserDb, input: BrokeredWriteRequest): Promise<AccessHandlerResult> {
+  const answer = await brokeredWriteCore(db, input, { mode: 'apply' });
+  if (!answer.ok) return wireRefusal(answer);
+  return { ok: true, op: 'write', changes: answer.changes };
 }
 
 // --------------------------------------------------------------------------------------- own writes
@@ -598,12 +690,20 @@ export async function applyOwnWrite(db: UserDb, input: OwnWriteInput): Promise<O
 
 const failed = (message: string): ExecuteApprovedWriteOutcome => ({ ok: false, reason: 'failed', message });
 
+/** Every seat an approval of the app's OWN change carries (`PendingWriteProposal`) — and nothing else. */
+const OWN_APPROVAL_KEYS: ReadonlySet<string> = new Set<keyof PendingWriteProposal>(['appId', 'statements', 'params', 'summary', 'previewed']);
+
 /**
  * The user's approval of a change to the app's OWN data — see THE APPROVAL in the header. Never
  * throws: every outcome is one of PR-2's three shapes, an applied one saying whether it can be
  * undone. `via` is the door the user approved it at (D-PR4-6): the chat card or a result page.
  */
 export async function applyApprovedWrite(db: UserDb, proposal: PendingWriteProposal, options: { via: 'chat' | 'user' }): Promise<ExecuteApprovedWriteOutcome> {
+  // D-PR5-10's SECOND belt (Gate-5 G5-16 ii-4), behind the read seam's allow-list: a proposal carrying
+  // any seat outside the own change's — another app's `target`, `sourceAppId`, `grantId`, anything
+  // unknown — is refused before anything is dry-run, so no path that built a card without the reader
+  // can apply a cross-app-shaped change to this app's own data.
+  if (Object.keys(proposal).some((key) => !OWN_APPROVAL_KEYS.has(key))) return failed(DATA_WRITE_CARD.notOwn);
   // The class guard again, at the gate that touches data (R-B1): a DDL here means the proposal was changed after approval.
   const outOfClass = proposal.statements.map((sql) => nonDataStatementReason(sql)).find((reason) => reason !== undefined);
   if (outOfClass !== undefined) return failed(outOfClass);

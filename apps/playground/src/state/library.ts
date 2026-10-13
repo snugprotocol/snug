@@ -7,6 +7,7 @@
 import type { UserDb } from '@snugprotocol/db';
 
 import { resetAccessSession } from '../access/grants.js';
+import { abortRefreshesFor } from '../access/refreshRuns.js';
 import { resetThreadSessions } from '../agent/threadSessions.js';
 import { revokeShareLinksForApp } from '../share/shareLinks.js';
 import { markAppRenamed } from './appMeta.js';
@@ -100,6 +101,9 @@ export function createUserDbLibrary(getDb: () => Promise<UserDb> = getUserDb): L
       // effort, never a reason the delete fails (the relay may be unreachable; the TTL
       // is the backstop, and the cascade removes the local token+key either way).
       await revokeShareLinksForApp(db, id);
+      // A fetch in flight that this app asked for, or was asked to make, is stopped BEFORE the cascade
+      // — only those (TASK-20261010-host-broker PR-5, S6) — so it writes no line on a history going away.
+      abortRefreshesFor(id);
       await db.deleteApp(id);
       // deleteApp's cascade may have wiped the persisted identity directory; drop the
       // session's in-memory harvest with it (TASK-20260820, Gate-5 review).

@@ -22,7 +22,9 @@
 // A SUGGESTION NEVER ARMS (TASK-20261010-host-broker PR-4, D-PR4-8): the consent's tick *make
 // changes on its own* mounts OFF here, every time — a proposal cannot carry an authority (the
 // writer re-parses it strictly) and nothing on the card seeds one. Only the user's tick arms, after
-// the one writer created the schedule (`armIfTicked`).
+// the one writer created the schedule (`armIfTicked`). Nor does a suggestion ever ask other apps to
+// fetch new data first (PR-5, D-PR5-19; S15): the card shows, consents to and hands the writer the
+// proposal WITHOUT that seat (`withoutUserOnlySeats`) — what the consent shows is what is written.
 
 import { useEffect, useState } from 'react';
 import type { ReactElement } from 'react';
@@ -37,7 +39,7 @@ import { SCHEDULE_CARD, stepWords } from './copy.js';
 import { describeSpec, nextOccurrence, resolveZone } from './cron.js';
 import { approvedHostsByApp, lookUpNamesByApp, type LookUpNamesByApp } from './editorModel.js';
 import { EnableConsent, armIfTicked, type EnableChoice } from './EnableConsent.js';
-import { enableProposedTask } from './enableProposedTask.js';
+import { enableProposedTask, withoutUserOnlySeats } from './enableProposedTask.js';
 import { formatOccurrence, nextWords, pageClock } from './pageModel.js';
 import { editHref, newScheduleHref } from './routes.js';
 
@@ -104,7 +106,8 @@ export function ScheduleCard({ card, messageId, busy, onResolve }: ScheduleCardP
     };
   }, [card.appId, card.messageRowId, card.threadId]);
 
-  const { proposal } = state;
+  // The seats only the user's own act sets never ride a suggestion — not even one read back from a row.
+  const proposal = withoutUserOnlySeats(state.proposal);
   const now = pageClock.now();
   const zone = resolveZone(proposal.spec.tz);
   const next = nextOccurrence(proposal.spec, now);

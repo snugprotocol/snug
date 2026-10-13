@@ -15,7 +15,8 @@
 //     PR-B M10), so a frame remounting a thousand times never grows it; a new generation is a
 //     new instance with its own minute;
 //   - capped in serialised UTF-8 BYTES (the task's own bound, measured as the schema measures
-//     it — S11), then STRICT-parsed against `scheduleProposalSchema` → `unreadable`;
+//     it — S11), then STRICT-parsed against `scheduleProposalSchema` → `unreadable` — and stripped
+//     of what only the user's own act sets (`refreshFirst`, TASK-20261010-host-broker PR-5, S15);
 //   - the app must be in this file (a read-only starter or a shared preview has no row a
 //     schedule could attach to) → `unknown-app`;
 //   - every app step names the SENDER — an app may suggest only for itself → `other-app`;
@@ -49,7 +50,7 @@ import { createAppAsk } from '../state/appAsk.js';
 import { getAppMeta } from '../state/appMeta.js';
 import type { Store } from '../state/store.js';
 import { getUserDb } from '../state/userdb.js';
-import { enableProposedTask, namesOnly } from './enableProposedTask.js';
+import { enableProposedTask, namesOnly, withoutUserOnlySeats } from './enableProposedTask.js';
 import type { TaskResult } from './scheduler.js';
 import { readFlag } from '../state/browserFlags.js';
 import { NO_SUGGESTIONS_KEY } from './ScheduleSettingsCard.js';
@@ -157,7 +158,8 @@ export async function consumeScheduleRequest(input: ScheduleRequestInput): Promi
   // An app knows only the id it ANNOUNCED (`useSnugApp({ appId })`), never the library id the
   // host assigned, so a step naming its announced id names the sender: map it to the library
   // id here, once, before the sender-only rule (PR-C). Anything else still reads `other-app`.
-  const proposal = withOwnStepsAs(parsed.data, getAppMeta(input.appId)?.announcedAppId, input.appId);
+  // An app may never ask other apps to fetch new data on a schedule: the seat is the user's own (D-PR5-19, S15).
+  const proposal = withOwnStepsAs(withoutUserOnlySeats(parsed.data), getAppMeta(input.appId)?.announcedAppId, input.appId);
 
   try {
     const db = await deps.getDb();

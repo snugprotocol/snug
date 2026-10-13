@@ -12,14 +12,51 @@
 // A SOURCE THE HOST DOES NOT KNOW IS NEVER "BUILT HERE". `install_source` is free text; only
 // its ABSENCE means the user's own builder made the app. Any other value — an unknown prefix,
 // an empty string — reads as the share line ("not built by you"), the conservative claim.
+//
+// AN IMPORTED APP OVERRIDES ALL OF IT (TASK-20261010-host-broker PR-5; D-PR5-9; R-77). An
+// untrusted import carries `install_source` verbatim, so a file can claim any origin. The db marks
+// every app such an import brought in or changed (`appProvenance:<appId>`); `importedMarkerOf`
+// reads that marker FAIL CLOSED — a row it cannot read still marks the app, with no date — and
+// the caller hands it here, where it beats every install source: *arrived with a file you imported
+// on 3 Oct · Snug can't tell who made it*.
 
-import { AGENT_INSTALL_SOURCE_PREFIX, SHARE_INSTALL_SOURCE_PREFIX, STARTER_INSTALL_SOURCE_PREFIX, type AppRecord } from '@snugprotocol/db';
+import {
+  AGENT_INSTALL_SOURCE_PREFIX,
+  SHARE_INSTALL_SOURCE_PREFIX,
+  STARTER_INSTALL_SOURCE_PREFIX,
+  appProvenanceKey,
+  readAppProvenance,
+  type AppRecord,
+  type UserDb,
+} from '@snugprotocol/db';
 
 import { PROVENANCE, dayMonth } from './copy.js';
 
-export type ReaderProvenanceKind = 'built' | 'share' | 'agent' | 'starter';
+export type ReaderProvenanceKind = 'built' | 'share' | 'agent' | 'starter' | 'imported';
 
-export function readerProvenanceKind(app: Pick<AppRecord, 'installSource'>): ReaderProvenanceKind {
+/** The imported marker as the provenance reads it: present (with its date when the row had a readable one), or absent. */
+export interface ImportedMarker {
+  at?: string;
+}
+
+/**
+ * The app's imported marker, FAIL CLOSED (D-PR5-9, F14): absent → `undefined`; a valid row → its
+ * date; a row that does not parse — or a read that throws — → imported with no date. A row Snug
+ * cannot read never makes an app look like the person's own.
+ */
+export function importedMarkerOf(db: UserDb, appId: string): ImportedMarker | undefined {
+  let marker: { imported: true; at?: string } | undefined;
+  try {
+    marker = readAppProvenance(db.getSetting(appProvenanceKey(appId)));
+  } catch {
+    return {};
+  }
+  if (marker === undefined) return undefined;
+  return marker.at !== undefined ? { at: marker.at } : {};
+}
+
+export function readerProvenanceKind(app: Pick<AppRecord, 'installSource'>, opts: { imported?: ImportedMarker } = {}): ReaderProvenanceKind {
+  if (opts.imported !== undefined) return 'imported';
   const source = app.installSource;
   if (source === undefined) return 'built';
   if (source.startsWith(AGENT_INSTALL_SOURCE_PREFIX)) return 'agent';
@@ -30,17 +67,24 @@ export function readerProvenanceKind(app: Pick<AppRecord, 'installSource'>): Rea
 
 export function provenanceLine(
   app: Pick<AppRecord, 'installSource' | 'createdAt' | 'currentVersion'>,
-  opts: { collides: boolean; now?: number },
+  opts: { collides: boolean; now?: number; imported?: ImportedMarker },
 ): string {
-  const kind = readerProvenanceKind(app);
-  const line =
-    kind === 'built'
-      ? PROVENANCE.built(app.currentVersion)
-      : kind === 'share'
-        ? PROVENANCE.share(dayMonth(app.createdAt, opts.now ?? Date.now()))
-        : kind === 'agent'
-          ? PROVENANCE.agent
-          : PROVENANCE.starter;
+  const now = opts.now ?? Date.now();
+  const kind = readerProvenanceKind(app, opts.imported !== undefined ? { imported: opts.imported } : {});
+  const line = ((): string => {
+    switch (kind) {
+      case 'imported':
+        return PROVENANCE.imported(opts.imported?.at !== undefined ? dayMonth(opts.imported.at, now) : undefined);
+      case 'built':
+        return PROVENANCE.built(app.currentVersion);
+      case 'share':
+        return PROVENANCE.share(dayMonth(app.createdAt, now));
+      case 'agent':
+        return PROVENANCE.agent;
+      case 'starter':
+        return PROVENANCE.starter;
+    }
+  })();
   return opts.collides ? `${line} · ${PROVENANCE.collides}` : line;
 }
 

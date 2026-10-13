@@ -12,6 +12,10 @@
 // before reading it*), each with its hint. The disclosure starts OPEN when the ask carried
 // `access: 'write'` or a renewal's seed turned a write, kv or refresh on (the sheet decides), so
 // a renewal shows its ticks without a click; otherwise CLOSED — the default path is the 1.1 sheet.
+//
+// TASK-20261010-host-broker PR-5 (D-PR5-5; D7): `canChange={false}` — a source's offer — reaches
+// every table row, so no write toggle is drawn, and the disclosure's description then names only
+// what it still holds (settings & notes, and fetching first): it never says "change".
 
 import { useId, type ReactElement } from 'react';
 
@@ -49,6 +53,8 @@ export interface SourcePickerProps {
   /** The radio group's `name` and the id of the section title that labels it. */
   groupName: string;
   labelledBy: string;
+  /** PR-5 (D-PR5-5): `false` on a source's offer — no table may be changed, so no write toggle. Default `true`. */
+  canChange?: boolean;
 }
 
 function summary(source: RankedSource): string {
@@ -104,6 +110,7 @@ export function SourcePicker({
   onShowMore,
   groupName,
   labelledBy,
+  canChange = true,
 }: SourcePickerProps): ReactElement {
   /** The *more options…* summary's description (UI-2): one id per picker, suffixed by the chosen source. */
   const optionsHintId = useId();
@@ -135,13 +142,14 @@ export function SourcePicker({
                     readerName={readerName}
                     ticked={tickedOf(source.appId)}
                     optionsOpen={optionsOpen}
+                    canChange={canChange}
                     onToggle={(table, on) => onToggle(source.appId, table, on)}
                     onColumn={(table, column, on) => onColumn(source.appId, table, column, on)}
                     onWrite={(table, on) => onWrite(source.appId, table, on)}
                   />
-                  {/* The summary's description for a screen reader (UI-2): opening it also puts a change toggle on each ticked table above. */}
+                  {/* The summary's description for a screen reader (UI-2): opening it also puts a change toggle on each ticked table above — except on an offer, which has none (D7). */}
                   <span id={`${optionsHintId}-${source.appId}`} className="visually-hidden">
-                    {CONSENT_SHEET.moreOptionsHint}
+                    {canChange ? CONSENT_SHEET.moreOptionsHint : CONSENT_SHEET.moreOptionsOfferHint}
                   </span>
                   <details
                     className="access-disclosure access-options-more"

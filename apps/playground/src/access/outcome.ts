@@ -8,6 +8,12 @@
 //
 // A failure is recorded with the engine's message, but the strip says it only through
 // `failedWords` (copy.ts): a message the engine did not word for a person goes to the console.
+//
+// TASK-20261010-host-broker PR-5 (D-PR5-5): a SOURCE that offered itself hears the answer too —
+// the line is recorded under the reader's id AND the source's, so both strips say it (each with
+// its own *stop*). Gate-5 G5-12 (IB-1): a DECLARED-form *don't allow* is recorded too. The ⋈ sheet
+// that started it closes before the review opens, and its act line goes with it, so without the
+// reader's strip the person saw no outcome anywhere.
 
 import { createStore, type Store } from '../state/store.js';
 import type { ConsentDecision, ConsentOutcome, PendingAccessRequest } from './consent.js';
@@ -38,10 +44,15 @@ export function recordOutcome(readerAppId: string, readerName: string, outcome: 
   accessOutcomeStore.set({ ...accessOutcomeStore.get(), [readerAppId]: { seq: outcomeSeq, readerName, outcome } });
 }
 
-/** Whether an outcome deserves a line: a dismissal never does; an ask the user started says only what was allowed or failed. */
+/**
+ * Whether an outcome deserves a line: a dismissal never does; an ask the user started says what
+ * was allowed or failed, and — when it came from what the app said it would like to read — that
+ * the app won't ask again (G5-12).
+ */
 function worthALine(pending: PendingAccessRequest, outcome: ConsentOutcome): boolean {
   if (outcome.kind === 'dismissed') return false;
-  return pending.provenance === 'app' || outcome.kind === 'allowed' || outcome.kind === 'failed';
+  if (pending.provenance === 'app' || outcome.kind === 'allowed' || outcome.kind === 'failed') return true;
+  return outcome.kind === 'declined' && pending.askedIn === 'declared';
 }
 
 /**
@@ -51,6 +62,11 @@ function worthALine(pending: PendingAccessRequest, outcome: ConsentOutcome): boo
 export async function answerAccess(pending: PendingAccessRequest, decision: ConsentDecision): Promise<ConsentOutcome> {
   const outcome = await pending.resolve(decision);
   if (outcome.kind === 'failed') console.warn('[snug] access: the allow was not written —', outcome.message);
-  if (worthALine(pending, outcome)) recordOutcome(pending.readerAppId, pending.readerName, outcome);
+  if (worthALine(pending, outcome)) {
+    recordOutcome(pending.readerAppId, pending.readerName, outcome);
+    // An offer's sheet is pinned to its source (the only candidate, preselected): the source's strip hears it too.
+    const offeredFrom = pending.offeredBy === 'source' ? pending.preselect?.appId : undefined;
+    if (offeredFrom !== undefined && offeredFrom !== pending.readerAppId) recordOutcome(offeredFrom, pending.readerName, outcome);
+  }
   return outcome;
 }

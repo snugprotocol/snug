@@ -29,7 +29,7 @@ import {
   type ScheduledTask,
 } from '@snugprotocol/protocol';
 
-import { ACCESS_SHEET, OWN_UNDO } from '../access/copy.js';
+import { ACCESS_SHEET, FETCH_FIRST, OWN_UNDO } from '../access/copy.js';
 import type { SnugPlatform } from '../platform/platform.js';
 import { RESULT_STATUS_WORD, WORDS, capped, needsYouDeclined, needsYouUnanswered, noHandler } from '../schedule/copy.js';
 import { ROW } from '../schedule/copy.page.js';
@@ -48,6 +48,7 @@ import {
   interruptedWhy,
   needsYouTitle,
   openingToRun,
+  stepFacts,
   wouldChange,
 } from '../schedule/copy.result.js';
 import type { StepContext, StepExecutor } from '../schedule/engine-types.js';
@@ -1170,5 +1171,62 @@ describe('PR-4 Gate-5 U14 — the held *full* names the live count; the capped l
     await initScheduler(deps());
     const el = await open();
     expect(el.querySelector('[data-testid="schedule-result-capped"]')?.textContent).toContain(capped('AI call'));
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// TASK-20261010-host-broker PR-5 (AC39b; contract v2 D-PR5-19; D11). An *ask* step that fetched new
+// data first says so in its ONE host line: the NEW internal step-result seat `fetched` (≤ 8 entries,
+// `{source ≤ 64, outcome: 'fresh' | 'recent' | 'failed' | 'skipped' | 'none'}`) is rendered by
+// `fetchedFact` inside `stepFacts`, from `access/copy.ts` `FETCH_FIRST`'s words (never respelled);
+// `none` → *didn’t fetch first — no app lets <App> ask for new data any more*. The AI's `summary` is
+// never rewritten.
+// ---------------------------------------------------------------------------------------------
+
+describe('PR-5 D-PR5-19 — the `fetched` seat in stepFacts (fetchedFact)', () => {
+  const NAMES = { app: 'Budget', connection: (slot: string) => slot };
+  const BUDGET_THINK: ScheduleStep = { kind: 'app-think', appId: 'budget', prompt: 'sum it', context: { maxRows: 50 } };
+  const factsOf = (fetched: Array<{ source: string; outcome: string }>): string => stepFacts(BUDGET_THINK, { status: 'ok', summary: 'fine', fetched } as never, NAMES) ?? '';
+  const word = (value: unknown, ...args: unknown[]): string => (typeof value === 'function' ? (value as (...a: unknown[]) => string)(...args) : String(value));
+
+  it('fresh → FETCH_FIRST.done(source), joined to the where-fact by a middle dot', () => {
+    const line = factsOf([{ source: 'Ledger', outcome: 'fresh' }]);
+    expect(line).toContain(FETCH_FIRST.done('Ledger'));
+    expect(line).toContain('Snug did this itself — Budget didn’t open');
+    expect(line.split(' · ').length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('failed → FETCH_FIRST.failed(source)', () => {
+    expect(factsOf([{ source: 'Ledger', outcome: 'failed' }])).toContain(FETCH_FIRST.failed('Ledger'));
+  });
+
+  it('skipped → FETCH_FIRST.skipped', () => {
+    expect(factsOf([{ source: 'Pantry', outcome: 'skipped' }])).toContain(word(FETCH_FIRST.skipped, 'Pantry'));
+  });
+
+  it('none → *didn’t fetch first — no app lets Budget ask for new data any more* (the step’s own app named)', () => {
+    expect(factsOf([{ source: 'Budget', outcome: 'none' }])).toContain('didn’t fetch first — no app lets Budget ask for new data any more');
+  });
+
+  it('two sources → each said', () => {
+    const line = factsOf([
+      { source: 'Ledger', outcome: 'fresh' },
+      { source: 'Pantry', outcome: 'failed' },
+    ]);
+    expect(line).toContain(FETCH_FIRST.done('Ledger'));
+    expect(line).toContain(FETCH_FIRST.failed('Pantry'));
+  });
+
+  it('GUARD: no `fetched` seat → the line is exactly what it was', () => {
+    expect(stepFacts(BUDGET_THINK, { status: 'ok', summary: 'fine' }, NAMES)).toBe('Snug did this itself — Budget didn’t open');
+  });
+
+  it('on the page: the step’s facts carry the fetch, and the AI’s summary is shown unchanged', async () => {
+    seed(task(), run({ steps: [{ status: 'ok', summary: 'Coffee came to 9.50 this week.', fetched: [{ source: 'Pantry', outcome: 'fresh' }] } as never] }));
+    await initScheduler(deps());
+    const el = await open();
+    const facts = [...el.querySelectorAll('[data-testid="schedule-result-step-facts"]')].map((n) => n.textContent ?? '');
+    expect(facts[0]).toContain(FETCH_FIRST.done('Pantry'));
+    expect(el.textContent).toContain('Coffee came to 9.50 this week.');
   });
 });

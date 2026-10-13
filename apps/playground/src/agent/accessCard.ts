@@ -28,9 +28,21 @@
  * when non-empty (a read-only allow persists the 1.1 shape, byte for byte), and re-admitted on
  * read as a list of the resolution's own tables; anything else is drift. No other persisted
  * shape changes.
+ *
+ * TASK-20261010-host-broker PR-5 (D-PR5-15): the ask may carry `access: 'write'` — persisted ONLY
+ * when it is `'write'` (a read ask keeps the PR-2 shape, byte for byte), and a row whose `access` is
+ * anything else is drift: no card. *Review* hands it to the sheet, which then wants write.
  */
 
-import { ACCESS_DURATIONS, accessHintsSchema, accessPurposeSchema, type AccessDuration, type AccessHints } from '@snugprotocol/protocol';
+import {
+  ACCESS_CARD_RESOLUTIONS,
+  ACCESS_DURATIONS,
+  accessHintsSchema,
+  accessPurposeSchema,
+  type AccessCardResolutionKind,
+  type AccessDuration,
+  type AccessHints,
+} from '@snugprotocol/protocol';
 import type { UserDb } from '@snugprotocol/db';
 
 import type { AccessProposal } from './accessProposeTool.js';
@@ -47,6 +59,8 @@ export interface AccessCardState {
   purpose: string;
   /** The AI's relevance hints — re-parsed through the protocol's schema on read; the sheet ranks the user's apps by them. */
   hints?: AccessHints;
+  /** PR-5 (D-PR5-15): an ask to change rows too — absent on a read ask. */
+  access?: 'write';
   /** The thread's app at staging — the reader the ask is for; the review resolves the app from the THREAD row, never from here. */
   appId: string;
   /** The thread the message lives in — what lets the card's answer be persisted by merging the row's meta. */
@@ -59,7 +73,13 @@ export interface AccessCardState {
 /** The persisted shape — the row's `meta.access`; the row id is the row's own address and is never written into it. */
 export type PersistedAccessCard = Omit<AccessCardState, 'messageRowId'>;
 
-const RESOLUTION_KINDS: ReadonlySet<string> = new Set<AccessCardResolution['kind']>(['allowed', 'not-now', 'declined', 'failed']);
+/**
+ * The kinds a persisted resolution may name — the protocol's list, spelled ONCE there (Gate-5 G5-1): the
+ * list the db's untrusted import reads a row's answer by too. `Exactly` fails the typecheck when this
+ * module's union and the protocol's list ever name different kinds, either way.
+ */
+type Exactly<A, B> = [A] extends [B] ? ([B] extends [A] ? A : never) : never;
+const RESOLUTION_KINDS: ReadonlySet<string> = new Set<Exactly<AccessCardResolution['kind'], AccessCardResolutionKind>>(ACCESS_CARD_RESOLUTIONS);
 const DURATIONS: ReadonlySet<string> = new Set<string>(ACCESS_DURATIONS);
 
 /** A fresh staged card for a proposal the hook accepted — for the THREAD's app. */
@@ -67,6 +87,7 @@ export function stageAccessCard(proposal: AccessProposal, options: { appId: stri
   return {
     purpose: proposal.purpose,
     ...(proposal.hints !== undefined ? { hints: proposal.hints } : {}),
+    ...(proposal.access === 'write' ? { access: 'write' as const } : {}),
     appId: options.appId,
     threadId: options.threadId,
   };
@@ -86,7 +107,7 @@ function readResolution(stored: unknown): AccessCardResolution | undefined {
   if (typeof stored !== 'object' || stored === null) return undefined;
   const { kind } = stored as { kind?: unknown };
   if (typeof kind !== 'string' || !RESOLUTION_KINDS.has(kind)) return undefined;
-  if (kind !== 'allowed') return { kind: kind as Exclude<AccessCardResolution['kind'], 'allowed'> };
+  if (kind !== 'allowed') return { kind: kind as Exclude<AccessCardResolutionKind, 'allowed'> };
   const { sourceName, tables, duration, write } = stored as { sourceName?: unknown; tables?: unknown; duration?: unknown; write?: unknown };
   if (!nonEmptyString(sourceName)) return undefined;
   if (!isStringList(tables)) return undefined;
@@ -105,17 +126,20 @@ export function metaToAccessCard(meta: unknown): AccessCardState | undefined {
   if (typeof meta !== 'object' || meta === null) return undefined;
   const stored = (meta as { access?: unknown }).access;
   if (typeof stored !== 'object' || stored === null) return undefined;
-  const { purpose, hints, appId, threadId, resolution } = stored as Partial<PersistedAccessCard> & { resolution?: unknown };
+  const { purpose, hints, access, appId, threadId, resolution } = stored as Partial<Record<keyof PersistedAccessCard, unknown>>;
   const parsedPurpose = accessPurposeSchema.safeParse(purpose);
   if (!parsedPurpose.success) return undefined;
   const parsedHints = hints === undefined ? undefined : accessHintsSchema.safeParse(hints);
   if (parsedHints !== undefined && !parsedHints.success) return undefined;
   if (!nonEmptyString(appId) || !nonEmptyString(threadId)) return undefined;
+  // PR-5: an ask to change rows says so with the one word; any other value is drift (D-PR5-15).
+  if (access !== undefined && access !== 'write') return undefined;
   const readResolved = resolution === undefined ? undefined : readResolution(resolution);
   if (resolution !== undefined && readResolved === undefined) return undefined;
   return {
     purpose: parsedPurpose.data,
     ...(parsedHints !== undefined ? { hints: parsedHints.data } : {}),
+    ...(access === 'write' ? { access: 'write' as const } : {}),
     appId,
     threadId,
     ...(readResolved !== undefined ? { resolution: readResolved } : {}),

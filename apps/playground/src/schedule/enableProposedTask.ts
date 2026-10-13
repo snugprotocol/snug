@@ -14,10 +14,16 @@
 // refuses an app the file does not hold. The answer is the engine's own `TaskResult` — the task,
 // or the refusal in words — so every channel shows the same sentence for the same refusal.
 //
+// THE USER'S OWN SEATS (TASK-20261010-host-broker PR-5, D-PR5-19; S15). `refreshFirst` — *fetch new
+// data first* — runs ANOTHER app's code unattended, so, like an authority, no proposal may carry it:
+// the user's tick in the editor is its only setter. The builder's and the chat's proposals and an
+// app's suggestion share the protocol's step schema, which parses it; every channel strips it
+// (`withoutUserOnlySeats`) — the strip's intake, the card's consent and, once more, this writer.
+//
 // Nothing here is a React import, a store or a surface: a pure async function over the db the
 // engine already holds, so the test can call it the way the three surfaces do.
 
-import { scheduleProposalSchema, type ScheduleProposal } from '@snugprotocol/protocol';
+import { scheduleProposalSchema, type ScheduleProposal, type ScheduleStep } from '@snugprotocol/protocol';
 
 import { createTask, type TaskResult } from './scheduler.js';
 import { appIdsOf } from './taskShape.js';
@@ -58,6 +64,22 @@ function parseProposalOrReason(proposal: unknown): { ok: true; proposal: Schedul
   return parsed.success ? { ok: true, proposal: parsed.data } : { ok: false, reason: `this suggestion can’t be read — ${issuesInWords(parsed.error.issues)}` };
 }
 
+/** A step without the seats only the user's own act sets — the same object when it carries none. */
+function stepWithoutUserOnlySeats(step: ScheduleStep): ScheduleStep {
+  if (step.kind !== 'app-think' || step.refreshFirst === undefined) return step;
+  const { refreshFirst: _userOnly, ...rest } = step;
+  return rest;
+}
+
+/**
+ * The proposal as a channel may carry it: no step asks other apps to fetch new data first (D-PR5-19,
+ * S15) — the same object when nothing was stripped, so its hash and its staging are untouched.
+ */
+export function withoutUserOnlySeats(proposal: ScheduleProposal): ScheduleProposal {
+  const steps = proposal.steps.map(stepWithoutUserOnlySeats);
+  return steps.every((step, index) => step === proposal.steps[index]) ? proposal : { ...proposal, steps };
+}
+
 /** Every app the steps name is `ownerAppId` — the "an app may only suggest for itself" rule, shared by the strip's intake and the writer. */
 export function namesOnly(proposal: ScheduleProposal, ownerAppId: string): boolean {
   return appIdsOf(proposal.steps).every((appId) => appId === ownerAppId);
@@ -70,7 +92,7 @@ export function namesOnly(proposal: ScheduleProposal, ownerAppId: string): boole
 export async function enableProposedTask(input: EnableProposedTaskInput): Promise<TaskResult> {
   const parsed = parseProposalOrReason(input.proposal);
   if (!parsed.ok) return refuse(parsed.reason);
-  const { proposal } = parsed;
+  const proposal = withoutUserOnlySeats(parsed.proposal);
   if (input.provenance === 'app' && input.ownerAppId === undefined) return refuse(NO_OWNER_REFUSAL);
   if (input.ownerAppId !== undefined && !namesOnly(proposal, input.ownerAppId)) return refuse(OTHER_APP_REFUSAL);
   return createTask({

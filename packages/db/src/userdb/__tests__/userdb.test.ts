@@ -3,7 +3,7 @@
 // settings/secrets/profile, export/import with secrets-strip default, fail-closed
 // corruption recovery, and the size guard.
 import initSqlJs from 'sql.js';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   USERDB_FILE,
   USERDB_LIMITS,
@@ -24,11 +24,14 @@ import { execFrame, kvSetFrame, locateWasm } from '../../__tests__/helpers.js';
 import { namespaceToFileName } from '../../namespace.js';
 import { scopedScratchRead } from '../../scoped-read.js';
 import { createMemoryBackend, type MemoryBackend } from '../../persistence.js';
+import { encryptContainer, generateRecoveryKey } from '../../crypto/container.js';
 import {
   accessDeclinedSettingKey,
   accessGrantSettingKey,
   accessLogSettingKey,
   accessMutedSettingKey,
+  accessUndoSettingKey,
+  ownUndoKey,
   SCHEDULER_STATE_SETTING_KEY,
   scheduleDeclinedSettingKey,
   scheduleMutedSettingKey,
@@ -696,7 +699,7 @@ describe('importUserDb — scheduled tasks are executable intent (TASK-20261009 
     await trusted.close();
   });
 
-  it('S9: an UNTRUSTED file’s chat messages lose `meta.schedule` — a staged suggestion is a foreign card; the data-write card and the other meta keys stay; TRUSTED keeps it', async () => {
+  it('S9: an UNTRUSTED file’s chat messages lose `meta.schedule` — a staged suggestion is a foreign card; an UNRESOLVED data-write card goes too (D-PR5-10); the other meta keys stay; TRUSTED keeps it', async () => {
     const schedule = { proposal: { title: 'morning', steps: [{ kind: 'notify', title: 'hi', body: 'there' }], spec: { kind: 'daily', time: '08:00', tz: 'device' } }, hash: 'h', channel: 'chat', threadId: 'app:x' };
     const bytes = await donorBytes((donor) => {
       donor.upsertThread('app:x', { appId: 'x', title: 'x' });
@@ -708,7 +711,11 @@ describe('importUserDb — scheduled tasks are executable intent (TASK-20261009 
     const untrusted = await open(createMemoryBackend());
     await untrusted.importUserDb(bytes);
     const rows = untrusted.listChatMessages('app:x');
-    expect(rows.map((m) => m.meta)).toEqual([{ dataWrite: { summary: 'add lunch' }, brainKind: 'byok' }, undefined, undefined]);
+    // INVERTED — D-PR5-10: the untrusted import drops an UNRESOLVED `dataWrite` card by its parsed key too
+    // (`dropImportedCards(next, keys, {unresolvedOnly: true})`; the D-PR5-1 rider "the own dataWrite import
+    // drop"). This card has no `outcome`, so it goes; the brain stamp stays. Was:
+    //   [{ dataWrite: { summary: 'add lunch' }, brainKind: 'byok' }, undefined, undefined]
+    expect(rows.map((m) => m.meta)).toEqual([{ brainKind: 'byok' }, undefined, undefined]);
     await untrusted.close();
 
     const trusted = await open(createMemoryBackend());
@@ -1560,7 +1567,10 @@ describe('importUserDb — the undo journal and the wants (TASK-20261010-host-br
     const trusted = await open(createMemoryBackend());
     await trusted.importUserDb(bytes, { trustedOrigin: true });
     expect(trusted.getSetting(undoKey)).toEqual(journal);
-    expect(trusted.getSetting(wantsKey)).toEqual(wants);
+    // INVERTED — D-PR5-2 (v2.1 note TA-Q1): the wants row is a host-derived mirror of the app's own
+    // HTML, re-derived on EVERY import whatever its origin; READER's HTML declares nothing, so the
+    // pulled row is gone (was: `expect(trusted.getSetting(wantsKey)).toEqual(wants)`).
+    expect(trusted.listSettingKeys()).not.toContain(wantsKey);
     await trusted.close();
   });
 });
@@ -1596,6 +1606,654 @@ describe('the facade’s inTransaction — forwarded for a held app, false for a
     expect(await db.driver.inTransaction(app.appId)).toBe(true);
     await db.deleteApp(app.appId);
     await expect(db.driver.inTransaction(app.appId)).resolves.toBe(false);
+    await db.close();
+  });
+});
+
+// =================================================================================================
+// TASK-20261010-host-broker PR-5 (contract v2 D-PR5-10; AC39a's db half) — the untrusted import drops
+// chat CARDS by their PARSED key. One helper, `dropImportedCards(next, keys, {unresolvedOnly: true})`,
+// walks EVERY message row with meta, `JSON.parse`s it (G5-3 [DB-4]: a meta that does not parse is
+// CLEARED on an untrusted import — the db reader throws on it and the whole thread would stop loading)
+// and drops an UNRESOLVED `schedule`, `accessWrite` or `dataWrite` card;
+// `dropImportedScheduleCards` is rewritten on it — its `meta LIKE '%"schedule"%'` pre-filter is what a
+// JSON escape (`schedule`) bypasses TODAY (S1). Resolved cards stay (a resolved card has no act);
+// a TRUSTED pull keeps everything. "Unresolved" as this lane reads the three card shapes: a schedule
+// card without `resolution`, a data-write or cross-app card without `outcome`.
+// =================================================================================================
+
+/** Every message's RAW meta text in a thread, read from the exported file — an unparseable meta cannot pass the accessor. */
+async function rawMetas(db: UserDb, threadId: string): Promise<Array<string | null>> {
+  const SQL = await initSqlJs({ locateFile: locateWasm });
+  const raw = new SQL.Database(await db.exportUserDb({ includeSecrets: true }));
+  try {
+    const rows = raw.exec(`SELECT meta FROM ${USERDB_TABLES.chatMessages} WHERE thread_id = ? ORDER BY id`, [threadId]);
+    return (rows[0]?.values ?? []).map((row) => (row[0] === null ? null : String(row[0])));
+  } finally {
+    raw.close();
+  }
+}
+
+/** Set one message's meta to raw TEXT inside exported bytes (keyed by its content) — the escaped-key planting. */
+async function plantMeta(bytes: Uint8Array, content: string, metaText: string): Promise<Uint8Array> {
+  const SQL = await initSqlJs({ locateFile: locateWasm });
+  const raw = new SQL.Database(bytes);
+  try {
+    raw.run(`UPDATE ${USERDB_TABLES.chatMessages} SET meta = ? WHERE content = ?`, [metaText, content]);
+    return raw.export();
+  } finally {
+    raw.close();
+  }
+}
+
+describe('importUserDb — chat cards dropped by their PARSED key (PR-5 D-PR5-10, S1)', () => {
+  const THREAD = 'app:budget';
+  const schedule = { proposal: { title: 'morning', steps: [{ kind: 'notify', title: 'hi', body: 'there' }], spec: { kind: 'daily', time: '08:00', tz: 'device' } }, hash: 'h', channel: 'chat', threadId: THREAD };
+  const dataWrite = { appId: READER_APP, statements: ["UPDATE expenses SET note = 'x' WHERE id = 1"], params: [[]], summary: 'add lunch', previewed: [1] };
+  const accessWrite = {
+    appId: READER_APP,
+    target: { grantId: '9d8c7b6a-5f4e-4d3c-8b2a-1f0e9d8c7b6a', grantedAt: ACCESS_AT, sourceAppId: SOURCE_APP, table: 'transactions' },
+    sql: "UPDATE transactions SET category = 'food' WHERE id = 3",
+    summary: 'files the lunch under food',
+    previewed: 1,
+  };
+
+  async function chatDonor(): Promise<Uint8Array> {
+    return donorBytes((donor) => {
+      donor.upsertThread(THREAD, { appId: READER_APP, title: 'Budget' });
+      donor.appendChatMessage(THREAD, 'assistant', 'cross unresolved', { meta: { accessWrite, brainKind: 'byok' } });
+      donor.appendChatMessage(THREAD, 'assistant', 'cross applied', { meta: { accessWrite: { ...accessWrite, outcome: 'applied', undoId: '8c6f1d2e-3a4b-4c5d-8e6f-7a8b9c0d1e2f' } } });
+      donor.appendChatMessage(THREAD, 'assistant', 'own unresolved', { meta: { dataWrite } });
+      donor.appendChatMessage(THREAD, 'assistant', 'own applied', { meta: { dataWrite: { ...dataWrite, outcome: 'applied', executed: [1] } } });
+      donor.appendChatMessage(THREAD, 'assistant', 'schedule unresolved', { meta: { schedule } });
+      donor.appendChatMessage(THREAD, 'assistant', 'schedule answered', { meta: { schedule: { ...schedule, resolution: 'declined' } } });
+    });
+  }
+
+  it('D-PR5-10 UNTRUSTED: an unresolved accessWrite, dataWrite or schedule card goes; the other meta keys stay', async () => {
+    const db = await open(backend);
+    await db.importUserDb(await chatDonor());
+    const metas = db.listChatMessages(THREAD).map((m) => m.meta as Record<string, unknown> | undefined);
+    expect(metas[0]).toEqual({ brainKind: 'byok' });
+    expect(metas[2]).toBeUndefined();
+    expect(metas[4]).toBeUndefined();
+    await db.close();
+  });
+
+  it('D-PR5-10 UNTRUSTED: a RESOLVED card of each kind stays — it carries no act', async () => {
+    const db = await open(backend);
+    await db.importUserDb(await chatDonor());
+    const metas = db.listChatMessages(THREAD).map((m) => m.meta as Record<string, unknown> | undefined);
+    expect(metas[1]).toEqual({ accessWrite: { ...accessWrite, outcome: 'applied', undoId: '8c6f1d2e-3a4b-4c5d-8e6f-7a8b9c0d1e2f' } });
+    expect(metas[3]).toEqual({ dataWrite: { ...dataWrite, outcome: 'applied', executed: [1] } });
+    expect(metas[5]).toEqual({ schedule: { ...schedule, resolution: 'declined' } });
+    await db.close();
+  });
+
+  it('D-PR5-10 UNTRUSTED: a JSON-ESCAPED key is the same key — \\u0073chedule, \\u0061ccessWrite and \\u0064ataWrite cards go (the LIKE pre-filter bypass, S1)', async () => {
+    let bytes = await chatDonor();
+    bytes = await plantMeta(bytes, 'schedule unresolved', JSON.stringify({ schedule }).replace('"schedule"', '"\\u0073chedule"'));
+    bytes = await plantMeta(bytes, 'cross unresolved', JSON.stringify({ accessWrite, brainKind: 'byok' }).replace('"accessWrite"', '"\\u0061ccessWrite"'));
+    bytes = await plantMeta(bytes, 'own unresolved', JSON.stringify({ dataWrite, note: 'kept' }).replace('"dataWrite"', '"\\u0064ataWrite"'));
+    const db = await open(backend);
+    await db.importUserDb(bytes);
+    const metas = db.listChatMessages(THREAD).map((m) => m.meta as Record<string, unknown> | undefined);
+    expect(metas[4]).toBeUndefined();
+    expect(metas[0]).toEqual({ brainKind: 'byok' });
+    expect(metas[2]).toEqual({ note: 'kept' });
+    await db.close();
+  });
+
+  // G5-3 [DB-4] — INVERTED (was: "a meta that does not parse is KEPT verbatim (the reader ignores it
+  // too)"). The premise was false: `listChatMessages` JSON.parses every meta and throws on that row,
+  // so one planted unparseable meta made the whole thread unreadable. An untrusted import CLEARS it.
+  it('G5-3 UNTRUSTED: a meta that does not parse is CLEARED (set to NULL) — and the thread lists', async () => {
+    const junk = '{"accessWrite": {"appId": "x", "sql": "UPDATE t SET a = 1 WHERE id = 1"'; // truncated JSON
+    const bytes = await plantMeta(await chatDonor(), 'cross unresolved', junk);
+    const db = await open(backend);
+    await db.importUserDb(bytes);
+    expect((await rawMetas(db, THREAD))[0]).toBeNull();
+    const listed = db.listChatMessages(THREAD);
+    expect(listed.map((m) => m.content)).toEqual(['cross unresolved', 'cross applied', 'own unresolved', 'own applied', 'schedule unresolved', 'schedule answered']);
+    expect(listed[0]?.meta).toBeUndefined();
+    await db.close();
+  });
+
+  it('D-PR5-10 TRUSTED: every card stays exactly as it is — resolved or not, escaped or not', async () => {
+    const escaped = JSON.stringify({ schedule }).replace('"schedule"', '"\\u0073chedule"');
+    const bytes = await plantMeta(await chatDonor(), 'schedule unresolved', escaped);
+    const db = await open(backend);
+    await db.importUserDb(bytes, { trustedOrigin: true });
+    const metas = db.listChatMessages(THREAD).map((m) => m.meta as Record<string, unknown> | undefined);
+    expect(metas[0]).toEqual({ accessWrite, brainKind: 'byok' });
+    expect(metas[2]).toEqual({ dataWrite });
+    expect(metas[4]).toEqual({ schedule });
+    expect((await rawMetas(db, THREAD))[4]).toBe(escaped);
+    await db.close();
+  });
+});
+
+// =================================================================================================
+// TASK-20261010-host-broker PR-5 (contract v2 D-PR5-8; AC37's import-seam half) — the history carry.
+// `UserDbImportOptions.carryHistorySince?: string | null` (ABSENT = no carry: the UI's untrusted
+// import and the recovery restore are unchanged); `report.history?: {carried, dropped, restopped}` —
+// a NEW seat, `report.access`'s exact pins untouched. With the option, the import (the sync loop's
+// pull) carries the LOCAL device's `accessLog:*` lines newer than `since` into the pulled image, the
+// undo journals FOLLOW the pulled image, and a grant revoked HERE stays revoked whatever the pull
+// says (a stop wins). `UserDb.carryFromImage(bytes, {since}) → Promise<{carried, restopped}>` is the
+// other direction (*keep this device's copy*): it opens a pulled image through the SAME decode the
+// import uses and carries ITS lines and revocations into the live file; an image it cannot open
+// carries nothing and never throws.
+// =================================================================================================
+
+describe('importUserDb({carryHistorySince}) — the history carried into the pulled image (PR-5 D-PR5-8, AC37)', () => {
+  const READ_AT = '2026-10-10T09:00:00.000Z';
+  const readLine = (grantId: string, over: Record<string, unknown> = {}) => accessEntry(grantId, { kind: 'read', at: READ_AT, sql: 'SELECT amount FROM transactions', rows: 2, ...over });
+
+  /** The local device: both apps, the grant, its granted line and one read only THIS device saw. */
+  async function localWith(g: AccessGrant): Promise<UserDb> {
+    const db = await open(backend);
+    installAccessApps(db);
+    db.putAccessGrant(g);
+    db.appendAccessLog(SOURCE_APP, accessEntry(g.id));
+    db.appendAccessLog(SOURCE_APP, readLine(g.id));
+    return db;
+  }
+
+  it('D-PR5-8 the local line the pull lacks is carried; a natural-key match is not; report.history counts', async () => {
+    const g = accessGrant();
+    const pulled = await accessDonor((donor) => {
+      donor.putAccessGrant(g);
+      donor.appendAccessLog(SOURCE_APP, accessEntry(g.id));
+    });
+    const db = await localWith(g);
+
+    const report = await db.importUserDb(pulled, { trustedOrigin: true, carryHistorySince: null });
+
+    expect(db.listAccessLog(SOURCE_APP).map((e) => [e.kind, e.at])).toEqual([
+      ['read', READ_AT],
+      ['granted', ACCESS_AT],
+    ]);
+    expect(report.history).toEqual({ carried: 1, dropped: 0, restopped: 0, rewritten: 1 }); // Gate-5 fold G5-7: the carry reports rewritten (rows written)
+    expect(report.access).toEqual({ suspendedGrants: 0, removedGrants: 0, taggedLogEntries: 0 }); // the access seat's pins are untouched
+    await db.close();
+  });
+
+  it('D-PR5-8 since: a local line no newer than since is not carried', async () => {
+    const g = accessGrant();
+    const pulled = await accessDonor((donor) => donor.putAccessGrant(g));
+    const db = await localWith(g);
+
+    const report = await db.importUserDb(pulled, { trustedOrigin: true, carryHistorySince: '2026-10-10T09:30:00.000Z' });
+
+    expect(db.listAccessLog(SOURCE_APP)).toEqual([]);
+    expect(report.history?.carried).toBe(0);
+    await db.close();
+  });
+
+  it('D-PR5-8 ABSENT carryHistorySince carries nothing and the report has no history seat (the UI import and the restore are unchanged)', async () => {
+    const g = accessGrant();
+    const pulled = await accessDonor((donor) => {
+      donor.putAccessGrant(g);
+      donor.appendAccessLog(SOURCE_APP, accessEntry(g.id));
+    });
+    const db = await localWith(g);
+
+    const report = await db.importUserDb(pulled, { trustedOrigin: true });
+
+    expect(db.listAccessLog(SOURCE_APP).map((e) => e.kind)).toEqual(['granted']);
+    expect('history' in report).toBe(false);
+    await db.close();
+  });
+
+  it('D-PR5-8 a carried wrote line loses its undoId; the undo journals FOLLOW the pulled image', async () => {
+    const g = accessGrant({ access: 'write', scope: { tables: [{ name: 'transactions', columns: ['amount', 'category'], write: true }] } });
+    const pulledJournal = [{ id: crypto.randomUUID(), note: 'the pulled image\'s journal' }];
+    const pulled = await accessDonor((donor) => {
+      donor.putAccessGrant(g);
+      donor.setSetting(accessUndoSettingKey(SOURCE_APP), pulledJournal);
+    });
+    const db = await open(backend);
+    installAccessApps(db);
+    db.putAccessGrant(g);
+    const undoId = '8c6f1d2e-3a4b-4c5d-8e6f-7a8b9c0d1e2f';
+    db.appendAccessLog(SOURCE_APP, accessEntry(g.id, { kind: 'wrote', at: READ_AT, authority: 'permission', changes: 1, undoId, via: 'app' }));
+    db.setSetting(accessUndoSettingKey(SOURCE_APP), [{ id: undoId, note: 'this device\'s journal' }]);
+    db.setSetting(ownUndoKey(READER_APP, 'approval'), [{ id: crypto.randomUUID() }]);
+
+    const report = await db.importUserDb(pulled, { trustedOrigin: true, carryHistorySince: null });
+
+    const [wrote] = db.listAccessLog(SOURCE_APP);
+    expect(wrote).toMatchObject({ kind: 'wrote', authority: 'permission', changes: 1, via: 'app' });
+    expect(wrote?.undoId).toBeUndefined();
+    expect(report.history?.carried).toBe(1);
+    expect(db.getSetting(accessUndoSettingKey(SOURCE_APP))).toEqual(pulledJournal);
+    expect(db.listSettingKeys()).not.toContain(ownUndoKey(READER_APP, 'approval'));
+    await db.close();
+  });
+
+  it('D-PR5-8 a source the pulled image does not hold: its local lines are dropped and counted', async () => {
+    const g = accessGrant();
+    const pulled = await donorBytes((donor) => donor.installApp({ appId: READER_APP, displayName: 'Budget', html: '<html>budget</html>' }));
+    const db = await localWith(g);
+
+    const report = await db.importUserDb(pulled, { trustedOrigin: true, carryHistorySince: null });
+
+    expect(db.listSettingKeys()).not.toContain(accessLogSettingKey(SOURCE_APP));
+    expect(report.history).toEqual({ carried: 0, dropped: 2, restopped: 0, rewritten: 0 }); // Gate-5 fold G5-7: the carry reports rewritten (rows written)
+    await db.close();
+  });
+
+  it('D-PR5-8 A STOP WINS: a grant revoked here stays revoked when the pull carries it active — restopped counts it', async () => {
+    const g = accessGrant();
+    const pulled = await accessDonor((donor) => donor.putAccessGrant({ ...g, reads: 7, updatedAt: '2026-10-11T07:00:00.000Z' }));
+    const db = await open(backend);
+    installAccessApps(db);
+    const stoppedAt = '2026-10-11T09:00:00.000Z';
+    const stopped = { ...g, status: 'revoked' as const, revokedAt: stoppedAt, updatedAt: stoppedAt };
+    db.putAccessGrant(stopped);
+
+    const report = await db.importUserDb(pulled, { trustedOrigin: true, carryHistorySince: null });
+
+    expect(db.getAccessGrant(g.id)).toEqual(stopped);
+    expect(report.history?.restopped).toBe(1);
+    await db.close();
+  });
+
+  it('D-PR5-8 A STOP WINS over a pulled row that does not parse, too', async () => {
+    const g = accessGrant();
+    const exported = await accessDonor((donor) => donor.putAccessGrant(g));
+    const pulled = await plantRaw(exported, [[accessGrantSettingKey(g.id), { ...g, auditTrail: 'a newer hub\'s field' }]]);
+    const db = await open(backend);
+    installAccessApps(db);
+    const stoppedAt = '2026-10-11T09:00:00.000Z';
+    const stopped = { ...g, status: 'revoked' as const, revokedAt: stoppedAt, updatedAt: stoppedAt };
+    db.putAccessGrant(stopped);
+
+    const report = await db.importUserDb(pulled, { trustedOrigin: true, carryHistorySince: null });
+
+    expect(db.getSetting(accessGrantSettingKey(g.id))).toEqual(stopped);
+    expect(report.history?.restopped).toBe(1);
+    await db.close();
+  });
+
+  it('D-PR5-8 guard: WITHOUT the option a trusted pull keeps the pulled row as today (the restore is unchanged)', async () => {
+    const g = accessGrant();
+    const pulled = await accessDonor((donor) => donor.putAccessGrant(g));
+    const db = await open(backend);
+    installAccessApps(db);
+    db.putAccessGrant({ ...g, status: 'revoked', revokedAt: '2026-10-11T09:00:00.000Z', updatedAt: '2026-10-11T09:00:00.000Z' });
+
+    await db.importUserDb(pulled, { trustedOrigin: true });
+
+    expect(db.getAccessGrant(g.id)).toEqual(g);
+    await db.close();
+  });
+});
+
+describe('UserDb.carryFromImage — keep this device\'s copy, carry the origin\'s history (PR-5 D-PR5-8, AC37)', () => {
+  const NEWER = '2026-10-11T10:00:00.000Z';
+
+  it('D-PR5-8 the origin\'s lines and revocations come into the live file; nothing else changes', async () => {
+    const g = accessGrant();
+    const stoppedAt = '2026-10-11T09:00:00.000Z';
+    const originRevoked = { ...g, status: 'revoked' as const, revokedAt: stoppedAt, updatedAt: stoppedAt };
+    const origin = await accessDonor((donor) => {
+      donor.putAccessGrant(originRevoked);
+      donor.appendAccessLog(SOURCE_APP, accessEntry(g.id));
+      donor.appendAccessLog(SOURCE_APP, accessEntry(g.id, { kind: 'revoked', at: stoppedAt }));
+      donor.appendAccessLog(SOURCE_APP, accessEntry(g.id, { kind: 'read', at: NEWER, sql: 'SELECT category FROM transactions', rows: 4 }));
+      donor.setSetting('who', 'origin');
+    });
+    const db = await open(backend);
+    installAccessApps(db);
+    db.putAccessGrant(g);
+    db.appendAccessLog(SOURCE_APP, accessEntry(g.id));
+    db.setSetting('who', 'local');
+
+    const result = await db.carryFromImage(origin, { since: null });
+
+    expect(result).toEqual({ carried: 2, restopped: 1 });
+    expect(db.listAccessLog(SOURCE_APP).map((e) => e.kind)).toEqual(['read', 'revoked', 'granted']);
+    expect(db.getAccessGrant(g.id)).toEqual(originRevoked);
+    expect(db.getSetting('who')).toBe('local'); // the data is this device's: only the history and the stop moved
+    await db.close();
+  });
+
+  it('D-PR5-8 since applies: the origin\'s lines no newer than since stay where they are', async () => {
+    const g = accessGrant();
+    const origin = await accessDonor((donor) => {
+      donor.putAccessGrant(g);
+      donor.appendAccessLog(SOURCE_APP, accessEntry(g.id, { kind: 'read', at: '2026-10-10T09:00:00.000Z', sql: 'SELECT 1', rows: 1 }));
+    });
+    const db = await open(backend);
+    installAccessApps(db);
+    db.putAccessGrant(g);
+
+    const result = await db.carryFromImage(origin, { since: '2026-10-10T12:00:00.000Z' });
+
+    expect(result).toEqual({ carried: 0, restopped: 0 });
+    expect(db.listAccessLog(SOURCE_APP)).toEqual([]);
+    await db.close();
+  });
+
+  it('D-PR5-8 a SEALED image it cannot open carries nothing and never throws — the user\'s choice is never blocked', async () => {
+    const g = accessGrant();
+    const plain = await accessDonor((donor) => {
+      donor.putAccessGrant(g);
+      donor.appendAccessLog(SOURCE_APP, accessEntry(g.id, { kind: 'read', at: NEWER, sql: 'SELECT 1', rows: 1 }));
+    });
+    const sealed = await encryptContainer(plain, { passphrase: 'not this device\'s', recoveryKey: generateRecoveryKey() });
+    const db = await open(backend);
+    installAccessApps(db);
+    db.putAccessGrant(g);
+
+    await expect(db.carryFromImage(sealed, { since: null })).resolves.toEqual({ carried: 0, restopped: 0 });
+    await expect(db.carryFromImage(new TextEncoder().encode('not a database at all'), { since: null })).resolves.toEqual({ carried: 0, restopped: 0 });
+    expect(db.listAccessLog(SOURCE_APP)).toEqual([]);
+    expect(db.getAccessGrant(g.id)).toEqual(g);
+    await db.close();
+  });
+});
+
+// =================================================================================================
+// TASK-20261010-host-broker PR-5 Gate 5 — the db fold's pins (G5-1, G5-2, G5-6, G5-7; G5-3 is the
+// inverted row in the D-PR5-10 block above).
+//
+// G5-1 [DB-1, SA-1, SB-1]: "answered" is a resolution VALUE the reader accepts, never a present key.
+// The vocabularies live in protocol (`chat-cards.ts`); spelled here as the reader spells them, so a
+// db pin never imports a name the protocol lane has not landed:
+//   schedule `resolution` ∈ {scheduled, declined, stale};
+//   dataWrite `outcome` ∈ {applied, declined, drifted, failed, undone};
+//   accessWrite `outcome` ∈ {applied, declined, drifted, failed};
+//   access (the ask card) `resolution.kind` ∈ {allowed, not-now, declined, failed}.
+// A seat that is PRESENT but outside its vocabulary (null, a planted word, a number, a word from
+// another card's list) is UNANSWERED: an untrusted import drops the card; a trusted pull keeps it.
+// G5-2 [DB-5, SA-3]: the ask card (`meta.access`) joins the drop list; [SB-5] the host-voiced fetch
+// facts (`meta.fetched`, G5-17) on a user row are dropped by an untrusted import.
+// =================================================================================================
+
+describe('G5-1 / G5-2 — an untrusted import drops a card whose answer seat is absent OR outside its vocabulary', () => {
+  const THREAD = 'app:budget';
+  const schedule = { proposal: { title: 'morning', steps: [{ kind: 'notify', title: 'hi', body: 'there' }], spec: { kind: 'daily', time: '08:00', tz: 'device' } }, hash: 'h', channel: 'chat', threadId: THREAD };
+  const dataWrite = { appId: READER_APP, statements: ['DELETE FROM notes WHERE id > 0'], params: [[]], summary: 'tidy up', previewed: [3] };
+  const accessWrite = {
+    appId: READER_APP,
+    target: { grantId: '9d8c7b6a-5f4e-4d3c-8b2a-1f0e9d8c7b6a', grantedAt: ACCESS_AT, sourceAppId: SOURCE_APP, table: 'transactions' },
+    sql: "UPDATE transactions SET category = 'food' WHERE id = 3",
+    summary: 'files the lunch under food',
+    previewed: 1,
+  };
+  const ask = { purpose: 'to tidy your ledger', hints: { tables: ['transactions'] }, access: 'write', appId: READER_APP, threadId: THREAD };
+  const facts = [{ source: 'Ledger', outcome: 'fresh' }, { source: 'Pantry', outcome: 'recent', minutes: 4, ok: true }];
+
+  /** A donor thread: one message per [content, meta] — every meta also carries a key that must survive. */
+  async function donorWith(rows: ReadonlyArray<readonly [content: string, meta: Record<string, unknown>, role?: 'user' | 'assistant']>): Promise<Uint8Array> {
+    return donorBytes((donor) => {
+      donor.upsertThread(THREAD, { appId: READER_APP, title: 'Budget' });
+      for (const [content, meta, role] of rows) donor.appendChatMessage(THREAD, role ?? 'assistant', content, { meta: { ...meta, brainKind: 'byok' } });
+    });
+  }
+
+  const metasAfter = async (bytes: Uint8Array, trustedOrigin: boolean): Promise<Array<Record<string, unknown> | undefined>> => {
+    const db = await open(createMemoryBackend());
+    await db.importUserDb(bytes, trustedOrigin ? { trustedOrigin: true } : undefined);
+    const metas = db.listChatMessages(THREAD).map((m) => m.meta as Record<string, unknown> | undefined);
+    await db.close();
+    return metas;
+  };
+
+  const PLANTED_OWN: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
+    ['own outcome null', { dataWrite: { ...dataWrite, outcome: null } }],
+    ['own outcome bogus', { dataWrite: { ...dataWrite, outcome: 'bogus' } }],
+    ['own outcome pending', { dataWrite: { ...dataWrite, outcome: 'pending' } }],
+    ['own outcome 42', { dataWrite: { ...dataWrite, outcome: 42 } }],
+  ];
+  const PLANTED_CROSS: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
+    ['cross outcome bogus', { accessWrite: { ...accessWrite, outcome: 'bogus' } }],
+    ['cross outcome null', { accessWrite: { ...accessWrite, outcome: null } }],
+    // `undone` is the OWN card's word: the cross-app card's vocabulary has no such outcome.
+    ['cross outcome undone', { accessWrite: { ...accessWrite, outcome: 'undone' } }],
+  ];
+  const PLANTED_SCHEDULE: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
+    ['schedule resolution null', { schedule: { ...schedule, resolution: null } }],
+    ['schedule resolution 7', { schedule: { ...schedule, resolution: 7 } }],
+    ['schedule resolution applied', { schedule: { ...schedule, resolution: 'applied' } }],
+  ];
+
+  for (const [label, planted] of [
+    ['dataWrite', PLANTED_OWN],
+    ['accessWrite', PLANTED_CROSS],
+    ['schedule', PLANTED_SCHEDULE],
+  ] as const) {
+    it(`G5-1 UNTRUSTED: a ${label} card whose answer seat is present but outside its vocabulary is DROPPED — the rest of the meta stays`, async () => {
+      const metas = await metasAfter(await donorWith(planted), false);
+      planted.forEach(([content], index) => expect(metas[index], content).toEqual({ brainKind: 'byok' }));
+    });
+
+    it(`G5-1 TRUSTED: the same ${label} cards are kept exactly (a pull keeps the user's own)`, async () => {
+      const metas = await metasAfter(await donorWith(planted), true);
+      planted.forEach(([content, meta], index) => expect(metas[index], content).toEqual({ ...meta, brainKind: 'byok' }));
+    });
+  }
+
+  it('G5-1 guard: every value IN its vocabulary is an answer — the card stays on an untrusted import', async () => {
+    const answered: Array<readonly [string, Record<string, unknown>]> = [
+      ...['applied', 'declined', 'drifted', 'failed', 'undone'].map((outcome) => [`own ${outcome}`, { dataWrite: { ...dataWrite, outcome } }] as const),
+      ...['applied', 'declined', 'drifted', 'failed'].map((outcome) => [`cross ${outcome}`, { accessWrite: { ...accessWrite, outcome } }] as const),
+      ...['scheduled', 'declined', 'stale'].map((resolution) => [`schedule ${resolution}`, { schedule: { ...schedule, resolution } }] as const),
+    ];
+    const metas = await metasAfter(await donorWith(answered), false);
+    answered.forEach(([content, meta], index) => expect(metas[index], content).toEqual({ ...meta, brainKind: 'byok' }));
+  });
+
+  const ASKS: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
+    ['ask unresolved', { access: ask }],
+    ['ask resolution null', { access: { ...ask, resolution: null } }],
+    ['ask resolution bogus kind', { access: { ...ask, resolution: { kind: 'bogus' } } }],
+    ['ask resolution a bare word', { access: { ...ask, resolution: 'declined' } }],
+  ];
+  const ANSWERED_ASKS: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
+    ['ask declined', { access: { ...ask, resolution: { kind: 'declined' } } }],
+    ['ask not-now', { access: { ...ask, resolution: { kind: 'not-now' } } }],
+    ['ask failed', { access: { ...ask, resolution: { kind: 'failed' } } }],
+    ['ask allowed', { access: { ...ask, resolution: { kind: 'allowed', sourceName: 'Ledger', tables: ['transactions'], duration: 'always', write: ['transactions'] } } }],
+  ];
+
+  it('G5-2 UNTRUSTED: the ASK card (meta.access) with no known resolution is DROPPED — unresolved, null, an unknown kind, a bare word', async () => {
+    const metas = await metasAfter(await donorWith(ASKS), false);
+    ASKS.forEach(([content], index) => expect(metas[index], content).toEqual({ brainKind: 'byok' }));
+  });
+
+  it('G5-2 UNTRUSTED: a JSON-escaped \\u0061ccess key is the same key — the unresolved ask goes', async () => {
+    const bytes = await plantMeta(await donorWith([['ask escaped', { access: ask }]]), 'ask escaped', JSON.stringify({ access: ask, brainKind: 'byok' }).replace('"access"', '"\\u0061ccess"'));
+    expect((await metasAfter(bytes, false))[0]).toEqual({ brainKind: 'byok' });
+  });
+
+  it('G5-2 UNTRUSTED: an ANSWERED ask card stays — it carries no act', async () => {
+    const metas = await metasAfter(await donorWith(ANSWERED_ASKS), false);
+    ANSWERED_ASKS.forEach(([content, meta], index) => expect(metas[index], content).toEqual({ ...meta, brainKind: 'byok' }));
+  });
+
+  it('G5-2 TRUSTED: every ask card stays exactly as it is, answered or not', async () => {
+    const rows = [...ASKS, ...ANSWERED_ASKS];
+    const metas = await metasAfter(await donorWith(rows), true);
+    rows.forEach(([content, meta], index) => expect(metas[index], content).toEqual({ ...meta, brainKind: 'byok' }));
+  });
+
+  it('G5-2 [SB-5] UNTRUSTED: the host-voiced fetch facts (meta.fetched) on a USER row are dropped — the row and the rest of its meta stay', async () => {
+    const db = await open(backend);
+    await db.importUserDb(await donorWith([['what did I spend?', { fetched: facts }, 'user']]));
+    const [row] = db.listChatMessages(THREAD);
+    expect(row?.content).toBe('what did I spend?');
+    expect(row?.role).toBe('user');
+    expect(row?.meta).toEqual({ brainKind: 'byok' });
+    await db.close();
+  });
+
+  it('G5-2 [SB-5] TRUSTED: a pull keeps the fetch facts', async () => {
+    expect((await metasAfter(await donorWith([['what did I spend?', { fetched: facts }, 'user']]), true))[0]).toEqual({ fetched: facts, brainKind: 'byok' });
+  });
+});
+
+// =================================================================================================
+// G5-6 [DB-6]: both identity maps are computed BEFORE the synchronous snapshots, so the
+// snapshot → swap window holds only `inner.close()` again (as before PR-5). Pinned by its effect: a
+// STOP made while the import is hashing the apps (the first sha256 the import asks for) is seen by
+// the grant snapshot, so the file's active twin of that grant does not come back active.
+// =================================================================================================
+
+describe('G5-6 — the import hashes the apps BEFORE it snapshots the grants (DB-6)', () => {
+  it('G5-6 a stop made while the import hashes survives the swap — the file\'s active twin is not live afterwards', async () => {
+    const g = accessGrant();
+    const bytes = await accessDonor((donor) => donor.putAccessGrant(g)); // intent-identical, active
+    const db = await open(backend);
+    installAccessApps(db);
+    db.putAccessGrant(g);
+    const stoppedAt = '2026-10-11T09:00:00.000Z';
+    const stopped = { ...g, status: 'revoked' as const, revokedAt: stoppedAt, updatedAt: stoppedAt };
+
+    const subtle = globalThis.crypto.subtle as unknown as { digest: (algorithm: AlgorithmIdentifier, data: BufferSource) => Promise<ArrayBuffer> };
+    const realDigest = subtle.digest.bind(subtle);
+    let stoppedMidImport = false;
+    const spy = vi.spyOn(subtle, 'digest').mockImplementation(async (algorithm, data) => {
+      if (!stoppedMidImport) {
+        stoppedMidImport = true;
+        db.putAccessGrant(stopped); // the user's stop, landing during the import's first await on a hash
+      }
+      return realDigest(algorithm, data);
+    });
+    try {
+      await db.importUserDb(bytes);
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(stoppedMidImport, 'the import hashed the apps').toBe(true);
+    expect(db.getAccessGrant(g.id)?.status).not.toBe('active');
+    await db.close();
+  });
+
+  it('G5-6 guard: with no stop, the intent-identical grant stays active (the window change moves nothing else)', async () => {
+    const g = accessGrant();
+    const bytes = await accessDonor((donor) => donor.putAccessGrant(g));
+    const db = await open(backend);
+    installAccessApps(db);
+    db.putAccessGrant(g);
+    await db.importUserDb(bytes);
+    expect(db.getAccessGrant(g.id)?.status).toBe('active');
+    await db.close();
+  });
+});
+
+// =================================================================================================
+// G5-7 [DB-7]: (a) the carry reports `rewritten` (the history ROWS it wrote) and any written row
+// marks the file dirty — a count-only merge reaches the backend and moves the loop
+// (`report.history.rewritten`); (b) a loser line whose NATURAL KEY exists on both sides is a candidate
+// whatever its `at` — a coalesced read group that began before `since` and grew after it keeps the
+// LARGER count (only the max-merge applies; a line the winner lacks still obeys `since`).
+// `carryFromImage`'s answer stays `{carried, restopped}` (this lane's reading: the loop never reads it).
+// =================================================================================================
+
+describe('G5-7 — a count-only merge is a write: rewritten, dirty, and a straddling group keeps the larger count (DB-7)', () => {
+  const GROUP_AT = '2026-10-10T09:00:00.000Z';
+  const SINCE = '2026-10-10T09:00:30.000Z';
+  const groupLine = (grantId: string, count: number) => accessEntry(grantId, { kind: 'read', at: GROUP_AT, sql: 'SELECT amount FROM transactions', rows: 2, count });
+  const historyOf = (report: unknown): Record<string, unknown> | undefined => (report as { history?: Record<string, unknown> }).history;
+
+  it('G5-7 carryFromImage: a recount-only carry marks the file dirty — the merged count reaches the backend', async () => {
+    const g = accessGrant();
+    const origin = await accessDonor((donor) => {
+      donor.putAccessGrant(g);
+      donor.appendAccessLog(SOURCE_APP, groupLine(g.id, 4));
+    });
+    const db = await open(backend);
+    installAccessApps(db);
+    db.putAccessGrant(g);
+    db.appendAccessLog(SOURCE_APP, groupLine(g.id, 1));
+    await db.flush(); // the backend now holds count 1, and the file is clean
+
+    const result = await db.carryFromImage(origin, { since: null });
+
+    expect(result).toMatchObject({ carried: 0, restopped: 0 });
+    expect(db.listAccessLog(SOURCE_APP)[0]?.count).toBe(4); // merged in memory …
+    await db.close(); // … and a close persists only a DIRTY file
+    const reopened = await open(backend);
+    expect(reopened.listAccessLog(SOURCE_APP)[0]?.count).toBe(4);
+    await reopened.close();
+  });
+
+  it('G5-7 the pull: a recount-only carry reports rewritten 1 (and carried 0) on report.history', async () => {
+    const g = accessGrant();
+    const pulled = await accessDonor((donor) => {
+      donor.putAccessGrant(g);
+      donor.appendAccessLog(SOURCE_APP, groupLine(g.id, 1));
+    });
+    const db = await open(backend);
+    installAccessApps(db);
+    db.putAccessGrant(g);
+    db.appendAccessLog(SOURCE_APP, groupLine(g.id, 3));
+
+    const report = await db.importUserDb(pulled, { trustedOrigin: true, carryHistorySince: null });
+
+    expect(db.listAccessLog(SOURCE_APP)[0]?.count).toBe(3);
+    expect(historyOf(report)).toMatchObject({ carried: 0, restopped: 0, rewritten: 1 });
+    await db.close();
+  });
+
+  it('G5-7 the pull: nothing to carry reports rewritten 0', async () => {
+    const g = accessGrant();
+    const pulled = await accessDonor((donor) => {
+      donor.putAccessGrant(g);
+      donor.appendAccessLog(SOURCE_APP, groupLine(g.id, 3));
+    });
+    const db = await open(backend);
+    installAccessApps(db);
+    db.putAccessGrant(g);
+    db.appendAccessLog(SOURCE_APP, groupLine(g.id, 3));
+
+    const report = await db.importUserDb(pulled, { trustedOrigin: true, carryHistorySince: null });
+
+    expect(historyOf(report)).toMatchObject({ carried: 0, rewritten: 0 });
+    await db.close();
+  });
+
+  it('G5-7 the pull: a group that began BEFORE since and grew after it keeps the larger count; a line the pull lacks still obeys since', async () => {
+    const g = accessGrant();
+    const pulled = await accessDonor((donor) => {
+      donor.putAccessGrant(g);
+      donor.appendAccessLog(SOURCE_APP, groupLine(g.id, 1)); // what the origin saw of the group
+    });
+    const db = await open(backend);
+    installAccessApps(db);
+    db.putAccessGrant(g);
+    db.appendAccessLog(SOURCE_APP, accessEntry(g.id, { kind: 'read', at: '2026-10-10T08:59:50.000Z', sql: 'SELECT other FROM transactions', rows: 1 })); // older than since, the pull lacks it
+    db.appendAccessLog(SOURCE_APP, groupLine(g.id, 3)); // the group grew to 3 here, after since
+
+    const report = await db.importUserDb(pulled, { trustedOrigin: true, carryHistorySince: SINCE });
+
+    const log = db.listAccessLog(SOURCE_APP);
+    expect(log).toHaveLength(1);
+    expect(log[0]).toMatchObject({ at: GROUP_AT, count: 3, sql: 'SELECT amount FROM transactions' });
+    expect(historyOf(report)).toMatchObject({ carried: 0, rewritten: 1 });
+    await db.close();
+  });
+
+  it('G5-7 carryFromImage: the origin\'s group that straddles since keeps the larger count here too', async () => {
+    const g = accessGrant();
+    const origin = await accessDonor((donor) => {
+      donor.putAccessGrant(g);
+      donor.appendAccessLog(SOURCE_APP, groupLine(g.id, 5));
+    });
+    const db = await open(backend);
+    installAccessApps(db);
+    db.putAccessGrant(g);
+    db.appendAccessLog(SOURCE_APP, groupLine(g.id, 2));
+
+    await db.carryFromImage(origin, { since: SINCE });
+
+    expect(db.listAccessLog(SOURCE_APP)).toHaveLength(1);
+    expect(db.listAccessLog(SOURCE_APP)[0]?.count).toBe(5);
     await db.close();
   });
 });

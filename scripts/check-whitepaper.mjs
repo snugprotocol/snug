@@ -1,18 +1,25 @@
 #!/usr/bin/env node
-// check-whitepaper.mjs — conformance checks for the Snug Protocol whitepaper, edition 5
-// (TASK-20261010-host-broker PR-3; edition 4 was TASK-20261010-cross-app-access, edition 3
-// TASK-20260822-spec-10-final, edition 2 TASK-20260820, edition 1 TASK-20260807).
+// check-whitepaper.mjs — conformance checks for the Snug Protocol whitepaper, edition 6
+// (TASK-20261010-host-broker PR-4 and PR-5; edition 5 was its PR-3, edition 4
+// TASK-20261010-cross-app-access, edition 3 TASK-20260822-spec-10-final, edition 2
+// TASK-20260820, edition 1 TASK-20260807).
 //
 // The whitepaper is a DERIVATIVE publication: the spec is normative, the paper only
 // explains it. So the paper must never be the place a constant, a frame name, or a rule
 // drifts. This checker treats the spec as a FIXTURE and fails when the two disagree.
 //
-// Edition-5 fixture: Specification 1.2 (docs/spec-drafts/SPEC.md — TASK-20261010-cross-app-access
-// renamed it; TASK-20261010-host-broker PR-3 took it to 1.2) plus the published schemas
-// exported from packages/protocol — the monorepo is the master (SPEC_SYNC), so
-// pre-publication the paper is checked against the staged spec. After the 1.2 push, point
-// --spec at a spec-repo clone and the same checks run against its SPEC.md (the 1.2 document;
-// the old draft filenames there are pointer stubs, never fixtures).
+// Edition-6 fixture: Specification 1.3 (docs/spec-drafts/SPEC.md — TASK-20261010-cross-app-access
+// renamed it; TASK-20261010-host-broker took it to 1.2 in PR-3 and to 1.3 in PR-4 and PR-5) plus
+// the published schemas exported from packages/protocol — the monorepo is the master
+// (SPEC_SYNC), so pre-publication the paper is checked against the staged spec. After the 1.3
+// push, point --spec at a spec-repo clone and the same checks run against its SPEC.md (the 1.3
+// document; the old draft filenames there are pointer stubs, never fixtures). --spec is the
+// PUBLISH check: there a "(draft)" cover is refused.
+//
+// The version the paper documents is pinned ONCE (EXPECTED_SPEC_VERSION / EXPECTED_EDITION) and
+// checked three ways: the fixture's header says it, the newest versioned entry of
+// docs/spec-changelog.md says it (the changelog always lives in this repo, --spec or not), and
+// the paper's cover and running head say it.
 //
 // Dependency-free on purpose (node: builtins + regexes). Run via
 // `pnpm run check-whitepaper`, or directly:
@@ -23,7 +30,10 @@
 //   AC2  embedded PDF metadata carries the exact title and Author "Jeetu Maker"
 //   AC3  every protocol constant quoted in the paper matches the spec draft
 //   AC4  the frame inventory matches schemas + the draft (15 frames); R5/NET codes listed
-//   AC5  1.2 surfaces are COVERED; stale draft/RC self-description absent; superseded facts absent
+//   AC5  1.3 surfaces are COVERED; the cover and the spec header name the pinned version and
+//        edition; the spec header equals the newest changelog entry; stale draft/RC
+//        self-description absent ("(draft)" on the cover refused under --spec); superseded facts
+//        absent
 //   AC6  claim discipline: forbidden framings absent; bounded claims stay bounded
 //   AC7  figures are inline vector, numbered, and each cited in prose
 //   AC8  structural completeness; section numbering cannot drift
@@ -46,6 +56,10 @@ const SPEC_OVERRIDE = specArgIdx !== -1 ? resolve(process.argv[specArgIdx + 1]) 
 
 export const EXPECTED_TITLE = 'The Snug Protocol: An Open Protocol for Agent-Backed Personal Software';
 export const EXPECTED_AUTHOR = 'Jeetu Maker';
+// TASK-20261010-host-broker PR-5: edition 6 documents Specification 1.3.
+export const EXPECTED_SPEC_VERSION = '1.3';
+export const EXPECTED_EDITION = 6;
+const CHANGELOG = join(REPO, 'docs', 'spec-changelog.md');
 
 // ---------------------------------------------------------------- tiny check harness
 
@@ -312,6 +326,10 @@ const REQUIRED_SURFACES = [
   { label: 'the doctrine (proposes/approves)', re: /model proposes.*human approves|human approves.*host (enforces|freezes)/i },
   // TASK-20261010-cross-app-access: spec 1.1 Part VI must be covered.
   { label: 'access between apps', re: /access grant/i },
+  // TASK-20261010-host-broker PR-5: spec 1.3's host surfaces — the declaration an app writes in
+  // its own head, and a grant started from the source's side.
+  { label: 'the access declaration (1.3)', re: /snug:access-wants/ },
+  { label: "a grant started from the source's side (1.3)", re: /start from the\s+source's side/i },
 ];
 
 /** Facts that would mark the paper as stale — superseded by the current draft. */
@@ -325,28 +343,80 @@ const SUPERSEDED = [
   { re: /credential broker/i, why: 'broker/subscription custody is unbuilt — never described as existing' },
 ];
 
+/** The cover's "Specification · Edition" cell, as authored (e.g. `1.3 · edition 6`). */
+function coverLabel(html) {
+  const m = html.match(/Specification\s*·\s*Edition<\/div>\s*<div class="v">([^<]*)<\/div>/);
+  return m ? m[1].trim() : null;
+}
+
+/** The version the spec fixture's header declares: `# … Specification X.Y` and `**Version:** X.Y` must agree. */
+function specHeaderVersion(spec) {
+  const title = spec.match(/^# Snug Protocol — Specification (\d+\.\d+)\s*$/m)?.[1] ?? null;
+  const field = spec.match(/\*\*Version:\*\* (\d+\.\d+) ·/)?.[1] ?? null;
+  return { title, field };
+}
+
+/**
+ * The version of the NEWEST changelog entry that names one (`## <date> — spec X.Y …`, a `v`
+ * tolerated) — entries are newest first, so the first match is it. An internal entry that
+ * names no version is skipped rather than read as a mismatch.
+ */
+export function newestChangelogVersion(changelog) {
+  return changelog.match(/^## \d{4}-\d{2}-\d{2} — spec v?(\d+\.\d+)\b/m)?.[1] ?? null;
+}
+
+function checkVersions(html, fx) {
+  const want = EXPECTED_SPEC_VERSION;
+  const { title, field } = specHeaderVersion(fx.spec);
+  check('AC5', `spec header names specification ${want} (title and Version field)`,
+    title === want && field === want,
+    `title: ${JSON.stringify(title)}, **Version:** ${JSON.stringify(field)} — the paper documents ${want}`);
+
+  // TASK-20261010-host-broker PR-5 (D-PR5-22): the header and the changelog move together.
+  if (check('AC5', 'spec changelog exists', existsSync(CHANGELOG), `expected ${CHANGELOG}`)) {
+    const logged = newestChangelogVersion(read(CHANGELOG));
+    check('AC5', 'spec header version equals the newest changelog entry\'s',
+      logged !== null && logged === field,
+      `header **Version:** ${JSON.stringify(field)} · newest changelog entry: ${JSON.stringify(logged)}`);
+  }
+
+  const cover = coverLabel(html);
+  const coverRe = new RegExp(`^${want.replace('.', '\\.')} · edition ${EXPECTED_EDITION}( \\(draft\\))?$`);
+  check('AC5', `cover names ${want} · edition ${EXPECTED_EDITION}`,
+    cover !== null && coverRe.test(cover),
+    `cover cell: ${JSON.stringify(cover)}`);
+  // The publish check (--spec, run against the spec clone before the push lands) refuses a
+  // cover still marked as a draft: a "(draft)" edition is never what gets published.
+  if (SPEC_OVERRIDE) {
+    check('AC5', 'publish check: the cover is not marked "(draft)"',
+      cover !== null && !/\(draft\)/i.test(cover),
+      `cover cell: ${JSON.stringify(cover)} — drop "(draft)" in the publishing change`);
+  }
+}
+
 function checkCoverage(html) {
   const text = stripTags(html);
-  // Edition 5 describes the NORMATIVE Specification 1.2 — the inverse of edition 2's
-  // draft-marking requirement. The paper must claim 1.2 and must NOT self-describe as a
-  // draft, a release candidate, or not-yet-normative. (§17 stays provisional and its own
-  // check below still requires that word FOR that feature — "provisional" is a per-surface
-  // maturity marker, not a document-level draft claim.)
+  // Edition 6 describes the NORMATIVE Specification 1.3 — the inverse of edition 2's
+  // draft-marking requirement. The paper must claim 1.3 and must NOT self-describe as a
+  // release candidate or not-yet-normative. (§17 stays provisional and its own check below
+  // still requires that word FOR that feature — "provisional" is a per-surface maturity
+  // marker, not a document-level draft claim.)
   // TASK-20261010-cross-app-access: edition 4 documented Specification 1.1;
-  // TASK-20261010-host-broker PR-3: edition 5 documents Specification 1.2.
-  check('AC5', 'edition 5 names specification 1.2',
-    /spec(?:ification)?\s*1\.2/i.test(text),
+  // TASK-20261010-host-broker PR-3: edition 5 documented Specification 1.2;
+  // TASK-20261010-host-broker PR-5: edition 6 documents Specification 1.3.
+  check('AC5', `edition ${EXPECTED_EDITION} names specification ${EXPECTED_SPEC_VERSION}`,
+    new RegExp(`spec(?:ification)?\\s*${EXPECTED_SPEC_VERSION.replace('.', '\\.')}\\b`, 'i').test(text),
     'the paper must state the spec version it documents');
   check('AC5', 'no stale draft self-description',
     // TASK-20261010-cross-app-access: the frame history ("the net and open-url pairs with
     // v0.3") is the one permitted mention — it dates the frames, not this document.
     !/v0\.3/i.test(text.replace(/open-url\s+pairs\s+with\s+v0\.3/gi, ' ')) &&
       !/release\s+candidate/i.test(text) && !/not\s+yet\s+normative/i.test(text),
-    'a 1.1 paper must not carry v0.3 / release-candidate / not-yet-normative claims (beyond the frame-history clause)');
+    'a normative paper must not carry v0.3 / release-candidate / not-yet-normative claims (beyond the frame-history clause)');
 
   for (const s of REQUIRED_SURFACES) {
-    check('AC5', `1.1 surface covered: ${s.label}`, s.re.test(text),
-      'the 1.1 spec surface must be covered by this edition');
+    check('AC5', `surface covered: ${s.label}`, s.re.test(text),
+      `the ${EXPECTED_SPEC_VERSION} spec surface must be covered by this edition`);
   }
   for (const s of SUPERSEDED) {
     check('AC5', `superseded fact absent: ${s.re.source}`, !s.re.test(text), s.why);
@@ -499,10 +569,11 @@ function checkStructure(html) {
     check('AC8', 'section + figure counters declared',
       /counter-reset/.test(css) && /counter-increment/.test(css));
     // TASK-20261010-cross-app-access: the running head moved to 1.1; PR-3 of
-    // TASK-20261010-host-broker: 1.2.
+    // TASK-20261010-host-broker: 1.2; its PR-5: 1.3 (the pinned EXPECTED_SPEC_VERSION).
+    const headRe = new RegExp(`content:\\s*"[^"]*\\b${EXPECTED_SPEC_VERSION.replace('.', '\\.')}\\b[^"]*"`);
     check('AC8', 'running head names the current spec version',
-      /content:\s*"[^"]*\b1\.2\b[^"]*"/.test(css) && !/v0\.3/.test(css),
-      'a content: "…1.2…" margin-box string must carry the label (an incidental 1.2 elsewhere in the CSS must not satisfy this), and no stale v0.3');
+      headRe.test(css) && !/v0\.3/.test(css),
+      `a content: "…${EXPECTED_SPEC_VERSION}…" margin-box string must carry the label (an incidental ${EXPECTED_SPEC_VERSION} elsewhere in the CSS must not satisfy this), and no stale v0.3`);
   }
 }
 
@@ -547,6 +618,7 @@ function main() {
   checkPdf();
   checkConstants(html, fx);
   checkFrames(html, fx);
+  checkVersions(html, fx);
   checkCoverage(html);
   checkClaims(html);
   checkFigures(html);

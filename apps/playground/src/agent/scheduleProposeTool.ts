@@ -141,7 +141,9 @@ export function buildScheduleProposeTool(options: BuildScheduleProposeToolOption
             if (typeof context === 'object' && context !== null && (context as Record<string, unknown>).sql !== undefined) return NO_SQL;
             if (step.sql !== undefined || step.queries !== undefined) return NO_SQL;
             // A step that may look things up rides as the literal `true` only (TASK-20261010-host-broker
-            // PR-4, D-PR4-20); no proposal channel can carry an authority — nothing else is read here.
+            // PR-4, D-PR4-20); no proposal channel can carry an authority, nor ask other apps to fetch
+            // new data first (`refreshFirst` is the user's tick alone — PR-5, D-PR5-19, S15) — nothing
+            // else is read here.
             steps.push({
               kind: 'app-think',
               appId,

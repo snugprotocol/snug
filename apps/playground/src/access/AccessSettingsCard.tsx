@@ -17,6 +17,14 @@
 // PR-3 (D-PR3-24; DS14, DS21) reaches this card through what it already renders: the intro and
 // the *clear history* hint are copy.ts's sentences, and a write access's row carries its badge
 // through the ONE `GrantRow` — nothing here is derived twice.
+//
+// TASK-20261010-host-broker PR-5 (D-PR5-4, D-PR5-6a; D3): *apps that could work together* — at
+// most `PAIRS_MAX` pairs from `listPairSuggestions`, each *Budget could read Ledger's transactions*
+// in host words with the app's purpose quoted below it, and *review…*, which starts the declared
+// ask pinned to that source. The section keeps the act's settle, so its act line outlives the row
+// an allow removes (the pair is no pair once Budget reads Ledger); re-read on the access and
+// library revisions. Gate-5 G5-15: each re-read reads the file's grants once (IB-7), and every
+// *review…* is disabled while the ask it started is in flight (IB-5).
 
 import { useEffect, useId, useState, type ReactElement } from 'react';
 
@@ -24,26 +32,32 @@ import type { AppRecord } from '@snugprotocol/db';
 
 import '../theme/access.css';
 import '../theme/access-sheet.css';
+import { useLibraryRevision } from '../platform/signals.js';
 import { appMayUseAccess } from '../run/appCapabilityRules.js';
 import { writeFlag } from '../state/browserFlags.js';
 import { Switch } from '../schedule/ScheduleStates.js';
 import { Button } from '../ui/Button.js';
 import { Card } from '../ui/Card.js';
+import { AccessActLine, isolateNames, useAccessAct } from './AccessActLine.js';
 import { NO_ACCESS_ASKS_KEY, accessAsksOff } from './consent.js';
-import { SETTINGS_CARD } from './copy.js';
+import { CONSENT_SHEET, SETTINGS_CARD } from './copy.js';
 import { GrantRow } from './GrantRow.js';
-import { accessDeps, bumpAccessRevision, grantsForApp, useAccessRevision, type LiveGrantRow } from './grants.js';
+import { accessDeps, bumpAccessRevision, foundGrants, grantsForApp, useAccessRevision, type LiveGrantRow } from './grants.js';
+import { PAIRS_MAX, listPairSuggestions, type PairSuggestion } from './pairs.js';
 import { startUserAsk } from './userAsk.js';
 
 interface CardData {
   apps: AppRecord[];
   rows: LiveGrantRow[];
   muted: AppRecord[];
+  /** PR-5 (D-PR5-4): the pairs shown, best first — at most `PAIRS_MAX`. */
+  pairs: readonly PairSuggestion[];
   now: number;
 }
 
 function useCardData(): CardData | undefined {
   const revision = useAccessRevision();
+  const library = useLibraryRevision();
   const [data, setData] = useState<CardData | undefined>(undefined);
   useEffect(() => {
     let cancelled = false;
@@ -53,9 +67,11 @@ function useCardData(): CardData | undefined {
         if (cancelled) return;
         const now = accessDeps().now();
         const apps = db.listApps();
+        // The file's grants read ONCE per revision (IB-7) — every app's rows and the pairs share them.
+        const found = foundGrants(db);
         // Every access has exactly one app that reads: the union of each app's `reads` is every access, once.
-        const rows = apps.flatMap((app) => grantsForApp(db, app.appId, now).reads);
-        setData({ apps, rows, muted: apps.filter((app) => db.isAccessMuted(app.appId)), now });
+        const rows = apps.flatMap((app) => grantsForApp(db, app.appId, now, found).reads);
+        setData({ apps, rows, muted: apps.filter((app) => db.isAccessMuted(app.appId)), pairs: listPairSuggestions(db, now, { found }).slice(0, PAIRS_MAX), now });
       })
       .catch(() => {
         // the file is not open (a swap in flight): the card shows what it last read
@@ -63,8 +79,67 @@ function useCardData(): CardData | undefined {
     return () => {
       cancelled = true;
     };
-  }, [revision]);
+  }, [revision, library]);
   return data;
+}
+
+/** A pair's identity across re-reads: the two apps. */
+const pairKey = (pair: Pick<PairSuggestion, 'readerAppId' | 'sourceAppId'>): string => JSON.stringify([pair.readerAppId, pair.sourceAppId]);
+
+/**
+ * *apps that could work together* (D-PR5-4): one row per pair, its act, and the ONE act line of the
+ * last *review…* — in that pair's row while the row is there, under the rows once an allow (or a
+ * change in the file) took the row away.
+ */
+function PairsSection({ pairs }: { pairs: readonly PairSuggestion[] }): ReactElement | null {
+  const act = useAccessAct();
+  const [asked, setAsked] = useState<{ key: string; readerName: string } | undefined>(undefined);
+  const titleId = useId();
+  const askedKey = act.settle === undefined ? undefined : asked?.key;
+  const inRow = askedKey !== undefined && pairs.some((pair) => pairKey(pair) === askedKey);
+  if (pairs.length === 0 && askedKey === undefined) return null;
+
+  const line = (triggerGone: boolean): ReactElement => (
+    <AccessActLine readerName={asked?.readerName ?? ''} settle={act.settle} onSettle={act.setSettle} triggerGone={triggerGone} />
+  );
+  return (
+    <div className="settings-row access-sheet-section" data-testid="access-pairs">
+      <h3 className="access-sheet-section-title" id={titleId}>
+        {SETTINGS_CARD.pairsTitle}
+      </h3>
+      <ul className="access-row-list" aria-labelledby={titleId}>
+        {pairs.map((pair) => {
+          const key = pairKey(pair);
+          return (
+            <li key={key} className="access-row" data-testid="access-pair-row">
+              <p className="access-row-sentence">
+                {isolateNames((reader, source) => SETTINGS_CARD.pairRow(reader, source, pair.matchedTables), pair.readerName, pair.sourceName)}
+              </p>
+              {/* The app's own words, quoted and isolated — never the host's (D3). */}
+              <q className="access-quote">{CONSENT_SHEET.quote(pair.want.purpose)}</q>
+              <div className="access-row-state">
+                <Button
+                  variant="ghost"
+                  className="access-row-act"
+                  data-testid="access-pair-review"
+                  aria-label={SETTINGS_CARD.pairReviewName(pair.readerName, pair.sourceName, pair.matchedTables)}
+                  disabled={act.busy}
+                  onClick={(event) => {
+                    setAsked({ key, readerName: pair.readerName });
+                    void act.start(pair.readerAppId, { declared: pair.want, source: pair.sourceAppId }, pair.sourceName, event.currentTarget);
+                  }}
+                >
+                  {SETTINGS_CARD.pairReview}
+                </Button>
+              </div>
+              {inRow && askedKey === key ? line(false) : null}
+            </li>
+          );
+        })}
+      </ul>
+      {askedKey !== undefined && !inRow ? line(true) : null}
+    </div>
+  );
 }
 
 export function AccessSettingsCard(): ReactElement {
@@ -125,6 +200,8 @@ export function AccessSettingsCard(): ReactElement {
           </ul>
         )}
       </div>
+
+      {data !== undefined ? <PairsSection pairs={data.pairs} /> : null}
 
       {chosen !== undefined ? (
         <div className="settings-row access-settings-create">

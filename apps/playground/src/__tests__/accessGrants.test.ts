@@ -21,6 +21,10 @@
 // one); `kv`/`refresh` only when ticked; `provenance: 'chat'` when the pending was the chat's ask.
 // `grantView` v2 adds `write`/`kv`/`refresh` only when set and never `withheld`. The v2 input and
 // record seats are LOCAL structural types until grants.ts / the protocol export them.
+//
+// TASK-20261010-host-broker PR-5 (D-PR5-5/6; AC35, AC36): `accessCountsByApp` — distinct other apps
+// each way, live accesses only, session ones included — and the offer's belt: `carryOut` refuses
+// ANY write on a pending the source offered (`offeredBy: 'source'`), writing nothing.
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -36,7 +40,7 @@ import {
 } from '@snugprotocol/protocol';
 
 import { createAccessHandlerFor } from '../access/accessHandler.js';
-import { collectSources, pendingAccessStore } from '../access/consent.js';
+import { collectSources, pendingAccessStore, type PendingAccessRequest } from '../access/consent.js';
 import { startUserAsk } from '../access/userAsk.js';
 import {
   __setAccessDepsForTests,
@@ -595,5 +599,143 @@ describe('PR-3 — grantView v2: write, kv and refresh only when set; never with
     });
     expect(JSON.stringify(view)).not.toContain('withheld');
     expect(JSON.stringify(view)).not.toContain('category');
+  });
+});
+
+// =========================================================================================
+// TASK-20261010-host-broker PR-5 (contract v2 D-PR5-5, D-PR5-6; AC35, AC36)
+//
+// `accessCountsByApp(db, now) → ReadonlyMap<appId, {reads, readBy}>` — for the Hub tile's ONE line:
+// the DISTINCT other apps joined to each app by ≥ 1 LIVE access each way (persisted active and not
+// expired, plus this tab's session accesses), from the ONE helper `grantsForApp` also uses. And the
+// offer's fail-closed belt: `carryOut` refuses ANY write when the pending carries `offeredBy:
+// 'source'` — a forged decision writes nothing (memory-only seat; S-a's list).
+// =========================================================================================
+
+type Counts = ReadonlyMap<string, { reads: number; readBy: number }>;
+const countsOf = async (now: number = clock.now): Promise<Counts> => {
+  const grantsModule = (await import('../access/grants.js')) as unknown as { accessCountsByApp?: (db: UserDb, now: number) => Counts };
+  expect(typeof grantsModule.accessCountsByApp, 'grants.ts exports accessCountsByApp').toBe('function');
+  return grantsModule.accessCountsByApp!(db, now);
+};
+const reads = (counts: Counts, appId: string): number => counts.get(appId)?.reads ?? 0;
+const readBy = (counts: Counts, appId: string): number => counts.get(appId)?.readBy ?? 0;
+
+describe('D-PR5-6 accessCountsByApp — distinct apps, both ways, live only', () => {
+  it('one access Budget → Ledger: Budget reads 1, Ledger is read by 1, Pantry nothing', async () => {
+    await allow({ duration: 'day' });
+    const counts = await countsOf();
+    expect([reads(counts, budget), readBy(counts, budget)]).toEqual([1, 0]);
+    expect([reads(counts, ledger), readBy(counts, ledger)]).toEqual([0, 1]);
+    expect([reads(counts, pantry), readBy(counts, pantry)]).toEqual([0, 0]);
+  });
+
+  it('DISTINCT apps: two accesses for the same pair count once', async () => {
+    await allow({ duration: 'day', tables: ['transactions'] });
+    await allow({ duration: 'week', tables: ['accounts'] });
+    const counts = await countsOf();
+    expect(reads(counts, budget)).toBe(1);
+    expect(readBy(counts, ledger)).toBe(1);
+  });
+
+  it('both directions at once, across several apps', async () => {
+    await allow({ reader: budget, source: ledger });
+    await allow({ reader: budget, source: pantry, tables: ['items'] });
+    await allow({ reader: pantry, source: ledger });
+    const counts = await countsOf();
+    expect([reads(counts, budget), readBy(counts, budget)]).toEqual([2, 0]);
+    expect([reads(counts, ledger), readBy(counts, ledger)]).toEqual([0, 2]);
+    expect([reads(counts, pantry), readBy(counts, pantry)]).toEqual([1, 1]);
+  });
+
+  it('this tab’s SESSION accesses count', async () => {
+    noteReaderGeneration(budget, 0);
+    await allow({ duration: 'session', generation: 0 });
+    expect(db.listAccessGrants()).toEqual([]);
+    const counts = await countsOf();
+    expect(reads(counts, budget)).toBe(1);
+    expect(readBy(counts, ledger)).toBe(1);
+  });
+
+  it('a stopped, a paused and an expired access do NOT count', async () => {
+    const stopped = await allow({ reader: budget, source: ledger, duration: 'week' });
+    await revokeAccess(stopped.id);
+    const paused = await allow({ reader: pantry, source: ledger, duration: 'week' });
+    await suspendAccess(db, paused.id, 'reader-updated', new Date(clock.now).toISOString());
+    await allow({ reader: budget, source: pantry, tables: ['items'], duration: 'day' });
+    const later = clock.now + 2 * DAY;
+    const counts = await countsOf(later);
+    for (const appId of [budget, ledger, pantry]) expect([reads(counts, appId), readBy(counts, appId)], appId).toEqual([0, 0]);
+  });
+
+  it('nothing at all: every app at 0 (no app has a line)', async () => {
+    const counts = await countsOf();
+    for (const appId of [budget, ledger, pantry]) expect(reads(counts, appId) + readBy(counts, appId)).toBe(0);
+  });
+
+  it('agrees with grantsForApp’s live rows — one derivation, two views', async () => {
+    await allow({ reader: budget, source: ledger });
+    await allow({ reader: pantry, source: ledger });
+    const counts = await countsOf();
+    for (const appId of [budget, ledger, pantry]) {
+      const rows = grantsForApp(db, appId, clock.now);
+      const distinct = (list: typeof rows.reads, side: 'sourceAppId' | 'readerAppId'): number => new Set(list.filter((row) => row.live).map((row) => row.grant[side])).size;
+      expect(reads(counts, appId), appId).toBe(distinct(rows.reads, 'sourceAppId'));
+      expect(readBy(counts, appId), appId).toBe(distinct(rows.readBy, 'readerAppId'));
+    }
+  });
+});
+
+describe('D-PR5-5 carryOut refuses any write on an OFFER — fail closed, nothing written (AC35 negative)', () => {
+  const offer = async (): Promise<PendingAccessRequest & { offeredBy?: 'source' }> => {
+    const answer = await (startUserAsk as unknown as (id: string, opts: { source: string; offer: true }) => Promise<unknown>)(budget, { source: ledger, offer: true });
+    expect(answer).toBe('opened');
+    const pending = pendingAccessStore.get()[budget] as (PendingAccessRequest & { offeredBy?: 'source' }) | undefined;
+    expect(pending?.offeredBy, 'the offer parked').toBe('source');
+    return pending!;
+  };
+  const decide = (pending: PendingAccessRequest, tables: TableChoiceV2[]): Promise<{ kind: string; grantId?: string }> =>
+    (pending.resolve as unknown as (d: unknown) => Promise<{ kind: string; grantId?: string }>)({
+      kind: 'allow',
+      sourceAppId: ledger,
+      tables,
+      duration: 'day',
+      unattended: false,
+      kv: false,
+      refresh: false,
+    });
+
+  it('a forged decision ticking write on the offered source: refused — no access, no history line, no revision of the file', async () => {
+    const pending = await offer();
+    const outcome = await decide(pending, [{ name: 'transactions', withheld: [], write: true }]);
+    expect(outcome.kind).toBe('failed');
+    expect(db.listAccessGrants()).toEqual([]);
+    expect(grantsForApp(db, budget, clock.now).reads).toEqual([]);
+    expect(db.listAccessLog(ledger)).toEqual([]);
+  });
+
+  it('a write on ONE of two tables is refused whole — never written as a read-only access', async () => {
+    const pending = await offer();
+    const outcome = await decide(pending, [read('accounts'), { name: 'transactions', withheld: [], write: true }]);
+    expect(outcome.kind).toBe('failed');
+    expect(db.listAccessGrants()).toEqual([]);
+  });
+
+  it('the twin: a READ allow on the offer is written — provenance user, the host’s purpose, read-only', async () => {
+    const pending = await offer();
+    const outcome = await decide(pending, [read('transactions')]);
+    expect(outcome.kind).toBe('allowed');
+    const grant = db.getAccessGrant(outcome.grantId!)!;
+    expect(grant.provenance).toBe('user');
+    expect(grant.access).toBe('read');
+    expect(grant.scope.tables.every((table) => (table as { write?: boolean }).write !== true)).toBe(true);
+  });
+
+  it('the twin: a write ticked on a reader-side ask (not an offer) is still written — the belt is the offer’s only', async () => {
+    await startUserAsk(budget);
+    const pending = pendingAccessStore.get()[budget]!;
+    const outcome = await decide(pending, [{ name: 'transactions', withheld: [], write: true }]);
+    expect(outcome.kind).toBe('allowed');
+    expect(db.getAccessGrant(outcome.grantId!)?.access).toBe('write');
   });
 });

@@ -29,6 +29,16 @@
 // (D-PR3-25). A sentence an app is answered with reveals no fact about the source and invites no
 // re-ask (DS19): a refusal names the RULE, never the row, the value or the column's content.
 //
+// TASK-20261010-host-broker PR-5 (ADR-0076 §7, §11; contract v2 D-PR5-2…24 and its v2.1 notes)
+// added discovery and the doors' new verbs: what an app would like to read (`ACCESS_WANTS` — the
+// host's words around the app's own, never "declaration"), the Hub tile's line (`HUB_TILE`),
+// *apps that could work together* in Settings, the source's offer on the ⋈ sheet, the declared
+// and offered forms of the consent sheet, the *imported* provenance, the chat's cross-app change
+// (`CHAT_DOOR`'s new keys — what a brain reads, so the house's curly apostrophe), and *fetch new
+// data first* (`FETCH_FIRST` — ONE home for the chat's note and the schedule's step fact —
+// and `CHAT_FETCH`). A refresh that was stopped ends `failed` like one that failed, so
+// `REFRESH_HISTORY_WORDS.failed` says what is true of both: the fetch didn't finish.
+//
 // THE VOICE. Lowercase-leading, plain words, no exclamation marks. Apostrophes are the
 // straight ones the task file pins ("while it's open", "Budget's access"); the typographic
 // quote marks wrap the app's purpose and the away line keeps the house’s curly apostrophe
@@ -37,6 +47,7 @@
 
 import {
   ACCESS_WRITE_MAX_ROWS,
+  REFRESH_FIRST_MAX_SOURCES,
   type AccessDuration,
   type AccessGrantStatus,
   type AccessLogEntry,
@@ -70,6 +81,11 @@ export function listWords(items: readonly string[]): string {
 }
 
 /** "Ledger's transactions" · "Ledger's transactions and accounts". */
+/** The ONE clause every pair sentence is built from (Gate-5 fold IB-8): "could read Ledger's transactions". */
+const couldReadTables = (sourceName: string, tables: readonly string[]): string => `could read ${tablesPhrase(sourceName, tables)}`;
+/** The Hub's clause, with no tables named: "could read Ledger's data". */
+const couldReadData = (sourceName: string): string => `could read ${sourceName}'s data`;
+
 export function tablesPhrase(sourceName: string, tables: readonly string[]): string {
   return `${sourceName}'s ${listWords(tables)}`;
 }
@@ -190,14 +206,47 @@ function readAndChangeWords(sourceName: string, tables: readonly string[], write
 
 /** One line for the visit after the act (AC18 `data-outcome`). */
 export const STRIP_OUTCOME = {
-  /** PR-3 (D-PR3-23, DS2): the written tables, when any — "Budget can now read and change Ledger's transactions · while it's open". */
-  allowed: (readerName: string, sourceName: string, tables: readonly string[], duration: AccessDuration, write: readonly string[] = []): string =>
-    `${readerName} can now ${readAndChangeWords(sourceName, tables, write)} · ${DURATION_WORDS[duration]}`,
+  /**
+   * PR-3 (D-PR3-23, DS2): the written tables, when any — "Budget can now read and change Ledger's transactions · while it's open".
+   * PR-5 (D-PR5-15; D17): `notChange` when the ask wanted to change rows and the person ticked none —
+   * folded into the clause, "Budget can now read — not change — Ledger's transactions · for a day".
+   */
+  allowed: (
+    readerName: string,
+    sourceName: string,
+    tables: readonly string[],
+    duration: AccessDuration,
+    write: readonly string[] = [],
+    opts: { notChange?: boolean } = {},
+  ): string =>
+    opts.notChange === true && write.length === 0
+      ? `${readerName} can now read — not change — ${tablesPhrase(sourceName, tables)} · ${DURATION_WORDS[duration]}`
+      : `${readerName} can now ${readAndChangeWords(sourceName, tables, write)} · ${DURATION_WORDS[duration]}`,
   /** The undo on the allowed line. */
   undo: 'stop',
   notNow: (readerName: string): string => `not now — ${readerName} may ask again`,
   wontAskAgain: (readerName: string): string => `${readerName} won't ask this again — allow it any time from ${readerName}'s access`,
   muted: (readerName: string): string => `${readerName} won't ask again — change that in Settings`,
+} as const;
+
+// ---------------------------------------------------------------------------------------------
+// What an app would like to read (TASK-20261010-host-broker PR-5, D-PR5-2/3; D4, D5)
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * The shared install preview's note over the app's own access-wants meta: ONE sentence in the
+ * host's words, then ONE line before the app's first purpose, which the surface quotes. The person
+ * never reads "declaration" (that word is a starter's `connection.json`, glossary): the host says
+ * *would like to read*, and every form says nothing is read until they allow it.
+ */
+export const ACCESS_WANTS = {
+  /** `names`: the wants' hint tables (else their hint words), at most three; `more`: how many beyond them. No name at all → the may-ask form. */
+  preview: (appName: string, names: readonly string[], more: number): string =>
+    names.length === 0
+      ? `${appName} may ask to read your other apps' data — nothing is read until you allow it`
+      : `${appName} would like to read data like ${more > 0 ? `${names.join(', ')} and ${more} more` : listWords(names)} from your other apps — nothing is read until you allow it`,
+  /** Said before the app's purpose, which the surface quotes (`CONSENT_SHEET.quote`) — never "would like to: “to …”" (D4). */
+  forWhat: (appName: string): string => `what ${appName} says it's for:`,
 } as const;
 
 // ---------------------------------------------------------------------------------------------
@@ -221,8 +270,12 @@ export const CONSENT_SHEET = {
   notNow: 'not now',
   dontAllow: "don't allow",
   pickATable: 'choose at least one table',
-  /** The title of an ask the USER started from host chrome — theirs, never the app's want (W6 key, added after the freeze). */
-  userTitle: (readerName: string): string => `let ${readerName} read another app's data`,
+  /**
+   * The title of an ask the USER started from host chrome — theirs, never the app's want (W6 key, added after the freeze).
+   * PR-5 (D-PR5-15; DS22): the chat's ask that wants to change rows says so, as the strip's write title does.
+   */
+  userTitle: (readerName: string, wantsWrite = false): string =>
+    wantsWrite ? `let ${readerName} read and change another app's data` : `let ${readerName} read another app's data`,
   /** The instruction while no app is chosen — there is no table on screen to tick yet (W6 key, added after the freeze). */
   pickAnApp: 'choose an app',
   /**
@@ -254,6 +307,14 @@ export const CONSENT_SHEET = {
   moreOptions: 'more options…',
   /** What the disclosure's summary describes for a screen reader (Gate-5 UI-2): opening it also puts a change toggle on each ticked table. */
   moreOptionsHint: 'also shows a change toggle on each ticked table',
+  // TASK-20261010-host-broker PR-5 (D-PR5-3, D-PR5-5; D4, D7): the declared form's says-line and
+  // the source's offer, which is read-only by construction.
+  /** The declared form's says-line, before the app's quoted purpose — the preview's own words (one home). */
+  declaredSays: ACCESS_WANTS.forWhat,
+  /** The title of the sheet a SOURCE's offer opens, pinned to that source: what the person is letting happen, never "Budget wants …". */
+  offerTitle: (readerName: string, sourceName: string): string => `let ${readerName} read ${sourceName}'s data`,
+  /** `moreOptionsHint`'s twin on an offer, where no table can be changed: only the two options are behind the disclosure (D7). */
+  moreOptionsOfferHint: 'also shows settings & notes and fetching new data first',
 } as const;
 
 /**
@@ -270,6 +331,8 @@ export const CONSENT_UI = {
   failed: (message: string): string => `that did not work — ${message}`,
   /** The strip's line when the allow could not be written for a reason the user has no words for (W3b fix lane). */
   nothingAllowed: 'that did not work — nothing was allowed',
+  /** A pair's ask whose wish or app changed between the listing and the tap (PR-5 D-PR5-6a `gone`). */
+  changedSince: 'that changed since it was listed — nothing was allowed',
   /** A table on the sheet with its row count: "transactions · 412 rows". */
   tableRows: (table: string, rowCount: number): string => `${table} · ${rowsWord(rowCount)}`,
   /** The accessible name of a table's column chips. */
@@ -375,14 +438,17 @@ export const BRAIN_NAMES: Readonly<Record<'anthropic' | 'openai', { brain: strin
 const columnWords = (name: string, type: string | undefined): string => (type === undefined || type === '' ? name : `${name} ${type}`);
 
 export const CHAT_DOOR = {
-  /** The heading per source: how long the access lasts, in the sheet's own words. */
-  heading: (sourceName: string, duration: AccessDuration, expiresAt: string | undefined, now: number): string =>
-    `### From ${sourceName} (read-only · access ${duration === 'session' ? "while it's open" : expiresAt !== undefined ? `until ${shortDate(expiresAt, now)}` : 'until you stop it'})`,
-  /** One table: its full name in the copy, its columns with their types, and the row count — or the cut. */
-  tableLine: (name: string, columns: readonly string[], types: readonly string[], rows: number, truncated: boolean, totalRows?: number): string => {
+  /**
+   * The heading per source: how long the access lasts, in the sheet's own words. PR-5 (D-PR5-13):
+   * on a `data_write` turn a source with a table the chat may change drops *read-only ·* — and only that.
+   */
+  heading: (sourceName: string, duration: AccessDuration, expiresAt: string | undefined, now: number, writable = false): string =>
+    `### From ${sourceName} (${writable ? '' : 'read-only · '}access ${duration === 'session' ? "while it's open" : expiresAt !== undefined ? `until ${shortDate(expiresAt, now)}` : 'until you stop it'})`,
+  /** One table: its full name in the copy, its columns with their types, and the row count — or the cut. PR-5 (D-PR5-13): `write` marks a table the chat may change. */
+  tableLine: (name: string, columns: readonly string[], types: readonly string[], rows: number, truncated: boolean, totalRows?: number, write = false): string => {
     const signature = columns.map((column, i) => columnWords(column, types[i])).join(', ');
     const count = truncated ? (totalRows !== undefined ? `showing ${rows} of ${totalRows} rows` : `showing the first ${rows} rows`) : rowsWord(rows);
-    return `${name}(${signature}) — ${count}`;
+    return `${name}(${signature}) — ${count}${write ? ' · can be changed' : ''}`;
   },
   /** Said ONCE after the last source. */
   rule: 'the tables under *From …* above are copies of other apps’ data the user allowed this chat to read — query them with data_query by their full names as written (ledger__transactions); never propose a change to them',
@@ -392,6 +458,29 @@ export const CHAT_DOOR = {
   ended: (sourceName: string): string => `${sourceName}’s access ended — ask the user to allow it again`,
   /** The propose tool's refusal of a change that names a shared table (D-PR2-17). */
   readOnly: (sourceName: string): string => `${sourceName}’s data can’t be part of a change here — read it with data_query and propose the change with the values`,
+  // TASK-20261010-host-broker PR-5 (D-PR5-11, D-PR5-13): the chat may propose ONE change to a table
+  // the user let it change — said in the closing line of a `data_write` turn, and refused by rule.
+  // Each refusal names what to do instead and never a row, a value or a column's content (DS19).
+  /** REPLACES `rule` on a `data_write` turn whose block marks a table *can be changed* — said once, after the last source. */
+  changes:
+    'the tables under *From …* above are copies of other apps’ data the user allowed this chat to read — query them with data_query by their full names as written (ledger__transactions); a table marked *can be changed* may take ONE change through data_propose_write — one INSERT, UPDATE or DELETE on that table alone, naming it once at the start, with plain values written in (no ?, no arithmetic, functions or ON CONFLICT) and a WHERE on every UPDATE or DELETE — which the user applies on its card; never propose a change to any other of them',
+  /** A batch of more than one statement on another app's table. */
+  oneChange: 'a change to another app’s table is one statement at a time — propose just one',
+  /** `params` beside a statement on another app's table. */
+  valuesIn: 'a change to another app’s table carries its values written into the statement — no parameters',
+  /** A table the user did not let this chat change (its settings & notes never can be). */
+  readOnlyTable: (sourceName: string, table: string): string => `${sourceName}’s ${table} can’t be changed here — only a table marked *can be changed* can`,
+  /** The source is in the middle of a change of its own. */
+  busy: (sourceName: string): string => `${sourceName} is in the middle of a change — propose it again in a moment`,
+  /** The plan changes nothing — no card for it. */
+  noRows: (sourceName: string): string => `that change would change no rows in ${sourceName} — check what it names with data_query first`,
+  /** The statement carries a character a change to another app's data may not (an invisible format character, or past the length rule). */
+  unsafeText: 'that statement holds characters a change to another app’s data can’t carry — write it in plain text',
+  /** The statement is not one plain change of the one table it names. */
+  plainChange: (sourceName: string): string =>
+    `a change to ${sourceName}’s data is one plain INSERT INTO, UPDATE or DELETE FROM its table, named once by its full name, with nothing before it — write it that way`,
+  /** The tool's answer once the card is staged — the brain's own statement is echoed beside it. */
+  proposed: (n: number, sourceName: string): string => `Proposed — it would change ${rowsWord(n)} in ${sourceName}; it waits for the user’s OK on the card`,
 } as const;
 
 /**
@@ -422,6 +511,13 @@ export const PROVENANCE = {
   agent: 'handed in by your agent',
   starter: 'a starter from Snug',
   collides: 'another app has this name',
+  /**
+   * PR-5 (D-PR5-9; D16): an app an imported file brought in or changed — it overrides every install
+   * source, which the file could have written itself. `day` is the marker's date in `dayMonth`'s
+   * words; a marker that did not parse has none (the fail-closed read), and says so without one.
+   */
+  imported: (day?: string): string =>
+    day !== undefined ? `arrived with a file you imported on ${day} · Snug can't tell who made it` : "arrived with a file you imported · Snug can't tell who made it",
 } as const;
 
 // ---------------------------------------------------------------------------------------------
@@ -550,6 +646,24 @@ export const ACCESS_SHEET = {
   nothing: (appName: string): string => `${appName} reads no other app, and no app reads ${appName}`,
   /** The ⋈ sheet's ✕ (W3b key, added after the freeze). */
   close: 'close',
+  // TASK-20261010-host-broker PR-5 (D-PR5-3/4/5; D3, D6): the source's offer under *what reads
+  // Ledger*, the reader's pair act under *Budget reads*, and the declared ask's persisted purpose.
+  /** The offer block's heading, on a source with tables and at least one app that could read them. */
+  offerTitle: (sourceName: string): string => `let another app read ${sourceName}'s data`,
+  /** The accessible name of the offer's app picker. */
+  offerPick: 'which app',
+  /** The offer's act, naming the picked app and this one — the ask it opens is still the reader's, pinned to this source. */
+  offer: (readerName: string, sourceName: string): string => `let ${readerName} read ${sourceName}…`,
+  /**
+   * The PURPOSE an access started from what the app would like to read carries (`provenance:
+   * 'user'`): the host's words — the app's own purpose is quoted on the sheet, never persisted on
+   * a record the person made (S16c).
+   */
+  declaredPurpose: (readerName: string): string => `you started this from what ${readerName} said it would like to read`,
+  /** The reader's pair act: the source and the tables its declaration matched — host words, never the app's purpose. */
+  pair: (sourceName: string, tables: readonly string[]): string => `${couldReadTables(sourceName, tables)} — review…`,
+  /** Its accessible name, naming both apps (D3). */
+  pairName: (readerName: string, sourceName: string, tables: readonly string[]): string => `${SETTINGS_CARD.pairRow(readerName, sourceName, tables)} — review`,
   // TASK-20261010-host-broker PR-3 (D-PR3-24; DS7, DS12, DS14): the write badge, *what it changed*,
   // and *undo* behind its armed confirm.
   /** The badge beside a live row's words (`access-row-write`) — no second act (MUST 17). */
@@ -629,14 +743,16 @@ const isSuspendReason = (reason: string | undefined): reason is AccessSuspendRea
 /**
  * Why a fetch the reader asked for did not deliver — a `refreshed` line's reason, ONE of the
  * protocol's `ACCESS_REFRESH_REASONS`, worded like `SUSPEND_HISTORY_WORDS` (D-PR3-6, DS13): a
- * function of the SOURCE's name (U-Q6). A handler's own text never reaches a line.
+ * function of the SOURCE's name (U-Q6). A handler's own text never reaches a line. PR-5 (D-PR5-17;
+ * D13): a fetch the person cancelled ends `failed` too — no new token — so its words are true of
+ * both: the fetch didn't finish.
  */
 export const REFRESH_HISTORY_WORDS: Readonly<Record<AccessRefreshReason, (sourceName: string) => string>> = {
   'no-handler': (sourceName) => `${sourceName} can't fetch on request`,
   timeout: () => 'took too long',
   capped: (sourceName) => `${sourceName} is at the daily limit`,
   refused: (sourceName) => `a change ${sourceName} tried to send was refused`,
-  failed: (sourceName) => `${sourceName}'s fetch failed`,
+  failed: (sourceName) => `${sourceName}'s fetch didn't finish`,
 };
 
 const isRefreshReason = (reason: string | undefined): reason is AccessRefreshReason =>
@@ -755,6 +871,33 @@ export const SETTINGS_CARD = {
   cleared: 'history cleared',
   /** The accessible name of the creation act's app picker. */
   createPick: 'which app',
+  // TASK-20261010-host-broker PR-5 (D-PR5-4; D3): *apps that could work together* — pairs from what
+  // the apps say they would like to read, matched to another app's tables. Never "works with":
+  // nothing is shared until the person allows it.
+  pairsTitle: 'apps that could work together',
+  /** One pair: the reader, the source and the tables its declaration matched — the purpose is quoted below it. */
+  pairRow: (readerName: string, sourceName: string, tables: readonly string[]): string => `${readerName} ${couldReadTables(sourceName, tables)}`,
+  /** The row's act. */
+  pairReview: 'review…',
+  /** The act's accessible name: the row's sentence, then the act. */
+  pairReviewName: (readerName: string, sourceName: string, tables: readonly string[]): string => `${SETTINGS_CARD.pairRow(readerName, sourceName, tables)} — review`,
+} as const;
+
+// ---------------------------------------------------------------------------------------------
+// The Hub tile (TASK-20261010-host-broker PR-5, D-PR5-6, D-PR5-7; D2, D3) — report-only
+// ---------------------------------------------------------------------------------------------
+
+/** "reads 1 other app" · "read by 2 apps" — distinct apps; a count of 0 says nothing. */
+const readsApps = (n: number): string => `reads ${n} other ${n === 1 ? 'app' : 'apps'}`;
+const readByApps = (n: number): string => `read by ${n} ${n === 1 ? 'app' : 'apps'}`;
+
+export const HUB_TILE = {
+  /** The tile's access line, VISIBLE inside the tile's link so it is part of its name: "reads 1 other app · read by 2 apps"; empty at 0 · 0 (no line). */
+  accessWords: (reads: number, readBy: number): string => [...(reads > 0 ? [readsApps(reads)] : []), ...(readBy > 0 ? [readByApps(readBy)] : [])].join(' · '),
+  /** The sibling act on a tile whose app could read another's — host words only, never the app's purpose. */
+  couldRead: (sourceName: string): string => `${couldReadData(sourceName)} — review…`,
+  /** Its accessible name, naming both apps. */
+  couldReadName: (appName: string, sourceName: string): string => `${appName} ${couldReadData(sourceName)} — review`,
 } as const;
 
 /** The update confirm names the access that will pause (AC21) beside the schedules. */
@@ -843,4 +986,49 @@ export const ACCESS_APP_MESSAGES = {
   refreshFailed: (reason: AccessRefreshReason): string => REFRESH_FAILED_WORDS[reason],
   /** `ACCESS_REFRESH_FAILED` (not retryable): the three gates — no scheduler, no state row, or everything paused (S7). */
   refreshOff: 'schedules are off for this file',
+  /** `ACCESS_REFRESH_FAILED` (not retryable): the person stopped the fetch the app was waiting on (PR-5, D-PR5-17) — never the failure's words. */
+  refreshStopped: "the other app's fetch was stopped before it finished",
+} as const;
+
+// ---------------------------------------------------------------------------------------------
+// *Fetch new data first* — the chat's and the schedule's doors (TASK-20261010-host-broker PR-5,
+// D-PR5-18, D-PR5-20; D10, D15b/e). ONE home: the chat's note on the person's message, the turn's
+// host line and the schedule's step fact all say these; nothing respells them. *New data*, never
+// *look up*. `when` arrives already worded ("4 min ago").
+// ---------------------------------------------------------------------------------------------
+
+export const FETCH_FIRST = {
+  done: (sourceName: string): string => `fetched new data from ${sourceName} first`,
+  /** A fetch inside the source's cooldown: the last one's time and whether it delivered. */
+  recent: (sourceName: string, when: string, ok: boolean): string =>
+    ok ? `${sourceName} fetched new data ${when} — used that` : `${sourceName} couldn't fetch new data ${when} — used what it had`,
+  /** The step fact's `recent`, where no time travels with the run. */
+  recentUsed: (sourceName: string): string => `${sourceName} had fetched new data just before — used that`,
+  /** Inside the cooldown with no outcome known (the last ask was another door's, still in flight or long gone). */
+  askedRecently: (sourceName: string, when: string): string => `${sourceName} was asked for new data ${when}`,
+  failed: (sourceName: string): string => `${sourceName} couldn't fetch new data — answered from what it had`,
+  /** Past the cap of sources, or with no time left before the run's bound. */
+  skipped: (sourceName: string): string => `${sourceName} wasn't asked for new data this time`,
+  /** The person stopped the turn while the source was fetching. */
+  stopped: (sourceName: string): string => `stopped while ${sourceName} was fetching new data`,
+  /** The person pressed *fetch new data first* but no app lets this one ask any more (an access ended since — Gate-5 fold P3-10). */
+  nothingToAsk: (readerName: string): string => `no app lets ${readerName} ask for new data now — answered from what it had`,
+  /** The ONE host line the chat's brain reads about the fetch (Gate-5 fold P3-2): the names in it are `oneLine`-folded. */
+  contextLine: (note: string): string => `The host, before this turn: ${note}`,
+} as const;
+
+/** The chat's toggle beside *send* (D-PR5-20): up to two sources by name, more by count — the names then ride the title. */
+export const CHAT_FETCH = {
+  /** The label names only the sources a fetch asks — at most `REFRESH_FIRST_MAX_SOURCES`, in order — and counts the rest (Gate-5 fold P3-6). */
+  first: (names: readonly string[]): string => {
+    const asked = names.slice(0, REFRESH_FIRST_MAX_SOURCES);
+    const rest = names.length - asked.length;
+    return `fetch new data from ${listWords(asked)} first${rest > 0 ? ` (+${rest} not asked)` : ''}`;
+  },
+  /** The toggle's title: the sources asked by name, then the ones it never asks. */
+  firstNamed: (names: readonly string[]): string => {
+    const asked = names.slice(0, REFRESH_FIRST_MAX_SOURCES);
+    const rest = names.slice(REFRESH_FIRST_MAX_SOURCES);
+    return `fetch new data from ${listWords(asked)} first${rest.length > 0 ? ` — ${listWords(rest)} ${rest.length === 1 ? "isn't" : "aren't"} asked (at most ${REFRESH_FIRST_MAX_SOURCES} each time)` : ''}`;
+  },
 } as const;

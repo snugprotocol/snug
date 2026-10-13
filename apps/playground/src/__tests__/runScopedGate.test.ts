@@ -467,3 +467,215 @@ describe('(1) a run with `posture: "schedule"` — unchanged: the ask gate (PR-3
     expect(run.refused).toEqual([{ host: 'api.example.com', method: 'POST', why: 'declined' }]);
   });
 });
+
+// ---------------------------------------------------------------------------------------------
+// TASK-20261010-host-broker PR-5 (AC39d; contract v2 D-PR5-17; security S2). A cancelled LIVE
+// refresh does NOT end its delegated record: the record is marked `cancelled` and KEEPS refusing
+// every mutating call of the generation — refused, never prompted, and counted — until the
+// handler's `schedule-result` arrives or the dispatch's ORIGINAL deadline passes; only then is it
+// ended, and the STICKY after-run ask applies. Driven end to end here: the REAL refresh engine on a
+// live frame played through the real registry, `cancelRefresh` from the NEW `access/refreshRuns.ts`
+// (a variable specifier, so the rows above keep running), and the gate composed over the REAL
+// placement store exactly as `state/net.ts` composes it. Real timers: the deadline is a short bound.
+// ---------------------------------------------------------------------------------------------
+
+describe('PR-5 D-PR5-17 — after cancelRefresh on a LIVE refresh, the gate keeps refusing until the result or the deadline (S2)', () => {
+  const REFRESH_RUNS = '../access/refreshRuns.js';
+  const loadRuns = (): Promise<typeof import('../access/refreshRuns.js')> => import(/* @vite-ignore */ REFRESH_RUNS) as Promise<typeof import('../access/refreshRuns.js')>;
+  const GENERATION = 1;
+  const RESULT_BOUND_MS = 400;
+  const SEAT = { kind: 'web' as const, scheduler: { wakeMode: 'page' as const, hostLabel: 'this tab' }, capabilities: { subscriptionMode: true, hubSyncOrigin: true, lanHttpPrivate: false } };
+
+  let db: Awaited<ReturnType<typeof import('./userdbTestHelper.js')['installTestUserDb']>>;
+  let source: string;
+  let notified: Array<{ event: string; data: { runId?: string } }>;
+  let cleanups: Array<() => void | Promise<void>>;
+
+  beforeEach(async () => {
+    vi.useRealTimers();
+    cleanups = [];
+    notified = [];
+    const hosts = await import('../state/appHosts.js');
+    hosts.__resetAppHostsForTest();
+    const { installTestUserDb } = await import('./userdbTestHelper.js');
+    db = await installTestUserDb();
+    const grants = await import('../access/grants.js');
+    grants.__setAccessDepsForTests({ getDb: () => Promise.resolve(db), now: () => Date.now() });
+    source = db.installApp({ displayName: 'Ledger', html: '<html>ledger</html>' }).appId;
+    const reader = db.installApp({ displayName: 'Budget', html: '<html>budget</html>' }).appId;
+    const { accessGrantSchema } = await import('@snugprotocol/protocol');
+    const at = new Date().toISOString();
+    db.putAccessGrant(
+      accessGrantSchema.parse({
+        id: crypto.randomUUID(),
+        readerAppId: reader,
+        sourceAppId: source,
+        scope: { tables: [{ name: 'transactions', columns: ['id', 'amount'] }] },
+        access: 'read',
+        purpose: 'to show spending',
+        duration: { kind: 'always' },
+        unattended: false,
+        status: 'active',
+        provenance: 'app',
+        readerVersion: 1,
+        grantedAt: at,
+        updatedAt: at,
+        reads: 0,
+        timeouts: 0,
+        refresh: true,
+      }),
+    );
+    db.setSchedulerState({ watermark: at, globalPause: false, daily: { date: at.slice(0, 10), ai: 0, net: 0 } });
+    // The source is OPEN: registered, at a generation, announced — the refresh runs on its live frame.
+    hosts.registerAppHost(source, (event, data) => {
+      notified.push({ event, data: data as { runId?: string } });
+    });
+    hosts.setAppHostGeneration(source, GENERATION);
+    hosts.markAppHostAnnounced(source, GENERATION);
+    cleanups.push(async () => {
+      (await loadRuns().catch(() => undefined))?.abortAllRefreshes('reset');
+      (await import('../access/refresh.js')).__resetRefreshForTests();
+      (await import('../schedule/runPlacement.js')).clearTouchedGeneration(source, GENERATION);
+      grants.resetAccessSession();
+      grants.__setAccessDepsForTests();
+      hosts.__resetAppHostsForTest();
+    });
+  });
+
+  afterEach(async () => {
+    for (const cleanup of cleanups.splice(0)) await cleanup();
+  });
+
+  /** The live run's deps over the REAL registry; nothing hidden is ever mounted (the source is open). */
+  async function liveDeps(): Promise<import('../schedule/appRun.js').AppRunDeps> {
+    const hosts = await import('../state/appHosts.js');
+    const { createStore } = await import('../state/store.js');
+    return {
+      platform: () => SEAT,
+      runtimeFor: () => {
+        throw new Error('the source is open — no runtime of ours is composed');
+      },
+      mounts: createStore<import('../schedule/appRun.js').HiddenMount | undefined>(undefined),
+      live: {
+        has: (id) => hosts.hasLiveAppHost(id),
+        notify: (id, event, data) => hosts.notifyAppHost(id, event, data),
+        subscribe: (listener) => hosts.subscribeAppHosts(listener),
+        subscribeEvents: (id, listener) => hosts.subscribeAppEvents(id, listener),
+        awaitReady: (id, ms) => hosts.awaitAppHostReady(id, ms),
+        generation: (id) => hosts.liveAppHostGeneration(id),
+      },
+      announceTimeoutMs: 2_000,
+      resultTimeoutMs: RESULT_BOUND_MS,
+    };
+  }
+
+  /** The gate exactly as `state/net.ts` composes it — over the real placement store and registry. */
+  async function realGate(): Promise<Harness> {
+    const placement = await import('../schedule/runPlacement.js');
+    const hosts = await import('../state/appHosts.js');
+    const inner = yesInner();
+    const { prompt, parked } = parkingPrompt();
+    const gate = createRunScopedGate({
+      inner,
+      delegated: placement.delegatedRunFor,
+      touched: placement.touchedGeneration,
+      liveGeneration: hosts.liveAppHostGeneration,
+      prompt,
+      timeoutMs: 5_000,
+    });
+    return { gate, inner, prompt, parked };
+  }
+
+  /** Start a refresh on the live source and cancel it from the chip; answers the run id once the waiter has its stop. */
+  async function cancelledLiveRefresh(): Promise<string> {
+    const { refreshSource } = await import('../access/refresh.js');
+    const runs = await loadRuns();
+    const deps = await liveDeps();
+    const grant = db.listAccessGrants().find((row) => row.sourceAppId === source)!;
+    const pending = refreshSource(db, deps, { grant, requestedBy: 'Budget', via: 'app' });
+    await vi.waitFor(() => expect(notified).toHaveLength(1));
+    const runId = notified[0]!.data.runId!;
+    expect(runs.cancelRefresh(runId)).toBe(true);
+    const answered = await Promise.race([pending, new Promise((resolve) => setTimeout(() => resolve('still waiting'), 200))]);
+    expect(answered, 'the waiter is answered at once').not.toBe('still waiting');
+    return runId;
+  }
+
+  it('within the deadline: a mutating call is REFUSED — never prompted, the page’s chain never asked — and recorded `refused` on the kept record', async () => {
+    const runId = await cancelledLiveRefresh();
+    const placement = await import('../schedule/runPlacement.js');
+    const record = placement.delegatedRunFor(source);
+    expect(record, 'the record is kept').toBeDefined();
+    expect(record).toMatchObject({ runId, posture: 'refresh', cancelled: true });
+    const h = await realGate();
+    expect(await h.gate.confirm(post({ appId: source }))).toBe(false);
+    expect(h.prompt).not.toHaveBeenCalled();
+    expect(h.inner.confirm).not.toHaveBeenCalled();
+    expect(placement.delegatedRunFor(source)?.refused).toEqual([{ host: 'api.example.com', method: 'POST', why: 'refused' }]);
+  });
+
+  it('within the deadline: the record keeps COUNTING (a GET is no gate matter — it passes and is counted on the run)', async () => {
+    await cancelledLiveRefresh();
+    const placement = await import('../schedule/runPlacement.js');
+    placement.noteDelegatedCall(source, 'net');
+    expect(placement.delegatedRunFor(source)?.calls.net).toBe(1);
+  });
+
+  it('after the ORIGINAL deadline passes, the record ends and the STICKY after-run ask applies: prompted with no run, the page’s chain still never asked', async () => {
+    await cancelledLiveRefresh();
+    const placement = await import('../schedule/runPlacement.js');
+    await vi.waitFor(() => expect(placement.delegatedRunFor(source)).toBeUndefined(), { timeout: RESULT_BOUND_MS * 5 });
+    const h = await realGate();
+    const call = h.gate.confirm(post({ appId: source }));
+    await vi.waitFor(() => expect(h.prompt).toHaveBeenCalledTimes(1));
+    expect(h.parked[0]!.ask.run, 'the after-run ask').toBeUndefined();
+    expect(h.inner.confirm).not.toHaveBeenCalled();
+    h.parked[0]!.answer({ granted: false });
+    expect(await call).toBe(false);
+  });
+
+  // TASK-20261010-host-broker PR-5 — Gate-5 fold G5-19 (SB-7a): a refusal the gate records DURING the
+  // hold is no longer lost — on release the engine writes ONE `refreshed` line with reason `refused` on
+  // the source's history (epoch-guarded), so PR-3's rule "a record holding any refusal outranks the app's
+  // own ok — the person should see it" holds for the late window S2 created.
+  it('G5-19 a POST the gate REFUSED during the hold → on the result, the source’s history gains a `refused` line', async () => {
+    await cancelledLiveRefresh();
+    const placement = await import('../schedule/runPlacement.js');
+    const hosts = await import('../state/appHosts.js');
+    const { SCHEDULE_RESULT_EVENT } = await import('../schedule/scheduleKey.js');
+    const refreshedReasons = (): unknown[] => db.listAccessLog(source).filter((entry) => entry.kind === 'refreshed').map((entry) => (entry as { reason?: unknown }).reason);
+    expect(refreshedReasons(), 'the cancel wrote its own line').toEqual(['failed']);
+    const h = await realGate();
+    expect(await h.gate.confirm(post({ appId: source }))).toBe(false);
+    hosts.publishAppEvent(source, SCHEDULE_RESULT_EVENT, { ok: true }, GENERATION);
+    await vi.waitFor(() => expect(placement.delegatedRunFor(source)).toBeUndefined(), { timeout: RESULT_BOUND_MS / 2 });
+    await vi.waitFor(() => expect(refreshedReasons()).toEqual(['refused', 'failed']), { timeout: 500 });
+  });
+
+  it('G5-19 guard: a hold with NO refusal writes no second line on release', async () => {
+    await cancelledLiveRefresh();
+    const placement = await import('../schedule/runPlacement.js');
+    const hosts = await import('../state/appHosts.js');
+    const { SCHEDULE_RESULT_EVENT } = await import('../schedule/scheduleKey.js');
+    hosts.publishAppEvent(source, SCHEDULE_RESULT_EVENT, { ok: true }, GENERATION);
+    await vi.waitFor(() => expect(placement.delegatedRunFor(source)).toBeUndefined(), { timeout: RESULT_BOUND_MS / 2 });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(db.listAccessLog(source).filter((entry) => entry.kind === 'refreshed')).toHaveLength(1);
+  });
+
+  it('after the handler’s RESULT arrives (before the deadline), the record ends at once and the sticky ask applies', async () => {
+    const runId = await cancelledLiveRefresh();
+    const placement = await import('../schedule/runPlacement.js');
+    const hosts = await import('../state/appHosts.js');
+    const { SCHEDULE_RESULT_EVENT } = await import('../schedule/scheduleKey.js');
+    expect(placement.delegatedRunFor(source)?.runId).toBe(runId);
+    hosts.publishAppEvent(source, SCHEDULE_RESULT_EVENT, { ok: true }, GENERATION);
+    await vi.waitFor(() => expect(placement.delegatedRunFor(source)).toBeUndefined(), { timeout: RESULT_BOUND_MS / 2 });
+    const h = await realGate();
+    const call = h.gate.confirm(post({ appId: source }));
+    await vi.waitFor(() => expect(h.prompt).toHaveBeenCalledTimes(1));
+    expect(h.parked[0]!.ask.run).toBeUndefined();
+    h.parked[0]!.answer({ granted: false });
+    await call;
+  });
+});

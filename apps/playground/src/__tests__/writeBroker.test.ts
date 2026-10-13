@@ -1391,3 +1391,210 @@ describe('PR-4 Gate-5 A5 — once the seat answered ok, nothing after the commit
     warn.mockRestore();
   });
 });
+
+// =========================================================================================
+// TASK-20261010-host-broker PR-5 (contract v2 D-PR5-12; F5): ONE strict core under the frame's
+// `write` and the chat's two verbs
+// =========================================================================================
+//
+// `brokeredWriteCore(db, req, { mode: 'plan' | 'apply', expectChanges? })` is extracted from
+// `brokeredWrite`: it answers `{ ok, phase: 'plan', changes, table }` (the plan alone — the seat is
+// never reached), `{ ok, phase: 'applied', changes, undoable: true, undoId }`, or `{ ok: false,
+// reason, rule? }` — its refusal effects (suspend on drift, timeout strikes, expiry marks) performed
+// INSIDE. The frame's `write` op maps it through today's `refusePlan` / `refuseApply`, so its wire
+// bytes are UNCHANGED for every refusal: the guard rows below pin today's bytes and stay green across
+// the extraction; the core's rows are red until it is exported.
+
+type CoreAnswer =
+  | { ok: true; phase: 'plan'; changes: number; table: string }
+  | { ok: true; phase: 'applied'; changes: number; undoable: true; undoId: string }
+  | { ok: false; reason: string; rule?: string };
+type CoreFn = (db: UserDb, req: Record<string, unknown>, options: { mode: 'plan' | 'apply'; expectChanges?: number }) => Promise<CoreAnswer>;
+
+describe('PR-5 D-PR5-12 — brokeredWriteCore: the plan phase, the applied phase, the refusals with their effects performed inside', () => {
+  const chatCaller = () => ({ kind: 'chat' as const, appId: budget, threadId: 'thread-1' });
+  async function core(): Promise<CoreFn> {
+    const mod = (await writeBroker()) as unknown as { brokeredWriteCore?: CoreFn };
+    if (typeof mod.brokeredWriteCore !== 'function') throw new Error('access/writeBroker.ts exports no brokeredWriteCore yet (D-PR5-12)');
+    return mod.brokeredWriteCore;
+  }
+  /** The request the chat's verbs hand the core: the found grant, the source, the table, the source-named statement, the approval's authority, the chat's door. */
+  async function requestFor(grantId: string, sql: string, table = 'entries'): Promise<Record<string, unknown>> {
+    const { findAccessGrant } = await import('../access/grants.js');
+    const found = findAccessGrant(db, grantId);
+    if (found === undefined) throw new Error('no such grant');
+    return { targetAppId: journal, statement: { sql }, table, authority: 'approval', via: 'chat', grant: found, caller: chatCaller() };
+  }
+
+  it("mode 'plan' answers { ok, phase: plan, changes, table } — the plan ran in the Worker; the seat, the journal and the history never touched", async () => {
+    const brokeredWriteCore = await core();
+    const mine = await grantOn(budget, journal, ['entries'], true);
+    const seatSpy = vi.spyOn(seat(), 'brokeredWrite');
+    const answer = await brokeredWriteCore(db, await requestFor(mine.id, "UPDATE entries SET amount = 0 WHERE amount < 5"), { mode: 'plan' });
+    expect(answer).toEqual({ ok: true, phase: 'plan', changes: 2, table: 'entries' });
+    expect(posted.map(kindOf)).toEqual(['plan-write']);
+    expect(seatSpy).not.toHaveBeenCalled();
+    expect(undoJournal().listAllAccessUndo(journal)).toEqual([]);
+    expect(linesOf(journal).map((entry) => entry.kind)).toEqual(['granted']);
+    expect(await rowsOf(journal, ENTRIES)).toEqual([
+      [1, 'tea', 3],
+      [2, 'cake', 5],
+      [3, 'bread', 2],
+    ]);
+  });
+
+  it("mode 'apply' with the expected count answers { ok, phase: applied, changes, undoable: true, undoId } — the wrote line names that undo", async () => {
+    const brokeredWriteCore = await core();
+    const mine = await grantOn(budget, journal, ['entries'], true);
+    const answer = await brokeredWriteCore(db, await requestFor(mine.id, "UPDATE entries SET amount = 0 WHERE amount < 5"), { mode: 'apply', expectChanges: 2 });
+    expect(answer).toMatchObject({ ok: true, phase: 'applied', changes: 2, undoable: true });
+    const undoId = (answer as { undoId?: string }).undoId;
+    expect(undoId).toMatch(UUID_V4);
+    expect(linesOf(journal).find((entry) => entry.kind === 'wrote')).toMatchObject({ undoId, via: 'chat', authority: 'approval', changes: 2 });
+  });
+
+  it("mode 'apply' whose fresh plan is not the expected count answers drifted BEFORE the room check and the seat", async () => {
+    const brokeredWriteCore = await core();
+    const mine = await grantOn(budget, journal, ['entries'], true);
+    const seatSpy = vi.spyOn(seat(), 'brokeredWrite');
+    const room = vi.spyOn(undoJournal(), 'listAccessUndo');
+    expect(await brokeredWriteCore(db, await requestFor(mine.id, "UPDATE entries SET amount = 0 WHERE amount < 5"), { mode: 'apply', expectChanges: 1 })).toMatchObject({ ok: false, reason: 'drifted' });
+    expect(seatSpy).not.toHaveBeenCalled();
+    expect(room).not.toHaveBeenCalled();
+  });
+
+  it('a strict-rule refusal carries its rule: no WHERE → { ok: false, reason: refused, rule: no-where }', async () => {
+    const brokeredWriteCore = await core();
+    const mine = await grantOn(budget, journal, ['entries'], true);
+    expect(await brokeredWriteCore(db, await requestFor(mine.id, 'UPDATE entries SET amount = 0'), { mode: 'plan' })).toMatchObject({ ok: false, reason: 'refused', rule: 'no-where' });
+  });
+
+  it('the target mid-change is busy — asked before any plan job', async () => {
+    const brokeredWriteCore = await core();
+    const mine = await grantOn(budget, journal, ['entries'], true);
+    const request = await requestFor(mine.id, "UPDATE entries SET amount = 0 WHERE title = 'tea'");
+    await exec(journal, 'BEGIN');
+    try {
+      expect(await brokeredWriteCore(db, request, { mode: 'plan' })).toMatchObject({ ok: false, reason: 'busy' });
+      expect(posted.map(kindOf)).toEqual([]);
+    } finally {
+      await exec(journal, 'ROLLBACK');
+    }
+  });
+
+  it('the expiry is MARKED inside the core (its effect performed there): an expired grant answers expired and the source’s history gains ONE expired line', async () => {
+    const brokeredWriteCore = await core();
+    const mine = await grantOn(budget, journal, ['entries'], true);
+    const request = await requestFor(mine.id, "UPDATE entries SET amount = 0 WHERE title = 'tea'");
+    clock.now += 2 * DAY;
+    expect(await brokeredWriteCore(db, request, { mode: 'plan' })).toMatchObject({ ok: false, reason: 'expired' });
+    expect(linesOf(journal).filter((entry) => entry.kind === 'expired')).toHaveLength(1);
+  });
+});
+
+describe('PR-5 D-PR5-12 — the frame’s write op: wire bytes UNCHANGED for every refusal across the core’s extraction (guards — green today, green after)', () => {
+  const write = async (grantId: string, sql: string): Promise<AccessHandlerResult> => createAccessHandlerFor(budget, { attended: true, generation: 0 }).handle(budget, writeFrame(grantId, sql));
+
+  it('busy — the target’s open transaction: ACCESS_BUSY, retryable, the busy sentence', async () => {
+    const mine = await grantOn(budget, journal, ['entries'], true);
+    await exec(journal, 'BEGIN');
+    try {
+      expect(await write(mine.id, "UPDATE entries SET amount = 9 WHERE title = 'tea'")).toEqual(refusal('ACCESS_BUSY', ACCESS_APP_MESSAGES.busy, true));
+    } finally {
+      await exec(journal, 'ROLLBACK');
+    }
+  });
+
+  it.each([
+    ['no-where', 'UPDATE entries SET amount = 9'],
+    ['statement', 'SELECT * FROM entries'],
+    ['value', "UPDATE entries SET title = 'sk-Ab3dEf9hIjKl2MnOpQr5StUvWxYz01234567aBcD' WHERE id = 1"],
+  ] as const)('%s — ACCESS_WRITE_REFUSED with the rule’s sentence, not retryable', async (rule, sql) => {
+    const mine = await grantOn(budget, journal, ['entries'], true);
+    expect(await write(mine.id, sql)).toEqual(refusal('ACCESS_WRITE_REFUSED', ACCESS_APP_MESSAGES.writeRefused(rule), false));
+  });
+
+  it(`too-many — over ${ACCESS_WRITE_MAX_ROWS} rows: ACCESS_WRITE_REFUSED with the too-many sentence`, async () => {
+    await exec(journal, `WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM n WHERE x < ${ACCESS_WRITE_MAX_ROWS + 5}) INSERT INTO entries (title, amount) SELECT 'row', x FROM n`);
+    const mine = await grantOn(budget, journal, ['entries'], true);
+    expect(await write(mine.id, "UPDATE entries SET amount = 0 WHERE title = 'row'")).toEqual(refusal('ACCESS_WRITE_REFUSED', ACCESS_APP_MESSAGES.writeRefused('too-many'), false));
+  });
+
+  it('a table the grant only lets the reader READ — ACCESS_NOT_GRANTED with the read-only sentence', async () => {
+    const mine = await grantOn(budget, journal, ['entries'], false);
+    expect(await write(mine.id, "UPDATE entries SET amount = 9 WHERE title = 'tea'")).toEqual(refusal('ACCESS_NOT_GRANTED', ACCESS_APP_MESSAGES.writeNotGranted, false));
+  });
+
+  it('an expired grant — ACCESS_EXPIRED', async () => {
+    const mine = await grantOn(budget, journal, ['entries'], true);
+    clock.now += 2 * DAY;
+    expect(await write(mine.id, "UPDATE entries SET amount = 9 WHERE title = 'tea'")).toEqual(refusal('ACCESS_EXPIRED', ACCESS_APP_MESSAGES.expired, false));
+  });
+
+  it('no worker — ACCESS_QUERY_FAILED with the no-worker sentence', async () => {
+    const mine = await grantOn(budget, journal, ['entries'], true);
+    vi.stubGlobal('Worker', undefined);
+    configureScopedRead({ createWorker: undefined, wasm: { wasmUrl: locateWasm() }, now: () => clock.now });
+    try {
+      expect(await write(mine.id, "UPDATE entries SET amount = 9 WHERE title = 'tea'")).toEqual(refusal('ACCESS_QUERY_FAILED', ACCESS_APP_MESSAGES.noWorker, false));
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('the success answer is still ONLY { ok, op: write, changes } — never the undo id (DS16)', async () => {
+    const mine = await grantOn(budget, journal, ['entries'], true);
+    expect(await write(mine.id, "UPDATE entries SET amount = 9 WHERE title = 'tea'")).toEqual({ ok: true, op: 'write', changes: 1 });
+  });
+});
+
+// =========================================================================================
+// TASK-20261010-host-broker PR-5 — Gate-5 fold G5-16 (ii-4): D-PR5-10's second belt. The read-seam
+// allow-list (`metaToDataWrite`) closes S4; `applyApprovedWrite` ALSO refuses a proposal carrying any
+// key outside `PendingWriteProposal` (`appId`, `statements`, `params`, `summary`, `previewed`) — at
+// least a cross-app `target`, `sourceAppId`, `grantId` — `failed`, nothing dry-run, nothing written.
+// Any future path that builds a card without the reader (a result page, a sync merge) would
+// otherwise apply a cross-app-shaped proposal against the reader's OWN data.
+// =========================================================================================
+
+describe('G5-16 (ii-4) applyApprovedWrite refuses a proposal carrying a key outside PendingWriteProposal', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(T0);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+  const proposal = (statements: string[], previewed: number[]): PendingWriteProposal => ({ appId: journal, statements, params: statements.map(() => []), summary: 'a change the user approved', previewed });
+  const TEA = "UPDATE entries SET amount = 9 WHERE title = 'tea'";
+
+  it.each([
+    ['target', { target: { grantId: '11111111-1111-4111-8111-111111111111', grantedAt: '2026-10-12T08:00:00.000Z', sourceAppId: 'app-ledger', table: 'transactions' } }],
+    ['sourceAppId', { sourceAppId: 'app-ledger' }],
+    ['grantId', { grantId: '11111111-1111-4111-8111-111111111111' }],
+    ['an unknown key', { extra: true }],
+  ] as const)('G5-16 a proposal carrying %s → ok false; no dry run, no seat, rows unchanged', async (_label, extra) => {
+    const { applyApprovedWrite } = await writeBroker();
+    const scratch = vi.spyOn(db, 'scratchRun');
+    const seatSpy = vi.spyOn(seat(), 'brokeredWrite');
+    const before = await db.driver.handle(journal, { v: PROTOCOL_VERSION, type: FRAME_TYPES.dbRequest, requestId: 'g5-ii4-before', instanceId: 'check', op: 'exec', sql: 'SELECT * FROM entries ORDER BY rowid' });
+    const outcome = await approve(applyApprovedWrite, { ...proposal([TEA], [1]), ...extra } as unknown as PendingWriteProposal, 'chat');
+    expect(outcome).toMatchObject({ ok: false });
+    expect(scratch).not.toHaveBeenCalled();
+    expect(seatSpy).not.toHaveBeenCalled();
+    const after = await db.driver.handle(journal, { v: PROTOCOL_VERSION, type: FRAME_TYPES.dbRequest, requestId: 'g5-ii4-after', instanceId: 'check', op: 'exec', sql: 'SELECT * FROM entries ORDER BY rowid' });
+    expect(after).toEqual(before);
+  });
+
+  it('G5-16 executeApprovedWrite (the thin caller) refuses it too', async () => {
+    const scratch = vi.spyOn(db, 'scratchRun');
+    const outcome = await (executeApprovedWrite as unknown as ApproveFn)(db, { ...proposal([TEA], [1]), target: { table: 'transactions' } } as unknown as PendingWriteProposal, { via: 'chat' });
+    expect(outcome).toMatchObject({ ok: false });
+    expect(scratch).not.toHaveBeenCalled();
+  });
+
+  it('G5-16 guard: the exact PendingWriteProposal shape still applies', async () => {
+    const { applyApprovedWrite } = await writeBroker();
+    expect(await approve(applyApprovedWrite, proposal([TEA], [1]), 'chat')).toMatchObject({ ok: true });
+  });
+});

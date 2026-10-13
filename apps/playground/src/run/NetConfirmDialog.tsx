@@ -11,7 +11,10 @@
 // silence means no; the credentials sentence and the verbatim URL exactly as the ordinary dialog
 // (R-8); NO remember box — the run-scoped gate never remembers, so the dialog must not offer what
 // the gate would not honour, and the decision it resolves carries no `rememberSession` key at
-// all. The `afterRun` tag is the sticky variant (the frame hosted a run earlier). Every string
+// all. The `afterRun` tag is the sticky variant (the frame hosted a run earlier); its words follow
+// what that run WAS (TASK-20261010-host-broker PR-5, D-PR5-17; D12(ii)): after a fetch another app
+// asked for, the app *fetched new data here earlier* — never that it ran a schedule. The queue's tag
+// keeps its shape; the dialog reads the touched record's posture (`touchedPosture`). Every string
 // comes from `schedule/copy.ts`.
 //
 // THE BUTTONS RESOLVE THE ENTRY THIS RENDER SHOWS (Gate-5 F-4), never "whatever is at the queue
@@ -22,13 +25,15 @@ import { useEffect, useState } from 'react';
 import type { ReactElement } from 'react';
 
 import { DELEGATED_CONFIRM } from '../schedule/copy.js';
+import { touchedPosture } from '../schedule/runPlacement.js';
 import { chatConfirmSurfaceStore, netConfirmStore, type PendingNetConfirm } from '../state/net.js';
 import { useStore } from '../state/store.js';
 import { Button } from '../ui/Button.js';
 
-/** The body of the scheduled variant: the run's, or the sticky after-run sentence. */
-function scheduledBody(scheduled: NonNullable<PendingNetConfirm['scheduled']>, appName: string, method: string, host: string): string {
-  return 'afterRun' in scheduled ? DELEGATED_CONFIRM.afterRunBody(appName, method, host) : DELEGATED_CONFIRM.body(scheduled.title, appName, method, host);
+/** The body of the scheduled variant: the run's, or the sticky after-run sentence for what last ran on the app's frame. */
+function scheduledBody(scheduled: NonNullable<PendingNetConfirm['scheduled']>, appId: string, method: string, host: string): string {
+  if (!('afterRun' in scheduled)) return DELEGATED_CONFIRM.body(scheduled.title, scheduled.appName, method, host);
+  return touchedPosture(appId) === 'refresh' ? DELEGATED_CONFIRM.afterFetchBody(scheduled.appName, method, host) : DELEGATED_CONFIRM.afterRunBody(scheduled.appName, method, host);
 }
 
 export function NetConfirmDialog(): ReactElement | null {
@@ -57,7 +62,7 @@ export function NetConfirmDialog(): ReactElement | null {
         {scheduled !== undefined ? (
           <>
             <h2 className="net-confirm-title">{DELEGATED_CONFIRM.title}</h2>
-            <p className="net-confirm-body">{scheduledBody(scheduled, scheduled.appName, method, host)}</p>
+            <p className="net-confirm-body">{scheduledBody(scheduled, appId, method, host)}</p>
             <p className="net-confirm-body">
               Your saved credentials for this connection will be attached by the host — the app never sees them.
             </p>

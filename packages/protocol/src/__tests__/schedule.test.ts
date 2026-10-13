@@ -18,6 +18,10 @@ import { ACCESS_WRITE_MAX_ROWS } from '../access.js';
 import * as protocolIndex from '../index.js';
 import {
   ALERT_KINDS,
+  // TASK-20261010-host-broker PR-5 (D-PR5-18/19): absent until the implementation lands — vitest's
+  // transform yields `undefined` for a missing named export, so the guards below stay green.
+  FETCHED_OUTCOMES,
+  REFRESH_FIRST_MAX_SOURCES,
   APP_AGENT_DEADLINE_MARGIN_MS,
   APP_AGENT_MAX_ROUND_TRIPS,
   APP_AGENT_MAX_TOOL_CALLS,
@@ -1272,5 +1276,169 @@ describe('PR-4 Gate-5 AUTH-F8 — what a pre-PR-4 reader refuses (the direction,
     expect(parses(preAppThinkStepSchema, step)).toBe(false);
     const { tools: _t, ...plain } = step;
     expect(parses(preAppThinkStepSchema, plain)).toBe(true);
+  });
+});
+
+// =================================================================================================
+// TASK-20261010-host-broker PR-5 — the scheduler's *fetch new data first* (contract v2: D-PR5-18,
+// D-PR5-19; AC39b's protocol half). `app-think` gains `refreshFirst?: true` (internal, strict,
+// omit-default — the `tools` precedent) on both the tool-free and the `tools: true` step; the step
+// result gains `fetched?` (1..8 `{source ≤ 64, outcome}`, omit-default — the `saw` precedent);
+// `REFRESH_FIRST_MAX_SOURCES = 2`; `FETCHED_OUTCOMES`. Every proposal channel STRIPS `refreshFirst`
+// — that strip lives in the playground (`enableProposedTask.ts`, `scheduleRequest.ts`,
+// `scheduleProposeTool.ts`) and is pinned by T-D's `proposalWriter.test.ts`; here the shared
+// `scheduleProposalSchema.steps` still PARSES the seat (S15: the three channels share one step
+// shape, so the strip removes it rather than the schema refusing it). No published bytes move.
+// =================================================================================================
+
+describe('PR-5 — the fetch-first constants (D-PR5-18, D-PR5-19)', () => {
+  it('REFRESH_FIRST_MAX_SOURCES is 2 — the rest of the sources are "skipped"', () => {
+    expect(REFRESH_FIRST_MAX_SOURCES).toBe(2);
+  });
+
+  it('FETCHED_OUTCOMES is exactly the step-result seat\'s five outcomes, in the contract\'s order', () => {
+    expect(FETCHED_OUTCOMES === undefined ? undefined : [...FETCHED_OUTCOMES]).toEqual(['fresh', 'recent', 'failed', 'skipped', 'none']);
+  });
+
+  it('index.ts exports both new names', () => {
+    const exported = protocolIndex as Record<string, unknown>;
+    for (const name of ['REFRESH_FIRST_MAX_SOURCES', 'FETCHED_OUTCOMES']) {
+      expect(exported[name], name).toBeDefined();
+    }
+    expect(exported.FETCHED_OUTCOMES).toBe(FETCHED_OUTCOMES);
+  });
+});
+
+describe('PR-5 — app-think + refreshFirst?: true (D-PR5-19; internal, strict, omit-default)', () => {
+  it('D-PR5-19 an app-think step accepts refreshFirst: true — tool-free and tools: true alike', () => {
+    expect(parses(scheduleStepSchema, { ...appThink, refreshFirst: true })).toBe(true);
+    expect(parses(scheduleStepSchema, { ...appThink, tools: true, refreshFirst: true })).toBe(true);
+    const parsed = scheduleStepSchema.parse({ ...appThink, refreshFirst: true });
+    expect(parsed.kind === 'app-think' && (parsed as Record<string, unknown>).refreshFirst).toBe(true);
+  });
+
+  it('D-PR5-19 absent stays absent — omit-default: a step without the tick parses to the same keys as before', () => {
+    expect(parses(scheduleStepSchema, { ...appThink, refreshFirst: true }), 'the seat exists').toBe(true);
+    const parsed = scheduleStepSchema.parse(appThink);
+    expect('refreshFirst' in parsed).toBe(false);
+    expect(Object.keys(parsed).sort()).toEqual(['appId', 'context', 'kind', 'prompt']);
+  });
+
+  it('D-PR5-19 refreshFirst is the literal true only — false is never written, so it never parses', () => {
+    expect(parses(scheduleStepSchema, { ...appThink, refreshFirst: true }), 'the passing twin').toBe(true);
+    for (const value of [false, 'yes', 1, null, ['ledger'], { sources: ['ledger'] }]) {
+      expect(parses(scheduleStepSchema, { ...appThink, refreshFirst: value }), JSON.stringify(value)).toBe(false);
+    }
+  });
+
+  it('D-PR5-19 the seat is app-think\'s alone — notify and app-run refuse it', () => {
+    expect(parses(scheduleStepSchema, { ...appThink, refreshFirst: true }), 'the passing twin').toBe(true);
+    expect(parses(scheduleStepSchema, { ...notify, refreshFirst: true })).toBe(false);
+    expect(parses(scheduleStepSchema, { ...appRun, refreshFirst: true })).toBe(false);
+  });
+
+  it('D-PR5-19 a refreshFirst step rides a task; the shared proposal steps still parse it (the channels STRIP it — T-D)', () => {
+    expect(parses(scheduledTaskSchema, { ...minimalTask, steps: [{ ...appThink, refreshFirst: true }] })).toBe(true);
+    expect(parseScheduledTask(JSON.stringify({ ...minimalTask, steps: [{ ...appThink, tools: true, refreshFirst: true }] }))).toBeDefined();
+    expect(parses(scheduleProposalSchema, { ...minimalProposal, steps: [{ ...appThink, refreshFirst: true }] })).toBe(true);
+  });
+
+  it('D-PR5-19 the tick is part of the intent: a step with and without it are different schedules', () => {
+    expect(parses(scheduledTaskSchema, { ...minimalTask, steps: [{ ...appThink, refreshFirst: true }] }), 'the seat exists').toBe(true);
+    const base = canonicalScheduleIntent(scheduledTaskSchema.parse({ ...minimalTask, steps: [appThink] }));
+    expect(canonicalScheduleIntent(scheduledTaskSchema.parse({ ...minimalTask, steps: [{ ...appThink, refreshFirst: true }] }))).not.toBe(base);
+  });
+
+  it('D-PR5-19 the older-hub direction: a pre-PR-5 app-think reader refuses a step carrying it (fail closed — "no such task")', () => {
+    /** main's PR-4 `app-think` member: `tools` but no `refreshFirst`. */
+    const prePr5AppThink = z.strictObject({
+      kind: z.literal('app-think'),
+      appId: z.string().min(1),
+      prompt: z.string().min(1),
+      context: z.strictObject({ sql: z.array(z.string()).optional(), maxRows: z.int().min(1).optional() }),
+      tools: z.literal(true).optional(),
+    });
+    const step = { ...appThink, tools: true, refreshFirst: true };
+    expect(parses(scheduleStepSchema, step)).toBe(true);
+    expect(parses(prePr5AppThink, step)).toBe(false);
+    const { refreshFirst: _r, ...plain } = step;
+    expect(parses(prePr5AppThink, plain), 'the passing twin').toBe(true);
+  });
+});
+
+describe('PR-5 — the step result\'s fetched? seat (D-PR5-19; the saw precedent)', () => {
+  const fetchedOf = (n: number, outcome = 'fresh') => Array.from({ length: n }, (_, i) => ({ source: `App ${i}`, outcome }));
+
+  it('D-PR5-19 fetched is 1..8 {source ≤ 64, outcome} — every FETCHED_OUTCOMES word parses', () => {
+    for (const outcome of ['fresh', 'recent', 'failed', 'skipped', 'none']) {
+      expect(parses(stepResultSchema, { status: 'ok', fetched: [{ source: 'Ledger', outcome }] }), outcome).toBe(true);
+    }
+    expect(parses(stepResultSchema, { status: 'ok', fetched: fetchedOf(8) })).toBe(true);
+    expect(parses(stepResultSchema, { status: 'ok', fetched: [{ source: 'x'.repeat(64), outcome: 'recent' }] })).toBe(true);
+  });
+
+  it('D-PR5-19 fetched refuses the empty list, a ninth entry, an over-long or empty source, and an outcome off the list', () => {
+    expect(parses(stepResultSchema, { status: 'ok', fetched: fetchedOf(1) }), 'the passing twin').toBe(true);
+    expect(parses(stepResultSchema, { status: 'ok', fetched: [] })).toBe(false);
+    expect(parses(stepResultSchema, { status: 'ok', fetched: fetchedOf(9) })).toBe(false);
+    expect(parses(stepResultSchema, { status: 'ok', fetched: [{ source: 'x'.repeat(65), outcome: 'fresh' }] })).toBe(false);
+    expect(parses(stepResultSchema, { status: 'ok', fetched: [{ source: '', outcome: 'fresh' }] })).toBe(false);
+    for (const outcome of ['stopped', 'ok', 'FRESH', '', 3]) {
+      expect(parses(stepResultSchema, { status: 'ok', fetched: [{ source: 'Ledger', outcome }] }), String(outcome)).toBe(false);
+    }
+  });
+
+  it('D-PR5-19 a fetched entry is strict — no grant, no time, no statement, no reason rides it', () => {
+    expect(parses(stepResultSchema, { status: 'ok', fetched: [{ source: 'Ledger', outcome: 'fresh' }] }), 'the passing twin').toBe(true);
+    for (const extra of [{ grantId: '9d8c7b6a-5f4e-4d3c-8b2a-1f0e9d8c7b6a' }, { at: AT }, { sql: 'SELECT 1' }, { reason: 'busy' }, { calls: 1 }]) {
+      expect(parses(stepResultSchema, { status: 'ok', fetched: [{ source: 'Ledger', outcome: 'fresh', ...extra }] }), JSON.stringify(extra)).toBe(false);
+    }
+    expect(parses(stepResultSchema, { status: 'ok', fetched: [{ source: 'Ledger' }] })).toBe(false);
+    expect(parses(stepResultSchema, { status: 'ok', fetched: [{ outcome: 'fresh' }] })).toBe(false);
+  });
+
+  it('D-PR5-19 omit-default — a step result without the seat parses to the same keys; the summary is untouched', () => {
+    expect(parses(stepResultSchema, { status: 'ok', fetched: fetchedOf(1) }), 'the seat exists').toBe(true);
+    const parsed = stepResultSchema.parse({ status: 'ok', summary: 'Spent 120 on food.' });
+    expect(Object.keys(parsed).sort()).toEqual(['status', 'summary']);
+    const withFetch = stepResultSchema.parse({ status: 'ok', summary: 'Spent 120 on food.', fetched: [{ source: 'Ledger', outcome: 'fresh' }] });
+    expect(withFetch.summary).toBe('Spent 120 on food.');
+  });
+
+  it('D-PR5-19 the seat rides a run beside the PR-4 facts, inside the run\'s caps', () => {
+    const run = {
+      ...minimalRun,
+      steps: [{ status: 'ok', summary: 'done', saw: [{ source: 'Ledger', table: 'transactions' }], fetched: [{ source: 'Ledger', outcome: 'fresh' }, { source: 'Bank', outcome: 'skipped' }] }],
+    };
+    expect(parses(scheduleRunSchema, run)).toBe(true);
+    expect(parseScheduleRun(JSON.stringify(run))?.steps[0]).toMatchObject({ fetched: [{ source: 'Ledger', outcome: 'fresh' }, { source: 'Bank', outcome: 'skipped' }] });
+  });
+});
+
+describe('PR-5 — publication line still holds: json-schemas SOURCES unchanged (pinned, D-PR5-22 "no published bytes")', () => {
+  it('buildJsonSchemas() exports exactly the same sixteen — and no published byte names a PR-5 seat', () => {
+    const schemas = buildJsonSchemas();
+    expect(Object.keys(schemas)).toEqual([
+      'app-announce.json',
+      'host-ready.json',
+      'app-message.json',
+      'app-cancel.json',
+      'app-response.json',
+      'db-request.json',
+      'db-response.json',
+      'host-event.json',
+      'app-event.json',
+      'net-request.json',
+      'net-response.json',
+      'open-url-request.json',
+      'open-url-result.json',
+      'access-request.json',
+      'access-response.json',
+      'app-request-envelope.json',
+    ]);
+    const published = JSON.stringify(schemas);
+    for (const seat of ['refreshFirst', 'snug:access-wants', 'appProvenance', 'accessWrite']) {
+      expect(published.includes(seat), seat).toBe(false);
+    }
   });
 });

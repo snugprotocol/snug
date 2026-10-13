@@ -4,6 +4,7 @@ import { Link, useNavigate } from 'react-router';
 
 import { STARTER_INSTALL_SOURCE_PREFIX } from '@snugprotocol/db';
 
+import { AccessTileBadge, AccessTileCouldRead, useHubAccess } from '../access/AccessTileBadge.js';
 import { parseBuildPrompt } from '../agent/chips.js';
 import { ProtectionOffer } from '../vault/ProtectionOffer.js';
 import { useProtectOffer } from '../vault/protectOffer.js';
@@ -12,7 +13,7 @@ import { ScheduleHubSection } from '../schedule/ScheduleHubSection.js';
 import { DesktopWelcome } from '../desktop/DesktopWelcome.js';
 import { useDesktopFirstRun } from '../desktop/firstRun.js';
 import { availabilityOf, needsOfConnections, needsOfRequirement, offersOf, signedIn, type AppNeed } from '../platform/availability.js';
-import { getPlatform } from '../platform/platform.js';
+import { allows, getPlatform } from '../platform/platform.js';
 import { useLibraryRevision } from '../platform/signals.js';
 import { refreshAppMeta, useAppMetaMap } from '../state/appMeta.js';
 import { mintBuildThread } from '../state/buildThread.js';
@@ -156,6 +157,9 @@ function HubHome(): ReactElement {
   // The library can change UNDERNEATH the hub: on the local runner an agent hands an app in
   // while the user is looking at this shelf (K6). The host says so by bumping this revision.
   const libraryRevision = useLibraryRevision();
+  // Access between apps, read ONCE for the whole shelf — never per tile (TASK-20261010-host-broker
+  // PR-5, D-PR5-6/7): each tile's line, or the pair that names it as the app that could read.
+  const hubAccess = useHubAccess(allows('access'));
   useEffect(() => {
     let cancelled = false;
     // No `setLoad({ phase: 'loading' })` here. The state STARTS as loading, which is the
@@ -314,6 +318,10 @@ function HubHome(): ReactElement {
             const verdict = availabilityOf(load.needs.get(entry.id) ?? [], offers);
             const blocker = verdict.ok ? undefined : verdict.blockers[0];
             const noteId = `tile-blocked-${entry.id}`;
+            // ONE line per tile (D-PR5-7): the access line when the app has live access, else the pair naming it as the reader.
+            const accessCounts = hubAccess.counts.get(entry.id);
+            const hasAccess = accessCounts !== undefined && accessCounts.reads + accessCounts.readBy > 0;
+            const couldRead = hasAccess ? undefined : hubAccess.couldRead.get(entry.id);
             const face = (
               <>
                 <span className="tile-emoji" aria-hidden="true">
@@ -321,6 +329,8 @@ function HubHome(): ReactElement {
                 </span>
                 <span className="tile-name">{name}</span>
                 <span className="tile-sub">{meta?.description ?? new Date(entry.createdAt).toLocaleDateString()}</span>
+                {/* PR-5 (D-PR5-6): in the face, so its visible words are part of the link's name. */}
+                <AccessTileBadge counts={accessCounts} />
               </>
             );
             // The Card CONTAINS the Link (rather than the Link wrapping the Card) so the
@@ -355,6 +365,8 @@ function HubHome(): ReactElement {
                     <TileBlockedNote id={noteId} blocker={blocker} details={{ to: `/run/${entry.id}`, name }} />
                   </>
                 )}
+                {/* PR-5 (D-PR5-7): a SIBLING of the link, never inside it — a button in an <a> would navigate. */}
+                <AccessTileCouldRead readerAppId={entry.id} readerName={name} pair={couldRead} />
                 {renaming === entry.id ? (
                   <div className="tile-confirm tile-rename-editor" role="group" aria-label={`rename ${name}`}>
                     <input

@@ -43,7 +43,11 @@ The security model is enforced by architecture, not by policy:
   **human-approved, host-frozen ceiling** of allowed hosts.
 - Credentials live in the user's own file and are injected by the host executor — they never
   enter the app iframe, never reach the LLM, and never reach an app publisher.
-- An app reads another app's tables — or changes rows in them, with an undo — only under a user-granted, logged, revocable access grant — the one sanctioned crossing, and the user sees exactly what is shared, what may be changed and where it can go before allowing it.
+- An app reads another app's tables — or changes rows in them, with an undo — only under a user-granted, logged, revocable access grant — the one sanctioned crossing, and the user sees exactly what is shared, what may be changed and where it can go before allowing it. The chat beside an app goes through that same grant: it
+  can propose a change to the other app's data, and the change applies only when the user
+  presses *apply* on its card, with the same undo. An app can say in its own code what it would
+  like to read, so Snug can suggest apps that could work together — nothing is read until the
+  user allows it.
 
 The [threat model and security argument](/docs/whitepaper/) are written down, including what
 is accepted and *not* mitigated.

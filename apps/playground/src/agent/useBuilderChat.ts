@@ -21,12 +21,47 @@
 //   Service, every table the user let this app read; the set reaches the data lane's context (the
 //   host's framing, never a row) and the data tools' `shared` seat, whose `data_query` records the
 //   read on the source's history before any shared row reaches the brain. No other lane opens it.
+// - *Fetch new data first* (TASK-20261010-host-broker PR-5, D-PR5-20; T-D Q12/Q13): `send`'s third
+//   argument, the run rail's toggle. Consumed only when the turn OPENS the data door — after routing,
+//   before the shared tables are copied (`onConsumed` tells the toggle); a turn routed elsewhere runs
+//   no fetch. The fetch is `chatFetch.ts`'s: what it came to rides the person's message as STRUCTURED
+//   facts (`fetched` — Gate-5 G5-17), persisted in the row's meta as the protocol's strict list,
+//   checked when written and again when read, and re-worded from `FETCH_FIRST` every time
+//   (`fetchNote` is those words, in memory only; the retired free-text `meta.fetchNote` is never read
+//   and never written — a row is never host words). The same fact joins the turn's context as ONE host
+//   line. A stop during the fetch ends the WHOLE turn — nothing routed further, no brain call — and
+//   keeps the message with its facts, PERSISTED, with no agent row (P3-8).
+// - The chat's CROSS-APP card (TASK-20261010-host-broker PR-5, D-PR5-10…14): on a `data_write` turn
+//   through the chat door, `data_propose_write` may stage ONE change to another app's table — under
+//   its own key `meta.accessWrite`, and ONE card per turn across it and the own `dataWrite`. The
+//   seat's `planWrite` is bound by `laneTools.ts` to the turn's caller. `approveAccessWrite` runs the
+//   apply under the same `approvalsInFlight` guard as the own card and persists the answer to the
+//   CARD's thread, read through a ref when the act begins (SC14); `declineAccessWrite` settles it.
+//   The rehydrate re-admits a persisted card only through the strict reader, and only for the
+//   thread's pinned app; `metaToDataWrite` is allow-list strict too — a `dataWrite` carrying any
+//   seat of another card (a `target`) or an unknown one is no card at all (S3, S4), and so is one
+//   whose outcome, undo id or undo flag is present in any shape but its own (Gate-5 G5-1). The card's
+//   module is reached LAZILY: it carries the access engine, which this hook never loads up front.
+//   Both acts read the CURRENT message, never the card they were clicked on: a settled card is
+//   never applied or cancelled again (G5-16 ii-6); the thread they persist to is read through a ref
+//   set before paint (ii-5).
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import type { AgentTool, AgentTurnEvent } from '@snugprotocol/adapters';
 import { OWN_UNDO_APPROVAL_BUCKET, type UserDb } from '@snugprotocol/db';
-import { AUTH_WIZARD_DIRECTIVE_KIND, ownUndoEntrySchema, type AuthWizardDirective, type RenderDirective, type ScheduleProposal } from '@snugprotocol/protocol';
+import {
+  AUTH_WIZARD_DIRECTIVE_KIND,
+  CHAT_FETCH_FACTS_MAX,
+  DATA_WRITE_OUTCOMES,
+  chatFetchFactsSchema,
+  ownUndoEntrySchema,
+  type AuthWizardDirective,
+  type ChatFetchFact,
+  type DataWriteOutcome,
+  type RenderDirective,
+  type ScheduleProposal,
+} from '@snugprotocol/protocol';
 
 import { directiveToMeta, metaToDirective, scanForRenderDirective } from './renderDirective.js';
 import { HOST_BRAIN_REFUSED_CODE } from '../platform/platform.js';
@@ -49,8 +84,10 @@ import { finalizeConnectionDeclaration } from './connectionPipeline.js';
 import { knowledgeDeliveryFor } from './knowledgeDelivery.js';
 import { authChoiceForPersistedRow, metaToAuthChoice, type AuthChoiceSeed } from './authChoiceCard.js';
 import { buildPresentCardTool, metaToCard, sanitizeCardText, type ChatCardState } from './cards.js';
+import { FETCH_FACTS } from './copy.dataWrite.js';
 import { accessCardToMeta, metaToAccessCard, persistAccessResolution, stageAccessCard, type AccessCardResolution, type AccessCardState, type PersistedAccessCard } from './accessCard.js';
 import type { AccessProposal } from './accessProposeTool.js';
+import type { AccessWriteCardState, PersistedAccessWrite } from './accessWriteCard.js';
 import { chatBrainRoute, chatDoorOpen } from '../access/egress.js';
 import type { AccessCaller } from '../access/policy.js';
 import type { MaterialisedSet } from '../access/service.js';
@@ -129,6 +166,19 @@ export interface ChatMessage {
    */
   access?: AccessCardState;
   /**
+   * A change the chat's AI proposed to ANOTHER app's table (TASK-20261010-host-broker PR-5,
+   * D-PR5-10), under its own key — strict both ways (`agent/accessWriteCard.ts`).
+   */
+  accessWrite?: AccessWriteCardState;
+  /**
+   * User messages only: what *fetch new data first* came to before this turn read the other
+   * apps' data (PR-5, D-PR5-20) — the host's words, re-worded from `fetched` by `FETCH_FACTS`; in
+   * memory only, never persisted (Gate-5 G5-17).
+   */
+  fetchNote?: string;
+  /** User messages only: the same, as the facts persisted on the row (`meta.fetched`) — what the log renders, each name isolated. */
+  fetched?: readonly ChatFetchFact[];
+  /**
    * What this turn actually ran on (TASK-20260826, ADR-0059 rule 3) — stamped by the
    * builder's `onBrain` from the resolved adapter config, persisted in message meta,
    * rehydrated on read. Provenance of the ROW, never re-derived from live settings:
@@ -139,14 +189,11 @@ export interface ChatMessage {
 }
 
 /**
- * How a data-write card was resolved — the ONE list the persisted row's `outcome` is re-admitted
- * from (TASK-20261010-host-broker PR-4, D-PR4-12): a word outside it is no outcome at all. `undone`
- * is the user's undo of an applied change (D-PR4-19).
+ * A proposal as the chat renders it: the staged change plus how it was resolved. `outcome` is one of
+ * the protocol's `DATA_WRITE_OUTCOMES` — the ONE list a persisted row's is re-admitted from, and the
+ * list the untrusted import reads too (PR-4 D-PR4-12; Gate-5 G5-1). `undone` is the user's undo of an
+ * applied change (D-PR4-19).
  */
-export const DATA_WRITE_OUTCOMES = ['applied', 'declined', 'drifted', 'failed', 'undone'] as const;
-export type DataWriteOutcome = (typeof DATA_WRITE_OUTCOMES)[number];
-
-/** A proposal as the chat renders it: the staged change plus how it was resolved. */
 export interface DataWriteCardState extends PendingWriteProposal {
   outcome?: DataWriteOutcome;
   /** Rows actually affected, recorded once applied. */
@@ -203,7 +250,7 @@ export interface BuilderChat {
    * `displayText`) is what the transport actually sends — internal prompt templates
    * belong in `wireText`, never on screen.
    */
-  send: (displayText: string, wireText?: string) => void;
+  send: (displayText: string, wireText?: string, options?: ChatSendOptions) => void;
   stop: () => void;
   /**
    * Apply a staged data-write proposal (ADR-0019 D8). THE ONLY path from the chat to the
@@ -212,6 +259,13 @@ export interface BuilderChat {
   approveDataWrite: (proposal: DataWriteCardState, messageId: number) => void;
   /** Decline it. Executes nothing; the card settles as cancelled. */
   declineDataWrite: (proposal: DataWriteCardState, messageId: number) => void;
+  /**
+   * Apply the chat's CROSS-APP card (TASK-20261010-host-broker PR-5, D-PR5-14): the change to another
+   * app's table, re-checked against the access as it is now — the only path from the chat to it.
+   */
+  approveAccessWrite: (card: AccessWriteCardState, messageId: number) => void;
+  /** Cancel it: nothing reaches the other app; the card settles as cancelled. */
+  declineAccessWrite: (card: AccessWriteCardState, messageId: number) => void;
   /**
    * Undo an applied card's change (TASK-20261010-host-broker PR-4, D-PR4-19): the user's act, through
    * the app's approval bucket; done, the card settles as `undone` and so does its row.
@@ -238,6 +292,16 @@ export interface BuilderChat {
    * through the hook's own meta path (the schedule card's rule).
    */
   resolveAccess: (card: AccessCardState, messageId: number, resolution: AccessCardResolution) => void;
+}
+
+/**
+ * What a send may carry beside its text (TASK-20261010-host-broker PR-5, D-PR5-20; T-D Q12): the run
+ * rail's *fetch new data first*. `onConsumed` is called once, when the turn opens the data door and
+ * the fetch starts — the toggle's cue to release; a turn routed elsewhere never calls it.
+ */
+export interface ChatSendOptions {
+  fetchFirst?: true;
+  onConsumed?: () => void;
 }
 
 export interface UseBuilderChatOptions {
@@ -282,6 +346,14 @@ interface PersistedMeta {
   access?: PersistedAccessCard;
   /** The brain this turn ran on (TASK-20260826) — 'demo' is what the tag renders from. */
   brainKind?: AdapterKind;
+  /**
+   * A user row's *fetch new data first* FACTS (Gate-5 G5-17) — the protocol's strict list, never a
+   * sentence. The free-text `fetchNote` it replaced (PR-5, T-D Q13) is tolerated on an old row — the
+   * row loads — and never read, never written.
+   */
+  fetched?: readonly ChatFetchFact[];
+  /** A staged (and possibly answered) cross-app change (TASK-20261010-host-broker PR-5) — `accessWriteToMeta`'s shape. */
+  accessWrite?: PersistedAccessWrite;
 }
 
 /** Strict read of a persisted brain kind — junk in an imported row is no kind at all.
@@ -320,9 +392,11 @@ function persistResolution(
   if (rowId === undefined) return;
   try {
     // MERGE, never replace: the same message can also carry an artifact card or a render
-    // directive, and resolving a data write must not delete them.
-    const existing = db.listChatMessages(threadId).find((m) => m.id === rowId)?.meta;
-    const base = typeof existing === 'object' && existing !== null ? (existing as PersistedMeta) : {};
+    // directive, and resolving a data write must not delete them. A row the thread does not hold is
+    // never written — merging onto nothing would replace its meta (Gate-5 G5-16 ii-5).
+    const row = db.listChatMessages(threadId).find((m) => m.id === rowId);
+    if (row === undefined) return;
+    const base = typeof row.meta === 'object' && row.meta !== null ? (row.meta as PersistedMeta) : {};
     db.updateChatMessageMeta(rowId, { ...base, dataWrite: resolved });
   } catch {
     // The change itself already landed; an unwritable audit field is not worth a throw.
@@ -332,6 +406,20 @@ function persistResolution(
 const isDataWriteOutcome = (value: unknown): value is DataWriteOutcome => typeof value === 'string' && (DATA_WRITE_OUTCOMES as readonly string[]).includes(value);
 /** An undo id is the journal's: a lowercase uuid v4 — the entry schema's own rule, never restated. */
 const isUndoId = (value: unknown): value is string => ownUndoEntrySchema.shape.id.safeParse(value).success;
+
+/** Every seat an OWN data-write card may persist (PR-5, D-PR5-10) — a row with any other is no card (S3, S4). */
+const DATA_WRITE_KEYS: ReadonlySet<string> = new Set<keyof DataWriteCardState>([
+  'appId',
+  'statements',
+  'params',
+  'summary',
+  'previewed',
+  'outcome',
+  'executed',
+  'undoId',
+  'undoable',
+  'messageRowId',
+]);
 
 /**
  * Rebuild a data-write card from a persisted row, or `undefined` if the row cannot be
@@ -347,19 +435,30 @@ const isUndoId = (value: unknown): value is string => ownUndoEntrySchema.shape.i
  * the dry run at approve time and halts on drift, so a stale card cannot execute a stale
  * change. Re-previewing on every rehydration would mean a scratch run per render for a
  * number the execute path recomputes anyway.
+ *
+ * ALLOW-LIST STRICT (TASK-20261010-host-broker PR-5, D-PR5-10; S3, S4): a seat outside the own
+ * card's — a cross-app `target`, a `sourceAppId`, a `grantId`, anything unknown — drops the WHOLE
+ * card. Rebuilding field by field would have kept the rest as an OWN card, so a row planted with
+ * another app's target would come back as a change to this one.
  */
 function metaToDataWrite(meta: unknown): DataWriteCardState | undefined {
   if (typeof meta !== 'object' || meta === null) return undefined;
   const staged = (meta as PersistedMeta).dataWrite;
-  if (staged === undefined || typeof staged !== 'object') return undefined;
+  if (staged === undefined || typeof staged !== 'object' || staged === null) return undefined;
+  if (Object.keys(staged).some((key) => !DATA_WRITE_KEYS.has(key))) return undefined;
   const { appId, statements, params, summary, previewed, outcome, executed, undoId, undoable } = staged as Record<keyof DataWriteCardState, unknown>;
   if (typeof appId !== 'string' || typeof summary !== 'string') return undefined;
   if (!Array.isArray(statements) || statements.length === 0) return undefined;
   if (!statements.every((sql) => typeof sql === 'string')) return undefined;
   if (!Array.isArray(previewed) || !previewed.every((n) => typeof n === 'number')) return undefined;
-  // THE BELT (TASK-20261010-host-broker PR-4, D-PR4-12): each seat a row could plant is re-admitted
-  // only in its own shape — an outcome from its list, an undo id as a uuid, the flag as a boolean.
-  // A planted word is no outcome (the card comes back unresolved); a planted id is no undo.
+  // THE BELT (TASK-20261010-host-broker PR-4, D-PR4-12; Gate-5 G5-1): each seat a row could plant is
+  // re-admitted only in its own shape — an outcome from the protocol's list, an undo id as a uuid, the
+  // flag as a boolean — and one PRESENT in any other shape drops the WHOLE card: "answered" is a value
+  // the reader accepts, never a key, and a card that came back unresolved would carry a live *apply*
+  // (DB-1, SA-1, SB-1). An absent outcome is a card still waiting.
+  if (outcome !== undefined && !isDataWriteOutcome(outcome)) return undefined;
+  if (undoId !== undefined && !isUndoId(undoId)) return undefined;
+  if (undoable !== undefined && typeof undoable !== 'boolean') return undefined;
   return {
     appId,
     statements,
@@ -372,6 +471,32 @@ function metaToDataWrite(meta: unknown): DataWriteCardState | undefined {
     ...(typeof undoable === 'boolean' ? { undoable } : {}),
   };
 }
+
+/**
+ * The fetch facts on a persisted USER row (Gate-5 G5-17), re-admitted only as the protocol's strict
+ * list: a row travels through export, import and sync, and a list the reader cannot vouch for whole
+ * is no facts at all — the message still loads. The retired `meta.fetchNote` is never read.
+ */
+function metaToFetched(meta: unknown): ChatFetchFact[] | undefined {
+  if (typeof meta !== 'object' || meta === null) return undefined;
+  const parsed = chatFetchFactsSchema.safeParse((meta as PersistedMeta).fetched);
+  return parsed.success ? parsed.data : undefined;
+}
+
+/**
+ * What the fetch came to, as a user row may carry it (G5-17): every fact the reader would re-admit
+ * (`chatFetch` folds and caps each name), at most `CHAT_FETCH_FACTS_MAX` — checked whole with the
+ * reader's own schema before it is written, so what is written is what a reload reads; or no facts
+ * at all (never an empty list).
+ */
+function factsForRow(facts: readonly ChatFetchFact[]): ChatFetchFact[] | undefined {
+  const admitted = facts.filter((fact) => chatFetchFactsSchema.safeParse([fact]).success).slice(0, CHAT_FETCH_FACTS_MAX);
+  const parsed = chatFetchFactsSchema.safeParse(admitted);
+  return parsed.success ? parsed.data : undefined;
+}
+
+/** The facts on a message: as persisted, and in `FETCH_FIRST`'s words (`FETCH_FACTS`, the one wording). */
+const fetchedOnMessage = (fetched: readonly ChatFetchFact[]): Pick<ChatMessage, 'fetched' | 'fetchNote'> => ({ fetched, fetchNote: FETCH_FACTS.note(fetched, Date.now()) });
 
 let messageSeq = 0;
 
@@ -454,6 +579,20 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
   const { messages, busy, activity, steps, lastArtifact, threadAppId, knowledgeEpoch, llmInspector } = state;
 
   const attachedAppId = pinnedAppId ?? threadAppId;
+
+  /**
+   * What the acts read when they BEGIN, never a value closed over by an older render (TASK-20261010-
+   * host-broker PR-5; next-steps' two stale closures, SC14): the thread a card lives in, and the
+   * host's provider-error observer. A card's answer is persisted to the thread it was on when the act
+   * began, whatever is on screen when the apply ends. Set in a LAYOUT effect (Gate-5 G5-16 ii-5): a
+   * passive one lags the render, so a click between the commit and that effect read the thread before.
+   */
+  const threadIdRef = useRef(threadId);
+  const onProviderNetErrorRef = useRef(options.onProviderNetError);
+  useLayoutEffect(() => {
+    threadIdRef.current = threadId;
+    onProviderNetErrorRef.current = options.onProviderNetError;
+  }, [threadId, options.onProviderNetError]);
 
   const onInstall = useCallback(
     (appId: string): void => {
@@ -550,6 +689,8 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
       const persisted = db.listChatMessages(threadId);
       /** The thread's pinned app — the only app a persisted ask card may be for (S10). */
       const pinnedApp = row?.appId ?? pinnedAppId;
+      /** Rehydrated agent rows that carry a cross-app card, by their view id — re-admitted in a second pass (below). */
+      const crossApp = new Map<number, { rowId: number; meta: unknown }>();
       patchSession(session, (current) => ({
         hydrated: true,
         // The pin is mirrored from the row OR from the caller's pinned app (RunView):
@@ -580,10 +721,15 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
                 const access = metaToAccessCard(m.meta);
                 const ownAccess = access !== undefined && pinnedApp !== undefined && access.appId === pinnedApp ? access : undefined;
                 const brainKind = metaToBrainKind(m.meta);
+                // PR-5 (D-PR5-20; Gate-5 G5-17): the fetch facts ride the person's own message only, re-worded on read.
+                const fetched = m.role === 'user' ? metaToFetched(m.meta) : undefined;
+                const id = ++messageSeq;
+                if (m.role !== 'user' && typeof m.meta === 'object' && m.meta !== null && 'accessWrite' in m.meta) crossApp.set(id, { rowId: m.id, meta: m.meta });
                 return {
-                  id: ++messageSeq,
+                  id,
                   role: m.role === 'user' ? ('user' as const) : ('agent' as const),
                   displayText: m.content,
+                  ...(fetched !== undefined ? fetchedOnMessage(fetched) : {}),
                   ...(artifact !== undefined ? { artifact } : {}),
                   ...(directive !== undefined && directive.kind === AUTH_WIZARD_DIRECTIVE_KIND ? { directive } : {}),
                   ...(dataWrite !== undefined ? { dataWrite } : {}),
@@ -600,6 +746,28 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
                 };
               }),
       }));
+      // PR-5 (D-PR5-10): the cross-app cards through their strict reader, for the thread's pinned app
+      // only — a SECOND pass, so the history never waits on the card's module (it carries the access
+      // engine, reached lazily): only a thread holding such a row loads it. Like the first pass it
+      // stands down once this effect is cleaned up, and a module that fails to load (a chunk-load
+      // failure) leaves the history as it is — without the thread's cross-app cards, so nothing can be
+      // applied from one — never an unhandled rejection (Gate-5 G5-16 ii-8).
+      if (crossApp.size === 0) return;
+      void import('./accessWriteCard.js')
+        .then(({ metaToAccessWrite }) => {
+          if (cancelled) return;
+          patchSession(session, (current) => ({
+            messages: current.messages.map((message) => {
+              const persistedRow = crossApp.get(message.id);
+              const card = persistedRow === undefined ? undefined : metaToAccessWrite(persistedRow.meta);
+              if (persistedRow === undefined || card === undefined || pinnedApp === undefined || card.appId !== pinnedApp) return message;
+              return { ...message, accessWrite: { ...card, messageRowId: persistedRow.rowId } };
+            }),
+          }));
+        })
+        .catch((err: unknown) => {
+          console.warn('chat: the cross-app cards of this thread could not be loaded — none is shown', err);
+        });
     });
     return () => {
       cancelled = true;
@@ -618,7 +786,7 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
   );
 
   const send = useCallback(
-    (displayText: string, wireText?: string): void => {
+    (displayText: string, wireText?: string, sendOptions?: ChatSendOptions): void => {
       const wire = wireText ?? displayText;
       // The turn binds to THIS session object (ADR-0062): every write below goes through
       // it BY REFERENCE, so a turn that outlives a registry reset writes into a detached
@@ -678,8 +846,10 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
       const stagedSchedule: { current: ScheduleCardState | undefined } = { current: undefined };
       /** One access ask per turn (TASK-20261010-host-broker PR-2) — the same single-seat rule. */
       const stagedAccess: { current: AccessCardState | undefined } = { current: undefined };
+      /** One cross-app change per turn (PR-5, D-PR5-11 (8)) — and ONE change card across it and `stagedProposal`. */
+      const stagedAccessWrite: { current: AccessWriteCardState | undefined } = { current: undefined };
       /** Per-turn state for bootstrap pinning (F9) + artifact-card persistence. */
-      const turn: { userDbId?: number; artifact?: ArtifactEvent; installedV1: boolean; brainKind?: AdapterKind } = {
+      const turn: { userDbId?: number; artifact?: ArtifactEvent; installedV1: boolean; brainKind?: AdapterKind; fetched?: ChatFetchFact[] } = {
         installedV1: false,
       };
       /** Subscription-mode artifact fetch+write runs detached — awaited before the turn finalizes. */
@@ -702,6 +872,14 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
         if (contextTarget !== undefined && session.store.get().threadAppId !== contextTarget) {
           patchSession(session, { threadAppId: contextTarget });
         }
+        /** The person's message on its row — with what the fetch came to, when it ran (G5-17). */
+        const persistUserMessage = (): void => {
+          db.upsertThread(threadId, {
+            ...(pinnedAppId !== undefined ? { appId: pinnedAppId } : {}),
+            ...(isFirstMessage ? { title: displayText.slice(0, 64) } : {}),
+          });
+          turn.userDbId = db.appendChatMessage(threadId, 'user', displayText, turn.fetched !== undefined ? { meta: { fetched: turn.fetched } satisfies PersistedMeta } : {}).id;
+        };
         /**
          * ADR-0019 D6 — CLASSIFY FIRST, for a message beside an INSTALLED app.
          *
@@ -785,24 +963,57 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
          * landed while the worker dumped ends the turn before any context is built. The `read`
          * line is written later, by `data_query`, only when a statement names a shared table.
          */
-        let door: { shared: MaterialisedSet; now: number; seat: SharedTablesSeat } | undefined;
+        let door: { shared: MaterialisedSet; now: number; seat: SharedTablesSeat; caller: Extract<AccessCaller, { kind: 'chat' }> } | undefined;
+        /** The fetch's one host line for this turn's context (PR-5, D-PR5-20) — the note on the person's message, as a fact for the brain. */
+        let fetchContextLine: string | undefined;
         if (route?.lane === 'data' && contextTarget !== undefined && appMayUseAccess(contextTarget) && chatDoorOpen(chatBrainRoute(db, contextTarget))) {
           const [{ accessService }, { accessDeps, readerGeneration }] = await Promise.all([import('../access/service.js'), import('../access/grants.js')]);
           const liveGeneration = readerGeneration(contextTarget);
-          const caller: AccessCaller = { kind: 'chat', appId: contextTarget, threadId, ...(liveGeneration !== undefined ? { liveGeneration } : {}) };
+          const caller: Extract<AccessCaller, { kind: 'chat' }> = { kind: 'chat', appId: contextTarget, threadId, ...(liveGeneration !== undefined ? { liveGeneration } : {}) };
+          /**
+           * *fetch new data first* (PR-5, D-PR5-20; F9): consumed HERE, the one point a turn opens the
+           * door — after routing, before the copy, so the copy reads what the sources fetched. The
+           * facts join the person's message at once — checked as the row will hold them, worded from
+           * `FETCH_FIRST` (G5-17) — and the stop is this turn's: a stop while the sources fetch ends
+           * the whole turn, keeping the message and its facts, persisted (P3-8) with no agent row.
+           */
+          if (sendOptions?.fetchFirst === true) {
+            sendOptions.onConsumed?.();
+            const { fetchFirstForChat } = await import('./chatFetch.js');
+            const fetched = await fetchFirstForChat(db, caller, controller.signal);
+            turn.fetched = factsForRow(fetched.facts);
+            if (turn.fetched !== undefined) patchMessage(userId, fetchedOnMessage(turn.fetched));
+            fetchContextLine = fetched.contextLine;
+            if (controller.signal.aborted) {
+              persistUserMessage();
+              patchMessage(agentId, { streaming: false });
+              setBusy(false);
+              setActivity(undefined);
+              session.abort = null;
+              return;
+            }
+          }
           const service = accessService();
           const shared = await service.materialise(caller);
           if (controller.signal.aborted) {
+            // A stop after the fetch keeps what it came to as well (P3-8): the sources were asked, and their histories say so.
+            if (turn.fetched !== undefined) persistUserMessage();
             patchMessage(agentId, { streaming: false });
             setBusy(false);
             setActivity(undefined);
             session.abort = null;
             return;
           }
-          door = { shared, now: accessDeps().now(), seat: { set: shared, recordRead: (grantIds, sql) => service.recordRead(caller, shared, { grantIds, sql }) } };
+          door = {
+            shared,
+            now: accessDeps().now(),
+            // `counting` (PR-5, S18): the cross-app change's counting line — the seat's `planWrite` is bound by `laneTools.ts`.
+            seat: { set: shared, recordRead: (grantIds, sql, opts) => service.recordRead(caller, shared, { grantIds, sql, ...(opts?.counting === true ? { counting: true as const } : {}) }) },
+            caller,
+          };
         }
 
-        const { contextBlock, history } =
+        const { contextBlock: laneBlock, history } =
           route === undefined
             ? // The host caps (T4 AC3): the html rides whole or the builder refuses; the
               // rest shrinks under the host's 64 KiB. Every other brain keeps today's caps.
@@ -811,11 +1022,9 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
                 toolFree: knowledgeDeliveryFor(currentBrain()) !== 'tool',
               })
             : await buildIntentTurnContext(db, contextTarget, route.intent, threadId, door !== undefined ? { shared: door.shared, now: door.now } : undefined);
-        db.upsertThread(threadId, {
-          ...(pinnedAppId !== undefined ? { appId: pinnedAppId } : {}),
-          ...(isFirstMessage ? { title: displayText.slice(0, 64) } : {}),
-        });
-        turn.userDbId = db.appendChatMessage(threadId, 'user', displayText).id;
+        // PR-5 (D-PR5-20): what the fetch came to joins the turn's context ONCE, as a host line after the lane's block.
+        const contextBlock = fetchContextLine === undefined ? laneBlock : laneBlock === undefined ? fetchContextLine : `${laneBlock}\n\n${fetchContextLine}`;
+        persistUserMessage();
 
         /**
          * LANE-SCOPED TOOLS (ADR-0019 D9) — the second lock. The data lane gets the two
@@ -892,15 +1101,28 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
            * can tell the user rather than believing both are pending.
            */
           onDataProposal: (proposal) => {
-            if (stagedProposal.current !== undefined) return false;
+            if (stagedProposal.current !== undefined || stagedAccessWrite.current !== undefined) return false;
             stagedProposal.current = proposal;
             patchMessage(agentId, { dataWrite: proposal });
             return true;
           },
-          onProviderFailureCode: (appId, code) => options.onProviderNetError?.(appId, code),
+          /**
+           * The chat's change to ANOTHER app's table (PR-5, D-PR5-11 (8)): its own key, and the same
+           * one-card rule — an own change staged first leaves it NOT staged, and the reverse. A card
+           * for any app but the one the message sits beside is refused outright.
+           */
+          onAccessWriteProposal: (card) => {
+            if (stagedProposal.current !== undefined || stagedAccessWrite.current !== undefined) return false;
+            if (card.appId !== contextTarget) return false;
+            stagedAccessWrite.current = card;
+            patchMessage(agentId, { accessWrite: card });
+            return true;
+          },
+          // Read through the ref (next-steps' stale closure): a host that passes a new observer is the one heard.
+          onProviderFailureCode: (appId, code) => onProviderNetErrorRef.current?.(appId, code),
           onScheduleProposal,
           onAccessProposal,
-          ...(door !== undefined ? { shared: door.seat } : {}),
+          ...(door !== undefined ? { shared: door.seat, accessCaller: door.caller } : {}),
         });
 
         const result = await agent.send(
@@ -1109,10 +1331,13 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
           if (finalText !== '') {
             // F9: the turn that produced v1 is the bootstrap — pin both sides of it.
             if (turn.installedV1 && turn.userDbId !== undefined) db.pinChatMessage(turn.userDbId);
+            // The cross-app card's persisted shape, from its own module (reached lazily — the engine rides it).
+            const accessWriteMeta = stagedAccessWrite.current === undefined ? undefined : (await import('./accessWriteCard.js')).accessWriteToMeta(stagedAccessWrite.current);
             const meta: PersistedMeta | undefined =
               turn.artifact !== undefined ||
               directive !== undefined ||
               stagedProposal.current !== undefined ||
+              accessWriteMeta !== undefined ||
               stagedCard.current !== undefined ||
               stagedSchedule.current !== undefined ||
               stagedAccess.current !== undefined ||
@@ -1134,6 +1359,8 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
                     // R-M5: the assistant's text says a change is awaiting approval, so the
                     // card it refers to has to outlive the React tree that rendered it.
                     ...(stagedProposal.current !== undefined ? { dataWrite: stagedProposal.current } : {}),
+                    // PR-5 (D-PR5-10): the cross-app card under its OWN key — re-read strictly, for the thread's app only.
+                    ...(accessWriteMeta !== undefined ? accessWriteMeta : {}),
                     // AC7: inference alternatives are not re-derivable after the turn, so
                     // the choice must survive a reload; re-admitted on every read.
                     ...(authChoice !== undefined ? { authChoice } : {}),
@@ -1182,6 +1409,12 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
                 access: { ...(m.access ?? stagedAccess.current!), messageRowId: rowId },
               }));
             }
+            if (stagedAccessWrite.current !== undefined) {
+              const rowId = stored.id;
+              patchMessage(agentId, (m) => ({
+                accessWrite: { ...(m.accessWrite ?? stagedAccessWrite.current!), messageRowId: rowId },
+              }));
+            }
           }
         } else {
           // A host brain's REFUSAL withdraws what it streamed (artifact runtime contract
@@ -1222,12 +1455,16 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
     // cannot catch this: it is a re-entrancy problem, not a staleness one.
     if (session.approvalsInFlight.has(messageId)) return;
     session.approvalsInFlight.add(messageId);
+    // The card's thread, read when the act begins (next-steps' stale closure, SC14): never the one on screen when it ends.
+    const cardThread = threadIdRef.current;
+    // The approval carries the change and nothing of the card's (Gate-5 G5-16 ii-4): the engine refuses any other seat.
+    const { appId, statements, params, summary, previewed } = proposal;
     void (async () => {
       try {
       const db = await getUserDb();
       const { executeApprovedWrite } = await import('./dataTools.js');
       // The chat card is the door (PR-4, D-PR4-6): the approval journals as the chat's.
-      const outcome = await executeApprovedWrite(db, proposal, { via: 'chat' });
+      const outcome = await executeApprovedWrite(db, { appId, statements, params, summary, previewed }, { via: 'chat' });
       const resolved: DataWriteCardState = {
         ...proposal,
         outcome: outcome.ok ? ('applied' as const) : outcome.reason === 'drifted' ? ('drifted' as const) : ('failed' as const),
@@ -1237,7 +1474,7 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
         ...(outcome.ok && typeof outcome.undoable === 'boolean' ? { undoable: outcome.undoable } : {}),
       };
       patchMessage(messageId, (m) => ({ dataWrite: { ...(m.dataWrite ?? proposal), ...resolved } }));
-      persistResolution(db, threadId, proposal, resolved);
+      persistResolution(db, cardThread, proposal, resolved);
       } finally {
         session.approvalsInFlight.delete(messageId);
       }
@@ -1247,9 +1484,67 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
   const declineDataWrite = useCallback((proposal: DataWriteCardState, messageId: number): void => {
     // Nothing to undo: a proposal never touched the real database.
     const resolved: DataWriteCardState = { ...proposal, outcome: 'declined' as const };
+    const cardThread = threadIdRef.current;
     patchMessage(messageId, (m) => ({ dataWrite: { ...(m.dataWrite ?? proposal), ...resolved } }));
-    void (async () => persistResolution(await getUserDb(), threadId, proposal, resolved))();
-  }, [patchMessage, session]);
+    void (async () => persistResolution(await getUserDb(), cardThread, proposal, resolved))();
+  }, [patchMessage]);
+
+  /**
+   * *apply to Ledger* on the chat's CROSS-APP card (PR-5, D-PR5-12/14): deliberately in host code,
+   * reached only from the card's act. The own card's double-click guard (`approvalsInFlight` — a
+   * second click inside the await window never reaches the seat), the card's thread read when the act
+   * begins (SC14), and the CURRENT message's card, never the one the act was clicked on (Gate-5
+   * G5-16 ii-6): a card settled since — an apply that landed, a cancel — is never answered again, and
+   * its row id is the current one (the card renders before its row exists). *busy* and *waiting* are
+   * the moment's: the card keeps its acts, and nothing is persisted until the card is settled.
+   */
+  const approveAccessWrite = useCallback(
+    (card: AccessWriteCardState, messageId: number): void => {
+      const live = session.store.get().messages.find((m) => m.id === messageId)?.accessWrite ?? card;
+      if (live.outcome !== undefined || session.approvalsInFlight.has(messageId)) return;
+      session.approvalsInFlight.add(messageId);
+      const cardThread = threadIdRef.current;
+      void (async () => {
+        try {
+          const [db, { approveCrossAppWrite, persistAccessWrite }] = await Promise.all([getUserDb(), import('./accessWriteCard.js')]);
+          const rowId = session.store.get().messages.find((m) => m.id === messageId)?.accessWrite?.messageRowId ?? live.messageRowId;
+          const resolved = await approveCrossAppWrite(db, { ...live, ...(rowId !== undefined ? { messageRowId: rowId } : {}) }, { threadId: cardThread });
+          patchMessage(messageId, { accessWrite: resolved });
+          if (resolved.outcome !== undefined) persistAccessWrite(db, cardThread, resolved);
+        } catch {
+          // The module or the file could not be reached: nothing was applied.
+          const { failedWhy: _earlier, ...rest } = live;
+          patchMessage(messageId, { accessWrite: { ...rest, outcome: 'failed', failedWhy: 'failed' } });
+        } finally {
+          session.approvalsInFlight.delete(messageId);
+        }
+      })();
+    },
+    [patchMessage, session],
+  );
+
+  /** *cancel* on the cross-app card: nothing reached the other app; the card settles as cancelled, on its own thread's row — never over an answer it already has (ii-6). */
+  const declineAccessWrite = useCallback(
+    (card: AccessWriteCardState, messageId: number): void => {
+      const live = session.store.get().messages.find((m) => m.id === messageId)?.accessWrite ?? card;
+      if (live.outcome !== undefined || session.approvalsInFlight.has(messageId)) return;
+      const cardThread = threadIdRef.current;
+      let resolved: AccessWriteCardState | undefined;
+      patchMessage(messageId, (m) => {
+        if (m.accessWrite?.outcome !== undefined) return {};
+        const { failedWhy: _earlier, ...current } = m.accessWrite ?? card;
+        resolved = { ...current, outcome: 'declined' };
+        return { accessWrite: resolved };
+      });
+      const answered = resolved;
+      if (answered === undefined) return;
+      void (async () => {
+        const [db, { persistAccessWrite }] = await Promise.all([getUserDb(), import('./accessWriteCard.js')]);
+        persistAccessWrite(db, cardThread, answered);
+      })().catch(() => undefined);
+    },
+    [patchMessage, session],
+  );
 
   /**
    * THE LIVE SET (PR-4, D-PR4-19): which applied cards may still offer *undo* — read from the
@@ -1429,6 +1724,8 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
     stop,
     approveDataWrite,
     declineDataWrite,
+    approveAccessWrite,
+    declineAccessWrite,
     undoDataWrite,
     dataWriteUndoable,
     selectCardOption,

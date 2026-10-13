@@ -17,6 +17,11 @@
 // over-long purpose, a bidi control, a credential, an unknown hint key, `snug_kv` — each an
 // `Error:` before anything is staged. Every answer is ONE line the model reads; the ok answer
 // says the user decides and never that it was allowed.
+//
+// TASK-20261010-host-broker PR-5 (D-PR5-15): the ask may carry `access: 'write'` — the user wants a
+// change and no shared table is marked *can be changed*. Anything but `'read'` or `'write'` is an
+// `Error:`; a read ask stages no `access` seat (the PR-2 shape). The decline rung hashes
+// `{ hints, access }`: a write ask is its own ask, and a read ask's hash is the 1.1 bytes.
 
 import type { AgentTool } from '@snugprotocol/adapters';
 import type { UserDb } from '@snugprotocol/db';
@@ -29,10 +34,12 @@ import { appMayUseAccess } from '../run/appCapabilityRules.js';
 /** Named here like the schedule tool — no server twin, no prompt placeholder. */
 export const ACCESS_PROPOSE_TOOL_NAME = 'access_propose';
 
-/** What the brain asked for: its purpose, in the user's words, and the hints the host ranks apps by. */
+/** What the brain asked for: its purpose, in the user's words, the hints the host ranks apps by, and — for a change — `access: 'write'`. */
 export interface AccessProposal {
   purpose: string;
   hints?: AccessHints;
+  /** Present only on an ask to change rows too (D-PR5-15); a read ask carries none. */
+  access?: 'write';
 }
 
 /**
@@ -58,6 +65,7 @@ const MUTED = `NOT staged: the user turned off asks from this app — ${CARRY_ON
 const DECLINED = `NOT staged: the user said don’t allow to this ask — ${CARRY_ON}.`;
 const PENDING = `NOT staged: an ask is already waiting for the user — tell them to answer it first, and ${CARRY_ON}.`;
 const SECOND = 'NOT staged: a request is already waiting in this turn. Tell the user about it and let them answer it first.';
+const BAD_ACCESS = 'Error: "access" must be "read" (the default) or "write" — ask for write only when the user wants to change the other app’s data.';
 
 const issuesOf = (error: { issues: Array<{ path: PropertyKey[]; message: string }> }): string =>
   error.issues
@@ -85,6 +93,7 @@ export function buildAccessProposeTool(options: BuildAccessProposeToolOptions): 
               tables: { type: 'array', items: { type: 'string' } },
             },
           },
+          access: { type: 'string', enum: ['read', 'write'] },
         },
         required: ['purpose'],
       },
@@ -102,6 +111,8 @@ export function buildAccessProposeTool(options: BuildAccessProposeToolOptions): 
         if (!parsedHints.success) return `Error: "hints" were rejected — ${issuesOf(parsedHints.error)}`;
         hints = parsedHints.data;
       }
+      if (input.access !== undefined && input.access !== 'read' && input.access !== 'write') return BAD_ACCESS;
+      const wantsWrite = input.access === 'write';
       const db = await options.getDb();
       const target = await options.resolveAppId();
       const appId = target !== undefined && db.getApp(target) !== undefined ? target : undefined;
@@ -111,12 +122,12 @@ export function buildAccessProposeTool(options: BuildAccessProposeToolOptions): 
       if (!appMayUseAccess(appId)) return NOT_OWNED;
       if (accessAsksOff()) return ASKS_OFF;
       if (db.isAccessMuted(appId)) return MUTED;
-      const hash = accessRequestHash({ hints: hints ?? {} });
+      const hash = accessRequestHash({ hints: hints ?? {}, ...(wantsWrite ? { access: 'write' as const } : {}) });
       if (db.listAccessDeclines(appId).some((decline) => decline.hash === hash)) return DECLINED;
       if (pendingAccessStore.get()[appId] !== undefined) return PENDING;
 
       if (options.onProposal === undefined) return NO_SURFACE;
-      const proposal: AccessProposal = { purpose: purpose.data, ...(hints !== undefined ? { hints } : {}) };
+      const proposal: AccessProposal = { purpose: purpose.data, ...(hints !== undefined ? { hints } : {}), ...(wantsWrite ? { access: 'write' as const } : {}) };
       if (options.onProposal(proposal, appId) === false) return SECOND;
       return [
         `Suggested (NOT allowed — the user decides on the card): "${proposal.purpose}"`,

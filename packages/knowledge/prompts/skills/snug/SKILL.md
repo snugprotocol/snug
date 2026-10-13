@@ -140,10 +140,15 @@ after the user has done something that needs the other app's data — never on l
 runner shows the ask as a strip the user reviews or declines. The app learns only what the
 user allowed and reads it with one read-only query. Never promise the user that an app
 already reads another, and never put another app's data into the bundle: the runner holds
-the access, not the app.
+the access, not the app. An app that will want another app's data may also say so in its
+`<head>`, right after the viewport meta, with `<meta name="snug:access-wants" content='…'>`
+(its shape is in the reference; an apostrophe inside it is written `&apos;` (or ’), since a plain
+one ends the value) — the runner shows it to the user up front; it allows nothing, and the app
+still asks.
 The chat beside an app — the runner's own AI — can read what the user allowed that app to
-read, and may ask for it on the app's behalf; your app's code is not involved, and the
-other app's history records such a read as the allowed app's read.
+read, may ask for it on the app's behalf, and may propose a change to a table the user let that
+app change, which the user applies on its card; your app's code is not involved, and the other
+app's history records such a read or change as the allowed app's.
 
 ## Schedules
 

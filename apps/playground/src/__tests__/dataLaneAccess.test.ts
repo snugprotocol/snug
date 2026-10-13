@@ -360,3 +360,101 @@ describe('AC11 / D-PR2-17 — data_propose_write refuses a shared table by name,
     for (let i = 0; i < h.scratch.mock.calls.length; i++) expect(attachOf(h, i)).toEqual([]);
   });
 });
+
+// =========================================================================================
+// TASK-20261010-host-broker PR-5 (contract v2 D-PR5-11; F4): WRITABLE-FIRST keeps every AC11 pin
+// =========================================================================================
+//
+// The chat may now propose ONE change to a table the user let it change (`MaterialisedTable.write`,
+// D-PR5-13) — but a batch naming a shared table of a READ-ONLY grant answers today's
+// `CHAT_DOOR.readOnly(source)` BYTE-IDENTICAL, before any of the new refusals (one change, values in,
+// …), so every pin above holds. These guards pin that order beside a writable grant in the same
+// set; the one red row shows the write grant's statement reaching the seat instead of the refusal.
+
+describe('PR-5 D-PR5-11 — writable-first: a READ-ONLY grant’s table is still refused by name, byte-identical, beside a writable one', () => {
+  const WRITABLE_TX = { ...LEDGER_TRANSACTIONS, write: true } as MaterialisedTable;
+
+  it('a read-only grant’s table in a batch of TWO with params answers today’s readOnly(source) exactly — never oneChange, never valuesIn', async () => {
+    const h = await budget();
+    const out = await run(toolsFor(h, setOf(WRITABLE_TX, PANTRY_ITEMS), { allowWrites: true }), DATA_PROPOSE_WRITE_TOOL_NAME, {
+      statements: ["UPDATE pantry__items SET qty = 3 WHERE name = 'rice'", 'DELETE FROM pantry__items WHERE qty = 0'],
+      params: [['x'], []],
+      summary: 'tidy the pantry',
+    });
+    expect(out).toBe(`Error: ${CHAT_DOOR.readOnly('Pantry')}`);
+    expect(h.proposals).toHaveLength(0);
+    expect(h.scratch).not.toHaveBeenCalled();
+    expect(h.records).toEqual([]);
+  });
+
+  it('every AC11 statement on the READ-ONLY grant keeps its exact answer beside a writable grant', async () => {
+    for (const statement of ['UPDATE pantry__items SET qty = 0', 'DELETE FROM "pantry__items" WHERE qty = 1', 'INSERT INTO envelopes (name, category) SELECT name, name FROM pantry__items']) {
+      const h = await budget();
+      const out = await run(toolsFor(h, setOf(WRITABLE_TX, PANTRY_ITEMS), { allowWrites: true }), DATA_PROPOSE_WRITE_TOOL_NAME, { statements: [statement], summary: 'tidy up' });
+      expect(out, statement).toBe(`Error: ${CHAT_DOOR.readOnly('Pantry')}`);
+      expect(h.proposals).toHaveLength(0);
+    }
+  });
+
+  it('on the WRITABLE grant, an INSERT … SELECT into the reader’s own table and a DROP are still readOnly(source) — the target must be the one alias', async () => {
+    for (const statement of ['INSERT INTO envelopes (name, category) SELECT category, category FROM ledger__transactions', 'DROP TABLE ledger__transactions']) {
+      const h = await budget();
+      const out = await run(toolsFor(h, setOf(WRITABLE_TX), { allowWrites: true }), DATA_PROPOSE_WRITE_TOOL_NAME, { statements: [statement], summary: 'tidy up' });
+      expect(out, statement).toBe(`Error: ${CHAT_DOOR.readOnly('Ledger')}`);
+      expect(h.proposals).toHaveLength(0);
+      expect(h.scratch).not.toHaveBeenCalled();
+    }
+  });
+
+  it('on the WRITABLE grant the AC11 DELETE is no longer refused by name: the counting line and the plan are asked with the source-named statement', async () => {
+    const h = await budget();
+    // Gate-5 fold G5-16 [ii-7, SB-8]: staging now re-checks that the access the plan ran under is still
+    // there, live, at the plan's `grantedAt` — so a REAL access stands behind the writable table (as
+    // chatCrossAppWrite.test.ts's harness persists one), and the fake plan answers its grantedAt. The
+    // file keys a grant by a uuid v4 only, so the live access carries one in place of 'g-ledger'.
+    const LIVE_LEDGER_GRANT = '22222222-2222-4222-8222-222222222222';
+    const GRANTED_AT = '2026-10-12T08:00:00.000Z';
+    const ledger = h.db.installApp({ displayName: 'Ledger', html: '<!doctype html><title>l</title>', usesDb: true }).appId;
+    h.db.putAccessGrant({
+      id: LIVE_LEDGER_GRANT,
+      readerAppId: h.appId,
+      sourceAppId: ledger,
+      scope: { tables: [{ name: 'transactions', columns: ['id', 'amount', 'category'], write: true }] },
+      access: 'write',
+      purpose: 'to tidy my spending',
+      duration: { kind: 'always' },
+      unattended: false,
+      status: 'active',
+      provenance: 'chat',
+      readerVersion: 1,
+      grantedAt: GRANTED_AT,
+      updatedAt: GRANTED_AT,
+      reads: 0,
+      timeouts: 0,
+    } as unknown as Parameters<Db['putAccessGrant']>[0]);
+    const liveTx = { ...WRITABLE_TX, grantId: LIVE_LEDGER_GRANT, sourceAppId: ledger } as MaterialisedTable;
+    const planWrite = vi.fn(async () => ({ ok: true as const, changes: 1, table: 'transactions', grantedAt: GRANTED_AT }));
+    const recordRead = vi.fn(async (grantIds: readonly string[]) => ({ recorded: [...grantIds], refused: [] }));
+    const staged: unknown[] = [];
+    const tools = buildDataTools({
+      appId: h.appId,
+      getDb: () => Promise.resolve(h.db),
+      allowWrites: true,
+      onProposal: (proposal: PendingWriteProposal) => {
+        h.proposals.push(proposal);
+      },
+      onAccessWriteProposal: (card: unknown) => {
+        staged.push(card);
+        return true;
+      },
+      shared: { set: setOf(liveTx), recordRead, planWrite },
+    } as unknown as Parameters<typeof buildDataTools>[0]);
+    const out = await run(tools, DATA_PROPOSE_WRITE_TOOL_NAME, { statements: ['DELETE FROM "ledger__transactions" WHERE id = 1'], summary: 'drop the first one' });
+    expect(out).not.toContain(CHAT_DOOR.readOnly('Ledger'));
+    expect(recordRead).toHaveBeenCalledWith([LIVE_LEDGER_GRANT], 'DELETE FROM "transactions" WHERE id = 1', { counting: true });
+    expect(planWrite).toHaveBeenCalledWith(LIVE_LEDGER_GRANT, 'DELETE FROM "transactions" WHERE id = 1');
+    expect(staged).toHaveLength(1);
+    expect((staged[0] as { target: { grantId: string; grantedAt: string } }).target).toMatchObject({ grantId: LIVE_LEDGER_GRANT, grantedAt: GRANTED_AT });
+    expect(h.proposals, 'never the own card').toHaveLength(0);
+  });
+});

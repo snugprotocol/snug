@@ -181,9 +181,22 @@ export const APP_AGENT_MAX_ROUND_TRIPS = 10;
 export const FETCH_CONNECTION_MAX_CHARS = 16_000;
 /** The step stops itself this long before the run's bound, so it answers WITH the calls it spent rather than losing them to the queue's race. */
 export const APP_AGENT_DEADLINE_MARGIN_MS = 30_000;
-/** A step result names at most this many tables it read, each name at most this long. */
+/** A step result names at most this many tables it read (and, PR-5, sources it asked to fetch first), each name at most this long. */
 export const STEP_SAW_MAX_ENTRIES = 8;
 export const STEP_SAW_NAME_MAX_CHARS = 64;
+
+// TASK-20261010-host-broker PR-5 (D-PR5-18, D-PR5-19) — *fetch new data first*. Internal like
+// PR-4's seats and omitted when absent, so a step or a run that never used it is unchanged.
+
+/** A *fetch new data first* asks at most this many sources, one after another; the rest are `skipped`. */
+export const REFRESH_FIRST_MAX_SOURCES = 2;
+/**
+ * What a step's fetch-first came to, per source: new data (`fresh`), a fetch moments ago reused
+ * (`recent`), it did not finish (`failed`), not asked — past the cap or out of time (`skipped`),
+ * or no app lets this one ask any more (`none`, the whole fetch's one entry).
+ */
+export const FETCHED_OUTCOMES = ['fresh', 'recent', 'failed', 'skipped', 'none'] as const;
+export type FetchedOutcome = (typeof FETCHED_OUTCOMES)[number];
 
 // ------------------------------------------------------------- building blocks
 
@@ -354,6 +367,11 @@ const thinkContextSchema = z.strictObject({
  *    calls over the app's data, what the user let it read from other apps, and GET-only fetches
  *    through the app's approved connections; its changes are proposals like the tool-free
  *    step's. The literal `true` only — omit-defaults: `false` is never written.
+ *    `refreshFirst: true` (PR-5, D-PR5-19) — *fetch new data first*: before the step's brain is
+ *    asked, the host asks at most `REFRESH_FIRST_MAX_SOURCES` apps this one may read while the
+ *    user is away to run their own fetch. On either form; the user's tick in the editor is its
+ *    only setter — every proposal channel strips it, like an authority. An older hub reads a
+ *    task carrying it as no task (fail closed).
  */
 export const scheduleStepSchema = z.discriminatedUnion('kind', [
   z.strictObject({
@@ -372,6 +390,7 @@ export const scheduleStepSchema = z.discriminatedUnion('kind', [
     prompt: z.string().min(1).max(SCHEDULE_PROMPT_MAX_CHARS),
     context: thinkContextSchema,
     tools: z.literal(true).optional(),
+    refreshFirst: z.literal(true).optional(),
   }),
 ]);
 export type ScheduleStep = z.infer<typeof scheduleStepSchema>;
@@ -404,11 +423,20 @@ const stepSawSchema = z.strictObject({
 });
 export type StepSaw = z.infer<typeof stepSawSchema>;
 
+/** What a *fetch new data first* came to for one source (D-PR5-19): the source as the user knows it and the outcome — never a grant, a time or a reason. */
+const stepFetchedSchema = z.strictObject({
+  source: z.string().min(1).max(STEP_SAW_NAME_MAX_CHARS),
+  outcome: z.enum(FETCHED_OUTCOMES),
+});
+export type StepFetched = z.infer<typeof stepFetchedSchema>;
+
 /**
  * One step's outcome inside a run. PR-4's host facts (D-PR4-17), each omitted when absent: where an
  * *app-run* ran (`inOpenApp` — absent is out of sight; an *ask* step is host-native by kind), the
  * shared tables it read (`saw`, written only when non-empty), what it did with its tools, and
- * `blockedBy` when no brain may answer it.
+ * `blockedBy` when no brain may answer it. PR-5 adds what its *fetch new data first* came to
+ * (`fetched`, D-PR5-19) — a host fact beside `summary`, which stays exactly the AI's text. An
+ * older hub drops a run entry carrying it.
  */
 export const stepResultSchema = z.strictObject({
   status: z.enum(STEP_RESULT_STATUSES),
@@ -418,6 +446,7 @@ export const stepResultSchema = z.strictObject({
   inOpenApp: z.literal(true).optional(),
   saw: z.array(stepSawSchema).min(1).max(STEP_SAW_MAX_ENTRIES).optional(),
   tools: stepToolsSchema.optional(),
+  fetched: z.array(stepFetchedSchema).min(1).max(STEP_SAW_MAX_ENTRIES).optional(),
   /** No brain may answer this step here — the demo override or a keyless BYOK (D-PR4-15); the page offers *open Settings*. */
   blockedBy: z.literal('brain').optional(),
 });
@@ -661,7 +690,7 @@ export function canonicalScheduledTask(task: ScheduledTask): string {
  * state, which is the same intent they consented to. So are `writeAuthority` and `disarmed`
  * (PR-4, D-PR4-7): consent state like `enabled` — every untrusted import strips the authority,
  * so counting it here would only demote an unarmed backup of an armed task. A step's `tools`
- * IS intent: it is inside `steps`.
+ * IS intent: it is inside `steps` — and so is its `refreshFirst` (PR-5).
  */
 export function canonicalScheduleIntent(task: ScheduledTask): string {
   const { steps, spec, cron, startsAt, endsAt, missedPolicy, alert, ownerAppId, provenance, title } = task;

@@ -62,7 +62,10 @@ your summary if you want it. Fetch and answer as for a schedule — read your da
 approved API, answer a summary — under the same unattended posture (a mutating call is
 refused, never asked). The host counts the run on the user's daily schedule limits and runs
 it at most once every five minutes; the asking app learns only whether your app ran, never
-your summary. An app without the listener simply cannot be asked.
+your summary. An app without the listener simply cannot be asked. The same wake comes when the
+user ticked *fetch new data first* on a schedule that asks another app's AI: just before that
+question runs, the host asks the apps it may read while the user is away — yours among them —
+to fetch new data first, each through this handshake and on the same limits.
 
 ## The Schedule Listener (copy beside the hooks block)
 

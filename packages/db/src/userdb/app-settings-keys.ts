@@ -402,8 +402,10 @@ export function readerAppIdFromAccessMutedSettingKey(key: string): string | unde
 // Two more one-row-per-app namespaces beside the four above. `accessUndo:<targetAppId>` is the
 // TARGET's journal of the rows each brokered write changed (spec 1.2 §22.4) — the target keeps
 // it, as it keeps its history; `accessWants:<appId>` is an app's builder-time declaration of
-// what it WILL ask for (ADR-0076 §11; defined here, parsed from the HTML by PR-5). Both are the
-// user's own device state: `deleteApp` equality-deletes each, and an untrusted import drops both.
+// what it WILL ask for (ADR-0076 §11) — since PR-5 (D-PR5-2) a host-derived mirror of the app's
+// CURRENT html head, written at every admission and re-derived on every import (`access-wants.ts`).
+// Both are the user's own device state: `deleteApp` equality-deletes each; an untrusted import drops
+// the journal, and every import re-derives the wants.
 
 /** The `accessUndo:` namespace prefix — one row per TARGET app. */
 export const ACCESS_UNDO_SETTING_PREFIX = 'accessUndo:';
@@ -424,7 +426,7 @@ export function targetAppIdFromAccessUndoSettingKey(key: string): string | undef
 /** The `accessWants:` namespace prefix — one row per app. */
 export const ACCESS_WANTS_SETTING_PREFIX = 'accessWants:';
 
-/** `accessWants:<appId>` — the app's declared asks (`accessWantsSchema` JSON). */
+/** `accessWants:<appId>` — the app's declared asks (`accessWantsSchema` JSON), derived from its html — never written by hand. */
 export function accessWantsSettingKey(appId: string): string {
   if (appId.length === 0) throw new Error('appId must be non-empty');
   return `${ACCESS_WANTS_SETTING_PREFIX}${appId}`;
@@ -434,6 +436,30 @@ export function accessWantsSettingKey(appId: string): string {
 export function appIdFromAccessWantsSettingKey(key: string): string | undefined {
   if (!key.startsWith(ACCESS_WANTS_SETTING_PREFIX)) return undefined;
   const appId = key.slice(ACCESS_WANTS_SETTING_PREFIX.length);
+  return appId.length === 0 ? undefined : appId;
+}
+
+// ---------------------- the imported marker (TASK-20261010-host-broker PR-5, D-PR5-9)
+//
+// `appProvenance:<appId>` records that this app ARRIVED WITH A FILE THE USER IMPORTED — an untrusted
+// import carries `install_source` verbatim, so a file can forge `starter:`/`agent:`/`share:`, and the
+// access provenance reads this marker instead (R-77). Written only by the untrusted import (for an app
+// whose identity differs from the local one), kept by a trusted pull, never cleared by an edit;
+// `deleteApp` equality-deletes it. The value's shape lives in `app-provenance.ts`.
+
+/** The `appProvenance:` namespace prefix — one row per app. */
+export const APP_PROVENANCE_SETTING_PREFIX = 'appProvenance:';
+
+/** `appProvenance:<appId>` — the imported marker (`appProvenanceSchema` JSON). */
+export function appProvenanceKey(appId: string): string {
+  if (appId.length === 0) throw new Error('appId must be non-empty');
+  return `${APP_PROVENANCE_SETTING_PREFIX}${appId}`;
+}
+
+/** The app a settings key names, or `undefined` if the key is not an imported marker. */
+export function appIdFromAppProvenanceKey(key: string): string | undefined {
+  if (!key.startsWith(APP_PROVENANCE_SETTING_PREFIX)) return undefined;
+  const appId = key.slice(APP_PROVENANCE_SETTING_PREFIX.length);
   return appId.length === 0 ? undefined : appId;
 }
 
