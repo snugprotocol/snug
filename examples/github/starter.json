@@ -1,7 +1,21 @@
 {
-  "version": 2,
-  "appHash": "307978846dd796bd72bc9c54c9183692b3c7fe4d130981531a31eb848fcbbd26",
+  "version": 3,
+  "appHash": "35c03f45b81cfa5ae719b13914431a50968897d0645f4e8582c9aa0ddcb50a29",
   "changelog": [
+    {
+      "version": 3,
+      "date": "2026-10-12",
+      "title": "Up to date with Snug",
+      "sections": [
+        {
+          "title": "What changed",
+          "items": [
+            "Standup works just as before: this release updates the built-in code every Snug app uses to talk to Snug to the version new apps are built with.",
+            "Customized your copy? You can skip this one — your version keeps working as it is."
+          ]
+        }
+      ]
+    },
     {
       "version": 2,
       "date": "2026-08-21",

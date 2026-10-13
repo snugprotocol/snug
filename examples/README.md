@@ -34,10 +34,12 @@ hub keeps for user-built apps — vision, requirements, plan, lessons).
   allowlist only (`cdn.jsdelivr.net`, `cdnjs.cloudflare.com`, `unpkg.com`). Inline styles;
   no other external references (the sandbox blocks `connect-src`, and `img-src` is
   `data:`/`blob:` only — these apps draw their art with CSS).
-- The **embedded hooks block** (`SnugBridge` + `useSnugApp` + `usePersistedState` +
-  `useAppDB` + `useConnectedFetch`) is copied **byte-identical** from
-  `packages/sdk/embedded/snug-hooks.js` and ends at the `// 5. RESPONSE SCHEMA` banner.
-  Never hand-edit it here — fix the SDK reference and re-copy.
+- The **embedded hooks block** — seven sections: `SnugBridge` + `useSnugApp` +
+  `usePersistedState` + `useAppDB` + `useConnectedFetch` + `useHostEvents` and
+  `useSnugSchedule` + `useSnugAccess` — is copied **byte-identical** from
+  `packages/sdk/embedded/snug-hooks.js` and ends at the RESPONSE SCHEMA banner. Never
+  hand-edit it here — fix the SDK reference and re-copy (`node scripts/sync-starter-hooks.mjs`,
+  below).
 - Announce metadata (`appId`/`displayName`/`description`/`iconEmoji`/`iconColor`), full
   state + `responseSchema` on every `sendMessage`, and defensive `ok:false` handling:
   errors are rendered, malformed replies get a graceful fallback, nothing crashes.
@@ -85,7 +87,7 @@ real-connection pins (symbolic URLs, no private-address literals).
 ## Adding an example
 
 Start from the rendered KB template, keep the hooks block verbatim, put everything
-app-authored after the `// 5. RESPONSE SCHEMA` banner (the validator uses that banner to
+app-authored after the RESPONSE SCHEMA banner (the validator uses that banner to
 delimit the hook block), add a `README.md`, list the app in `APPS` in
 `validate.test.mjs` (and in `LLM_FREE_APPS` if it never calls the agent), update
 `MANIFEST_APPS` in `connection-manifests.test.mjs` if it declares a connection, and run
@@ -113,3 +115,10 @@ normalization do not demand a release, and anything the vouch would call a chang
 There is no upstream history: the bundle's bytes simply replace the old bytes, and only
 the changelog accumulates. A user's installed copy keeps its own pre-update versions via
 the in-app versions panel.
+
+**When the hooks block changes**, every starter re-copies it — a release for each.
+`node scripts/sync-starter-hooks.mjs` splices `packages/sdk/embedded/snug-hooks.js` into
+every `app.html` (re-indented to the page's own indent) and renumbers the two authored
+banners to follow the block's last section; `--release --date=YYYY-MM-DD` also bumps each
+changed starter's `version`, prepends the wave's changelog entry and recomputes `appHash`
+(a second run changes nothing; `--dry` reports without writing).

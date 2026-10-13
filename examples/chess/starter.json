@@ -1,7 +1,21 @@
 {
-  "version": 3,
-  "appHash": "2b697122f8f9edf169a7a4e22390f061ecc5ad848175ab15f1345dc14fb058bd",
+  "version": 4,
+  "appHash": "0dd3e47ebdd48e75d8cc11b11a95303000428b80a10f4b73edecaf03ad01ef86",
   "changelog": [
+    {
+      "version": 4,
+      "date": "2026-10-12",
+      "title": "Up to date with Snug",
+      "sections": [
+        {
+          "title": "What changed",
+          "items": [
+            "ember chess works just as before: this release updates the built-in code every Snug app uses to talk to Snug to the version new apps are built with.",
+            "Customized your copy? You can skip this one — your version keeps working as it is."
+          ]
+        }
+      ]
+    },
     {
       "version": 3,
       "date": "2026-10-04",

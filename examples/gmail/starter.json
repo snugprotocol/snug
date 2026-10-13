@@ -1,7 +1,22 @@
 {
-  "version": 3,
-  "appHash": "f83e9a494903f9b23b5eaae55d0a95e400be97d968faa750aff0df5c23f87b9a",
+  "version": 4,
+  "appHash": "5ff2af581002f0b4563526ba939982a8919aaaf3f5adb79d6a225af4cfc8fed6",
   "changelog": [
+    {
+      "version": 4,
+      "date": "2026-10-12",
+      "title": "Up to date with Snug",
+      "sections": [
+        {
+          "title": "What changed",
+          "items": [
+            "Inbox Copilot works just as before: this release updates the built-in code every Snug app uses to talk to Snug to the version new apps are built with.",
+            "Customized your copy? You can skip this one — your version keeps working as it is.",
+            "'Load my real data' after connecting Gmail runs on that updated code and works as before."
+          ]
+        }
+      ]
+    },
     {
       "version": 3,
       "date": "2026-08-22",

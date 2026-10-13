@@ -1,7 +1,21 @@
 {
-  "version": 2,
-  "appHash": "9768accfa2af746dd14da2715404dab12f0aed78771074ee17938a6fd8435ea3",
+  "version": 3,
+  "appHash": "a7d012f364b627e2effbd247256f85db7151121b9608c51bd4e192ecda1bc703",
   "changelog": [
+    {
+      "version": 3,
+      "date": "2026-10-12",
+      "title": "Up to date with Snug",
+      "sections": [
+        {
+          "title": "What changed",
+          "items": [
+            "Quiz Me works just as before: this release updates the built-in code every Snug app uses to talk to Snug to the version new apps are built with.",
+            "Customized your copy? You can skip this one — your version keeps working as it is."
+          ]
+        }
+      ]
+    },
     {
       "version": 2,
       "date": "2026-08-21",
