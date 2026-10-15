@@ -1,6 +1,6 @@
 # TASK-20261014-trail-setup: Wire trail (code map + agent memory) into the repo for Claude Code
 
-- **Status**: in-review (setup done and verified; local-only, so no code diff — owner to decide on the open items, then close)
+- **Status**: done (local-only setup verified; cleanups applied; closed 2026-10-14)
 - **Owner**: Jeetu
 - **Risk tier**: low (dev tooling only; no package code, no CI/release config, no C1/C2 surface). Rises to a review-worthy low if the wiring is committed (see Q1).
 - **Branch**: `feat/TASK-20261014-trail-setup`
@@ -67,3 +67,13 @@ Rollback: `trail uninstall` removes everything trail wrote to the repo; restore 
 - State: trail live for this repo; a Claude Code restart loads the project `.mcp.json` + hooks.
 - Next step: owner decides (a) trim the `npx graft` / `node dist/cli.js` allow entries, (b) drop the project-level hooks/MCP duplicates; then `/close-session` (done/INDEX line, delete this file, PR).
 - Open questions: (a), (b).
+
+### 2026-10-14 — Jeetu / Claude (Opus 5.5) — session close
+- Owner: "yes go ahead with two cleanups", then close, push, PR, merge once CI is green.
+- Done: (a) removed `Bash(npx graft:*)` and `Bash(node dist/cli.js:*)` from the project `.claude/settings.json`; (b) removed its `hooks` block and deleted `.mcp.json` — the user-level hooks and `mcpServers.trail` in `~/.claude.json` still cover this repo; the statusline stays (no user-level one). Pre-cleanup copies in the session scratchpad. `trail status` in sync; `trail build --check` exit 0.
+- **Surprise — `.gitignore` written anyway.** After the build, the user-level post-edit hook refreshed the graph on the next file edit and appended `/graft/` to the tracked `.gitignore` (`--no-gitignore` is not persisted). Reverted; added `env: { GRAFT_NO_GITIGNORE: "1", GRAFT_NO_IGNORE: "1" }` to the gitignored `.claude/settings.local.json` (effective from the next session). Lesson filed in `docs/lessons.md` (storage, config & mechanical edits).
+- Local machine state this task leaves (nothing committed): trail paths in `.git/info/exclude`; `graft/` built; project `.claude/settings.json` (statusline + trail allows), `.claude/helpers/trail-*.cjs`, `.claude/skills/trail/`, `.trail/README.md`; the env block above. Undo: `trail uninstall`, then remove the exclude block and the env entries. Re-running `trail init` re-adds the hooks, `.mcp.json` and allow entries — trim again.
+- Docs: no architecture / code-map / conventions / next-steps drift (local dev tooling, no repo code); no ADR (a per-machine tool choice, reversible, nothing committed); no protocol change.
+- State: done. Closed in the same PR (done line + task file deleted, ADR-0027).
+- Next step: none.
+- Open questions: none.
