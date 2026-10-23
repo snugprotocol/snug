@@ -205,7 +205,15 @@ function countersNow(state: SchedulerState | undefined, nowIso: string): Schedul
   return { date: nowIso.slice(0, 10), ai: 0, net: 0 };
 }
 
-/** The persisted step: its status, its summary and PR-4's host facts — each only when it has something to say (D-PR4-17). */
+/**
+ * `StepOutcome.retryable` stays in memory (TASK-20261023-siwc-chatgpt-plan L4-7): the persisted
+ * result's schema is strict (C3), so the day a field of that name is added to it this line stops
+ * compiling and the decision is made again on purpose rather than by a spread.
+ */
+const retryableNeverPersisted: 'retryable' extends keyof StepResult ? never : true = true;
+void retryableNeverPersisted;
+
+/** The persisted step: its status, its summary and PR-4's host facts — each only when it has something to say (D-PR4-17). Never `retryable` (above) or `capped`. */
 function toStepResult(outcome: StepOutcome): StepResult {
   return {
     status: outcome.status,

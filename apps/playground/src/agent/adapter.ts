@@ -2,18 +2,26 @@
 // user DB's snug_secrets (mode.ts) and go DIRECTLY to the provider from the page —
 // never through the hub server. Local mode targets an OpenAI-compatible localhost
 // endpoint. No key / mock provider? The demo brain is always available.
+//
+// The ChatGPT plan (TASK-20261023-siwc-chatgpt-plan, ADR-0078 §5) is the one mode that is NOT
+// "a key the user pasted": its arm is built against the page's keeper through the adapters'
+// `BearerSource` seam, never a key — `config.key` is not read there — and a missing session is
+// a NAMED result from that adapter, never the demo brain standing in (the `hostBrainGone` pattern).
 
 import {
   anthropicAdapter,
   localAdapter,
   mockAdapter,
   openaiAdapter,
+  openaiResponsesAdapter,
   type AgentAdapter,
   type FetchLike,
   type MockTurn,
 } from '@snugprotocol/adapters';
+import { ERROR_CODES } from '@snugprotocol/protocol';
 
-import type { ByokProvider, PlaygroundMode } from '../state/mode.js';
+import { chatgptBearerSource, chatgptDefaultEffortFor, chatgptModels } from '../state/chatgptPlan.js';
+import { chatgptEffortStore, chatgptModelStore, type ByokProvider, type PlaygroundMode } from '../state/mode.js';
 import { getPlatform } from '../platform/platform.js';
 import { demoAuthChatScript, demoAuthVariant } from './demoAuth.js';
 import { demoRequirementChatScript, demoRequirementVariant } from './demoRequirement.js';
@@ -98,7 +106,7 @@ function demoAppScript(): MockTurn[] {
  * the runtime list, so the meta reader's validation (`useBuilderChat`'s
  * metaToBrainKind) can never silently strip a newly-added kind.
  */
-export const ADAPTER_KINDS = ['webllm', 'local', 'anthropic', 'openai', 'demo', 'host'] as const;
+export const ADAPTER_KINDS = ['webllm', 'local', 'anthropic', 'openai', 'demo', 'host', 'chatgpt'] as const;
 export type AdapterKind = (typeof ADAPTER_KINDS)[number];
 
 /**
@@ -138,6 +146,38 @@ const hostBrainGone: AgentAdapter = {
   }),
 };
 
+/**
+ * The chatgpt arm's answer when no model is known anywhere — not in the config, not in the
+ * `providerModel:chatgpt` row, not in the account's cached list (signed out, or the plan not
+ * granted). A RESULT the surfaces can act on, never a throw and never another adapter: the user
+ * chose the plan, and a request with no model would only be refused by the route.
+ */
+export const CHATGPT_NO_MODEL_MESSAGE = 'no ChatGPT model is chosen — pick one in Settings';
+
+const chatgptNoModel: AgentAdapter = {
+  complete: async () => ({ ok: false, code: ERROR_CODES.HOST_ERROR, message: CHATGPT_NO_MODEL_MESSAGE, retryable: false }),
+};
+
+/**
+ * The model a chatgpt turn runs on: the caller's (a per-app pin, resolved per send) → the plan's
+ * default row → the first model of the account's list, in the server's order (AC8). NEVER the
+ * global `model` row — that names an Ollama or hub model. ONE fallback for the constructor, the
+ * transport (which needs the model to look up its default level) and the scheduled agent.
+ */
+export function resolveChatgptModel(explicit?: string): string | undefined {
+  return explicit ?? chatgptModelStore.get() ?? chatgptModels()[0]?.id;
+}
+
+/**
+ * The thinking level a chatgpt turn carries (D6; ADR-0078 §8). Interactive turns send the stored
+ * `providerEffort:chatgpt` row, read PER SEND; an UNATTENDED turn (a scheduled step, with or
+ * without tools) runs on the model's own default level from the account's list — never the stored
+ * one, never the top one: nobody is watching the spend. `undefined` means no level is sent.
+ */
+export function chatgptEffortFor(model: string | undefined, unattended: boolean): string | undefined {
+  return unattended ? chatgptDefaultEffortFor(resolveChatgptModel(model)) : chatgptEffortStore.get();
+}
+
 /** The ONE config→route mapping — both the constructor and the stamp go through it. */
 export function routeOf(config: Pick<TurnAdapterConfig, 'mode' | 'provider' | 'key'>): AdapterRoute {
   return { mode: config.mode, provider: config.provider, hasKey: config.key !== undefined };
@@ -149,6 +189,10 @@ export function adapterKindFor(route: AdapterRoute): AdapterKind {
   if (route.mode === 'host') return 'host';
   if (route.mode === 'webllm') return 'webllm';
   if (route.mode === 'local') return 'local';
+  // The user's ChatGPT plan, BEFORE any provider or key check (TASK-20261023 D5): the mode is
+  // the user's explicit choice, so a BYOK key sitting in the file is irrelevant here, and so is
+  // its absence — a missing session is the adapter's named result, not a fall-through.
+  if (route.mode === 'chatgpt') return 'chatgpt';
   if (route.provider === 'anthropic' && route.hasKey) return 'anthropic';
   if (route.provider === 'openai' && route.hasKey) return 'openai';
   return 'demo';
@@ -203,6 +247,19 @@ export function createTurnAdapter(config: TurnAdapterConfig, purpose: ByokPurpos
       return kind === 'anthropic'
         ? anthropicAdapter({ apiKey: key, ...modelDep, ...fetchDep })
         : openaiAdapter({ apiKey: key, ...modelDep, ...fetchDep });
+    }
+    case 'chatgpt': {
+      // The page's keeper as the adapter's bearer seam (D2, D3): a token is asked for per attempt
+      // and lives only for that send. `config.key` is deliberately not read — a BYOK OpenAI key in
+      // the file is a different credential for a different route (ADR-0078 §5).
+      const model = resolveChatgptModel(config.model);
+      if (model === undefined) return chatgptNoModel;
+      return openaiResponsesAdapter({
+        bearer: chatgptBearerSource(),
+        model,
+        ...(config.effort !== undefined ? { effort: config.effort } : {}),
+        ...fetchDep,
+      });
     }
     case 'demo':
       return paced(mockAdapter(purpose === 'chat' ? demoChatScript() : demoAppScript()), demoSlowMs());

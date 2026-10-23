@@ -218,6 +218,13 @@ function emptyCopy(mode: TurnMode): { title: string; lesson: string } {
         lesson:
           'the host you opened Snug in answers each turn directly, so each prompt, reply and timing lands here the moment a turn runs. in-memory only.',
       };
+    case 'chatgpt':
+      // TASK-20261023-siwc-chatgpt-plan L4-13: the plan is a direct wire like byok's, but naming "your
+      // key" here would be false — the request carries the keeper's bearer, which this surface never shows.
+      return {
+        title: 'no round trips yet',
+        lesson: 'Your ChatGPT plan answers this app’s thinks — the round trip shows here after the first one.',
+      };
   }
 }
 

@@ -76,6 +76,13 @@ export interface StepOutcome {
   fetched?: StepFetched[] | undefined;
   /** No brain may answer this step here (the demo override or a keyless BYOK) — the page offers *open Settings*. */
   blockedBy?: StepResult['blockedBy'];
+  /**
+   * A `failed` step whose brain said "try again shortly" (TASK-20261023-siwc-chatgpt-plan L4-7:
+   * the ChatGPT plan's `CHATGPT_USAGE_UNAVAILABLE` after its one retry). IN MEMORY ONLY: the
+   * persisted `StepResult` is strict (C3) and never carries it — `queue.ts`'s `toStepResult` is the
+   * one place an outcome becomes a result, and it builds the result field by field.
+   */
+  retryable?: boolean | undefined;
 }
 
 export type StepExecutor = (step: ScheduleStep, ctx: StepContext) => Promise<StepOutcome>;

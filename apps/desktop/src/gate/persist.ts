@@ -38,10 +38,11 @@
 // is a db-level seam to disable the lifecycle flush, not event interception here.
 
 import { setPlatform } from '@playground/platform/platform';
+import { chatgptPlanFlush } from '@playground/state/chatgptPlan.js';
 import { bootUserDb, getUserDb, userDbStatusStore } from '@playground/state/userdb.js';
 
 import { createDesktopPlatform } from '../platform-desktop.js';
-import { registerCloseFlush } from '../close-flush.js';
+import { composeCloseFlush, registerCloseFlush } from '../close-flush.js';
 import type { CheckResult } from './types.js';
 
 /** The canary this proof writes and then looks for. */
@@ -86,10 +87,15 @@ export async function runPersistWrite(): Promise<PersistWritePlan> {
 
   // EXACTLY the registration main.tsx performs — the proof must exercise the
   // shipping handshake, not a parallel one built for the gate.
-  registerCloseFlush(async () => {
-    if (userDbStatusStore.get().state !== 'ready') return;
-    await (await getUserDb()).flush();
-  });
+  registerCloseFlush(
+    composeCloseFlush({
+      userDb: async () => {
+        if (userDbStatusStore.get().state !== 'ready') return;
+        await (await getUserDb()).flush();
+      },
+      chatgptPlan: chatgptPlanFlush,
+    }),
+  );
 
   const checks: CheckResult[] = [];
   try {

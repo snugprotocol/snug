@@ -9,12 +9,12 @@
 // mints an id — after which the ordinary per-app row is the one source of truth and
 // this store clears.
 
-import { setAppPin } from './appModel.js';
-import type { ByokProvider } from './mode.js';
+import { setAppPin, type PinProvider } from './appModel.js';
 import { createStore, useStore } from './store.js';
 
+/** A pick carries its family like a pin does (ADR-0078 §6): a chatgpt pick routes only a chatgpt thread, a BYOK one only a byok thread. */
 export interface BuilderPick {
-  provider: ByokProvider;
+  provider: PinProvider;
   model: string;
 }
 

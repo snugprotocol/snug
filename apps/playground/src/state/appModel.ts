@@ -3,10 +3,11 @@
 //
 // Precedence, in exactly one place each:
 //
-//   resolveModelForApp:    the app's pick → the default for the provider the app
-//                          resolves to (byok) / the global `model` setting (local,
-//                          subscription) → undefined ("let the adapter decide").
-//   resolveProviderForApp: the app's provider pin → the RESOLVED default provider.
+//   resolveModelForApp:    the app's pick, when its family matches the mode (below) → the
+//                          default for the provider the app resolves to (byok) / the plan's
+//                          own `providerModel:chatgpt` row (chatgpt) / the global `model`
+//                          setting (local, subscription) → undefined ("let the adapter decide").
+//   resolveProviderForApp: the app's BYOK provider pin → the RESOLVED default provider.
 //
 // A PIN IS A PIN (plan review 2026-08-21, finding 10): picking any model in the
 // selector stores BOTH rows — `appModel:<appId>` and `appProvider:<appId>` — because a
@@ -23,12 +24,38 @@
 // Storage is the namespaced-key pattern of ADR-0036 D2 (`app-settings-keys.ts` is the
 // one key contract; `deleteApp` cascades both rows; `app-provider-setting.test.ts`
 // mutation-checks the cascade).
+//
+// A PIN HAS A FAMILY (TASK-20261023-siwc-chatgpt-plan, ADR-0078 §6 — an amendment to ADR-0036/0046;
+// plan §11 L4-4 as amended). The family is read from the provider row: `chatgpt` → the ChatGPT plan;
+// `anthropic|openai|mock` → byok; NO provider row → unscoped (today's `setAppModel` shape for local
+// pins, and every BYOK pin written before TASK-20260821 added the provider row). A pin routes only in
+// a mode of its family: a chatgpt pin only in chatgpt mode, a provider pin only in byok, an unscoped
+// pin in byok and local (today's behaviour, kept). So a `claude-…` pin is never sent to the plan, a
+// `gpt-6…` plan pin is never sent to Anthropic — and a `gpt-4o` pin WITH a provider row no longer
+// reaches Ollama (the cross-pin ADR-0078 §6 corrects). A pin from another family is ignored for
+// routing and REPORTED by `appPinFamily`, so the selectors can say "pinned for <mode> — not used here"
+// instead of hiding it. Subscription keeps today's mode-blind pin: the hub decides there.
 
 import type { UserDb } from '@snugprotocol/db';
 
-import { byokKeyPresenceStore, modeStore, modelStore, providerModelsStore, providerStore, type ByokProvider } from './mode.js';
+import {
+  byokKeyPresenceStore,
+  chatgptModelStore,
+  modeStore,
+  modelStore,
+  providerModelsStore,
+  providerStore,
+  type ByokProvider,
+  type PlaygroundMode,
+} from './mode.js';
 import { createStore, useStore } from './store.js';
 import { getUserDb } from './userdb.js';
+
+/** What an `appProvider:<appId>` row may name: a BYOK provider, or the ChatGPT plan. */
+export type PinProvider = ByokProvider | 'chatgpt';
+
+/** The mode family a pin was made for — `local` is the UNSCOPED family (no provider row; see the header). */
+export type PinFamily = 'byok' | 'local' | 'chatgpt';
 
 /** `{ [appId]: modelId }` for apps that have PINNED a model. Inheriting apps are absent. */
 export const appModelStore = createStore<Record<string, string>>({});
@@ -50,7 +77,7 @@ export function hydrateAppModels(db: UserDb): void {
  * inherits again. Store updates are synchronous, DB writes async — the selector must
  * reflect the click immediately (the write-through shape `setModel` uses).
  */
-export function setAppPin(appId: string, pick: { provider: ByokProvider; model: string } | undefined): void {
+export function setAppPin(appId: string, pick: { provider: PinProvider; model: string } | undefined): void {
   const models = { ...appModelStore.get() };
   const providers = { ...appProviderStore.get() };
   const model = pick?.model.trim();
@@ -83,18 +110,52 @@ export function setAppModel(appId: string, model: string | undefined): void {
 }
 
 /**
- * The app's pinned provider when one is stored AND names a real catalog provider —
- * `undefined` means "follows the default". A corrupted row reads as inheriting.
+ * The app's pinned provider when one is stored AND names something real — a BYOK provider or the
+ * ChatGPT plan; `undefined` means "follows the default". A corrupted row reads as inheriting.
  */
-export function appProviderPinFor(appId: string): ByokProvider | undefined {
+export function appProviderPinFor(appId: string): PinProvider | undefined {
   const pinned = appProviderStore.get()[appId];
-  return pinned === 'anthropic' || pinned === 'openai' || pinned === 'mock' ? pinned : undefined;
+  return pinned === 'anthropic' || pinned === 'openai' || pinned === 'mock' || pinned === 'chatgpt' ? pinned : undefined;
 }
 
-/** THE provider resolution for an app-scoped lane: pin → resolved default. */
+/**
+ * The pin as a BYOK seat may read it — a chatgpt pin is NOT one (its family is another mode's), so
+ * it reads as inheriting here. The byok send paths and the key-missing mark consult this, never a
+ * `'chatgpt'` string a provider adapter would be handed.
+ */
+export function byokProviderPinFor(appId: string): ByokProvider | undefined {
+  const pinned = appProviderPinFor(appId);
+  return pinned === 'chatgpt' ? undefined : pinned;
+}
+
+/** The family of the app's pin, or `undefined` when it has none — see the header for the rule. */
+export function appPinFamily(appId: string): PinFamily | undefined {
+  const model = appModelStore.get()[appId];
+  if (model === undefined || model === '') return undefined;
+  const provider = appProviderStore.get()[appId];
+  if (provider === 'chatgpt') return 'chatgpt';
+  if (provider === 'anthropic' || provider === 'openai' || provider === 'mock') return 'byok';
+  return 'local';
+}
+
+/** Whether a pin of `family` routes in `mode` — the one statement of the rule in the header. */
+function pinApplies(family: PinFamily, mode: PlaygroundMode): boolean {
+  switch (mode) {
+    case 'chatgpt':
+      return family === 'chatgpt';
+    case 'byok':
+      return family === 'byok' || family === 'local';
+    case 'local':
+      return family === 'local';
+    case 'subscription':
+      return true;
+  }
+}
+
+/** THE provider resolution for an app-scoped lane: byok pin → resolved default. */
 export function resolveProviderForApp(appId?: string): ByokProvider {
   if (appId !== undefined) {
-    const pinned = appProviderPinFor(appId);
+    const pinned = byokProviderPinFor(appId);
     if (pinned !== undefined) return pinned;
   }
   return providerStore.get();
@@ -109,11 +170,15 @@ export function resolveProviderForApp(appId?: string): ByokProvider {
  * mounted, and a mid-session switch would appear to do nothing until a reload.
  */
 export function resolveModelForApp(appId?: string): string | undefined {
+  const mode = modeStore.get();
   if (appId !== undefined) {
-    const pinned = appModelStore.get()[appId];
-    if (pinned !== undefined && pinned !== '') return pinned;
+    const family = appPinFamily(appId);
+    if (family !== undefined && pinApplies(family, mode)) return appModelStore.get()[appId];
   }
-  if (modeStore.get() === 'byok') {
+  // The plan's default is its own row — NEVER the global `model` row below, which names an Ollama
+  // or hub model. Absence means the account list's first model (the adapter arm's fallback).
+  if (mode === 'chatgpt') return chatgptModelStore.get();
+  if (mode === 'byok') {
     // The default for the provider this app RESOLVES to (TASK-20260821 AC9). The demo
     // brain names no model; absence means the adapter's own default, as it always has.
     const provider = resolveProviderForApp(appId);
@@ -137,7 +202,7 @@ export function useAppProvider(appId: string): string | undefined {
 
 /** Is the pinned provider's key gone? The selector renders this instead of hiding it. */
 export function appPinMissingKey(appId: string): boolean {
-  const pinned = appProviderPinFor(appId);
+  const pinned = byokProviderPinFor(appId);
   if (pinned === undefined || pinned === 'mock') return false;
   return !byokKeyPresenceStore.get()[pinned];
 }

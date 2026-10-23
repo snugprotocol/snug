@@ -77,6 +77,11 @@ export function ModelSelect({ appId }: ModelSelectProps): ReactElement | null {
   // mode/provider actually decide the model (webllm and demo both override it).
   if (brain.kind !== 'settings') return null;
   if (mode === 'byok' && provider === 'mock') return null;
+  // The ChatGPT plan's selector — the account's model list, cross-family pins shown as "not used
+  // here" — is L5's (TASK-20261023-siwc-chatgpt-plan). Until then NOTHING renders in this mode:
+  // the BYOK arm below would list keyed providers and write an anthropic/openai pin for an app
+  // whose turns run on the plan (ADR-0078 §6).
+  if (mode === 'chatgpt') return null;
 
   // ---- LOCAL: the Ollama list, bare values, model row only (unchanged behavior). ----
   if (mode === 'local') {

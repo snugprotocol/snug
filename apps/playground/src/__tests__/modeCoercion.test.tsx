@@ -182,6 +182,42 @@ describe('hydrateSettings — a stored chatgpt mode (TASK-20261023-siwc-chatgpt-
   });
 });
 
+// TASK-20261023-siwc-chatgpt-plan L4 (plan §12 L5-2): `modeCoercedStore` stays the boolean the
+// note shows on; `coercedFromModeStore` says WHICH stored mode was coerced, so the note (L5) can
+// branch its copy — the subscription sentence, or the "your file asked for your ChatGPT plan"
+// one. Set in BOTH coercion branches, cleared with the note, untouched by a clean hydrate.
+describe('hydrateSettings — coercedFromModeStore names the stored mode that was coerced (L5-2)', () => {
+  it('a stored chatgpt mode without the seat → "chatgpt"', async () => {
+    const harness = await fresh(desktopPlatform());
+    harness.db.setSetting('mode', 'chatgpt');
+    harness.mode.hydrateSettings(harness.db);
+    expect(harness.mode.modeCoercedStore.get()).toBe(true);
+    expect(harness.mode.coercedFromModeStore.get()).toBe('chatgpt');
+  });
+
+  it('a stored subscription mode without the capability → "subscription"', async () => {
+    const harness = await fresh(desktopPlatform());
+    harness.db.setSetting('mode', 'subscription');
+    harness.mode.hydrateSettings(harness.db);
+    expect(harness.mode.modeCoercedStore.get()).toBe(true);
+    expect(harness.mode.coercedFromModeStore.get()).toBe('subscription');
+  });
+
+  it('a clean hydrate leaves it undefined; dismissing the note clears both stores', async () => {
+    const harness = await fresh(desktopPlatform());
+    harness.db.setSetting('mode', 'local');
+    harness.mode.hydrateSettings(harness.db);
+    expect(harness.mode.coercedFromModeStore.get()).toBeUndefined();
+
+    harness.db.setSetting('mode', 'chatgpt');
+    harness.mode.hydrateSettings(harness.db);
+    expect(harness.mode.coercedFromModeStore.get()).toBe('chatgpt');
+    harness.mode.dismissModeCoercionNote();
+    expect(harness.mode.modeCoercedStore.get()).toBe(false);
+    expect(harness.mode.coercedFromModeStore.get()).toBeUndefined();
+  });
+});
+
 describe('ModeCoercionNote — the small dismissible surface', () => {
   async function mount(harness: Harness): Promise<void> {
     container = document.createElement('div');

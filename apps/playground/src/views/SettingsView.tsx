@@ -93,6 +93,7 @@ const MODE_LABELS: Record<PlaygroundMode, string> = {
   byok: 'bring your own key',
   local: 'local model',
   subscription: 'hub subscription',
+  chatgpt: 'my ChatGPT plan',
 };
 
 /** The model select's escape hatch back to free text. */
@@ -172,7 +173,10 @@ export function SettingsView(): ReactElement {
                   ? 'everything runs in this browser — your key goes straight to the provider, never to the hub.'
                   : mode === 'local'
                     ? 'fully on-device: the agent talks to an OpenAI-compatible endpoint on your machine (e.g. Ollama).'
-                    : 'requests go through the hub server (:8787) and its LLM subscription — run `pnpm dev` in apps/server.'}
+                    : mode === 'chatgpt'
+                      ? // The plan's own rows (sign-in, account, model, level — L5) sit below; this line must never be the hub's.
+                        'your ChatGPT plan answers — requests go from this computer to OpenAI under your ChatGPT account, no API key involved.'
+                      : 'requests go through the hub server (:8787) and its LLM subscription — run `pnpm dev` in apps/server.'}
               </span>
             </div>
 

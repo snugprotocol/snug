@@ -51,7 +51,7 @@
 // answer (Gate-5 JOBS-F4) — and it is stored, so it passes the `store` scrub here, before
 // `finalizeOutcome` applies it again. The model never sees what the host made of its proposals.
 
-import { runAgentTurn, type AgentAdapter, type AgentTool } from '@snugprotocol/adapters';
+import { CHATGPT_ERROR_CODES, runAgentTurn, type AgentAdapter, type AgentTool } from '@snugprotocol/adapters';
 import type { UserDb } from '@snugprotocol/db';
 import { SYSTEM_BLOCK_SEPARATOR, buildHostSystemPrompt, renderRuntimeContract } from '@snugprotocol/knowledge';
 import {
@@ -70,7 +70,7 @@ import {
 import { chatBrainRoute, chatDoorOpen, type ReaderBrainRoute } from '../access/egress.js';
 import { namesTable } from '../access/materialise.js';
 import type { MaterialisedSet } from '../access/service.js';
-import { adapterKindFor, createTurnAdapter, routeOf, type TurnAdapterConfig } from '../agent/adapter.js';
+import { adapterKindFor, chatgptEffortFor, createTurnAdapter, routeOf, type TurnAdapterConfig } from '../agent/adapter.js';
 import { buildDataTools, capToolCalls, type SharedTablesSeat } from '../agent/dataTools.js';
 import { buildFetchConnectionTool, fetchableConnections } from '../agent/fetchConnectionTool.js';
 import { AI_CEILING_CODE, gatedAdapter } from '../agent/gatedAdapter.js';
@@ -90,13 +90,19 @@ const NO_DIRECT_BRAIN = 'the brain in Settings can’t look things up for a sche
 /**
  * The adapter config for the route the chat's own derivation takes for `appId` (`chatBrainRoute`,
  * which the executors gated on): the provider after the per-app pin, the key read from the FILE,
- * the per-app model, the local endpoint. Only a route with a data lane reaches here — a keyed BYOK
- * or a local brain (`chatDoorOpen`).
+ * the per-app model, the local endpoint. Only a route with a data lane reaches here — a keyed BYOK,
+ * a local brain or the ChatGPT plan (`chatDoorOpen`).
  */
 function configFrom(db: UserDb, appId: string, route: ReaderBrainRoute): TurnAdapterConfig {
   const model = resolveModelForApp(appId);
   const modelSeat = model !== undefined ? { model } : {};
   if (route.kind === 'local') return { mode: 'local', provider: route.provider, ...modelSeat, localUrl: localUrlStore.get() };
+  if (route.kind === 'chatgpt') {
+    // NO secret read (L4-8): the plan's adapter takes its bearer from the keeper per attempt; a
+    // `byok:` row is another route's credential. Unattended, so the model's default level (ADR-0078 §8).
+    const effort = chatgptEffortFor(model, true);
+    return { mode: 'chatgpt', provider: route.provider, ...modelSeat, ...(effort !== undefined ? { effort } : {}) };
+  }
   const key = db.getSecret(`${SECRET_KEY_PREFIX}${route.provider}`);
   return { mode: 'byok', provider: route.provider, ...(key !== undefined ? { key } : {}), ...modelSeat };
 }
@@ -293,6 +299,9 @@ export async function executeAppAgent(step: AppThinkStep, ctx: StepContext): Pro
     if (result.ok) return { status: 'ok', summary: scrubOrWithhold(finalText ?? result.text, 'store') ?? WITHHELD_SUMMARY, ...facts };
     if (result.code === AI_CEILING_CODE) return { status: 'refused', summary: capped('AI call'), ...facts, capped: 'ai' };
     if (result.code === ERROR_CODES.CONSENT_REQUIRED) return { status: 'refused', summary: result.message, ...facts };
+    // The plan's usage limit is a REFUSAL by name on this path too (AC14, L4-7) — the same policy by
+    // code as the tool-free step's, so the queue never sees a failure to retry.
+    if (result.code === CHATGPT_ERROR_CODES.USAGE_LIMIT) return { status: 'refused', summary: result.message, ...facts };
     if (result.code === ERROR_CODES.CANCELLED) return { status: 'failed', summary: CANCELLED_SUMMARY, ...facts };
     if (roundTrips >= APP_AGENT_MAX_ROUND_TRIPS && lastAskedForTools) return { status: 'failed', summary: ranOutOfTurns(appName, used), ...facts };
     return { status: 'failed', summary: result.message, ...facts };

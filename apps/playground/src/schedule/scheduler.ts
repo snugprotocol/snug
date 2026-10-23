@@ -83,6 +83,7 @@ import type { ScheduleRun, ScheduledTask, SchedulerState } from '@snugprotocol/p
 import { registryEpochStore } from '../agent/threadSessions.js';
 import { allows, getPlatform, type SnugPlatform } from '../platform/platform.js';
 import { bumpScheduleRevision, libraryRevisionStore, scheduleRevisionStore } from '../platform/signals.js';
+import { chatgptPlanReady } from '../state/chatgptPlan.js';
 import { createStore, useStore, type Store } from '../state/store.js';
 import { getUserDb, userDbStatusStore } from '../state/userdb.js';
 import { hostHonesty } from './copy.js';
@@ -527,7 +528,9 @@ function reinitWhenReady(): void {
     if (userDbStatusStore.get().state !== 'ready') return false;
     reinitStop?.();
     reinitStop = undefined;
-    void initScheduler();
+    // After the ChatGPT-plan keeper's first read, like the explicit chains (TASK-20261023 L4-6);
+    // resolved at once once the page has booted, so this stays a microtask away.
+    void chatgptPlanReady().then(() => initScheduler());
     return true;
   };
   reinitStop = userDbStatusStore.subscribe(() => {

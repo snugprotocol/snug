@@ -88,6 +88,7 @@ import { chatBrainRoute, chatDoorOpen, type ReaderBrainRoute } from '../access/e
 import type { FetchedSource, FetchFirstResult } from '../access/fetchFirst.js';
 import type { MaterialisedSet } from '../access/service.js';
 import { oneLine } from '../agent/sharedDdl.js';
+import { chatgptPlanReady } from '../state/chatgptPlan.js';
 import { appHasSidecarFact } from '../state/sidecarLive.js';
 import { defaultAppRunDeps, executeAppRun, type AppRunDeps } from './appRun.js';
 import { CANCELLED_SUMMARY, defaultTransportFor, executeAppThink, keylessBrainGate, type AppThinkDeps, type AppThinkStep } from './appThink.js';
@@ -188,6 +189,8 @@ export function finalizeOutcome(outcome: StepOutcome): StepOutcome {
   if (outcome.fetched !== undefined && outcome.fetched.length > 0) out.fetched = safeFetched(outcome.fetched);
   if (outcome.tools !== undefined) out.tools = outcome.tools;
   if (outcome.blockedBy !== undefined) out.blockedBy = outcome.blockedBy;
+  // In memory only, like `capped`: the queue's `toStepResult` never persists it (L4-7).
+  if (outcome.retryable === true) out.retryable = true;
   return out;
 }
 
@@ -239,6 +242,10 @@ async function answerAsk(step: AppThinkStep, ctx: StepContext, deps: StepExecuto
  * cannot run, else the agent. The fetch's calls ride whatever the branch answers, a throw included.
  */
 async function executeAsk(step: AppThinkStep, ctx: StepContext, deps: StepExecutorDeps): Promise<StepOutcome> {
+  // The ChatGPT-plan keeper's first read answers before the gate reads it (TASK-20261023 L4-6, F9):
+  // a launch catch-up gating on `'unknown'` would either refuse a valid session or send on one the
+  // page has not read. Resolved at once on every other route.
+  await chatgptPlanReady();
   const route = deps.brainRouteFor?.(ctx.db, step.appId);
   if (route !== undefined) {
     const refused = keylessBrainGate(ctx.db, step.appId, route);

@@ -104,6 +104,16 @@ const BRAINS: Record<ActiveBrainKind, { label: string; aria: string; headline: s
     headline: 'snug hub',
     body: 'turns run through the Snug hub server you signed into.',
   },
+  // The user's ChatGPT plan (TASK-20261023-siwc-chatgpt-plan D5; AC4). The label is OpenAI's
+  // prescribed feature string. The signed-out / not-allowed / limit sub-lines, the account popover
+  // and the level control are L5's; this entry is what the chip says the moment the mode exists,
+  // so it can never read "demo brain" for a plan the user chose (ADR-0059).
+  chatgpt: {
+    label: 'ChatGPT plan',
+    aria: 'what’s thinking: your ChatGPT plan',
+    headline: 'Using ChatGPT plan',
+    body: 'turns go from this computer to OpenAI on your ChatGPT plan — no API key involved.',
+  },
   // The platform-pinned host brain (TASK-20260905-host-kit P2): the label is the host's
   // own (`PlatformBrain.label`), substituted at render — this row is the fallback shape.
   host: {

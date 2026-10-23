@@ -9,9 +9,9 @@ import { buildHostSystemPrompt } from '@snugprotocol/knowledge';
 import { ERROR_CODES } from '@snugprotocol/protocol';
 
 import { getPlatform } from '../platform/platform.js';
-import { appProviderPinFor, resolveModelForApp } from '../state/appModel.js';
+import { byokProviderPinFor, resolveModelForApp } from '../state/appModel.js';
 import { endpointsNeedConfirm, getByokKey, type ByokProvider } from '../state/mode.js';
-import { adapterKindFor, createTurnAdapter, routeOf, type AdapterKind, type DirectMode } from './adapter.js';
+import { adapterKindFor, chatgptEffortFor, createTurnAdapter, routeOf, type AdapterKind, type DirectMode } from './adapter.js';
 import type { ArtifactSink } from './artifactSink.js';
 import { buildByokTools, type ByokToolHooks } from './tools.js';
 import { knowledgeDeliveryFor } from './knowledgeDelivery.js';
@@ -285,15 +285,18 @@ export function createDirectBuilder(options: DirectBuilderOptions): BuilderAgent
       // explicit construction stay untouched — the pin only overrides byok with an app.
       const provider =
         options.mode === 'byok' && options.provider !== 'mock' && options.appId !== undefined
-          ? (appProviderPinFor(options.appId) ?? options.provider)
+          ? (byokProviderPinFor(options.appId) ?? options.provider)
           : options.provider;
       // local talks to an unauthenticated endpoint; webllm runs IN the page; the host
-      // brain is the host's own — none reads a provider key.
-      const key = options.mode === 'local' || isWebllm || options.mode === 'host' ? undefined : await readKey(provider);
+      // brain is the host's own; the ChatGPT plan is the keeper's session — none reads a
+      // provider key.
+      const key = options.mode === 'local' || isWebllm || options.mode === 'host' || options.mode === 'chatgpt' ? undefined : await readKey(provider);
       // PER SEND, never at construction — useBuilderChat memoizes this agent, so a model
       // captured here at creation would freeze the thread on whatever was chosen when the
       // view mounted. An explicit `options.model` still wins (test pins, existing callers).
       const model = options.model ?? resolveModelForApp(options.appId);
+      // The plan's thinking level rides per send too; a builder turn is always attended.
+      const effort = options.mode === 'chatgpt' ? chatgptEffortFor(model, false) : undefined;
       // ONE config object feeds both the provenance stamp and the constructor
       // (ADR-0059 rule 2): building them from separate spreads is how a stamp
       // starts lying about the route.
@@ -303,6 +306,7 @@ export function createDirectBuilder(options: DirectBuilderOptions): BuilderAgent
         ...(key !== undefined ? { key } : {}),
         ...(model !== undefined ? { model } : {}),
         ...(options.localUrl !== undefined ? { localUrl: options.localUrl } : {}),
+        ...(effort !== undefined ? { effort } : {}),
       };
       handlers.onBrain?.(adapterKindFor(routeOf(adapterConfig)));
       const adapter = createTurnAdapter(adapterConfig, 'chat');
