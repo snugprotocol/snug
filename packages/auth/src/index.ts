@@ -182,6 +182,9 @@ export {
   SecretSpillFlowStateStore,
   SnugAuthError,
   constantTimeEqual,
+  // The non-2xx answer to a credential POST, scrubbed of what the POST submitted and parsed for
+  // its OAuth error code — `postForm`'s reviewed seat as a free function (TASK-20261023 D2).
+  extractOauthErrorFromPost,
   generatePkceVerifier,
   pkceChallenge,
   signState,
@@ -190,6 +193,7 @@ export {
   type CallbackErrorDelivery,
   type CallbackSink,
   type FetchLike,
+  type OauthPostError,
   type FlowState,
   type FlowStateStore,
   type OAuthCallbackInput,
@@ -207,6 +211,7 @@ export {
 // production-shaped transport — DI-pure, no tauri imports; the shell injects the
 // `LoopbackListener` and the playground platform seam consumes the transport.
 export {
+  DEFAULT_LOOPBACK_CALLBACK_PATH,
   DESKTOP_FLOW_TTL_MS,
   SNUG_DESKTOP_OAUTH_PORT,
   buildLoopbackRedirectUri,
@@ -217,12 +222,20 @@ export {
 
 // "Use my ChatGPT plan" (TASK-20261023-siwc-chatgpt-plan, ADR-0078): the per-machine session
 // contracts — the file the shell keeps `0600` outside the user file, the store and loopback
-// seats the desktop implements, the keeper's API and its named failures. L0 ships the types;
-// the keeper (`createChatgptPlanSession`) is L1.
+// seats the desktop implements, the keeper's API and its named failures — and the keeper
+// itself: PKCE sign-in with dynamic registration, ID-token checks against OpenAI's JWKS, the
+// serial queue + epoch, the single-flight rotation-safe refresh, revocation, the model list.
 export {
+  CHATGPT_API_RESOURCE,
+  CHATGPT_CALLBACK_PATH,
+  CHATGPT_ISSUER,
+  CHATGPT_PLAN_APP_ID,
   CHATGPT_PLAN_ERROR_CODES,
+  CHATGPT_PLAN_SCOPE,
   ChatgptPlanError,
+  createChatgptPlanSession,
   type ChatgptLoopbackSeat,
+  type ChatgptPlanSessionDeps,
   type ChatgptModel,
   type ChatgptPlanErrorCode,
   type ChatgptPlanSession,

@@ -31,7 +31,7 @@ import {
 } from '@snugprotocol/protocol';
 import { authFlowSecretKey, AUTH_FLOW_SECRET_PREFIX } from '@snugprotocol/db';
 import { isUrlWithinHosts } from './app-host-freeze.js';
-import { extractProviderErrorDetail } from './provider-error-detail.js';
+import { MAX_AUTH_FAILURE_BODY_CHARS, extractProviderErrorDetail } from './provider-error-detail.js';
 import { scrubAuthValues } from './scrub.js';
 import { base64UrlToUtf8, bytesToBase64Url, bytesToHex, randomBase64Url, utf8ToBase64Url } from './base64url.js';
 import type { CredentialStore, SecretsQuartet } from './credential-store.js';
@@ -688,57 +688,101 @@ export class OAuthService {
       );
     }
     if (!response.ok) {
-      // THE ERROR BODY IS RAW PROVIDER BYTES AND THIS MESSAGE TRAVELS (audit D2).
-      //
-      // It does not stop here: the caller wraps it in a SnugAuthError, the executor turns
-      // that into `NET_AUTH_FAILED` prose, the playground relays that verbatim into the
-      // net-response frame (the app IFRAME), and the provider lane renders it into the
-      // model's context. So a slice of this body reaches both readers C1 names.
-      //
-      // It previously forwarded `text.slice(0, 500)` unmodified. The request that produced
-      // it is a credential POST — `refresh_token` and `client_secret` are in the body we
-      // just sent — and a provider that echoes submitted parameters in its error envelope
-      // (ordinary debugging behaviour) puts them straight into that slice.
-      //
-      // The scrubber cannot cover this and it is worth saying why, so nobody "fixes" it by
-      // reaching for one: on this path injection throws before a candidate set is built,
-      // and the leaking values are POST BODY parameters that were never injected headers,
-      // so they would fall outside the candidate set even if one existed. Bounding must
-      // therefore happen HERE, at the seat that reads the bytes.
-      //
-      // THE VALUE SCRUB IS THE CONTROL HERE. `extractProviderErrorDetail` bounds volume
-      // and shape — useful, and not a credential guard.
-      //
-      // `scrubAuthValues` runs over the values WE JUST SUBMITTED, and this seat is the one
-      // place they are known exactly: `body` is the very URLSearchParams that went out.
-      // That is precisely what the downstream response scrubber lacks — these are POST
-      // body params, never injected headers, so they are absent from its candidate set.
-      //
-      // The first cut of this fix relied on the extractor alone and leaked, in an
-      // instructive way: an allowlist of SHAPES decides which FIELD is forwarded, never
-      // what that field CONTAINS. Measured against the shipped extractor, all three of
-      // `invalid_grant for token rt-…`, `error=…&refresh_token=rt-…`, and
-      // `{"error_description":"bad token rt-…"}` carried the live token through the
-      // 160-char cap untouched. The third defeats the tempting narrower fix of "forward
-      // only recognized JSON fields": a provider puts the echo inside `error_description`,
-      // which is exactly the field a reader wants to see.
-      //
-      // Scrub on BOTH sides of the extract, and the second pass is not belt-and-braces:
-      // `JSON.parse` DECODES `\u` escapes and it runs INSIDE the extractor, so a provider
-      // that escapes its echo defeats an exact-substring scrub of the raw text and the
-      // secret is reconstituted character-for-character in the extracted field. That is
-      // not the documented re-encoding boundary (`scrub.ts:16-19`) — the value arrives in
-      // the SAME form, after a decode step we perform ourselves; the scrub was simply on
-      // the wrong side of it. The first pass still earns its place: it catches the
-      // plain-text and form-encoded heads, where no decode happens, and it redacts a value
-      // straddling the 160-char cut rather than letting half of it through.
-      const text = await response.text().catch(() => '');
-      const secrets = submittedSecrets(body);
-      const detail = extractProviderErrorDetail(scrubAuthValues(text, secrets), secrets);
-      throw new Error(detail !== undefined ? `HTTP ${response.status}: ${detail}` : `HTTP ${response.status}`);
+      const { status, detail } = await extractOauthErrorFromPost(response, body);
+      throw new Error(detail !== undefined ? `HTTP ${status}: ${detail}` : `HTTP ${status}`);
     }
     return (await response.json()) as TokenResponse;
   }
+}
+
+// ---------------------------------------------------------------------------
+// The non-2xx answer to a credential POST, made forwardable
+// ---------------------------------------------------------------------------
+
+/** What a failed credential POST tells a caller: the status, the OAuth `error` code when the body named one, and a bounded, scrubbed detail. */
+export interface OauthPostError {
+  status: number;
+  code?: string;
+  detail?: string;
+}
+
+/** An OAuth error code is an identifier (RFC 6749 §5.2 names them so); prose or an echo is never a code. */
+const OAUTH_ERROR_CODE_SHAPE = /^[A-Za-z0-9_.:-]{1,64}$/;
+
+/**
+ * THE ERROR BODY IS RAW PROVIDER BYTES AND WHAT THIS RETURNS TRAVELS (audit D2).
+ *
+ * It does not stop at the caller: `postForm` wraps the detail in a SnugAuthError, the
+ * executor turns that into `NET_AUTH_FAILED` prose, the playground relays that verbatim into
+ * the net-response frame (the app IFRAME), and the provider lane renders it into the model's
+ * context — and the ChatGPT-plan keeper (TASK-20261023-siwc-chatgpt-plan) turns the `code`
+ * into a named state. So a slice of this body reaches both readers C1 names.
+ *
+ * `postForm` previously forwarded `text.slice(0, 500)` unmodified. The request that produced
+ * it is a credential POST — `refresh_token`, `client_secret`, `code`, `code_verifier` are in
+ * the body we just sent — and a provider that echoes submitted parameters in its error
+ * envelope (ordinary debugging behaviour) puts them straight into that slice.
+ *
+ * The response scrubber cannot cover this and it is worth saying why, so nobody "fixes" it
+ * by reaching for one: on that path injection throws before a candidate set is built, and
+ * the leaking values are POST BODY parameters that were never injected headers, so they
+ * would fall outside the candidate set even if one existed. Bounding must therefore happen
+ * HERE, at the seat that reads the bytes.
+ *
+ * THE VALUE SCRUB IS THE CONTROL HERE. `extractProviderErrorDetail` bounds volume and
+ * shape — useful, and not a credential guard.
+ *
+ * `scrubAuthValues` runs over the values WE JUST SUBMITTED, and this seat is the one place
+ * they are known exactly: `submitted` is the very URLSearchParams that went out. That is
+ * precisely what the downstream response scrubber lacks — these are POST body params, never
+ * injected headers, so they are absent from its candidate set.
+ *
+ * The first cut of this fix relied on the extractor alone and leaked, in an instructive
+ * way: an allowlist of SHAPES decides which FIELD is forwarded, never what that field
+ * CONTAINS. Measured against the shipped extractor, all three of `invalid_grant for token
+ * rt-…`, `error=…&refresh_token=rt-…`, and `{"error_description":"bad token rt-…"}` carried
+ * the live token through the 160-char cap untouched. The third defeats the tempting
+ * narrower fix of "forward only recognized JSON fields": a provider puts the echo inside
+ * `error_description`, which is exactly the field a reader wants to see.
+ *
+ * Scrub on BOTH sides of the extract, and the second pass is not belt-and-braces:
+ * `JSON.parse` DECODES `\u` escapes and it runs INSIDE the extractor, so a provider that
+ * escapes its echo defeats an exact-substring scrub of the raw text and the secret is
+ * reconstituted character-for-character in the extracted field. That is not the documented
+ * re-encoding boundary (`scrub.ts:16-19`) — the value arrives in the SAME form, after a
+ * decode step we perform ourselves; the scrub was simply on the wrong side of it. The first
+ * pass still earns its place: it catches the plain-text and form-encoded heads, where no
+ * decode happens, and it redacts a value straddling the 160-char cut rather than letting
+ * half of it through. The `code` gets the same two passes and one more bound: it must be
+ * identifier-shaped, so a secret planted in the `error` field never comes back as a code.
+ */
+export async function extractOauthErrorFromPost(response: Response, submitted: URLSearchParams): Promise<OauthPostError> {
+  const text = await response.text().catch(() => '');
+  const secrets = submittedSecrets(submitted);
+  const scrubbed = scrubAuthValues(text, secrets);
+  const detail = extractProviderErrorDetail(scrubbed, secrets);
+  const code = extractOauthErrorCode(scrubbed, secrets);
+  return {
+    status: response.status,
+    ...(code !== undefined ? { code } : {}),
+    ...(detail !== undefined ? { detail } : {}),
+  };
+}
+
+/** The RFC 6749 `error` member of a JSON error body — after the decode-side scrub, and only when identifier-shaped. */
+function extractOauthErrorCode(scrubbedBody: string, secrets: Record<string, string>): string | undefined {
+  if (scrubbedBody.length > MAX_AUTH_FAILURE_BODY_CHARS) return undefined;
+  const trimmed = scrubbedBody.trim();
+  if (!trimmed.startsWith('{')) return undefined;
+  let error: unknown;
+  try {
+    error = (JSON.parse(trimmed) as Record<string, unknown>)['error'];
+  } catch {
+    return undefined;
+  }
+  if (typeof error !== 'string') return undefined;
+  const code = scrubAuthValues(error, secrets).trim();
+  return OAUTH_ERROR_CODE_SHAPE.test(code) ? code : undefined;
 }
 
 // ---------------------------------------------------------------------------

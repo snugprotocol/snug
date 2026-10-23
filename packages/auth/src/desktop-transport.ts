@@ -38,12 +38,17 @@ export interface LoopbackListener {
   start(opts: { fixedPort?: number }): Promise<{ port: number; stop(): Promise<void> }>;
 }
 
+/** The redirect path every existing caller gets; the ChatGPT-plan sign-in passes `/auth/callback`. */
+export const DEFAULT_LOOPBACK_CALLBACK_PATH = '/callback';
+
 /**
  * The one URI builder — literal `127.0.0.1`, never `localhost` (Spotify bans it;
  * RFC 8252 §7.3 prefers the literal). Every desktop redirect URI flows through here.
+ * `path` (TASK-20261023-siwc-chatgpt-plan D10) defaults to `/callback`, so the URI every
+ * registered provider knows is unchanged.
  */
-export function buildLoopbackRedirectUri(port: number): string {
-  return `http://127.0.0.1:${port}/callback`;
+export function buildLoopbackRedirectUri(port: number, path: string = DEFAULT_LOOPBACK_CALLBACK_PATH): string {
+  return `http://127.0.0.1:${port}${path}`;
 }
 
 export interface DesktopOAuthTransport {
@@ -74,6 +79,17 @@ export interface DesktopOAuthTransport {
 interface ActiveFlow {
   startedAt: number;
   stop(): Promise<void>;
+}
+
+/** The unsigned `{appId, flowId}` prefix of a `signState` token, or undefined when it has no such shape. */
+function peekStateChannel(state: string): { appId: string; flowId: string } | undefined {
+  try {
+    const payload = JSON.parse(base64UrlToUtf8(state.split('.')[0] ?? '')) as { appId?: unknown; flowId?: unknown };
+    if (typeof payload.appId !== 'string' || typeof payload.flowId !== 'string') return undefined;
+    return { appId: payload.appId, flowId: payload.flowId };
+  } catch {
+    return undefined;
+  }
 }
 
 export function createDesktopOAuthTransport(deps: {
@@ -114,7 +130,7 @@ export function createDesktopOAuthTransport(deps: {
       },
     },
 
-    async beginFlow({ posture, appId }) {
+    async beginFlow({ posture, appId, path }) {
       // Single-flight, cancel-old: the newest user intent wins (the wizard's own
       // teardown-then-assign popup pattern). Refusing instead would strand the user
       // behind a zombie listener that only an explicit cancel could clear.
@@ -142,7 +158,7 @@ export function createDesktopOAuthTransport(deps: {
         );
       }
 
-      const uri = buildLoopbackRedirectUri(handle.port);
+      const uri = buildLoopbackRedirectUri(handle.port, path ?? DEFAULT_LOOPBACK_CALLBACK_PATH);
       recorded = { appId, uri };
       active = { startedAt: clock(), stop: () => handle.stop() };
       return { redirectUri: uri };
@@ -159,39 +175,51 @@ export function createDesktopOAuthTransport(deps: {
         return;
       }
 
-      let code: string | null;
-      let state: string | null;
+      let params: URLSearchParams;
       try {
-        const parsed = new URL(url);
-        code = parsed.searchParams.get('code');
-        state = parsed.searchParams.get('state');
+        params = new URL(url).searchParams;
       } catch {
         return; // not a URL — drop, keep listening
       }
-      if (code === null || code === '' || state === null || state === '') return;
+      const state = params.get('state');
+      if (state === null || state === '') return;
 
       // Unsigned peek for channel naming ONLY (OAuthCallbackPage's documented
       // discipline) — NO signature validation here; a forged state can name a
       // channel, it cannot pass `handleCallback`'s verifyState downstream.
-      let appId: string;
-      let flowId: string;
-      try {
-        const payload = JSON.parse(base64UrlToUtf8(state.split('.')[0] ?? '')) as {
-          appId?: unknown;
-          flowId?: unknown;
-        };
-        if (typeof payload.appId !== 'string' || typeof payload.flowId !== 'string') return;
-        appId = payload.appId;
-        flowId = payload.flowId;
-      } catch {
-        return; // malformed state — drop, keep listening
+      const peeked = peekStateChannel(state);
+      if (peeked === undefined) return; // malformed state — drop, keep listening
+
+      const code = params.get('code');
+      if (code === null || code === '') {
+        // No code: a provider error callback (`?error=access_denied&state=…`). Delivered
+        // ONLY to an instance that opted in (D10); otherwise dropped, listener kept —
+        // the wizard's behaviour byte-for-byte.
+        const error = params.get('error');
+        if (deps.onError === undefined || error === null || error === '') return;
+        active = null;
+        void flow.stop().catch(() => undefined);
+        const errorDescription = params.get('error_description');
+        deps.onError({
+          ...peeked,
+          state,
+          error,
+          ...(errorDescription !== null && errorDescription !== '' ? { errorDescription } : {}),
+        });
+        return;
       }
 
       // One-shot: tear the listener down, but KEEP the recorded URI — the token
       // exchange's redirectUri() call happens after this point.
       active = null;
       void flow.stop().catch(() => undefined);
-      deps.onDelivery({ appId, flowId, code, state });
+      const clientId = params.get('client_id');
+      deps.onDelivery({
+        ...peeked,
+        code,
+        state,
+        ...(clientId !== null && clientId !== '' ? { clientId } : {}),
+      });
     },
 
     async cancel(): Promise<void> {
