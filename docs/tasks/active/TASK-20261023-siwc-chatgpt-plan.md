@@ -365,3 +365,9 @@ ADR-0078 accepted; delta + ledger + v3.14 (+ §2 Assets amendment; residuals R-1
 - State: L1–L4 complete; L5 impl running; L6 next.
 - Next step: L5 lands → every suite → L6 docs lane (Opus high) → Gate 5.
 - Open questions: the owner quits Snug.app before the Gate 5 gate run (standing).
+
+### 2026-10-24 — Fable 5.1 (conductor) — merged tree after L4 verified
+- Done: on `56c728b` (L4 folded over the L5 tests): build 14/14; playground tsc 5 errors = exactly the three L5 modules (`views/ChatgptPlanNotice`, `ui/UsageLimitMessage`, `desktop/ChatgptButton`); playground vitest 7 134 green + 3 skipped, 79 red = the 14 known (`writeBroker` 11 · `accessHandler` 2 · `accessSheet` 1) + 65 L5 tests by design; desktop 307; host 750.
+- State: L1–L4 complete and verified together; L5 impl running.
+- Next step: L5 lands → every suite → L6 docs lane → Gate 5.
+- Open questions: the owner quits Snug.app before the Gate 5 gate run (standing).
