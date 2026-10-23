@@ -64,7 +64,8 @@ interface Expected {
   text: string;
   toolCalls: { id: string; name: string; input: Record<string, unknown> }[];
   stopReason: 'end' | 'tool_use';
-  usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number };
+  /** The recorded `response.completed` carries `cache_write_tokens: 0` as well as `cached_tokens: 0` — both ride through (conductor's fold, 2026-10-23). */
+  usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheCreationTokens: number };
 }
 
 // Read from the recorded bytes. toolcall-1's single call: name `get_weather`, call_id
@@ -76,21 +77,21 @@ const EXPECTED: Expected[] = [
     text: 'Hello, Snug, enjoy your day!',
     toolCalls: [],
     stopReason: 'end',
-    usage: { inputTokens: 35, outputTokens: 95, cacheReadTokens: 0 },
+    usage: { inputTokens: 35, outputTokens: 95, cacheReadTokens: 0, cacheCreationTokens: 0 },
   },
   {
     file: 'stream-toolcall-1.sse',
     text: '',
     toolCalls: [{ id: 'call_dey9hByG71tiQf2bdSR2ff8l', name: 'get_weather', input: { city: 'Olden, Norway' } }],
     stopReason: 'tool_use',
-    usage: { inputTokens: 78, outputTokens: 21, cacheReadTokens: 0 },
+    usage: { inputTokens: 78, outputTokens: 21, cacheReadTokens: 0, cacheCreationTokens: 0 },
   },
   {
     file: 'stream-toolcall-2.sse',
     text: 'It’s currently 14°C with light rain in Olden, Norway.',
     toolCalls: [],
     stopReason: 'end',
-    usage: { inputTokens: 121, outputTokens: 19, cacheReadTokens: 0 },
+    usage: { inputTokens: 121, outputTokens: 19, cacheReadTokens: 0, cacheCreationTokens: 0 },
   },
 ];
 

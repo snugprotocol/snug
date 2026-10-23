@@ -424,7 +424,7 @@ describe('stream parsing (AC12)', () => {
       text: 'Hello, world',
       toolCalls: [],
       stopReason: 'end',
-      usage: { inputTokens: 35, outputTokens: 95, cacheReadTokens: 7 },
+      usage: { inputTokens: 35, outputTokens: 95, cacheReadTokens: 7, cacheCreationTokens: 0 },
       model: MODEL,
     });
     expect(deltas).toEqual(['Hello', ', world']);
