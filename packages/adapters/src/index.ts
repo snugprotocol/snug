@@ -67,3 +67,15 @@ export {
 } from './bearer-source.js';
 
 export { MODEL_ID_PATTERN, isModelId } from './model-id.js';
+
+// TASK-20261023-siwc-chatgpt-plan L2 — the Responses adapter on the ChatGPT plan (D3): built
+// against `BearerSource`, base pinned, a stream decided by status, named results with fixed
+// sentences, and a client-side output ceiling because the route rejects `max_output_tokens`.
+export {
+  RESPONSES_DEFAULT_BASE_URL,
+  RESPONSES_DEFAULT_MAX_TOKENS,
+  openaiResponsesAdapter,
+  type OpenAiResponsesAdapterOptions,
+} from './openai-responses.js';
+
+export { CHATGPT_ERROR_SENTENCES, ERROR_DETAIL_CAP, redactThenCap } from './errors.js';
