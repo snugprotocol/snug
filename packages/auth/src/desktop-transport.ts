@@ -16,7 +16,7 @@
  */
 
 import { base64UrlToUtf8 } from './base64url.js';
-import type { CallbackDelivery, RedirectUriProvider } from './oauth-service.js';
+import type { CallbackDelivery, CallbackErrorDelivery, RedirectUriProvider } from './oauth-service.js';
 
 /**
  * The ONE registered desktop loopback port for `loopback-fixed-port` (exact-match)
@@ -58,6 +58,12 @@ export interface DesktopOAuthTransport {
     appId: string;
     /** Reserved for the shell's channel adapter; deliveries use the PEEKED ids. */
     flowId?: string;
+    /**
+     * The redirect PATH (TASK-20261023-siwc-chatgpt-plan D10). Default `/callback` — every
+     * existing caller unchanged; the ChatGPT-plan sign-in needs `/auth/callback` exactly.
+     * CONTRACT at L0; L1 threads it into `buildLoopbackRedirectUri`, tests first.
+     */
+    path?: string;
   }): Promise<{ redirectUri: string }>;
   /** Feed the raw URL the listener saw; parses code/state and delivers (or drops). */
   handleCallbackUrl(url: string): void;
@@ -73,6 +79,13 @@ interface ActiveFlow {
 export function createDesktopOAuthTransport(deps: {
   listener: LoopbackListener;
   onDelivery: (d: CallbackDelivery) => void;
+  /**
+   * OPT-IN error delivery (TASK-20261023-siwc-chatgpt-plan D10): a `?error=…&state=…` callback
+   * (no `code`) is dropped unless this handler is present — the wizard's instance passes none
+   * and keeps today's behaviour byte-for-byte; the ChatGPT-plan instance passes one so a
+   * declined consent ends the flow by name. CONTRACT at L0; L1 wires it, tests first.
+   */
+  onError?: (e: CallbackErrorDelivery) => void;
   clock?: () => number;
 }): DesktopOAuthTransport {
   const clock = deps.clock ?? (() => Date.now());

@@ -187,6 +187,7 @@ export {
   signState,
   verifyState,
   type CallbackDelivery,
+  type CallbackErrorDelivery,
   type CallbackSink,
   type FetchLike,
   type FlowState,
@@ -213,3 +214,22 @@ export {
   type DesktopOAuthTransport,
   type LoopbackListener,
 } from './desktop-transport.js';
+
+// "Use my ChatGPT plan" (TASK-20261023-siwc-chatgpt-plan, ADR-0078): the per-machine session
+// contracts — the file the shell keeps `0600` outside the user file, the store and loopback
+// seats the desktop implements, the keeper's API and its named failures. L0 ships the types;
+// the keeper (`createChatgptPlanSession`) is L1.
+export {
+  CHATGPT_PLAN_ERROR_CODES,
+  ChatgptPlanError,
+  type ChatgptLoopbackSeat,
+  type ChatgptModel,
+  type ChatgptPlanErrorCode,
+  type ChatgptPlanSession,
+  type ChatgptPlanStatus,
+  type ChatgptSessionAccount,
+  type ChatgptSessionFile,
+  type ChatgptSessionStore,
+  type ChatgptSessionTokens,
+  type SignInResult,
+} from './chatgpt-plan.js';

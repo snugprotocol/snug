@@ -38,6 +38,13 @@ export interface TurnAdapterConfig {
   model?: string;
   localUrl?: string;
   /**
+   * The thinking level for THIS send, in the brain's own vocabulary (TASK-20261023-siwc-chatgpt-plan
+   * D6, ADR-0070 §3): read per send from `providerEffort:<mode>` by the arm that honours it
+   * (`chatgpt` → `reasoning.effort`, L4); the other arms ignore it. Never a mapped tier.
+   * Unattended scheduled steps pass the model's DEFAULT level, never the top one.
+   */
+  effort?: string;
+  /**
    * Test override ONLY. Production never passes this — the default is the platform
    * fetch (TASK-20260812, P0 amendment 8), so desktop's native transport reaches every
    * provider adapter through this ONE choke point with zero per-call-site edits.

@@ -26,7 +26,19 @@ export interface CredentialScan {
   warnings: CredentialFinding[];
 }
 
-const JWT_SHAPE = /^eyJ[\w-]{8,}\.[\w-]{8,}\.[\w-]{8,}$/;
+/**
+ * The JWT shape, ONE home (TASK-20261023-siwc-chatgpt-plan AC10, lesson L191). The scanner
+ * below anchors it to judge a whole value; `jwtShapeInText` finds it inside prose for the
+ * redaction seats (the Responses adapter's error-body backstop, the inspector's display mode)
+ * — a ChatGPT-plan access token is a JWT, and a provider 401 echoes the bearer it was sent.
+ * Three base64url segments of at least 8 characters each, the first a JSON header (`eyJ`).
+ */
+export const JWT_SHAPE_SOURCE = String.raw`eyJ[\w-]{8,}\.[\w-]{8,}\.[\w-]{8,}`;
+const JWT_SHAPE = new RegExp(`^${JWT_SHAPE_SOURCE}$`);
+/** A FRESH global, word-bounded matcher per call — a shared `g` regex would carry `lastIndex` between callers. */
+export function jwtShapeInText(): RegExp {
+  return new RegExp(String.raw`\b${JWT_SHAPE_SOURCE}`, 'g');
+}
 const BEARER_PREFIX = /^bearer\s+\S+/i;
 /** Well-known provider secret prefixes (OpenAI/Anthropic sk-, GitHub ghp_/gho_, Slack xox, AWS AKIA, Stripe rk_/sk_live). */
 const KNOWN_KEY_PREFIX = /^(sk-[\w-]{16,}|sk_(live|test)_[\w]{16,}|rk_(live|test)_[\w]{16,}|ghp_[\w]{20,}|gho_[\w]{20,}|xox[abps]-[\w-]{10,}|AKIA[A-Z0-9]{16})/;

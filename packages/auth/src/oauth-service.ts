@@ -287,6 +287,27 @@ export interface CallbackDelivery {
   flowId: string;
   code: string;
   state: string;
+  /**
+   * The `client_id` the callback carried, when it did (TASK-20261023-siwc-chatgpt-plan D10):
+   * OpenAI's dynamic registration returns the issued `oaiapp_…` client on the FIRST callback
+   * and omits it on re-auth. Absent for every other provider. The desktop transport fills it
+   * (L1); `handleCallback` ignores it.
+   */
+  clientId?: string;
+}
+
+/**
+ * A callback that carries `error` instead of `code` (`?error=access_denied&state=…`),
+ * delivered ONLY to a transport that opted in (TASK-20261023-siwc-chatgpt-plan D10): a
+ * declined ChatGPT consent ends the sign-in by name instead of waiting out the flow TTL. The
+ * wizard's transport keeps dropping these byte-for-byte, and `handleCallback` never sees one.
+ */
+export interface CallbackErrorDelivery {
+  appId: string;
+  flowId: string;
+  state: string;
+  error: string;
+  errorDescription?: string;
 }
 
 /**

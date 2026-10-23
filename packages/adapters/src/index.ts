@@ -52,3 +52,18 @@ export {
 } from './agent-turn.js';
 
 export { STREAM_DROPPED_CODE } from './errors.js';
+
+// TASK-20261023-siwc-chatgpt-plan L0 — the ChatGPT-plan seam (ADR-0078 §3/§5, plan §2): the
+// Responses adapter (L2) is built against `BearerSource`, never a key; the four host-level
+// codes are the named results apps classify as HOST_ERROR honouring `retryable` (R5).
+// `isModelId` moves here from the host runner so the playground's settings boundary can
+// validate a model id (C5) without a Node-only import.
+export {
+  CHATGPT_ERROR_CODES,
+  type BearerFailureCode,
+  type BearerResult,
+  type BearerSource,
+  type ChatgptErrorCode,
+} from './bearer-source.js';
+
+export { MODEL_ID_PATTERN, isModelId } from './model-id.js';
