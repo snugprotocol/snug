@@ -157,11 +157,17 @@ pub fn run() {
         // (signature, content pin, admission, caps) are Rust-side and unconditional.
         helper_install::helper_status,
         helper_install::helper_install,
+        // ADR-0078 §2: ChatGPT-plan session custody. Registered in BOTH lists — the wall is
+        // the invoke key (as for read_user_file), proven per command by the gate rows (AC13).
+        chatgpt_session::chatgpt_session_read,
+        chatgpt_session::chatgpt_session_write,
+        chatgpt_session::chatgpt_session_clear,
         pending_opened_files,
         close_flush_done,
         gate::shell_gate_config,
         gate::write_gate_results,
         gate::gate_ipc_sentinel_exists,
+        gate::gate_chatgpt_session_stat,
     ]);
     #[cfg(not(debug_assertions))]
     let builder = builder.invoke_handler(tauri::generate_handler![
@@ -180,6 +186,11 @@ pub fn run() {
         sidecar::sidecar_wizard_fetch,
         helper_install::helper_status,
         helper_install::helper_install,
+        // Ships in RELEASE: custody is a production capability; its guards (the dot-dir,
+        // the modes, the cap) are Rust-side and unconditional (ADR-0078 §2).
+        chatgpt_session::chatgpt_session_read,
+        chatgpt_session::chatgpt_session_write,
+        chatgpt_session::chatgpt_session_clear,
         pending_opened_files,
         close_flush_done,
     ]);

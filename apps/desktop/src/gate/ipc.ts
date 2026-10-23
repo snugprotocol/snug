@@ -52,7 +52,7 @@
 
 import { invoke } from '@tauri-apps/api/core';
 
-import type { CheckResult } from './types.js';
+import type { ChatgptSessionStat, CheckResult } from './types.js';
 
 export const IPC_CHECK_IDS = [
   'ipc-tauri-internals-absent',
@@ -72,6 +72,12 @@ export const IPC_CHECK_IDS = [
   'ipc-helper-status-dispatchable',
   'ipc-notification-refused',
   'ipc-notification-dispatchable',
+  'ipc-chatgpt-session-read-refused',
+  'ipc-chatgpt-session-read-dispatchable',
+  'ipc-chatgpt-session-write-refused',
+  'ipc-chatgpt-session-write-dispatchable',
+  'ipc-chatgpt-session-clear-refused',
+  'ipc-chatgpt-session-clear-dispatchable',
 ] as const;
 
 /**
@@ -214,6 +220,68 @@ export const NOTIFICATION_NOTIFY_COMMAND = 'plugin:notification|notify';
 export const NOTIFICATION_PERMISSION_COMMAND = 'plugin:notification|is_permission_granted';
 
 /**
+ * The ChatGPT-plan custody commands (TASK-20261023-siwc-chatgpt-plan AC13, D2; ADR-0078 §2)
+ * get a row EACH, for the amendment-16 reason every row above has — registration is
+ * per-command — and with stakes that need no sentence stretched: `chatgpt_session_read`
+ * RETURNS the user's ChatGPT tokens, refresh token included; `chatgpt_session_write` can plant
+ * a session (an attacker's account) under the user; `chatgpt_session_clear` signs them out.
+ * Tauri capabilities do not scope custom commands (no `AppManifest`), so the wall is the
+ * invoke key — exactly as for `read_user_file` — and these rows prove it per command: a
+ * keyless invoke of each from a sandboxed frame resolves no callback, each reading its OWN
+ * slot. They share the SENSOR PROBLEM of the rows above and the same honest pairing with the
+ * key-absence checks.
+ *
+ * The positive twins are EFFECT SENSORS, not reach probes — the one place this file asserts
+ * what a command DID. They run in the gate's THROWAWAY HOME (gate/run-gate.mjs launches the
+ * shell with `HOME` pointed at a fresh mkdtemp directory, and `userfile::snug_dir()` reads
+ * HOME — so `~/Snug/.chatgpt-plan` is a temp dir, never the developer's own session): the
+ * main frame writes a fixture that is NOT a valid session (`v:0` — the seat reads it as "no
+ * session"), the stat probe must then see a `0600` file in a `0700` directory, a read must
+ * resolve while that file exists (only `resolved` is recorded — never the body), and a clear
+ * must leave no file, so the run ends signed out. `gate_chatgpt_session_stat` (gate.rs,
+ * debug-only) answers existence and permission bits, never bytes.
+ */
+export const CHATGPT_SESSION_READ_COMMAND = 'chatgpt_session_read';
+export const CHATGPT_SESSION_WRITE_COMMAND = 'chatgpt_session_write';
+export const CHATGPT_SESSION_CLEAR_COMMAND = 'chatgpt_session_clear';
+export const GATE_CHATGPT_SESSION_STAT_COMMAND = 'gate_chatgpt_session_stat';
+
+/**
+ * What the main frame writes as the seed. Deliberately NOT a session the seat would accept
+ * (`v` is 0, no `hostId`): should the throwaway-HOME isolation ever fail, the keeper reads
+ * this as "no session", never as a planted account. Its bytes never reach the results.
+ */
+const GATE_SESSION_FIXTURE = '{"v":0,"gate":"snug shell gate fixture, not a session"}';
+
+export type ChatgptSessionWhich = 'read' | 'write' | 'clear';
+const CHATGPT_SESSION_WHICH: readonly ChatgptSessionWhich[] = ['read', 'write', 'clear'];
+
+/** Per command: its name, its two row ids, its OWN probe slot and the stakes sentence. */
+const CHATGPT_SESSION_ROWS = {
+  read: {
+    command: CHATGPT_SESSION_READ_COMMAND,
+    refused: 'ipc-chatgpt-session-read-refused',
+    dispatchable: 'ipc-chatgpt-session-read-dispatchable',
+    slot: 'chatgptSessionReadCallbackFired',
+    breakage: 'app code can read the user\'s ChatGPT tokens, the refresh token included (ADR-0078 §2)',
+  },
+  write: {
+    command: CHATGPT_SESSION_WRITE_COMMAND,
+    refused: 'ipc-chatgpt-session-write-refused',
+    dispatchable: 'ipc-chatgpt-session-write-dispatchable',
+    slot: 'chatgptSessionWriteCallbackFired',
+    breakage: 'app code can plant a ChatGPT session — an attacker\'s account — under the user (ADR-0078 §2)',
+  },
+  clear: {
+    command: CHATGPT_SESSION_CLEAR_COMMAND,
+    refused: 'ipc-chatgpt-session-clear-refused',
+    dispatchable: 'ipc-chatgpt-session-clear-dispatchable',
+    slot: 'chatgptSessionClearCallbackFired',
+    breakage: 'app code can sign the user out of ChatGPT (ADR-0078 §2)',
+  },
+} as const;
+
+/**
  * The sentinel filename the subframe's keyless write targets. Must match
  * `gate.rs::IPC_SENTINEL_NAME` — the Rust side answers for this name ONLY, so a
  * drift here turns the probe into an error rather than a silent pass.
@@ -330,6 +398,20 @@ const PROBE_HTML = `<!doctype html><html><head><meta charset="utf-8"><title>ipc 
   var NTF_CB = 987654401;
   window['_' + NTF_CB] = function () { notificationCallbackFired = true; };
   window['_' + (NTF_CB + 1)] = function () { notificationCallbackFired = true; };
+  // The ChatGPT-plan custody commands (TASK-20261023-siwc-chatgpt-plan AC13): one slot pair
+  // PER command, never shared — a reach proven for the read must not be credited to the write.
+  var chatgptSessionReadCallbackFired = false;
+  var CGR_CB = 987654411;
+  window['_' + CGR_CB] = function () { chatgptSessionReadCallbackFired = true; };
+  window['_' + (CGR_CB + 1)] = function () { chatgptSessionReadCallbackFired = true; };
+  var chatgptSessionWriteCallbackFired = false;
+  var CGW_CB = 987654421;
+  window['_' + CGW_CB] = function () { chatgptSessionWriteCallbackFired = true; };
+  window['_' + (CGW_CB + 1)] = function () { chatgptSessionWriteCallbackFired = true; };
+  var chatgptSessionClearCallbackFired = false;
+  var CGC_CB = 987654431;
+  window['_' + CGC_CB] = function () { chatgptSessionClearCallbackFired = true; };
+  window['_' + (CGC_CB + 1)] = function () { chatgptSessionClearCallbackFired = true; };
 
   function keylessInvokeBody() {
     // The main-frame invoke shape (scripts/core.js) MINUS a valid
@@ -437,6 +519,40 @@ const PROBE_HTML = `<!doctype html><html><head><meta charset="utf-8"><title>ipc 
     });
   }
 
+  function keylessChatgptSessionReadBody() {
+    // The read takes no arguments: a DISPATCHED call would resolve the callback WITH the
+    // user's tokens — into a sandboxed frame. Reaching the dispatcher is the breakage.
+    return JSON.stringify({
+      cmd: '${CHATGPT_SESSION_READ_COMMAND}',
+      callback: CGR_CB,
+      error: CGR_CB + 1,
+      payload: {}
+    });
+  }
+
+  function keylessChatgptSessionWriteBody() {
+    // A REAL, well-formed write — a string payload under the cap, the shape the seat sends —
+    // so a refusal cannot be attributed to a bad payload. Its bytes are not a session
+    // (\`v:0\`): if it ever LANDED, the keeper would read "no session", not an account.
+    return JSON.stringify({
+      cmd: '${CHATGPT_SESSION_WRITE_COMMAND}',
+      callback: CGW_CB,
+      error: CGW_CB + 1,
+      payload: { payload: '{"v":0,"gate":"keyless probe from a sandboxed frame"}' }
+    });
+  }
+
+  function keylessChatgptSessionClearBody() {
+    // No arguments either: a DISPATCHED clear signs the user out. In the gate's throwaway
+    // HOME there is nothing to lose, which is exactly why the probe may send a real one.
+    return JSON.stringify({
+      cmd: '${CHATGPT_SESSION_CLEAR_COMMAND}',
+      callback: CGC_CB,
+      error: CGC_CB + 1,
+      payload: {}
+    });
+  }
+
   function keylessNotifyBody() {
     // A REAL, well-formed notify call — the exact payload the plugin's own polyfilled
     // \`new Notification(title, { body })\` posts (\`{ options: { title, body } }\`), so a
@@ -461,6 +577,9 @@ const PROBE_HTML = `<!doctype html><html><head><meta charset="utf-8"><title>ipc 
     try { transports[k].handler.postMessage(keylessRelaunchBody()); } catch (e8) { /* transport rejected the shape */ }
     try { transports[k].handler.postMessage(keylessHelperInstallBody()); } catch (e9) { /* transport rejected the shape */ }
     try { transports[k].handler.postMessage(keylessNotifyBody()); } catch (e10) { /* transport rejected the shape */ }
+    try { transports[k].handler.postMessage(keylessChatgptSessionReadBody()); } catch (e11) { /* transport rejected the shape */ }
+    try { transports[k].handler.postMessage(keylessChatgptSessionWriteBody()); } catch (e12) { /* transport rejected the shape */ }
+    try { transports[k].handler.postMessage(keylessChatgptSessionClearBody()); } catch (e13) { /* transport rejected the shape */ }
   }
 
   function finishInvoke() {
@@ -479,7 +598,10 @@ const PROBE_HTML = `<!doctype html><html><head><meta charset="utf-8"><title>ipc 
         updaterInstallCallbackFired: updaterInstallCallbackFired,
         helperInstallCallbackFired: helperInstallCallbackFired,
         relaunchCallbackFired: relaunchCallbackFired,
-        notificationCallbackFired: notificationCallbackFired
+        notificationCallbackFired: notificationCallbackFired,
+        chatgptSessionReadCallbackFired: chatgptSessionReadCallbackFired,
+        chatgptSessionWriteCallbackFired: chatgptSessionWriteCallbackFired,
+        chatgptSessionClearCallbackFired: chatgptSessionClearCallbackFired
       }
     }, '*');
   }
@@ -507,6 +629,12 @@ interface ProbeReport {
   helperInstallCallbackFired: boolean;
   /** Per-command (TASK-20261009 H1): did a keyless `plugin:notification|notify` resolve into the subframe? */
   notificationCallbackFired: boolean;
+  /** Per-command (TASK-20261023-siwc-chatgpt-plan AC13): did a keyless `chatgpt_session_read` resolve into the subframe? */
+  chatgptSessionReadCallbackFired: boolean;
+  /** Per-command: did a keyless `chatgpt_session_write` resolve into the subframe? */
+  chatgptSessionWriteCallbackFired: boolean;
+  /** Per-command: did a keyless `chatgpt_session_clear` resolve into the subframe? */
+  chatgptSessionClearCallbackFired: boolean;
 }
 
 /**
@@ -794,6 +922,132 @@ export function decideSidecarFetchDispatchable(outcome: { resolved: boolean; det
   return decideDispatchable('ipc-sidecar-fetch-dispatchable', SIDECAR_FETCH_COMMAND, outcome, 'ipc-sidecar-fetch-refused');
 }
 
+/**
+ * THE PER-COMMAND VERDICT for each ChatGPT-plan custody command (AC13) — the same decision
+ * the helper, updater and notification rows use, over that command's OWN slot, so a reach
+ * proven for the read is never credited to (or charged against) the write or the clear.
+ */
+export function decideChatgptSessionRefused(
+  which: ChatgptSessionWhich,
+  report: ProbeReport | undefined,
+  keyReachable: boolean,
+): CheckResult {
+  const row = CHATGPT_SESSION_ROWS[which];
+  return decideUpdateChannelCommandRefused(
+    row.refused,
+    row.command,
+    row.breakage,
+    report === undefined ? undefined : { ...report, fired: report[row.slot] },
+    keyReachable,
+  );
+}
+
+/**
+ * The "did not resolve" sentence shared by the three effect-sensor twins. Unlike
+ * `decideDispatchable`, a body error FAILS here: in the throwaway HOME the command has
+ * nothing to fail on, so an answer from the body that is not success is a defect in custody,
+ * not a healthy "the body ran". The unregistered/uncapable shapes are named as such.
+ */
+function chatgptSessionUndispatched(command: string, detail: string, refusedId: string): string {
+  return UNDISPATCHABLE_SHAPE.test(detail)
+    ? `${command} is NOT DISPATCHABLE from the main window (${detail}) — unregistered or uncapable, so ${refusedId} is vouching for nothing`
+    : `${command} dispatched from the main window but its body FAILED in the gate's throwaway HOME (${detail}) — an effect sensor needs the effect`;
+}
+
+/** Permission bits as the three octal digits a reader expects (`0600` → `600`); never the type bits. */
+function modeDigits(mode: number | null): string {
+  return mode === null ? '???' : (mode & 0o777).toString(8).padStart(3, '0');
+}
+
+/**
+ * The read twin records ONLY that the main-frame read resolved: the body IS the user's
+ * tokens in a real HOME, so no success path may echo what the caller saw (the caller passes
+ * `resolved`, and even that is not repeated). The read runs while the seeded fixture exists —
+ * a read of an empty HOME would prove nothing about the body path.
+ */
+export function decideChatgptSessionReadDispatchable(outcome: { resolved: boolean; detail: string }): CheckResult {
+  const { command, dispatchable: id, refused } = CHATGPT_SESSION_ROWS.read;
+  if (outcome.resolved) {
+    return { id, pass: true, detail: `${command} dispatched from the main window and resolved over the seeded fixture (body not recorded)` };
+  }
+  return { id, pass: false, detail: chatgptSessionUndispatched(command, outcome.detail, refused) };
+}
+
+/**
+ * The write twin asserts the ON-DISK effect through the stat probe: a resolved write must have
+ * left a `0600` file in a `0700` directory. A resolved write with no file is a no-op body, not
+ * custody; a dead stat probe cannot vouch; and the caller's detail is never repeated (it is
+ * the payload's neighbourhood).
+ */
+export function decideChatgptSessionWriteDispatchable(
+  outcome: { resolved: boolean; detail: string },
+  stat: ChatgptSessionStat | { error: string },
+): CheckResult {
+  const { command, dispatchable: id, refused } = CHATGPT_SESSION_ROWS.write;
+  if (!outcome.resolved) {
+    return { id, pass: false, detail: chatgptSessionUndispatched(command, outcome.detail, refused) };
+  }
+  if ('error' in stat) {
+    return { id, pass: false, detail: `${command} resolved but the stat probe is unavailable (${stat.error}) — cannot vouch for the on-disk effect` };
+  }
+  if (!stat.exists) {
+    return { id, pass: false, detail: `${command} resolved but left NO session file in the gate's throwaway HOME — a no-op body is not custody` };
+  }
+  const fileMode = modeDigits(stat.fileMode);
+  const dirMode = modeDigits(stat.dirMode);
+  if (fileMode !== '600' || dirMode !== '700') {
+    return {
+      id,
+      pass: false,
+      detail: `${command} left session.json mode 0${fileMode} in a 0${dirMode} directory — custody requires 0600 in 0700 (ADR-0078 §2)`,
+    };
+  }
+  return { id, pass: true, detail: `${command} dispatched from the main window and left a 0600 session.json in a 0700 directory (payload not recorded)` };
+}
+
+/** The clear twin asserts the file is GONE: a sign-out that leaves the tokens behind is a fail. */
+export function decideChatgptSessionClearDispatchable(
+  outcome: { resolved: boolean; detail: string },
+  stat: ChatgptSessionStat | { error: string },
+): CheckResult {
+  const { command, dispatchable: id, refused } = CHATGPT_SESSION_ROWS.clear;
+  if (!outcome.resolved) {
+    return { id, pass: false, detail: chatgptSessionUndispatched(command, outcome.detail, refused) };
+  }
+  if ('error' in stat) {
+    return { id, pass: false, detail: `${command} resolved but the stat probe is unavailable (${stat.error}) — cannot vouch for the on-disk effect` };
+  }
+  if (stat.exists) {
+    return { id, pass: false, detail: `${command} resolved but session.json is STILL on disk — a sign-out that leaves the tokens behind` };
+  }
+  return { id, pass: true, detail: `${command} dispatched from the main window and left no session file — the throwaway HOME ends signed out` };
+}
+
+/** A main-frame invoke, reduced to "resolved or not": the answer itself is dropped on the floor. */
+async function attemptInvoke(command: string, args?: Record<string, unknown>): Promise<{ resolved: boolean; detail: string }> {
+  try {
+    await invoke(command, args);
+    return { resolved: true, detail: 'resolved' };
+  } catch (err) {
+    return { resolved: false, detail: String(err) };
+  }
+}
+
+/** The stat probe, narrowed from the IPC answer; anything but the expected shape is "unavailable". */
+async function statChatgptSession(): Promise<ChatgptSessionStat | { error: string }> {
+  let raw: unknown;
+  try {
+    raw = await invoke<unknown>(GATE_CHATGPT_SESSION_STAT_COMMAND);
+  } catch (err) {
+    return { error: String(err) };
+  }
+  if (typeof raw !== 'object' || raw === null) return { error: 'malformed stat answer' };
+  const answer = raw as { exists?: unknown; fileMode?: unknown; dirMode?: unknown };
+  if (typeof answer.exists !== 'boolean') return { error: 'malformed stat answer' };
+  const bits = (v: unknown): number | null => (typeof v === 'number' ? v : null);
+  return { exists: answer.exists, fileMode: bits(answer.fileMode), dirMode: bits(answer.dirMode) };
+}
+
 export async function runIpcChecks(): Promise<CheckResult[]> {
   const { byId, report } = await new Promise<{ byId: Map<string, CheckResult>; report?: ProbeReport }>((resolve) => {
     const iframe = document.createElement('iframe');
@@ -838,6 +1092,12 @@ export async function runIpcChecks(): Promise<CheckResult[]> {
                   (p as { helperInstallCallbackFired?: unknown }).helperInstallCallbackFired === true,
                 notificationCallbackFired:
                   (p as { notificationCallbackFired?: unknown }).notificationCallbackFired === true,
+                chatgptSessionReadCallbackFired:
+                  (p as { chatgptSessionReadCallbackFired?: unknown }).chatgptSessionReadCallbackFired === true,
+                chatgptSessionWriteCallbackFired:
+                  (p as { chatgptSessionWriteCallbackFired?: unknown }).chatgptSessionWriteCallbackFired === true,
+                chatgptSessionClearCallbackFired:
+                  (p as { chatgptSessionClearCallbackFired?: unknown }).chatgptSessionClearCallbackFired === true,
               },
             }
           : {}),
@@ -979,6 +1239,24 @@ export async function runIpcChecks(): Promise<CheckResult[]> {
     notificationDispatch = { resolved: false, detail: String(err) };
   }
   byId.set('ipc-notification-dispatchable', decideNotificationDispatchable(notificationDispatch));
+
+  // THE CHATGPT-PLAN CUSTODY ROWS (TASK-20261023-siwc-chatgpt-plan AC13). Refusal per command,
+  // each over its own slot, through the same per-command decision as the rows above.
+  for (const which of CHATGPT_SESSION_WHICH) {
+    byId.set(CHATGPT_SESSION_ROWS[which].refused, decideChatgptSessionRefused(which, report, keyReachable));
+  }
+
+  // The positive twins are EFFECT SENSORS in the gate's throwaway HOME (see the commands'
+  // header): the seed is the main window's OWN write of a non-session fixture, observed
+  // through the stat probe; the read runs while that file exists and records only that it
+  // resolved; the clear runs LAST and unconditionally, so whatever happened above the run
+  // ends with no session file. Nothing any command answered is kept.
+  const seeded = await attemptInvoke(CHATGPT_SESSION_WRITE_COMMAND, { payload: GATE_SESSION_FIXTURE });
+  byId.set(CHATGPT_SESSION_ROWS.write.dispatchable, decideChatgptSessionWriteDispatchable(seeded, await statChatgptSession()));
+  const readBack = await attemptInvoke(CHATGPT_SESSION_READ_COMMAND);
+  byId.set(CHATGPT_SESSION_ROWS.read.dispatchable, decideChatgptSessionReadDispatchable(readBack));
+  const cleared = await attemptInvoke(CHATGPT_SESSION_CLEAR_COMMAND);
+  byId.set(CHATGPT_SESSION_ROWS.clear.dispatchable, decideChatgptSessionClearDispatchable(cleared, await statChatgptSession()));
 
   // EVERY id must be present — a missing verdict is a FAIL (AC7).
   return IPC_CHECK_IDS.map((id) => byId.get(id) ?? { id, pass: false, detail: 'no-verdict' });

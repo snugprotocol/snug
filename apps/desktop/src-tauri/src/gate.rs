@@ -158,6 +158,58 @@ pub fn gate_ipc_sentinel_exists(name: String) -> Result<bool, String> {
     Ok(path.exists())
 }
 
+// ---------------------------------------------------------------------------
+// ChatGPT-session stat probe (TASK-20261023-siwc-chatgpt-plan AC13, folds F3/S6).
+//
+// The positive twins of the three custody rows (`ipc-chatgpt-session-*-dispatchable`)
+// are EFFECT SENSORS run in the gate's throwaway HOME: after the main frame's own
+// write the harness asks whether `~/Snug/.chatgpt-plan/session.json` exists and
+// what mode it and its directory carry (`0600` in `0700`); after the clear, that it
+// is gone. This command answers EXISTENCE and PERMISSION BITS only — never bytes —
+// so a session body can never land in the results JSON. It resolves the directory
+// through `chatgpt_session::custody_dir()`, the commands' own spelling, so the
+// probe cannot drift from the file it vouches for. Debug-only like every gate
+// command, and refused outside gate mode.
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatgptSessionStat {
+    pub exists: bool,
+    /// Permission bits (`& 0o777`) of the session file; `None` when it does not exist.
+    pub file_mode: Option<u32>,
+    /// Permission bits (`& 0o777`) of the custody directory; `None` when it does not exist.
+    pub dir_mode: Option<u32>,
+}
+
+#[cfg(unix)]
+fn permission_bits(path: &std::path::Path) -> Option<u32> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path).ok().map(|m| m.permissions().mode() & 0o777)
+}
+
+#[cfg(not(unix))]
+fn permission_bits(_path: &std::path::Path) -> Option<u32> {
+    None
+}
+
+fn stat_session(dir: &std::path::Path) -> ChatgptSessionStat {
+    let file = dir.join(crate::chatgpt_session::SESSION_FILE);
+    ChatgptSessionStat {
+        exists: file.is_file(),
+        file_mode: permission_bits(&file),
+        dir_mode: permission_bits(dir),
+    }
+}
+
+/// Existence + modes of the ChatGPT-plan session file and its directory — never bytes.
+#[tauri::command]
+pub fn gate_chatgpt_session_stat() -> Result<ChatgptSessionStat, String> {
+    if config().is_none() {
+        return Err("shell gate mode is off — refusing the session stat probe".into());
+    }
+    Ok(stat_session(&crate::chatgpt_session::custody_dir()?))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -18,64 +18,177 @@
 //!   - The IPC wall for these commands is the invoke key, exactly as for `read_user_file`
 //!     (ADR-0021 §8); `capabilities/main.json` is unchanged. The in-shell gate's rows prove a
 //!     sandboxed app frame cannot reach them (AC13).
-//!
-//! GATE 3 STATE: the bodies below are compile-only stubs so `cargo test` BUILDS and the tests
-//! FAIL on `todo!()`. The L3 implementation lane replaces them; the tests are the contract.
 
+use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 /// The size cap on one session payload. Over it → `Err` naming the cap, nothing written.
 pub const MAX_SESSION_BYTES: usize = 64 * 1024;
 
-// ------------------------------------------------------------------------------------------
-// L3 impl lane replaces these — compile-only stubs (Gate 3, tests first).
-// ------------------------------------------------------------------------------------------
+/// The dot-directory under `~/Snug`. The leading `.` is what keeps it out of `valid_name`'s reach.
+const SESSION_DIR_NAME: &str = ".chatgpt-plan";
+/// The one file inside it. `pub(crate)` for the debug-only gate stat probe (gate.rs).
+pub(crate) const SESSION_FILE: &str = "session.json";
+/// The staging name. DETERMINISTIC on purpose: a crash leaves at most one leftover, at a name
+/// the next write collides with and removes unopened (see `open_temp`) — a random name would
+/// need a directory sweep to be sure no half-written copy of the tokens survives.
+const TEMP_FILE: &str = "session.json.tmp";
 
 /// `<home>/Snug/.chatgpt-plan` — the ONE location (pinned by test).
-pub fn session_dir(_home: &Path) -> PathBuf {
-    todo!("L3 impl lane: session_dir")
+pub fn session_dir(home: &Path) -> PathBuf {
+    home.join("Snug").join(SESSION_DIR_NAME)
+}
+
+/// The commands' directory. The home comes from `userfile::snug_dir()` — the one place the
+/// HOME/USERPROFILE precedence lives (where a Windows-ordering bug already shipped once) — and
+/// the location from `session_dir`, so neither rule is spelled twice.
+pub(crate) fn custody_dir() -> Result<PathBuf, String> {
+    let snug = crate::userfile::snug_dir()?;
+    let home = snug.parent().ok_or_else(|| "no home directory".to_string())?;
+    Ok(session_dir(home))
 }
 
 /// `Ok(None)` when no session file exists (or the directory does not). The bytes, verbatim,
-/// otherwise.
-pub fn read_impl(_dir: &Path) -> Result<Option<String>, String> {
-    todo!("L3 impl lane: read_impl")
+/// otherwise — and an error, never a lossy string, when they are not UTF-8: a silently altered
+/// refresh token is worse than a refused read.
+pub fn read_impl(dir: &Path) -> Result<Option<String>, String> {
+    match fs::read(dir.join(SESSION_FILE)) {
+        Ok(bytes) => String::from_utf8(bytes)
+            .map(Some)
+            .map_err(|_| "session file is not valid UTF-8".to_string()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("read session file: {e}")),
+    }
 }
 
 /// The production write: `write_impl_with_hook` with a no-op hook.
-pub fn write_impl(_dir: &Path, _payload: &str) -> Result<(), String> {
-    todo!("L3 impl lane: write_impl")
+pub fn write_impl(dir: &Path, payload: &str) -> Result<(), String> {
+    write_impl_with_hook(dir, payload, |_tmp| {})
 }
 
 /// The write, with a seam at the moment between the temp being fully written + synced and the
 /// rename: `before_rename` receives the TEMP path so a test can `stat` it (S5). Production
 /// passes a no-op — one write path, not a test-only variant.
+///
+/// Order is load-bearing (the four steps of `userfile.rs`'s staged write, plus the modes):
+///   1. the cap — checked before anything touches the disk; the error names the cap, never
+///      the payload;
+///   2. the directory, created `0700` or tightened to it;
+///   3. the temp — `create_new` + `mode(0o600)`, written, `sync_all`;
+///   4. `rename` over the target — readers see old-or-new, never torn;
+///   5. the directory fsync'ed, so the rename itself survives a power cut.
+/// On any failure the temp is removed and the target is left exactly as it was.
 pub fn write_impl_with_hook(
-    _dir: &Path,
-    _payload: &str,
-    _before_rename: impl FnOnce(&Path),
+    dir: &Path,
+    payload: &str,
+    before_rename: impl FnOnce(&Path),
 ) -> Result<(), String> {
-    todo!("L3 impl lane: write_impl_with_hook")
+    if payload.len() > MAX_SESSION_BYTES {
+        return Err(format!(
+            "session payload is {} bytes; the cap is {MAX_SESSION_BYTES} bytes (64 KiB)",
+            payload.len()
+        ));
+    }
+    ensure_private_dir(dir)?;
+    let target = dir.join(SESSION_FILE);
+    let tmp = dir.join(TEMP_FILE);
+    let result = (|| -> Result<(), String> {
+        let mut f = open_temp(&tmp)?;
+        f.write_all(payload.as_bytes()).map_err(|e| format!("write session temp: {e}"))?;
+        f.sync_all().map_err(|e| format!("fsync session temp: {e}"))?;
+        drop(f);
+        before_rename(&tmp);
+        fs::rename(&tmp, &target).map_err(|e| format!("rename session file into place: {e}"))?;
+        // The directory entry the rename created is durable only once the DIRECTORY is
+        // fsync'ed (userfile.rs `fsync_dir` carries the full reasoning). Best-effort: a
+        // durability barrier failing must not fail a completed write. No-op on Windows.
+        #[cfg(not(windows))]
+        if let Ok(d) = fs::File::open(dir) {
+            let _ = d.sync_all();
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp); // best-effort cleanup; the target was never touched
+    }
+    result
 }
 
-/// Removes `session.json`; idempotent; leaves the directory in place.
-pub fn clear_impl(_dir: &Path) -> Result<(), String> {
-    todo!("L3 impl lane: clear_impl")
+/// Removes `session.json`; idempotent; leaves the directory in place (and creates nothing).
+pub fn clear_impl(dir: &Path) -> Result<(), String> {
+    match fs::remove_file(dir.join(SESSION_FILE)) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("remove session file: {e}")),
+    }
+}
+
+/// The custody directory, `0700`. Only the LEAF gets the mode: `~/Snug` is created with the
+/// process default when missing and never chmod'ed when present.
+fn ensure_private_dir(dir: &Path) -> Result<(), String> {
+    if let Some(parent) = dir.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
+    }
+    let mut builder = fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    match builder.create(dir) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(e) => return Err(format!("create {}: {e}", dir.display())),
+    }
+    // Tighten an existing (or umask-widened) directory; a no-op on one already 0700.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
+            .map_err(|e| format!("chmod {}: {e}", dir.display()))?;
+    }
+    Ok(())
+}
+
+/// Open the staging file `create_new` — never through an existing path, so a symlink planted
+/// at the temp name is refused rather than followed — with mode `0600` from its first byte. A
+/// leftover from a crash collides: it is removed unopened and the open retried ONCE, so a stale
+/// copy of the tokens never blocks the next write and never survives it.
+fn open_temp(tmp: &Path) -> Result<fs::File, String> {
+    let open = || {
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        options.open(tmp)
+    };
+    match open() {
+        Ok(f) => Ok(f),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            fs::remove_file(tmp).map_err(|e| format!("remove stale session temp: {e}"))?;
+            open().map_err(|e| format!("create session temp: {e}"))
+        }
+        Err(e) => Err(format!("create session temp: {e}")),
+    }
 }
 
 #[tauri::command]
 pub fn chatgpt_session_read() -> Result<Option<String>, String> {
-    todo!("L3 impl lane: chatgpt_session_read")
+    read_impl(&custody_dir()?)
 }
 
 #[tauri::command]
-pub fn chatgpt_session_write(_payload: String) -> Result<(), String> {
-    todo!("L3 impl lane: chatgpt_session_write")
+pub fn chatgpt_session_write(payload: String) -> Result<(), String> {
+    write_impl(&custody_dir()?, &payload)
 }
 
 #[tauri::command]
 pub fn chatgpt_session_clear() -> Result<(), String> {
-    todo!("L3 impl lane: chatgpt_session_clear")
+    clear_impl(&custody_dir()?)
 }
 
 #[cfg(test)]
