@@ -1,6 +1,6 @@
 # 0014 — Credentials are local-first (custody doctrine)
 
-- **Status:** accepted (owner decision 2026-08-04/05, recorded 2026-08-05) — **amended 2026-08-20 by [ADR-0043](0043-passphrase-encryption-at-rest.md)**: the deferred passphrase-encryption alternative below is now DECIDED and shipped (opt-in, with a mandatory Recovery Key paying down the forgotten-passphrase cost named there). Custody is unchanged — the keys are still in the user's own file.
+- **Status:** accepted (owner decision 2026-08-04/05, recorded 2026-08-05) — **amended 2026-08-20 by [ADR-0043](0043-passphrase-encryption-at-rest.md)**: the deferred passphrase-encryption alternative below is now DECIDED and shipped (opt-in, with a mandatory Recovery Key paying down the forgotten-passphrase cost named there). Custody is unchanged — the keys are still in the user's own file. — **amended by [ADR-0078](0078-chatgpt-plan-mode.md)** (2026-10-23): one scoped exception — the ChatGPT-plan session, a rotating per-host credential, lives in a `0600` file beside the user file and never in `snug_secrets`; the custody claim is unchanged and stated per machine
 - **Date:** 2026-08-05
 - **Task:** TASK-20260805-doctrines-devex
 
