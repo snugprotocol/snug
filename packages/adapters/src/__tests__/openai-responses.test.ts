@@ -451,11 +451,14 @@ describe('stream parsing (AC12)', () => {
     expect(result).toMatchObject({ ok: true, model: 'gpt-6.1-sol-2026-10-01' });
   });
 
-  it('usage maps input/output/cached tokens; cacheCreationTokens stays ABSENT (never coerced to 0)', async () => {
+  it('usage maps input/output/cached/cache-write tokens — the recorded wire DOES report `cache_write_tokens`, so it is mapped (even when 0), never coerced', async () => {
+    // Conductor's fold (2026-10-23): the brief said "cacheCreationTokens absent" on the assumption the
+    // route reported nothing about cache writes; the recorded `response.completed` carries
+    // `input_tokens_details.cache_write_tokens`, and TokenUsage's rule is "absent only when the provider
+    // said nothing" — a reported 0 is a fact ("cached 0%"), so it rides through.
     const { result } = await run(() => bareStream(TEXT_STREAM));
     if (!result.ok) throw new Error(`expected ok, got ${result.code}`);
-    expect(result.usage).toEqual({ inputTokens: 35, outputTokens: 95, cacheReadTokens: 7 });
-    expect(result.usage).not.toHaveProperty('cacheCreationTokens');
+    expect(result.usage).toEqual({ inputTokens: 35, outputTokens: 95, cacheReadTokens: 7, cacheCreationTokens: 0 });
   });
 
   it('a usage block with no input_tokens_details leaves cacheReadTokens ABSENT, not 0', async () => {
