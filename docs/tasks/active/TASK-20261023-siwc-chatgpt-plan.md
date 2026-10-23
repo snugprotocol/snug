@@ -352,3 +352,9 @@ ADR-0078 accepted; delta + ledger + v3.14 (+ §2 Assets amendment; residuals R-1
 - State: branch @ the fold commit; L4 impl running; L5 impl waits on L4.
 - Next step: L4 lands → run the playground (expect the L5 reds only + the 14 known) → L5 impl (Fable high) → L6 → Gate 5.
 - Open questions: the owner quits Snug.app before the Gate 5 gate run (standing).
+
+### 2026-10-24 — Fable 5.1 (conductor) — the bounded JWT shape (protocol), done by the conductor
+- Done: `fe0fc4d` — test first in `packages/protocol/src/__tests__/jwt-shape.test.ts` (an 8 MiB unbroken `eyJ…` run completes and is NOT matched; a 4 096-character segment matches, 4 097 does not); shown red with the measured `RangeError: Maximum call stack size exceeded`; then `JWT_SHAPE_SOURCE` = `eyJ[\w-]{8,4093}\.[\w-]{8,4096}\.[\w-]{8,4096}` (the `eyJ` prefix counted in the first segment's 4 096); protocol 671 green, adapters 245 green (the backstop's consumers unchanged), build 14/14. Taken from the L5 impl lane's list because it touches only a package no lane is editing and it unblocks the inspector's large-payload tests.
+- State: branch @ `fe0fc4d`; L4 impl running.
+- Next step: unchanged (L4 lands → L5 impl → L6 → Gate 5).
+- Open questions: the owner quits Snug.app before the Gate 5 gate run (standing).
