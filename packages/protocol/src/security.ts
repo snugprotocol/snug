@@ -33,7 +33,12 @@ export interface CredentialScan {
  * — a ChatGPT-plan access token is a JWT, and a provider 401 echoes the bearer it was sent.
  * Three base64url segments of at least 8 characters each, the first a JSON header (`eyJ`).
  */
-export const JWT_SHAPE_SOURCE = String.raw`eyJ[\w-]{8,}\.[\w-]{8,}\.[\w-]{8,}`;
+export const JWT_SHAPE_SOURCE = String.raw`eyJ[\w-]{8,4093}\.[\w-]{8,4096}\.[\w-]{8,4096}`;
+// Each segment is BOUNDED (4 096 characters, the `eyJ` prefix counted): the unbounded form made the
+// prose matcher overflow V8's regex stack on an 8 MiB unbroken `eyJ…` run (measured 2026-10-24,
+// TASK-20261023-siwc-chatgpt-plan §12 L5-7). A real JWT segment is a few kilobytes; a megabyte run
+// is not a token, and every consumer — this scanner, the Responses adapter's backstop, the
+// inspector's display redaction — must stay linear on multi-megabyte payloads.
 const JWT_SHAPE = new RegExp(`^${JWT_SHAPE_SOURCE}$`);
 /** A FRESH global, word-bounded matcher per call — a shared `g` regex would carry `lastIndex` between callers. */
 export function jwtShapeInText(): RegExp {

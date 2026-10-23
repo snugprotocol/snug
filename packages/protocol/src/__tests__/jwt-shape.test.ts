@@ -64,3 +64,22 @@ describe('L0 — the JWT shape is single-homed in the protocol (AC10, lesson L19
     expect(b.lastIndex).toBe(0);
   });
 });
+
+describe('§12 L5-7 — the shape is BOUNDED so every consumer stays linear on large payloads', () => {
+  // Measured by the L5 test lane on Node 22 (2026-10-24): the unbounded `[\\w-]{8,}` segments made
+  // `jwtShapeInText()` throw "Maximum call stack size exceeded" over an 8 MiB unbroken `eyJ…` run
+  // (V8's backtracking stack). A real JWT segment is a few KB; a megabyte run is not a token.
+  it('an 8 MiB unbroken `eyJ…` run completes and is NOT matched (no stack overflow)', () => {
+    const run = `eyJ${'a'.repeat(8 * 1024 * 1024)}`;
+    expect(run.replace(jwtShapeInText(), '***')).toBe(run);
+    expect(scanForCredentialValues({ blob: run }).rejects).toEqual([]);
+  });
+
+  it('a 4 096-character segment still matches; a 4 097-character one does not', () => {
+    const seg = (n: number): string => 'A'.repeat(n);
+    const within = `eyJ${seg(4093)}.${seg(4096)}.${seg(4096)}`; // header segment incl. its `eyJ` prefix = 4 096
+    const beyond = `eyJ${seg(4094)}.${seg(4096)}.${seg(4096)}`;
+    expect(within.replace(jwtShapeInText(), '***')).toBe('***');
+    expect(beyond.replace(jwtShapeInText(), '***')).toBe(beyond);
+  });
+});
