@@ -122,6 +122,66 @@ describe('hydrateSettings — subscription coercion on capability-less platforms
   });
 });
 
+// TASK-20261023-siwc-chatgpt-plan Gate 3, L4 (AC1; plan §11 L4-10; ADR-0078 §1): a roaming file
+// whose stored mode is `chatgpt` opened where the platform carries NO custody seat (web, the host
+// kit, a desktop build without it) is coerced exactly like subscription — the best available mode,
+// the note raised, the stored row untouched. Where the seat IS present the mode is simply chatgpt.
+// Before the fix a stored 'chatgpt' fails `isMode` and is silently IGNORED (modeStore stays byok,
+// no note) — the first three rows are red on the note; the seat row is red on the mode.
+describe('hydrateSettings — a stored chatgpt mode (TASK-20261023-siwc-chatgpt-plan, L4-10)', () => {
+  /** The ChatGPT-plan custody seat, inert — presence is all `availableModes()` / the coercion read. */
+  const seat = (): NonNullable<SnugPlatform['chatgptPlan']> => ({
+    sessionStore: { read: () => Promise.resolve(undefined), write: () => Promise.resolve(), clear: () => Promise.resolve() },
+    loopback: { begin: (path) => Promise.resolve({ redirectUri: `http://127.0.0.1:1455${path}` }), onCallback: () => () => undefined, cancel: () => Promise.resolve() },
+    openExternal: () => Promise.resolve(),
+  });
+
+  it('a desktop WITHOUT the seat: coerced to byok (no Ollama), the note raised, the stored row untouched', async () => {
+    const harness = await fresh(desktopPlatform());
+    harness.db.setSetting('mode', 'chatgpt');
+
+    harness.mode.hydrateSettings(harness.db);
+    await new Promise((resolve) => setTimeout(resolve, 10)); // any illegal write-through would have landed
+
+    expect(harness.mode.modeStore.get()).toBe('byok');
+    expect(harness.mode.modeCoercedStore.get()).toBe(true);
+    expect(harness.db.getSetting('mode'), 'the stored value must survive untouched').toBe('chatgpt');
+  });
+
+  it('coerces to local when the Ollama probe found a running install', async () => {
+    const harness = await fresh(desktopPlatform({ probeOllama: () => Promise.resolve({ running: true, models: ['llama3.2'] }) }));
+    harness.db.setSetting('mode', 'chatgpt');
+    await harness.ollama.refreshOllama();
+
+    harness.mode.hydrateSettings(harness.db);
+
+    expect(harness.mode.modeStore.get()).toBe('local');
+    expect(harness.mode.modeCoercedStore.get()).toBe(true);
+    expect(harness.db.getSetting('mode')).toBe('chatgpt');
+  });
+
+  it('the web build (subscription offered, no seat) coerces too — never "subscription", never chatgpt', async () => {
+    const harness = await fresh();
+    harness.db.setSetting('mode', 'chatgpt');
+
+    harness.mode.hydrateSettings(harness.db);
+
+    expect(harness.mode.modeStore.get()).toBe('byok');
+    expect(harness.mode.modeCoercedStore.get()).toBe(true);
+    expect(harness.db.getSetting('mode')).toBe('chatgpt');
+  });
+
+  it('a desktop WITH the seat: the mode is chatgpt and there is nothing to note', async () => {
+    const harness = await fresh(desktopPlatform({ chatgptPlan: seat() }));
+    harness.db.setSetting('mode', 'chatgpt');
+
+    harness.mode.hydrateSettings(harness.db);
+
+    expect(harness.mode.modeStore.get()).toBe('chatgpt');
+    expect(harness.mode.modeCoercedStore.get()).toBe(false);
+  });
+});
+
 describe('ModeCoercionNote — the small dismissible surface', () => {
   async function mount(harness: Harness): Promise<void> {
     container = document.createElement('div');

@@ -7,7 +7,7 @@ import { parseAgentReply } from '@snugprotocol/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DEMO_APP_REPLY } from '../agent/demoApp.js';
-import { createDirectAppTransport } from '../agent/transport.js';
+import { ENDPOINTS_UNCONFIRMED, createDirectAppTransport } from '../agent/transport.js';
 import { installTestUserDb } from './userdbTestHelper.js';
 
 // The transport now carries the R-9 egress guard (TASK-20260820), which reads the page
@@ -53,6 +53,26 @@ describe('createDirectAppTransport', () => {
       signal: new AbortController().signal,
     });
     expect(result).toMatchObject({ ok: false, code: 'CONSENT_REQUIRED', retryable: false });
+    expect(getKey).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  // TASK-20261023-siwc-chatgpt-plan Gate 3, L4 (plan §4 row 17; §11 L4-12): a file whose mode is
+  // `chatgpt` is executable config like any other direct mode — an imported one refuses the turn
+  // before ANY credential is reached (no key read, no bearer asked, no network) until confirmed.
+  it('F15 guard covers the chatgpt mode too: refused by name, nothing read, nothing sent', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('network must not be touched'));
+    const getKey = vi.fn(() => Promise.resolve('sk-should-not-be-read'));
+    const transport = createDirectAppTransport({
+      mode: 'chatgpt',
+      provider: 'openai',
+      getKey,
+      needsConfirm: () => true,
+    });
+    const result = await transport.send('[SNUG_APP_REQUEST] {"snug":1}', {
+      signal: new AbortController().signal,
+    });
+    expect(result).toMatchObject({ ok: false, code: 'CONSENT_REQUIRED', message: ENDPOINTS_UNCONFIRMED, retryable: false });
     expect(getKey).not.toHaveBeenCalled();
     expect(fetchSpy).not.toHaveBeenCalled();
   });

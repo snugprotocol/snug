@@ -25,12 +25,25 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
   appModelStore,
+  appPinFamily,
+  appProviderPinFor,
   appProviderStore,
   hydrateAppModels,
   resolveModelForApp,
+  resolveProviderForApp,
   setAppModel,
+  setAppPin,
 } from '../state/appModel.js';
-import { modeStore, modelStore, providerModelsStore, providerStore, providerChoiceStore, byokKeyPresenceStore } from '../state/mode.js';
+import {
+  byokKeyPresenceStore,
+  chatgptModelStore,
+  modeStore,
+  modelStore,
+  providerChoiceStore,
+  providerModelsStore,
+  providerStore,
+  setChatgptModel,
+} from '../state/mode.js';
 import { installTestUserDb } from './userdbTestHelper.js';
 
 const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
@@ -206,5 +219,148 @@ describe('unknown or stale stored models (AC11)', () => {
     // Silently substituting the default here would send the app's turns to a model the
     // user did not choose, with nothing on screen saying so.
     expect(resolveModelForApp(APP_A)).toBe('some-retired-model-id');
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// TASK-20261023-siwc-chatgpt-plan Gate 3, L4 — PIN FAMILIES (plan §4 row 8/10; §11 L4-4;
+// ADR-0078 §6, an amendment to ADR-0036/0046). A pin's family is read from its provider row:
+// `chatgpt` → chatgpt; `anthropic|openai|mock` → byok; no provider row → local (setAppModel's
+// shape). `resolveModelForApp` applies a pin only when its family matches the active mode's
+// (subscription untouched); a pin from another family is IGNORED for routing and REPORTED by
+// `appPinFamily` so the selectors (L5) can say "pinned for <mode> — not used here". In chatgpt
+// mode the fallback is the `providerModel:chatgpt` row, else undefined — NEVER the global
+// `model` row (that is local's and subscription's: an Ollama id would be sent to the plan).
+//
+// NOT asserted here, deliberately (flagged to the conductor in the Gate-3 report): whether a
+// PROVIDER-LESS pin still applies in BYOK mode. Read literally, L4-4 makes it a local pin that
+// BYOK ignores — which reds ~20 existing tests in this file and appModelRouting.test.ts (they
+// pin `setAppModel` routing in byok) and silently drops pre-TASK-20260821 files' byok pins.
+// Those existing rows are left untouched; the rows below pin only the unambiguous directions.
+// `appModel.test.ts:63` (local inherits the global model, no pin) does not assert a cross-pin
+// and is unchanged.
+// ---------------------------------------------------------------------------------------------
+
+describe('pin families — a pin routes only in the mode family that made it (L4-4)', () => {
+  beforeEach(async () => {
+    await installTestUserDb();
+    chatgptModelStore.set(undefined);
+  });
+
+  it('setAppPin(appId, { provider: "chatgpt", model }) writes BOTH rows, and the family reads "chatgpt"', async () => {
+    const db = await installTestUserDb();
+    setAppPin(APP_A, { provider: 'chatgpt', model: 'gpt-6.1-mini' });
+    await flush();
+    expect(db.listAppModels()[APP_A]).toBe('gpt-6.1-mini');
+    expect(db.listAppProviders()[APP_A]).toBe('chatgpt');
+    expect(appPinFamily(APP_A)).toBe('chatgpt');
+    expect(appProviderPinFor(APP_A)).toBe('chatgpt');
+  });
+
+  it('appPinFamily: byok for anthropic/openai/mock rows, local for a provider-less pin, undefined for none', async () => {
+    setAppPin(APP_A, { provider: 'openai', model: 'gpt-4o' });
+    setAppModel(APP_B, 'llama3.2');
+    await flush();
+    expect(appPinFamily(APP_A)).toBe('byok');
+    expect(appPinFamily(APP_B)).toBe('local');
+    expect(appPinFamily('app-never-pinned')).toBeUndefined();
+    setAppPin(APP_A, { provider: 'mock', model: 'demo' });
+    expect(appPinFamily(APP_A)).toBe('byok');
+  });
+
+  it('chatgpt mode: a BYOK pin (openai · gpt-4o) is IGNORED — the plan’s default row resolves, and the pin is reported as byok', async () => {
+    modeStore.set('chatgpt');
+    setAppPin(APP_A, { provider: 'openai', model: 'gpt-4o' });
+    setChatgptModel('gpt-6.1-sol');
+    await flush();
+    expect(resolveModelForApp(APP_A)).toBe('gpt-6.1-sol');
+    expect(appPinFamily(APP_A)).toBe('byok');
+  });
+
+  it('chatgpt mode: a local (provider-less) pin is IGNORED too — an Ollama id never reaches the plan', async () => {
+    modeStore.set('chatgpt');
+    setAppModel(APP_A, 'llama3.2');
+    setChatgptModel('gpt-6.1-sol');
+    await flush();
+    expect(resolveModelForApp(APP_A)).toBe('gpt-6.1-sol');
+    expect(appPinFamily(APP_A)).toBe('local');
+  });
+
+  it('chatgpt mode with no chatgpt pin and no plan default → undefined — NEVER the global `model` row', async () => {
+    modeStore.set('chatgpt');
+    modelStore.set('llama3.2');
+    providerModelsStore.set({ anthropic: 'claude-sonnet-5', openai: 'gpt-4o-mini' });
+    setAppPin(APP_A, { provider: 'anthropic', model: 'claude-opus-5' });
+    await flush();
+    expect(resolveModelForApp(APP_A)).toBeUndefined();
+    expect(resolveModelForApp(APP_B)).toBeUndefined();
+    expect(resolveModelForApp()).toBeUndefined();
+  });
+
+  it('chatgpt mode: a chatgpt pin applies over the plan default', async () => {
+    modeStore.set('chatgpt');
+    setChatgptModel('gpt-6.1-sol');
+    setAppPin(APP_A, { provider: 'chatgpt', model: 'gpt-6.1-mini' });
+    await flush();
+    expect(resolveModelForApp(APP_A)).toBe('gpt-6.1-mini');
+    expect(resolveModelForApp(APP_B)).toBe('gpt-6.1-sol');
+  });
+
+  it('byok mode: a chatgpt pin is IGNORED for the model AND the provider (never a "chatgpt" provider handed to a BYOK adapter), and reported', async () => {
+    modeStore.set('byok');
+    providerStore.set('anthropic');
+    providerModelsStore.set({ anthropic: 'claude-sonnet-5' });
+    setAppPin(APP_A, { provider: 'chatgpt', model: 'gpt-6.1-mini' });
+    await flush();
+    expect(resolveModelForApp(APP_A)).toBe('claude-sonnet-5');
+    expect(resolveProviderForApp(APP_A)).toBe('anthropic');
+    expect(appPinFamily(APP_A)).toBe('chatgpt');
+  });
+
+  it('local mode: a chatgpt pin is IGNORED — the global model resolves — and reported', async () => {
+    modeStore.set('local');
+    modelStore.set('llama3.2');
+    setAppPin(APP_A, { provider: 'chatgpt', model: 'gpt-6.1-mini' });
+    await flush();
+    expect(resolveModelForApp(APP_A)).toBe('llama3.2');
+    expect(appPinFamily(APP_A)).toBe('chatgpt');
+  });
+
+  it('THE FIX (BYOK → local): a byok `gpt-4o` pin no longer reaches the local endpoint — local resolves its own model', async () => {
+    // Before ADR-0078 §6 `resolveModelForApp` returned the pin mode-blind, so an app pinned to
+    // OpenAI's gpt-4o sent "gpt-4o" to Ollama the moment the user switched to local.
+    modeStore.set('local');
+    modelStore.set('llama3.2');
+    setAppPin(APP_A, { provider: 'openai', model: 'gpt-4o' });
+    await flush();
+    expect(resolveModelForApp(APP_A)).toBe('llama3.2');
+    expect(appPinFamily(APP_A)).toBe('byok');
+  });
+
+  it('a local pin still applies in local mode (the family matches)', async () => {
+    modeStore.set('local');
+    modelStore.set('llama3.2');
+    setAppModel(APP_A, 'qwen2.5:7b');
+    await flush();
+    expect(resolveModelForApp(APP_A)).toBe('qwen2.5:7b');
+  });
+
+  it('a BYOK pin still applies in byok mode (the family matches)', async () => {
+    modeStore.set('byok');
+    setAppPin(APP_A, { provider: 'openai', model: 'gpt-4o' });
+    await flush();
+    expect(resolveModelForApp(APP_A)).toBe('gpt-4o');
+    expect(resolveProviderForApp(APP_A)).toBe('openai');
+  });
+
+  it('deleteApp sweeps a chatgpt pin’s two rows', async () => {
+    const db = await installTestUserDb();
+    const app = db.installApp({ displayName: 'Ledger', html: '<html>v1</html>' });
+    setAppPin(app.appId, { provider: 'chatgpt', model: 'gpt-6.1-mini' });
+    await flush();
+    expect(db.listAppProviders()[app.appId]).toBe('chatgpt');
+    await db.deleteApp(app.appId);
+    expect(db.listAppModels()[app.appId]).toBeUndefined();
+    expect(db.listAppProviders()[app.appId]).toBeUndefined();
   });
 });
