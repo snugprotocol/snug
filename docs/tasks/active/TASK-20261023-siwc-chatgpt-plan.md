@@ -1,6 +1,6 @@
 # TASK-20261023-siwc-chatgpt-plan: "Use my ChatGPT plan" — Sign in with ChatGPT as the desktop's third way to think
 
-- **Status**: draft → *planned* on approval (Gate 2 — interview answered 2026-10-23, plan written to those answers, Gate-2 reviews folded; **awaiting the owner's plan approval**)
+- **Status**: **planned** — the owner approved the plan on 2026-10-23 ("ok i approve the plan") after the one-batch interview and both Gate-2 review folds; implementation starts in a fresh session via `/pickup` (owner's call, advised by the conductor)
 - **Owner**: Jeetu (conductor session: Fable 5.1 xhigh)
 - **Risk tier**: **High** — touches `packages/auth`, a credential's custody, C1, and the desktop shell's IPC surface (auto-escalates; see [PROCESS.md](../../engineering/PROCESS.md#risk-tiers))
 - **Branch**: `feat/TASK-20261023-siwc-chatgpt-plan` (worktree `/Users/jeetu/SnugProtocol/snug-siwc`, off `origin/main` @ `1aca9a9`)
@@ -233,3 +233,14 @@ ADR-0078 accepted; delta + ledger + v3.14 (+ §2 Assets amendment; residuals R-1
 - State: Gate 2 complete pending the owner's approval. Branch: `22126c1` + this fold commit.
 - Next step: owner approval → L0 contracts → Gate 3 tests (Opus) for L1/L2/L3.
 - Open questions: none blocking; the data-use wording lands in D9 and the consent copy when the lane returns.
+
+### 2026-10-23 — Fable 5.1 xhigh (conductor) — plan APPROVED · handoff to a fresh session
+- Done: the owner approved the plan ("ok i approve the plan"); ADR-0078 flipped to **accepted**; this file to **planned**. The owner asked whether to continue here or start fresh — advised **fresh session + dynamic workflows** (this session's context is planning-heavy; the task file carries every decision and fold; the project's own pattern after cross-app access and host-broker).
+- State: branch `feat/TASK-20261023-siwc-chatgpt-plan` in worktree `/Users/jeetu/SnugProtocol/snug-siwc`, docs-only commits so far; no code written; the worktree has **no `node_modules` yet**. The data-use-terms lane's answer is folded into D9 / ADR §9 / R-132 in the commit that follows this entry (or, if it had not returned, the next session reads it from the lane's note in D9 and fetches the docs itself).
+- **Next session, in order** (`/pickup TASK-20261023-siwc-chatgpt-plan`; restate the model routing first):
+  1. `cd /Users/jeetu/SnugProtocol/snug-siwc && nvm use 22 && pnpm install` (gates run on Node 22; prove it by printing `node --version` inside the gate command). Leave the main checkout's branch and its `.gitignore` alone; never `git add` the worktree's `.gitignore` (a dev-tool hook line).
+  2. Check `spikes/siwc/results/` for `stream-*.sse` captures (the owner may have run `node spike.mjs capture`; never run it yourself). If present, copy them in as L2 fixtures with a PROVENANCE note; if absent, L2's fixtures are TRANSCRIBED and the replay test waits for the first capture.
+  3. **L0 contracts** (sequential, one lane or the conductor): the types in §3 L0, `tsc` green, the lockfile tripwire.
+  4. Gate 3 tests (Opus high) for L1 / L2 / L3 in parallel, each shown failing → L1 ∥ L2 ∥ L3 (Fable high, one worktree each off this branch) → merge → L4 → L5 → L6 → Gate 5 (§3 order; §4 table; §6 proofs) → PR, **not merged**.
+  5. Gate 6 folds the delta back into `docs/security/` with the ledger row, v3.14 and `**R-124 —`…`R-132`; ADR status lines on 0014/0021/0036/0046/0059 gain the amended-by pointer.
+- Open questions: none. Owner asks outstanding (optional): run `node spike.mjs capture` once before L2's tests; eyeball the OpenAI button asset and its NOTICE line at the walk.

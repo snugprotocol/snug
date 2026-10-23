@@ -1,6 +1,6 @@
 # 0078 — "Use my ChatGPT plan": a third desktop mode on OpenAI's Sign in with ChatGPT, with per-machine token custody outside the user file
 
-- **Status:** **draft** (written at Gate 2 of TASK-20261023-siwc-chatgpt-plan; becomes *accepted* when the owner approves the plan). The owner's one-batch interview (2026-10-23) settled: no flag (§1 ships on by default, *preview* in the copy); a Welcome card as well as Settings (§1); scheduled steps may spend the plan (§8); the label set in the task file.
+- **Status:** **accepted** (the owner approved the plan on 2026-10-23 after the one-batch interview and the two Gate-2 review folds; written at Gate 2 of TASK-20261023-siwc-chatgpt-plan). The owner's one-batch interview (2026-10-23) settled: no flag (§1 ships on by default, *preview* in the copy); a Welcome card as well as Settings (§1); scheduled steps may spend the plan (§8); the label set in the task file.
 - **Date:** 2026-10-23
 - **Task:** TASK-20261023-siwc-chatgpt-plan
 - **Amends:** **ADR-0014** (custody — one scoped exception: a per-machine, rotating credential lives beside the file, not in it) · **ADR-0021 §7** ("Desktop ships BYOK/local only" → BYOK, local and the ChatGPT plan; §2's loopback core gains a redirect *path*, the callback's `client_id` and opt-in error delivery) · **ADR-0036 / ADR-0046 §1–§3** (a third mode with its own default-model row; **per-app pins are scoped to the mode family that made them** — §6) · **ADR-0059** (a new brain joins the one derivation and the chip's label map)
