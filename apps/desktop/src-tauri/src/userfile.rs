@@ -231,8 +231,11 @@ pub fn write_user_file(request: tauri::ipc::Request<'_>) -> Result<(), String> {
     write_user_file_impl(&name, bytes)
 }
 
+/// `pub(crate)` (TASK-20261023-siwc-chatgpt-plan, tests only): `chatgpt_session.rs`'s
+/// command-level tests mutate HOME too and must share THIS module's `ENV_LOCK` via
+/// `with_home` — two locks would let parallel tests swap each other's `~`.
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// ONE lock for every test that mutates HOME/USERPROFILE. It must be shared
@@ -281,7 +284,7 @@ mod tests {
     /// variables are set, because `snug_dir`'s precedence differs by platform
     /// and a test that set only HOME would silently use the developer's real
     /// profile directory on Windows.
-    fn with_home<T>(f: impl FnOnce() -> T) -> T {
+    pub(crate) fn with_home<T>(f: impl FnOnce() -> T) -> T {
         let _guard = EnvGuard::acquire();
         let dir = tempfile::tempdir().unwrap();
         std::env::set_var("HOME", dir.path());
@@ -297,6 +300,74 @@ mod tests {
         for good in ["user.sqlite", "user.sqlite.corrupt-abc.bak", "a-b_c.1"] {
             assert!(valid_name(good), "{good:?} must be accepted");
         }
+    }
+
+    // ---- TASK-20261023-siwc-chatgpt-plan F1/S2: the ChatGPT-plan custody dir is unreachable
+    //
+    // The session file lives at `~/Snug/.chatgpt-plan/session.json` BECAUSE `valid_name`
+    // refuses a leading `.` and every separator. A plain `~/Snug/chatgpt-plan.json` would have
+    // been readable (the refresh token) and overwritable (a planted session) by these two
+    // commands — the Gate-2 blocker. These tests characterize today's `valid_name` against the
+    // exact names an attacker in a compromised host page would try; NO behaviour change.
+
+    const CUSTODY_NAMES: [&str; 5] = [
+        ".chatgpt-plan",
+        ".chatgpt-plan/session.json",
+        "../.chatgpt-plan/session.json",
+        "./.chatgpt-plan/session.json",
+        "..",
+    ];
+
+    /// Plant a session file where the custody module puts it, under the test HOME.
+    fn plant_session(contents: &str) -> PathBuf {
+        let dir = snug_dir().unwrap().join(".chatgpt-plan");
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("session.json");
+        fs::write(&file, contents).unwrap();
+        file
+    }
+
+    #[test]
+    fn read_user_file_refuses_every_name_that_could_reach_the_chatgpt_session() {
+        with_home(|| {
+            plant_session("REFRESH-TOKEN-NEVER-READABLE");
+            for name in CUSTODY_NAMES {
+                let got = read_user_file_impl(name);
+                assert!(got.is_err(), "{name:?} must be refused, got {got:?}");
+                assert!(
+                    !format!("{got:?}").contains("REFRESH-TOKEN"),
+                    "a refusal must never carry the file's bytes"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn write_user_file_refuses_every_name_that_could_reach_the_chatgpt_session() {
+        with_home(|| {
+            let file = plant_session("ORIGINAL-SESSION");
+            for name in CUSTODY_NAMES {
+                assert!(
+                    write_user_file_impl(name, b"PLANTED-BY-THE-HOST-PAGE").is_err(),
+                    "{name:?} must be refused"
+                );
+            }
+            assert_eq!(fs::read_to_string(&file).unwrap(), "ORIGINAL-SESSION", "the session file is untouched");
+            let litter: Vec<_> = fs::read_dir(file.parent().unwrap())
+                .unwrap()
+                .filter_map(|e| e.ok())
+                .map(|e| e.file_name())
+                .collect();
+            assert_eq!(litter, vec![std::ffi::OsString::from("session.json")], "nothing was staged inside the custody dir");
+        });
+    }
+
+    #[test]
+    fn the_bare_name_session_json_resolves_to_snug_never_into_the_dot_directory() {
+        with_home(|| {
+            plant_session("DOT-DIR-ONLY");
+            assert_eq!(read_user_file_impl("session.json").unwrap(), None, "a bare name must not alias the custody file");
+        });
     }
 
     #[test]

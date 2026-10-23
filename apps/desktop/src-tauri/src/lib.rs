@@ -6,6 +6,9 @@
 //! system-browser opener. All security policy (C1 credential custody, host
 //! ceilings, C2 sandbox) stays in the TS packages, unchanged.
 
+/// ChatGPT-plan session custody (TASK-20261023-siwc-chatgpt-plan D2, ADR-0078 §2): three
+/// commands over `~/Snug/.chatgpt-plan/session.json`, `0600` in a `0700` dot-directory.
+mod chatgpt_session;
 mod exportfile;
 /// In-shell hard-gate commands (P4). Debug builds only — a release binary
 /// carries neither the commands nor their strings (P0 amendment 4).

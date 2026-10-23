@@ -47,6 +47,34 @@ describe('gate driver expectations track the harness (no hand-typed twin)', () =
   it('includes the per-command lan_fetch check that exposed the drift', () => {
     expect(IPC_CHECK_IDS).toContain('ipc-lan-fetch-refused');
   });
+
+  it('expects the six ChatGPT-session rows (TASK-20261023-siwc-chatgpt-plan AC13) — refused ×3 from the frame, effect-sensor twins ×3', () => {
+    // The driver derives its list from IPC_CHECK_IDS (pinned above), so this is what makes a
+    // shell run WITHOUT these rows fail as "missing check id" rather than pass quietly.
+    const harnessSource = readFileSync(fileURLToPath(new URL('../gate/ipc.ts', import.meta.url)), 'utf8');
+    const block = /export const IPC_CHECK_IDS = \[([\s\S]*?)\] as const;/.exec(harnessSource)!;
+    const parsed = [...block[1].matchAll(/'([^']+)'/g)].map((m) => m[1]);
+    for (const which of ['read', 'write', 'clear']) {
+      for (const kind of ['refused', 'dispatchable']) {
+        const id = `ipc-chatgpt-session-${which}-${kind}`;
+        expect(parsed, `the driver must expect ${id}`).toContain(id);
+      }
+    }
+  });
+});
+
+describe('the gate shell runs under a THROWAWAY HOME (TASK-20261023-siwc-chatgpt-plan F3/S6)', () => {
+  // The ChatGPT-session effect sensors WRITE and CLEAR `~/Snug/.chatgpt-plan/session.json`, and
+  // `userfile::snug_dir()` resolves `~` from HOME. If the driver ever launched the gate shell
+  // with the developer's own HOME, a gate run would sign them out of ChatGPT (and the sentinel
+  // probe would litter their real ~/Snug). Pin the isolation the sensors depend on.
+  it('the debug shell is spawned with HOME pointed at a fresh mkdtemp directory', () => {
+    expect(driverSource).toMatch(/const workDir = fs\.mkdtempSync\(path\.join\(os\.tmpdir\(\), 'snug-shell-gate-'\)\);/);
+    expect(driverSource).toMatch(/const fakeHome = path\.join\(workDir, 'home'\);/);
+    const launch = /const app = spawn\(binaryPath, \[\], \{\s*env: \{([\s\S]*?)\},/.exec(driverSource);
+    expect(launch, 'the full-gate launch site must stay parseable').not.toBeNull();
+    expect(launch![1]).toMatch(/\.\.\.process\.env,\s*HOME: fakeHome,/);
+  });
 });
 
 describe('the net-scope ids are derived the same way (TASK-20261008-p0-clearance W3)', () => {
