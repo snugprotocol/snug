@@ -7,6 +7,9 @@
 //   AC14 — in-memory only + bounded (ring buffer); nothing is persisted.
 //   AC15 — a BYOK key must NEVER appear, even though bodies ARE rendered.
 
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -15,6 +18,7 @@ import {
   type LlmInspectorState,
   LLM_INSPECTOR_MAX_ENTRIES,
 } from '../run/llmInspector.js';
+import { REDACTED, redactCredentialShapes, scrubCredentialProse } from '../security/credentialShapes.js';
 import type { AgentRoundTrip } from '@snugprotocol/adapters';
 
 const roundTrip = (overrides: Partial<AgentRoundTrip> = {}): AgentRoundTrip => ({
@@ -187,5 +191,67 @@ describe('llmInspector', () => {
     expect(cleared.entries).toHaveLength(0);
     expect(cleared.totalDurationMs).toBe(0);
     expect(cleared.totalUsage).toEqual({});
+  });
+});
+
+// =============================================================================================
+// TASK-20261023-siwc-chatgpt-plan Gate 3, L5 — DISPLAY mode masks a bare JWT (AC10; plan §12 L5-7;
+// ADR-0078 §3). A ChatGPT-plan access token is a JWT, and the measured 401 echoes the bearer it
+// was sent; the inspector renders bodies verbatim, so a bare `eyJ….….…` must be masked there.
+// The shape is single-homed in `packages/protocol` (`JWT_SHAPE_SOURCE` / `jwtShapeInText()`,
+// lesson L191) and runs in DISPLAY mode ONLY (a `displayOnly` flag, the mirror of `proseOnly`):
+// prose scrubbing keeps a bare JWT (error strings stay diagnostic), and the share scan does not
+// flag one (shareScan.test.ts — the starters carry sample JWTs).
+// RED until credentialShapes gains the display-only JWT shape.
+// =============================================================================================
+
+describe('display mode masks a bare JWT (AC10, L5-7)', () => {
+  /** Three base64url segments of ≥ 8 chars, the first a JSON header — each under 40 chars, so no other shape can catch it. */
+  const JWT = 'eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyLTEyMyJ9.c2lnbmF0dXJlLXZhbHVl';
+  const PROSE = `the access token was ${JWT} — done`;
+
+  it('redactCredentialShapes masks the WHOLE bare JWT and keeps the words around it', () => {
+    const out = redactCredentialShapes(PROSE);
+    expect(out).not.toContain(JWT);
+    for (const segment of JWT.split('.')) expect(out, `segment ${segment}`).not.toContain(segment);
+    expect(out).toContain(REDACTED);
+    expect(out.startsWith('the access token was ')).toBe(true);
+    expect(out.endsWith(' — done')).toBe(true);
+  });
+
+  it('the Bearer form stays masked too (the scheme shape already covers it)', () => {
+    const out = redactCredentialShapes(`Authorization: Bearer ${JWT}`);
+    expect(out).not.toContain(JWT);
+    expect(out).toContain('Bearer');
+  });
+
+  it('a dotted identifier that is NOT three ≥8-char segments is left alone (no over-broad eyJ shape)', () => {
+    expect(redactCredentialShapes('see eyJabc.def.ghi for details')).toBe('see eyJabc.def.ghi for details');
+  });
+
+  it('through the inspector: a 401 body echoing the plan’s bearer, and a JWT pasted into a prompt, never render', () => {
+    const state = feed([
+      roundTrip({
+        request: { system: 'sys', messages: [{ role: 'user', content: `my token is ${JWT}` }] },
+        response: { ok: false, code: 'HOST_ERROR', message: `Incorrect API key provided: ${JWT}.`, retryable: false },
+      }),
+    ]);
+    expect(JSON.stringify(state.entries)).not.toContain(JWT);
+  });
+
+  it('PROSE mode leaves a bare JWT alone — the shape is display-only (L5-7)', () => {
+    expect(scrubCredentialProse(PROSE)).toBe(PROSE);
+  });
+
+  it('the existing prose cases are unchanged: word-shaped prose survives, a real key is still masked', () => {
+    expect(scrubCredentialProse('Basic authentication failed')).toBe('Basic authentication failed');
+    expect(scrubCredentialProse('rejected sk-ant-api03-abcdefgh12345678')).not.toContain('sk-ant-api03-abcdefgh12345678');
+  });
+
+  it('the shape comes from the protocol’s ONE home — credentialShapes.ts imports it and spells no eyJ regex of its own (L191)', () => {
+    const source = readFileSync(path.resolve(__dirname, '..', 'security', 'credentialShapes.ts'), 'utf8');
+    expect(source).toMatch(/\b(jwtShapeInText|JWT_SHAPE_SOURCE)\b/);
+    expect(source).toMatch(/from '@snugprotocol\/protocol'/);
+    expect(source, 'a second spelling of the JWT shape').not.toMatch(/eyJ\[/);
   });
 });

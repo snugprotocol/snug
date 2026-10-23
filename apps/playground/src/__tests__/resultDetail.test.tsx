@@ -29,9 +29,11 @@ import {
   type ScheduledTask,
 } from '@snugprotocol/protocol';
 
+import { CHATGPT_ERROR_CODES, CHATGPT_ERROR_SENTENCES } from '@snugprotocol/adapters';
+
 import { ACCESS_SHEET, FETCH_FIRST, OWN_UNDO } from '../access/copy.js';
 import type { SnugPlatform } from '../platform/platform.js';
-import { RESULT_STATUS_WORD, WORDS, capped, needsYouDeclined, needsYouUnanswered, noHandler } from '../schedule/copy.js';
+import { RESULT_STATUS_WORD, WORDS, brainBlocked, capped, needsYouDeclined, needsYouUnanswered, noHandler } from '../schedule/copy.js';
 import { ROW } from '../schedule/copy.page.js';
 import {
   CAPPED_WHAT,
@@ -1006,6 +1008,76 @@ describe('PR-4 — blockedBy:"brain" is its own state: *open Settings*, never *n
     expect(el.querySelector('[data-testid="schedule-result-needs-you"]')).toBeNull();
     expect(el.textContent).not.toContain('needs your OK');
     expect(button(el, 'run now and review')).toBeUndefined();
+  });
+});
+
+// =============================================================================================
+// TASK-20261023-siwc-chatgpt-plan Gate 3, L5 — the result page on the ChatGPT plan (AC7, AC14;
+// plan §12 L5-3, L5-4; ADR-0078 §5, §8).
+//
+// L5-3: `stepResultSchema` is strict and carries no `code` (a C3 change, queued), so a usage-limit
+// refusal is recognised by its summary being EXACTLY the single-homed sentence
+// `CHATGPT_ERROR_SENTENCES.CHATGPT_USAGE_LIMIT` (compared, never retyped — imported here too), and
+// its StepRow carries **Manage usage** as the PRIMARY action. No `blockedBy` — it is not a
+// brain-missing state.
+// L5-4: the run-level brain card shows the FIRST blocked step's summary (the plan's signed-out
+// sentence), never "it's the demo, or it has no key yet" for a chatgpt-blocked run; **open
+// Settings** stays its primary act; a blocked step with NO summary keeps today's sentence.
+// RED until StepRow and the brain card read the step.
+// =============================================================================================
+
+describe('the result page on the ChatGPT plan (L5-3, L5-4)', () => {
+  const LIMIT = CHATGPT_ERROR_SENTENCES[CHATGPT_ERROR_CODES.USAGE_LIMIT];
+  const SIGNED_OUT_REFUSAL = 'Sign in to ChatGPT to run this step — it runs on your ChatGPT plan.';
+  const MANAGE_USAGE_URL = 'https://chatgpt.com/settings/usage';
+
+  const manageUsageIn = (scope: ParentNode): HTMLAnchorElement | undefined =>
+    [...scope.querySelectorAll<HTMLAnchorElement>('a')].find((a) => a.textContent === 'Manage usage');
+
+  it('a step refused with the usage-limit sentence: its row carries Manage usage as the PRIMARY action', async () => {
+    seed(task(), run({ status: 'failed', reason: LIMIT, steps: [{ status: 'refused', summary: LIMIT }] }));
+    await initScheduler(deps());
+    const el = await open();
+    const row = el.querySelector('[data-testid="schedule-result-step"]');
+    expect(row?.textContent).toContain(LIMIT);
+    const manage = manageUsageIn(row!);
+    expect(manage, 'the limit names its one remedy').toBeDefined();
+    expect(manage!.getAttribute('href')).toBe(MANAGE_USAGE_URL);
+    expect(manage!.classList.contains('btn-primary')).toBe(true);
+    // Not a brain-missing state: no open-Settings brain card.
+    expect(el.querySelector('[data-testid="schedule-result-brain"]')).toBeNull();
+  });
+
+  it('NEGATIVE: a refused step with any other summary carries no Manage usage act', async () => {
+    seed(task(), run({ status: 'failed', reason: 'the app said no', steps: [{ status: 'refused', summary: 'the app said no' }] }));
+    await initScheduler(deps());
+    const el = await open();
+    expect(manageUsageIn(el)).toBeUndefined();
+  });
+
+  it('a chatgpt-blocked run: the brain card says the plan’s sentence, NOT the demo/keyless one — open Settings still primary', async () => {
+    seed(task(), run({ status: 'needs-you', reason: 'refused', steps: [{ status: 'refused', blockedBy: 'brain', summary: SIGNED_OUT_REFUSAL }] }));
+    await initScheduler(deps());
+    const el = await open();
+    const card = el.querySelector('[data-testid="schedule-result-brain"]');
+    expect(card).not.toBeNull();
+    expect(card!.querySelector('.connection-note-title')?.textContent).toBe(SIGNED_OUT_REFUSAL);
+    expect(el.textContent).not.toContain(brainBlocked.text);
+    expect(el.textContent).not.toContain('it’s the demo, or it has no key yet');
+    const acts = [...card!.querySelectorAll('a, button')];
+    expect(acts).toHaveLength(1);
+    expect(acts[0]?.textContent).toBe('open Settings');
+    expect(acts[0]?.getAttribute('href')).toBe('/settings');
+    expect(acts[0]?.classList.contains('btn-primary')).toBe(true);
+  });
+
+  it('a blocked step with NO summary keeps today’s card — the keyless sentence and open Settings', async () => {
+    seed(task(), run({ status: 'needs-you', reason: 'refused', steps: [{ status: 'refused', blockedBy: 'brain' } as never] }));
+    await initScheduler(deps());
+    const el = await open();
+    const card = el.querySelector('[data-testid="schedule-result-brain"]');
+    expect(card?.querySelector('.connection-note-title')?.textContent).toBe(brainBlocked.text);
+    expect([...(card?.querySelectorAll('a, button') ?? [])].map((a) => a.textContent)).toEqual(['open Settings']);
   });
 });
 

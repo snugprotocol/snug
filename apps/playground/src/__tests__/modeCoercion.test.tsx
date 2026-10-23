@@ -224,3 +224,82 @@ describe('ModeCoercionNote — the small dismissible surface', () => {
     expect(harness.db.getSetting('mode')).toBe('subscription');
   });
 });
+
+// ---------------------------------------------------------------------------------------------
+// TASK-20261023-siwc-chatgpt-plan Gate 3, L5 — the note says WHICH mode the file asked for (plan
+// §12 L5-2). `modeCoercedStore` stays a boolean; `coercedFromModeStore` (L4) names the stored mode
+// that was coerced, and the note branches its copy on it. A file that asked for the ChatGPT plan
+// must not be told it asked for a hub subscription (the mutation: one hard-coded sentence).
+// RED until `coercedFromModeStore` exists and the note branches.
+// ---------------------------------------------------------------------------------------------
+
+describe('ModeCoercionNote — the copy names the mode the file asked for (L5-2)', () => {
+  const CHATGPT_NOTE =
+    "This computer uses its own AI settings — your file asked for your ChatGPT plan, which this app can't sign in to here. Pick how apps think in settings.";
+  const SUBSCRIPTION_NOTE =
+    "This computer uses its own AI settings — your file asked for a hub subscription, which isn't part of the desktop app. Pick how apps think in settings.";
+  const collapse = (s: string | null | undefined): string => (s ?? '').replace(/\s+/g, ' ').trim();
+
+  async function mountNote(harness: Harness): Promise<void> {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    await act(async () => {
+      root!.render(
+        <MemoryRouter>
+          <harness.note.ModeCoercionNote />
+        </MemoryRouter>,
+      );
+    });
+  }
+
+  it('a stored chatgpt mode on a seatless desktop: coercedFromModeStore is "chatgpt" and the note reads the ChatGPT sentence VERBATIM — never the hub one', async () => {
+    const harness = await fresh(desktopPlatform());
+    harness.db.setSetting('mode', 'chatgpt');
+    harness.mode.hydrateSettings(harness.db);
+    expect(harness.mode.coercedFromModeStore.get()).toBe('chatgpt');
+
+    await mountNote(harness);
+    const text = collapse(container?.querySelector('[data-testid="mode-coercion-note"]')?.textContent);
+    expect(text).toContain(CHATGPT_NOTE);
+    expect(text).not.toContain('hub subscription');
+    expect(container?.querySelector('a[href*="settings"]'), 'the note still links to Settings').toBeTruthy();
+  });
+
+  it('a stored subscription mode: coercedFromModeStore is "subscription" and today’s sentence is unchanged', async () => {
+    const harness = await fresh(desktopPlatform());
+    harness.db.setSetting('mode', 'subscription');
+    harness.mode.hydrateSettings(harness.db);
+    expect(harness.mode.coercedFromModeStore.get()).toBe('subscription');
+
+    await mountNote(harness);
+    const text = collapse(container?.querySelector('[data-testid="mode-coercion-note"]')?.textContent);
+    expect(text).toContain(SUBSCRIPTION_NOTE);
+    expect(text).not.toContain('ChatGPT');
+  });
+
+  it('no coercion → coercedFromModeStore is undefined', async () => {
+    const harness = await fresh(desktopPlatform());
+    harness.db.setSetting('mode', 'byok');
+    harness.mode.hydrateSettings(harness.db);
+    expect(harness.mode.coercedFromModeStore.get()).toBeUndefined();
+  });
+
+  it('"got it" clears BOTH stores — the boolean and the named mode — and the stored row is untouched', async () => {
+    const harness = await fresh(desktopPlatform());
+    harness.db.setSetting('mode', 'chatgpt');
+    harness.mode.hydrateSettings(harness.db);
+    await mountNote(harness);
+
+    const dismiss = [...(container?.querySelectorAll('button') ?? [])].find((b) => /got it/i.test(b.textContent ?? ''));
+    expect(dismiss).toBeDefined();
+    await act(async () => {
+      dismiss!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(container?.querySelector('[data-testid="mode-coercion-note"]')).toBeNull();
+    expect(harness.mode.modeCoercedStore.get()).toBe(false);
+    expect(harness.mode.coercedFromModeStore.get()).toBeUndefined();
+    expect(harness.db.getSetting('mode')).toBe('chatgpt');
+  });
+});

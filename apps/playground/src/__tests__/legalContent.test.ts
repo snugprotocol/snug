@@ -10,7 +10,7 @@
 // ones ADR-0055 §6 names. Prose is not byte-pinned beyond what carries a legal or
 // truthfulness load — a copy edit should not be a test edit unless it changed a claim.
 
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
@@ -89,9 +89,11 @@ describe('/privacy (AC2)', () => {
   });
 
   it('names every third party the threat model reaches — the fixed set, no more, no less', () => {
+    // TASK-20261023-siwc-chatgpt-plan L5-5: the ChatGPT-plan mode is a new egress → a new row.
     expect(THIRD_PARTIES.map((t) => t.id).sort()).toEqual(
-      ['cdn', 'cloudflare', 'github', 'huggingface', 'messaging', 'model-provider', 'sync-origin'].sort(),
+      ['cdn', 'chatgpt-plan', 'cloudflare', 'github', 'huggingface', 'messaging', 'model-provider', 'sync-origin'].sort(),
     );
+    expect(THIRD_PARTIES).toHaveLength(8);
     const table = PRIVACY.sections.flatMap((s) => s.blocks).find((b) => b.kind === 'table');
     expect(table, 'the third-party table is rendered as a table block').toBeDefined();
     expect(table?.kind === 'table' ? table.rows.length : 0).toBe(THIRD_PARTIES.length);
@@ -266,5 +268,83 @@ describe('claim discipline (AC3) — every published text, and the checker itsel
     // …and stays quiet on the negated forms the documents use.
     expect(findClaimViolations('Snug is not zero-knowledge and not end-to-end encrypted.')).toEqual([]);
     expect(findClaimViolations('We do not claim your keys never leave your file.')).toEqual([]);
+  });
+});
+
+// =============================================================================================
+// TASK-20261023-siwc-chatgpt-plan Gate 3, L5 — privacy and terms for "my ChatGPT plan" (plan §1
+// D2/D8/D9, §12 L5-5; ADR-0078 §2, §9). The in-app pages ARE the website's /privacy and /terms (the
+// website renders this data through its @playground alias), so these pins are the website's too.
+//   - the third-party row `chatgpt-plan`: its `sees` is the D9 data-use sentence VERBATIM (OpenAI's
+//     documents do not say which data policy covers plan traffic — never "not used for training");
+//     its `when` names the desktop app's *my ChatGPT plan* choice;
+//   - "Where your data lives" names the ChatGPT sign-in as living BESIDE the file, at
+//     `~/Snug/.chatgpt-plan/`, and not travelling with it (D2: per-machine custody — the claim
+//     "every … token you save lives in one file" would otherwise be untrue);
+//   - terms: "no plan of Snug's own", and running on your ChatGPT plan is named beside a key;
+//   - the non-affiliation sentence VERBATIM in privacy AND terms (D9, OpenAI's brand terms);
+//   - LEGAL_UPDATED moves past 2026-08-23 (any wording change bumps it);
+//   - the legal modules still import only `legalShared` / `config/site` (the website build rule).
+// RED until legal/privacy.ts and legal/terms.ts carry the change.
+// =============================================================================================
+
+describe('privacy and terms for the ChatGPT plan (L5-5, D9)', () => {
+  const D9_DATA_USE =
+    "In this mode your requests go to OpenAI under your ChatGPT account. OpenAI's documents don't say which data policy covers them, so assume your ChatGPT data controls ('Improve the model for everyone') apply. Snug and the app can't see your ChatGPT conversations or memories.";
+  const NON_AFFILIATION = 'ChatGPT is a trademark of OpenAI. Snug is independently developed and not affiliated with, endorsed by, or sponsored by OpenAI.';
+
+  const sectionText = (id: string): string => {
+    const section = PRIVACY.sections.find((s) => s.id === id);
+    if (section === undefined) throw new Error(`no privacy section ${id}`);
+    return collapse(legalPlainText({ ...PRIVACY, sections: [section] }));
+  };
+
+  it('the chatgpt-plan row: named for OpenAI and the plan, sees = the D9 sentence verbatim, when = the desktop app’s *my ChatGPT plan*', () => {
+    const row = THIRD_PARTIES.find((t) => t.id === 'chatgpt-plan');
+    expect(row, 'a row for the new egress').toBeDefined();
+    expect(row!.name).toBe('OpenAI (your ChatGPT plan)');
+    expect(row!.sees).toBe(D9_DATA_USE);
+    expect(row!.when).toMatch(/my ChatGPT plan/);
+    expect(row!.when).toMatch(/desktop app/i);
+  });
+
+  it('"Where your data lives": the ChatGPT sign-in lives beside the file at ~/Snug/.chatgpt-plan/ and never travels with it', () => {
+    const text = sectionText('where-your-data-lives');
+    expect(text).toContain('except the sign-in for your ChatGPT plan, which lives beside the file on this computer and never travels with it');
+    expect(text).toContain('~/Snug/.chatgpt-plan/');
+  });
+
+  it('terms: no plan of Snug’s own, and running on your ChatGPT plan is named beside bringing a key', () => {
+    expect(terms).toMatch(/no plan of Snug['’]s own/);
+    expect(terms).toMatch(/runs on your ChatGPT plan/);
+    expect(terms).not.toMatch(/no payment and no plan\./);
+  });
+
+  it('the non-affiliation sentence appears VERBATIM in privacy AND in terms', () => {
+    expect(collapse(privacy)).toContain(NON_AFFILIATION);
+    expect(collapse(terms)).toContain(NON_AFFILIATION);
+  });
+
+  it('neither document claims what OpenAI’s documents do not say', () => {
+    for (const text of [privacy, terms]) expect(text).not.toMatch(/not used for training|zero[ -]retention/i);
+  });
+
+  it('LEGAL_UPDATED moves past 2026-08-23 with this wording change, and both documents carry it', () => {
+    expect(LEGAL_UPDATED > '2026-08-23').toBe(true);
+    expect(PRIVACY.updated).toBe(LEGAL_UPDATED);
+    expect(TERMS.updated).toBe(LEGAL_UPDATED);
+  });
+
+  it('the legal modules import only legalShared and config/site (the website build resolves nothing else)', () => {
+    const dir = fileURLToPath(new URL('../legal/', import.meta.url));
+    const offenders: string[] = [];
+    for (const name of readdirSync(dir).filter((n) => n.endsWith('.ts'))) {
+      const source = readFileSync(`${dir}${name}`, 'utf8');
+      for (const match of source.matchAll(/^(?:import|export)\b[^;'"`]*?\bfrom\s+['"]([^'"]+)['"]/gm)) {
+        const spec = match[1]!;
+        if (spec !== './legalShared.js' && spec !== '../config/site.js') offenders.push(`${name} → ${spec}`);
+      }
+    }
+    expect(offenders).toEqual([]);
   });
 });
