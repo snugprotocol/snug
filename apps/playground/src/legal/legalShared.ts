@@ -38,7 +38,15 @@ export const GOVERNING_LAW = 'the laws of the State of California';
 export const VENUE = 'the state and federal courts located in the State of California';
 
 /** The date every document carries; bump it with any wording change. */
-export const LEGAL_UPDATED = '2026-08-23';
+export const LEGAL_UPDATED = '2026-10-24';
+
+/**
+ * OpenAI's brand terms (TASK-20261023-siwc-chatgpt-plan D9; ADR-0078 §9): the non-affiliation
+ * sentence, verbatim, in the privacy statement and the terms. Literal here — a legal module imports
+ * nothing from the app (see the dependency rule above).
+ */
+export const OPENAI_NON_AFFILIATION =
+  'ChatGPT is a trademark of OpenAI. Snug is independently developed and not affiliated with, endorsed by, or sponsored by OpenAI.';
 
 // ---------------------------------------------------------------- the byte-pinned sentences
 

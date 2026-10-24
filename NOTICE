@@ -1,0 +1,16 @@
+Snug (the Snug Protocol) is licensed under the MIT License — see LICENSE.
+
+This repository carries ONE third-party asset that the MIT License does not cover:
+
+  apps/playground/src/desktop/assets/openai-button/
+    chatgpt-logo-black.svg, chatgpt-logo-white.svg — OpenAI's trademark asset for the
+    "Continue with ChatGPT" button, copied verbatim from
+    https://developers.openai.com/assets/siwc/sign-in-buttons/ on 2026-10-23 and used per
+    OpenAI's button guideline. OpenAI's brand guidelines govern these files; the permission
+    to use them is revocable by OpenAI. See the NOTICE.md beside them.
+
+Vendored content that keeps its own licence is marked in place (for example
+packages/knowledge/prompts/skills/skill-creator/NOTICE.md, Apache-2.0).
+
+ChatGPT is a trademark of OpenAI. Snug is independently developed and not affiliated with,
+endorsed by, or sponsored by OpenAI.

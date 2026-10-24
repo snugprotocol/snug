@@ -138,8 +138,11 @@ export function appPinFamily(appId: string): PinFamily | undefined {
   return 'local';
 }
 
-/** Whether a pin of `family` routes in `mode` — the one statement of the rule in the header. */
-function pinApplies(family: PinFamily, mode: PlaygroundMode): boolean {
+/**
+ * Whether a pin of `family` routes in `mode` — the one statement of the rule in the header. The
+ * selectors read it too, so what they SAY ("pinned for <mode> — not used here") is what routing does.
+ */
+export function pinFamilyApplies(family: PinFamily, mode: PlaygroundMode): boolean {
   switch (mode) {
     case 'chatgpt':
       return family === 'chatgpt';
@@ -173,7 +176,7 @@ export function resolveModelForApp(appId?: string): string | undefined {
   const mode = modeStore.get();
   if (appId !== undefined) {
     const family = appPinFamily(appId);
-    if (family !== undefined && pinApplies(family, mode)) return appModelStore.get()[appId];
+    if (family !== undefined && pinFamilyApplies(family, mode)) return appModelStore.get()[appId];
   }
   // The plan's default is its own row — NEVER the global `model` row below, which names an Ollama
   // or hub model. Absence means the account list's first model (the adapter arm's fallback).

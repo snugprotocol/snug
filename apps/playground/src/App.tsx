@@ -11,6 +11,7 @@ import {
 } from './platform/openFile.js';
 import { initDesktopFirstRun } from './desktop/firstRun.js';
 import { ModeCoercionNote } from './desktop/ModeCoercionNote.js';
+import { ChatgptPlanNotice } from './views/ChatgptPlanNotice.js';
 import { AppUpdateSurface } from './desktop/AppUpdateControls.js';
 import { HelperSurface } from './desktop/HelperSurface.js';
 import { initAppUpdateLaunchCheck } from './state/appUpdate.js';
@@ -267,8 +268,10 @@ export function App(): ReactElement {
         </nav>
       </header>
       <WebllmBanner />
-      {/* P3 item 2: the honest trace of a hydrated-subscription coercion (desktop). */}
+      {/* P3 item 2: the honest trace of a hydrated-mode coercion (desktop). */}
       <ModeCoercionNote />
+      {/* TASK-20261023 AC11: OpenAI's one-time notice, once per file, while the plan is in use — on every route. */}
+      <ChatgptPlanNotice />
       <main className="shell-main">
         <Routes>
           <Route path="/" element={<HubView />} />

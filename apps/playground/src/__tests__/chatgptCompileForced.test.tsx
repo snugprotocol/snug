@@ -8,8 +8,9 @@
 //   - the inspector's empty state names the plan (`emptyCopy('chatgpt')`, an exhaustive switch);
 //   - `DemoBrainCallout` never shows in chatgpt mode, whatever keys are (or are not) saved;
 //   - `ModelSelect` / `BuilderModelSelect` never render the BYOK provider groups in chatgpt mode
-//     and never write an anthropic/openai pin from it; `BuilderModelSelect` renders nothing there
-//     (today's byok-only guard, pinned).
+//     and never write an anthropic/openai pin from it; `BuilderModelSelect` lists the ACCOUNT's
+//     models there (the L4 pin "renders nothing until L5" was amended to this when L5 landed —
+//     plan §12 amendments, the one Gate 3 assertion this task knowingly rewrote).
 // `MODE_LABELS.chatgpt` (`my ChatGPT plan`) is pinned through Settings in chatgptModes.test.tsx.
 //
 // The desktop platform WITH the custody seat, set once; the keeper booted READY per test.
@@ -173,9 +174,11 @@ describe('the model selectors in chatgpt mode never offer or write a BYOK pin (L
     expect(row === 'anthropic' || row === 'openai').toBe(false);
   });
 
-  it('BuilderModelSelect (a fresh thread) renders nothing in chatgpt mode — today’s byok-only guard', async () => {
+  it('BuilderModelSelect (a fresh thread) lists the account’s models in chatgpt mode — no BYOK group, no pin written (L5 amended the L4 "renders nothing until L5" pin)', async () => {
     const el = await mount(<BuilderModelSelect />);
-    expect(el.querySelector('[data-testid="builder-model-select"]')).toBeNull();
+    const select = el.querySelector<HTMLSelectElement>('[data-testid="builder-model-select"]');
+    expect(select).not.toBeNull();
+    expect([...select!.options].filter((o) => o.value !== '').map((o) => o.textContent)).toEqual(['GPT-6.1 Sol', 'GPT-6.1 mini']);
     expect(el.querySelectorAll('optgroup')).toHaveLength(0);
     expect(builderPickStore.get()).toBeUndefined();
   });

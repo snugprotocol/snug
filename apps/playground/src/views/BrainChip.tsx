@@ -28,6 +28,9 @@ import type { ReactElement } from 'react';
 import { useId, useRef, useSyncExternalStore } from 'react';
 import { Link } from 'react-router';
 
+import type { ChatgptModel, ChatgptPlanStatus } from '@snugprotocol/auth';
+
+import { CHATGPT_MANAGE_USAGE_URL } from '../access/copy.js';
 import {
   BRAIN_AUTO,
   BRAIN_MARK_WORD,
@@ -46,10 +49,13 @@ import {
   tierSubstitutionNote,
 } from '../platform/copy.js';
 import { allows, getPlatform, type BrainOptionView, type BrainSwitchSeat, type TierChoice } from '../platform/platform.js';
-import { setMode } from '../state/mode.js';
+import { signOutOfChatgpt, useChatgptPlan } from '../state/chatgptPlan.js';
+import { setChatgptEffort, setChatgptModel, setMode, useChatgptEffort, useChatgptModel } from '../state/mode.js';
 import { useActiveBrain, type ActiveBrainKind } from '../state/activeBrain.js';
 import { useOllama } from '../state/ollama.js';
 import { useBrain } from '../state/webllm.js';
+import { ExternalLink } from '../ui/ExternalLink.js';
+import { USAGE_LIMIT_SENTENCE } from '../ui/UsageLimitMessage.js';
 import { useDismissableMenu } from '../ui/useDismissableMenu.js';
 
 export const DEMO_BRAIN_BODY =
@@ -149,6 +155,52 @@ export function brainChipLabel(brain: ActiveBrainKind): string {
 /** One stable no-op for the seatless render (a fresh closure per render would resubscribe on every render). */
 const noSubscription = (): (() => void) => () => undefined;
 
+/**
+ * The chip on the user's ChatGPT plan (TASK-20261023-siwc-chatgpt-plan D5; ADR-0078 §5): the label
+ * stays *ChatGPT plan* in every state — never a reroute, never "demo brain" — and the sub-line names
+ * the one state a person must act on: *sign in needed*, *plan not allowed*, *limit reached*. The
+ * popover headline is OpenAI's required indicator, *Using ChatGPT plan · <email>*.
+ */
+interface ChatgptChipView {
+  sub: string | undefined;
+  headline: string;
+  body: string;
+  signedIn: boolean;
+  models: readonly ChatgptModel[];
+  /** The model a think would run on — the stored default, else the account list's first. */
+  resolved: ChatgptModel | undefined;
+}
+
+function chatgptChipView(plan: ChatgptPlanStatus, model: string | undefined): ChatgptChipView {
+  const none = { signedIn: false, models: [], resolved: undefined } as const;
+  if (plan === 'unknown') return { ...none, sub: undefined, headline: BRAINS.chatgpt.headline, body: BRAINS.chatgpt.body };
+  if (!plan.signedIn) {
+    return {
+      ...none,
+      sub: 'sign in needed',
+      headline: 'ChatGPT plan · sign in needed',
+      body: 'sign in to ChatGPT in settings — your apps then think on your plan, with no API key involved.',
+    };
+  }
+  if (!plan.planGranted) {
+    return {
+      ...none,
+      sub: 'plan not allowed',
+      headline: 'ChatGPT plan · not allowed yet',
+      body: 'ChatGPT plan usage isn’t allowed for Snug — allow it in settings, or use a key or a local model.',
+    };
+  }
+  const resolvedId = model ?? plan.models[0]?.id;
+  return {
+    sub: plan.limit !== undefined ? 'limit reached' : undefined,
+    headline: `Using ChatGPT plan${plan.email !== undefined ? ` · ${plan.email}` : ''}`,
+    body: plan.limit?.code === 'usage_limit' ? USAGE_LIMIT_SENTENCE : BRAINS.chatgpt.body,
+    signedIn: true,
+    models: plan.models,
+    resolved: plan.models.find((candidate) => candidate.id === resolvedId),
+  };
+}
+
 export function BrainChip(): ReactElement {
   const seat = getPlatform().brainSwitch;
   return seat === undefined ? <StatusChip /> : <BrainSwitcher seat={seat} />;
@@ -175,6 +227,12 @@ function StatusChip(): ReactElement {
     () => tierSeat?.state.get(),
     () => tierSeat?.state.get(),
   );
+
+  // The ChatGPT plan's state (D5): read on every render so the hook list is stable; used only on that brain.
+  const plan = useChatgptPlan();
+  const planModel = useChatgptModel();
+  const planEffort = useChatgptEffort();
+  const planView = brain === 'chatgpt' ? chatgptChipView(plan, planModel) : undefined;
 
   const copy = copyFor(brain);
   const models = ollama !== 'unknown' && ollama.running ? ollama.models : [];
@@ -208,13 +266,65 @@ function StatusChip(): ReactElement {
         ) : (
           <span className="brain-chip-text">
             <span className="brain-chip-label">{copy.label}</span>
+            {/* The plan's one actionable state under the label (D5) — nothing when it is ready. */}
+            {planView?.sub !== undefined ? (
+              <span className="brain-chip-sub" data-testid="brain-chip-plan-state">
+                {planView.sub}
+              </span>
+            ) : null}
           </span>
         )}
       </button>
       {open ? (
         <div className="identity-menu brain-menu" data-testid="brain-menu" ref={menuRef} aria-label="what’s thinking">
-          <span className="identity-menu-label">{copy.headline}</span>
-          <span className="brain-menu-body">{copy.body}</span>
+          <span className="identity-menu-label">{planView?.headline ?? copy.headline}</span>
+          <span className="brain-menu-body">{planView?.body ?? copy.body}</span>
+          {planView !== undefined && planView.signedIn ? (
+            <>
+              {/* OpenAI's required indicator carries its link (D5); the house opener, never a webview navigation. */}
+              <ExternalLink href={CHATGPT_MANAGE_USAGE_URL} className="identity-menu-item" data-testid="brain-menu-manage-usage">
+                Manage usage
+              </ExternalLink>
+              {planView.models.length > 0 || planModel !== undefined ? (
+                <label className="brain-menu-tier">
+                  <span className="brain-menu-tier-label">model</span>
+                  {/* The ACCOUNT's models, server order, display names (D6). A stored id the plan no longer
+                      lists stays visible and selected — never silently "default". */}
+                  <select
+                    aria-label="model"
+                    data-testid="brain-menu-model-select"
+                    value={planModel ?? ''}
+                    onChange={(event) => setChatgptModel(event.currentTarget.value === '' ? undefined : event.currentTarget.value)}
+                  >
+                    <option value="">plan default{planView.models[0] !== undefined ? ` (${planView.models[0].name})` : ''}</option>
+                    {planView.models.map((candidate) => (
+                      <option key={candidate.id} value={candidate.id}>
+                        {candidate.name}
+                      </option>
+                    ))}
+                    {planModel !== undefined && !planView.models.some((candidate) => candidate.id === planModel) ? (
+                      <option value={planModel}>{planModel} (not on your plan)</option>
+                    ) : null}
+                  </select>
+                </label>
+              ) : null}
+              {/* Only when the resolved model HAS levels (ADR-0070's Haiku rule) — the plan's own control, never the host seat (D6). */}
+              {planView.resolved !== undefined && planView.resolved.efforts.length > 0 ? (
+                <LevelPicker levels={planView.resolved.efforts} value={planEffort} onChange={(next) => setChatgptEffort(next)} />
+              ) : null}
+              <button
+                type="button"
+                className="identity-menu-item"
+                data-testid="brain-menu-chatgpt-sign-out"
+                onClick={() => {
+                  void signOutOfChatgpt();
+                  close(false);
+                }}
+              >
+                Sign out of ChatGPT
+              </button>
+            </>
+          ) : null}
           {tierSeat !== undefined && tierState !== undefined ? (
             <label className="brain-menu-tier">
               <span className="brain-menu-tier-label">thinking level</span>

@@ -110,6 +110,23 @@ export const endpointsNeedConfirmStore = createStore<boolean>(false);
  */
 export const chatgptModelStore = createStore<string | undefined>(undefined);
 export const chatgptEffortStore = createStore<string | undefined>(undefined);
+/**
+ * Whether this FILE has shown the one-time "You're using your ChatGPT plan" notice (AC11) —
+ * hydrated from the row, so the notice reads it synchronously the moment a sign-in completes and
+ * follows the file (an import or a sync pull rehydrates it), never the machine.
+ */
+export const chatgptNoticeShownStore = createStore<boolean>(false);
+
+/**
+ * The mode names a person sees — the Settings segment (L4-13) and the selectors' "pinned for
+ * <mode> — not used here" line (ADR-0078 §6) say the same word for the same mode.
+ */
+export const MODE_LABELS: Record<PlaygroundMode, string> = {
+  byok: 'bring your own key',
+  local: 'local model',
+  subscription: 'hub subscription',
+  chatgpt: 'my ChatGPT plan',
+};
 
 const isMode = (v: unknown): v is PlaygroundMode => v === 'subscription' || v === 'byok' || v === 'local' || v === 'chatgpt';
 
@@ -230,6 +247,7 @@ export function hydrateSettings(db: UserDb): void {
   chatgptModelStore.set(isModelId(chatgptModel) ? chatgptModel : undefined);
   const chatgptEffort = db.getSetting(SETTING_CHATGPT_EFFORT);
   chatgptEffortStore.set(typeof chatgptEffort === 'string' && chatgptEffort !== '' ? chatgptEffort : undefined);
+  chatgptNoticeShownStore.set(db.getSetting(SETTING_CHATGPT_NOTICE_SHOWN) === true);
   // Per-app model picks ride the same hydration path as the global settings above, so a
   // boot, an import and a first sync pull all restore them (TASK-20260817). They are NOT
   // gated by the F15 `needsEndpointConfirm` flag: that gate exists for executable
@@ -312,13 +330,19 @@ export function setChatgptEffort(effort: string | undefined): void {
   writeSetting(SETTING_CHATGPT_EFFORT, trimmed);
 }
 
-/** Whether this FILE has shown the one-time plan notice (AC11) — a row, so it follows the file, not the machine. */
-export async function chatgptNoticeShown(): Promise<boolean> {
-  return (await getUserDb()).getSetting(SETTING_CHATGPT_NOTICE_SHOWN) === true;
+/** Whether this FILE has shown the one-time plan notice (AC11) — the hydrated row, read synchronously. */
+export function chatgptNoticeShown(): boolean {
+  return chatgptNoticeShownStore.get();
 }
 
-export async function markChatgptNoticeShown(): Promise<void> {
-  (await getUserDb()).setSetting(SETTING_CHATGPT_NOTICE_SHOWN, true);
+/** The notice was shown: the store flips at once (the notice unmounts), the row follows (the file remembers). */
+export function markChatgptNoticeShown(): Promise<void> {
+  chatgptNoticeShownStore.set(true);
+  return getUserDb().then((db) => db.setSetting(SETTING_CHATGPT_NOTICE_SHOWN, true));
+}
+
+export function useChatgptNoticeShown(): boolean {
+  return useStore(chatgptNoticeShownStore);
 }
 
 export function setLocalUrl(url: string): void {

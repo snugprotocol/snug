@@ -62,6 +62,13 @@ const HANDED_OUT_RING = 16;
 /** The keeper's status as every surface reads it; `'unknown'` until the first store read answers. */
 export const chatgptPlanStore = createStore<ChatgptPlanStatus>('unknown');
 
+/**
+ * A sign-in is out in the system browser (L5-1; AC2). ONE flag for every surface that can start a
+ * sign-in — the Welcome card and the Settings card — so each shows the awaiting hint and the
+ * visible cancel for the same window, and neither offers a second "Continue" while one is open.
+ */
+export const chatgptSignInPendingStore = createStore<boolean>(false);
+
 interface Deferred {
   promise: Promise<void>;
   resolve: () => void;
@@ -164,6 +171,26 @@ export function useChatgptPlan(): ChatgptPlanStatus {
   return statusOf(useStore(chatgptPlanStore));
 }
 
+/** Whether a sign-in is out in the browser right now (the awaiting hint + cancel render on it). */
+export function useChatgptSignInPending(): boolean {
+  return useStore(chatgptSignInPendingStore);
+}
+
+/**
+ * Refresh the account's model list from the server (AC8: "refreshed on Settings open"). The
+ * keeper fails soft to its last list and notifies the store; nothing to do while signed out, and
+ * a failure here is the keeper's to report through its status — never a throw into a render.
+ */
+export function refreshChatgptModels(): Promise<void> {
+  if (session === undefined) return Promise.resolve();
+  const status = session.status();
+  if (status === 'unknown' || !status.signedIn) return Promise.resolve();
+  return session.listModels(true).then(
+    () => undefined,
+    () => undefined,
+  );
+}
+
 /** The plan's cached model list (server order) — empty while signed out or unknown. */
 export function chatgptModels(): readonly ChatgptModel[] {
   const status = chatgptPlanStatus();
@@ -186,7 +213,14 @@ export function chatgptDefaultEffortFor(modelId: string | undefined): string | u
 
 export function signInToChatgpt(opts?: { prompt?: 'consent' }): Promise<SignInResult> {
   if (session === undefined) return Promise.resolve({ ok: false, code: 'sign_in_needed', message: NO_SEAT_MESSAGE });
-  return session.signIn(opts);
+  // The pending flag brackets the keeper's own promise: set before the browser opens, cleared when
+  // the flow ends by any name (success, cancel, a named failure) — so the visible cancel never
+  // outlives the flow it would cancel, and never goes before it.
+  chatgptSignInPendingStore.set(true);
+  const settle = (): void => chatgptSignInPendingStore.set(false);
+  const result = session.signIn(opts);
+  result.then(settle, settle);
+  return result;
 }
 
 export function cancelChatgptSignIn(): Promise<void> {
@@ -286,6 +320,7 @@ export function resetChatgptPlanForTests(): void {
   booting = undefined;
   ready = deferred();
   chatgptPlanStore.set('unknown');
+  chatgptSignInPendingStore.set(false);
   handedOut.length = 0;
   persistsInFlight.clear();
 }

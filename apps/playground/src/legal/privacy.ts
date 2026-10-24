@@ -24,6 +24,7 @@ import {
   CDN_HOSTS,
   LEGAL_CONTACT,
   LEGAL_UPDATED,
+  OPENAI_NON_AFFILIATION,
   PRIVACY_PATH,
   SITE_OPERATOR,
   SITE_OPERATOR_DESCRIBED,
@@ -41,7 +42,7 @@ import {
 
 /** One row of the "what leaves your device" table. Typed so the test walks rows, not prose. */
 export interface ThirdParty {
-  id: 'cloudflare' | 'model-provider' | 'cdn' | 'huggingface' | 'github' | 'sync-origin' | 'messaging';
+  id: 'cloudflare' | 'model-provider' | 'chatgpt-plan' | 'cdn' | 'huggingface' | 'github' | 'sync-origin' | 'messaging';
   name: string;
   sees: string;
   when: string;
@@ -59,6 +60,15 @@ export const THIRD_PARTIES: readonly ThirdParty[] = [
     name: 'Your model provider (Anthropic, OpenAI, or the endpoint you configured)',
     sees: 'Your prompts, the app data an app puts in front of the model, and the results of any connected-service calls the model asked for.',
     when: 'Whenever the agent runs in "bring your own key" mode. Requests go straight from your browser or the desktop app to the provider, under their own terms, on your own bill. Nothing routes through us. In "local model" mode with an endpoint on this machine or your own network, no model traffic leaves it — if the endpoint you typed is elsewhere, Settings tells you so.',
+  },
+  {
+    // TASK-20261023-siwc-chatgpt-plan (D9; ADR-0078 §9): a new egress, a new row. `sees` is the data-use
+    // sentence settled by the security review, verbatim — OpenAI's documents never say which policy
+    // covers plan traffic, so this says exactly that — and never the two claims D9 forbids about training or retention.
+    id: 'chatgpt-plan',
+    name: 'OpenAI (your ChatGPT plan)',
+    sees: "In this mode your requests go to OpenAI under your ChatGPT account. OpenAI's documents don't say which data policy covers them, so assume your ChatGPT data controls ('Improve the model for everyone') apply. Snug and the app can't see your ChatGPT conversations or memories.",
+    when: 'Only when you chose "my ChatGPT plan" on the desktop app. Your prompts, the app data an app puts in front of the model, and the results of any connected-service calls go from that computer to OpenAI on your own ChatGPT plan, under OpenAI\'s terms. Nothing routes through us. The sign-in itself lives beside your file on that computer and never travels with it; signing out in Settings deletes it, and disconnecting Snug in ChatGPT → Settings ends it on OpenAI\'s side.',
   },
   {
     id: 'cdn',
@@ -126,10 +136,10 @@ export const PRIVACY: LegalDocument = {
       heading: 'Where your data lives',
       blocks: [
         p(
-          'Everything Snug knows — your apps, their data, your chats, your settings, and every API key or token you save — lives in one file that is yours: in your browser\'s private storage on the web, or in ~/Snug in the desktop app. Export it and you have all of it; delete it and it is gone, because we never had a copy.',
+          'Everything Snug knows — your apps, their data, your chats, your settings, and every API key or token you save — lives in one file that is yours: in your browser\'s private storage on the web, or in ~/Snug in the desktop app — except the sign-in for your ChatGPT plan, which lives beside the file on this computer and never travels with it. Export the file and you have all of it; delete it and it is gone, because we never had a copy.',
         ),
         p(
-          'One thing lives beside that file rather than in it: if you link a messaging account, the helper\'s session — its keys, its access token, and a cache of the chats it has synced, which includes other people\'s messages — sits next to the file (in ~/Snug/whatsapp-session on a Mac). It does not ride exports or sync, and deleting the file does not delete it; unlinking the account, or removing the last linked app, does.',
+          'Two things live beside that file rather than in it. If you link a messaging account, the helper\'s session — its keys, its access token, and a cache of the chats it has synced, which includes other people\'s messages — sits next to the file (in ~/Snug/whatsapp-session on a Mac). It does not ride exports or sync, and deleting the file does not delete it; unlinking the account, or removing the last linked app, does. And if you use your ChatGPT plan on the desktop app, that sign-in — a rotating session OpenAI issued to this computer, never an API key — sits in ~/Snug/.chatgpt-plan/ next to the file. It does not ride exports or sync, the file\'s protection does not cover it, and signing out of ChatGPT in Settings deletes it.',
         ),
         p(
           'By default that file is an ordinary database, readable by any program running under your user account on that computer. You can turn on protection in Settings: the whole file is then encrypted at rest with a passphrase only you hold, plus a Recovery Key shown to you once. If you lose both, the data is unrecoverable — there is no reset and no backdoor, which is the point of the feature and also its cost.',
@@ -212,6 +222,7 @@ export const PRIVACY: LegalDocument = {
         p(
           `This statement is dated ${LEGAL_UPDATED} and lives at ${PRIVACY_PATH} on the Playground and on snugprotocol.org. When the software gains a new egress, this statement changes with it and the release notes say so. Questions, corrections, or an egress we failed to name: ${LEGAL_CONTACT}.`,
         ),
+        p(OPENAI_NON_AFFILIATION),
       ],
     },
   ],

@@ -19,6 +19,14 @@
 // «redacted» failed" destroys the diagnostic the text exists to carry (Gate-5
 // finding, executed against the previous regex). Real scheme-carried tokens
 // virtually always contain a digit.
+//
+// A bare JWT (TASK-20261023-siwc-chatgpt-plan AC10, plan §12 L5-7): a ChatGPT-plan access token is
+// a JWT and a provider 401 echoes the bearer it was sent, so DISPLAY mode masks the shape — read
+// from its ONE home in the protocol (`jwtShapeInText`, bounded segments; lesson L191), never spelt
+// again here. Display-only: prose error strings keep their diagnostics, and the share scan does not
+// flag one (the starters and their docs carry sample JWTs).
+
+import { jwtShapeInText } from '@snugprotocol/protocol';
 
 interface CredentialShape {
   pattern: RegExp;
@@ -37,6 +45,12 @@ interface CredentialShape {
    * inspector's 8 MiB fixtures), and prose inputs are short error strings.
    */
   proseOnly?: boolean;
+  /**
+   * Run only in display mode — the mirror of `proseOnly`. The JWT shape is here: the
+   * inspector renders bodies verbatim and must mask an echoed bearer, while a bare JWT
+   * in prose (a diagnostic) or in shared html/docs (a sample) is not a credential leak.
+   */
+  displayOnly?: boolean;
 }
 
 const CREDENTIAL_SHAPES: CredentialShape[] = [
@@ -46,6 +60,9 @@ const CREDENTIAL_SHAPES: CredentialShape[] = [
   // The scheme word is kept (leading group), the value is redacted, and the
   // digit-guard keeps prose like "Basic authentication failed" intact.
   { pattern: /(\b(?:Bearer|Basic|Token|Digest|Negotiate)\s+)[A-Za-z0-9._~+/=-]{8,}/gi, digitGuardInProse: true },
+  // A bare JWT — three bounded base64url segments, the first a JSON header (`eyJ`). The protocol's
+  // matcher, display mode only (see the header).
+  { pattern: jwtShapeInText(), displayOnly: true },
   // Google/GCP.
   { pattern: /\bAIza[A-Za-z0-9_-]{10,}/g },
   // GitHub PATs — classic and fine-grained.
@@ -80,8 +97,9 @@ type RedactMode = 'display' | 'prose';
 function redact(value: string, mode: RedactMode): string {
   if (!value) return value;
   let out = value;
-  for (const { pattern, digitGuardInProse, proseOnly } of CREDENTIAL_SHAPES) {
+  for (const { pattern, digitGuardInProse, proseOnly, displayOnly } of CREDENTIAL_SHAPES) {
     if (proseOnly === true && mode !== 'prose') continue;
+    if (displayOnly === true && mode !== 'display') continue;
     // Keep a leading capture group when the pattern has one (the `key:` half of a
     // name/value pair) so the shape stays readable with only the VALUE masked.
     //
@@ -146,8 +164,10 @@ export interface CredentialShapeHit {
 export function findCredentialShapes(value: string): CredentialShapeHit[] {
   const hits: CredentialShapeHit[] = [];
   if (!value) return hits;
-  for (const { pattern, digitGuardInProse, proseOnly } of CREDENTIAL_SHAPES) {
-    if (proseOnly === true) continue;
+  for (const { pattern, digitGuardInProse, proseOnly, displayOnly } of CREDENTIAL_SHAPES) {
+    // Neither mode-bound shape runs here: the long run trips on base64 images and minified code,
+    // the JWT shape on the sample tokens a starter or an authoring doc legitimately carries.
+    if (proseOnly === true || displayOnly === true) continue;
     const re = new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`);
     for (const match of value.matchAll(re)) {
       const prefix = typeof match[1] === 'string' ? match[1] : '';

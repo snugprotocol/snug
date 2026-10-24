@@ -46,9 +46,9 @@ import {
   useProviderChoice,
   useProviderModels,
   KEYED_PROVIDERS,
+  MODE_LABELS,
   type ByokProvider,
   type KeyedProvider,
-  type PlaygroundMode,
 } from '../state/mode.js';
 import { useOllama } from '../state/ollama.js';
 import { ProtectSetupFlow } from '../vault/ProtectSetupFlow.js';
@@ -84,17 +84,11 @@ import { ExternalLink } from '../ui/ExternalLink.js';
 import { EULA_TEXT } from '../legal/eula.js';
 import { isLocalEndpointHost, localEndpointHostOf } from '../security/privateHost.js';
 import { LICENSE_URL, PRIVACY_PATH, TERMS_PATH, THREAT_MODEL_URL } from '../legal/legalShared.js';
+import { ChatgptPlanRows } from './ChatgptPlanRows.js';
 import { ConnectionSlotsCard } from './ConnectionSlotsCard.js';
 import { ScheduleSettingsCard } from '../schedule/ScheduleSettingsCard.js';
 import { AccessSettingsCard } from '../access/AccessSettingsCard.js';
 import { SETTINGS_CARD } from '../access/copy.js';
-
-const MODE_LABELS: Record<PlaygroundMode, string> = {
-  byok: 'bring your own key',
-  local: 'local model',
-  subscription: 'hub subscription',
-  chatgpt: 'my ChatGPT plan',
-};
 
 /** The model select's escape hatch back to free text. */
 const OTHER_MODEL_CHOICE = '__other__';
@@ -271,6 +265,9 @@ export function SettingsView(): ReactElement {
                 <span className="hint">leave empty for the provider’s default.</span>
               </div>
             ) : null}
+
+            {/* The ChatGPT plan's rows (TASK-20261023-siwc-chatgpt-plan L5): sign-in, account, model, level, sign-out. */}
+            {mode === 'chatgpt' ? <ChatgptPlanRows /> : null}
           </Card>
         </Section>
       ) : null}
@@ -752,6 +749,14 @@ function ProtectionCard(): ReactElement {
             </div>
           </>
         )}
+        {/* D2 (TASK-20261023-siwc-chatgpt-plan): the plan's session file is per-machine custody OUTSIDE the
+            passphrase-protected file — said here in both protection states, only where the seat exists. */}
+        {getPlatform().chatgptPlan !== undefined ? (
+          <span className="hint" data-testid="chatgpt-protection-note">
+            one thing this does not cover: your ChatGPT sign-in, if you use your ChatGPT plan, is kept outside the file a
+            passphrase protects — beside it, on this computer only. signing out of ChatGPT deletes it.
+          </span>
+        ) : null}
         {error !== undefined ? (
           <p className="error-note" role="alert">
             {error}
