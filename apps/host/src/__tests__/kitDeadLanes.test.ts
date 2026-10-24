@@ -53,6 +53,12 @@ import type { AccessWriteCardState as StubAccessWriteCardState } from '../stubs/
 // their brains and routes explicitly, so the platform changes nothing for them.
 setPlatform({ kind: 'host', binding: 'local-host', capabilities: hostCapabilities({ appExport: false }) });
 
+// The sections below `await import(...)` the REAL playground modules — the whole graph on a cold
+// worker. Vitest's 5 s default timed out section 2 on a loaded CI runner (run 40110518422), and
+// the abandoned import then surfaced as a cached rejection in section 7. Generous on purpose:
+// the bound only matters when something is wrong (TASK-20261023-siwc-chatgpt-plan, Gate 6).
+vi.setConfig({ testTimeout: 120_000 });
+
 const HOST = path.resolve(__dirname, '../..');
 const PLAYGROUND = path.resolve(HOST, '../playground/src');
 const read = (file: string): string => readFileSync(file, 'utf8');

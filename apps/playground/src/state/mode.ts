@@ -131,7 +131,16 @@ export const MODE_LABELS: Record<PlaygroundMode, string> = {
 const isMode = (v: unknown): v is PlaygroundMode => v === 'subscription' || v === 'byok' || v === 'local' || v === 'chatgpt';
 
 /** Whether this platform can hold a ChatGPT-plan session at all — the seat's presence IS the capability (AC1, D10). ONE definition; the keeper reads it too. */
-export const hasChatgptSeat = (): boolean => getPlatform().chatgptPlan !== undefined;
+/**
+ * A FUNCTION DECLARATION on purpose (hoisted): `state/chatgptPlan.ts` imports this and sits in an
+ * import cycle with this module (mode → appModel → chatgptPlan → mode). A `const` arrow here threw
+ * "Cannot access 'hasChatgptSeat' before initialization" when the graph was entered from
+ * `webllm.ts` on CI (TASK-20261023-siwc-chatgpt-plan, Gate 6, run 40110518422); a declaration is
+ * initialised before any module body runs, so the cycle's entry order no longer matters.
+ */
+export function hasChatgptSeat(): boolean {
+  return getPlatform().chatgptPlan !== undefined;
+}
 
 /**
  * The shape a thinking level must have to be stored or sent (Gate 5 ST12 / A3): OpenAI's levels are
