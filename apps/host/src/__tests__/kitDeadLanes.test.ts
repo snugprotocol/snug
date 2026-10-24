@@ -33,7 +33,7 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 
-import { describe, expect, expectTypeOf, it } from 'vitest';
+import { describe, expect, expectTypeOf, it, vi } from 'vitest';
 
 import { hostCapabilities } from '@playground/platform/hostCapabilities.js';
 import { setPlatform } from '@playground/platform/platform.js';
