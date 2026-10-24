@@ -1091,4 +1091,34 @@ describe('the chip on the ChatGPT plan (AC4, D5, D6)', () => {
     });
     expect(session.calls.signOut).toBe(1);
   });
+
+  // Gate 5 — the limit the page REMEMBERS (G5-C3) reaches the chip, and its one remedy is primary there (verifier R3).
+  it('a limit remembered by the page (chatgptLimitStore) shows "limit reached" and the popover’s Manage usage is the PRIMARY act', async () => {
+    const { harness } = await chatgptChip({ signedIn: true, planGranted: true, email: 'ada@example.com', models: [] }, (h) =>
+      h.keeper.chatgptLimitStore.set({ at: Date.parse('2026-10-23T08:00:00.000Z'), code: 'usage_limit' }),
+    );
+    expect(chip().textContent).toContain('limit reached');
+    const opened = await openMenu();
+    const { CHATGPT_ERROR_CODES, CHATGPT_ERROR_SENTENCES } = await import('@snugprotocol/adapters');
+    expect(opened.textContent).toContain(CHATGPT_ERROR_SENTENCES[CHATGPT_ERROR_CODES.USAGE_LIMIT]);
+    const manage = opened.querySelector<HTMLAnchorElement>('[data-testid="brain-menu-manage-usage"]');
+    expect(manage?.getAttribute('href')).toBe('https://chatgpt.com/settings/usage');
+    expect(manage?.classList.contains('btn-primary'), 'the limit’s one remedy is primary wherever it renders (AC7)').toBe(true);
+    // Cleared by the next ok result: the sub-line goes.
+    await act(async () => harness.keeper.chatgptLimitStore.set(undefined));
+    expect(chip().textContent).not.toContain('limit reached');
+  });
+
+  it('plan not granted: the popover body is the adapters’ own PLAN_NOT_GRANTED sentence — imported, never retyped (ST7)', async () => {
+    await chatgptChip({ signedIn: true, planGranted: false, email: 'ada@example.com', models: [] });
+    const opened = await openMenu();
+    const { CHATGPT_ERROR_CODES, CHATGPT_ERROR_SENTENCES } = await import('@snugprotocol/adapters');
+    expect(opened.querySelector('.brain-menu-body')?.textContent).toBe(CHATGPT_ERROR_SENTENCES[CHATGPT_ERROR_CODES.PLAN_NOT_GRANTED]);
+  });
+
+  it('the chip’s label is the ONE brain name (access/copy.ts BRAIN_NAMES.chatgpt.brain), typed once', async () => {
+    await chatgptChip({ signedIn: true, planGranted: true, email: 'ada@example.com', models: [] });
+    const { BRAIN_NAMES } = await import('../access/copy.js');
+    expect(chip().querySelector('.brain-chip-label')?.textContent).toBe(BRAIN_NAMES.chatgpt.brain);
+  });
 });

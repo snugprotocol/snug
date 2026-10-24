@@ -130,8 +130,17 @@ export const MODE_LABELS: Record<PlaygroundMode, string> = {
 
 const isMode = (v: unknown): v is PlaygroundMode => v === 'subscription' || v === 'byok' || v === 'local' || v === 'chatgpt';
 
-/** Whether this platform can hold a ChatGPT-plan session at all — the seat's presence IS the capability (AC1, D10). */
-const hasChatgptSeat = (): boolean => getPlatform().chatgptPlan !== undefined;
+/** Whether this platform can hold a ChatGPT-plan session at all — the seat's presence IS the capability (AC1, D10). ONE definition; the keeper reads it too. */
+export const hasChatgptSeat = (): boolean => getPlatform().chatgptPlan !== undefined;
+
+/**
+ * The shape a thinking level must have to be stored or sent (Gate 5 ST12 / A3): OpenAI's levels are
+ * short lowercase words (`low`, `medium`, `high`, `ultra`); a row from a foreign file or a crafted
+ * value that is not one is refused at this boundary, never carried into a request body.
+ */
+const CHATGPT_EFFORT_SHAPE = /^[a-z][a-z0-9_-]{0,31}$/;
+
+export const isChatgptEffort = (value: unknown): value is string => typeof value === 'string' && CHATGPT_EFFORT_SHAPE.test(value);
 
 /**
  * Modes the current platform offers (TASK-20260812 Decision 10): subscription is a capability the
@@ -189,7 +198,15 @@ export function hydrateSettings(db: UserDb): void {
       coercedFromModeStore.set(mode);
     } else {
       modeStore.set(mode);
+      // A hydrate that coerced nothing clears a note an earlier one left (Gate 5 G5-C14): a file
+      // whose mode this platform runs is not "moved away from" any more — an import that replaced a
+      // chatgpt file with a byok one must not keep saying the plan was set aside.
+      modeCoercedStore.set(false);
+      coercedFromModeStore.set(undefined);
     }
+  } else {
+    modeCoercedStore.set(false);
+    coercedFromModeStore.set(undefined);
   }
   // Key presence BEFORE the provider resolution — the derivation reads it.
   byokKeyPresenceStore.set({
@@ -246,7 +263,7 @@ export function hydrateSettings(db: UserDb): void {
   const chatgptModel = db.getSetting(providerModelSettingKey('chatgpt'));
   chatgptModelStore.set(isModelId(chatgptModel) ? chatgptModel : undefined);
   const chatgptEffort = db.getSetting(SETTING_CHATGPT_EFFORT);
-  chatgptEffortStore.set(typeof chatgptEffort === 'string' && chatgptEffort !== '' ? chatgptEffort : undefined);
+  chatgptEffortStore.set(isChatgptEffort(chatgptEffort) ? chatgptEffort : undefined);
   chatgptNoticeShownStore.set(db.getSetting(SETTING_CHATGPT_NOTICE_SHOWN) === true);
   // Per-app model picks ride the same hydration path as the global settings above, so a
   // boot, an import and a first sync pull all restore them (TASK-20260817). They are NOT
@@ -318,7 +335,11 @@ export function setChatgptModel(model: string | undefined): void {
   writeSetting(providerModelSettingKey('chatgpt'), model);
 }
 
-/** The plan's thinking level for interactive turns (D6); `undefined` or empty clears the row — no level is sent. */
+/**
+ * The plan's thinking level for interactive turns (D6); `undefined` or empty clears the row — no level
+ * is sent. A value that is not level-shaped (`isChatgptEffort`, Gate 5 ST12 / A3) changes NOTHING: the
+ * settings boundary is where it is checked, like the model id.
+ */
 export function setChatgptEffort(effort: string | undefined): void {
   const trimmed = effort?.trim();
   if (trimmed === undefined || trimmed === '') {
@@ -326,6 +347,7 @@ export function setChatgptEffort(effort: string | undefined): void {
     void getUserDb().then((db) => db.deleteSetting(SETTING_CHATGPT_EFFORT));
     return;
   }
+  if (!isChatgptEffort(trimmed)) return;
   chatgptEffortStore.set(trimmed);
   writeSetting(SETTING_CHATGPT_EFFORT, trimmed);
 }

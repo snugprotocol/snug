@@ -34,7 +34,8 @@ import type { ReactElement } from 'react';
 import { ANTHROPIC_DEFAULT_MODEL, OPENAI_DEFAULT_MODEL, popularModelsFor } from '@snugprotocol/adapters';
 
 import { appPinFamily, pinFamilyApplies, setAppModel, setAppPin, useAppModel, useAppProvider } from '../state/appModel.js';
-import { useChatgptPlan } from '../state/chatgptPlan.js';
+import { chatgptModelView, useChatgptPlan } from '../state/chatgptPlan.js';
+import { CHATGPT_DEFAULT_CHOICE, ChatgptModelOptions } from '../ui/ChatgptModelOptions.js';
 import {
   KEYED_PROVIDERS,
   MODE_LABELS,
@@ -95,40 +96,31 @@ export function ModelSelect({ appId }: ModelSelectProps): ReactElement | null {
   const family = appPinFamily(appId);
   const foreign = family !== undefined && !pinFamilyApplies(family, mode) ? family : undefined;
   const pinnedModel = foreign === undefined ? storedModel : undefined;
+  // The UNSCOPED family (a pin with no provider row — a legacy BYOK pin, or a local one) belongs to no
+  // one mode, so it is not called "local" here (G5-C10): the note names it neutrally.
   const foreignNote =
     foreign !== undefined ? (
       <span className="hint app-model-pin-note" data-testid="app-model-pin-note">
-        pinned for {MODE_LABELS[foreign]} — not used here
+        {foreign === 'local' ? 'pinned for another mode — not used here' : `pinned for ${MODE_LABELS[foreign]} — not used here`}
       </span>
     ) : null;
 
-  // ---- CHATGPT PLAN: the ACCOUNT's models, server order, display names (D6) — no catalogue of ours. ----
+  // ---- CHATGPT PLAN: the ACCOUNT's models, server order, display names (D6) — the one option list (ST2). ----
   if (mode === 'chatgpt') {
-    const planModels = plan !== 'unknown' && plan.signedIn ? plan.models : [];
-    const defaultId = planDefault ?? planModels[0]?.id;
-    const defaultName = defaultId === undefined ? undefined : (planModels.find((m) => m.id === defaultId)?.name ?? defaultId);
-    const inheritLabel = defaultName === undefined ? 'default (your plan’s choice)' : `default (${defaultName})`;
-    const unlisted = pinnedModel !== undefined && !planModels.some((m) => m.id === pinnedModel);
+    const view = chatgptModelView(plan, planDefault, pinnedModel);
     return (
       <label className="app-model-select">
         <span className="visually-hidden">model for this app</span>
         <select
           data-testid="app-model-select"
-          value={pinnedModel ?? INHERIT_CHOICE}
+          value={pinnedModel ?? CHATGPT_DEFAULT_CHOICE}
           title="which model this app thinks with on your ChatGPT plan — remembered for this app"
           onChange={(event) => {
             const value = event.target.value;
-            setAppPin(appId, value === INHERIT_CHOICE ? undefined : { provider: 'chatgpt', model: value });
+            setAppPin(appId, value === CHATGPT_DEFAULT_CHOICE ? undefined : { provider: 'chatgpt', model: value });
           }}
         >
-          <option value={INHERIT_CHOICE}>{inheritLabel}</option>
-          {planModels.map((option) => (
-            <option key={option.id} value={option.id}>
-              {option.name}
-            </option>
-          ))}
-          {/* Rule 3, in the plan's words: a pin the plan no longer lists stays visible and selected. */}
-          {unlisted ? <option value={pinnedModel}>{pinnedModel} (not on your plan)</option> : null}
+          <ChatgptModelOptions view={view} value={pinnedModel ?? CHATGPT_DEFAULT_CHOICE} />
         </select>
         {foreignNote}
       </label>

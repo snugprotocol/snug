@@ -269,6 +269,58 @@ describe('Continue with ChatGPT starts the sign-in — it does not choose the mo
   });
 });
 
+// Gate 5 G5-A9: choosing another card, or skipping, while a sign-in is out in the browser CANCELS it —
+// and a completion that lands late must never set the mode over the person's later choice.
+describe('another choice or the skip cancels a pending sign-in; a late completion never wins (G5-A9)', () => {
+  it('"use an AI service key" while the browser is open: cancelChatgptSignIn() is called, the mode is byok, and a LATE { ok: true } leaves it byok', async () => {
+    const session = fakeChatgptSession(SIGNED_OUT);
+    const held = holdSignIn(session);
+    const harness = await welcomeWith(session);
+    await click(buttonIn(chatgptCard(), /Continue with ChatGPT/), 'Continue with ChatGPT');
+    expect(session.calls.cancelSignIn).toBe(0);
+
+    await click(buttonIn(welcome() ?? undefined, /use an AI service key/i), 'use an AI service key');
+    expect(session.calls.cancelSignIn, 'the other card cancels the sign-in it would otherwise leave open for ten minutes').toBe(1);
+    expect(harness.mode.modeStore.get()).toBe('byok');
+
+    // The keeper's promise settles anyway (a real cancel answers by name; here the browser "finished" late).
+    await act(async () => {
+      session.setStatus(READY);
+      held.resolve({ ok: true, status: READY });
+    });
+    await settle();
+    expect(harness.mode.modeStore.get(), 'a late completion must not override the later choice').toBe('byok');
+    expect(harness.db.getSetting('mode')).toBe('byok');
+  });
+
+  it('"use your computer’s AI" cancels a pending sign-in too', async () => {
+    const session = fakeChatgptSession(SIGNED_OUT);
+    const held = holdSignIn(session);
+    const harness = await welcomeWith(session, { probeOllama: () => Promise.resolve({ running: true, models: ['llama3.2'] }) });
+    await click(buttonIn(chatgptCard(), /Continue with ChatGPT/), 'Continue with ChatGPT');
+    await click(buttonIn(welcome() ?? undefined, /use your computer/i), 'use your computer’s AI');
+    expect(session.calls.cancelSignIn).toBe(1);
+    expect(harness.mode.modeStore.get()).toBe('local');
+    await act(async () => held.resolve({ ok: true, status: READY }));
+    await settle();
+    expect(harness.mode.modeStore.get()).toBe('local');
+  });
+
+  it('the skip ("I’ll look around first") cancels a pending sign-in; a late completion sets no mode', async () => {
+    const session = fakeChatgptSession(SIGNED_OUT);
+    const held = holdSignIn(session);
+    const harness = await welcomeWith(session);
+    await click(buttonIn(chatgptCard(), /Continue with ChatGPT/), 'Continue with ChatGPT');
+    await click(container?.querySelector<HTMLButtonElement>('[data-testid="welcome-skip"]') ?? undefined, 'skip');
+    expect(session.calls.cancelSignIn).toBe(1);
+    expect(welcome()).toBeNull();
+    await act(async () => held.resolve({ ok: true, status: READY }));
+    await settle();
+    expect(harness.mode.modeStore.get()).not.toBe('chatgpt');
+    expect(harness.db.getSetting('mode')).toBeUndefined();
+  });
+});
+
 describe('the Ollama link opens through openExternalUrl, never the OAuth opener (L5-1)', () => {
   it('clicking ollama.com calls platform.openExternalUrl with the site and NEVER oauth.openExternal', async () => {
     const openExternalUrl = vi.fn((_url: string) => Promise.resolve());

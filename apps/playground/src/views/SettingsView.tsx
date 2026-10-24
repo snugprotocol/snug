@@ -754,7 +754,8 @@ function ProtectionCard(): ReactElement {
         {getPlatform().chatgptPlan !== undefined ? (
           <span className="hint" data-testid="chatgpt-protection-note">
             one thing this does not cover: your ChatGPT sign-in, if you use your ChatGPT plan, is kept outside the file a
-            passphrase protects — beside it, on this computer only. signing out of ChatGPT deletes it.
+            passphrase protects — beside it, on this computer only. signing out of ChatGPT deletes its tokens; what this
+            computer registered with ChatGPT stays until you forget the registration there.
           </span>
         ) : null}
         {error !== undefined ? (

@@ -273,12 +273,27 @@ describe('chatgptBearerSource() — the keeper as the Responses adapter’s Bear
     });
   }
 
-  it('an unexpected throw from the keeper is still a RESULT (ok: false), never a rejection the adapter must catch', async () => {
+  it('an unexpected throw from the keeper is still a RESULT (ok: false), never a rejection the adapter must catch — and it is `network`, retryable, never a usage sentence (G5-A8)', async () => {
     const session = fakeChatgptSession(READY);
     const { keeper } = await booted(session);
     session.nextAccessToken(new Error('something nobody named'));
-    const result = await keeper.chatgptBearerSource().get();
-    expect(result.ok).toBe(false);
+    // A write IPC error, a thrown string — a fault on THIS side of the wire, not the plan's usage.
+    await expect(keeper.chatgptBearerSource().get()).resolves.toEqual({ ok: false, code: 'network', retryable: true });
+  });
+
+  it('invalidate(stale) → the keeper’s reportRejected(stale): the route refused the retry’s bearer, so the status stops saying signed in (G5-C4 / S1 / A2)', async () => {
+    const session = fakeChatgptSession(READY);
+    const { keeper } = await booted(session);
+    const source = keeper.chatgptBearerSource();
+    expect(source.invalidate, 'the optional seam is implemented by the page').toBeTypeOf('function');
+    await source.invalidate?.('eyJhbGciOiJSUzI1NiJ9.rejected-twice.sig');
+    expect(session.calls.reportRejected).toEqual(['eyJhbGciOiJSUzI1NiJ9.rejected-twice.sig']);
+    expect(keeper.chatgptPlanStatus()).toEqual({ signedIn: false, registered: true });
+  });
+
+  it('with no keeper (web) invalidate() is a no-op that resolves', async () => {
+    const { keeper } = await fresh();
+    await expect(keeper.chatgptBearerSource().invalidate?.('x')).resolves.toBeUndefined();
   });
 
   it('refresh(stale) is the keeper’s forced refreshNow(stale), answering the rotated token', async () => {
@@ -333,5 +348,160 @@ describe('chatgptBearerSource() — the keeper as the Responses adapter’s Bear
   it('with no keeper (web) get() is sign_in_needed by name — a result, never a fall-through', async () => {
     const { keeper } = await fresh();
     await expect(keeper.chatgptBearerSource().get()).resolves.toEqual({ ok: false, code: 'sign_in_needed', retryable: false });
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Gate 5 — the bounded wait (G5-C1 / A1), the remembered limit (G5-C3 / ST1) and the one model view (ST2)
+// ---------------------------------------------------------------------------------------------
+
+describe('chatgptPlanReadyBounded(wait) — every boot/restore chain waits for the first read, but never for ever (G5-C1)', () => {
+  it('a first read that never answers (a hung IPC, an unreadable file nobody settled) releases the wait once the bound elapses', async () => {
+    const session = fakeChatgptSession('unknown');
+    const { keeper } = await booted(session);
+    const waits: number[] = [];
+    const wait = (ms: number): Promise<void> => {
+      waits.push(ms);
+      return Promise.resolve();
+    };
+    await expect(keeper.chatgptPlanReadyBounded(wait)).resolves.toBeUndefined();
+    expect(waits).toEqual([keeper.CHATGPT_READY_BOUND_MS]);
+    expect(keeper.CHATGPT_READY_BOUND_MS).toBe(3_000);
+    // The status is still unknown: the caller proceeds and the scheduled gate refuses BY NAME, never hangs.
+    expect(keeper.chatgptPlanStatus()).toBe('unknown');
+    // The unbounded wait is untouched — it still pins F9 for the gate.
+    expect(await settled(keeper.chatgptPlanReady())).toBe(false);
+  });
+
+  it('a read that answers first wins the race — the bound is never the thing that releases a healthy launch', async () => {
+    const session = fakeChatgptSession('unknown');
+    const { keeper } = await booted(session);
+    let release: (() => void) | undefined;
+    const wait = (): Promise<void> => new Promise((r) => (release = r));
+    const bounded = keeper.chatgptPlanReadyBounded(wait);
+    expect(await settled(bounded)).toBe(false);
+    session.resolveFirstRead(READY);
+    await expect(bounded).resolves.toBeUndefined();
+    release?.();
+  });
+
+  it('without a seat it resolves at once and never starts a timer', async () => {
+    const { keeper } = await fresh();
+    const wait = vi.fn(() => new Promise<void>(() => undefined));
+    await expect(keeper.chatgptPlanReadyBounded(wait)).resolves.toBeUndefined();
+    expect(wait).not.toHaveBeenCalled();
+  });
+});
+
+describe('the remembered limit — chatgptLimitStore overlays the mirrored status (G5-C3 / ST1)', () => {
+  const okResult = { ok: true as const, text: '{}', toolCalls: [], stopReason: 'end' as const };
+  const failed = (code: string) => ({ ok: false as const, code, message: 'x', retryable: false });
+  const adapterAnswering = (results: Array<ReturnType<typeof failed> | typeof okResult>) => ({
+    complete: async () => results.shift() ?? okResult,
+  });
+  const request = { system: 's', messages: [{ role: 'user' as const, content: 'hi' }] };
+
+  it('a result coded CHATGPT_USAGE_LIMIT sets { at, code: usage_limit } and the status carries it; the next ok result clears it', async () => {
+    const { keeper } = await booted(fakeChatgptSession(READY));
+    const adapters = await import('@snugprotocol/adapters');
+    const observed = keeper.withChatgptLimitObserver(adapterAnswering([failed(adapters.CHATGPT_ERROR_CODES.USAGE_LIMIT), okResult]), () => 1_700_000_000_000);
+    await observed.complete(request);
+    expect(keeper.chatgptLimitStore.get()).toEqual({ at: 1_700_000_000_000, code: 'usage_limit' });
+    const status = keeper.chatgptPlanStatus();
+    expect(status !== 'unknown' && status.signedIn ? status.limit : undefined).toEqual({ at: 1_700_000_000_000, code: 'usage_limit' });
+    await observed.complete(request);
+    expect(keeper.chatgptLimitStore.get()).toBeUndefined();
+    const cleared = keeper.chatgptPlanStatus();
+    expect(cleared !== 'unknown' && cleared.signedIn ? cleared.limit : 'no').toBeUndefined();
+  });
+
+  it('CHATGPT_USAGE_UNAVAILABLE is remembered as usage_unavailable; any other failure leaves the limit alone', async () => {
+    const { keeper } = await booted(fakeChatgptSession(READY));
+    const adapters = await import('@snugprotocol/adapters');
+    const observed = keeper.withChatgptLimitObserver(adapterAnswering([failed(adapters.CHATGPT_ERROR_CODES.USAGE_UNAVAILABLE), failed('HOST_ERROR')]), () => 5);
+    await observed.complete(request);
+    expect(keeper.chatgptLimitStore.get()).toEqual({ at: 5, code: 'usage_unavailable' });
+    await observed.complete(request);
+    expect(keeper.chatgptLimitStore.get(), 'a HOST_ERROR is not a limit and does not clear one').toEqual({ at: 5, code: 'usage_unavailable' });
+  });
+
+  it('the overlay rides only a signed-in status; the test seam reset clears it', async () => {
+    const session = fakeChatgptSession(READY);
+    const { keeper } = await booted(session);
+    keeper.chatgptLimitStore.set({ at: 1, code: 'usage_limit' });
+    session.setStatus(SIGNED_OUT);
+    expect(keeper.chatgptPlanStatus()).toEqual(SIGNED_OUT);
+    keeper.resetChatgptPlanForTests();
+    expect(keeper.chatgptLimitStore.get()).toBeUndefined();
+  });
+});
+
+describe('chatgptModelView(status, stored, pin?) — the ONE model choice every surface renders (G5-ST2)', () => {
+  it('signed in: the account’s models in server order; the default is the stored row, else the first; the resolved model and its levels', async () => {
+    const { keeper } = await booted(fakeChatgptSession(READY));
+    const view = keeper.chatgptModelView(READY, undefined);
+    expect(view.models.map((m) => m.id)).toEqual(['gpt-6.1-sol', 'gpt-6.1-mini']);
+    expect(view.defaultId).toBe('gpt-6.1-sol');
+    expect(view.defaultName).toBe('GPT-6.1 Sol');
+    expect(view.resolved?.id).toBe('gpt-6.1-sol');
+    expect(view.levels).toEqual(['low', 'medium', 'high', 'ultra']);
+    expect(view.unlisted).toBeUndefined();
+
+    const stored = keeper.chatgptModelView(READY, 'gpt-6.1-mini');
+    expect(stored.defaultId).toBe('gpt-6.1-mini');
+    expect(stored.defaultName).toBe('GPT-6.1 mini');
+    expect(stored.levels).toEqual([]);
+  });
+
+  it('a stored or pinned id the plan does not list is said, never hidden: unlisted, no levels, the default name falls back to the id', async () => {
+    const { keeper } = await booted(fakeChatgptSession(READY));
+    const stored = keeper.chatgptModelView(READY, 'gpt-5-retired');
+    expect(stored.unlisted).toBe('gpt-5-retired');
+    expect(stored.defaultName).toBe('gpt-5-retired');
+    expect(stored.resolved).toBeUndefined();
+    expect(stored.levels).toEqual([]);
+    // A per-app pin wins over the stored default for what a think would run on.
+    const pinned = keeper.chatgptModelView(READY, 'gpt-6.1-sol', 'gpt-6.1-mini');
+    expect(pinned.resolved?.id).toBe('gpt-6.1-mini');
+    expect(pinned.defaultId, 'the default is still the stored row — it is what the inherit option names').toBe('gpt-6.1-sol');
+    expect(keeper.chatgptModelView(READY, undefined, 'gpt-5-retired').unlisted).toBe('gpt-5-retired');
+  });
+
+  it('signed out or unknown: no models, no resolved model, no levels', async () => {
+    const { keeper } = await booted(fakeChatgptSession(SIGNED_OUT));
+    for (const status of [SIGNED_OUT, 'unknown' as const]) {
+      const view = keeper.chatgptModelView(status, 'gpt-6.1-sol');
+      expect(view.models).toEqual([]);
+      expect(view.defaultId).toBe('gpt-6.1-sol');
+      expect(view.resolved).toBeUndefined();
+      expect(view.levels).toEqual([]);
+    }
+  });
+
+  it('ONE default label: chatgptDefaultLabel names the default model, or the plan’s choice when none is known', async () => {
+    const { keeper } = await booted(fakeChatgptSession(READY));
+    expect(keeper.chatgptDefaultLabel(keeper.chatgptModelView(READY, undefined))).toBe('default (GPT-6.1 Sol)');
+    expect(keeper.chatgptDefaultLabel(keeper.chatgptModelView(SIGNED_OUT, undefined))).toBe('default (your plan’s choice)');
+  });
+
+  it('resolveChatgptModel and chatgptEffortFor live here now: the level is sent only when the resolved model offers it (G5-A3 / ST12)', async () => {
+    const { keeper } = await booted(fakeChatgptSession(READY));
+    const mode = await import('../state/mode.js');
+    mode.chatgptModelStore.set(undefined);
+    expect(keeper.resolveChatgptModel('gpt-6.1-mini')).toBe('gpt-6.1-mini');
+    expect(keeper.resolveChatgptModel(undefined)).toBe('gpt-6.1-sol');
+    mode.chatgptModelStore.set('gpt-6.1-mini');
+    expect(keeper.resolveChatgptModel(undefined)).toBe('gpt-6.1-mini');
+
+    mode.chatgptEffortStore.set('ultra');
+    expect(keeper.chatgptEffortFor('gpt-6.1-sol', false)).toBe('ultra');
+    expect(keeper.chatgptEffortFor('gpt-6.1-mini', false), 'mini has no level axis — nothing is sent').toBeUndefined();
+    expect(keeper.chatgptEffortFor('gpt-5-retired', false), 'an unlisted model offers nothing we can check — nothing is sent').toBeUndefined();
+    mode.chatgptEffortStore.set('galactic');
+    expect(keeper.chatgptEffortFor('gpt-6.1-sol', false), 'a level the model lacks is not sent').toBeUndefined();
+    // Unattended: the model's own default, never the stored one.
+    mode.chatgptEffortStore.set('ultra');
+    expect(keeper.chatgptEffortFor('gpt-6.1-sol', true)).toBe('medium');
+    expect(keeper.chatgptEffortFor('gpt-6.1-mini', true)).toBeUndefined();
   });
 });

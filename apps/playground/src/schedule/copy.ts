@@ -328,6 +328,16 @@ export const brainBlocked = {
   action: 'open Settings',
 } as const satisfies StateCopy;
 
+/**
+ * The ChatGPT plan's own refusals (TASK-20261023-siwc-chatgpt-plan L4-6; Gate 5 ST7 — their one home,
+ * beside the keyless sentence they must never be confused with), one sentence a person can act on
+ * each. The result page renders them in the brain-blocked card with *open Settings* as the act.
+ */
+export const CHATGPT_SIGNED_OUT_REFUSAL = 'Sign in to ChatGPT to run this step — it runs on your ChatGPT plan.';
+export const CHATGPT_NOT_GRANTED_REFUSAL = 'Allow plan usage for Snug in Settings to run this step.';
+/** The keeper's first read never answered within the bound (Gate 5 G5-C1): refused by name, never a step left hanging. */
+export const CHATGPT_UNREAD_REFUSAL = 'the ChatGPT session couldn’t be read — open Settings';
+
 /** An *ask* step that may look things up hit its round trips before it answered (D-PR4-15) — `lookups` is the calls it made. */
 export function ranOutOfTurns(appName: string, lookups: number): string {
   return `${appName}’s AI looked things up ${lookups} ${lookups === 1 ? 'time' : 'times'} and ran out of turns before answering`;

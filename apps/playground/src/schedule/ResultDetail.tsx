@@ -72,7 +72,7 @@ import {
   type StepResult,
 } from '@snugprotocol/protocol';
 
-import { CHATGPT_MANAGE_USAGE_URL } from '../access/copy.js';
+import { ManageUsageLink } from '../ui/ManageUsageLink.js';
 import { OwnUndoAct } from '../access/OwnUndoAct.js';
 import type { UndoOutcome } from '../access/writeBroker.js';
 import { sanitizeCardText } from '../agent/cards.js';
@@ -82,7 +82,6 @@ import { getUserDb } from '../state/userdb.js';
 import { Button } from '../ui/Button.js';
 import { Card } from '../ui/Card.js';
 import { EmptyState } from '../ui/EmptyState.js';
-import { ExternalLink } from '../ui/ExternalLink.js';
 import { Skeleton } from '../ui/Skeleton.js';
 import { disarmTask } from './acts.js';
 import { WORDS, brainBlocked, capped, cappedWhatOf, needsYou, noHandler, stepLabel } from './copy.js';
@@ -689,6 +688,13 @@ function StepRow({ task, index, result, apps, connections }: { task: ScheduledTa
     <li className="schedule-result-step" data-testid="schedule-result-step">
       <div className="schedule-result-step-head">
         <span className="schedule-result-step-label">{label}</span>
+        {/* TASK-20261023 L5-3: `stepResultSchema` carries no code (a C3 change, queued), so the plan's usage-limit
+            refusal is known by its summary being EXACTLY the single-homed sentence — compared, never retyped —
+            and its one remedy, Manage usage, is the row's primary act and comes FIRST, before the app link
+            (AC7; §12's rule; Gate 5 verifier R3). Not a brain-missing state. */}
+        {result.status === 'refused' && result.summary === CHATGPT_ERROR_SENTENCES[CHATGPT_ERROR_CODES.USAGE_LIMIT] ? (
+          <ManageUsageLink className="btn btn-primary" testId="schedule-result-manage-usage" />
+        ) : null}
         {appId !== undefined ? (
           <Link to={`/run/${encodeURIComponent(appId)}`} className="schedule-result-step-app">
             {openApp(appName ?? 'this app')}
@@ -697,16 +703,6 @@ function StepRow({ task, index, result, apps, connections }: { task: ScheduledTa
         <StepStatus status={result.status} />
       </div>
       {result.summary !== undefined && result.summary !== '' ? <p className="schedule-result-step-summary">{sanitizeCardText(result.summary)}</p> : null}
-      {/* TASK-20261023 L5-3: `stepResultSchema` carries no code (a C3 change, queued), so the plan's usage-limit
-          refusal is known by its summary being EXACTLY the single-homed sentence — compared, never retyped —
-          and its one remedy, Manage usage, is the row's primary act (AC7). Not a brain-missing state. */}
-      {result.status === 'refused' && result.summary === CHATGPT_ERROR_SENTENCES[CHATGPT_ERROR_CODES.USAGE_LIMIT] ? (
-        <div className="connection-note-actions">
-          <ExternalLink href={CHATGPT_MANAGE_USAGE_URL} className="btn btn-primary" data-testid="schedule-result-manage-usage">
-            Manage usage
-          </ExternalLink>
-        </div>
-      ) : null}
       {result.appMissing === true ? <span className="hint">{stepLabel(step?.kind ?? 'app-run')} — this app was deleted</span> : null}
       {facts !== undefined ? (
         <p className="hint schedule-result-step-facts" data-testid="schedule-result-step-facts">

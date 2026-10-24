@@ -1044,6 +1044,12 @@ describe('the result page on the ChatGPT plan (L5-3, L5-4)', () => {
     expect(manage, 'the limit names its one remedy').toBeDefined();
     expect(manage!.getAttribute('href')).toBe(MANAGE_USAGE_URL);
     expect(manage!.classList.contains('btn-primary')).toBe(true);
+    // FIRST (§12's rule; verifier R3): Manage usage renders before the "open <app>" link in the row.
+    const openApp = row!.querySelector<HTMLAnchorElement>('.schedule-result-step-app');
+    expect(openApp, 'the row still offers the app').not.toBeNull();
+    expect(manage!.compareDocumentPosition(openApp!) & Node.DOCUMENT_POSITION_FOLLOWING, 'Manage usage comes first').toBeTruthy();
+    const anchors = [...row!.querySelectorAll('a')];
+    expect(anchors.indexOf(manage!)).toBeLessThan(anchors.indexOf(openApp!));
     // Not a brain-missing state: no open-Settings brain card.
     expect(el.querySelector('[data-testid="schedule-result-brain"]')).toBeNull();
   });

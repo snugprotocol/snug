@@ -322,6 +322,46 @@ describe('"forget this registration" (AC9, D10)', () => {
     await settingsWith(fakeChatgptSession({ signedIn: false, registered: false }));
     expect(buttonIn(rows(), /forget this registration/i)).toBeUndefined();
   });
+
+  it('signed IN: no forget act — the registration is in use (verifier)', async () => {
+    await settingsWith(fakeChatgptSession(READY));
+    expect(buttonIn(rows(), /forget this registration/i)).toBeUndefined();
+    expect(rows()?.textContent).not.toMatch(/forget this registration/i);
+  });
+
+  it('the consent band says what signing out deletes — the TOKENS — and that the registration stays until it is forgotten (G5-S11)', async () => {
+    await settingsWith(fakeChatgptSession(SIGNED_OUT));
+    const band = collapse(container?.querySelector('[data-testid="chatgpt-consent-band"]')?.textContent);
+    expect(band).toMatch(/signing out deletes (its|the) tokens/i);
+    expect(band).toMatch(/registration[^.]*(stays|kept)[^.]*forget this registration/i);
+    expect(band).not.toMatch(/signing out deletes it\b/i);
+  });
+});
+
+describe('a remembered usage limit in Settings (G5-C3; verifier R3)', () => {
+  it('the limit line renders with Manage usage as the PRIMARY act, and goes when the limit clears', async () => {
+    const harness = await settingsWith(fakeChatgptSession(READY), {}, (h) => h.keeper.chatgptLimitStore.set({ at: Date.parse('2026-10-23T08:00:00.000Z'), code: 'usage_limit' }));
+    const limit = container?.querySelector<HTMLElement>('[data-testid="chatgpt-settings-usage-limit"]');
+    expect(limit, 'the remembered limit reaches Settings').not.toBeNull();
+    const manage = [...(limit?.querySelectorAll<HTMLAnchorElement>('a') ?? [])].find((a) => a.textContent === 'Manage usage');
+    expect(manage?.getAttribute('href')).toBe(MANAGE_USAGE_URL);
+    expect(manage?.classList.contains('btn-primary')).toBe(true);
+    await act(async () => harness.keeper.chatgptLimitStore.set(undefined));
+    await settle();
+    expect(container?.querySelector('[data-testid="chatgpt-settings-usage-limit"]')).toBeNull();
+  });
+
+  it('a remembered usage_unavailable renders the adapters’ unavailable sentence, not the limit message', async () => {
+    await settingsWith(fakeChatgptSession(READY), {}, (h) => h.keeper.chatgptLimitStore.set({ at: 1, code: 'usage_unavailable' }));
+    const { CHATGPT_ERROR_CODES, CHATGPT_ERROR_SENTENCES } = await import('@snugprotocol/adapters');
+    expect(rows()?.textContent).toContain(CHATGPT_ERROR_SENTENCES[CHATGPT_ERROR_CODES.USAGE_UNAVAILABLE]);
+    expect(container?.querySelector('[data-testid="chatgpt-settings-usage-limit"]')).toBeNull();
+  });
+
+  it('the default-model select’s first option is the ONE default label (ST2)', async () => {
+    await settingsWith(fakeChatgptSession(READY));
+    expect(modelSelect()?.options[0]?.textContent).toBe('default (GPT-6.1 Sol)');
+  });
 });
 
 describe('signed in + plan NOT granted — re-consent and the alternatives (AC3)', () => {
@@ -351,6 +391,13 @@ describe('the Protection card says the ChatGPT sign-in sits outside the protecte
     const text = collapse(protectionCard()?.textContent);
     expect(text).toContain('this file is protected');
     expect(text).toMatch(OUTSIDE_THE_FILE);
+  });
+
+  it('the line says signing out deletes the TOKENS, not "it" — the registration stays until forgotten (G5-S11)', async () => {
+    await settingsWith(fakeChatgptSession(READY));
+    const note = collapse(container?.querySelector('[data-testid="chatgpt-protection-note"]')?.textContent);
+    expect(note).toMatch(/signing out[^.]*deletes (its|the) tokens/i);
+    expect(note).not.toMatch(/signing out of ChatGPT deletes it\b/i);
   });
 
   it('a desktop WITHOUT the seat never mentions ChatGPT on the Protection card', async () => {

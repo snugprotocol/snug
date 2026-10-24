@@ -20,8 +20,8 @@ import {
 } from '@snugprotocol/adapters';
 import { ERROR_CODES } from '@snugprotocol/protocol';
 
-import { chatgptBearerSource, chatgptDefaultEffortFor, chatgptModels } from '../state/chatgptPlan.js';
-import { chatgptEffortStore, chatgptModelStore, type ByokProvider, type PlaygroundMode } from '../state/mode.js';
+import { chatgptBearerSource, resolveChatgptModel, withChatgptLimitObserver } from '../state/chatgptPlan.js';
+import type { ByokProvider, PlaygroundMode } from '../state/mode.js';
 import { getPlatform } from '../platform/platform.js';
 import { demoAuthChatScript, demoAuthVariant } from './demoAuth.js';
 import { demoRequirementChatScript, demoRequirementVariant } from './demoRequirement.js';
@@ -47,9 +47,10 @@ export interface TurnAdapterConfig {
   localUrl?: string;
   /**
    * The thinking level for THIS send, in the brain's own vocabulary (TASK-20261023-siwc-chatgpt-plan
-   * D6, ADR-0070 §3): read per send from `providerEffort:<mode>` by the arm that honours it
-   * (`chatgpt` → `reasoning.effort`, L4); the other arms ignore it. Never a mapped tier.
-   * Unattended scheduled steps pass the model's DEFAULT level, never the top one.
+   * D6, ADR-0070 §3): the callers read it per send through `chatgptEffortFor` (state/chatgptPlan.ts —
+   * the stored `providerEffort:chatgpt` row, only when the model offers that level) and the chatgpt
+   * arm sends it as `reasoning.effort`; the other arms ignore it. Never a mapped tier. Unattended
+   * scheduled steps pass the model's DEFAULT level, never the top one.
    */
   effort?: string;
   /**
@@ -158,26 +159,6 @@ const chatgptNoModel: AgentAdapter = {
   complete: async () => ({ ok: false, code: ERROR_CODES.HOST_ERROR, message: CHATGPT_NO_MODEL_MESSAGE, retryable: false }),
 };
 
-/**
- * The model a chatgpt turn runs on: the caller's (a per-app pin, resolved per send) → the plan's
- * default row → the first model of the account's list, in the server's order (AC8). NEVER the
- * global `model` row — that names an Ollama or hub model. ONE fallback for the constructor, the
- * transport (which needs the model to look up its default level) and the scheduled agent.
- */
-export function resolveChatgptModel(explicit?: string): string | undefined {
-  return explicit ?? chatgptModelStore.get() ?? chatgptModels()[0]?.id;
-}
-
-/**
- * The thinking level a chatgpt turn carries (D6; ADR-0078 §8). Interactive turns send the stored
- * `providerEffort:chatgpt` row, read PER SEND; an UNATTENDED turn (a scheduled step, with or
- * without tools) runs on the model's own default level from the account's list — never the stored
- * one, never the top one: nobody is watching the spend. `undefined` means no level is sent.
- */
-export function chatgptEffortFor(model: string | undefined, unattended: boolean): string | undefined {
-  return unattended ? chatgptDefaultEffortFor(resolveChatgptModel(model)) : chatgptEffortStore.get();
-}
-
 /** The ONE config→route mapping — both the constructor and the stamp go through it. */
 export function routeOf(config: Pick<TurnAdapterConfig, 'mode' | 'provider' | 'key'>): AdapterRoute {
   return { mode: config.mode, provider: config.provider, hasKey: config.key !== undefined };
@@ -251,15 +232,19 @@ export function createTurnAdapter(config: TurnAdapterConfig, purpose: ByokPurpos
     case 'chatgpt': {
       // The page's keeper as the adapter's bearer seam (D2, D3): a token is asked for per attempt
       // and lives only for that send. `config.key` is deliberately not read — a BYOK OpenAI key in
-      // the file is a different credential for a different route (ADR-0078 §5).
+      // the file is a different credential for a different route (ADR-0078 §5). The model is the
+      // ONE derivation in state/chatgptPlan.ts (ST2); every result is observed for the plan's limit
+      // so the chip and Settings can say *limit reached* (G5-C3).
       const model = resolveChatgptModel(config.model);
       if (model === undefined) return chatgptNoModel;
-      return openaiResponsesAdapter({
-        bearer: chatgptBearerSource(),
-        model,
-        ...(config.effort !== undefined ? { effort: config.effort } : {}),
-        ...fetchDep,
-      });
+      return withChatgptLimitObserver(
+        openaiResponsesAdapter({
+          bearer: chatgptBearerSource(),
+          model,
+          ...(config.effort !== undefined ? { effort: config.effort } : {}),
+          ...fetchDep,
+        }),
+      );
     }
     case 'demo':
       return paced(mockAdapter(purpose === 'chat' ? demoChatScript() : demoAppScript()), demoSlowMs());

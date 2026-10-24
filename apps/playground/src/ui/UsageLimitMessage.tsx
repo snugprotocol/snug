@@ -12,9 +12,8 @@ import type { ReactElement } from 'react';
 
 import { CHATGPT_ERROR_CODES, CHATGPT_ERROR_SENTENCES } from '@snugprotocol/adapters';
 
-import { CHATGPT_MANAGE_USAGE_URL } from '../access/copy.js';
 import { Button } from './Button.js';
-import { ExternalLink } from './ExternalLink.js';
+import { ManageUsageLink } from './ManageUsageLink.js';
 
 export const USAGE_LIMIT_SENTENCE = CHATGPT_ERROR_SENTENCES[CHATGPT_ERROR_CODES.USAGE_LIMIT];
 
@@ -29,9 +28,7 @@ export function UsageLimitMessage({ onDismiss, testId = 'usage-limit-message' }:
     <div className="connection-note" role="alert" data-testid={testId}>
       <p className="connection-note-title">{USAGE_LIMIT_SENTENCE}</p>
       <div className="connection-note-actions">
-        <ExternalLink href={CHATGPT_MANAGE_USAGE_URL} className="btn btn-primary">
-          Manage usage
-        </ExternalLink>
+        <ManageUsageLink className="btn btn-primary" />
         {onDismiss !== undefined ? (
           <Button variant="ghost" onClick={onDismiss}>
             dismiss

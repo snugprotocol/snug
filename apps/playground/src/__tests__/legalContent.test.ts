@@ -314,6 +314,19 @@ describe('privacy and terms for the ChatGPT plan (L5-5, D9)', () => {
     expect(text).toContain('~/Snug/.chatgpt-plan/');
   });
 
+  it('signing out deletes the TOKENS; the registration (an app id, not a credential) stays until "forget this registration" — in the row and the section (G5-S11); LEGAL_UPDATED stays 2026-10-24', () => {
+    const row = THIRD_PARTIES.find((t) => t.id === 'chatgpt-plan')!;
+    expect(row.when).toMatch(/signing out in Settings deletes (its|the|those) tokens/i);
+    expect(row.when).toMatch(/registration/i);
+    expect(row.when).toMatch(/forget this registration/i);
+    expect(row.when).not.toMatch(/signing out in Settings deletes it\b/);
+    const text = sectionText('where-your-data-lives');
+    expect(text).toMatch(/signing out of ChatGPT in Settings deletes (its|the|those) tokens/i);
+    expect(text).toMatch(/forget this registration/i);
+    expect(text).not.toMatch(/signing out of ChatGPT in Settings deletes it\b/);
+    expect(LEGAL_UPDATED).toBe('2026-10-24');
+  });
+
   it('terms: no plan of Snug’s own, and running on your ChatGPT plan is named beside bringing a key', () => {
     expect(terms).toMatch(/no plan of Snug['’]s own/);
     expect(terms).toMatch(/runs on your ChatGPT plan/);

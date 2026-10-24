@@ -65,6 +65,9 @@ export interface FakeChatgptSessionCalls {
   getAccessToken: number;
   refreshNow: string[];
   listModels: Array<boolean | undefined>;
+  /** Every token the page told the keeper the route REJECTED after a refresh-and-retry (G5-C4). */
+  reportRejected: string[];
+  flush: number;
 }
 
 export interface FakeChatgptSession extends ChatgptPlanSession {
@@ -102,6 +105,8 @@ export function fakeChatgptSession(initial: ChatgptPlanStatus, opts: FakeChatgpt
     getAccessToken: 0,
     refreshNow: [],
     listModels: [],
+    reportRejected: [],
+    flush: 0,
   };
   const setStatus = (next: ChatgptPlanStatus): void => {
     current = next;
@@ -164,6 +169,16 @@ export function fakeChatgptSession(initial: ChatgptPlanStatus, opts: FakeChatgpt
     listModels(force) {
       calls.listModels.push(force);
       return Promise.resolve(current !== 'unknown' && current.signedIn ? current.models : []);
+    },
+    reportRejected(token) {
+      calls.reportRejected.push(token);
+      // The real keeper drops the session when the rejected token is still current: signed out, registration kept.
+      if (current !== 'unknown' && current.signedIn) setStatus({ signedIn: false, registered: true });
+      return Promise.resolve();
+    },
+    flush() {
+      calls.flush += 1;
+      return Promise.resolve();
     },
   };
 }

@@ -98,10 +98,11 @@ import { toAttach } from '../access/materialise.js';
 import type { MaterialisedSet, MaterialisedTable } from '../access/service.js';
 import { oneLine, renderSharedDdl } from '../agent/sharedDdl.js';
 import { createAppTransport } from '../agent/transport.js';
-import { chatgptPlanReady, chatgptPlanStatus } from '../state/chatgptPlan.js';
+import { chatgptPlanReadyBounded, chatgptPlanStatus } from '../state/chatgptPlan.js';
 import { modeStore, providerStore } from '../state/mode.js';
 import { currentBrain } from '../state/webllm.js';
-import { appMissing, brainBlocked, busyNote } from './copy.js';
+import { CHATGPT_UNAVAILABLE_RETRY_MS, chatgptStepOutcome, sendOnPlan } from './chatgptOutcome.js';
+import { CHATGPT_NOT_GRANTED_REFUSAL, CHATGPT_SIGNED_OUT_REFUSAL, CHATGPT_UNREAD_REFUSAL, appMissing, brainBlocked, busyNote } from './copy.js';
 import type { StepContext, StepOutcome } from './engine-types.js';
 import { gateProposal } from './proposalGate.js';
 import { ZERO_CALLS } from './protection.js';
@@ -125,7 +126,8 @@ export interface AppThinkDeps {
   sharedFor?(appId: string, ctx: StepContext): Promise<MaterialisedSet>;
   /**
    * The pause before the one `CHATGPT_USAGE_UNAVAILABLE` retry (L4-7) — a real wait in production,
-   * a recorder in tests. Called with `CHATGPT_UNAVAILABLE_RETRY_MS`.
+   * a recorder in tests. Called with `CHATGPT_UNAVAILABLE_RETRY_MS`; also the bound on the wait for
+   * the keeper's first read (`CHATGPT_READY_BOUND_MS`, G5-C1).
    */
   wait?(ms: number): Promise<void>;
 }
@@ -153,28 +155,28 @@ export const CANCELLED_SUMMARY = 'cancelled';
  */
 export const KEYLESS_BRAIN_REFUSAL = brainBlocked.text;
 
-/**
- * The plan's own refusals (L4-6), one sentence a person can act on each — never the keyless one
- * above, which names a key the user did not choose.
- */
-export const CHATGPT_SIGNED_OUT_REFUSAL = 'Sign in to ChatGPT to run this step — it runs on your ChatGPT plan.';
-export const CHATGPT_NOT_GRANTED_REFUSAL = 'Allow plan usage for Snug in Settings to run this step.';
-
-/** The pause before the one retry of a `CHATGPT_USAGE_UNAVAILABLE` reply (L4-7). */
-export const CHATGPT_UNAVAILABLE_RETRY_MS = 1_500;
-
 /** No brain here may answer an *ask* step: refused, nothing sent, nothing read, nothing spent. */
 const brainBlockedOutcome = (summary: string = KEYLESS_BRAIN_REFUSAL): StepOutcome => ({ status: 'refused', summary, calls: { ...ZERO_CALLS }, blockedBy: 'brain' });
+
+/** What the gate does with a keeper whose first read has not answered — see `keylessBrainGate`. */
+export interface BrainGateOptions {
+  /**
+   * `'proceed'` (the default): the caller chose not to wait — the editor's hint, which must not say
+   * *blocked* while a launch is still reading the session file. `'refuse'`: a STEP, whose caller
+   * already waited through `chatgptPlanReadyBounded()` — a status still unknown is a session that
+   * could not be read, refused BY NAME, never a step left hanging (Gate 5 G5-C1).
+   */
+  unknown?: 'proceed' | 'refuse';
+}
 
 /**
  * The plan's gate (L4-6): the keeper's status, read LIVE. Signed out or plan not granted → refused by
  * name; signed in and granted → proceed, a remembered limit notwithstanding (the live result decides —
- * §11 amendment). `'unknown'` proceeds too: the callers await `chatgptPlanReady()` before gating, so
- * an unknown status here is a caller that chose not to wait (the editor's hint), never a step.
+ * §11 amendment). `'unknown'` is the caller's call (`BrainGateOptions.unknown`).
  */
-function chatgptPlanGate(): StepOutcome | undefined {
+function chatgptPlanGate(unknown: 'proceed' | 'refuse'): StepOutcome | undefined {
   const status = chatgptPlanStatus();
-  if (status === 'unknown') return undefined;
+  if (status === 'unknown') return unknown === 'refuse' ? brainBlockedOutcome(CHATGPT_UNREAD_REFUSAL) : undefined;
   if (!status.signedIn) return brainBlockedOutcome(CHATGPT_SIGNED_OUT_REFUSAL);
   if (!status.planGranted) return brainBlockedOutcome(CHATGPT_NOT_GRANTED_REFUSAL);
   return undefined;
@@ -187,8 +189,8 @@ function chatgptPlanGate(): StepOutcome | undefined {
  * route the keeper's state decides instead (`chatgptPlanGate`). Nothing is sent and nothing is
  * read. The executors pass the route they already derived; a direct call derives it.
  */
-export function keylessBrainGate(db: UserDb, appId: string, route: Pick<ReaderBrainRoute, 'kind'> = chatBrainRoute(db, appId)): StepOutcome | undefined {
-  if (route.kind === 'chatgpt') return chatgptPlanGate();
+export function keylessBrainGate(db: UserDb, appId: string, route: Pick<ReaderBrainRoute, 'kind'> = chatBrainRoute(db, appId), options: BrainGateOptions = {}): StepOutcome | undefined {
+  if (route.kind === 'chatgpt') return chatgptPlanGate(options.unknown ?? 'proceed');
   return route.kind === 'demo' ? brainBlockedOutcome() : undefined;
 }
 
@@ -249,7 +251,7 @@ const oneAi = (): StepOutcome['calls'] => ({ ai: 1, net: 0 });
 export function defaultTransportFor(appId: string): AgentTransport | undefined {
   if (currentBrain().kind === 'demo') return undefined;
   // Unattended: nobody is watching the spend, so the plan runs on the model's default level (ADR-0078 §8).
-  return createAppTransport(modeStore.get(), providerStore.get(), undefined, appId, undefined, { unattended: true });
+  return createAppTransport(modeStore.get(), providerStore.get(), { appId, unattended: true });
 }
 
 /** The production pause — a plain timer; tests inject a recorder through `AppThinkDeps.wait`. */
@@ -472,12 +474,15 @@ function stepIndexOf(ctx: StepContext, step: ScheduleStep): number {
 
 export async function executeAppThink(step: AppThinkStep, ctx: StepContext, deps: AppThinkDeps): Promise<StepOutcome> {
   if (ctx.signal.aborted) return { status: 'failed', summary: CANCELLED_SUMMARY, calls: { ...ZERO_CALLS } };
+  const wait = deps.wait ?? realWait;
   // The keeper's first read answers before any brain is asked (F9): a step that ran on `'unknown'`
   // would send on a session the page has not read yet. Resolved at once everywhere but a chatgpt
-  // desktop at launch, so the other modes pay a microtask.
-  await chatgptPlanReady();
+  // desktop at launch, so the other modes pay a microtask — and BOUNDED (G5-C1): a read that never
+  // answers refuses the step by name below instead of hanging it.
+  await chatgptPlanReadyBounded(wait);
   const app = ctx.db.getApp(step.appId);
   if (app === undefined) return { status: 'blocked', summary: appMissing.text, calls: { ...ZERO_CALLS } };
+  if (chatBrainRoute(ctx.db, step.appId).kind === 'chatgpt' && chatgptPlanStatus() === 'unknown') return brainBlockedOutcome(CHATGPT_UNREAD_REFUSAL);
   const transport = deps.transportFor(step.appId);
   if (transport === undefined) return brainBlockedOutcome();
   const appName = oneLine(app.displayName);
@@ -500,26 +505,29 @@ export async function executeAppThink(step: AppThinkStep, ctx: StepContext, deps
     payload: { prompt: step.prompt, context },
     responseSchema: responseSchemaFor(ctx.task.writeAuthority !== undefined),
   });
-  let reply = await transport.send(wire, { signal: ctx.signal });
-  let attempts = 1;
+  // Every attempt that REACHED the brain is charged; a refusal that never left the page is not — F15's
+  // consent refusal (`scrub.ts`, M15) and a plan bearer the keeper refused before any request (G5-C11).
+  let reached = 0;
+  const send = async (): Promise<Awaited<ReturnType<AgentTransport['send']>>> => {
+    const { reply, reachedRoute } = await sendOnPlan(() => transport.send(wire, { signal: ctx.signal }));
+    if (reachedRoute && countsAsAiCall(reply)) reached += 1;
+    return reply;
+  };
+  let reply = await send();
   // THE ONE RETRY (L4-7): the plan's route said it is unavailable right now — a 503 before any
   // stream, nothing spent — so one more attempt after a short pause; a second such answer is the
   // step's failure, retryable. Every other code keeps today's no-retry policy.
   if (!reply.ok && reply.code === CHATGPT_ERROR_CODES.USAGE_UNAVAILABLE && !ctx.signal.aborted) {
-    await (deps.wait ?? realWait)(CHATGPT_UNAVAILABLE_RETRY_MS);
-    reply = await transport.send(wire, { signal: ctx.signal });
-    attempts += 1;
+    await wait(CHATGPT_UNAVAILABLE_RETRY_MS);
+    reply = await send();
   }
   if (!reply.ok) {
-    // One rule with the hidden frame's transport (`scrub.ts`, M15): every attempt that reached the
-    // brain is charged, a refusal that never left the page is not.
-    const calls = countsAsAiCall(reply) ? { ai: attempts, net: 0 } : { ...ZERO_CALLS };
+    const calls = { ai: reached, net: 0 };
     if (reply.code === ERROR_CODES.CONSENT_REQUIRED) return { status: 'refused', summary: reply.message, calls, ...sawSeat };
     if (reply.code === ERROR_CODES.CANCELLED) return { status: 'failed', summary: CANCELLED_SUMMARY, calls, ...sawSeat };
-    // A usage limit is a REFUSAL by name, by code — never a failure the queue would retry, whatever
-    // the reply claims about retryability; the usage may already have been spent, so it is charged.
-    if (reply.code === CHATGPT_ERROR_CODES.USAGE_LIMIT) return { status: 'refused', summary: reply.message, calls, ...sawSeat };
-    if (reply.code === CHATGPT_ERROR_CODES.USAGE_UNAVAILABLE) return { status: 'failed', summary: reply.message, calls, retryable: true, ...sawSeat };
+    // The plan's four codes have ONE policy, shared with the agent path (`chatgptOutcome.ts`).
+    const plan = chatgptStepOutcome(reply, calls);
+    if (plan !== undefined) return { ...plan, ...sawSeat };
     return { status: 'failed', summary: reply.message, calls, ...sawSeat };
   }
 

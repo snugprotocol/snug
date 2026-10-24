@@ -34,7 +34,8 @@
 // `gpt-6…` plan pin is never sent to Anthropic — and a `gpt-4o` pin WITH a provider row no longer
 // reaches Ollama (the cross-pin ADR-0078 §6 corrects). A pin from another family is ignored for
 // routing and REPORTED by `appPinFamily`, so the selectors can say "pinned for <mode> — not used here"
-// instead of hiding it. Subscription keeps today's mode-blind pin: the hub decides there.
+// instead of hiding it. Subscription keeps today's mode-blind pin for the BYOK and unscoped families —
+// the hub decides there — but never a chatgpt pin, which names a plan model the hub cannot serve.
 
 import type { UserDb } from '@snugprotocol/db';
 
@@ -151,7 +152,9 @@ export function pinFamilyApplies(family: PinFamily, mode: PlaygroundMode): boole
     case 'local':
       return family === 'local';
     case 'subscription':
-      return true;
+      // The hub decides among its own models, so a BYOK or unscoped pin still rides — but a chatgpt
+      // pin names a model of the user's ChatGPT plan, which the hub does not serve (Gate 5 G5-C10).
+      return family !== 'chatgpt';
   }
 }
 

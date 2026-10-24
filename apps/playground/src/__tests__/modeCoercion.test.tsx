@@ -216,6 +216,29 @@ describe('hydrateSettings — coercedFromModeStore names the stored mode that wa
     expect(harness.mode.modeCoercedStore.get()).toBe(false);
     expect(harness.mode.coercedFromModeStore.get()).toBeUndefined();
   });
+
+  it('a NON-coerced hydrate after a coerced one clears BOTH stores — an import that replaced the chatgpt file stops saying the plan was set aside (G5-C14)', async () => {
+    const harness = await fresh(desktopPlatform());
+    harness.db.setSetting('mode', 'chatgpt');
+    harness.mode.hydrateSettings(harness.db);
+    expect(harness.mode.modeCoercedStore.get()).toBe(true);
+    expect(harness.mode.coercedFromModeStore.get()).toBe('chatgpt');
+
+    harness.db.setSetting('mode', 'byok');
+    harness.mode.hydrateSettings(harness.db);
+    expect(harness.mode.modeStore.get()).toBe('byok');
+    expect(harness.mode.modeCoercedStore.get()).toBe(false);
+    expect(harness.mode.coercedFromModeStore.get()).toBeUndefined();
+
+    // A file with no mode row at all is not coerced either.
+    harness.db.setSetting('mode', 'chatgpt');
+    harness.mode.hydrateSettings(harness.db);
+    expect(harness.mode.modeCoercedStore.get()).toBe(true);
+    harness.db.deleteSetting('mode');
+    harness.mode.hydrateSettings(harness.db);
+    expect(harness.mode.modeCoercedStore.get()).toBe(false);
+    expect(harness.mode.coercedFromModeStore.get()).toBeUndefined();
+  });
 });
 
 describe('ModeCoercionNote — the small dismissible surface', () => {

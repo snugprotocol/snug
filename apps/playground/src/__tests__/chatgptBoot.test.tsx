@@ -80,6 +80,8 @@ vi.mock('../state/chatgptPlan.js', async (importOriginal) => {
       return h.gate.promise;
     },
     chatgptPlanReady: () => h.gate.promise,
+    // The chains wait through the BOUNDED form (Gate 5 G5-C1) — the same gate here, so the order rows still bite.
+    chatgptPlanReadyBounded: () => h.gate.promise,
   };
 });
 

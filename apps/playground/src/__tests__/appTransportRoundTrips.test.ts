@@ -116,13 +116,7 @@ describe('the app-frame transport reports LLM round trips (owner bug: BYOK + Che
   // timer ticking under finished calls.
   it('fires onTurnStart so an app turn resets the inspector, exactly as a builder turn does', async () => {
     const turnStarts: number[] = [];
-    const transport = createAppTransport(
-      'byok',
-      'mock',
-      undefined,
-      undefined,
-      () => turnStarts.push(Date.now()),
-    );
+    const transport = createAppTransport('byok', 'mock', { onTurnStart: () => turnStarts.push(Date.now()) });
     await transport.send(JSON.stringify({ type: 'chat', text: 'hi' }), {
       signal: new AbortController().signal,
     });

@@ -19,7 +19,8 @@ import type { ReactElement } from 'react';
 import { popularModelsFor } from '@snugprotocol/adapters';
 
 import { setBuilderPick, useBuilderPick } from '../state/builderModel.js';
-import { useChatgptPlan } from '../state/chatgptPlan.js';
+import { chatgptModelView, useChatgptPlan } from '../state/chatgptPlan.js';
+import { CHATGPT_DEFAULT_CHOICE, ChatgptModelOptions } from '../ui/ChatgptModelOptions.js';
 import {
   KEYED_PROVIDERS,
   useByokKeyPresence,
@@ -54,32 +55,24 @@ export function BuilderModelSelect({ attachedAppId }: BuilderModelSelectProps): 
 
   if (brain.kind !== 'settings') return null;
 
-  // ---- CHATGPT PLAN: the account's models (D6); the pick's family is the plan's. ----
+  // ---- CHATGPT PLAN: the account's models (D6), the one option list (ST2); the pick's family is the plan's. ----
   if (mode === 'chatgpt') {
-    const planModels = plan !== 'unknown' && plan.signedIn ? plan.models : [];
-    if (planModels.length === 0) return null;
     const own = pick?.provider === 'chatgpt' ? pick.model : undefined;
-    const defaultId = planDefault ?? planModels[0]?.id;
-    const defaultName = planModels.find((m) => m.id === defaultId)?.name ?? defaultId;
+    const view = chatgptModelView(plan, planDefault, own);
+    if (view.models.length === 0) return null;
     return (
       <label className="app-model-select">
         <span className="visually-hidden">model for this build</span>
         <select
           data-testid="builder-model-select"
-          value={own ?? INHERIT_CHOICE}
+          value={own ?? CHATGPT_DEFAULT_CHOICE}
           title="which model builds this app on your ChatGPT plan — it becomes the app’s model when it installs"
           onChange={(event) => {
             const value = event.target.value;
-            setBuilderPick(value === INHERIT_CHOICE ? undefined : { provider: 'chatgpt', model: value });
+            setBuilderPick(value === CHATGPT_DEFAULT_CHOICE ? undefined : { provider: 'chatgpt', model: value });
           }}
         >
-          <option value={INHERIT_CHOICE}>{`default (${defaultName ?? 'your plan’s choice'})`}</option>
-          {planModels.map((option) => (
-            <option key={option.id} value={option.id}>
-              {option.name}
-            </option>
-          ))}
-          {own !== undefined && !planModels.some((m) => m.id === own) ? <option value={own}>{own} (not on your plan)</option> : null}
+          <ChatgptModelOptions view={view} value={own ?? CHATGPT_DEFAULT_CHOICE} />
         </select>
       </label>
     );

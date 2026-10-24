@@ -23,7 +23,8 @@ import { type RequirementInferrerComplete } from '@snugprotocol/auth';
 import { resolveModelForApp, resolveProviderForApp } from '../state/appModel.js';
 import { getByokKey, localUrlStore, modeStore, providerStore, type ByokProvider } from '../state/mode.js';
 import { currentBrain } from '../state/webllm.js';
-import { chatgptEffortFor, createTurnAdapter, type DirectMode } from './adapter.js';
+import { chatgptEffortFor } from '../state/chatgptPlan.js';
+import { createTurnAdapter, type DirectMode } from './adapter.js';
 
 /**
  * A live-adapter resolution that can honestly FAIL: a real inference must never

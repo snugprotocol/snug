@@ -19,7 +19,7 @@ import { openBuildMenu } from './state/buildThread.js';
 import { refreshAppMeta } from './state/appMeta.js';
 import { initDemoCallout } from './state/demoCallout.js';
 import { login, refreshAuth, useAuth } from './state/auth.js';
-import { bootChatgptPlan, chatgptPlanReady } from './state/chatgptPlan.js';
+import { bootChatgptPlan, chatgptPlanReadyBounded } from './state/chatgptPlan.js';
 import { initSettings } from './state/mode.js';
 import { initScheduler } from './schedule/scheduler.js';
 import { RunningChip } from './schedule/RunningChip.js';
@@ -98,8 +98,9 @@ export function App(): ReactElement {
       // ...and only once the keeper's first read has answered (TASK-20261023 L4-6, F9): the
       // launch catch-up gates a chatgpt file's steps on the keeper, and `'unknown'` means WAIT —
       // a scheduler started before the answer would refuse a valid session. Resolved at once
-      // where no seat exists, so web pays nothing.
-      .then(() => chatgptPlanReady())
+      // where no seat exists, so web pays nothing — and bounded (G5-C1): a read that never answers
+      // must not keep every desktop user's scheduler from starting.
+      .then(() => chatgptPlanReadyBounded())
       .then(() => {
         void initScheduler();
       })
@@ -190,8 +191,8 @@ export function App(): ReactElement {
                       await initSync();
                       // The fresh file gets its own scheduler (TASK-20261009 E1): the swap seam
                       // inside recoverFresh already reset the engine; this is the re-init — after
-                      // the ChatGPT-plan keeper's first read, as at boot (TASK-20261023 L4-6).
-                      await chatgptPlanReady();
+                      // the ChatGPT-plan keeper's first read, as at boot (TASK-20261023 L4-6), bounded (G5-C1).
+                      await chatgptPlanReadyBounded();
                       void initScheduler();
                     });
                   }}

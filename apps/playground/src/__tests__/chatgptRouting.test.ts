@@ -373,7 +373,7 @@ describe('createDirectAppTransport / createAppTransport in chatgpt mode — no k
   });
 
   it('the level is read PER SEND: a change between two sends of one transport reaches the second; none set → omitted', async () => {
-    const transport = createAppTransport('chatgpt', 'openai', undefined, appId);
+    const transport = createAppTransport('chatgpt', 'openai', { appId });
     setChatgptModel('gpt-6.1-sol');
     await settle();
     await transport.send(wireFor(appId), { signal: new AbortController().signal });
@@ -388,7 +388,7 @@ describe('createDirectAppTransport / createAppTransport in chatgpt mode — no k
   });
 
   it('the model resolves per send from providerModel:chatgpt — never the global `model` row (llama3.2) — and a chatgpt pin wins', async () => {
-    const transport = createAppTransport('chatgpt', 'openai', undefined, appId);
+    const transport = createAppTransport('chatgpt', 'openai', { appId });
     setChatgptModel('gpt-6.1-sol');
     await settle();
     await transport.send(wireFor(appId), { signal: new AbortController().signal });

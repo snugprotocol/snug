@@ -23,10 +23,11 @@ import type { ReactElement } from 'react';
 
 import { CHATGPT_ERROR_CODES, CHATGPT_ERROR_SENTENCES } from '@snugprotocol/adapters';
 
-import { CHATGPT_DATA_USE, CHATGPT_MANAGE_USAGE_URL } from '../access/copy.js';
+import { CHATGPT_DATA_USE } from '../access/copy.js';
 import { ChatgptButton } from '../desktop/ChatgptButton.js';
 import { ChatgptSignInWait } from '../desktop/ChatgptSignInWait.js';
 import {
+  chatgptModelView,
   forgetChatgptRegistration,
   refreshChatgptModels,
   signInToChatgpt,
@@ -36,7 +37,8 @@ import {
 } from '../state/chatgptPlan.js';
 import { setChatgptEffort, setChatgptModel, useChatgptEffort, useChatgptModel } from '../state/mode.js';
 import { Button } from '../ui/Button.js';
-import { ExternalLink } from '../ui/ExternalLink.js';
+import { CHATGPT_DEFAULT_CHOICE, ChatgptModelOptions } from '../ui/ChatgptModelOptions.js';
+import { ManageUsageLink } from '../ui/ManageUsageLink.js';
 import { UsageLimitMessage } from '../ui/UsageLimitMessage.js';
 
 /** D7: sign-out is local + best-effort revocation; the account-side disconnect is ChatGPT's to do. */
@@ -105,7 +107,9 @@ export function ChatgptPlanRows(): ReactElement {
             and where the sign-in lives. The data-use sentence is the ONE non-legal home's, never retyped. */}
         <div className="hint" role="note" data-testid="chatgpt-consent-band">
           ChatGPT plan usage in Snug is a preview. {CHATGPT_DATA_USE} Your ChatGPT sign-in is kept on this computer,
-          outside the passphrase-protected file — it never rides exports or sync, and signing out deletes it.
+          outside the passphrase-protected file — it never rides exports or sync. Signing out deletes its tokens; the
+          registration this computer made with ChatGPT (an app id, not a credential) stays until you choose &ldquo;forget
+          this registration&rdquo;.
         </div>
         {plan !== 'unknown' && plan.registered ? (
           <>
@@ -154,12 +158,10 @@ export function ChatgptPlanRows(): ReactElement {
   }
 
   // ---- SIGNED IN, PLAN GRANTED ----
-  const models = plan.models;
-  // The plan's default is its own row; absence means the account list's first model (appModel.ts).
-  const resolvedId = model ?? models[0]?.id;
-  const resolved = models.find((candidate) => candidate.id === resolvedId);
-  const unlistedModel = model !== undefined && !models.some((candidate) => candidate.id === model);
-  const levels = resolved?.efforts ?? [];
+  // The ONE model derivation (ST2): the account's models, the default (the plan's own row, else the
+  // account list's first — appModel.ts), the resolved model and its levels.
+  const view = chatgptModelView(plan, model);
+  const { models, resolved, levels } = view;
   const unlistedLevel = effort !== undefined && !levels.includes(effort);
 
   return (
@@ -171,7 +173,7 @@ export function ChatgptPlanRows(): ReactElement {
         </span>
       </div>
       <span className="hint" data-testid="chatgpt-account">
-        {account} · <ExternalLink href={CHATGPT_MANAGE_USAGE_URL}>Manage usage</ExternalLink>
+        {account} · <ManageUsageLink />
       </span>
       {plan.limit !== undefined ? (
         plan.limit.code === 'usage_limit' ? (
@@ -185,21 +187,14 @@ export function ChatgptPlanRows(): ReactElement {
           <label htmlFor="chatgpt-model-select" className="provider-model-label">
             default model
           </label>
-          {/* The ACCOUNT's models, server order, display names (D6) — never a catalogue of ours. */}
+          {/* The ACCOUNT's models, server order, display names (D6) — never a catalogue of ours; the one option list (ST2). */}
           <select
             id="chatgpt-model-select"
             data-testid="chatgpt-model-select"
-            value={model ?? ''}
-            onChange={(event) => setChatgptModel(event.target.value === '' ? undefined : event.target.value)}
+            value={model ?? CHATGPT_DEFAULT_CHOICE}
+            onChange={(event) => setChatgptModel(event.target.value === CHATGPT_DEFAULT_CHOICE ? undefined : event.target.value)}
           >
-            <option value="">plan default{models[0] !== undefined ? ` (${models[0].name})` : ''}</option>
-            {models.map((candidate) => (
-              <option key={candidate.id} value={candidate.id}>
-                {candidate.name}
-              </option>
-            ))}
-            {/* A stored id the plan no longer lists stays visible and selected — never a silent "default". */}
-            {unlistedModel ? <option value={model}>{model} (not on your plan)</option> : null}
+            <ChatgptModelOptions view={view} value={model ?? CHATGPT_DEFAULT_CHOICE} />
           </select>
         </div>
       ) : null}

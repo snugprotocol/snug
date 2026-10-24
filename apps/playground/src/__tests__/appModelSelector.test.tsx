@@ -425,4 +425,24 @@ describe('ModelSelect on the ChatGPT plan (AC8, L5)', () => {
     expect(select()!.value).toBe('');
     expect(Array.from(select()!.options).some((o) => (o.textContent ?? '').includes('gpt-6.1-mini')), 'never shown as an Anthropic "(not listed)" pin').toBe(false);
   });
+
+  it('chatgpt mode, an UNSCOPED pin (no provider row — a legacy or local pin): "pinned for another mode — not used here", never "pinned for local model" (G5-C10)', async () => {
+    const g = await graph();
+    g.mode.setMode('chatgpt');
+    g.appModel.setAppModel(APP, 'llama3.2');
+    await flush();
+    await renderIn(g);
+    expect(container?.textContent).toContain('pinned for another mode — not used here');
+    expect(container?.textContent).not.toContain('pinned for local model');
+    expect(select()!.value).toBe('');
+    expect(Array.from(select()!.options).some((o) => (o.textContent ?? '').includes('llama3.2'))).toBe(false);
+  });
+
+  it('every selector on the plan says the ONE default label — "default (<name>)" — like the chip and Settings (ST2)', async () => {
+    const g = await graph();
+    g.mode.setMode('chatgpt');
+    await flush();
+    await renderIn(g);
+    expect(select()!.options[0]?.textContent).toBe('default (GPT-6.1 Sol)');
+  });
 });

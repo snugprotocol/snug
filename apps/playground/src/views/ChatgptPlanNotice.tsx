@@ -9,11 +9,10 @@
 
 import type { ReactElement } from 'react';
 
-import { CHATGPT_MANAGE_USAGE_URL } from '../access/copy.js';
 import { useChatgptPlan } from '../state/chatgptPlan.js';
 import { markChatgptNoticeShown, useChatgptNoticeShown, useMode } from '../state/mode.js';
 import { Button } from '../ui/Button.js';
-import { ExternalLink } from '../ui/ExternalLink.js';
+import { ManageUsageLink } from '../ui/ManageUsageLink.js';
 
 export function ChatgptPlanNotice(): ReactElement | null {
   const mode = useMode();
@@ -28,9 +27,7 @@ export function ChatgptPlanNotice(): ReactElement | null {
         <Button variant="primary" onClick={() => void markChatgptNoticeShown()}>
           Got it
         </Button>
-        <ExternalLink href={CHATGPT_MANAGE_USAGE_URL} className="btn btn-ghost">
-          Manage usage
-        </ExternalLink>
+        <ManageUsageLink className="btn btn-ghost" />
       </div>
     </div>
   );

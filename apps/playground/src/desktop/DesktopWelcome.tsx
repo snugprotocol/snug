@@ -13,13 +13,19 @@
 // back `ok` sets the mode and finishes the first run — a mode set before that would leave a
 // person who cancelled on a brain that refuses every turn. A named failure is said under the
 // card it came from; the other two cards stay live.
+//
+// ANOTHER CHOICE CANCELS A PENDING SIGN-IN (Gate 5 G5-A9). The keeper keeps a sign-in open for ten
+// minutes; a person who picks another card or skips while the browser is still out has decided, so
+// the pending sign-in is cancelled first — and a completion that lands late anyway (the browser
+// finished a moment after) is not allowed to set the mode over that later choice: only the sign-in
+// attempt the Welcome is still waiting on may finish the first run.
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import type { ReactElement } from 'react';
 import { useNavigate } from 'react-router';
 
 import { getPlatform } from '../platform/platform.js';
-import { signInToChatgpt, useChatgptSignInPending } from '../state/chatgptPlan.js';
+import { cancelChatgptSignIn, signInToChatgpt, useChatgptSignInPending } from '../state/chatgptPlan.js';
 import { setMode } from '../state/mode.js';
 import { useOllama } from '../state/ollama.js';
 import { Button } from '../ui/Button.js';
@@ -40,21 +46,38 @@ export function DesktopWelcome(): ReactElement {
   const planSeat = getPlatform().chatgptPlan !== undefined;
   const signingIn = useChatgptSignInPending();
   const [planFailure, setPlanFailure] = useState<string | undefined>(undefined);
+  /** The sign-in attempt the Welcome is waiting on; another choice moves past it, so a late completion finds itself stale. */
+  const attempt = useRef(0);
+
+  /** The person chose something else (or skipped): whatever sign-in is still out is cancelled and may no longer choose the mode. */
+  const abandonPlanSignIn = (): void => {
+    attempt.current += 1;
+    void cancelChatgptSignIn();
+  };
 
   const chooseLocal = (): void => {
+    abandonPlanSignIn();
     setMode('local');
     completeDesktopFirstRun();
   };
 
   const chooseServiceKey = (): void => {
+    abandonPlanSignIn();
     setMode('byok');
     completeDesktopFirstRun();
     navigate('/settings');
   };
 
+  const skip = (): void => {
+    abandonPlanSignIn();
+    completeDesktopFirstRun();
+  };
+
   const choosePlan = (): void => {
     setPlanFailure(undefined);
+    const mine = ++attempt.current;
     void signInToChatgpt().then((result) => {
+      if (mine !== attempt.current) return; // the person chose otherwise meanwhile — this completion is not theirs to act on
       if (result.ok) {
         // The hub is where the one-time notice shows (AC11) — no navigate to Settings.
         setMode('chatgpt');
@@ -136,7 +159,7 @@ export function DesktopWelcome(): ReactElement {
       </div>
 
       <div style={{ marginTop: 'var(--space-3)' }}>
-        <Button variant="ghost" data-testid="welcome-skip" onClick={() => completeDesktopFirstRun()}>
+        <Button variant="ghost" data-testid="welcome-skip" onClick={skip}>
           I&apos;ll look around first
         </Button>
       </div>

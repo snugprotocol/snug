@@ -134,6 +134,51 @@ describe('the ChatGPT-plan settings rows and their accessors (AC8, AC11, L4-10)'
     expect(mode.chatgptModelStore.get()).toBe('gpt-6.1-sol');
   });
 
+  it('setChatgptModel(undefined) clears the store AND deletes the row — the account list’s first model answers again (verifier)', async () => {
+    const { db, mode } = await fresh(chatgptDesktopPlatform());
+    mode.setChatgptModel('gpt-6.1-sol');
+    await settle();
+    expect(db.getSetting('providerModel:chatgpt')).toBe('gpt-6.1-sol');
+    mode.setChatgptModel(undefined);
+    await settle();
+    expect(mode.chatgptModelStore.get()).toBeUndefined();
+    expect(db.getSetting('providerModel:chatgpt')).toBeUndefined();
+    mode.hydrateSettings(db);
+    expect(mode.chatgptModelStore.get()).toBeUndefined();
+  });
+
+  // Gate 5 ST12 / A3: the level is checked at the settings boundary like the model id — `^[a-z][a-z0-9_-]{0,31}$`.
+  for (const bad of ['Ultra', 'very high', '', '../etc', 'x'.repeat(33), '-low', 'ultra high', 'über']) {
+    it(`setChatgptEffort(${JSON.stringify(bad)}) is refused at the settings boundary — no store change, no row (ST12 / A3)`, async () => {
+      const { db, mode } = await fresh(chatgptDesktopPlatform());
+      mode.setChatgptEffort('high');
+      await settle();
+      mode.setChatgptEffort(bad);
+      await settle();
+      if (bad.trim() === '') {
+        // Empty still means "clear" — no level is sent.
+        expect(mode.chatgptEffortStore.get()).toBeUndefined();
+        expect(db.getSetting('providerEffort:chatgpt')).toBeUndefined();
+      } else {
+        expect(mode.chatgptEffortStore.get()).toBe('high');
+        expect(db.getSetting('providerEffort:chatgpt')).toBe('high');
+      }
+    });
+  }
+
+  it('a level row from a foreign file that fails the shape is not hydrated into the store (ST12 / A3)', async () => {
+    const { db, mode } = await fresh(chatgptDesktopPlatform());
+    db.setSetting('providerEffort:chatgpt', 'Ultra Think 9000');
+    mode.hydrateSettings(db);
+    expect(mode.chatgptEffortStore.get()).toBeUndefined();
+    db.setSetting('providerEffort:chatgpt', 'xhigh');
+    mode.hydrateSettings(db);
+    expect(mode.chatgptEffortStore.get()).toBe('xhigh');
+    expect(mode.isChatgptEffort('medium-2')).toBe(true);
+    expect(mode.isChatgptEffort('a'.repeat(32))).toBe(true);
+    expect(mode.isChatgptEffort('a'.repeat(33))).toBe(false);
+  });
+
   for (const bad of ['bad id', '../etc', '', 'gpt\n6', '-leading-dash']) {
     it(`setChatgptModel(${JSON.stringify(bad)}) is refused at the settings boundary (isModelId, C5) — no store change, no row`, async () => {
       const { db, mode } = await fresh(chatgptDesktopPlatform());

@@ -31,7 +31,8 @@
 // exports exist.
 
 import type { AdapterResult } from '@snugprotocol/adapters';
-import { CHATGPT_ERROR_CODES } from '@snugprotocol/adapters';
+import { CHATGPT_ERROR_CODES, CHATGPT_ERROR_SENTENCES } from '@snugprotocol/adapters';
+import { ChatgptPlanError } from '@snugprotocol/auth';
 import { createMemoryBackend, openUserDb, type UserDb } from '@snugprotocol/db';
 import { buildAppRequest, type ScheduleStep, type ScheduledTask } from '@snugprotocol/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -48,12 +49,27 @@ const h = vi.hoisted(() => ({
 
 vi.mock('@snugprotocol/adapters', async (importOriginal) => {
   const real = await importOriginal<typeof import('@snugprotocol/adapters')>();
+  /** The real adapter's own mapping of a keeper refusal to its named result (`bearerFailureResult`), so a pre-send failure reads as it would on the wire. */
+  const bearerFailure = (failure: Extract<import('@snugprotocol/adapters').BearerResult, { ok: false }>): import('@snugprotocol/adapters').AdapterResult => {
+    const code =
+      failure.code === 'sign_in_needed'
+        ? real.CHATGPT_ERROR_CODES.SIGN_IN_NEEDED
+        : failure.code === 'plan_not_granted'
+          ? real.CHATGPT_ERROR_CODES.PLAN_NOT_GRANTED
+          : real.CHATGPT_ERROR_CODES.USAGE_UNAVAILABLE;
+    return { ok: false, code, message: real.CHATGPT_ERROR_SENTENCES[code], retryable: failure.retryable };
+  };
   return {
     ...real,
     openaiResponsesAdapter: vi.fn((options: Record<string, unknown>) => {
       h.responses.push(options);
+      const bearer = options.bearer as import('@snugprotocol/adapters').BearerSource;
       return {
         complete: async () => {
+          // Like the real adapter: a bearer per attempt, FIRST — a keeper refusal is the named result and
+          // nothing is sent (G5-C11: the recorder must ask, or "reached the route" could never be told apart).
+          const got = await bearer.get();
+          if (!got.ok) return bearerFailure(got);
           h.completes += 1;
           return h.script.shift() ?? { ok: true, text: '{"answer":"answered on the plan"}', toolCalls: [], stopReason: 'end' };
         },
@@ -110,7 +126,9 @@ setPlatform(chatgptDesktopPlatform());
 
 const NOW = '2026-10-23T08:00:00.000Z';
 const OPENAI_KEY = 'sk-proj-test-openai-key-that-must-never-be-read-0123456789';
-const LIMIT_SENTENCE = 'Usage limit reached — Review your plan or this app’s limit in ChatGPT settings.';
+/** The adapters' fixed sentence — the result page recognises a limit by comparing to these bytes (L5-3), so the pin is the constant, never a retype. */
+const LIMIT_SENTENCE = CHATGPT_ERROR_SENTENCES[CHATGPT_ERROR_CODES.USAGE_LIMIT];
+const UNAVAILABLE_SENTENCE = CHATGPT_ERROR_SENTENCES[CHATGPT_ERROR_CODES.USAGE_UNAVAILABLE];
 
 let db: UserDb;
 let appId: string;
@@ -295,6 +313,60 @@ describe('`unknown` = WAIT at launch (F9; plan §4 row 5)', () => {
     session.resolveFirstRead(READY);
     await expect(running).resolves.toMatchObject({ status: 'ok' });
   });
+
+  // Gate 5 G5-C1 / A1: WAIT, but never for ever — a first read that never answers (a hung IPC, an
+  // unreadable file nobody settled) is refused BY NAME once the bound elapses, never a hanging step.
+  it('a first read that NEVER answers: the wait is bounded (wait(3000)), then the step is refused by name — never a hang', async () => {
+    await bootKeeper('unknown', false);
+    const wait = vi.fn(() => Promise.resolve());
+    const step = thinkStep();
+    const outcome = await productionLike(wait)(step, context([step]));
+    expect(outcome).toMatchObject({ status: 'refused', summary: 'the ChatGPT session couldn’t be read — open Settings', calls: { ai: 0, net: 0 }, blockedBy: 'brain' });
+    expect(wait).toHaveBeenCalledWith(3000);
+    expect(h.completes).toBe(0);
+  });
+
+  it('executeAppThink called directly: the same bound, the same refusal by name', async () => {
+    await bootKeeper('unknown', false);
+    const wait = vi.fn(() => Promise.resolve());
+    const step = thinkStep();
+    const outcome = await executeAppThink(step, context([step]), { transportFor: defaultTransportFor, wait });
+    expect(outcome).toMatchObject({ status: 'refused', summary: 'the ChatGPT session couldn’t be read — open Settings', blockedBy: 'brain' });
+    expect(h.completes).toBe(0);
+  });
+
+  it('the editor’s hint keeps proceeding on `unknown` — it never waited, and must not say *blocked* while the file is still being read', async () => {
+    await bootKeeper('unknown', false);
+    expect(keylessBrainGate(db, appId)).toBeUndefined();
+  });
+});
+
+// Gate 5 G5-C1 / the verifier: the FOURTH `initScheduler` chain — `reinitWhenReady` after a registry-epoch
+// bump (a file swap) — waits for the keeper like the three explicit chains, and like them never for ever.
+describe('the swap-seam re-init (scheduler.ts reinitWhenReady) waits for the keeper’s first read, bounded (G5-C1)', () => {
+  it('a never-answering first read: the scheduler re-inits once the 3 s bound elapses, not before', async () => {
+    const { initScheduler, __resetSchedulerForTests, schedulerStore } = await import('../schedule/scheduler.js');
+    const { resetThreadSessions } = await import('../agent/threadSessions.js');
+    const ticker: import('../schedule/scheduler.js').SchedulerDeps['ticker'] = () => ({ start: () => undefined, stop: () => undefined, nextFireAt: () => undefined });
+    __resetSchedulerForTests();
+    try {
+      await initScheduler({ db: () => Promise.resolve(db), execute: async () => ({ status: 'ok', calls: { ai: 0, net: 0 } }), locks: undefined, ticker, now: () => new Date(NOW), allows: () => true });
+      expect(schedulerStore.get().ready).toBe(true);
+      // The keeper's first read is out again and never answers.
+      await bootKeeper('unknown', false);
+      vi.useFakeTimers({ toFake: ['setTimeout'] });
+      resetThreadSessions(); // the swap seam every file replacement goes through
+      expect(schedulerStore.get().ready).toBe(false);
+      await vi.advanceTimersByTimeAsync(2_900);
+      expect(schedulerStore.get().ready, 'still waiting for the keeper inside the bound').toBe(false);
+      await vi.advanceTimersByTimeAsync(200);
+      vi.useRealTimers();
+      await vi.waitFor(() => expect(schedulerStore.get().ready).toBe(true));
+    } finally {
+      vi.useRealTimers();
+      __resetSchedulerForTests();
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -309,7 +381,9 @@ describe('the scheduled error policy on the plan (L4-7; AC7, AC14)', () => {
     const step = thinkStep();
     const outcome = await executeAppThink(step, context([step]), { transportFor: defaultTransportFor, wait });
     expect(outcome).toMatchObject({ status: 'refused', calls: { ai: 1, net: 0 } });
-    expect(outcome.summary).toContain('Usage limit reached');
+    // EXACTLY the single-homed sentence (verifier R2): the result page compares, never matches loosely.
+    expect(outcome.summary).toBe(LIMIT_SENTENCE);
+    expect(outcome.blockedBy, 'a limit is not a brain-missing state').toBeUndefined();
     expect(h.completes).toBe(1);
     expect(wait).not.toHaveBeenCalled();
   });
@@ -328,21 +402,81 @@ describe('the scheduled error policy on the plan (L4-7; AC7, AC14)', () => {
     h.script.push(failure(CHATGPT_ERROR_CODES.USAGE_LIMIT, LIMIT_SENTENCE, false));
     const step = thinkStep();
     const outcome = await productionLike(() => Promise.resolve())(step, context([step]));
-    expect(outcome).toMatchObject({ status: 'refused', calls: { ai: 1, net: 0 } });
+    expect(outcome).toMatchObject({ status: 'refused', summary: LIMIT_SENTENCE, calls: { ai: 1, net: 0 } });
+    expect(outcome.blockedBy).toBeUndefined();
     expect(h.completes).toBe(1);
   });
 
+  it('CHATGPT_USAGE_LIMIT on the AGENT path (tools: true) → the same refusal, the same bytes, no blockedBy — ONE policy (G5-C11 / ST10)', async () => {
+    h.script.push(failure(CHATGPT_ERROR_CODES.USAGE_LIMIT, LIMIT_SENTENCE, true));
+    const wait = vi.fn(() => Promise.resolve());
+    const step = thinkStep({ tools: true });
+    const outcome = await productionLike(wait)(step, context([step]));
+    expect(outcome).toMatchObject({ status: 'refused', summary: LIMIT_SENTENCE, calls: { ai: 1, net: 0 } });
+    expect(outcome.blockedBy).toBeUndefined();
+    expect(h.completes).toBe(1);
+    expect(wait).not.toHaveBeenCalled();
+  });
+
   it('CHATGPT_USAGE_UNAVAILABLE → exactly ONE retry after the wait (1 500 ms), then failed by name with retryable: true', async () => {
-    h.script.push(failure(CHATGPT_ERROR_CODES.USAGE_UNAVAILABLE, 'ChatGPT usage is unavailable right now — try again shortly.', true));
-    h.script.push(failure(CHATGPT_ERROR_CODES.USAGE_UNAVAILABLE, 'ChatGPT usage is unavailable right now — try again shortly.', true));
+    h.script.push(failure(CHATGPT_ERROR_CODES.USAGE_UNAVAILABLE, UNAVAILABLE_SENTENCE, true));
+    h.script.push(failure(CHATGPT_ERROR_CODES.USAGE_UNAVAILABLE, UNAVAILABLE_SENTENCE, true));
     const wait = vi.fn(() => Promise.resolve());
     const step = thinkStep();
     const outcome = await executeAppThink(step, context([step]), { transportFor: defaultTransportFor, wait });
-    expect(outcome).toMatchObject({ status: 'failed', retryable: true });
-    expect(outcome.summary).toContain('unavailable');
+    expect(outcome).toMatchObject({ status: 'failed', summary: UNAVAILABLE_SENTENCE, retryable: true, calls: { ai: 2, net: 0 } });
     expect(h.completes).toBe(2);
     expect(wait).toHaveBeenCalledTimes(1);
     expect(wait).toHaveBeenCalledWith(1500);
+  });
+
+  it('CHATGPT_USAGE_UNAVAILABLE on the AGENT path → the same ONE retry after wait(1500), then failed by name, retryable (G5-C11)', async () => {
+    h.script.push(failure(CHATGPT_ERROR_CODES.USAGE_UNAVAILABLE, UNAVAILABLE_SENTENCE, true));
+    h.script.push(failure(CHATGPT_ERROR_CODES.USAGE_UNAVAILABLE, UNAVAILABLE_SENTENCE, true));
+    const wait = vi.fn(() => Promise.resolve());
+    const step = thinkStep({ tools: true });
+    const outcome = await productionLike(wait)(step, context([step]));
+    expect(outcome).toMatchObject({ status: 'failed', summary: UNAVAILABLE_SENTENCE, retryable: true, calls: { ai: 2, net: 0 } });
+    expect(h.completes).toBe(2);
+    expect(wait).toHaveBeenCalledTimes(1);
+    expect(wait).toHaveBeenCalledWith(1500);
+  });
+
+  it('CHATGPT_USAGE_UNAVAILABLE then a reply on the AGENT path → the retry answers and the step is ok', async () => {
+    h.script.push(failure(CHATGPT_ERROR_CODES.USAGE_UNAVAILABLE, UNAVAILABLE_SENTENCE, true));
+    const wait = vi.fn(() => Promise.resolve());
+    const step = thinkStep({ tools: true });
+    const outcome = await productionLike(wait)(step, context([step]));
+    expect(outcome).toMatchObject({ status: 'ok', calls: { ai: 2, net: 0 } });
+    expect(h.completes).toBe(2);
+    expect(wait).toHaveBeenCalledTimes(1);
+  });
+
+  it('a PRE-SEND keeper refusal (usage_unavailable before any request) is retried once and charged NOTHING — it never left the page (G5-C11)', async () => {
+    session.nextAccessToken(new ChatgptPlanError('the session file could not be read', 'usage_unavailable', true));
+    session.nextAccessToken(new ChatgptPlanError('the session file could not be read', 'usage_unavailable', true));
+    const wait = vi.fn(() => Promise.resolve());
+    const step = thinkStep();
+    const outcome = await executeAppThink(step, context([step]), { transportFor: defaultTransportFor, wait });
+    expect(outcome).toMatchObject({ status: 'failed', summary: UNAVAILABLE_SENTENCE, retryable: true, calls: { ai: 0, net: 0 } });
+    expect(h.completes, 'nothing reached the recorder').toBe(0);
+    expect(wait).toHaveBeenCalledTimes(1);
+  });
+
+  it('a PRE-SEND keeper refusal on the AGENT path is charged nothing either (the gate un-counts it)', async () => {
+    session.nextAccessToken(new ChatgptPlanError('sign in', 'sign_in_needed'));
+    const step = thinkStep({ tools: true });
+    const outcome = await productionLike(() => Promise.resolve())(step, context([step]));
+    expect(outcome).toMatchObject({ status: 'failed', summary: CHATGPT_ERROR_SENTENCES[CHATGPT_ERROR_CODES.SIGN_IN_NEEDED], calls: { ai: 0, net: 0 } });
+    expect(h.completes).toBe(0);
+  });
+
+  it('a 503 that REACHED the route is charged (the bearer was handed out) — the recorder stands in for the route here', async () => {
+    h.script.push(failure(CHATGPT_ERROR_CODES.USAGE_UNAVAILABLE, UNAVAILABLE_SENTENCE, true));
+    h.script.push(failure(CHATGPT_ERROR_CODES.USAGE_UNAVAILABLE, UNAVAILABLE_SENTENCE, true));
+    const step = thinkStep();
+    const outcome = await productionLike(() => Promise.resolve())(step, context([step]));
+    expect(outcome.calls).toEqual({ ai: 2, net: 0 });
   });
 
   it('CHATGPT_USAGE_UNAVAILABLE then a reply → the retry answers and the step is ok', async () => {
@@ -356,14 +490,25 @@ describe('the scheduled error policy on the plan (L4-7; AC7, AC14)', () => {
   });
 
   for (const code of [CHATGPT_ERROR_CODES.SIGN_IN_NEEDED, CHATGPT_ERROR_CODES.PLAN_NOT_GRANTED]) {
-    it(`${code} mid-run → failed by name, one AI call, no retry`, async () => {
+    it(`${code} mid-run → failed by name (the fixed sentence), one AI call, no retry`, async () => {
       h.script.push(failure(code, `the plan said ${code}`, false));
       const wait = vi.fn(() => Promise.resolve());
       const step = thinkStep();
       const outcome = await executeAppThink(step, context([step]), { transportFor: defaultTransportFor, wait });
-      expect(outcome).toMatchObject({ status: 'failed', calls: { ai: 1, net: 0 } });
+      expect(outcome).toMatchObject({ status: 'failed', summary: CHATGPT_ERROR_SENTENCES[code], calls: { ai: 1, net: 0 } });
       expect(h.completes).toBe(1);
       expect(wait).not.toHaveBeenCalled();
+      // The mode is the user's choice, not the step's to change (verifier R6): still the plan after a sign-in-needed answer.
+      expect(modeStore.get()).toBe('chatgpt');
+    });
+
+    it(`${code} mid-run on the AGENT path → failed by name too, one AI call`, async () => {
+      h.script.push(failure(code, `the plan said ${code}`, false));
+      const step = thinkStep({ tools: true });
+      const outcome = await productionLike(() => Promise.resolve())(step, context([step]));
+      expect(outcome).toMatchObject({ status: 'failed', summary: CHATGPT_ERROR_SENTENCES[code], calls: { ai: 1, net: 0 } });
+      expect(h.completes).toBe(1);
+      expect(modeStore.get()).toBe('chatgpt');
     });
   }
 
@@ -396,6 +541,32 @@ describe('unattended steps run on the model’s DEFAULT level, never the stored 
     expect(getByokKeySpy).not.toHaveBeenCalled();
   });
 
+  // Verifier R6: the scheduled agent's `configFrom`, crossed over every keeper state — the plan's config is
+  // built with NO key read whatever the keeper says; signed out / not granted refuse at the gate, limited runs.
+  for (const [label, status] of [
+    ['ready', READY],
+    ['signed out', SIGNED_OUT],
+    ['plan not granted', NOT_GRANTED],
+    ['limited', LIMITED],
+  ] as const) {
+    it(`configFrom × keeper ${label}: getByokKey never called, no byok: secret read, and the Responses adapter (when built) carries the plan's model`, async () => {
+      await bootKeeper(status);
+      const step = thinkStep({ tools: true });
+      const outcome = await productionLike()(step, context([step]));
+      if (status === SIGNED_OUT || status === NOT_GRANTED) {
+        expect(outcome.status).toBe('refused');
+        expect(h.responses).toHaveLength(0);
+      } else {
+        expect(outcome.status).toBe('ok');
+        expect(h.responses.length).toBeGreaterThan(0);
+        for (const options of h.responses) expect(options).toMatchObject({ model: 'gpt-6.1-sol' });
+      }
+      expect(getByokKeySpy).not.toHaveBeenCalled();
+      expect(byokSecretReads()).toEqual([]);
+      expect(modeStore.get()).toBe('chatgpt');
+    });
+  }
+
   it('a model whose levels are unknown runs with NO level unattended — never the stored top one', async () => {
     setChatgptModel('gpt-6.1-mini'); // no defaultEffort in the cached list
     setChatgptEffort('ultra');
@@ -418,7 +589,7 @@ describe('unattended steps run on the model’s DEFAULT level, never the stored 
     setChatgptEffort('ultra');
     await settle();
     const wire = buildAppRequest({ appId, instanceId: 'inst', requestId: 'req', action: 'ask', payload: {} });
-    await createAppTransport('chatgpt', 'openai', undefined, appId).send(wire, { signal: new AbortController().signal });
+    await createAppTransport('chatgpt', 'openai', { appId }).send(wire, { signal: new AbortController().signal });
     expect(h.responses.at(-1)).toMatchObject({ effort: 'ultra' });
   });
 });
@@ -447,7 +618,7 @@ describe('F15 — an imported file whose mode is chatgpt stays under the endpoin
     appId = foreignAppId;
 
     const wire = buildAppRequest({ appId, instanceId: 'inst', requestId: 'req', action: 'ask', payload: {} });
-    const turn = await createAppTransport('chatgpt', 'openai', undefined, appId).send(wire, { signal: new AbortController().signal });
+    const turn = await createAppTransport('chatgpt', 'openai', { appId }).send(wire, { signal: new AbortController().signal });
     expect(turn).toMatchObject({ ok: false, code: 'CONSENT_REQUIRED', message: ENDPOINTS_UNCONFIRMED });
 
     const toolFree = thinkStep();

@@ -126,7 +126,7 @@ beforeEach(async () => {
  */
 async function routeTheTransportTakes(): Promise<string> {
   h.routes = [];
-  await resolveAppTransport(modeStore.get(), providerStore.get(), undefined, APP).send('{}', { signal: new AbortController().signal });
+  await resolveAppTransport(modeStore.get(), providerStore.get(), { appId: APP }).send('{}', { signal: new AbortController().signal });
   expect(h.routes).toHaveLength(1);
   const route = h.routes[0]!;
   if (route.kind === 'server') return 'subscription';

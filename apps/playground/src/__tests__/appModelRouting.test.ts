@@ -112,7 +112,7 @@ describe('AC6a — app-frame turns route to the app’s model', () => {
     const { calls, fetchImpl } = recordingFetch();
     vi.spyOn(globalThis, 'fetch').mockImplementation(fetchImpl);
 
-    const transport = resolveAppTransport('byok', 'anthropic', undefined, APP_A);
+    const transport = resolveAppTransport('byok', 'anthropic', { appId: APP_A });
     await transport.send('[SNUG_APP_REQUEST] {"snug":1}', { signal: new AbortController().signal });
 
     expect(calls).toEqual(['claude-opus-5']);
@@ -126,7 +126,7 @@ describe('AC6a — app-frame turns route to the app’s model', () => {
     const { calls, fetchImpl } = recordingFetch();
     vi.spyOn(globalThis, 'fetch').mockImplementation(fetchImpl);
 
-    const transport = resolveAppTransport('byok', 'anthropic', undefined, APP_B);
+    const transport = resolveAppTransport('byok', 'anthropic', { appId: APP_B });
     await transport.send('[SNUG_APP_REQUEST] {"snug":1}', { signal: new AbortController().signal });
 
     expect(calls).toEqual(['claude-opus-4-8']);
@@ -147,7 +147,7 @@ describe('AC6a — app-frame turns route to the app’s model', () => {
     const { calls, fetchImpl } = recordingFetch();
     vi.spyOn(globalThis, 'fetch').mockImplementation(fetchImpl);
 
-    const transport = createAppTransport('byok', 'anthropic', undefined, APP_A);
+    const transport = createAppTransport('byok', 'anthropic', { appId: APP_A });
     await transport.send('[SNUG_APP_REQUEST] {"snug":1}', { signal: new AbortController().signal });
 
     setAppModel(APP_A, 'claude-sonnet-5');
@@ -164,10 +164,10 @@ describe('AC6a — app-frame turns route to the app’s model', () => {
     const { calls, fetchImpl } = recordingFetch();
     vi.spyOn(globalThis, 'fetch').mockImplementation(fetchImpl);
 
-    await resolveAppTransport('byok', 'anthropic', undefined, APP_A).send('[SNUG_APP_REQUEST] {"snug":1}', {
+    await resolveAppTransport('byok', 'anthropic', { appId: APP_A }).send('[SNUG_APP_REQUEST] {"snug":1}', {
       signal: new AbortController().signal,
     });
-    await resolveAppTransport('byok', 'anthropic', undefined, APP_B).send('[SNUG_APP_REQUEST] {"snug":1}', {
+    await resolveAppTransport('byok', 'anthropic', { appId: APP_B }).send('[SNUG_APP_REQUEST] {"snug":1}', {
       signal: new AbortController().signal,
     });
 
@@ -260,7 +260,7 @@ describe('AC7 — the brain override and the mock provider ignore the pick', () 
     await flush();
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('network must not be touched'));
 
-    const transport = resolveAppTransport('byok', 'mock', undefined, APP_A);
+    const transport = resolveAppTransport('byok', 'mock', { appId: APP_A });
     const result = await transport.send('[SNUG_APP_REQUEST] {"snug":1}', {
       signal: new AbortController().signal,
     });
@@ -280,7 +280,7 @@ describe('AC8 — subscription mode carries the resolved model to /invoke', () =
     const { calls, fetchImpl } = recordingFetch();
     vi.spyOn(globalThis, 'fetch').mockImplementation(fetchImpl);
 
-    const transport = resolveAppTransport('subscription', 'anthropic', undefined, APP_A);
+    const transport = resolveAppTransport('subscription', 'anthropic', { appId: APP_A });
     await transport.send('[SNUG_APP_REQUEST] {"snug":1}', { signal: new AbortController().signal });
 
     // The server already accepts and swaps a per-request `model` (routes/invoke.ts:96-98),
@@ -346,7 +346,7 @@ describe('AC10 — a provider pin routes adapter, key and model (per send, no re
 
     // The captured `provider` argument is the RESOLVED DEFAULT (anthropic) — the pin
     // must override it inside the per-send resolution, not rely on the caller.
-    const transport = createAppTransport('byok', 'anthropic', undefined, APP_A);
+    const transport = createAppTransport('byok', 'anthropic', { appId: APP_A });
     await transport.send('[SNUG_APP_REQUEST] {"snug":1}', { signal: new AbortController().signal });
 
     expect(calls).toEqual(['api.openai.com · gpt-4o-mini · sk-openai-key']);
@@ -356,7 +356,7 @@ describe('AC10 — a provider pin routes adapter, key and model (per send, no re
     const { calls, fetchImpl } = dualRecordingFetch();
     vi.spyOn(globalThis, 'fetch').mockImplementation(fetchImpl);
 
-    const transport = createAppTransport('byok', 'anthropic', undefined, APP_A);
+    const transport = createAppTransport('byok', 'anthropic', { appId: APP_A });
     await transport.send('[SNUG_APP_REQUEST] {"snug":1}', { signal: new AbortController().signal });
     setAppPin(APP_A, { provider: 'openai', model: 'gpt-4o-mini' });
     await flush();
@@ -407,7 +407,7 @@ describe('AC10 — a provider pin routes adapter, key and model (per send, no re
     const { calls, fetchImpl } = dualRecordingFetch();
     vi.spyOn(globalThis, 'fetch').mockImplementation(fetchImpl);
 
-    const transport = createAppTransport('byok', 'anthropic', undefined, APP_B);
+    const transport = createAppTransport('byok', 'anthropic', { appId: APP_B });
     await transport.send('[SNUG_APP_REQUEST] {"snug":1}', { signal: new AbortController().signal });
 
     expect(calls[0]).toContain('api.anthropic.com');

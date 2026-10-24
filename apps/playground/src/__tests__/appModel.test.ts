@@ -29,6 +29,7 @@ import {
   appProviderPinFor,
   appProviderStore,
   hydrateAppModels,
+  pinFamilyApplies,
   resolveModelForApp,
   resolveProviderForApp,
   setAppModel,
@@ -335,6 +336,22 @@ describe('pin families — a pin routes only in the mode family that made it (L4
     await flush();
     expect(resolveModelForApp(APP_A)).toBe('llama3.2');
     expect(appPinFamily(APP_A)).toBe('byok');
+  });
+
+  it('SUBSCRIPTION mode: a chatgpt pin is IGNORED — a plan model is never sent to the hub (G5-C10); byok and unscoped pins still ride', async () => {
+    const db = await installTestUserDb();
+    db.setSetting('mode', 'subscription');
+    modeStore.set('subscription');
+    modelStore.set('hub-default');
+    setAppPin(APP_A, { provider: 'chatgpt', model: 'gpt-6.1-mini' });
+    await flush();
+    expect(pinFamilyApplies('chatgpt', 'subscription')).toBe(false);
+    expect(resolveModelForApp(APP_A)).toBe('hub-default');
+    expect(pinFamilyApplies('byok', 'subscription')).toBe(true);
+    expect(pinFamilyApplies('local', 'subscription')).toBe(true);
+    setAppPin(APP_A, { provider: 'anthropic', model: 'claude-opus-5' });
+    await flush();
+    expect(resolveModelForApp(APP_A)).toBe('claude-opus-5');
   });
 
   it('a local pin still applies in local mode (the family matches)', async () => {

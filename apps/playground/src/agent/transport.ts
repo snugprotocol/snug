@@ -21,9 +21,10 @@ import {
   type ByokProvider,
   type PlaygroundMode,
 } from '../state/mode.js';
+import { chatgptEffortFor } from '../state/chatgptPlan.js';
 import { getUserDb } from '../state/userdb.js';
 import { currentBrain } from '../state/webllm.js';
-import { chatgptEffortFor, createTurnAdapter, type DirectMode } from './adapter.js';
+import { createTurnAdapter, type DirectMode } from './adapter.js';
 import { guardWireForApp } from './pseudonymizeEgress.js';
 
 /**
@@ -94,8 +95,28 @@ export interface DirectTransportOptions {
   unattended?: boolean;
 }
 
-/** Options every app transport takes beyond its stores — see `DirectTransportOptions.unattended`. */
+/**
+ * What `createAppTransport` / `resolveAppTransport` take beyond the mode and provider — ONE options
+ * object (Gate 5 ST10), so a new seam is a named field and never another trailing positional.
+ */
 export interface AppTransportOptions {
+  /** The in-app turn's LLM feed — see `DirectTransportOptions.onLlmEvent`. Subscription ignores it. */
+  onLlmEvent?: (event: AgentTurnEvent) => void;
+  /** The installed app this transport serves — see `DirectTransportOptions.appId`. */
+  appId?: string;
+  /**
+   * Fired when an APP's turn begins — the same seam `useBuilderChat` gives the builder
+   * (TASK-20260813, owner repro 2026-08-13).
+   *
+   * Without it the inspector was reset by builder turns ONLY, so an app's own turns
+   * (a Chess move) appended forever. Since `agent-turn.ts` numbers round trips from 0
+   * per turn, those accumulated entries collided on index with every later turn, and a
+   * stale `pending` entry could keep its timer ticking under finished calls. The
+   * reducer now settles pending-first as a backstop; this closes the accumulation that
+   * made collisions likely in the first place.
+   */
+  onTurnStart?: () => void;
+  /** Nobody is watching this turn — see `DirectTransportOptions.unattended`. */
   unattended?: boolean;
 }
 
@@ -239,32 +260,14 @@ export function createDirectAppTransport(options: DirectTransportOptions): Agent
  * useBuilderChat stale-discriminator bug this task already fixed once: when a
  * behavior is conditional, evaluate the condition where the CALL happens.
  */
-export function createAppTransport(
-  mode: PlaygroundMode,
-  provider: ByokProvider,
-  onLlmEvent?: (event: AgentTurnEvent) => void,
-  appId?: string,
-  /**
-   * Fired when an APP's turn begins — the same seam `useBuilderChat` gives the builder
-   * (TASK-20260813, owner repro 2026-08-13).
-   *
-   * Without it the inspector was reset by builder turns ONLY, so an app's own turns
-   * (a Chess move) appended forever. Since `agent-turn.ts` numbers round trips from 0
-   * per turn, those accumulated entries collided on index with every later turn, and a
-   * stale `pending` entry could keep its timer ticking under finished calls. The
-   * reducer now settles pending-first as a backstop; this closes the accumulation that
-   * made collisions likely in the first place.
-   */
-  onTurnStart?: () => void,
-  transportOptions: AppTransportOptions = {},
-): AgentTransport {
+export function createAppTransport(mode: PlaygroundMode, provider: ByokProvider, transportOptions: AppTransportOptions = {}): AgentTransport {
   return {
     send(wire, options) {
-      onTurnStart?.();
+      transportOptions.onTurnStart?.();
       // The R-9 egress scrub deliberately does NOT live here: it guards inside BOTH leaf
       // producers (`createDirectAppTransport`, `createServerAppTransport`), so a caller
       // reaching a lower export is bound too (Gate-5 review, altitude finding 5).
-      return resolveAppTransport(mode, provider, onLlmEvent, appId, transportOptions).send(wire, options);
+      return resolveAppTransport(mode, provider, transportOptions).send(wire, options);
     },
   };
 }
@@ -273,13 +276,8 @@ export function createAppTransport(
  * The brain/settings decision, evaluated per send (see createAppTransport).
  * Exported for the consumer-altitude tests only.
  */
-export function resolveAppTransport(
-  mode: PlaygroundMode,
-  provider: ByokProvider,
-  onLlmEvent?: (event: AgentTurnEvent) => void,
-  appId?: string,
-  transportOptions: AppTransportOptions = {},
-): AgentTransport {
+export function resolveAppTransport(mode: PlaygroundMode, provider: ByokProvider, transportOptions: AppTransportOptions = {}): AgentTransport {
+  const { onLlmEvent, appId } = transportOptions;
   // AL-07: the experimental webllm brain OVERRIDES the configured mode entirely —
   // including subscription. `'webllm'` runs the in-page engine; `'demo'` is the
   // graceful no-WebGPU fallback (the shell banner explains it). `'settings'` is the

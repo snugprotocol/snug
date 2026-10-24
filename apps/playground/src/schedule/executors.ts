@@ -88,7 +88,7 @@ import { chatBrainRoute, chatDoorOpen, type ReaderBrainRoute } from '../access/e
 import type { FetchedSource, FetchFirstResult } from '../access/fetchFirst.js';
 import type { MaterialisedSet } from '../access/service.js';
 import { oneLine } from '../agent/sharedDdl.js';
-import { chatgptPlanReady } from '../state/chatgptPlan.js';
+import { chatgptPlanReadyBounded } from '../state/chatgptPlan.js';
 import { appHasSidecarFact } from '../state/sidecarLive.js';
 import { defaultAppRunDeps, executeAppRun, type AppRunDeps } from './appRun.js';
 import { CANCELLED_SUMMARY, defaultTransportFor, executeAppThink, keylessBrainGate, type AppThinkDeps, type AppThinkStep } from './appThink.js';
@@ -114,6 +114,8 @@ export interface StepExecutorDeps {
    * tool-free, ungated, as before PR-4 (the unit seam).
    */
   brainRouteFor?(db: UserDb, appId: string): ReaderBrainRoute;
+  /** The pauses an *ask* step makes (the plan's one retry, the bound on the keeper's first read) — a recorder in tests; see `AppThinkDeps.wait`. */
+  wait?: AppThinkDeps['wait'];
   /**
    * The *Run [app]* seams (`appRun.ts`): the platform seat, the hidden mount store, the
    * live-host registry, the runtime composition. Required — a unit fake that wants the arm
@@ -233,7 +235,7 @@ async function answerAsk(step: AppThinkStep, ctx: StepContext, deps: StepExecuto
   const unavailable = !chatDoorOpen(route) ? 'brain' : appHasSidecarFact(ctx.db, step.appId) ? 'sidecar' : undefined;
   if (unavailable !== undefined) return { ...(await executeAppThink(step, ctx, deps)), tools: { unavailable } };
   const { executeAppAgent } = await import('./appAgent.js');
-  return executeAppAgent(step, ctx);
+  return executeAppAgent(step, ctx, deps.wait !== undefined ? { wait: deps.wait } : {});
 }
 
 /**
@@ -244,11 +246,12 @@ async function answerAsk(step: AppThinkStep, ctx: StepContext, deps: StepExecuto
 async function executeAsk(step: AppThinkStep, ctx: StepContext, deps: StepExecutorDeps): Promise<StepOutcome> {
   // The ChatGPT-plan keeper's first read answers before the gate reads it (TASK-20261023 L4-6, F9):
   // a launch catch-up gating on `'unknown'` would either refuse a valid session or send on one the
-  // page has not read. Resolved at once on every other route.
-  await chatgptPlanReady();
+  // page has not read. Resolved at once on every other route — and BOUNDED (G5-C1): a read that never
+  // answers lets the gate refuse the step by name instead of hanging it.
+  await chatgptPlanReadyBounded(deps.wait);
   const route = deps.brainRouteFor?.(ctx.db, step.appId);
   if (route !== undefined) {
-    const refused = keylessBrainGate(ctx.db, step.appId, route);
+    const refused = keylessBrainGate(ctx.db, step.appId, route, { unknown: 'refuse' });
     if (refused !== undefined) return refused;
   }
   if (step.refreshFirst !== true) return answerAsk(step, ctx, deps, route);

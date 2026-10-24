@@ -111,9 +111,9 @@ function readerBrainRoute(appId: string, hasKey: (provider: 'anthropic' | 'opena
 
   const mode = modeStore.get();
   if (mode === 'subscription') return { kind: 'subscription', provider, keyMissing: false };
-  // The ChatGPT plan is a real brain with the data lane and no key to miss (TASK-20261023 L4-5):
-  // whatever the keeper says, the turn is routed to it — a missing session is its named result.
-  if (mode === 'chatgpt') return { kind: adapterKindFor({ mode, provider, hasKey: false }), provider, keyMissing: false };
+  // The ChatGPT plan is a real brain with the data lane and no key to miss (TASK-20261023 L4-5): it
+  // falls through to `adapterKindFor`'s own arm with no pin and no key read — whatever the keeper says,
+  // the turn is routed to it, a missing session being its named result (Gate 5 ST5: no copied arm).
   const pinned = mode === 'byok' && provider !== 'mock' ? byokProviderPinFor(appId) : undefined;
   const effective = pinned ?? provider;
   // local talks to an unauthenticated endpoint and never reads a key (createDirectAppTransport).

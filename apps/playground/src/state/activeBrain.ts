@@ -59,10 +59,9 @@ export function resolveActiveBrainFrom(inputs: ActiveBrainInputs): ActiveBrainKi
   if (inputs.brain.kind === 'demo') return 'demo';
   const { mode } = inputs;
   if (mode === 'subscription') return 'subscription';
-  // The user's ChatGPT plan (TASK-20261023-siwc-chatgpt-plan D5): named whether or not a session
-  // exists — the mode is the user's explicit choice, keys and picks are irrelevant, and a missing
-  // session is the adapter's named result, never a fall-through to a key or the demo brain.
-  if (mode === 'chatgpt') return 'chatgpt';
+  // The user's ChatGPT plan (TASK-20261023-siwc-chatgpt-plan D5) needs no arm here: the builder pick
+  // below applies only under byok, and `adapterKindFor` names the plan before any provider or key
+  // check — the ONE derivation, not a copy that could drift (Gate 5 ST5; the matrix test proves it).
   // The fresh-thread pick, under the send path's exact guard (useBuilderChat):
   // never under a mock default, byok only, and only a pick of byok's own family (a chatgpt
   // pick is another mode's — ADR-0078 §6). An attached thread ignores the pick on

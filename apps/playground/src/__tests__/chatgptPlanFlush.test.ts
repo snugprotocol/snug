@@ -1,31 +1,34 @@
 // chatgptPlanFlush.test.ts — TASK-20261023-siwc-chatgpt-plan L4 (plan §1 D4; §11 amendment
-// "L4-11 addition": the keeper exposes a pending persist and `state/chatgptPlan.ts` exports
-// `chatgptPlanFlush()`, which the desktop's close-requested flush awaits before `close_flush_done`).
+// "L4-11 addition"; Gate 5 G5-C2 / ST8): `state/chatgptPlan.ts` exports `chatgptPlanFlush()`, which
+// the desktop's close-requested flush awaits before `close_flush_done`.
 //
 // THE HOLE. A refresh rotates the refresh token: the POST succeeds, the keeper writes the rotated set
 // to the custody file. A window close landing between the POST and the write loses the ONLY valid
 // refresh token — the next launch is signed out, and the server has already burned the old one. The
-// desktop shell therefore asks the page to flush before it destroys the window, and that flush must
-// wait for whatever the keeper is writing right now.
+// desktop shell therefore asks the page to flush before it destroys the window.
 //
+// THE SHAPE (Gate 5 G5-C2 / ST8). Two parties know about a persist in flight, and the flush asks BOTH:
+//   - the KEEPER's `flush()` — it alone knows about a refresh whose POST has answered but whose write
+//     is not yet queued (the window ADR-0078 §4 names; G5-C2), and about a sign-in between its
+//     callback and its persist;
+//   - the SEAT's own `flush?()` — the desktop store tracks its own IPC writes (ST8), so the page no
+//     longer patches the platform's store object to watch them (a patched custody store was a
+//     second thing standing between the keeper and the shell).
 // Pinned here, each with the mutation it catches:
-//   - no persist in flight → the flush resolves at once (a flush that waits for nothing must not hang);
-//   - a `write` in flight on the SEAT'S store holds the flush until it settles (the write is tracked
-//     where the keeper makes it — the seat's own store, the one `bootChatgptPlan` hands the keeper);
-//   - a `clear` in flight holds it too (sign-out's delete is a persist as much as a write);
-//   - a persist that REJECTS still releases the flush — settled, never a rejection the close must catch;
-//   - several persists in flight → the flush waits for every one of them, not just the first;
-//   - no seat (web, the host kit) → nothing was ever booted and the flush resolves at once.
+//   - the flush awaits the keeper's `flush()` AND the seat's `flush()` — both called, both awaited;
+//   - a seat flush that REJECTS (or throws synchronously) never rejects the whole — settled, never a
+//     rejection the close must catch;
+//   - a seat without `flush` (an older shell, the fake seats) → the keeper's flush alone;
+//   - no seat (web, the host kit) → nothing was ever booted and the flush resolves at once;
+//   - the keeper is still handed the seat's OWN store object (the custody pin, kept).
 //
 // Fresh module graph per test (the keeper test's harness): the platform is set once per graph, and
 // the keeper is page-wide state.
 
 import { describe, expect, it, vi } from 'vitest';
 
-import type { ChatgptSessionFile } from '@snugprotocol/auth';
-
 import type { ChatgptPlanSeat, SnugPlatform } from '../platform/platform.js';
-import { READY, fakeChatgptSession, recordingFactory, settle } from './chatgptPlanTestHelper.js';
+import { READY, fakeChatgptSeat, fakeChatgptSession, recordingFactory, settle, type FakeChatgptSession } from './chatgptPlanTestHelper.js';
 
 type Keeper = typeof import('../state/chatgptPlan.js');
 
@@ -45,33 +48,6 @@ function deferred<T>(): Deferred<T> {
   return { promise, resolve, reject };
 }
 
-/** A custody seat whose persists the TEST settles — each `write`/`clear` answers the next queued deferred. */
-function controllableSeat(): ChatgptPlanSeat & { persists: Array<Deferred<void>>; nextPersist(): Deferred<void> } {
-  const persists: Array<Deferred<void>> = [];
-  const nextPersist = (): Deferred<void> => {
-    const d = deferred<void>();
-    persists.push(d);
-    return d;
-  };
-  return {
-    persists,
-    nextPersist,
-    sessionStore: {
-      read: () => Promise.resolve(undefined),
-      write: () => nextPersist().promise,
-      clear: () => nextPersist().promise,
-    },
-    loopback: {
-      begin: (path) => Promise.resolve({ redirectUri: `http://127.0.0.1:1455${path}` }),
-      onCallback: () => () => undefined,
-      cancel: () => Promise.resolve(),
-    },
-    openExternal: () => Promise.resolve(),
-  };
-}
-
-const FILE: ChatgptSessionFile = { v: 1, hostId: 'urn:uuid:host', planGranted: true };
-
 async function fresh(platform?: SnugPlatform): Promise<Keeper> {
   vi.resetModules();
   const platformModule = await import('../platform/platform.js');
@@ -81,10 +57,11 @@ async function fresh(platform?: SnugPlatform): Promise<Keeper> {
   return keeper;
 }
 
-async function bootedOn(seat: ChatgptPlanSeat): Promise<Keeper> {
+async function bootedOn(seat: ChatgptPlanSeat, session: FakeChatgptSession = fakeChatgptSession(READY)): Promise<{ keeper: Keeper; created: ReturnType<typeof recordingFactory>['created'] }> {
   const keeper = await fresh({ kind: 'desktop', capabilities: { subscriptionMode: false, hubSyncOrigin: false, lanHttpPrivate: true }, chatgptPlan: seat });
-  await keeper.bootChatgptPlan(recordingFactory(fakeChatgptSession(READY)).create);
-  return keeper;
+  const factory = recordingFactory(session);
+  await keeper.bootChatgptPlan(factory.create);
+  return { keeper, created: factory.created };
 }
 
 /** Whether `promise` has settled after the queue drains — without ever awaiting a pending one. */
@@ -98,67 +75,95 @@ async function settled(promise: Promise<unknown>): Promise<boolean> {
   return done;
 }
 
-describe('chatgptPlanFlush() — the close-requested flush waits for the keeper’s persist in flight (D4)', () => {
-  it('nothing in flight → resolves at once', async () => {
-    const keeper = await bootedOn(controllableSeat());
+/** A keeper whose `flush()` the TEST settles. */
+function holdingFlush(session: FakeChatgptSession): Deferred<void> {
+  const held = deferred<void>();
+  session.flush = () => {
+    session.calls.flush += 1;
+    return held.promise;
+  };
+  return held;
+}
+
+describe('chatgptPlanFlush() — the close-requested flush asks the keeper AND the seat (D4; G5-C2 / ST8)', () => {
+  it('nothing in flight → resolves at once, having asked both', async () => {
+    const seat = { ...fakeChatgptSeat(), flush: vi.fn(() => Promise.resolve()) };
+    const session = fakeChatgptSession(READY);
+    const { keeper } = await bootedOn(seat, session);
     expect(await settled(keeper.chatgptPlanFlush())).toBe(true);
+    expect(session.calls.flush).toBe(1);
+    expect(seat.flush).toHaveBeenCalledTimes(1);
   });
 
-  it('a write in flight on the seat’s store holds the flush until that write settles', async () => {
-    const seat = controllableSeat();
-    const keeper = await bootedOn(seat);
-    void seat.sessionStore.write(FILE);
+  it('the keeper’s flush() holds the whole flush — a refresh between its POST and its write is what it knows about', async () => {
+    const seat = fakeChatgptSeat();
+    const session = fakeChatgptSession(READY);
+    const held = holdingFlush(session);
+    const { keeper } = await bootedOn(seat, session);
     const flush = keeper.chatgptPlanFlush();
-    expect(await settled(flush), 'the flush must not resolve while the rotated set is still being written').toBe(false);
-
-    seat.persists[0]?.resolve();
+    expect(await settled(flush), 'the flush must not resolve while the keeper still has a persist to make').toBe(false);
+    held.resolve();
     await expect(flush).resolves.toBeUndefined();
   });
 
-  it('a clear in flight holds it too — sign-out’s delete is a persist', async () => {
-    const seat = controllableSeat();
-    const keeper = await bootedOn(seat);
-    void seat.sessionStore.clear();
+  it('the seat’s flush?() holds it too — the shell’s own IPC writes in flight', async () => {
+    const seatFlush = deferred<void>();
+    const seat = { ...fakeChatgptSeat(), flush: () => seatFlush.promise };
+    const { keeper } = await bootedOn(seat);
     const flush = keeper.chatgptPlanFlush();
     expect(await settled(flush)).toBe(false);
-
-    seat.persists[0]?.resolve();
+    seatFlush.resolve();
     await expect(flush).resolves.toBeUndefined();
   });
 
-  it('a persist that REJECTS releases the flush as a resolution — the close never has to catch it', async () => {
-    const seat = controllableSeat();
-    const keeper = await bootedOn(seat);
-    const write = seat.sessionStore.write(FILE);
-    write.catch(() => undefined); // the keeper's own handling, stood in for here
+  it('both in flight → the flush waits for BOTH, not only the first to settle', async () => {
+    const seatFlush = deferred<void>();
+    const seat = { ...fakeChatgptSeat(), flush: () => seatFlush.promise };
+    const session = fakeChatgptSession(READY);
+    const held = holdingFlush(session);
+    const { keeper } = await bootedOn(seat, session);
     const flush = keeper.chatgptPlanFlush();
-    expect(await settled(flush)).toBe(false);
-
-    seat.persists[0]?.reject(new Error('disk full'));
+    held.resolve();
+    expect(await settled(flush), 'the seat is still writing').toBe(false);
+    seatFlush.resolve();
     await expect(flush).resolves.toBeUndefined();
   });
 
-  it('several persists in flight → the flush waits for EVERY one, not only the first', async () => {
-    const seat = controllableSeat();
-    const keeper = await bootedOn(seat);
-    void seat.sessionStore.write(FILE);
-    void seat.sessionStore.write({ ...FILE, clientId: 'oaiapp_rotated' });
+  it('a seat flush that REJECTS releases the flush as a resolution — the close never has to catch it', async () => {
+    const seatFlush = deferred<void>();
+    const seat = { ...fakeChatgptSeat(), flush: () => seatFlush.promise };
+    const { keeper } = await bootedOn(seat);
     const flush = keeper.chatgptPlanFlush();
-
-    seat.persists[0]?.resolve();
-    expect(await settled(flush), 'the second write is still out').toBe(false);
-
-    seat.persists[1]?.resolve();
+    seatFlush.reject(new Error('disk full'));
     await expect(flush).resolves.toBeUndefined();
   });
 
-  it('once the in-flight persists settled, a later flush resolves at once again', async () => {
-    const seat = controllableSeat();
-    const keeper = await bootedOn(seat);
-    void seat.sessionStore.write(FILE);
-    seat.persists[0]?.resolve();
-    await settle();
-    expect(await settled(keeper.chatgptPlanFlush())).toBe(true);
+  it('a seat flush that THROWS synchronously is settled the same way', async () => {
+    const seat = {
+      ...fakeChatgptSeat(),
+      flush: (): Promise<void> => {
+        throw new Error('ipc gone');
+      },
+    };
+    const { keeper } = await bootedOn(seat);
+    await expect(keeper.chatgptPlanFlush()).resolves.toBeUndefined();
+  });
+
+  it('a seat without flush (an older shell, the fake seats) → the keeper’s flush alone', async () => {
+    const session = fakeChatgptSession(READY);
+    const { keeper } = await bootedOn(fakeChatgptSeat(), session);
+    await expect(keeper.chatgptPlanFlush()).resolves.toBeUndefined();
+    expect(session.calls.flush).toBe(1);
+  });
+
+  it('the seat’s store object is handed to the keeper UNPATCHED — write and clear are the seat’s own functions (ST8: no tracking wrapper)', async () => {
+    const seat = fakeChatgptSeat();
+    const write = seat.sessionStore.write;
+    const clear = seat.sessionStore.clear;
+    const { created } = await bootedOn(seat);
+    expect(created[0]?.store).toBe(seat.sessionStore);
+    expect(seat.sessionStore.write).toBe(write);
+    expect(seat.sessionStore.clear).toBe(clear);
   });
 
   it('no seat (web, the host kit) → nothing was booted and the flush resolves at once', async () => {
