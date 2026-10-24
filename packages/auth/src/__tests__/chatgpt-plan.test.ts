@@ -152,16 +152,29 @@ function deferred<T = void>(): Deferred<T> {
   return { promise, resolve, reject };
 }
 
-/** Event-loop turns WITHOUT setTimeout (some tests fake it): WebCrypto settles off-thread. */
-async function flush(turns = 30): Promise<void> {
-  for (let i = 0; i < turns; i++) await new Promise<void>((r) => setImmediate(r));
+/**
+ * Event-loop turns WITHOUT setTimeout (some tests fake it): WebCrypto settles off-thread, in REAL
+ * time. Both helpers are therefore bounded by the wall clock, not by a turn count — on a loaded
+ * CI runner 600 `setImmediate` turns ran out in well under a millisecond while a PKCE digest was
+ * still in flight, and 27 sign-in tests "timed out" (CI run 40109682973, Gate 6 of
+ * TASK-20261023-siwc-chatgpt-plan). `Date` is never faked in this file, so `Date.now()` is real.
+ */
+async function flush(minMs = 25): Promise<void> {
+  const until = Date.now() + minMs;
+  let turns = 0;
+  while (Date.now() < until || turns < 30) {
+    await new Promise<void>((r) => setImmediate(r));
+    turns++;
+  }
 }
 
-async function waitFor(pred: () => boolean, label: string, turns = 600): Promise<void> {
-  for (let i = 0; i < turns; i++) {
+async function waitFor(pred: () => boolean, label: string, timeoutMs = 10_000): Promise<void> {
+  const until = Date.now() + timeoutMs;
+  while (Date.now() < until) {
     if (pred()) return;
     await new Promise<void>((r) => setImmediate(r));
   }
+  if (pred()) return;
   throw new Error(`waitFor timed out: ${label}`);
 }
 
