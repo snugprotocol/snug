@@ -35,6 +35,9 @@ import path from 'node:path';
 
 import { describe, expect, expectTypeOf, it } from 'vitest';
 
+import { hostCapabilities } from '@playground/platform/hostCapabilities.js';
+import { setPlatform } from '@playground/platform/platform.js';
+
 // PR-5 (D-PR5-16, F20): the stubs' shapes against the real modules' — type-only, erased at runtime.
 import type { AccessCardState as RealAccessCardState } from '@playground/agent/accessCard.js';
 import type { AccessProposal as RealAccessProposal } from '@playground/agent/accessProposeTool.js';
@@ -42,6 +45,13 @@ import type { AccessWriteCardState as RealAccessWriteCardState } from '@playgrou
 import type { AccessCardState as StubAccessCardState } from '../stubs/accessCard.js';
 import type { AccessProposal as StubAccessProposal } from '../stubs/accessProposeTool.js';
 import type { AccessWriteCardState as StubAccessWriteCardState } from '../stubs/accessWriteCard.js';
+
+// Section 7 (TASK-20261023-siwc-chatgpt-plan G5-1): this file reads the playground under the KIT's
+// platform — the local runner's refusal-time table (`compose-local.ts` `minimalPlatform`), the one
+// every kit binding shares the shape of: `kind: 'host'`, a kit binding, the kit capabilities and NO
+// `chatgptPlan` seat. Set once, before any read (the seam throws on a swap). Sections 1–6 pass
+// their brains and routes explicitly, so the platform changes nothing for them.
+setPlatform({ kind: 'host', binding: 'local-host', capabilities: hostCapabilities({ appExport: false }) });
 
 const HOST = path.resolve(__dirname, '../..');
 const PLAYGROUND = path.resolve(HOST, '../playground/src');
@@ -248,7 +258,7 @@ const SWAPS_PR5 = [
   { real: 'access/AccessWriteCard.tsx', stub: 'src/stubs/AccessWriteCard.tsx' },
 ] as const;
 
-const NUMBER_WORDS: Readonly<Record<number, string>> = { 8: 'eight', 9: 'nine', 10: 'ten', 11: 'eleven', 12: 'twelve' };
+const NUMBER_WORDS: Readonly<Record<number, string>> = { 8: 'eight', 9: 'nine', 10: 'ten', 11: 'eleven', 12: 'twelve', 13: 'thirteen', 14: 'fourteen', 15: 'fifteen', 16: 'sixteen', 17: 'seventeen', 18: 'eighteen' };
 
 describe('6 — PR-5 D-PR5-16: the cross-app card is swapped for loud stubs, and the chat’s write verbs are reachable only through swapped modules', () => {
   const raw = read(path.join(HOST, 'vite.config.ts'));
@@ -262,9 +272,10 @@ describe('6 — PR-5 D-PR5-16: the cross-app card is swapped for loud stubs, and
     expect(table).toContain(`/${real}\``);
   });
 
-  it('the header’s count of swapped modules is the table’s: ten (was eight)', () => {
-    const entries = [...table.matchAll(/\[`\$\{playgroundSrc\}\/[^`]+`\]\s*:/g)].length;
-    expect(entries).toBe(10);
+  it('the header’s count of swapped modules is the table’s: seventeen (ten before G5-1, eight before PR-5)', () => {
+    // Every entry of the table — the playground keys and, since G5-1, the adapters package's own module.
+    const entries = [...table.matchAll(/^\s*\[[^\n]+\]\s*:\s*here\(/gm)].length;
+    expect(entries).toBe(17);
     expect(raw).toContain(`${NUMBER_WORDS[entries]} modules are swapped by resolved path`);
   });
 
@@ -330,5 +341,222 @@ describe('6 — PR-5 D-PR5-16: the cross-app card is swapped for loud stubs, and
     expectTypeOf<StubAccessCardState>().toEqualTypeOf<RealAccessCardState>();
     expectTypeOf<StubAccessProposal>().toEqualTypeOf<RealAccessProposal>();
     expectTypeOf<StubAccessWriteCardState>().toEqualTypeOf<RealAccessWriteCardState>();
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// 7 — TASK-20261023-siwc-chatgpt-plan (Gate 5, G5-1): the ChatGPT-plan modules are kit-dead
+// ---------------------------------------------------------------------------------------------
+//
+// WHY THE CUT IS TRUE. The ChatGPT plan is the one mode built on a CUSTODY seat the shell hands the
+// page (`SnugPlatform.chatgptPlan`, ADR-0078 §1–§2): the desktop keeps the session file and gives the
+// page the seat; the web, the hosted build and the host kit have none. Every platform the kit
+// composes — the probe's (Binding A/B/C), the local runner's (`compose-local.ts`) and the refusal
+// table — carries no seat, so `availableModes()` never offers `chatgpt`, a stored `chatgpt` mode is
+// coerced away at hydrate (L4-10), and without a seat the keeper's status is `{ signedIn: false,
+// registered: false }` with `chatgptPlanReady()` resolved at once (L4-11's recorded deviation). The
+// keeper module and the five surfaces are therefore shipped but unreachable for anything but their
+// no-seat answers — and they carried `@snugprotocol/auth`'s keeper, the Settings card, the notice,
+// OpenAI's button with its two SVGs (in a single-file page an emitted asset is a dead reference) and
+// the usage-limit message into the page, over its ceiling. The kit swaps the six for stubs that answer
+// exactly the no-seat answers; the playground and the desktop keep the real modules.
+
+const SWAPS_G5 = [
+  { real: 'state/chatgptPlan.ts', stub: 'src/stubs/chatgptPlan.ts' },
+  { real: 'views/ChatgptPlanRows.tsx', stub: 'src/stubs/ChatgptPlanRows.tsx' },
+  { real: 'views/ChatgptPlanNotice.tsx', stub: 'src/stubs/ChatgptPlanNotice.tsx' },
+  { real: 'desktop/ChatgptButton.tsx', stub: 'src/stubs/ChatgptButton.tsx' },
+  { real: 'desktop/ChatgptSignInWait.tsx', stub: 'src/stubs/ChatgptSignInWait.tsx' },
+  { real: 'ui/UsageLimitMessage.tsx', stub: 'src/stubs/UsageLimitMessage.tsx' },
+] as const;
+
+const NO_SEAT_STATUS = { signedIn: false, registered: false };
+const NO_KEEPER = { ok: false, code: 'sign_in_needed', retryable: false };
+
+describe('7 — G5-1: the ChatGPT-plan keeper and its five surfaces are swapped for inert stubs, with the invariant that makes them dead', () => {
+  const raw = read(path.join(HOST, 'vite.config.ts'));
+  const config = stripComments(raw);
+  const table = config.slice(config.indexOf('swapResolved({'), config.indexOf('}),', config.indexOf('swapResolved({')));
+
+  it.each(SWAPS_G5)('vite.config.ts swaps $real for $stub by resolved path, inside the swapResolved table', ({ real, stub: target }) => {
+    const realPath = real.replace(/\./g, '\\.');
+    const targetPath = target.replace(/^src\//, '').replace(/\./g, '\\.');
+    expect(config).toMatch(new RegExp(String.raw`\[\`\$\{playgroundSrc\}/${realPath}\`\]\s*:\s*here\('\./src/${targetPath}'\)`));
+    expect(table).toContain(`/${real}\``);
+  });
+
+  it.each(SWAPS_G5)('$stub exports every runtime name $real exports', ({ real, stub: target }) => {
+    const realNames = valueExports(read(path.join(PLAYGROUND, real)));
+    const stubNames = valueExports(read(path.join(HOST, target)));
+    expect(realNames.length).toBeGreaterThan(0);
+    expect(stubNames).toEqual(expect.arrayContaining(realNames));
+  });
+
+  it.each(SWAPS_G5)('$stub imports no value from the playground and none of the plan’s graph (the keeper, the Responses adapter, the surfaces)', ({ stub: target }) => {
+    const code = stripComments(read(path.join(HOST, target)));
+    const valueImports = [...code.matchAll(/^import\s+(?!type\b)[^'"]*from\s+['"]([^'"]+)['"]/gm)].map((match) => match[1]!);
+    expect(valueImports.filter((spec) => spec.startsWith('@playground') || spec.includes('playground/src'))).toEqual([]);
+    expect(valueImports.filter((spec) => spec === '@snugprotocol/auth')).toEqual([]);
+    expect(importSpecifiers(code).filter((spec) => /chatgptPlan|ChatgptPlan|ChatgptButton|ChatgptSignInWait|UsageLimitMessage|openai-responses|responses-wire/.test(spec) && !/^\.\//.test(spec))).toEqual([]);
+  });
+
+  it('the REAL button carries OpenAI’s two SVGs as `?url` assets; the stub imports no asset at all (a single-file page would emit a dead reference)', () => {
+    const real = importSpecifiers(read(path.join(PLAYGROUND, 'desktop/ChatgptButton.tsx'))).filter((spec) => spec.endsWith('?url'));
+    expect(real).toHaveLength(2);
+    const stubSpecs = importSpecifiers(stripComments(read(path.join(HOST, 'src/stubs/ChatgptButton.tsx'))));
+    expect(stubSpecs.filter((spec) => /\.(svg|png|jpe?g|webp)(\?|$)/.test(spec))).toEqual([]);
+  });
+
+  it('the invariant: no kit source composes a `chatgptPlan` seat, and under the kit’s platform `availableModes()` never offers `chatgpt`', async () => {
+    // Structural: the seat is written by the desktop's shell only. Every platform the kit builds lives
+    // under src/ outside the stubs and the tests — none of those files so much as names the seat.
+    const offenders: string[] = [];
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          if (entry.name !== '__tests__' && entry.name !== 'stubs' && entry.name !== 'node_modules') walk(full);
+          continue;
+        }
+        if (/\.tsx?$/.test(entry.name) && /\bchatgptPlan\b/.test(stripComments(read(full)))) offenders.push(path.relative(HOST, full));
+      }
+    };
+    walk(path.join(HOST, 'src'));
+    expect(offenders).toEqual([]);
+    // Runtime: the platform set at the top of this file is the kit's shape — no seat, so no third mode.
+    const { availableModes } = await import('@playground/state/mode.js');
+    expect(availableModes()).not.toContain('chatgpt');
+    expect(availableModes()).toEqual(['byok', 'local']);
+  });
+
+  it('chatgptPlan: the no-seat answers and nothing else — signed out and unregistered, ready at once, acts refuse by name, no bearer, no models, nothing in flight', async () => {
+    const mod = await stub<typeof import('@playground/state/chatgptPlan.js')>('src/stubs/chatgptPlan.ts');
+    await expect(mod.bootChatgptPlan()).resolves.toBeUndefined();
+    await expect(mod.chatgptPlanReady()).resolves.toBeUndefined();
+    expect(mod.chatgptPlanStatus()).toEqual(NO_SEAT_STATUS);
+    expect(mod.useChatgptPlan()).toEqual(NO_SEAT_STATUS);
+    expect(mod.chatgptPlanStore.get()).toEqual(NO_SEAT_STATUS);
+    expect(mod.useChatgptSignInPending()).toBe(false);
+    expect(mod.chatgptSignInPendingStore.get()).toBe(false);
+    expect(mod.chatgptModels()).toEqual([]);
+    expect(mod.chatgptDefaultEffortFor('gpt-5')).toBeUndefined();
+    await expect(mod.refreshChatgptModels()).resolves.toBeUndefined();
+    const signIn = await mod.signInToChatgpt();
+    expect(signIn.ok).toBe(false);
+    if (!signIn.ok) {
+      expect(signIn.code).toBe('sign_in_needed');
+      expect(signIn.message).toMatch(/desktop/);
+    }
+    // The pending flag never moved: no browser was opened.
+    expect(mod.chatgptSignInPendingStore.get()).toBe(false);
+    await expect(mod.cancelChatgptSignIn()).resolves.toBeUndefined();
+    await expect(mod.signOutOfChatgpt()).resolves.toEqual({ revocation: 'none' });
+    await expect(mod.forgetChatgptRegistration()).resolves.toBeUndefined();
+    const bearer = mod.chatgptBearerSource();
+    await expect(bearer.get()).resolves.toEqual(NO_KEEPER);
+    await expect(bearer.refresh('stale')).resolves.toEqual(NO_KEEPER);
+    expect(bearer.redact('eyJ-nothing-was-handed-out')).toBe('eyJ-nothing-was-handed-out');
+    await expect(mod.chatgptPlanFlush()).resolves.toBeUndefined();
+    expect(() => mod.resetChatgptPlanForTests()).not.toThrow();
+  });
+
+  it('chatgptPlan: the stub’s stores are inert — a set is ignored, a subscriber is never called', async () => {
+    const mod = await stub<typeof import('@playground/state/chatgptPlan.js')>('src/stubs/chatgptPlan.ts');
+    let notified = 0;
+    const off = mod.chatgptPlanStore.subscribe(() => void notified++);
+    mod.chatgptPlanStore.set('unknown');
+    expect(mod.chatgptPlanStore.get()).toEqual(NO_SEAT_STATUS);
+    mod.chatgptSignInPendingStore.set(true);
+    expect(mod.chatgptSignInPendingStore.get()).toBe(false);
+    expect(notified).toBe(0);
+    expect(() => off()).not.toThrow();
+  });
+
+  it('the five surfaces render nothing, and keep the words their consumers compare against', async () => {
+    const rows = await stub<typeof import('@playground/views/ChatgptPlanRows.js')>('src/stubs/ChatgptPlanRows.tsx');
+    expect(rows.ChatgptPlanRows()).toBeNull();
+    const notice = await stub<typeof import('@playground/views/ChatgptPlanNotice.js')>('src/stubs/ChatgptPlanNotice.tsx');
+    expect(notice.ChatgptPlanNotice()).toBeNull();
+    const button = await stub<typeof import('@playground/desktop/ChatgptButton.js')>('src/stubs/ChatgptButton.tsx');
+    expect(button.ChatgptButton({ onClick: () => undefined })).toBeNull();
+    const wait = await stub<typeof import('@playground/desktop/ChatgptSignInWait.js')>('src/stubs/ChatgptSignInWait.tsx');
+    expect(wait.ChatgptSignInWait()).toBeNull();
+    const limit = await stub<typeof import('@playground/ui/UsageLimitMessage.js')>('src/stubs/UsageLimitMessage.tsx');
+    expect(limit.UsageLimitMessage({})).toBeNull();
+    // `BrainChip` compares a limit's sentence to `USAGE_LIMIT_SENTENCE` — the stub's is the adapters' own bytes.
+    const { CHATGPT_ERROR_CODES, CHATGPT_ERROR_SENTENCES } = await import('@snugprotocol/adapters');
+    expect(limit.USAGE_LIMIT_SENTENCE).toBe(CHATGPT_ERROR_SENTENCES[CHATGPT_ERROR_CODES.USAGE_LIMIT]);
+    const real = await import('@playground/desktop/ChatgptButton.js');
+    expect(button.CONTINUE_WITH_CHATGPT).toBe(real.CONTINUE_WITH_CHATGPT);
+  });
+
+  it('the keeper stub mirrors the real module’s TYPE surface (checked by tsc) — a consumer the stub cannot satisfy reds here, not in a page', () => {
+    expectTypeOf<typeof import('../stubs/chatgptPlan.js')>().toMatchTypeOf<typeof import('@playground/state/chatgptPlan.js')>();
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// 8 — G5-1, the adapters package's Responses adapter rides out with the plan
+// ---------------------------------------------------------------------------------------------
+//
+// `agent/adapter.ts` imports `openaiResponsesAdapter` statically for `createTurnAdapter`'s `chatgpt`
+// arm, so the adapter and its wire module were in the page although no kit turn can reach the arm:
+// `adapterKindFor` names it for `mode: 'chatgpt'` ONLY, and section 7 pins that no kit platform offers
+// the mode. The kit swaps the PACKAGE's module (`packages/adapters/dist/openai-responses.js`) by
+// resolved path — the index re-export keeps its names — for a stub that keeps the two constants'
+// real values and throws, by name, if the arm is ever built here.
+
+const RESPONSES_SWAP = { real: '../../packages/adapters/src/openai-responses.ts', stub: 'src/stubs/openaiResponsesAdapter.ts' } as const;
+
+describe('8 — G5-1: the Responses adapter is swapped at the adapters package’s own module, with the routing invariant that makes it dead', () => {
+  const config = stripComments(read(path.join(HOST, 'vite.config.ts')));
+  const table = config.slice(config.indexOf('swapResolved({'), config.indexOf('}),', config.indexOf('swapResolved({')));
+
+  it('vite.config.ts swaps packages/adapters/dist/openai-responses.js for src/stubs/openaiResponsesAdapter.ts by resolved path, inside the swapResolved table', () => {
+    expect(table).toMatch(/\[here\('\.\.\/\.\.\/packages\/adapters\/dist\/openai-responses\.js'\)\]\s*:\s*here\('\.\/src\/stubs\/openaiResponsesAdapter\.ts'\)/);
+  });
+
+  it('the stub exports every runtime name the real module exports, and the constants keep their real values', async () => {
+    const realNames = valueExports(read(path.resolve(HOST, RESPONSES_SWAP.real)));
+    const stubNames = valueExports(read(path.join(HOST, RESPONSES_SWAP.stub)));
+    expect(realNames).toContain('openaiResponsesAdapter');
+    expect(stubNames).toEqual(expect.arrayContaining(realNames));
+    const real = await import('@snugprotocol/adapters');
+    const mod = await stub<typeof import('../stubs/openaiResponsesAdapter.js')>(RESPONSES_SWAP.stub);
+    expect(mod.RESPONSES_DEFAULT_BASE_URL).toBe(real.RESPONSES_DEFAULT_BASE_URL);
+    expect(mod.RESPONSES_DEFAULT_MAX_TOKENS).toBe(real.RESPONSES_DEFAULT_MAX_TOKENS);
+  });
+
+  it('the stub imports no value at all — none of the adapter’s wire, SSE or transport graph rides back in', () => {
+    const code = stripComments(read(path.join(HOST, RESPONSES_SWAP.stub)));
+    const valueImports = [...code.matchAll(/^import\s+(?!type\b)[^'"]*from\s+['"]([^'"]+)['"]/gm)].map((match) => match[1]!);
+    expect(valueImports).toEqual([]);
+    expect(importSpecifiers(code).filter((spec) => /openai-responses|responses-wire|\/sse|http-transport|@playground/.test(spec))).toEqual([]);
+  });
+
+  it('openaiResponsesAdapter fails LOUDLY, by name', async () => {
+    const mod = await stub<typeof import('../stubs/openaiResponsesAdapter.js')>(RESPONSES_SWAP.stub);
+    expect(() => mod.openaiResponsesAdapter({} as never)).toThrow(/host kit has no ChatGPT-plan seat/);
+    expect(() => mod.openaiResponsesAdapter({} as never)).toThrow(/openaiResponsesAdapter/);
+  });
+
+  it('the invariant: the REAL routing names the chatgpt arm for `mode: \'chatgpt\'` only — never for a mode the kit can hold, whatever the provider or the key', async () => {
+    const { adapterKindFor } = await import('@playground/agent/adapter.js');
+    for (const mode of ['byok', 'local', 'host', 'webllm'] as const) {
+      for (const provider of ['mock', 'anthropic', 'openai'] as const) {
+        for (const hasKey of [false, true]) {
+          expect(adapterKindFor({ mode, provider, hasKey }), `${mode}/${provider}/${hasKey}`).not.toBe('chatgpt');
+        }
+      }
+    }
+    expect(adapterKindFor({ mode: 'chatgpt', provider: 'mock', hasKey: false })).toBe('chatgpt');
+  });
+
+  it('the stub mirrors the real module’s TYPE surface (checked by tsc)', () => {
+    expectTypeOf<typeof import('../stubs/openaiResponsesAdapter.js')>().toMatchTypeOf<{
+      RESPONSES_DEFAULT_BASE_URL: string;
+      RESPONSES_DEFAULT_MAX_TOKENS: number;
+      openaiResponsesAdapter: typeof import('@snugprotocol/adapters').openaiResponsesAdapter;
+    }>();
   });
 });

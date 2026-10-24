@@ -2,21 +2,28 @@
 // own source aliased in, as the desktop does (ADR-0021 D9); what differs is the OUTPUT: one
 // self-contained page. Every chunk is inlined (`inlineDynamicImports`), every asset becomes
 // a data URL, the entry script and the stylesheet are folded into the html by
-// `inlineSingleFile`, and ten modules are swapped by resolved path (`swapResolved`, whose
+// `inlineSingleFile`, and seventeen modules are swapped by resolved path (`swapResolved`, whose
 // dead-swap guard fails the build if a swap stops being hit): the starter source (the ≈ 1 MB
 // of starter bytes load on click — AC14), the sql.js locator (the engine rides as bytes — P4),
 // and the chat's data lane — `agent/chatRouter`, `agent/laneTools`, `agent/accessProposeTool`,
 // `agent/accessCard` and `access/AccessCard` (TASK-20261010-host-broker PR-2, the owner's
-// kit-ceiling cut of 2026-10-11) — the scheduled agent, `schedule/appAgent` (PR-4), and the chat's
+// kit-ceiling cut of 2026-10-11) — the scheduled agent, `schedule/appAgent` (PR-4), the chat's
 // cross-app card, `agent/accessWriteCard` and `access/AccessWriteCard` (PR-5, D-PR5-16; the chat's
 // write verbs, `access/chatWrite`, are imported only by it and `agent/laneTools`, so no kit byte
-// reaches them). The
+// reaches them), and the ChatGPT plan — its keeper `state/chatgptPlan`, the five surfaces
+// `views/ChatgptPlanRows`, `views/ChatgptPlanNotice`, `desktop/ChatgptButton`,
+// `desktop/ChatgptSignInWait`, `ui/UsageLimitMessage`, and the adapters package's Responses adapter
+// `openai-responses.js`, which only the `chatgpt` arm builds (TASK-20261023-siwc-chatgpt-plan, Gate 5 G5-1). The
 // invariant that cut stands on: every kit binding pins the HOST brain, composed `tools: false`, or
 // the DEMO brain, so no kit turn is ever routed to a lane, the data lane — PR-2's chat door and
 // the brain's ask on it included — never runs here, and the scheduler's brain gates refuse or
 // degrade every *ask* step before the agent is reached; the stubs under `src/stubs/` keep the
 // names and fail loudly, and `src/__tests__/kitDeadLanes.test.ts` pins the swaps, the invariant
-// and the stubs' surface.
+// and the stubs' surface. The ChatGPT plan is dead for a different reason, pinned there too: the
+// mode exists only where the shell hands the page a custody seat (`SnugPlatform.chatgptPlan`,
+// ADR-0078 §1), and no kit platform carries one — `availableModes()` never offers it, a stored
+// `chatgpt` mode is coerced away, and the keeper's only reachable answers are its no-seat ones,
+// which the stubs give inertly (no loud throw: boot and the scheduler DO reach them).
 // The knowledge package's content module is rewritten without the prompt files nothing
 // shipped reads — everything under `skills/` and the store's `README.md` (`dropPromptFiles`,
 // whose dead-rule guard fails the build the same way; TASK-20261010-host-broker PR-3,
@@ -79,6 +86,22 @@ export default defineConfig({
       // turn reaches the data lane that stages one (TASK-20261010-host-broker PR-5, D-PR5-16).
       [`${playgroundSrc}/agent/accessWriteCard.ts`]: here('./src/stubs/accessWriteCard.ts'),
       [`${playgroundSrc}/access/AccessWriteCard.tsx`]: here('./src/stubs/AccessWriteCard.tsx'),
+      // The ChatGPT plan → stubs that give the no-seat answers and render nothing: no kit platform
+      // carries the custody seat the mode is built on, so it is never offered here
+      // (TASK-20261023-siwc-chatgpt-plan G5-1, ADR-0078 §1; `kitDeadLanes.test.ts` §7). The keeper
+      // swap keeps `@snugprotocol/auth`'s ChatGPT-plan session out of the page; the button swap keeps
+      // OpenAI's two SVGs out (a single-file page would carry them as dead data URLs).
+      [`${playgroundSrc}/state/chatgptPlan.ts`]: here('./src/stubs/chatgptPlan.ts'),
+      [`${playgroundSrc}/views/ChatgptPlanRows.tsx`]: here('./src/stubs/ChatgptPlanRows.tsx'),
+      [`${playgroundSrc}/views/ChatgptPlanNotice.tsx`]: here('./src/stubs/ChatgptPlanNotice.tsx'),
+      [`${playgroundSrc}/desktop/ChatgptButton.tsx`]: here('./src/stubs/ChatgptButton.tsx'),
+      [`${playgroundSrc}/desktop/ChatgptSignInWait.tsx`]: here('./src/stubs/ChatgptSignInWait.tsx'),
+      [`${playgroundSrc}/ui/UsageLimitMessage.tsx`]: here('./src/stubs/UsageLimitMessage.tsx'),
+      // The adapters package's Responses adapter → a loud stub: `agent/adapter.ts` imports it for the
+      // `chatgpt` arm alone, which `adapterKindFor` names for `mode: 'chatgpt'` only — a mode no kit
+      // platform offers (above). Swapped at the package's OWN module, by resolved path, as the
+      // knowledge package's content module is rewritten below; the index re-export keeps its names.
+      [here('../../packages/adapters/dist/openai-responses.js')]: here('./src/stubs/openaiResponsesAdapter.ts'),
     }),
     // The prompt files nothing shipped reads (everything under `skills/`, the store's README, and
     // the scheduled agent's three — PR-5, D-PR5-16) → out of the page (the header;
