@@ -69,6 +69,22 @@ declare global {
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
 const T0 = Date.parse('2026-10-10T09:00:00.000Z');
+
+/**
+ * ONE clock for the test and the DB (TASK-20261023-siwc-chatgpt-plan, Gate 6 — the 2026-10-18 time
+ * bomb): these tests injected `clock` into the access deps but the user DB reads `Date.now()` for
+ * the undo journal's liveness, so entries planted at T0 + 7 days read as `gone` once the real
+ * calendar passed 2026-10-18 and 14 tests went red on `main`. `Date` is now faked at T0 for the
+ * whole file and `clock` is a VIEW onto it: `clock.now += DAY` moves the DB's clock too.
+ */
+const systemClock = (): { now: number } => ({
+  get now() {
+    return Date.now();
+  },
+  set now(value: number) {
+    vi.setSystemTime(value);
+  },
+});
 const MIN = 60_000;
 
 let db: UserDb;
@@ -168,7 +184,9 @@ function expectedWords(row: LiveGrantRow, now: number): { words: string; act?: {
 
 beforeEach(async () => {
   resetAccessSession();
-  clock = { now: T0 };
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(T0);
+  clock = systemClock();
   db = await installTestUserDb();
   __setAccessDepsForTests({ getDb: () => Promise.resolve(db), now: () => clock.now });
   budget = db.installApp({ displayName: 'Budget', html: '<!doctype html><title>b</title>' }).appId;
@@ -183,6 +201,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.useRealTimers();
   await act(async () => {
     root?.unmount();
   });
