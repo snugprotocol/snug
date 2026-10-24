@@ -260,6 +260,13 @@ export interface ChatgptPlanSeat {
   sessionStore: ChatgptSessionStore;
   loopback: ChatgptLoopbackSeat;
   openExternal(url: string): Promise<void>;
+  /**
+   * Resolves when no session-file write or clear the SEAT started is still in flight (Gate 5
+   * G5-C2 / ST8): the desktop's close-requested flush awaits this beside the keeper's own
+   * `flush()`, so a rotated refresh token is never lost between the token POST and the write.
+   * Optional — a seat that cannot track its IPC has nothing to await.
+   */
+  flush?(): Promise<void>;
 }
 
 /**

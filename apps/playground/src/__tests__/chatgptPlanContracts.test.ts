@@ -20,6 +20,7 @@ describe('L0 — SnugPlatform.chatgptPlan (D10, AC1)', () => {
       sessionStore: ChatgptSessionStore;
       loopback: ChatgptLoopbackSeat;
       openExternal(url: string): Promise<void>;
+      flush?(): Promise<void>;
     }>();
     expectTypeOf<SnugPlatform['chatgptPlan']>().toEqualTypeOf<ChatgptPlanSeat | undefined>();
   });
