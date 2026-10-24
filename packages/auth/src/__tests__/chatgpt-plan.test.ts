@@ -26,15 +26,15 @@
 // (discovery, token, jwks, models, revocation) recording bodies/headers, per-route handlers a
 // test can replace (fail, defer, hang); a fake `ChatgptLoopbackSeat` with `deliver(delivery)`;
 // a capturing `openExternal`; a fake clock.
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { base64UrlToUtf8 } from '../base64url.js';
 import {
-  CHATGPT_PLAN_ERROR_CODES,
   ChatgptPlanError,
   createChatgptPlanSession,
+  parseChatgptSessionFile,
   type ChatgptLoopbackSeat,
   type ChatgptPlanSession,
   type ChatgptSessionFile,
@@ -42,6 +42,7 @@ import {
   type SignInResult,
 } from '../chatgpt-plan.js';
 import * as indexExports from '../index.js';
+import { JWKS_REFETCH_INTERVAL_MS, createIdTokenVerifier } from '../jwks.js';
 import { pkceChallenge, type CallbackDelivery, type CallbackErrorDelivery } from '../oauth-service.js';
 import {
   decodeJwtPayload,
@@ -187,6 +188,12 @@ class MemoryStore implements ChatgptSessionStore {
   clears = 0;
   reads = 0;
   readGate: Promise<void> | undefined;
+  /** When set, every `read` REJECTS with it (G5-C1: a non-UTF-8 file, EACCES, a directory in the file's place). */
+  readError: unknown;
+  /** What the store hands back from `read` — a malformed file is whatever the shell found on disk (ST4). */
+  rawOverride: unknown;
+  /** When set, a write that carries a model cache rejects (G5-A8). */
+  failModelWrites = false;
 
   constructor(
     private readonly log: string[],
@@ -198,10 +205,13 @@ class MemoryStore implements ChatgptSessionStore {
   async read(): Promise<ChatgptSessionFile | undefined> {
     this.reads++;
     if (this.readGate !== undefined) await this.readGate;
+    if (this.readError !== undefined) throw this.readError;
+    if (this.rawOverride !== undefined) return structuredClone(this.rawOverride) as ChatgptSessionFile;
     return this.file === undefined ? undefined : structuredClone(this.file);
   }
 
   async write(file: ChatgptSessionFile): Promise<void> {
+    if (this.failModelWrites && file.models !== undefined) throw new Error('disk full');
     const copy = structuredClone(file);
     this.writes.push(copy);
     this.file = structuredClone(copy);
@@ -267,12 +277,18 @@ function makeLoopback(firstPort = 51234) {
   let cancels = 0;
   const begins: string[] = [];
   const uris: string[] = [];
+  /** The seat's calls in order — `begin`, `begin-resolved`, `cancel` — so a test can say what happened AFTER a bind (G5-C8). */
+  const events: string[] = [];
   const subs = new Set<(d: CallbackDelivery | CallbackErrorDelivery) => void>();
+  const gates: { begin: Promise<void> | undefined } = { begin: undefined };
   const seat: ChatgptLoopbackSeat = {
     async begin(path: string) {
       begins.push(path);
+      events.push('begin');
+      if (gates.begin !== undefined) await gates.begin;
       const uri = `http://127.0.0.1:${port++}${path}`;
       uris.push(uri);
+      events.push('begin-resolved');
       return { redirectUri: uri };
     },
     onCallback(cb) {
@@ -283,12 +299,17 @@ function makeLoopback(firstPort = 51234) {
     },
     async cancel() {
       cancels++;
+      events.push('cancel');
     },
   };
   return {
     seat,
     begins,
     uris,
+    events,
+    set beginGate(gate: Promise<void> | undefined) {
+      gates.begin = gate;
+    },
     get cancels() {
       return cancels;
     },
@@ -322,6 +343,7 @@ function makeHarness(
     store?: MemoryStore;
     log?: string[];
     readGate?: Promise<void>;
+    readError?: unknown;
     seed?: number;
     port?: number;
   } = {},
@@ -329,6 +351,7 @@ function makeHarness(
   const log = opts.log ?? [];
   const store = opts.store ?? new MemoryStore(log, opts.file);
   if (opts.readGate !== undefined) store.readGate = opts.readGate;
+  if (opts.readError !== undefined) store.readError = opts.readError;
   const loopback = makeLoopback(opts.port);
   const counters = { signin: 0, rotated: 0 };
 
@@ -856,7 +879,8 @@ describe('AC2 — sign-in on the loopback with dynamic registration', () => {
     const result = await attempt.result;
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(CHATGPT_PLAN_ERROR_CODES).toContain(result.code);
+      // Tightened at Gate 5 (the AC verifier): a declined consent is the one named code, not any of the eleven.
+      expect(result.code).toBe('sign_in_needed');
       expect(result.message.length).toBeGreaterThan(0);
     }
     expect(h.loopback.cancels).toBeGreaterThan(cancelsBefore);
@@ -952,7 +976,10 @@ describe('discovery — endpoints come from the document and every one is host-c
       if (!attempt.settled()) await h.session.cancelSignIn();
       const result = await attempt.result;
       expect(result.ok).toBe(false);
-      expect(h.calls.filter((c) => c.url.startsWith(new URL(evil).origin))).toHaveLength(0);
+      // Exact URLs (Gate 5, the AC verifier): the refused endpoint is never fetched, and the ones that
+      // were fetched are the trusted document's, byte for byte.
+      expect(h.calls.map((c) => c.url.split('?')[0])).not.toContain(evil);
+      for (const call of h.calls) expect([DISCOVERY_URL, TOKEN_URL, JWKS_URL, REVOKE_URL, MODELS_URL]).toContain(call.url.split('?')[0]);
       expect(h.store.file?.tokens).toBeUndefined();
       expect(h.store.file?.clientId).toBeUndefined();
     });
@@ -1081,6 +1108,31 @@ describe('AC3 — the sign-in ID token: every check can fail alone', () => {
       { kty: 'EC', crv: 'P-256', x: 'f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU', y: 'x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0', kid: KEY.kid, use: 'sig' },
       KEY.publicJwk,
     ];
+    const { result } = await completeSignIn(h);
+    expect(result.ok).toBe(true);
+  });
+
+  it('an `oct` key carrying n/e under the right kid is refused (kty decides, never the members present)', async () => {
+    const h = makeHarness();
+    h.jwksKeys = [{ ...KEY.publicJwk, kty: 'oct' }];
+    const { result } = await completeSignIn(h);
+    expect(result).toMatchObject({ ok: false, code: 'id_token_invalid' });
+    expect(h.store.file?.tokens).toBeUndefined();
+  });
+
+  it('a JWK whose own alg is RS512 is skipped — the RS256 twin verifies', async () => {
+    const h = makeHarness();
+    h.jwksKeys = [{ ...KEY.publicJwk, alg: 'RS512' }];
+    expect((await completeSignIn(h)).result).toMatchObject({ ok: false, code: 'id_token_invalid' });
+    const h2 = makeHarness();
+    h2.jwksKeys = [{ ...KEY.publicJwk, alg: 'RS512' }, KEY.publicJwk];
+    expect((await completeSignIn(h2)).result.ok).toBe(true);
+  });
+
+  it('a JWK with NO `use` member is accepted (RFC 7517 §4.2 — optional)', async () => {
+    const h = makeHarness();
+    const { use: _use, ...withoutUse } = KEY.publicJwk;
+    h.jwksKeys = [withoutUse];
     const { result } = await completeSignIn(h);
     expect(result.ok).toBe(true);
   });
@@ -1307,7 +1359,8 @@ describe('AC5 — proactive and forced refresh, single-flight, rotation-safe', (
 // ===================================================================== AC6 — refresh failures
 
 describe('AC6 — terminal vs transient refresh failures', () => {
-  for (const error of ['invalid_grant', 'refresh_token_reused']) {
+  // `refresh_token_expired` / `refresh_token_invalidated` joined the terminal set at Gate 5 (G5-C5).
+  for (const error of ['invalid_grant', 'refresh_token_reused', 'refresh_token_expired', 'refresh_token_invalidated']) {
     it(`${error} clears the tokens, KEEPS the registration, and names sign_in_needed`, async () => {
       const h = makeHarness({ file: await signedInFile() });
       h.now = IN_WINDOW;
@@ -1382,6 +1435,10 @@ describe('AC6 — terminal vs transient refresh failures', () => {
     const err = await outcome;
     expect(err).toBeInstanceOf(ChatgptPlanError);
     expect((err as ChatgptPlanError).code).toBe('sign_in_needed');
+    // Tightened at Gate 5 (the AC verifier): two timeouts say nothing about the server's state, so
+    // the tokens are KEPT — the next attempt's `invalid_grant` clears them by name if it rotated.
+    expect(h.store.file?.tokens?.refreshToken).toBe('rt-old');
+    expect(h.store.file?.tokens?.accessToken).toBe('at-old');
     await vi.advanceTimersByTimeAsync(120_000);
     await flush();
     expect(h.tokenPosts()).toHaveLength(2);
@@ -1515,6 +1572,7 @@ describe('AC9 — sign-out revokes best-effort, deletes tokens, keeps the regist
     expect(call.form!.get('token')).toBe('rt-old');
     expect(call.form!.get('token_type_hint')).toBe('refresh_token');
     expect(call.form!.get('client_id')).toBe(ISSUED_CLIENT);
+    expect(call.url, 'the revocation URL is the document’s, exactly').toBe(REVOKE_URL);
   });
 
   it('after sign-out the file keeps only the registration and the status says registered', async () => {
@@ -1550,7 +1608,8 @@ describe('AC9 — sign-out revokes best-effort, deletes tokens, keeps the regist
     const h = makeHarness({ file: await signedInFile() });
     h.on.revoke = () => new Response(null, { status: 302, headers: { location: 'https://evil.example/collect' } });
     await expect(h.session.signOut()).resolves.toEqual({ revocation: 'unconfirmed' });
-    expect(h.calls.filter((c) => c.url.startsWith('https://evil.example'))).toHaveLength(0);
+    expect(h.calls.map((c) => c.url)).not.toContain('https://evil.example/collect');
+    expect(h.calls_to(REVOKE_URL).map((c) => c.url)).toEqual([REVOKE_URL]);
     expect(h.store.file?.tokens).toBeUndefined();
   });
 
@@ -1572,7 +1631,8 @@ describe('AC9 — sign-out revokes best-effort, deletes tokens, keeps the regist
     h.discovery['revocation_endpoint'] = 'https://evil.example/revoke';
     const result = await h.session.signOut();
     expect(result.revocation).not.toBe('confirmed');
-    expect(h.calls.filter((c) => c.url.startsWith('https://evil.example'))).toHaveLength(0);
+    expect(h.calls.map((c) => c.url)).not.toContain('https://evil.example/revoke');
+    expect(h.calls.map((c) => c.url)).toEqual([DISCOVERY_URL]);
     expect(h.store.file?.tokens).toBeUndefined();
   });
 
@@ -1616,6 +1676,606 @@ describe('AC9 — sign-out revokes best-effort, deletes tokens, keeps the regist
   });
 });
 
+// ===================================================================== Gate 5 — the review findings
+// The four Gate 5 reviews (correctness, security, standards, adversarial) and the AC verifier:
+// each test below names the finding it closes (journal, "Gate 5: the correctness review").
+
+describe('Gate 5 / G5-C1 — a REJECTED store read settles the keeper instead of leaving it unknown', () => {
+  const EACCES = new Error('EACCES: permission denied, open /Users/x/.chatgpt-plan');
+
+  it("status leaves 'unknown' as signed out + unregistered when the first read rejects; subscribers hear it", async () => {
+    const h = makeHarness({ readError: EACCES });
+    const heard = vi.fn();
+    h.session.subscribe(heard);
+    await waitFor(() => h.session.status() !== 'unknown', 'status settled after a failed read');
+    expect(h.session.status()).toEqual({ signedIn: false, registered: false });
+    expect(heard).toHaveBeenCalled();
+  });
+
+  it('a later signIn names the read failure (network, the scrubbed reason) rather than silently re-registering', async () => {
+    const h = makeHarness({ readError: EACCES });
+    const result = await h.session.signIn();
+    expect(result).toMatchObject({ ok: false, code: 'network' });
+    if (!result.ok) {
+      expect(result.message).toMatch(/^couldn't read the ChatGPT session file — /);
+      expect(result.message).toContain('EACCES');
+    }
+    expect(h.opened).toHaveLength(0);
+    expect(h.store.writes, 'no host id is minted over an unreadable file').toHaveLength(0);
+  });
+
+  it('getAccessToken on an unreadable file is a network failure — never a sign-in prompt, never a token', async () => {
+    const h = makeHarness({ readError: EACCES });
+    await expectPlanError(h.session.getAccessToken(), 'network', false);
+  });
+
+  it('a reason that carries a token-shaped value is scrubbed before it reaches the message', async () => {
+    const jwt = 'eyJhbGciOiJSUzI1NiIsImtpZCI6ImFiYyJ9.eyJzdWIiOiJ1c2VyLTEyMyIsImF1ZCI6WyJvYWlhcHAiXX0.c2lnbmF0dXJlLWJ5dGVzLWhlcmUtMTIz';
+    const h = makeHarness({ readError: new Error(`invalid utf-8 after ${jwt}\n  at read_impl`) });
+    const result = await h.session.signIn();
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.message).not.toContain(jwt);
+      expect(result.message).not.toContain('\n');
+    }
+  });
+
+  it('forgetRegistration() clears the file even when the read throws', async () => {
+    const h = makeHarness({ readError: EACCES });
+    await h.session.forgetRegistration();
+    expect(h.store.clears).toBe(1);
+    expect(h.session.status()).toEqual({ signedIn: false, registered: false });
+  });
+});
+
+describe('Gate 5 / G5-C2 — flush(): a close between the token POST’s answer and the write cannot lose the rotation', () => {
+  it('awaits a refresh whose POST has gone out but whose write has not landed', async () => {
+    const h = makeHarness({ file: await signedInFile() });
+    const gate = deferred();
+    h.on.token = async (call) => {
+      await gate.promise;
+      return h.defaultToken(call);
+    };
+    const refresh = h.session.refreshNow('at-old');
+    await waitFor(() => h.tokenPosts().length === 1, 'refresh POST in flight');
+    let flushed = false;
+    const flushing = h.session.flush().then(() => {
+      flushed = true;
+    });
+    await flush();
+    expect(flushed, 'flush() must wait for the in-flight refresh').toBe(false);
+    gate.resolve();
+    await flushing;
+    expect(h.store.file?.tokens?.refreshToken).toBe('rt-rotated-1');
+    await expect(refresh).resolves.toBe('at-rotated-1');
+  });
+
+  it('awaits a sign-in whose code arrived but whose tokens are not yet written', async () => {
+    const h = makeHarness();
+    const gate = deferred();
+    h.on.token = async (call) => {
+      await gate.promise;
+      return h.defaultToken(call);
+    };
+    const attempt = await startSignIn(h);
+    h.loopback.deliver(codeDelivery(attempt.params!));
+    await waitFor(() => h.tokenPosts().length === 1, 'exchange POST in flight');
+    let flushed = false;
+    const flushing = h.session.flush().then(() => {
+      flushed = true;
+    });
+    await flush();
+    expect(flushed, 'flush() must wait for the exchange to persist').toBe(false);
+    gate.resolve();
+    await flushing;
+    expect(h.store.file?.tokens?.refreshToken).toBe('rt-signin-1');
+    expect((await attempt.result).ok).toBe(true);
+  });
+
+  it('resolves at once with nothing in flight, and never rejects — even when the refresh it awaited failed', async () => {
+    const idle = makeHarness({ file: await signedInFile() });
+    await expect(idle.session.flush()).resolves.toBeUndefined();
+
+    const h = makeHarness({ file: await signedInFile() });
+    const gate = deferred();
+    h.on.token = async () => {
+      await gate.promise;
+      throw new TypeError('Failed to fetch');
+    };
+    const refresh = h.session.refreshNow('at-old').catch(() => undefined);
+    await waitFor(() => h.tokenPosts().length === 1, 'refresh POST in flight');
+    const flushing = h.session.flush();
+    gate.resolve();
+    await expect(flushing).resolves.toBeUndefined();
+    await refresh;
+  });
+});
+
+describe('Gate 5 / G5-C4 — reportRejected(token): the adapter’s second 401 reaches the keeper', () => {
+  it('clears the tokens when `token` is still current — registration kept, status signed out, subscribers told', async () => {
+    const h = makeHarness({ file: await signedInFile() });
+    await waitFor(() => h.session.status() !== 'unknown', 'loaded');
+    const heard = vi.fn();
+    h.session.subscribe(heard);
+    await h.session.reportRejected('at-old');
+    expect(h.store.file?.tokens).toBeUndefined();
+    expect(h.store.file?.account).toBeUndefined();
+    expect(h.store.file?.clientId).toBe(ISSUED_CLIENT);
+    expect(h.store.file?.hostId).toBe(SEEDED_HOST);
+    expect(h.session.status()).toEqual({ signedIn: false, registered: true });
+    expect(heard).toHaveBeenCalled();
+    await expectPlanError(h.session.getAccessToken(), 'sign_in_needed');
+  });
+
+  it('is a no-op when `token` is no longer the current one (another caller already rotated)', async () => {
+    const h = makeHarness({ file: await signedInFile() });
+    await h.session.reportRejected('at-some-older-token');
+    expect(h.store.file?.tokens?.accessToken).toBe('at-old');
+    expect(h.store.writes).toHaveLength(0);
+    expect(h.session.status()).toMatchObject({ signedIn: true });
+  });
+
+  it('is a no-op when signed out', async () => {
+    const h = makeHarness({ file: registeredFile() });
+    await h.session.reportRejected('at-old');
+    expect(h.store.writes).toHaveLength(0);
+    expect(h.session.status()).toEqual({ signedIn: false, registered: true });
+  });
+});
+
+describe('Gate 5 / G5-C5 — the refresh error classifier', () => {
+  async function refreshAgainst(handler: Handler): Promise<Harness> {
+    const h = makeHarness({ file: await signedInFile() });
+    h.on.token = handler;
+    return h;
+  }
+
+  it('reads the code from `error.code` (the measured envelope shape) as well as from a string `error`', async () => {
+    const h = await refreshAgainst(() => json({ error: { code: 'invalid_grant', message: 'Refresh token no longer valid', type: 'invalid_request_error' } }, 400));
+    await expectPlanError(h.session.refreshNow('at-old'), 'sign_in_needed', false);
+    expect(h.store.file?.tokens).toBeUndefined();
+    expect(h.store.file?.clientId).toBe(ISSUED_CLIENT);
+  });
+
+  it('reads a top-level `code` too', async () => {
+    const h = await refreshAgainst(() => json({ code: 'refresh_token_reused' }, 400));
+    await expectPlanError(h.session.refreshNow('at-old'), 'sign_in_needed', false);
+    expect(h.store.file?.tokens).toBeUndefined();
+  });
+
+  it('a 401 from the token endpoint is terminal whatever the body says', async () => {
+    const h = await refreshAgainst(() => json({ error: { message: 'Incorrect token provided: rt-old.' } }, 401));
+    const err = await expectPlanError(h.session.refreshNow('at-old'), 'sign_in_needed', false);
+    expect(err.message).not.toContain('rt-old');
+    expect(h.store.file?.tokens).toBeUndefined();
+    expect(h.session.status()).toEqual({ signedIn: false, registered: true });
+  });
+
+  it('an unknown 4xx stays network, retryable, tokens kept (D4: never erase on a transient failure)', async () => {
+    const h = await refreshAgainst(() => json({ error: 'temporarily_unavailable' }, 422));
+    await expectPlanError(h.session.refreshNow('at-old'), 'network', true);
+    expect(h.store.file?.tokens?.refreshToken).toBe('rt-old');
+    expect(h.session.status()).toMatchObject({ signedIn: true });
+  });
+
+  it('a 5xx stays network, retryable, tokens kept', async () => {
+    const h = await refreshAgainst(() => json({ error: 'server_error' }, 503));
+    await expectPlanError(h.session.refreshNow('at-old'), 'network', true);
+    expect(h.store.file?.tokens?.refreshToken).toBe('rt-old');
+  });
+});
+
+describe('Gate 5 / G5-C6 + S10 — the stored ID token is re-verified without `exp`, and the unverified flag survives a reload', () => {
+  it("the verifier's expiry option: an expired token is refused by default and accepted when the login moment is not the question", async () => {
+    const verifier = createIdTokenVerifier({ fetch: async () => json(jwksDocument([KEY.publicJwk])) });
+    const expired = await signIdToken({ ...baseClaims(T0), exp: Math.floor(T0 / 1000) - 3600 }, KEY);
+    const expected = { issuer: ISSUER, clientId: ISSUED_CLIENT, subject: SUB };
+    expect(await verifier.verifyIdToken(expired, expected, { jwksUri: JWKS_URL, nowMs: T0 })).toMatchObject({ ok: false, kind: 'invalid', reason: 'expired' });
+    expect(await verifier.verifyIdToken(expired, expected, { jwksUri: JWKS_URL, nowMs: T0, expiry: 'ignored' })).toMatchObject({ ok: true, claims: { sub: SUB } });
+    // Every other check still applies while exp is ignored.
+    expect(
+      await verifier.verifyIdToken(expired, { ...expected, subject: 'user-B' }, { jwksUri: JWKS_URL, nowMs: T0, expiry: 'ignored' }),
+    ).toMatchObject({ ok: false, reason: 'subject' });
+  });
+
+  it('an outage-time refresh PERSISTS idTokenUnverified; a reloaded keeper re-verifies the stored token ignoring its exp and clears the flag', async () => {
+    const h = makeHarness({ file: await signedInFile() });
+    h.now = IN_WINDOW;
+    // The rotated ID token is short-lived on purpose: its exp is about the login event, not the session.
+    h.idTokenFor = (claims) => signIdToken({ ...claims, exp: Math.floor(h.now / 1000) + 60 }, KEY);
+    h.on.jwks = () => Promise.reject(new TypeError('Failed to fetch'));
+    await expect(h.session.refreshNow('at-old')).resolves.toBe('at-rotated-1');
+    expect(h.store.file?.tokens?.idTokenUnverified).toBe(true);
+
+    // A reload (a new keeper over the same file) ten minutes on: the access token is good for
+    // fifty more minutes, the ID token's exp is nine minutes past, and the JWKS is back.
+    const h2 = makeHarness({ store: h.store, log: h.log });
+    h2.now = IN_WINDOW + 10 * 60_000;
+    await expect(h2.session.getAccessToken()).resolves.toBe('at-rotated-1');
+    expect(h2.calls_to(JWKS_URL), 'the stored token was re-verified').toHaveLength(1);
+    expect(h2.tokenPosts(), 'no refresh was needed').toHaveLength(0);
+    expect(h.store.file?.tokens?.idTokenUnverified).toBeUndefined();
+    expect(h.store.file?.tokens?.refreshToken).toBe('rt-rotated-1');
+    // Once verified, the next use consults no JWKS.
+    await h2.session.getAccessToken();
+    expect(h2.calls_to(JWKS_URL)).toHaveLength(1);
+  });
+
+  it('a reloaded keeper whose stored ID token FAILS re-verification clears the session by name, registration kept', async () => {
+    const file = await signedInFile();
+    file.tokens = { ...file.tokens!, idToken: await signIdToken(baseClaims(T0), OTHER_KEY), idTokenUnverified: true };
+    const h = makeHarness({ file });
+    await expectPlanError(h.session.getAccessToken(), 'sign_in_needed');
+    expect(h.store.file?.tokens).toBeUndefined();
+    expect(h.store.file?.clientId).toBe(ISSUED_CLIENT);
+  });
+});
+
+describe('Gate 5 / G5-C7 + S4 + S5 — what a 2xx refresh reply persists', () => {
+  /** The default reply with some members removed. */
+  function replyWithout(h: Harness, ...drop: string[]): Handler {
+    return async (call) => {
+      const body = (await (await h.defaultToken(call)).json()) as Record<string, unknown>;
+      for (const key of drop) delete body[key];
+      return json(body);
+    };
+  }
+
+  it('G5-C7: a reply without id_token rotates the tokens, keeps the stored ID token and marks it unverified', async () => {
+    const stored = await signedInFile();
+    const h = makeHarness({ file: stored });
+    h.on.token = replyWithout(h, 'id_token');
+    await expect(h.session.refreshNow('at-old')).resolves.toBe('at-rotated-1');
+    const tokens = h.store.file?.tokens;
+    expect(tokens?.refreshToken).toBe('rt-rotated-1');
+    expect(tokens?.accessToken).toBe('at-rotated-1');
+    expect(tokens?.idToken).toBe(stored.tokens!.idToken);
+    expect(tokens?.idTokenUnverified).toBe(true);
+    expect(h.session.status()).toMatchObject({ signedIn: true });
+    expect(h.tokenPosts()).toHaveLength(1);
+  });
+
+  it('G5-C7: a reply without refresh_token keeps the stored refresh token (RFC 6749 §6 allows the omission)', async () => {
+    const h = makeHarness({ file: await signedInFile() });
+    h.on.token = replyWithout(h, 'refresh_token');
+    await expect(h.session.refreshNow('at-old')).resolves.toBe('at-rotated-1');
+    expect(h.store.file?.tokens).toMatchObject({ accessToken: 'at-rotated-1', refreshToken: 'rt-old' });
+    expect(h.store.file?.tokens?.idTokenUnverified).toBeUndefined();
+    expect(h.tokenPosts()).toHaveLength(1);
+  });
+
+  it('S4: a reply that rotated the refresh token but carries no usable access token persists the rotation FIRST, then fails as transient', async () => {
+    const h = makeHarness({ file: await signedInFile() });
+    h.on.token = () => json({ refresh_token: 'rt-rotated-only', token_type: 'Bearer' });
+    await expectPlanError(h.session.refreshNow('at-old'), 'network', true);
+    expect(h.store.file?.tokens?.refreshToken, 'the only valid refresh token is on disk').toBe('rt-rotated-only');
+    expect(h.store.file?.tokens?.accessToken).toBe('at-old');
+    // The next refresh spends the rotated token.
+    h.on.token = (call) => h.defaultToken(call);
+    await expect(h.session.refreshNow('at-old')).resolves.toBe('at-rotated-1');
+    expect(h.tokenPosts()[1]!.form!.get('refresh_token')).toBe('rt-rotated-only');
+  });
+
+  it('a reply that is not an object, or carries neither token, is incomplete — nothing persisted, tokens kept', async () => {
+    for (const body of ['not json', '[]', '{"token_type":"Bearer"}', '{"access_token":"","refresh_token":""}']) {
+      const h = makeHarness({ file: await signedInFile() });
+      h.on.token = () => new Response(body, { status: 200, headers: { 'content-type': 'application/json' } });
+      await expectPlanError(h.session.refreshNow('at-old'), 'network', true);
+      expect(h.store.file?.tokens?.refreshToken, body).toBe('rt-old');
+      expect(h.store.writes, body).toHaveLength(0);
+    }
+  });
+
+  it("S5: planGranted follows the reply's scope when present — and is kept when the reply names none", async () => {
+    const h = makeHarness({ file: await signedInFile() });
+    h.grantedScope = 'openid profile email offline_access';
+    await h.session.refreshNow('at-old');
+    expect(h.store.file?.planGranted).toBe(false);
+    expect(h.store.file?.tokens?.scopes).toEqual(['openid', 'profile', 'email', 'offline_access']);
+    expect(h.session.status()).toMatchObject({ signedIn: true, planGranted: false });
+    await expectPlanError(h.session.getAccessToken(), 'plan_not_granted');
+
+    const h2 = makeHarness({ file: await signedInFile() });
+    h2.on.token = replyWithout(h2, 'scope');
+    await h2.session.refreshNow('at-old');
+    expect(h2.store.file?.planGranted).toBe(true);
+    expect(h2.store.file?.tokens?.scopes).toEqual(SIX_SCOPES);
+  });
+
+  it("S5: the persist compare-and-swaps on the STORED refresh token — a re-consent sign-in that landed meanwhile wins, the refresh's set is revoked", async () => {
+    const h = makeHarness({ file: await signedInFile() });
+    const gate = deferred();
+    h.on.token = async (call) => {
+      if (call.form?.get('grant_type') === 'refresh_token') await gate.promise;
+      return h.defaultToken(call);
+    };
+    const refresh = h.session.refreshNow('at-old');
+    await waitFor(() => h.tokenPosts().length === 1, 'refresh POST in flight');
+    const { result } = await completeSignIn(h, { clientId: null, prompt: 'consent' });
+    expect(result.ok).toBe(true);
+    expect(h.store.file?.tokens?.refreshToken).toBe('rt-signin-1');
+    gate.resolve();
+    await expect(refresh, 'the refresh answers the set that stands').resolves.toBe('at-signin-1');
+    expect(h.store.file?.tokens?.refreshToken).toBe('rt-signin-1');
+    expect(h.calls_to(REVOKE_URL).map((c) => c.form?.get('token'))).toEqual(['rt-rotated-1']);
+    expectNoStaleWriteAfterRotation(h.store, 'rt-signin-1');
+  });
+});
+
+describe('Gate 5 / G5-C8 + G5-C9 — cancel timing', () => {
+  it('G5-C8: a cancel that arrives while loopback.begin() is pending still tears the listener down once the bind answers', async () => {
+    const h = makeHarness();
+    const gate = deferred();
+    h.loopback.beginGate = gate.promise;
+    const result = h.session.signIn();
+    await waitFor(() => h.loopback.events.includes('begin'), 'begin() called');
+    await h.session.cancelSignIn();
+    expect(await result).toMatchObject({ ok: false, code: 'sign_in_needed' });
+    gate.resolve();
+    await flush();
+    const bound = h.loopback.events.indexOf('begin-resolved');
+    expect(bound).toBeGreaterThanOrEqual(0);
+    expect(h.loopback.events.slice(bound + 1), 'the late bind is released').toContain('cancel');
+    expect(h.opened, 'the browser is never opened for a cancelled attempt').toHaveLength(0);
+  });
+
+  it('G5-C9: once the tokens are persisted a cancel is a no-op for that attempt — the result is ok and carries the models', async () => {
+    const h = makeHarness();
+    const gate = deferred();
+    h.on.models = async () => {
+      await gate.promise;
+      return json(MODELS_BODY);
+    };
+    const attempt = await startSignIn(h);
+    h.loopback.deliver(codeDelivery(attempt.params!));
+    await waitFor(() => h.store.file?.tokens !== undefined, 'tokens persisted');
+    await h.session.cancelSignIn();
+    expect(attempt.settled(), 'a persisted attempt is no longer cancellable').toBe(false);
+    gate.resolve();
+    const result = await attempt.result;
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.status).toMatchObject({ signedIn: true, planGranted: true, models: EXPECTED_MODELS });
+    expect(h.store.file?.tokens?.refreshToken).toBe(h.issued[0]!.refresh);
+    expect(h.store.file?.models?.list).toEqual(EXPECTED_MODELS);
+  });
+
+  it('G5-A8: a failing model-cache write never fails a plan-granted sign-in', async () => {
+    const h = makeHarness();
+    h.store.failModelWrites = true;
+    const { result } = await completeSignIn(h);
+    expect(result.ok).toBe(true);
+    expect(h.store.file?.tokens?.refreshToken).toBe(h.issued[0]!.refresh);
+    expect(h.session.status()).toMatchObject({ signedIn: true, planGranted: true });
+  });
+});
+
+describe('Gate 5 / G5-A7 — a terminal answer clears ONLY the set it was about (compare-and-swap)', () => {
+  it("two keepers on one file: the loser's refresh_token_reused never wipes the winner's fresh set", async () => {
+    const log: string[] = [];
+    const store = new MemoryStore(log, await signedInFile());
+    const winner = makeHarness({ store, log });
+    const loser = makeHarness({ store, log, seed: 3 });
+    const gate = deferred();
+    loser.on.token = async () => {
+      await gate.promise;
+      return json({ error: 'refresh_token_reused' }, 400);
+    };
+    const losing = loser.session.refreshNow('at-old');
+    await waitFor(() => loser.tokenPosts().length === 1, "the loser's POST is in flight");
+    expect(loser.tokenPosts()[0]!.form!.get('refresh_token')).toBe('rt-old');
+    await expect(winner.session.refreshNow('at-old')).resolves.toBe('at-rotated-1');
+    gate.resolve();
+    await expect(losing, 'the loser answers the set that stands').resolves.toBe('at-rotated-1');
+    expect(store.file?.tokens?.refreshToken).toBe('rt-rotated-1');
+    expect(loser.session.status()).toMatchObject({ signedIn: true });
+    expect(winner.session.status()).toMatchObject({ signedIn: true });
+  });
+
+  it('one page: a sign-out + fresh sign-in completing while an old refresh POST is pending — its invalid_grant leaves the new set alone', async () => {
+    const h = makeHarness({ file: await signedInFile() });
+    const gate = deferred();
+    h.on.token = async (call) => {
+      if (call.form?.get('grant_type') === 'refresh_token') {
+        await gate.promise;
+        return json({ error: 'invalid_grant' }, 400);
+      }
+      return h.defaultToken(call);
+    };
+    const refresh = h.session.refreshNow('at-old').catch((e: unknown) => e);
+    await waitFor(() => h.tokenPosts().length === 1, 'refresh POST in flight');
+    await h.session.signOut();
+    expect((await completeSignIn(h, { clientId: null })).result.ok).toBe(true);
+    expect(h.store.file?.tokens?.refreshToken).toBe('rt-signin-1');
+    gate.resolve();
+    await refresh;
+    expect(h.store.file?.tokens?.refreshToken).toBe('rt-signin-1');
+    expect(h.session.status()).toMatchObject({ signedIn: true });
+  });
+
+  it('a refresh ID token that fails verification clears only the set it came with', async () => {
+    const h = makeHarness({ file: await signedInFile() });
+    h.now = IN_WINDOW;
+    const gate = deferred();
+    let jwksServed = 0;
+    h.on.jwks = async () => {
+      if (jwksServed++ === 0) await gate.promise; // the refresh's verification is held; the sign-in's is not
+      return json(jwksDocument(h.jwksKeys));
+    };
+    h.idTokenFor = (claims, grant) => (grant === 'refresh_token' ? signIdToken(claims, OTHER_KEY) : signIdToken(claims, KEY));
+    const refresh = h.session.refreshNow('at-old');
+    await waitFor(() => h.store.file?.tokens?.refreshToken === 'rt-rotated-1', 'the rotation persisted before verification');
+    const { result } = await completeSignIn(h, { clientId: null, prompt: 'consent' });
+    expect(result.ok).toBe(true);
+    expect(h.store.file?.tokens?.refreshToken).toBe('rt-signin-1');
+    gate.resolve();
+    await expect(refresh).resolves.toBe('at-signin-1');
+    expect(h.store.file?.tokens?.refreshToken, "the sign-in's set stands").toBe('rt-signin-1');
+    expect(h.session.status()).toMatchObject({ signedIn: true });
+  });
+});
+
+describe('Gate 5 / G5-C12 + G5-A12 — the JWKS cache: one bounded refetch, rebuilt from the new document', () => {
+  function countingVerifier(docs: () => Array<Record<string, unknown>>) {
+    let fetches = 0;
+    const verifier = createIdTokenVerifier({
+      fetch: async () => {
+        fetches++;
+        return json(jwksDocument(docs()));
+      },
+    });
+    return { verifier, fetches: () => fetches };
+  }
+  const expected = { issuer: ISSUER, clientId: ISSUED_CLIENT };
+  const at = (nowMs: number) => ({ jwksUri: JWKS_URL, nowMs });
+
+  it('G5-C12: a kid absent from the CACHED document costs ONE refetch; a second miss inside 60 s costs none; the floor passes', async () => {
+    let served: Array<Record<string, unknown>> = [KEY.publicJwk];
+    const { verifier, fetches } = countingVerifier(() => served);
+    const good = await signIdToken(baseClaims(T0), KEY);
+    expect((await verifier.verifyIdToken(good, expected, at(T0))).ok).toBe(true);
+    expect(fetches()).toBe(1);
+
+    const strangerKey = await makeRsaKey('stranger-kid');
+    const stranger = await signIdToken(baseClaims(T0), strangerKey);
+    expect(await verifier.verifyIdToken(stranger, expected, at(T0 + 1_000))).toMatchObject({ ok: false, reason: 'kid' });
+    expect(fetches(), 'one refetch for a cached miss').toBe(2);
+    expect(await verifier.verifyIdToken(stranger, expected, at(T0 + 2_000))).toMatchObject({ ok: false, reason: 'kid' });
+    expect(fetches(), 'no second refetch inside the floor').toBe(2);
+    expect(await verifier.verifyIdToken(stranger, expected, at(T0 + 1_000 + JWKS_REFETCH_INTERVAL_MS))).toMatchObject({ ok: false, reason: 'kid' });
+    expect(fetches(), 'the floor passed: one more refetch').toBe(3);
+
+    served = [KEY.publicJwk, strangerKey.publicJwk]; // the issuer rotated a key in: the next refetch finds it
+    expect((await verifier.verifyIdToken(stranger, expected, at(T0 + 2_000 + 2 * JWKS_REFETCH_INTERVAL_MS))).ok).toBe(true);
+    expect(fetches()).toBe(4);
+  }, 20_000);
+
+  it('G5-A12: a refetch REBUILDS the cache from the new document — a key the issuer removed no longer verifies', async () => {
+    const rotated = await makeRsaKey('rotated-kid');
+    let served = [KEY.publicJwk];
+    const { verifier, fetches } = countingVerifier(() => served);
+    const byOld = await signIdToken(baseClaims(T0), KEY);
+    const byNew = await signIdToken(baseClaims(T0), rotated);
+    expect((await verifier.verifyIdToken(byOld, expected, at(T0))).ok).toBe(true);
+    served = [rotated.publicJwk]; // the issuer rotated: the old key is gone from the document
+    expect((await verifier.verifyIdToken(byNew, expected, at(T0))).ok).toBe(true);
+    expect(fetches()).toBe(2);
+    // The old key went with the rebuild: a kid miss now, and inside the floor no refetch is spent on it.
+    expect(await verifier.verifyIdToken(byOld, expected, at(T0 + 1_000))).toMatchObject({ ok: false, reason: 'kid' });
+    expect(fetches()).toBe(2);
+  }, 20_000);
+
+  it('a failed refetch keeps the cache it had — the verdict is network, and the keys still verify afterwards', async () => {
+    let fail = false;
+    let fetches = 0;
+    const verifier = createIdTokenVerifier({
+      fetch: async () => {
+        fetches++;
+        if (fail) throw new Error('network');
+        return json(jwksDocument([KEY.publicJwk]));
+      },
+    });
+    const good = await signIdToken(baseClaims(T0), KEY);
+    const stranger = await signIdToken(baseClaims(T0), await makeRsaKey('stranger-kid'));
+    expect((await verifier.verifyIdToken(good, expected, at(T0))).ok).toBe(true);
+    fail = true;
+    expect(await verifier.verifyIdToken(stranger, expected, at(T0 + 1_000))).toMatchObject({ ok: false, kind: 'network' });
+    expect((await verifier.verifyIdToken(good, expected, at(T0 + 2_000))).ok).toBe(true);
+    expect(fetches).toBe(2);
+  }, 20_000);
+});
+
+describe("Gate 5 / §6 — the discovery document's issuer must be OpenAI's", () => {
+  it('a document naming another issuer refuses the sign-in by name — nothing opened, nothing bound, nothing persisted', async () => {
+    const h = makeHarness();
+    h.discovery['issuer'] = 'https://auth.openai.com.evil.example';
+    const result = await h.session.signIn();
+    expect(result).toMatchObject({ ok: false, code: 'network' });
+    if (!result.ok) expect(result.message).toMatch(/issuer/);
+    expect(h.opened).toHaveLength(0);
+    expect(h.loopback.begins).toHaveLength(0);
+    expect(h.store.file?.clientId).toBeUndefined();
+  });
+
+  it('a document without an issuer is refused the same way; a refresh refuses it too, tokens kept', async () => {
+    const h = makeHarness({ file: await signedInFile() });
+    delete h.discovery['issuer'];
+    await expectPlanError(h.session.refreshNow('at-old'), 'network', false);
+    expect(h.tokenPosts()).toHaveLength(0);
+    expect(h.store.file?.tokens?.refreshToken).toBe('rt-old');
+  });
+});
+
+describe('Gate 5 / ST4 — parseChatgptSessionFile: a TOTAL parser over whatever the file holds', () => {
+  const REGISTRATION = { v: 1, hostId: SEEDED_HOST, clientId: ISSUED_CLIENT, planGranted: false };
+
+  it('a well-formed file round-trips, and the parser is exported from the package index', async () => {
+    const file = await signedInFile();
+    file.models = { fetchedAt: 1, list: EXPECTED_MODELS };
+    file.tokens = { ...file.tokens!, idTokenUnverified: true };
+    expect(parseChatgptSessionFile(file)).toEqual(file);
+    expect(parseChatgptSessionFile(registeredFile())).toEqual(registeredFile());
+    expect(typeof (indexExports as Record<string, unknown>)['parseChatgptSessionFile']).toBe('function');
+  });
+
+  it('unknown fields are ignored (forward-compat); an absent planGranted reads false', () => {
+    expect(parseChatgptSessionFile({ v: 1, hostId: SEEDED_HOST, clientId: ISSUED_CLIENT, later: { x: 1 } })).toEqual(REGISTRATION);
+  });
+
+  it('not a file at all: non-objects, another version, a missing or non-string hostId', () => {
+    for (const bad of [undefined, null, 'x', 7, [], { v: 2, hostId: 'h', planGranted: false }, { v: '1', hostId: 'h' }, { v: 1 }, { v: 1, hostId: 3 }, { v: 1, hostId: '' }]) {
+      expect(parseChatgptSessionFile(bad), JSON.stringify(bad)).toBeUndefined();
+    }
+  });
+
+  it('a malformed `tokens` reads as registration-only — never a throw, never a half session', async () => {
+    const file = await signedInFile();
+    const tokens = file.tokens!;
+    for (const malformed of [
+      null,
+      'at',
+      { ...tokens, refreshToken: 7 },
+      { ...tokens, accessToken: '' },
+      { ...tokens, expiresAt: 'soon' },
+      { ...tokens, scopes: 'openid' },
+      { ...tokens, scopes: ['openid', 2] },
+      { ...tokens, earliestRefreshAt: '12' },
+      { accessToken: 'a' },
+    ]) {
+      expect(parseChatgptSessionFile({ ...file, tokens: malformed }), JSON.stringify(malformed)).toEqual(REGISTRATION);
+    }
+  });
+
+  it('typed optional members: a non-string clientId, a malformed account or model cache, a non-boolean idTokenUnverified are dropped', async () => {
+    const file = await signedInFile();
+    const parsed = parseChatgptSessionFile({
+      ...file,
+      clientId: 5,
+      account: { sub: 1 },
+      models: { fetchedAt: 'x', list: [] },
+      tokens: { ...file.tokens, idTokenUnverified: 'yes' },
+    });
+    expect(parsed).toBeDefined();
+    expect(parsed?.clientId).toBeUndefined();
+    expect(parsed?.account).toBeUndefined();
+    expect(parsed?.models).toBeUndefined();
+    expect(parsed?.tokens?.idTokenUnverified).toBeUndefined();
+    expect(parsed?.tokens?.refreshToken).toBe('rt-old');
+    // A model entry that is not a model is dropped from the list; the rest of the list stands.
+    const models = parseChatgptSessionFile({ ...file, models: { fetchedAt: 1, list: [EXPECTED_MODELS[0], { id: 7 }, { id: 'x', name: 'X', efforts: ['a', 1] }] } })?.models;
+    expect(models).toEqual({ fetchedAt: 1, list: [EXPECTED_MODELS[0]] });
+    // An account's optional display claims are typed too.
+    expect(parseChatgptSessionFile({ ...file, account: { sub: SUB, email: 7, name: NAME } })?.account).toEqual({ sub: SUB, name: NAME });
+  });
+
+  it('the keeper reads through the parser: a file with malformed tokens is signed out + registered', async () => {
+    const h = makeHarness();
+    h.store.rawOverride = { v: 1, hostId: SEEDED_HOST, clientId: ISSUED_CLIENT, planGranted: true, tokens: { accessToken: 'at', refreshToken: null } };
+    await waitFor(() => h.session.status() !== 'unknown', 'loaded');
+    expect(h.session.status()).toEqual({ signedIn: false, registered: true });
+    await expectPlanError(h.session.getAccessToken(), 'sign_in_needed');
+  });
+});
+
 // ===================================================================== AC10 — no logging
 
 describe('AC10 — no console.* on the auth path (source lint)', () => {
@@ -1626,7 +2286,18 @@ describe('AC10 — no console.* on the auth path (source lint)', () => {
     expect(NO_CONSOLE.test('const consoleLike = 1;')).toBe(false);
   });
 
-  for (const file of ['chatgpt-plan.ts', 'jwks.ts']) {
+  // Every file of the keeper (the split: `chatgpt-plan*.ts`) and the verifier — found by name, so a
+  // new file of the family is linted the day it appears (ST3).
+  const AUTH_PATH_FILES = /^chatgpt-plan.*\.ts$|^jwks\.ts$/;
+  const files = readdirSync(join(__dirname, '..')).filter((name) => AUTH_PATH_FILES.test(name));
+
+  it('the filter finds the keeper family and the verifier (at least three files)', () => {
+    expect(files.length).toBeGreaterThanOrEqual(3);
+    expect(files).toContain('chatgpt-plan.ts');
+    expect(files).toContain('jwks.ts');
+  });
+
+  for (const file of files) {
     it(`src/${file} exists and contains no console.*`, () => {
       const path = join(__dirname, '..', file);
       expect(existsSync(path), `${file} exists`).toBe(true);

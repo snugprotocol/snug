@@ -762,7 +762,34 @@ describe('client-side output ceiling (AC12)', () => {
     const past = await run((_url, init) => openUntilAborted(init, [created, messageAdded(), textDelta('a'.repeat(limit)), textDelta('bb')]));
     expect(past.result).toMatchObject({ ok: true, stopReason: 'max_tokens' });
     expect(past.calls[0]!.init.signal!.aborted).toBe(true);
+    // Tightened at Gate 5 (the AC verifier): the partial text is a non-empty prefix of what streamed.
+    if (past.result.ok) {
+      expect(past.result.text.length).toBeGreaterThan(0);
+      expect(`${'a'.repeat(limit)}bb`.startsWith(past.result.text)).toBe(true);
+    }
   }, 10_000);
+
+  it('S6: function-call ARGUMENT deltas count toward the ceiling — a cut tool call answers max_tokens with the calls assembled so far', async () => {
+    const chunks = [created, fnAdded(0, 'call_1', 'get_weather'), ...Array.from({ length: 10 }, () => argsDelta(0, TEN))];
+    const { result, calls, deltas } = await run((_url, init) => openUntilAborted(init, chunks), { tools: [WEATHER_TOOL] }, { maxTokens: 10 });
+    expect(calls[0]!.init.signal!.aborted).toBe(true);
+    expect(result).toMatchObject({ ok: true, text: '', stopReason: 'max_tokens' });
+    if (!result.ok) return;
+    expect(result.toolCalls).toHaveLength(1);
+    expect(result.toolCalls[0]).toMatchObject({ id: 'call_1', name: 'get_weather' });
+    expect(deltas, 'argument bytes are never streamed as text').toEqual([]);
+  }, 5_000);
+
+  it('S6: text and argument characters are summed against the one ceiling', async () => {
+    // 30 characters of text + 20 of arguments = 50 > 40: cut; neither alone would be.
+    const chunks = [created, messageAdded(), textDelta(TEN), textDelta(TEN), textDelta(TEN), fnAdded(1, 'call_1', 'get_weather'), argsDelta(1, TEN), argsDelta(1, TEN)];
+    const cut = await run((_url, init) => openUntilAborted(init, chunks), { tools: [WEATHER_TOOL] }, { maxTokens: 10 });
+    expect(cut.result).toMatchObject({ ok: true, text: TEN.repeat(3), stopReason: 'max_tokens' });
+    // Exactly the ceiling across both kinds completes normally; the recorded fixtures' small arguments do too.
+    const exact = [created, messageAdded(), textDelta(TEN), textDelta(TEN), fnAdded(1, 'call_1', 'get_weather'), argsDelta(1, TEN), argsDelta(1, TEN), argsDone(1, '{"city":"Rome"}'), completed()];
+    const whole = await run(() => bareStream(exact), { tools: [WEATHER_TOOL] }, { maxTokens: 10 });
+    expect(whole.result).toMatchObject({ ok: true, text: TEN.repeat(2), stopReason: 'tool_use' });
+  }, 5_000);
 
   it('the ceiling abort never aborts the CALLER’s signal, and is not reported as CANCELLED', async () => {
     const caller = new AbortController();
@@ -810,6 +837,50 @@ describe('401 → one refresh → one retry (AC6)', () => {
       expect(all).not.toMatch(/api key/i); // no provider prose at all
     },
   );
+
+  it("G5-C4: a second 401 tells the source to invalidate the RETRY's bearer before the sign-in result is formed", async () => {
+    const invalidated: string[] = [];
+    const bearer = Object.assign(fakeBearer(), {
+      invalidate: async (stale: string) => {
+        invalidated.push(stale);
+      },
+    });
+    let n = 0;
+    const { result } = await run(() => (n++ === 0 ? echoing401(TOKEN_A) : echoing401(TOKEN_B)), {}, { bearer });
+    expect(invalidated, 'the bearer the retry sent — not the one the refresh replaced').toEqual([TOKEN_B]);
+    expect(result).toMatchObject({ ok: false, code: CHATGPT_ERROR_CODES.SIGN_IN_NEEDED, retryable: false });
+  });
+
+  it('G5-C4: a first 401 that the retry recovers from never invalidates anything', async () => {
+    const invalidated: string[] = [];
+    const bearer = Object.assign(fakeBearer(), {
+      invalidate: async (stale: string) => {
+        invalidated.push(stale);
+      },
+    });
+    let n = 0;
+    const { result } = await run(() => (n++ === 0 ? echoing401(TOKEN_A) : bareStream(TEXT_STREAM)), {}, { bearer });
+    expect(result.ok).toBe(true);
+    expect(invalidated).toEqual([]);
+  });
+
+  it('G5-C4: an invalidate that rejects or throws is swallowed — the named result stands; a source without invalidate is fine', async () => {
+    const rejecting = Object.assign(fakeBearer(), { invalidate: () => Promise.reject(new Error('store gone')) });
+    let n = 0;
+    const a = await run(() => (n++ === 0 ? echoing401(TOKEN_A) : echoing401(TOKEN_B)), {}, { bearer: rejecting });
+    expect(a.result).toMatchObject({ ok: false, code: CHATGPT_ERROR_CODES.SIGN_IN_NEEDED, message: SENTENCE.SIGN_IN_NEEDED });
+    const throwing = Object.assign(fakeBearer(), {
+      invalidate: (): Promise<void> => {
+        throw new Error('sync');
+      },
+    });
+    n = 0;
+    const b = await run(() => (n++ === 0 ? echoing401(TOKEN_A) : echoing401(TOKEN_B)), {}, { bearer: throwing });
+    expect(b.result).toMatchObject({ ok: false, code: CHATGPT_ERROR_CODES.SIGN_IN_NEEDED });
+    n = 0;
+    const c = await run(() => (n++ === 0 ? echoing401(TOKEN_A) : echoing401(TOKEN_B)));
+    expect(c.result).toMatchObject({ ok: false, code: CHATGPT_ERROR_CODES.SIGN_IN_NEEDED });
+  });
 
   it('refresh answering sign_in_needed → CHATGPT_SIGN_IN_NEEDED, no retry, no body prose', async () => {
     const bearer = fakeBearer({ refreshResult: () => ({ ok: false, code: 'sign_in_needed', retryable: false }) });
@@ -894,15 +965,18 @@ describe('bearer.get() failures — a named result and NO fetch (D5)', () => {
     const { result, calls } = await run(() => bareStream(TEXT_STREAM), {}, { bearer });
     expect(result).toMatchObject({ ok: false, code: 'NETWORK_ERROR', retryable: true });
     expect(calls).toHaveLength(0);
+    expect(bearer.refreshCalls, 'a get() failure is never answered with a refresh').toHaveLength(0);
   });
 
-  it('every BearerFailureCode yields a result — none throws, none reaches the network', async () => {
+  it('every BearerFailureCode yields a result — none throws, none reaches the network, none asks for a refresh', async () => {
     const codes: BearerFailureCode[] = ['sign_in_needed', 'plan_not_granted', 'usage_unavailable', 'network', 'refresh_not_ready'];
     for (const code of codes) {
       const bearer = fakeBearer({ getResult: { ok: false, code, retryable: code !== 'sign_in_needed' && code !== 'plan_not_granted' } });
       const { result, calls } = await run(() => bareStream(TEXT_STREAM), {}, { bearer });
       expect(result.ok, code).toBe(false);
       expect(calls, code).toHaveLength(0);
+      // Tightened at Gate 5 (the AC verifier): zero refresh calls, not merely zero fetches.
+      expect(bearer.refreshCalls, code).toHaveLength(0);
     }
   });
 });
@@ -1039,13 +1113,19 @@ describe('pre-stream HTTP statuses (D3, AC7, AC10)', () => {
 
 describe('source lints (AC10, AC12)', () => {
   const source = (file: string): string => readFileSync(join(__dirname, '..', file), 'utf8');
+  /** Code only: block and line comments stripped, so a comment MENTIONING the console is not a hit (Gate 5 widening). */
+  const codeOf = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
 
-  it('openai-responses.ts never logs (no console.)', () => {
-    expect(source('openai-responses.ts')).not.toMatch(/\bconsole\./);
-  });
+  // The whole ChatGPT-plan route in this package: the adapter, its wire shapes, the seam and the errors.
+  for (const file of ['openai-responses.ts', 'responses-wire.ts', 'bearer-source.ts', 'errors.ts']) {
+    it(`${file} never logs (no console. on a code line)`, () => {
+      expect(codeOf(source(file))).not.toMatch(/\bconsole\./);
+    });
+  }
 
-  it('errors.ts never logs (no console.)', () => {
-    expect(source('errors.ts')).not.toMatch(/\bconsole\./);
+  it('the comment stripper keeps code and drops comments (so the lint above can fail)', () => {
+    expect(codeOf('// console.log in a comment\nconst x = 1; /* console.debug */')).not.toMatch(/\bconsole\./);
+    expect(codeOf('const x = 1; // fine\nconsole.log(x);')).toMatch(/\bconsole\./);
   });
 
   it('openai-responses.ts never reads the response content-type — a stream is decided by status', () => {

@@ -107,14 +107,14 @@ export function openaiResponsesAdapter(options: OpenAiResponsesAdapterOptions): 
             const data = tryParseJsonRecord(event.data);
             if (data === null) continue; // a malformed block never kills the stream
             const delta = applyResponsesEvent(state, data, event.event);
-            if (delta !== undefined) {
-              onDelta?.(delta);
-              // "Exceeds", not "reaches": output of exactly the ceiling completes normally.
-              if (state.text.length > ceilingChars) {
-                ceilingHit = true;
-                controller.abort();
-                break;
-              }
+            if (delta !== undefined) onDelta?.(delta);
+            // "Exceeds", not "reaches": output of exactly the ceiling completes normally. Every
+            // output character counts — text AND function-call arguments (S6): a model writing
+            // a megabyte of JSON into a tool call is the same runaway as one writing prose.
+            if (state.outputChars > ceilingChars) {
+              ceilingHit = true;
+              controller.abort();
+              break;
             }
             if (state.terminal !== undefined) break; // post-settle events are never read
           }
@@ -134,11 +134,14 @@ export function openaiResponsesAdapter(options: OpenAiResponsesAdapterOptions): 
         if (attempt.kind === 'settled') return attempt.result;
 
         // One forced refresh on the token that failed, then one retry — a second 401 is a
-        // sign-in state, and its body (which echoes the bearer) is never read.
+        // sign-in state, and its body (which echoes the bearer) is never read. The keeper is
+        // told which bearer the route refused, so its status stops saying "signed in" (G5-C4).
         const refreshed = await bearer.refresh(first.token);
         if (!refreshed.ok) return bearerFailureResult(refreshed);
         const retry = await send(refreshed.token);
-        return retry.kind === 'settled' ? retry.result : chatgptErrorResult(CHATGPT_ERROR_CODES.SIGN_IN_NEEDED, false);
+        if (retry.kind === 'settled') return retry.result;
+        await invalidateQuietly(bearer, refreshed.token);
+        return chatgptErrorResult(CHATGPT_ERROR_CODES.SIGN_IN_NEEDED, false);
       } finally {
         signal?.removeEventListener('abort', mirrorAbort);
       }
@@ -226,6 +229,15 @@ function bearerFailureResult(failure: Extract<BearerResult, { ok: false }>): Ada
       return chatgptErrorResult(CHATGPT_ERROR_CODES.USAGE_UNAVAILABLE, true);
     case 'network':
       return networkErrorResult(new Error('network request failed while reaching the ChatGPT session'));
+  }
+}
+
+/** `bearer.invalidate`, when the source has one: awaited, and anything it throws — sync or async — stays with the keeper. */
+async function invalidateQuietly(bearer: BearerSource, stale: string): Promise<void> {
+  try {
+    await bearer.invalidate?.(stale);
+  } catch {
+    // The named result the caller returns next is the user's news; the keeper's own failure is not.
   }
 }
 

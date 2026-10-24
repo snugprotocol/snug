@@ -65,8 +65,10 @@ export interface DesktopOAuthTransport {
     flowId?: string;
     /**
      * The redirect PATH (TASK-20261023-siwc-chatgpt-plan D10). Default `/callback` — every
-     * existing caller unchanged; the ChatGPT-plan sign-in needs `/auth/callback` exactly.
-     * CONTRACT at L0; L1 threads it into `buildLoopbackRedirectUri`, tests first.
+     * existing caller unchanged; the ChatGPT-plan sign-in needs `/auth/callback` exactly,
+     * because OpenAI's registration binds the client to that path. Threaded into
+     * `buildLoopbackRedirectUri`, so the authorize request and the token exchange name the
+     * same recorded URI.
      */
     path?: string;
   }): Promise<{ redirectUri: string }>;
@@ -98,8 +100,9 @@ export function createDesktopOAuthTransport(deps: {
   /**
    * OPT-IN error delivery (TASK-20261023-siwc-chatgpt-plan D10): a `?error=…&state=…` callback
    * (no `code`) is dropped unless this handler is present — the wizard's instance passes none
-   * and keeps today's behaviour byte-for-byte; the ChatGPT-plan instance passes one so a
-   * declined consent ends the flow by name. CONTRACT at L0; L1 wires it, tests first.
+   * and keeps its behaviour byte-for-byte; the ChatGPT-plan instance passes one so a declined
+   * consent ends the flow by name instead of waiting out the TTL. Reached only from
+   * `handleCallbackUrl`, and only for a state that peeks to the active flow.
    */
   onError?: (e: CallbackErrorDelivery) => void;
   clock?: () => number;

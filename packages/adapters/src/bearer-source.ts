@@ -1,10 +1,11 @@
 // bearer-source.ts — the seam between a session keeper and the Responses adapter
 // (TASK-20261023-siwc-chatgpt-plan D3/D5, plan §2; Gate-2 finding F6). Defined HERE because
 // adapters cannot depend on auth: the keeper (`@snugprotocol/auth`'s ChatGPT-plan session) is
-// adapted to this shape in the playground (L4), and the adapter never sees a key — it asks for
-// a bearer per attempt, asks for a refresh when the attempt it made came back 401, and hands
-// every error body through `redact` before a message is formed (the bearer of the attempt that
-// FAILED, which after a refresh-and-retry is a different token).
+// adapted to this shape in the playground's platform seat, and the adapter never sees a key —
+// it asks for a bearer per attempt, asks for a refresh when the attempt it made came back 401,
+// tells the source when the RETRY came back 401 too, and hands every error body through
+// `redact` before a message is formed (the bearer of the attempt that FAILED, which after a
+// refresh-and-retry is a different token).
 
 /**
  * Why a bearer could not be produced, in the keeper's words. Every code is a NAMED result on
@@ -26,6 +27,14 @@ export interface BearerSource {
   refresh(stale: string): Promise<BearerResult>;
   /** Scrub every bearer this source has handed out from `text` (the auth side's exact-value scrub). */
   redact(text: string): string;
+  /**
+   * The route rejected `stale` AFTER a refresh-and-retry: the session the keeper holds is not
+   * one the route accepts, so the keeper should say "signed out" instead of looking healthy
+   * while every send burns a refresh and two requests (Gate 5 G5-C4). Optional and additive —
+   * a source without it is complete; the adapter awaits it and swallows whatever it throws,
+   * because the named result it is about to return is the user's news, not the keeper's error.
+   */
+  invalidate?(stale: string): Promise<void>;
 }
 
 /**

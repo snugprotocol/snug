@@ -53,10 +53,11 @@ export {
 
 export { STREAM_DROPPED_CODE } from './errors.js';
 
-// TASK-20261023-siwc-chatgpt-plan L0 — the ChatGPT-plan seam (ADR-0078 §3/§5, plan §2): the
-// Responses adapter (L2) is built against `BearerSource`, never a key; the four host-level
-// codes are the named results apps classify as HOST_ERROR honouring `retryable` (R5).
-// `isModelId` moves here from the host runner so the playground's settings boundary can
+// The ChatGPT-plan seam (TASK-20261023-siwc-chatgpt-plan, ADR-0078 §3/§5, plan §2): the
+// Responses adapter is built against `BearerSource`, never a key — adapters cannot depend on
+// auth, so the keeper is adapted to this shape in the playground; the four host-level codes
+// are the named results apps classify as HOST_ERROR honouring `retryable` (R5). `isModelId`
+// lives here rather than in the host runner so the playground's settings boundary can
 // validate a model id (C5) without a Node-only import.
 export {
   CHATGPT_ERROR_CODES,
@@ -68,9 +69,9 @@ export {
 
 export { MODEL_ID_PATTERN, isModelId } from './model-id.js';
 
-// TASK-20261023-siwc-chatgpt-plan L2 — the Responses adapter on the ChatGPT plan (D3): built
-// against `BearerSource`, base pinned, a stream decided by status, named results with fixed
-// sentences, and a client-side output ceiling because the route rejects `max_output_tokens`.
+// The Responses adapter on the ChatGPT plan (TASK-20261023-siwc-chatgpt-plan D3): built against
+// `BearerSource`, base pinned, a stream decided by status, named results with fixed sentences,
+// and a client-side output ceiling because the route rejects `max_output_tokens`.
 export {
   RESPONSES_DEFAULT_BASE_URL,
   RESPONSES_DEFAULT_MAX_TOKENS,

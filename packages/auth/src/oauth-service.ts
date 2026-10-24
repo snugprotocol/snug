@@ -32,6 +32,7 @@ import {
 import { authFlowSecretKey, AUTH_FLOW_SECRET_PREFIX } from '@snugprotocol/db';
 import { isUrlWithinHosts } from './app-host-freeze.js';
 import { MAX_AUTH_FAILURE_BODY_CHARS, extractProviderErrorDetail } from './provider-error-detail.js';
+import { isRecord } from './records.js';
 import { scrubAuthValues } from './scrub.js';
 import { base64UrlToUtf8, bytesToBase64Url, bytesToHex, randomBase64Url, utf8ToBase64Url } from './base64url.js';
 import type { CredentialStore, SecretsQuartet } from './credential-store.js';
@@ -291,7 +292,7 @@ export interface CallbackDelivery {
    * The `client_id` the callback carried, when it did (TASK-20261023-siwc-chatgpt-plan D10):
    * OpenAI's dynamic registration returns the issued `oaiapp_…` client on the FIRST callback
    * and omits it on re-auth. Absent for every other provider. The desktop transport fills it
-   * (L1); `handleCallback` ignores it.
+   * from the callback URL; the ChatGPT-plan keeper reads it; `handleCallback` ignores it.
    */
   clientId?: string;
 }
@@ -706,8 +707,12 @@ export interface OauthPostError {
   detail?: string;
 }
 
-/** An OAuth error code is an identifier (RFC 6749 §5.2 names them so); prose or an echo is never a code. */
-const OAUTH_ERROR_CODE_SHAPE = /^[A-Za-z0-9_.:-]{1,64}$/;
+/**
+ * An OAuth error code is an identifier (RFC 6749 §5.2 names them so); prose or an echo is never a
+ * code. Exported because the ChatGPT-plan keeper judges a callback's `error` by the same rule —
+ * one shape, one home (Gate 5 ST6).
+ */
+export const OAUTH_ERROR_CODE_SHAPE = /^[A-Za-z0-9_.:-]{1,64}$/;
 
 /**
  * THE ERROR BODY IS RAW PROVIDER BYTES AND WHAT THIS RETURNS TRAVELS (audit D2).
@@ -769,20 +774,30 @@ export async function extractOauthErrorFromPost(response: Response, submitted: U
   };
 }
 
-/** The RFC 6749 `error` member of a JSON error body — after the decode-side scrub, and only when identifier-shaped. */
+/**
+ * The error code of a JSON error body — after the decode-side scrub, and only when
+ * identifier-shaped. Three spellings are read, in this order (Gate 5 G5-C5): RFC 6749 §5.2's
+ * string `error`; OpenAI's API envelope, which nests it as `error.code` (the measured 401
+ * shape: `{"error":{"code":"invalid_api_key","message":…}}`); and a top-level `code`.
+ */
 function extractOauthErrorCode(scrubbedBody: string, secrets: Record<string, string>): string | undefined {
   if (scrubbedBody.length > MAX_AUTH_FAILURE_BODY_CHARS) return undefined;
   const trimmed = scrubbedBody.trim();
   if (!trimmed.startsWith('{')) return undefined;
-  let error: unknown;
+  let body: unknown;
   try {
-    error = (JSON.parse(trimmed) as Record<string, unknown>)['error'];
+    body = JSON.parse(trimmed);
   } catch {
     return undefined;
   }
-  if (typeof error !== 'string') return undefined;
-  const code = scrubAuthValues(error, secrets).trim();
-  return OAUTH_ERROR_CODE_SHAPE.test(code) ? code : undefined;
+  if (!isRecord(body)) return undefined;
+  const error = body['error'];
+  for (const candidate of [error, isRecord(error) ? error['code'] : undefined, body['code']]) {
+    if (typeof candidate !== 'string') continue;
+    const code = scrubAuthValues(candidate, secrets).trim();
+    if (OAUTH_ERROR_CODE_SHAPE.test(code)) return code;
+  }
+  return undefined;
 }
 
 // ---------------------------------------------------------------------------

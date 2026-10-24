@@ -88,10 +88,16 @@ export interface ResponsesStreamState {
   text: string;
   calls: Map<number, PendingCall>;
   terminal: ResponsesTerminal | undefined;
+  /**
+   * Every output character so far — the text AND the function-call arguments — for the
+   * client-side ceiling (S6): the route gives no server-side cap, and a runaway tool call is
+   * output just as prose is. Kept as a running count so the ceiling check is O(1) per event.
+   */
+  outputChars: number;
 }
 
 export function emptyStreamState(): ResponsesStreamState {
-  return { text: '', calls: new Map(), terminal: undefined };
+  return { text: '', calls: new Map(), terminal: undefined, outputChars: 0 };
 }
 
 /**
@@ -111,27 +117,37 @@ export function applyResponsesEvent(
     case 'response.output_text.delta': {
       if (typeof data.delta !== 'string' || data.delta === '') return undefined;
       state.text += data.delta;
+      state.outputChars += data.delta.length;
       return data.delta;
     }
     case 'response.output_item.added': {
       const item = asRecord(data.item);
       if (item === null || item.type !== 'function_call') return undefined;
+      const args = typeof item.arguments === 'string' ? item.arguments : '';
       state.calls.set(indexOf(data), {
         id: typeof item.call_id === 'string' ? item.call_id : '',
         name: typeof item.name === 'string' ? item.name : '',
-        args: typeof item.arguments === 'string' ? item.arguments : '',
+        args,
         done: undefined,
       });
+      state.outputChars += args.length;
       return undefined;
     }
     case 'response.function_call_arguments.delta': {
       const entry = state.calls.get(indexOf(data));
-      if (entry !== undefined && typeof data.delta === 'string') entry.args += data.delta;
+      if (entry !== undefined && typeof data.delta === 'string') {
+        entry.args += data.delta;
+        state.outputChars += data.delta.length;
+      }
       return undefined;
     }
     case 'response.function_call_arguments.done': {
       const entry = state.calls.get(indexOf(data));
-      if (entry !== undefined && typeof data.arguments === 'string') entry.done = data.arguments;
+      if (entry !== undefined && typeof data.arguments === 'string') {
+        // Authoritative, and usually the deltas' concatenation; only what the deltas did not carry counts again.
+        state.outputChars += Math.max(0, data.arguments.length - entry.args.length);
+        entry.done = data.arguments;
+      }
       return undefined;
     }
     case 'response.completed': {

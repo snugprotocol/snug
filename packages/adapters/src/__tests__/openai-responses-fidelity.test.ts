@@ -111,7 +111,8 @@ async function replay(chunks: Uint8Array[]): Promise<{ result: AdapterResult; de
 /**
  * EVERY byte boundary — exhaustive, not sampled: mid-`data:`, between the two newlines of a
  * block, mid-JSON-escape, and inside each multi-byte UTF-8 sequence. Cheap enough (~35k
- * replays across the three fixtures in a few seconds) that sampling would only lose coverage.
+ * replays across the three fixtures in about 12 s, measured at Gate 5 on Node 22) that
+ * sampling would only lose coverage.
  */
 function splitPoints(bytes: Uint8Array): number[] {
   return Array.from({ length: bytes.length - 1 }, (_, i) => i + 1);

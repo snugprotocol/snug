@@ -222,9 +222,11 @@ export {
 
 // "Use my ChatGPT plan" (TASK-20261023-siwc-chatgpt-plan, ADR-0078): the per-machine session
 // contracts — the file the shell keeps `0600` outside the user file, the store and loopback
-// seats the desktop implements, the keeper's API and its named failures — and the keeper
-// itself: PKCE sign-in with dynamic registration, ID-token checks against OpenAI's JWKS, the
-// serial queue + epoch, the single-flight rotation-safe refresh, revocation, the model list.
+// seats the desktop implements, the keeper's API and its named failures — the TOTAL parser the
+// shell's seat and the keeper read that file through, and the keeper itself: PKCE sign-in with
+// dynamic registration, ID-token checks against OpenAI's JWKS, the serial queue + epoch, the
+// single-flight rotation-safe refresh, revocation, the model list. One door: `chatgpt-plan.ts`
+// re-exports the contracts (`chatgpt-plan-types.ts`) and the wire constants (`chatgpt-plan-wire.ts`).
 export {
   CHATGPT_API_RESOURCE,
   CHATGPT_CALLBACK_PATH,
@@ -234,6 +236,7 @@ export {
   CHATGPT_PLAN_SCOPE,
   ChatgptPlanError,
   createChatgptPlanSession,
+  parseChatgptSessionFile,
   type ChatgptLoopbackSeat,
   type ChatgptPlanSessionDeps,
   type ChatgptModel,

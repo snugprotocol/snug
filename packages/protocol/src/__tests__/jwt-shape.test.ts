@@ -22,11 +22,16 @@ describe('L0 — the JWT shape is single-homed in the protocol (AC10, lesson L19
     expect(scan.rejects.filter((f) => f.reason === 'jwt-shape')).toEqual([]);
   });
 
-  it('the exported source is the scanner’s own shape — anchoring it reproduces the whole-value rule', () => {
+  it('the exported source and the scanner’s whole-value rule agree for segments up to 4 096 characters; the scanner also accepts longer ones (S7)', () => {
     const anchored = new RegExp(`^${JWT_SHAPE_SOURCE}$`);
-    expect(anchored.test(JWT)).toBe(true);
-    expect(anchored.test('eyJ.short.x')).toBe(false);
-    expect(anchored.test(`${JWT} trailing`)).toBe(false);
+    const whole = (value: string): boolean => scanForCredentialValues({ v: value }).rejects.some((f) => f.reason === 'jwt-shape');
+    for (const value of [JWT, 'eyJ.short.x', `${JWT} trailing`, `eyJ${'A'.repeat(4093)}.${'B'.repeat(4096)}.${'C'.repeat(4096)}`, 'eyJabcdefgh.ijklmnop.qrstuvwx', 'eyJabcdefgh.ijklmnop']) {
+      expect(whole(value), value.slice(0, 40)).toBe(anchored.test(value));
+    }
+    // Beyond the in-text matcher's bound the two part ways on purpose: the scanner is unbounded.
+    const long = `eyJ${'A'.repeat(4094)}.${'B'.repeat(4096)}.${'C'.repeat(4096)}`;
+    expect(anchored.test(long)).toBe(false);
+    expect(whole(long)).toBe(true);
   });
 
   it('jwtShapeInText finds the token inside prose, after a Bearer scheme, inside JSON and glued to `=`', () => {
@@ -81,5 +86,40 @@ describe('§12 L5-7 — the shape is BOUNDED so every consumer stays linear on l
     const beyond = `eyJ${seg(4094)}.${seg(4096)}.${seg(4096)}`;
     expect(within.replace(jwtShapeInText(), '***')).toBe('***');
     expect(beyond.replace(jwtShapeInText(), '***')).toBe(beyond);
+  });
+});
+
+describe('S7 — the ANCHORED whole-value rule is not weakened by the bound', () => {
+  // Measured at Gate 5: with the whole-value rule built from the bounded source, a JWT whose payload
+  // ran past 4 096 characters sailed through the C1 scanner. A whole value is judged by splitting on
+  // `.` into exactly three `[\w-]` segments of at least 8 characters, the first a JSON header — a
+  // charset walk, linear, no length limit — while the in-text matcher keeps its bound.
+  const seg = (ch: string, n: number): string => ch.repeat(n);
+
+  it('a JWT with a 5 KB payload is REJECTED by the scanner', () => {
+    const big = `eyJ${seg('A', 29)}.${seg('B', 5 * 1024)}.${seg('C', 43)}`;
+    expect(scanForCredentialValues({ token: big }).rejects).toEqual([{ path: 'token', reason: 'jwt-shape' }]);
+    expect(scanForCredentialValues({ note: big }).rejects).toEqual([{ path: 'note', reason: 'jwt-shape' }]);
+  });
+
+  it('the rule is still exact: a bad character, a fourth segment, a short segment, or a non-`eyJ` head is not a token', () => {
+    for (const value of [
+      `eyJ${seg('A', 29)}.${seg('B', 5000)}.${seg('C', 43)}.extra`,
+      `eyJ${seg('A', 29)}.${seg('B', 5000)}=.${seg('C', 43)}`,
+      `eyJ${seg('A', 29)}.${seg('B', 5000)}.short`,
+      `ABC${seg('A', 29)}.${seg('B', 5000)}.${seg('C', 43)}`,
+      `eyJ${seg('A', 29)}.${seg('B', 5000)}.${seg('C', 43)} `,
+    ]) {
+      expect(scanForCredentialValues({ v: value }).rejects.filter((f) => f.reason === 'jwt-shape'), value.slice(0, 40)).toEqual([]);
+    }
+  });
+
+  it('an 8 MiB value still completes: an unbroken run is not a token, a dotted one is judged linearly', () => {
+    const run = `eyJ${'a'.repeat(8 * 1024 * 1024)}`;
+    expect(scanForCredentialValues({ blob: run }).rejects).toEqual([]);
+    const dotted = `eyJ${'a'.repeat(4 * 1024 * 1024)}.${'b'.repeat(4 * 1024 * 1024)}.${'c'.repeat(64)}`;
+    expect(scanForCredentialValues({ blob: dotted }).rejects).toEqual([{ path: 'blob', reason: 'jwt-shape' }]);
+    const broken = `eyJ${'a'.repeat(4 * 1024 * 1024)}.${'b'.repeat(4 * 1024 * 1024)}!.${'c'.repeat(64)}`;
+    expect(scanForCredentialValues({ blob: broken }).rejects.filter((f) => f.reason === 'jwt-shape')).toEqual([]);
   });
 });
