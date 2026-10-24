@@ -13,14 +13,18 @@
 //!     `OpenOptions::new().write(true).create_new(true).mode(0o600)` — so the temp is `0600`
 //!     from its first byte (S5) and a planted symlink is never followed — then `sync_all`,
 //!     `rename` over `session.json`, and the directory fsync'ed.
-//!   - The payload is OPAQUE bytes with a size cap: no serde, no JSON parse (a serde type error
-//!     would quote the offending string — a token — back into an error message).
+//!   - The payload is OPAQUE bytes with a size cap on BOTH sides: no serde, no JSON parse (a
+//!     serde type error would quote the offending string — a token — back into an error
+//!     message); a file grown past the cap by another writer is refused, not read (S12).
+//!   - The custody directory must be a REAL directory: a `.chatgpt-plan` that is a symlink (or
+//!     a file) is refused by name, before anything is read, written or chmod'ed through it
+//!     (S12 — a planted link would send the tokens and the `0700` wherever it points).
 //!   - The IPC wall for these commands is the invoke key, exactly as for `read_user_file`
 //!     (ADR-0021 §8); `capabilities/main.json` is unchanged. The in-shell gate's rows prove a
 //!     sandboxed app frame cannot reach them (AC13).
 
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 /// The size cap on one session payload. Over it → `Err` naming the cap, nothing written.
@@ -51,14 +55,54 @@ pub(crate) fn custody_dir() -> Result<PathBuf, String> {
 
 /// `Ok(None)` when no session file exists (or the directory does not). The bytes, verbatim,
 /// otherwise — and an error, never a lossy string, when they are not UTF-8: a silently altered
-/// refresh token is worse than a refused read.
+/// refresh token is worse than a refused read. A file over `MAX_SESSION_BYTES` is refused, not
+/// read (S12): the read is bounded by `take`, so a file growing under us cannot exceed it
+/// either. A symlinked (or non-directory) custody path is refused before the open.
 pub fn read_impl(dir: &Path) -> Result<Option<String>, String> {
-    match fs::read(dir.join(SESSION_FILE)) {
-        Ok(bytes) => String::from_utf8(bytes)
-            .map(Some)
-            .map_err(|_| "session file is not valid UTF-8".to_string()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(format!("read session file: {e}")),
+    refuse_unless_real_dir(dir)?;
+    let mut file = match fs::File::open(dir.join(SESSION_FILE)) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("read session file: {e}")),
+    };
+    let len = file.metadata().map_err(|e| format!("read session file: {e}"))?.len();
+    if len > MAX_SESSION_BYTES as u64 {
+        return Err(over_cap_message("session file is", len));
+    }
+    let mut bytes = Vec::with_capacity(len as usize);
+    (&mut file)
+        .take(MAX_SESSION_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| format!("read session file: {e}"))?;
+    if bytes.len() > MAX_SESSION_BYTES {
+        return Err(over_cap_message("session file is", bytes.len() as u64));
+    }
+    String::from_utf8(bytes)
+        .map(Some)
+        .map_err(|_| "session file is not valid UTF-8".to_string())
+}
+
+/// The one sentence for either side of the cap. Names the size and the cap — never the bytes.
+fn over_cap_message(what: &str, len: u64) -> String {
+    format!("{what} {len} bytes; the cap is {MAX_SESSION_BYTES} bytes (64 KiB)")
+}
+
+/// Gate 5 S12: custody happens in a REAL directory or not at all. `symlink_metadata` does not
+/// follow, so a planted link at `.chatgpt-plan` is seen as what it is and refused by name — the
+/// write would otherwise chmod and stage the tokens wherever it points, and the read would hand
+/// the keeper whatever session its planter put there. A file at the name is refused too (the
+/// old path chmod'ed it). A missing path is fine: the read answers `None`, the write creates it.
+fn refuse_unless_real_dir(dir: &Path) -> Result<(), String> {
+    match fs::symlink_metadata(dir) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            Err(format!("{} is a symlink — refusing custody through it", dir.display()))
+        }
+        Ok(meta) if !meta.is_dir() => {
+            Err(format!("{} exists and is not a directory — refusing custody", dir.display()))
+        }
+        Ok(_) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("inspect {}: {e}", dir.display())),
     }
 }
 
@@ -85,10 +129,7 @@ pub fn write_impl_with_hook(
     before_rename: impl FnOnce(&Path),
 ) -> Result<(), String> {
     if payload.len() > MAX_SESSION_BYTES {
-        return Err(format!(
-            "session payload is {} bytes; the cap is {MAX_SESSION_BYTES} bytes (64 KiB)",
-            payload.len()
-        ));
+        return Err(over_cap_message("session payload is", payload.len() as u64));
     }
     ensure_private_dir(dir)?;
     let target = dir.join(SESSION_FILE);
@@ -101,12 +142,9 @@ pub fn write_impl_with_hook(
         before_rename(&tmp);
         fs::rename(&tmp, &target).map_err(|e| format!("rename session file into place: {e}"))?;
         // The directory entry the rename created is durable only once the DIRECTORY is
-        // fsync'ed (userfile.rs `fsync_dir` carries the full reasoning). Best-effort: a
-        // durability barrier failing must not fail a completed write. No-op on Windows.
-        #[cfg(not(windows))]
-        if let Ok(d) = fs::File::open(dir) {
-            let _ = d.sync_all();
-        }
+        // fsync'ed — `userfile::fsync_dir` is that barrier (best-effort; a no-op on Windows)
+        // and carries the full reasoning; one spelling in the crate (ST13).
+        crate::userfile::fsync_dir(dir);
         Ok(())
     })();
     if result.is_err() {
@@ -125,8 +163,10 @@ pub fn clear_impl(dir: &Path) -> Result<(), String> {
 }
 
 /// The custody directory, `0700`. Only the LEAF gets the mode: `~/Snug` is created with the
-/// process default when missing and never chmod'ed when present.
+/// process default when missing and never chmod'ed when present. A leaf that is a symlink or a
+/// file is refused first — the chmod below must never go through a link (S12).
 fn ensure_private_dir(dir: &Path) -> Result<(), String> {
+    refuse_unless_real_dir(dir)?;
     if let Some(parent) = dir.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
     }
@@ -195,6 +235,7 @@ pub fn chatgpt_session_clear() -> Result<(), String> {
 mod tests {
     use super::*;
     use std::fs;
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
     const FILE: &str = "session.json";
@@ -206,6 +247,7 @@ mod tests {
         (root, dir)
     }
 
+    #[cfg(unix)]
     fn mode_of(p: &Path) -> u32 {
         fs::metadata(p).unwrap().permissions().mode() & 0o777
     }
@@ -303,6 +345,7 @@ mod tests {
 
     // ---- modes ---------------------------------------------------------------------------
 
+    #[cfg(unix)]
     #[test]
     fn a_created_directory_is_0700_and_the_file_is_0600() {
         // The test process umask is typically 022: a create_dir_all / File::create without an
@@ -313,6 +356,7 @@ mod tests {
         assert_eq!(mode_of(&dir.join(FILE)), 0o600, "session file must be 0600");
     }
 
+    #[cfg(unix)]
     #[test]
     fn an_existing_looser_directory_is_tightened_to_0700() {
         let (_root, dir) = fresh_dir();
@@ -322,6 +366,7 @@ mod tests {
         assert_eq!(mode_of(&dir), 0o700);
     }
 
+    #[cfg(unix)]
     #[test]
     fn an_existing_0644_session_file_is_replaced_by_a_0600_one() {
         // Catches an in-place write (truncate + write keeps the old inode's mode).
@@ -334,6 +379,7 @@ mod tests {
         assert_eq!(read_impl(&dir).unwrap().as_deref(), Some("new"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn the_temp_file_is_0600_complete_and_beside_the_target_before_the_rename() {
         // S5: `userfile.rs`-style `File::create` leaves a 0644 temp holding the tokens for the
@@ -376,6 +422,7 @@ mod tests {
         seen.unwrap()
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_leftover_temp_from_a_crash_does_not_break_the_next_write_and_is_not_left_behind() {
         // PINNED STRATEGY: the next write succeeds AND no stale temp survives it (the leftover
@@ -394,6 +441,7 @@ mod tests {
         assert_eq!(entries(&dir), vec![FILE.to_string()], "the stale temp must not survive the next write");
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_symlink_planted_at_the_temp_name_is_never_written_through() {
         // `create_new` refuses an existing path, symlink included — a `create(true)` open would
@@ -410,7 +458,77 @@ mod tests {
         assert_eq!(read_impl(&dir).unwrap().as_deref(), Some("SECRET-REFRESH-TOKEN"));
     }
 
+    // ---- a symlinked (or non-directory) custody path (Gate 5 S12) ---------------------------
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_custody_dir_is_refused_by_the_write_and_never_chmodded_through() {
+        // Same-user residual (R-3 class): a `.chatgpt-plan` that is a SYMLINK sends the tokens —
+        // and the 0700 chmod — wherever its planter pointed it. Refuse by name; touch nothing.
+        let (root, dir) = fresh_dir();
+        let elsewhere = root.path().join("elsewhere");
+        fs::create_dir_all(&elsewhere).unwrap();
+        fs::set_permissions(&elsewhere, fs::Permissions::from_mode(0o755)).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, &dir).unwrap();
+
+        let err = write_impl(&dir, "SECRET-REFRESH-TOKEN").unwrap_err();
+        assert!(err.contains("symlink"), "the error must name the symlink; got: {err}");
+        assert!(!err.contains("SECRET"), "an error never quotes the payload");
+        assert_eq!(mode_of(&elsewhere), 0o755, "the chmod must never go through the link");
+        assert_eq!(entries(&elsewhere), Vec::<String>::new(), "nothing is written through the link");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_custody_dir_is_refused_by_the_read() {
+        // A read through the link would hand the keeper whatever session its planter put there.
+        let (root, dir) = fresh_dir();
+        let elsewhere = root.path().join("elsewhere");
+        fs::create_dir_all(&elsewhere).unwrap();
+        fs::write(elsewhere.join(FILE), "{\"v\":1,\"hostId\":\"PLANTED-SESSION\"}").unwrap();
+        std::os::unix::fs::symlink(&elsewhere, &dir).unwrap();
+
+        let err = read_impl(&dir).unwrap_err();
+        assert!(err.contains("symlink"), "the error must name the symlink; got: {err}");
+        assert!(!err.contains("PLANTED"), "an error never quotes the file");
+    }
+
+    #[test]
+    fn a_custody_path_that_is_a_file_is_refused_by_the_write_without_a_chmod() {
+        // `.chatgpt-plan` as a FILE: the old path chmod'ed it 0700 and then failed opening the
+        // temp inside it. Now it is refused before anything is touched.
+        let (_root, dir) = fresh_dir();
+        fs::create_dir_all(dir.parent().unwrap()).unwrap();
+        fs::write(&dir, "I am a file").unwrap();
+        let err = write_impl(&dir, "payload").unwrap_err();
+        assert!(err.contains("not a directory"), "the error must say what it found; got: {err}");
+        assert_eq!(fs::read_to_string(&dir).unwrap(), "I am a file", "untouched");
+    }
+
     // ---- the size cap -----------------------------------------------------------------------
+
+    #[test]
+    fn an_over_cap_file_on_disk_is_refused_by_the_read_not_read() {
+        // Gate 5 S12: the cap guards the write; a file grown past it by another writer must not
+        // be slurped into the webview either. The error names the cap, never the bytes.
+        let (_root, dir) = fresh_dir();
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(FILE), format!("SECRET-MARKER{}", "a".repeat(MAX_SESSION_BYTES))).unwrap();
+        let err = read_impl(&dir).unwrap_err();
+        assert!(
+            err.contains("65536") || err.contains("64 KiB"),
+            "the error must name the cap; got: {err}"
+        );
+        assert!(!err.contains("SECRET-MARKER"), "an error must never quote the file");
+    }
+
+    #[test]
+    fn a_file_of_exactly_the_cap_is_read_whole() {
+        let (_root, dir) = fresh_dir();
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(FILE), "b".repeat(MAX_SESSION_BYTES)).unwrap();
+        assert_eq!(read_impl(&dir).unwrap().map(|s| s.len()), Some(MAX_SESSION_BYTES));
+    }
 
     #[test]
     fn the_cap_is_64_kib() {
@@ -472,6 +590,7 @@ mod tests {
 
     // ---- the commands resolve the fixed location under HOME ----------------------------------
 
+    #[cfg(unix)]
     #[test]
     fn the_three_commands_operate_on_home_snug_dot_chatgpt_plan_and_leave_snug_mode_alone() {
         crate::userfile::tests::with_home(|| {
@@ -508,18 +627,61 @@ mod tests {
 
     // ---- registration: BOTH handler lists ---------------------------------------------------
 
-    /// The two `generate_handler![...]` bodies in lib.rs, debug first then release.
-    fn handler_lists() -> (String, String) {
+    /// The command IDENTIFIERS one `generate_handler![ … ]` body registers: comment lines
+    /// dropped, the body split on commas, each entry reduced to its last path segment. A list of
+    /// identifiers compared whole — so `chatgpt_session_readx` can never stand in for
+    /// `chatgpt_session_read` the way a substring match would let it (Gate 5 verifier, AC13).
+    fn parse_handler_identifiers(body: &str) -> Vec<String> {
+        body.lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n")
+            .split(',')
+            .map(str::trim)
+            .filter(|entry| !entry.is_empty())
+            .map(|entry| entry.rsplit("::").next().unwrap_or(entry).to_string())
+            .collect()
+    }
+
+    /// The identifiers of the two `generate_handler![...]` lists in lib.rs, debug then release.
+    fn handler_lists() -> (Vec<String>, Vec<String>) {
         let lib = include_str!("lib.rs");
         let debug_at = lib.find("#[cfg(debug_assertions)]\n    let builder = builder.invoke_handler(").expect("the debug handler list");
         let release_at = lib.find("#[cfg(not(debug_assertions))]\n    let builder = builder.invoke_handler(").expect("the release handler list");
-        let body = |from: usize| -> String {
+        let identifiers = |from: usize| -> Vec<String> {
             let rest = &lib[from..];
-            let open = rest.find("generate_handler![").unwrap();
+            let open = rest.find("generate_handler![").unwrap() + "generate_handler![".len();
             let close = rest[open..].find("]);").unwrap();
-            rest[open..open + close].to_string()
+            parse_handler_identifiers(&rest[open..open + close])
         };
-        (body(debug_at), body(release_at))
+        (identifiers(debug_at), identifiers(release_at))
+    }
+
+    fn registers(list: &[String], cmd: &str) -> bool {
+        list.iter().any(|entry| entry == cmd)
+    }
+
+    #[test]
+    fn the_handler_list_parser_yields_whole_identifiers_not_substrings() {
+        let parsed = parse_handler_identifiers(
+            "\n        a::b_read,\n        // a comment, with a comma and b_read in it\n        c,\n        d::e::f_readx,\n    ",
+        );
+        assert_eq!(parsed, vec!["b_read", "c", "f_readx"]);
+        assert!(!registers(&parsed, "f_read"), "a longer identifier is not the one asked for");
+        assert!(!registers(&parsed, "b"), "a path prefix is not an identifier");
+        assert!(!registers(&parsed, "read"), "a suffix is not an identifier");
+    }
+
+    #[test]
+    fn the_handler_lists_parse_to_the_known_production_commands() {
+        // Pins the parse against the real lib.rs, so a reshaped macro cannot make every check
+        // below pass vacuously on an empty list.
+        let (debug, release) = handler_lists();
+        for cmd in ["read_user_file", "write_user_file", "pending_opened_files", "close_flush_done"] {
+            assert!(registers(&debug, cmd), "debug: {cmd}; parsed {debug:?}");
+            assert!(registers(&release, cmd), "release: {cmd}; parsed {release:?}");
+        }
+        assert!(debug.len() > release.len(), "the debug list carries the gate commands on top");
     }
 
     #[test]
@@ -528,9 +690,8 @@ mod tests {
         // works in every dev run and dies in the shipped binary.
         let (debug, release) = handler_lists();
         for cmd in ["chatgpt_session_read", "chatgpt_session_write", "chatgpt_session_clear"] {
-            let entry = format!("{cmd},");
-            assert!(debug.contains(&entry), "debug list must register {cmd}");
-            assert!(release.contains(&entry), "release list must register {cmd}");
+            assert!(registers(&debug, cmd), "debug list must register {cmd}");
+            assert!(registers(&release, cmd), "release list must register {cmd}");
         }
     }
 
@@ -539,8 +700,17 @@ mod tests {
         // The in-shell gate's effect sensors (AC13) need a main-frame view of the file's mode;
         // like every gate command it must not exist in a release binary (P0 amendment 4).
         let (debug, release) = handler_lists();
-        assert!(debug.contains("gate_chatgpt_session_stat,"));
-        assert!(!release.contains("gate_chatgpt_session_stat"));
+        assert!(registers(&debug, "gate_chatgpt_session_stat"));
+        assert!(!registers(&release, "gate_chatgpt_session_stat"));
+    }
+
+    #[test]
+    fn the_gate_home_marker_probe_is_registered_in_the_debug_list_only() {
+        // G5-A10: the effect sensors run only when the driver's marker is in HOME; the command
+        // that answers is a gate command and must be absent from a release binary like the rest.
+        let (debug, release) = handler_lists();
+        assert!(registers(&debug, "gate_chatgpt_session_marker_present"));
+        assert!(!registers(&release, "gate_chatgpt_session_marker_present"));
     }
 
     // ---- nothing logged, nothing parsed ------------------------------------------------------
@@ -569,6 +739,9 @@ mod tests {
         assert!(src.contains(".mode(0o600)"), "the temp must be opened with mode 0o600");
         let rename_at = src.find("fs::rename(").expect("the write must rename");
         let after = &src[rename_at..];
-        assert!(after.contains("sync_all()"), "the directory must be fsync'ed AFTER the rename");
+        // Gate 5 ST13: the directory fsync is `userfile::fsync_dir` — the one spelling of the
+        // durability barrier in this crate — called after the rename, not a rewritten twin.
+        assert!(after.contains("crate::userfile::fsync_dir(dir)"), "the directory must be fsync'ed AFTER the rename through userfile::fsync_dir");
+        assert!(!src.contains("d.sync_all()"), "no second spelling of the directory fsync");
     }
 }

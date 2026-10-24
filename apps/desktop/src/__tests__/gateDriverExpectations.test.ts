@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
-import { IPC_CHECK_IDS } from '../gate/ipc.js';
+import { GATE_HOME_MARKER_NAME, IPC_CHECK_IDS } from '../gate/ipc.js';
 import { NET_SCOPE_CHECK_IDS } from '../gate/netScope.js';
 
 const driverSource = readFileSync(fileURLToPath(new URL('../../gate/run-gate.mjs', import.meta.url)), 'utf8');
@@ -61,6 +61,13 @@ describe('gate driver expectations track the harness (no hand-typed twin)', () =
       }
     }
   });
+
+  it('expects the gate-home marker row (G5-A10) — a shell that skipped the effect sensors cannot pass quietly', () => {
+    const harnessSource = readFileSync(fileURLToPath(new URL('../gate/ipc.ts', import.meta.url)), 'utf8');
+    const block = /export const IPC_CHECK_IDS = \[([\s\S]*?)\] as const;/.exec(harnessSource)!;
+    const parsed = [...block[1].matchAll(/'([^']+)'/g)].map((m) => m[1]);
+    expect(parsed).toContain('ipc-chatgpt-session-gate-home');
+  });
 });
 
 describe('the gate shell runs under a THROWAWAY HOME (TASK-20261023-siwc-chatgpt-plan F3/S6)', () => {
@@ -74,6 +81,26 @@ describe('the gate shell runs under a THROWAWAY HOME (TASK-20261023-siwc-chatgpt
     const launch = /const app = spawn\(binaryPath, \[\], \{\s*env: \{([\s\S]*?)\},/.exec(driverSource);
     expect(launch, 'the full-gate launch site must stay parseable').not.toBeNull();
     expect(launch![1]).toMatch(/\.\.\.process\.env,\s*HOME: fakeHome,/);
+  });
+
+  // G5-A10: the throwaway HOME is only known to BE throwaway because the driver marks it. The
+  // harness asks the debug-only Rust command for `<home>/.snug-shell-gate-home` before any
+  // effect sensor writes or clears, so the three spellings must agree — the driver's (what it
+  // writes), the harness's (what the row names) and the Rust side's (what it stats).
+  it('the driver writes the gate-home MARKER into BOTH homes it creates — the main leg’s and the persist legs’', () => {
+    expect(driverSource).toMatch(/const GATE_HOME_MARKER = '\.snug-shell-gate-home';/);
+    const markHome = /function markGateHome\(home\) \{([\s\S]*?)\n\}/.exec(driverSource);
+    expect(markHome, 'one helper that mkdirs and marks a gate home').not.toBeNull();
+    expect(markHome![1]).toMatch(/fs\.writeFileSync\(path\.join\(home, GATE_HOME_MARKER\), ''\)/);
+    expect(driverSource).toMatch(/const fakeHome = path\.join\(workDir, 'home'\);\s*markGateHome\(fakeHome\);/);
+    expect(driverSource).toMatch(/const home = path\.join\(workDir, 'persist-home'\);\s*markGateHome\(home\);/);
+  });
+
+  it('the marker name is ONE spelling across the driver, the harness and gate.rs', () => {
+    expect(GATE_HOME_MARKER_NAME).toBe('.snug-shell-gate-home');
+    const gateRs = readFileSync(fileURLToPath(new URL('../../src-tauri/src/gate.rs', import.meta.url)), 'utf8');
+    expect(gateRs).toMatch(/pub const GATE_HOME_MARKER: &str = "\.snug-shell-gate-home";/);
+    expect(gateRs, 'the debug-only command the harness calls').toContain('pub fn gate_chatgpt_session_marker_present(');
   });
 });
 

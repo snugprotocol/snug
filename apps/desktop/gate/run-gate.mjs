@@ -48,6 +48,21 @@ const binaryPath = path.join(
 const stubScript = path.join(repoRoot, 'apps', 'playground', 'e2e', 'fixtures', 'net-stub.mjs');
 
 const STUB_PORT = Number(process.env.SNUG_GATE_STUB_PORT ?? 43120);
+/**
+ * THE GATE-HOME MARKER (TASK-20261023-siwc-chatgpt-plan, Gate 5 G5-A10). The harness's
+ * ChatGPT-session effect sensors write over, then delete, `~/Snug/.chatgpt-plan/session.json`
+ * in whatever HOME the shell has. They act only when THIS file sits directly under HOME —
+ * the debug-only `gate_chatgpt_session_marker_present` answers for it — so a developer who
+ * sets SNUG_SHELL_GATE=1 on a plain `tauri dev` cannot lose a real session. One spelling,
+ * locked by test against `src/gate/ipc.ts` and `src-tauri/src/gate.rs`.
+ */
+const GATE_HOME_MARKER = '.snug-shell-gate-home';
+
+/** Create a throwaway HOME and mark it as one. Every HOME this driver launches with goes through here. */
+function markGateHome(home) {
+  fs.mkdirSync(home, { recursive: true });
+  fs.writeFileSync(path.join(home, GATE_HOME_MARKER), '');
+}
 /** The journey host (driver-owned, NEVER in the bundle): the demo brain's
  *  `?demoreq=coinbase` app dials this declared provider host. */
 const JOURNEY_HOST = 'api.meridian-exchange.example';
@@ -201,7 +216,7 @@ function checkRemapAbsentFromBundle() {
  */
 async function runPersistLegs(workDir, children) {
   const home = path.join(workDir, 'persist-home');
-  fs.mkdirSync(home, { recursive: true });
+  markGateHome(home);
   const checks = [];
 
   for (const phase of ['persist-write', 'persist-verify']) {
@@ -323,7 +338,7 @@ async function main() {
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'snug-shell-gate-'));
   const resultsPath = path.join(workDir, 'gate-results.json');
   const fakeHome = path.join(workDir, 'home');
-  fs.mkdirSync(fakeHome, { recursive: true });
+  markGateHome(fakeHome);
   log(`launching debug shell (results → ${resultsPath})…`);
   const app = spawn(binaryPath, [], {
     env: {

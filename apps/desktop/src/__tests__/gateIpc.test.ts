@@ -28,6 +28,9 @@ import {
   CHATGPT_SESSION_READ_COMMAND,
   CHATGPT_SESSION_WRITE_COMMAND,
   GATE_CHATGPT_SESSION_STAT_COMMAND,
+  GATE_CHATGPT_SESSION_MARKER_COMMAND,
+  GATE_HOME_MARKER_NAME,
+  decideChatgptSessionGateHome,
   decideChatgptSessionClearDispatchable,
   decideChatgptSessionReadDispatchable,
   decideChatgptSessionRefused,
@@ -634,6 +637,9 @@ const COMMAND = {
 
 const WHICH = ['read', 'write', 'clear'] as const;
 
+/** The G5-A10 row: the throwaway HOME must carry the driver's marker before any sensor acts. */
+const GATE_HOME_ID = 'ipc-chatgpt-session-gate-home';
+
 const UNREGISTERED = (cmd: string): string[] => [
   `Command ${cmd} not found`,
   `${cmd} not allowed. Permissions associated with this command: none`,
@@ -646,6 +652,12 @@ describe('the ChatGPT-session commands: names, ids, declarations', () => {
     expect(CHATGPT_SESSION_WRITE_COMMAND).toBe('chatgpt_session_write');
     expect(CHATGPT_SESSION_CLEAR_COMMAND).toBe('chatgpt_session_clear');
     expect(GATE_CHATGPT_SESSION_STAT_COMMAND).toBe('gate_chatgpt_session_stat');
+    expect(GATE_CHATGPT_SESSION_MARKER_COMMAND).toBe('gate_chatgpt_session_marker_present');
+    expect(GATE_HOME_MARKER_NAME).toBe('.snug-shell-gate-home');
+  });
+
+  it('the gate-home row is REQUIRED too (G5-A10) — the effect sensors never run without it', () => {
+    expect(IPC_CHECK_IDS).toContain(GATE_HOME_ID);
   });
 
   it('all six ids are REQUIRED — the derive-based driver expects them, and a missing verdict is a fail', () => {
@@ -808,20 +820,52 @@ describe('decideChatgptSessionClearDispatchable — the clear twin asserts the f
   });
 });
 
+// G5-A10. The effect sensors WRITE over, then CLEAR, whatever `~/Snug/.chatgpt-plan/session.json`
+// the shell's HOME resolves to. `run-gate.mjs` points HOME at a throwaway directory — but
+// `SNUG_SHELL_GATE=1` + `SNUG_SHELL_GATE_OUT` on a plain `tauri dev` would run the same sensors
+// over the developer's REAL home and delete their tokens and registration. So the driver drops a
+// marker file into every HOME it creates, the debug-only `gate_chatgpt_session_marker_present`
+// answers whether `<home>/.snug-shell-gate-home` exists, and the harness refuses to seed, read or
+// clear anything without it — recording the three twins as skipped rows that FAIL the gate.
+describe('decideChatgptSessionGateHome — the sensors require the driver’s marker in HOME (G5-A10)', () => {
+  it('passes when the marker is present, naming the marker file', () => {
+    const result = decideChatgptSessionGateHome(true);
+    expect(result).toMatchObject({ id: GATE_HOME_ID, pass: true });
+    expect(result.detail).toContain(GATE_HOME_MARKER_NAME);
+  });
+
+  it('FAILS when the marker is absent — and says the sensors were skipped, not run', () => {
+    const result = decideChatgptSessionGateHome(false);
+    expect(result).toMatchObject({ id: GATE_HOME_ID, pass: false });
+    expect(result.detail).toContain('no gate-home marker');
+    expect(result.detail).toContain(GATE_HOME_MARKER_NAME);
+  });
+
+  it('FAILS when the marker command is unavailable — a shell without it cannot vouch for its HOME', () => {
+    const result = decideChatgptSessionGateHome({ error: `Command ${GATE_CHATGPT_SESSION_MARKER_COMMAND} not found` });
+    expect(result.pass).toBe(false);
+    expect(result.detail).toContain('cannot vouch');
+  });
+});
+
 describe('runIpcChecks drives the ChatGPT-session effect sensors from the main frame', () => {
   /**
    * A fake shell over a fake throwaway HOME: the three commands act on one in-memory file and
    * `gate_chatgpt_session_stat` reports it. jsdom never runs the srcdoc probe, so the subframe
    * rows time out as "never reported" — irrelevant here; the subject is the main-frame twins.
+   * The gate-home marker is PRESENT unless a test says otherwise (G5-A10).
    */
-  async function runAgainstFakeShell(opts: { fileModeAfterWrite?: number } = {}) {
+  async function runAgainstFakeShell(opts: { fileModeAfterWrite?: number; marker?: boolean | 'unregistered' } = {}) {
     const READ_BODY = '{"v":1,"hostId":"urn:uuid:GATE-READ-BODY-MARKER","tokens":{"accessToken":"eyJGATE.READ.BODY"}}';
     const disk = { exists: false };
-    const log = { readWhileExists: false, statCalls: 0, writes: [] as string[] };
+    const log = { readWhileExists: false, statCalls: 0, writes: [] as string[], reads: 0, clears: 0 };
     core.invoke.mockImplementation(async (cmd: string, args?: unknown) => {
       switch (cmd) {
         case 'gate_ipc_sentinel_exists':
           return false;
+        case GATE_CHATGPT_SESSION_MARKER_COMMAND:
+          if (opts.marker === 'unregistered') throw new Error(`Command ${GATE_CHATGPT_SESSION_MARKER_COMMAND} not found`);
+          return opts.marker ?? true;
         case CHATGPT_SESSION_WRITE_COMMAND: {
           const payload = (args as { payload?: unknown } | undefined)?.payload;
           if (typeof payload !== 'string') throw new Error('missing payload');
@@ -830,9 +874,11 @@ describe('runIpcChecks drives the ChatGPT-session effect sensors from the main f
           return null;
         }
         case CHATGPT_SESSION_READ_COMMAND:
+          log.reads += 1;
           if (disk.exists) log.readWhileExists = true;
           return disk.exists ? READ_BODY : null;
         case CHATGPT_SESSION_CLEAR_COMMAND:
+          log.clears += 1;
           disk.exists = false;
           return null;
         case GATE_CHATGPT_SESSION_STAT_COMMAND:
@@ -893,5 +939,69 @@ describe('runIpcChecks drives the ChatGPT-session effect sensors from the main f
   it('a write that lands a 0644 file FAILS the write twin end to end', async () => {
     const { results } = await runAgainstFakeShell({ fileModeAfterWrite: 0o644 });
     expect(results.find((r) => r.id === SESSION_IDS.write.dispatchable)!.pass).toBe(false);
+  });
+
+  it('with the marker present, the gate-home row PASSES (G5-A10)', async () => {
+    const { results } = await runAgainstFakeShell();
+    const row = results.find((r) => r.id === GATE_HOME_ID);
+    expect(row, GATE_HOME_ID).toBeDefined();
+    expect(row!.pass, row!.detail).toBe(true);
+  });
+
+  it('WITHOUT the marker, no write, read or clear is sent — the three twins are recorded skipped and FAIL, and so does the gate-home row (G5-A10)', async () => {
+    // The HOME is somebody's real one for all the harness knows: SNUG_SHELL_GATE=1 on a plain
+    // `tauri dev` must never delete a real session.
+    const { results, log, disk } = await runAgainstFakeShell({ marker: false });
+    expect(log.writes, 'no seed written over the real file').toEqual([]);
+    expect(log.reads, 'no read of the real file').toBe(0);
+    expect(log.clears, 'no clear of the real file').toBe(0);
+    expect(disk.exists).toBe(false);
+    expect(results.find((r) => r.id === GATE_HOME_ID)!.pass).toBe(false);
+    for (const which of WHICH) {
+      const row = results.find((r) => r.id === SESSION_IDS[which].dispatchable)!;
+      expect(row.pass, row.id).toBe(false);
+      expect(row.detail, row.id).toContain('skipped: no gate-home marker');
+    }
+    // The refusal rows are untouched by the marker: they read the subframe's report, not HOME.
+    for (const which of WHICH) {
+      expect(results.find((r) => r.id === SESSION_IDS[which].refused)!.detail).not.toContain('gate-home');
+    }
+  });
+
+  it('a shell WITHOUT the marker command (built before it, or a release-shaped handler list) is treated as no marker — nothing is sent', async () => {
+    const { results, log } = await runAgainstFakeShell({ marker: 'unregistered' });
+    expect(log.writes).toEqual([]);
+    expect(log.reads).toBe(0);
+    expect(log.clears).toBe(0);
+    expect(results.find((r) => r.id === GATE_HOME_ID)!.pass).toBe(false);
+    expect(results.find((r) => r.id === SESSION_IDS.write.dispatchable)!.pass).toBe(false);
+  });
+
+  it('the marker is asked for BEFORE the seed is written — the order is the protection', async () => {
+    const order: string[] = [];
+    core.invoke.mockImplementation(async (cmd: string) => {
+      order.push(cmd);
+      if (cmd === GATE_CHATGPT_SESSION_MARKER_COMMAND) return true;
+      if (cmd === GATE_CHATGPT_SESSION_STAT_COMMAND) return { exists: false, fileMode: null, dirMode: null };
+      if (cmd === 'gate_ipc_sentinel_exists') return false;
+      if (cmd.startsWith('chatgpt_session_')) return null;
+      throw new Error('not here');
+    });
+    vi.useFakeTimers();
+    try {
+      const running = runIpcChecks();
+      await vi.advanceTimersByTimeAsync(15_000);
+      await running;
+    } finally {
+      vi.useRealTimers();
+      core.invoke.mockImplementation(async () => {
+        throw new Error('not in a shell');
+      });
+    }
+    const marker = order.indexOf(GATE_CHATGPT_SESSION_MARKER_COMMAND);
+    const seed = order.indexOf(CHATGPT_SESSION_WRITE_COMMAND);
+    expect(marker, 'the marker command runs').toBeGreaterThanOrEqual(0);
+    expect(seed, 'the seed runs when the marker is present').toBeGreaterThanOrEqual(0);
+    expect(marker).toBeLessThan(seed);
   });
 });

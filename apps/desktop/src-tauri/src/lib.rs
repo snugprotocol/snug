@@ -168,6 +168,8 @@ pub fn run() {
         gate::write_gate_results,
         gate::gate_ipc_sentinel_exists,
         gate::gate_chatgpt_session_stat,
+        // G5-A10: the effect sensors act only in a HOME the gate driver marked as throwaway.
+        gate::gate_chatgpt_session_marker_present,
     ]);
     #[cfg(not(debug_assertions))]
     let builder = builder.invoke_handler(tauri::generate_handler![

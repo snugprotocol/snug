@@ -3,8 +3,12 @@
 //
 // `createChatgptPlanSeat()` is what `SnugPlatform.chatgptPlan` carries on the desktop:
 //   - `sessionStore` — custody over the three Rust commands. The Rust side treats the payload
-//     as opaque bytes, so THIS side owns the shape check: a malformed file reads as `undefined`
-//     (never a throw — a corrupt file must not block the sign-in that would overwrite it).
+//     as opaque bytes, so THIS side owns the shape check through auth's total
+//     `parseChatgptSessionFile`: malformed JSON or a malformed shape reads as `undefined` (a
+//     corrupt file must not block the sign-in that would overwrite it), while a REFUSED read —
+//     the Rust side rejecting (EACCES, a non-UTF-8 file, `.chatgpt-plan` as a file) — stays a
+//     rejection the keeper names (Gate 5 ST4). `flush()` awaits the seat's own in-flight write /
+//     clear IPC, settled, never rejecting (Gate 5 G5-C2 / ST8).
 //   - `loopback` — the sign-in's OWN `createDesktopOAuthTransport` (reserved appId
 //     `chatgpt-plan`) behind its own port-filtered listener, with error delivery opted in; it
 //     never cancels or consumes the connection wizard's flow.
@@ -12,8 +16,7 @@
 //
 // Tauri is absent in vitest: `invoke`, `listen` and the opener are faked at their module seams.
 // The transport core is the REAL one from packages/auth, wrapped in a pass-through spy so the
-// wiring (`beginFlow` arguments, the `onError` opt-in) is observable without depending on L1's
-// core changes landing first.
+// wiring (`beginFlow` arguments, the `onError` opt-in) is observable from here.
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -36,6 +39,12 @@ const fake = vi.hoisted(() => {
     sessionError: null as string | null,
     /** When true, EVERY invoke rejects (a shell whose commands are all failing). */
     allFail: false,
+    /**
+     * When true, every `chatgpt_session_write` / `_clear` invoke stays PENDING until the test
+     * settles it through `deferred` — the seat's flush tracking is only observable that way.
+     */
+    deferSession: false,
+    deferred: [] as Array<{ cmd: string; resolve: () => void; reject: (err: unknown) => void }>,
   };
   const invoke = vi.fn(async (cmd: string, args?: Record<string, unknown>) => {
     if (state.allFail) throw new Error('ipc unavailable');
@@ -50,6 +59,11 @@ const fake = vi.hoisted(() => {
     if (cmd.startsWith('chatgpt_session_')) {
       if (state.sessionError !== null) throw state.sessionError;
       if (cmd === 'chatgpt_session_read') return state.sessionBody;
+      if (state.deferSession) {
+        return new Promise<void>((resolve, reject) => {
+          state.deferred.push({ cmd, resolve, reject });
+        });
+      }
       return null;
     }
     return new ArrayBuffer(0);
@@ -119,6 +133,8 @@ beforeEach(() => {
   fake.state.sessionBody = null;
   fake.state.sessionError = null;
   fake.state.allFail = false;
+  fake.state.deferSession = false;
+  fake.state.deferred = [];
   fake.invoke.mockClear();
   fake.listen.mockClear();
   fake.openUrl.mockClear();
@@ -136,10 +152,18 @@ afterEach(() => {
   expect(logged, 'the ChatGPT-plan seat must log nothing (C1 — a session body is a credential)').toEqual([]);
 });
 
+/** A signed-in session file — tokens included, so the round trip below pins the WHOLE shape. */
 const VALID: ChatgptSessionFile = {
   v: 1,
   hostId: 'urn:uuid:7d1f0f8e-0000-4000-8000-000000000001',
   clientId: 'oaiapp_test',
+  tokens: {
+    accessToken: 'at.test',
+    refreshToken: 'rt.test',
+    idToken: 'id.test',
+    expiresAt: 1_800_000_000_000,
+    scopes: ['openid', 'profile', 'email', 'offline_access'],
+  },
   planGranted: true,
   account: { sub: 'user-1', email: 'a@example.com' },
 };
@@ -150,6 +174,7 @@ describe('the seat’s shape', () => {
     expect(typeof seat.sessionStore.read).toBe('function');
     expect(typeof seat.sessionStore.write).toBe('function');
     expect(typeof seat.sessionStore.clear).toBe('function');
+    expect(typeof seat.flush, 'the desktop seat tracks its own IPC, so it offers flush() (G5-C2 / ST8)').toBe('function');
     expect(typeof seat.loopback.begin).toBe('function');
     expect(typeof seat.loopback.onCallback).toBe('function');
     expect(typeof seat.loopback.cancel).toBe('function');
@@ -194,6 +219,35 @@ describe('sessionStore — custody over chatgpt_session_read | write | clear', (
     }
   });
 
+  it('read: a registration-only file (no tokens) reads as the registration — planGranted false, no account — exactly as the keeper reads it (Gate 5 ST4)', async () => {
+    const { tokens: _tokens, ...registrationOnly } = VALID;
+    fake.state.sessionBody = JSON.stringify(registrationOnly);
+    await expect(createChatgptPlanSeat().sessionStore.read()).resolves.toEqual({
+      v: 1,
+      hostId: VALID.hostId,
+      clientId: VALID.clientId,
+      planGranted: false,
+    });
+  });
+
+  it('read: parses through auth’s TOTAL parser — a malformed `tokens` object reads as the registration alone (the old two-field cast passed it through; Gate 5 ST4)', async () => {
+    fake.state.sessionBody = JSON.stringify({ ...VALID, tokens: { accessToken: 7, refreshToken: null } });
+    await expect(createChatgptPlanSeat().sessionStore.read()).resolves.toEqual({
+      v: 1,
+      hostId: VALID.hostId,
+      clientId: VALID.clientId,
+      planGranted: false,
+    });
+  });
+
+  it('read: an IPC REJECTION stays a rejection — a refused read (EACCES, a non-UTF-8 file the Rust side refuses, `.chatgpt-plan` as a file) is named, never hidden as "no session" (Gate 5 ST4)', async () => {
+    const store = createChatgptPlanSeat().sessionStore;
+    for (const refusal of ['session file is not valid UTF-8', 'read session file: Permission denied (os error 13)', 'read session file: Not a directory (os error 20)']) {
+      fake.state.sessionError = refusal;
+      await expect(store.read(), refusal).rejects.toBe(refusal);
+    }
+  });
+
   it('write: one invoke of chatgpt_session_write carrying JSON.stringify(file) as `payload`', async () => {
     await createChatgptPlanSeat().sessionStore.write(VALID);
     const calls = sessionCalls();
@@ -217,6 +271,70 @@ describe('sessionStore — custody over chatgpt_session_read | write | clear', (
   it('clear: one invoke of chatgpt_session_clear', async () => {
     await createChatgptPlanSeat().sessionStore.clear();
     expect(sessionCalls().map(([cmd]) => cmd)).toEqual(['chatgpt_session_clear']);
+  });
+});
+
+// Gate 5 G5-C2 / ST8: the desktop's close-requested flush awaits the keeper's `flush()` AND this
+// seat's — a rotated refresh token whose write IPC is still in flight at close must reach the
+// custody file. The seat tracks ITS OWN write / clear promises (a Set, released on settle) and
+// `flush()` awaits them all SETTLED: a failed persist is the keeper's to report, never a reason
+// to hold the window open or to reject the flush.
+describe('flush() — the seat awaits its own in-flight write / clear IPC (G5-C2 / ST8)', () => {
+  it('with nothing in flight, flush resolves at once and touches no command', async () => {
+    const seat = createChatgptPlanSeat();
+    await expect(seat.flush!()).resolves.toBeUndefined();
+    expect(sessionCalls()).toEqual([]);
+  });
+
+  it('awaits two in-flight writes and a clear — it resolves only once the LAST of them settles', async () => {
+    fake.state.deferSession = true;
+    const seat = createChatgptPlanSeat();
+    const w1 = seat.sessionStore.write(VALID);
+    const w2 = seat.sessionStore.write({ ...VALID, planGranted: false });
+    const c = seat.sessionStore.clear();
+    expect(fake.state.deferred.map((d) => d.cmd)).toEqual(['chatgpt_session_write', 'chatgpt_session_write', 'chatgpt_session_clear']);
+
+    let flushed = false;
+    const flush = seat.flush!().then(() => {
+      flushed = true;
+    });
+    await Promise.resolve();
+    expect(flushed, 'three IPCs in flight — the flush must wait').toBe(false);
+
+    fake.state.deferred[0]!.resolve();
+    fake.state.deferred[2]!.resolve();
+    await Promise.all([w1, c]);
+    await Promise.resolve();
+    expect(flushed, 'one write still in flight — the flush must still wait').toBe(false);
+
+    fake.state.deferred[1]!.resolve();
+    await w2;
+    await flush;
+    expect(flushed).toBe(true);
+  });
+
+  it('a REJECTED write never rejects the flush — flush settles, it does not throw (the keeper reports the failure)', async () => {
+    fake.state.deferSession = true;
+    const seat = createChatgptPlanSeat();
+    const failing = seat.sessionStore.write(VALID);
+    const flush = seat.flush!();
+    fake.state.deferred[0]!.reject(new Error('disk full'));
+    await expect(failing, 'the write itself still rejects — the keeper must know (D4)').rejects.toThrow('disk full');
+    await expect(flush).resolves.toBeUndefined();
+  });
+
+  it('a flush awaits the set AS OF the call — a write started after it is not its to wait on', async () => {
+    // A close flush must settle within its budget even if the keeper keeps writing; later writes
+    // belong to a later flush.
+    fake.state.deferSession = true;
+    const seat = createChatgptPlanSeat();
+    const w1 = seat.sessionStore.write(VALID);
+    const flush = seat.flush!();
+    void seat.sessionStore.write(VALID).catch(() => undefined);
+    fake.state.deferred[0]!.resolve();
+    await w1;
+    await expect(flush).resolves.toBeUndefined();
+    expect(fake.state.deferred, 'the second write is still pending — the flush did not wait on it').toHaveLength(2);
   });
 });
 
@@ -352,5 +470,17 @@ describe('no logging on the custody path (AC10)', () => {
   it('src/chatgpt-plan.ts contains no console.* call', () => {
     const source = readFileSync(path.resolve(__dirname, '../chatgpt-plan.ts'), 'utf8');
     expect(source).not.toMatch(/\bconsole\s*\./);
+  });
+});
+
+describe('one spelling of the reserved appId (Gate 5 ST6)', () => {
+  it('the seat imports CHATGPT_PLAN_APP_ID from @snugprotocol/auth and retypes no appId of its own', () => {
+    const source = readFileSync(path.resolve(__dirname, '../chatgpt-plan.ts'), 'utf8');
+    expect(source, 'no desktop-side twin of the constant').not.toMatch(/export const CHATGPT_PLAN_APP_ID/);
+    expect(source, 'no retyped literal').not.toMatch(/'chatgpt-plan'/);
+    const authImport = /import\s*\{([^}]*)\}\s*from\s*'@snugprotocol\/auth'/.exec(source);
+    expect(authImport, 'an import from @snugprotocol/auth').not.toBeNull();
+    expect(authImport![1]).toMatch(/\bCHATGPT_PLAN_APP_ID\b/);
+    expect(authImport![1], 'the total parser is the boundary (ST4)').toMatch(/\bparseChatgptSessionFile\b/);
   });
 });

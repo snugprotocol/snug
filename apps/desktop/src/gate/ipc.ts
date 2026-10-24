@@ -78,6 +78,7 @@ export const IPC_CHECK_IDS = [
   'ipc-chatgpt-session-write-dispatchable',
   'ipc-chatgpt-session-clear-refused',
   'ipc-chatgpt-session-clear-dispatchable',
+  'ipc-chatgpt-session-gate-home',
 ] as const;
 
 /**
@@ -240,11 +241,25 @@ export const NOTIFICATION_PERMISSION_COMMAND = 'plugin:notification|is_permissio
  * resolve while that file exists (only `resolved` is recorded — never the body), and a clear
  * must leave no file, so the run ends signed out. `gate_chatgpt_session_stat` (gate.rs,
  * debug-only) answers existence and permission bits, never bytes.
+ *
+ * THE GATE-HOME MARKER (Gate 5 G5-A10). "Throwaway" is a property of the DRIVER's launch, not
+ * of gate mode: `SNUG_SHELL_GATE=1` + `SNUG_SHELL_GATE_OUT` on a plain `tauri dev` arms the
+ * harness over the developer's REAL home, where the seed would overwrite their session and
+ * the clear would delete their tokens and registration. So the driver drops an empty marker
+ * file, `.snug-shell-gate-home`, into every HOME it creates, and the sensors first ask the
+ * debug-only `gate_chatgpt_session_marker_present` (gate.rs) whether `<home>/<marker>`
+ * exists. Without it NOTHING is sent — no seed, no read, no clear — and the three twins are
+ * recorded as skipped rows that FAIL the gate, beside a dedicated `ipc-chatgpt-session-gate-home`
+ * row that says why.
  */
 export const CHATGPT_SESSION_READ_COMMAND = 'chatgpt_session_read';
 export const CHATGPT_SESSION_WRITE_COMMAND = 'chatgpt_session_write';
 export const CHATGPT_SESSION_CLEAR_COMMAND = 'chatgpt_session_clear';
 export const GATE_CHATGPT_SESSION_STAT_COMMAND = 'gate_chatgpt_session_stat';
+export const GATE_CHATGPT_SESSION_MARKER_COMMAND = 'gate_chatgpt_session_marker_present';
+/** The marker file the driver writes into a throwaway HOME. Must match `gate.rs::GATE_HOME_MARKER` and run-gate.mjs. */
+export const GATE_HOME_MARKER_NAME = '.snug-shell-gate-home';
+const GATE_HOME_ID = 'ipc-chatgpt-session-gate-home';
 
 /**
  * What the main frame writes as the seed. Deliberately NOT a session the seat would accept
@@ -1023,6 +1038,48 @@ export function decideChatgptSessionClearDispatchable(
   return { id, pass: true, detail: `${command} dispatched from the main window and left no session file — the throwaway HOME ends signed out` };
 }
 
+/**
+ * The gate-home row (G5-A10): the effect sensors act only in a HOME the driver marked. A
+ * missing marker — or a shell that cannot answer — is a FAIL that names what was skipped.
+ */
+export function decideChatgptSessionGateHome(marker: boolean | { error: string }): CheckResult {
+  if (typeof marker !== 'boolean') {
+    return {
+      id: GATE_HOME_ID,
+      pass: false,
+      detail: `the gate-home marker probe is unavailable (${marker.error}) — cannot vouch that HOME is throwaway; the ChatGPT-session effect sensors were skipped`,
+    };
+  }
+  if (!marker) {
+    return {
+      id: GATE_HOME_ID,
+      pass: false,
+      detail: `no gate-home marker: HOME carries no ${GATE_HOME_MARKER_NAME}, so it may be a real home — the ChatGPT-session effect sensors were skipped rather than run over a real session (G5-A10)`,
+    };
+  }
+  return { id: GATE_HOME_ID, pass: true, detail: `HOME carries ${GATE_HOME_MARKER_NAME} — the driver's throwaway home; the effect sensors may act` };
+}
+
+/** The twin's row when the sensors did not run: named as skipped, and a FAIL. */
+function chatgptSessionSkipped(which: ChatgptSessionWhich): CheckResult {
+  const { command, dispatchable: id } = CHATGPT_SESSION_ROWS[which];
+  return {
+    id,
+    pass: false,
+    detail: `skipped: no gate-home marker — ${command} was not sent, because without ${GATE_HOME_MARKER_NAME} in HOME the session file could be a real one (G5-A10)`,
+  };
+}
+
+/** The marker probe, narrowed from the IPC answer; anything but a boolean is "unavailable". */
+async function gateHomeMarker(): Promise<boolean | { error: string }> {
+  try {
+    const raw = await invoke<unknown>(GATE_CHATGPT_SESSION_MARKER_COMMAND);
+    return typeof raw === 'boolean' ? raw : { error: 'malformed marker answer' };
+  } catch (err) {
+    return { error: String(err) };
+  }
+}
+
 /** A main-frame invoke, reduced to "resolved or not": the answer itself is dropped on the floor. */
 async function attemptInvoke(command: string, args?: Record<string, unknown>): Promise<{ resolved: boolean; detail: string }> {
   try {
@@ -1251,12 +1308,21 @@ export async function runIpcChecks(): Promise<CheckResult[]> {
   // through the stat probe; the read runs while that file exists and records only that it
   // resolved; the clear runs LAST and unconditionally, so whatever happened above the run
   // ends with no session file. Nothing any command answered is kept.
-  const seeded = await attemptInvoke(CHATGPT_SESSION_WRITE_COMMAND, { payload: GATE_SESSION_FIXTURE });
-  byId.set(CHATGPT_SESSION_ROWS.write.dispatchable, decideChatgptSessionWriteDispatchable(seeded, await statChatgptSession()));
-  const readBack = await attemptInvoke(CHATGPT_SESSION_READ_COMMAND);
-  byId.set(CHATGPT_SESSION_ROWS.read.dispatchable, decideChatgptSessionReadDispatchable(readBack));
-  const cleared = await attemptInvoke(CHATGPT_SESSION_CLEAR_COMMAND);
-  byId.set(CHATGPT_SESSION_ROWS.clear.dispatchable, decideChatgptSessionClearDispatchable(cleared, await statChatgptSession()));
+  //
+  // BUT ONLY IN A MARKED HOME (G5-A10). The marker is asked for FIRST, and without it no
+  // command is sent at all — the seed would overwrite, and the clear delete, a real session.
+  const marker = await gateHomeMarker();
+  byId.set(GATE_HOME_ID, decideChatgptSessionGateHome(marker));
+  if (marker === true) {
+    const seeded = await attemptInvoke(CHATGPT_SESSION_WRITE_COMMAND, { payload: GATE_SESSION_FIXTURE });
+    byId.set(CHATGPT_SESSION_ROWS.write.dispatchable, decideChatgptSessionWriteDispatchable(seeded, await statChatgptSession()));
+    const readBack = await attemptInvoke(CHATGPT_SESSION_READ_COMMAND);
+    byId.set(CHATGPT_SESSION_ROWS.read.dispatchable, decideChatgptSessionReadDispatchable(readBack));
+    const cleared = await attemptInvoke(CHATGPT_SESSION_CLEAR_COMMAND);
+    byId.set(CHATGPT_SESSION_ROWS.clear.dispatchable, decideChatgptSessionClearDispatchable(cleared, await statChatgptSession()));
+  } else {
+    for (const which of CHATGPT_SESSION_WHICH) byId.set(CHATGPT_SESSION_ROWS[which].dispatchable, chatgptSessionSkipped(which));
+  }
 
   // EVERY id must be present — a missing verdict is a FAIL (AC7).
   return IPC_CHECK_IDS.map((id) => byId.get(id) ?? { id, pass: false, detail: 'no-verdict' });

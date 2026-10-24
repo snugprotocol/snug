@@ -82,11 +82,13 @@ describe('the scheduler seat (TASK-20261009 H3 + H1; ADR-0074 §7)', () => {
 // set only after a successful boot read), a failed read at launch would make the mode vanish and
 // the W2b coercion would rewrite a `chatgpt` user's mode out from under them.
 describe('the ChatGPT-plan seat (TASK-20261023-siwc-chatgpt-plan AC1, D10)', () => {
-  it('createDesktopPlatform() carries chatgptPlan with its three parts', async () => {
+  it('createDesktopPlatform() carries chatgptPlan with its four parts — the store, the loopback, the opener and flush() (Gate 5 G5-C2 / ST8)', async () => {
     const { createDesktopPlatform } = await import('../platform-desktop.js');
     const { chatgptPlan } = createDesktopPlatform();
     expect(chatgptPlan, 'a deleted `chatgptPlan` line would silently drop the desktop to two modes').toBeDefined();
-    expect(Object.keys(chatgptPlan ?? {}).sort()).toEqual(['loopback', 'openExternal', 'sessionStore']);
+    // `flush` is what the close-requested flush awaits beside the keeper's own: a seat without
+    // it would let a rotated refresh token's write be cut off at the window close.
+    expect(Object.keys(chatgptPlan ?? {}).sort()).toEqual(['flush', 'loopback', 'openExternal', 'sessionStore']);
   });
 
   it('is a plain data property — present on the object, not reached through a getter', async () => {

@@ -127,7 +127,10 @@ fn sweep_stale_tmp_files(dir: &std::path::Path) {
 /// portable-on-unix fix. Windows has no directory-handle fsync and does not
 /// need one (NTFS journals the metadata operation), so this is a no-op there.
 /// Best-effort: a durability barrier failing must not fail a completed write.
-fn fsync_dir(dir: &std::path::Path) {
+///
+/// `pub(crate)` (Gate 5 ST13): `chatgpt_session.rs`'s staged write ends with the same barrier
+/// and calls this rather than carrying a second spelling of it.
+pub(crate) fn fsync_dir(dir: &std::path::Path) {
     #[cfg(not(windows))]
     if let Ok(f) = fs::File::open(dir) {
         let _ = f.sync_all();
