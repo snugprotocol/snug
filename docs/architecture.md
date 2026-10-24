@@ -254,7 +254,9 @@ differs from the playground is the OUTPUT and what the platform carries:
   `order:'post'`, after Vite's own generateBundle — any other emitted file, any leftover
   `./assets/` reference), and the build stamp `<version> <sha>[-dirty]`. Two modules are
   swapped by RESOLVED path (`swap-resolved`, a dead swap fails the build): the starter
-  source and the sql.js locator. WebLLM is aliased to a stub. The prompt files no code reads
+  source and the sql.js locator (seventeen since — the chat's data lane, the scheduled agent,
+  the cross-app card and, since TASK-20261023-siwc-chatgpt-plan, the ChatGPT plan's seven
+  modules, all listed under *Dependency graph* below). WebLLM is aliased to a stub. The prompt files no code reads
   (`skills/` and the store README) are filtered out of the knowledge content module by
   `drop-prompt-files` (a dead rule fails the build; TASK-20261010-host-broker PR-3, −253 KB). Measured 2,219,519 B
   (2026-09-05); 3,255,702 B without the starter swap; sha-identical across clean builds.
@@ -702,10 +704,18 @@ protocol runs in the page: `packages/auth/src/chatgpt-plan.ts` (`createChatgptPl
 agree, RS256 ID-token checks in `jwks.ts`, ONE serial mutation queue with a session epoch,
 single-flight refresh persisted before re-verification, best-effort revocation, the model
 list from `/v1/models` in OpenAI's own words). It holds no token between uses — every use
-reads the file inside the queue. The page has ONE keeper (`apps/playground/src/state/chatgptPlan.ts`,
-built at boot from the seat; `'unknown'` means WAIT), and the desktop's close-requested
-flush awaits `chatgptPlanFlush()` so a window close cannot land between a token POST and
-its write. The sign-in has its OWN loopback transport (`apps/desktop/src/chatgpt-plan.ts`,
+reads the file inside the queue (its types and total file parser live in
+`chatgpt-plan-types.ts`, its wire constants and pure helpers in `chatgpt-plan-wire.ts`). The page has ONE keeper (`apps/playground/src/state/chatgptPlan.ts`,
+built at boot from the seat; `'unknown'` means WAIT — bounded: every chain awaits
+`chatgptPlanReadyBounded()`, 3 s at most, and a failed first read settles the keeper as
+signed out, so no session-file failure can stall the desktop), and the desktop's close-requested
+flush awaits `chatgptPlanFlush()` — the keeper's `flush()` (an in-flight refresh between its
+POST and its write, a sign-in's persist) and the seat's `flush?()` (the shell's own IPC) —
+inside its 2 s budget. Every post-POST persist and every clear compare-and-swaps on the
+refresh token the POST spent, so a re-consent landing mid-refresh, or a second shell on the
+same file, is never overwritten or wiped; a 401 that survives refresh-and-retry reaches the
+keeper (`BearerSource.invalidate?` → `reportRejected`), which clears the tokens and keeps the
+registration. The sign-in has its OWN loopback transport (`apps/desktop/src/chatgpt-plan.ts`,
 redirect `http://127.0.0.1:<port>/auth/callback`) over a port-filtered listener
 (`apps/desktop/src/oauth.ts`), so it never consumes a connection wizard's callback; its
 `?error=` callbacks end the flow because it passes an `onError` handler.
@@ -718,17 +728,26 @@ credential stay per machine). Per-app pins are scoped to the mode family that ma
 (`pinFamilyApplies`, `state/appModel.ts`): a chatgpt pin (`appProvider:<appId> =
 'chatgpt'`) routes only in chatgpt mode, a provider pin only in byok, a provider-less pin
 (today's local shape, and every BYOK pin from before ADR-0046) in byok and local; a pin
-from another family is shown as "pinned for <mode> — not used here", never routed.
+from another family is shown as "pinned for <mode> — not used here", never routed. The
+model choice has one home (`chatgptModelView` in `state/chatgptPlan.ts`, rendered by
+`ui/ChatgptModelOptions.tsx` in every select), and a level is sent only when the resolved
+model offers it.
 
 **The scheduler.** A signed-in, granted plan is a real brain for *Ask [app]'s AI* steps
 (the owner's call): every unattended path runs on the resolved model's DEFAULT level; a
 live `CHATGPT_USAGE_LIMIT` refuses the step by name and is not retried; `…_UNAVAILABLE`
-gets one bounded retry; a signed-out or ungranted plan refuses by name; a *remembered*
+gets one bounded retry — one policy for the tool-free and agent paths
+(`schedule/chatgptOutcome.ts`), and a keeper refusal that never left the page is not charged
+as an AI call; a signed-out or ungranted plan refuses by name; a *remembered*
 limit never refuses at the gate (the live result decides); and every `initScheduler()`
-chain awaits `chatgptPlanReady()` so a launch catch-up never reads a loading session as
+chain awaits `chatgptPlanReadyBounded()` so a launch catch-up never reads a loading session as
 signed out. A step's limit message keys on the single-homed sentence — `StepResult` has no
-`code` (C3). Threat surface: `docs/security/threat-model-delta-chatgpt-plan.md`
-(R-124 … R-132).
+`code` (C3). The remembered limit is a page-side overlay (`chatgptLimitStore`, set by
+`withChatgptLimitObserver` on the chatgpt arm from a turn's `CHATGPT_USAGE_LIMIT` /
+`…_UNAVAILABLE`, cleared by the next ok result) that the chip's *limit reached* and the
+Settings card read; **Manage usage** is one component (`ui/ManageUsageLink.tsx`), primary
+while a limit stands. In the host kit the plan's modules are kit-dead stubs (below). Threat
+surface: `docs/security/threat-model-delta-chatgpt-plan.md` (R-124 … R-134).
 
 ## Linked-device helpers and the host live pump (ADR-0032 / ADR-0034)
 
@@ -971,7 +990,7 @@ Until 2026-09-03 every piece of a builder turn — messages, busy flag, step tim
 - `auth` depends on `protocol` + `db` (CredentialStore seats on the user DB); `playground` now consumes it (AL-03 wires the connected-fetch executor into the runner's NetHandler seam) — change `auth` → run `auth` + `playground`. `runner` does NOT depend on `auth` (value-blind by lint, R4).
 - `desktop` (apps/desktop) consumes the playground SOURCE (vite alias) + ALL seven @snugprotocol packages (protocol/runner/sdk/db/knowledge/adapters/auth per its package.json) — change any of those → run `desktop` too (`pnpm --filter desktop test`, plus `test:rust` and the `gate` script for shell-level changes).
 - `host-mcp` (apps/host-mcp, TASK-20260907-binding-b-plugin-host) consumes `@snugprotocol/auth` (DEEP-imported: `dist/net-guards.js` + `dist/scrub.js`, because the barrel reaches `db` and drags in sql.js and the provider registry — 4,368 B against 329,902 B measured) and `@snugprotocol/protocol` (the bundle parser). It serves `apps/host`'s ONE page (`snug-host.html`, ADR-0072 §1) — turbo runs `host-mcp#test` after `host#build` → change either package, or the kit page, and run `host-mcp` too (`pnpm --filter host-mcp test`, then `pnpm --filter host-mcp build`); root `check-host-mcp` sweeps the release bundle for the `SNUG_MCP_TEST_` prefix, builds the plugin tree and starts it.
-- `host` (apps/host, TASK-20260905-host-kit) consumes the playground SOURCE (vite alias; ten modules swapped by resolved path since TASK-20261010-host-broker PR-5 — the starter source, the sql.js locator, the chat's data lane (five modules, PR-2), the scheduled agent (PR-4) and the chat's cross-app card (two modules, PR-5) — and the knowledge content module rewritten without the prompt files nothing shipped reads: `skills/` and the store's README (PR-3), and the scheduled agent's three (PR-5)) + ALL seven @snugprotocol packages, like `desktop` — change any of those, or playground source, → run `host` too (`pnpm --filter host test`, then `pnpm --filter host build` + `test:e2e` on the built page); root `check-host-kit` rebuilds the page twice and reads the runner's built `dist/csp.js` in the e2e.
+- `host` (apps/host, TASK-20260905-host-kit) consumes the playground SOURCE (vite alias; seventeen modules swapped by resolved path — the starter source, the sql.js locator, the chat's data lane (five modules, PR-2), the scheduled agent (PR-4) and the chat's cross-app card (two modules, PR-5), and since TASK-20261023-siwc-chatgpt-plan (Gate 5 G5-1) the ChatGPT plan's seven: the keeper `state/chatgptPlan`, `views/ChatgptPlanRows`, `views/ChatgptPlanNotice`, `desktop/ChatgptButton` (with OpenAI's two SVGs), `desktop/ChatgptSignInWait`, `ui/UsageLimitMessage`, and the adapters package's `dist/openai-responses.js` — dead for a different reason than the lanes: no kit platform carries the custody seat, so the mode is never offered there (ADR-0078 §1) and the stubs give the no-seat answers inertly rather than throwing, since boot and the scheduler do reach the keeper; `kitDeadLanes.test.ts` pins all seventeen; a kit size claim is measured with `pnpm --filter host build`, because turbo's host inputs do not cover `apps/playground/src` and a root build can replay a stale page — and the knowledge content module rewritten without the prompt files nothing shipped reads: `skills/` and the store's README (PR-3), and the scheduled agent's three (PR-5)) + ALL seven @snugprotocol packages, like `desktop` — change any of those, or playground source, → run `host` too (`pnpm --filter host test`, then `pnpm --filter host build` + `test:e2e` on the built page); root `check-host-kit` rebuilds the page twice and reads the runner's built `dist/csp.js` in the e2e.
 - `share-relay` (apps/share-relay, ADR-0064) is a standalone Worker with NO workspace dependencies — plain `.mjs`, tested with `node:test`; its only contract with the playground is the HTTP shape in `handler.mjs` and the id/key grammar restated in `apps/playground/src/share/relayClient.ts` (a change to either → run both).
 - `website` (apps/website, ADR-0048) is the public marketing + docs/spec site — a static Astro build OUTSIDE the runtime product. It reads the playground source read-only via the same `@playground` alias (`releaseChannel.ts` constants, theme tokens) and derives its docs pages from `docs/spec-drafts/` + `packages/protocol/schemas/` + the whitepaper; drift is gated by root `check-website-sync` (manifest `apps/website/docs-sync.json`, remedy `/sync-website`). Change `releaseChannel.ts`, the spec draft, the schemas, `docs/product-vision.md`, or the whitepaper → the gate names the website pages owed an update. Both the website and the playground deploy to Cloudflare Pages as static direct uploads via `scripts/deploy-web.mjs` (ADR-0054; runbook `docs/runbooks/deploy-web.md`) — production only from merged `main`, hosted-posture invariants (ADR-0013) enforced by the script. **Live since 2026-08-24**: `snugprotocol.org` (project `snug-website`, whose `pages.dev` subdomain is `snug-website-c7z.pages.dev` — Cloudflare suffixed it) and `playground.snugprotocol.org` (project `snug-playground`). The zone's script-injecting features are OFF and read back from the API, which is how ADR-0013's no-telemetry claim is actually falsified — the `cdn-cgi` response grep alone does not prove it.
 

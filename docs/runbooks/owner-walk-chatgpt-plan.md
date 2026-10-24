@@ -8,7 +8,7 @@
 |---|---|---|
 | the sign-in end to end (dynamic registration, the loopback on `/auth/callback`, the ID-token checks), a think and a builder tool loop on the plan, the named limit with **Manage usage**, sign-out and a re-sign-in that reuses the registration, and the custody on disk | a few thinks on your ChatGPT plan (one app think, one builder turn with a tool call, whatever it takes to reach a limit you set yourself) | the desktop built from the branch under Node 22; **Snug.app quit first**; a ChatGPT account with a plan; a browser signed in to ChatGPT (or ready to sign in) |
 
-**Ground rules.** Nothing here publishes a package, cuts a release or pushes anything. Never paste a token, a `session.json`'s contents or an `eyJ…` string into a chat, a journal or an issue — the checks below print counts and modes, never values. The walk leaves your registration in place at the end (step 13); *forget this registration* in Settings drops it if you want a clean slate.
+**Ground rules.** Nothing here publishes a package, cuts a release or pushes anything. Never paste a token, a `session.json`'s contents or an `eyJ…` string into a chat, a journal or an issue — the checks below print counts and modes, never values. The walk leaves your registration in place at the end (step 14); *forget this registration* in Settings drops it if you want a clean slate.
 
 ---
 
@@ -39,7 +39,7 @@
 
 3. **Sign in in the browser.** Sign in to ChatGPT if asked, then consent. **First time on this machine:** OpenAI asks you to name the app — EXPECT the suggested name **Snug**; keep it. EXPECT the browser to land on a plain local page at `http://127.0.0.1:<port>/auth/callback` (the port varies; it is the sign-in's own listener) — close the tab.
 
-4. **Back in Snug: the one-time notice.** EXPECT the hub (the Welcome closes only on a successful sign-in) and a note headed **You're using your ChatGPT plan** — *"Eligible usage in this app uses your ChatGPT plan. Manage usage in your ChatGPT settings."* — with **Got it** and **Manage usage**. Press **Got it**. It must never show again (check after step 12's restart).
+4. **Back in Snug: the one-time notice.** EXPECT the hub (the Welcome closes only on a successful sign-in) and a note headed **You're using your ChatGPT plan** — *"Eligible usage in this app uses your ChatGPT plan. Manage usage in your ChatGPT settings."* — with **Got it** and **Manage usage**. Press **Got it**. It must never show again (check after step 13's restart).
 
 5. **The chip reads ChatGPT plan.** EXPECT the brain chip to read **ChatGPT plan**. Open it: EXPECT **Using ChatGPT plan · <your email>**, **Manage usage**, a model select listing your plan's models in OpenAI's own names, a level picker when the chosen model has levels, and **Sign out of ChatGPT**.
 
@@ -51,13 +51,22 @@
 
 9. **Set a per-app limit in ChatGPT.** Press **Manage usage**: EXPECT `https://chatgpt.com/settings/usage` in your system browser; record whether it lists Snug and offers a per-app limit. Set Snug's own limit as low as ChatGPT allows (or skip this and run thinks until your plan's limit — slower).
 
-10. **The limit message, with Manage usage first.** Think again until the limit lands. EXPECT, in the builder or app chat, *"Usage limit reached — Review your plan or this app's limit in ChatGPT settings."* with **Manage usage** as the primary (first) action; the same banner in the run view for an app think; and — if you have a schedule with an *Ask [app]'s AI* step, run it now — the step's result **refused** with the same sentence and Manage usage, not retried. EXPECT nothing to answer from a key, a local model or the demo brain; the chip still reads **ChatGPT plan** (its *limit reached* sub-line is not wired as built — nothing records the limit into the keeper's status; record what the chip shows). Raise or clear the limit in ChatGPT afterwards.
+10. **The limit message, with Manage usage first.** Think again until the limit lands. EXPECT, in the builder or app chat, *"Usage limit reached — Review your plan or this app's limit in ChatGPT settings."* with **Manage usage** as the primary (first) action; the same banner in the run view for an app think; and — if you have a schedule with an *Ask [app]'s AI* step, run it now — the step's result **refused** with the same sentence and Manage usage, not retried. EXPECT nothing to answer from a key, a local model or the demo brain; the chip still reads **ChatGPT plan**, now with the sub-line **limit reached** — open it and EXPECT the limit sentence with **Manage usage** as its primary action; Settings' card shows the same limit message. Raise or clear the limit in ChatGPT afterwards; the next answered think clears *limit reached*.
 
 11. **Sign out of ChatGPT.** Settings → **Sign out of ChatGPT**. EXPECT *"signed out of ChatGPT on this computer. to remove Snug from your account entirely, disconnect it in ChatGPT → Settings."* (and, only if OpenAI did not confirm the revocation, a second line saying so — record which). EXPECT the chip to still read **ChatGPT plan**, now with **sign in needed** — the mode stays yours; nothing reroutes. Think once: EXPECT a named *sign in* message, never an answer from another brain.
 
-12. **Sign in again: no name prompt.** Press **Continue with ChatGPT** in Settings. EXPECT the browser consent WITHOUT the name-the-app prompt (the registration from step 3 is reused), then back to **Using ChatGPT plan**. Quit Snug and start it again (step 0.2's command): EXPECT still signed in, and the one-time notice NOT shown.
+12. **The registration stays; the tokens are gone.** In a terminal:
 
-13. **Verify the custody on disk.** In a terminal:
+    ```sh
+    ls ~/Snug/.chatgpt-plan/                          # EXPECT session.json still there
+    grep -c eyJ ~/Snug/.chatgpt-plan/session.json     # EXPECT 0
+    ```
+
+    The file now holds the registration only (the issued client id and this machine's host id — no token, no account). It stays until Settings → *forget this registration* removes it; do not press that now (step 13 reuses the registration).
+
+13. **Sign in again: no name prompt.** Press **Continue with ChatGPT** in Settings. EXPECT the browser consent WITHOUT the name-the-app prompt (the registration from step 3 is reused), then back to **Using ChatGPT plan**. Quit Snug and start it again (step 0.2's command): EXPECT still signed in, and the one-time notice NOT shown.
+
+14. **Verify the custody on disk.** In a terminal:
 
     ```sh
     ls -la ~/Snug/.chatgpt-plan/
@@ -76,4 +85,4 @@
 
 ## 2. What to record
 
-In the task file's journal (or the `done/INDEX.md` line after the merge): the date; the commit walked; the shell (`dev` or built); for each step 1–13 what it showed — in particular the model that answered (step 7), whether OpenAI confirmed the revocation (step 11), whether the name prompt was absent (step 12), and the two modes and the two `eyJ` counts (step 13). Anything that differed from an EXPECT is a finding: write the exact text Snug showed, never a token.
+In the task file's journal (or the `done/INDEX.md` line after the merge): the date; the commit walked; the shell (`dev` or built); for each step 1–14 what it showed — in particular the model that answered (step 7), whether the chip showed *limit reached* (step 10), whether OpenAI confirmed the revocation (step 11), the registration-only file's `eyJ` count (step 12), whether the name prompt was absent (step 13), and the two modes and the two `eyJ` counts (step 14). Anything that differed from an EXPECT is a finding: write the exact text Snug showed, never a token.
