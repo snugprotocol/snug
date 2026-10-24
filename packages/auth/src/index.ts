@@ -182,13 +182,18 @@ export {
   SecretSpillFlowStateStore,
   SnugAuthError,
   constantTimeEqual,
+  // The non-2xx answer to a credential POST, scrubbed of what the POST submitted and parsed for
+  // its OAuth error code — `postForm`'s reviewed seat as a free function (TASK-20261023 D2).
+  extractOauthErrorFromPost,
   generatePkceVerifier,
   pkceChallenge,
   signState,
   verifyState,
   type CallbackDelivery,
+  type CallbackErrorDelivery,
   type CallbackSink,
   type FetchLike,
+  type OauthPostError,
   type FlowState,
   type FlowStateStore,
   type OAuthCallbackInput,
@@ -206,6 +211,7 @@ export {
 // production-shaped transport — DI-pure, no tauri imports; the shell injects the
 // `LoopbackListener` and the playground platform seam consumes the transport.
 export {
+  DEFAULT_LOOPBACK_CALLBACK_PATH,
   DESKTOP_FLOW_TTL_MS,
   SNUG_DESKTOP_OAUTH_PORT,
   buildLoopbackRedirectUri,
@@ -213,3 +219,33 @@ export {
   type DesktopOAuthTransport,
   type LoopbackListener,
 } from './desktop-transport.js';
+
+// "Use my ChatGPT plan" (TASK-20261023-siwc-chatgpt-plan, ADR-0078): the per-machine session
+// contracts — the file the shell keeps `0600` outside the user file, the store and loopback
+// seats the desktop implements, the keeper's API and its named failures — the TOTAL parser the
+// shell's seat and the keeper read that file through, and the keeper itself: PKCE sign-in with
+// dynamic registration, ID-token checks against OpenAI's JWKS, the serial queue + epoch, the
+// single-flight rotation-safe refresh, revocation, the model list. One door: `chatgpt-plan.ts`
+// re-exports the contracts (`chatgpt-plan-types.ts`) and the wire constants (`chatgpt-plan-wire.ts`).
+export {
+  CHATGPT_API_RESOURCE,
+  CHATGPT_CALLBACK_PATH,
+  CHATGPT_ISSUER,
+  CHATGPT_PLAN_APP_ID,
+  CHATGPT_PLAN_ERROR_CODES,
+  CHATGPT_PLAN_SCOPE,
+  ChatgptPlanError,
+  createChatgptPlanSession,
+  parseChatgptSessionFile,
+  type ChatgptLoopbackSeat,
+  type ChatgptPlanSessionDeps,
+  type ChatgptModel,
+  type ChatgptPlanErrorCode,
+  type ChatgptPlanSession,
+  type ChatgptPlanStatus,
+  type ChatgptSessionAccount,
+  type ChatgptSessionFile,
+  type ChatgptSessionStore,
+  type ChatgptSessionTokens,
+  type SignInResult,
+} from './chatgpt-plan.js';

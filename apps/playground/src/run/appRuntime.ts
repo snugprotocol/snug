@@ -139,7 +139,11 @@ export interface AppRuntime {
 
 export function composeAppRuntime(options: ComposeAppRuntimeOptions): AppRuntime {
   const { appId } = options;
-  const own = createAppTransport(options.mode, options.provider, options.onLlmEvent, appId, options.onTurnStart);
+  const own = createAppTransport(options.mode, options.provider, {
+    appId,
+    ...(options.onLlmEvent !== undefined ? { onLlmEvent: options.onLlmEvent } : {}),
+    ...(options.onTurnStart !== undefined ? { onTurnStart: options.onTurnStart } : {}),
+  });
   // The visible frame counts a delegated run's thinks on the run's record; the hidden frame's
   // transport is wrapped by the executor itself (the capping, scrubbing sibling).
   const transport = options.attended

@@ -67,6 +67,31 @@ export async function runCloseFlush(deps: CloseFlushDeps): Promise<'flushed' | '
   return outcome;
 }
 
+export interface ComposedCloseFlushDeps {
+  /** The user db's debounced write-back (guarded by the caller on `ready` — see main.tsx). */
+  userDb: () => Promise<void>;
+  /**
+   * The ChatGPT-plan keeper's persist in flight (TASK-20261023-siwc-chatgpt-plan D4): a refresh
+   * rotates the refresh token, and a close landing between the token POST and the custody write
+   * would lose the only valid one. Never rejects (the keeper swallows its own failures).
+   */
+  chatgptPlan: () => Promise<void>;
+}
+
+/**
+ * The ONE flush the shell registers: the user db and the ChatGPT-plan keeper, both awaited before
+ * `done`. Both run at once — neither depends on the other — and a failed db flush still waits for
+ * the keeper's persist before it is reported, so a rotated token is never dropped because a
+ * write-back of app data failed first. The db failure is rethrown so `runCloseFlush` still says
+ * `failed` (and still closes).
+ */
+export function composeCloseFlush(deps: ComposedCloseFlushDeps): () => Promise<void> {
+  return async () => {
+    const [userDb] = await Promise.allSettled([deps.userDb(), deps.chatgptPlan()]);
+    if (userDb.status === 'rejected') throw userDb.reason;
+  };
+}
+
 /**
  * Register the handler. Desktop-only: on web nothing emits `snug:close-flush`.
  *

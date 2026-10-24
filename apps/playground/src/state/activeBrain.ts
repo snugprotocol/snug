@@ -59,11 +59,15 @@ export function resolveActiveBrainFrom(inputs: ActiveBrainInputs): ActiveBrainKi
   if (inputs.brain.kind === 'demo') return 'demo';
   const { mode } = inputs;
   if (mode === 'subscription') return 'subscription';
+  // The user's ChatGPT plan (TASK-20261023-siwc-chatgpt-plan D5) needs no arm here: the builder pick
+  // below applies only under byok, and `adapterKindFor` names the plan before any provider or key
+  // check — the ONE derivation, not a copy that could drift (Gate 5 ST5; the matrix test proves it).
   // The fresh-thread pick, under the send path's exact guard (useBuilderChat):
-  // never under a mock default, byok only. An attached thread ignores the pick on
+  // never under a mock default, byok only, and only a pick of byok's own family (a chatgpt
+  // pick is another mode's — ADR-0078 §6). An attached thread ignores the pick on
   // the send path too (the app's own pin governs there — see the exclusion above).
   const provider =
-    mode === 'byok' && inputs.provider !== 'mock' && inputs.builderPick !== undefined
+    mode === 'byok' && inputs.provider !== 'mock' && inputs.builderPick !== undefined && inputs.builderPick.provider !== 'chatgpt'
       ? inputs.builderPick.provider
       : inputs.provider;
   const hasKey = provider === 'anthropic' || provider === 'openai' ? inputs.keys[provider] : false;

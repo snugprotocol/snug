@@ -33,6 +33,7 @@ import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import type { SnugPlatform } from '@playground/platform/platform';
 
 import { createAppUpdates } from './app-updates.js';
+import { createChatgptPlanSeat } from './chatgpt-plan.js';
 import { createDesktopNotifySeat } from './notify.js';
 import { createOnOpenShareLink } from './share-links.js';
 import { createTauriFileFs } from './fs.js';
@@ -298,6 +299,13 @@ export function createDesktopPlatform(): SnugPlatform {
     // plugin (artifact-signature verified in Rust); relaunch reaps the sidecar first
     // — the ordering is pinned by appUpdates.test.ts's call-order spy, never by prose.
     appUpdates: createAppUpdates(),
+    // THE CHATGPT-PLAN SEAT (TASK-20261023-siwc-chatgpt-plan D2/D10; ADR-0078 §1–§2). Its
+    // PRESENCE is the third mode (`availableModes()` reads it), so it is a plain, STATIC
+    // property: building it touches no command, and it is never derived from a store read —
+    // a failed read at launch must not make the mode vanish and let the W2b coercion rewrite
+    // a `chatgpt` user's mode. The sign-in's loopback is its OWN transport (chatgpt-plan.ts);
+    // the wizard's `oauth` seat above is untouched.
+    chatgptPlan: createChatgptPlanSeat(),
     // THE SCHEDULER SEAT (TASK-20261009 H3 + H1; ADR-0074 §7). The shell names itself as the
     // subject of the honesty line ("runs while Snug for Mac is open") and promises only the
     // page: background mode is the deferred task (§8), and stating `page` here is what keeps

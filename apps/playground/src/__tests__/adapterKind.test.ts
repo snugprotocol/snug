@@ -30,6 +30,8 @@ vi.mock('@snugprotocol/adapters', async (importOriginal) => {
     openaiAdapter: vi.fn(() => tagged('openai')),
     localAdapter: vi.fn(() => tagged('local')),
     mockAdapter: vi.fn(() => tagged('demo')),
+    // TASK-20261023-siwc-chatgpt-plan L4: the plan's Responses adapter, tagged like the rest.
+    openaiResponsesAdapter: vi.fn(() => tagged('chatgpt')),
   };
 });
 vi.mock('../agent/webllm/webllmAdapter.js', () => ({
@@ -50,13 +52,21 @@ const constructedKind = (config: TurnAdapterConfig): string => {
 
 describe('adapterKindFor mirrors createTurnAdapter (AC1)', () => {
   it('agrees with the constructed adapter across the full config matrix', () => {
-    const modes = ['byok', 'local', 'webllm'] as const;
+    // 'chatgpt' joined 2026-10-23 (TASK-20261023-siwc-chatgpt-plan L4-1). Its arm needs a model
+    // to build the Responses adapter (no model anywhere is a named RESULT — pinned below), so the
+    // chatgpt configs carry one; the other modes' configs are exactly what they always were.
+    const modes = ['byok', 'local', 'webllm', 'chatgpt'] as const;
     const providers = ['mock', 'anthropic', 'openai'] as const;
     const keys = [undefined, 'sk-test'] as const;
     for (const mode of modes) {
       for (const provider of providers) {
         for (const key of keys) {
-          const config: TurnAdapterConfig = { mode, provider, ...(key !== undefined ? { key } : {}) };
+          const config: TurnAdapterConfig = {
+            mode,
+            provider,
+            ...(key !== undefined ? { key } : {}),
+            ...(mode === 'chatgpt' ? { model: 'gpt-6.1-sol' } : {}),
+          };
           expect(adapterKindFor(routeOf(config)), `mode=${mode} provider=${provider} key=${key ?? 'absent'}`).toBe(
             constructedKind(config),
           );
@@ -102,7 +112,8 @@ describe('adapterKindFor mirrors createTurnAdapter (AC1)', () => {
 
   it('ADAPTER_KINDS is the single-homed kind vocabulary the meta reader validates against', () => {
     // 'host' joined 2026-09-05 (TASK-20260905-host-kit P2): the platform-pinned host brain.
-    expect(ADAPTER_KINDS).toEqual(['webllm', 'local', 'anthropic', 'openai', 'demo', 'host']);
+    // 'chatgpt' joined 2026-10-23 (TASK-20261023-siwc-chatgpt-plan L4-1): the user's ChatGPT plan.
+    expect(ADAPTER_KINDS).toEqual(['webllm', 'local', 'anthropic', 'openai', 'demo', 'host', 'chatgpt']);
   });
 
   it("mode 'host' outranks provider and key entirely — the platform pin is named first", () => {
@@ -120,5 +131,26 @@ describe('adapterKindFor mirrors createTurnAdapter (AC1)', () => {
     // flip itself; the pinned path is proven end-to-end in hostBrain.test.ts.
     const result = await createTurnAdapter({ mode: 'host', provider: 'mock' }, 'chat').complete({ system: 's', messages: [{ role: 'user', content: 'hi' }] });
     expect(result).toMatchObject({ ok: false, code: HOST_BRAIN_GONE_CODE, retryable: true });
+  });
+
+  // TASK-20261023-siwc-chatgpt-plan Gate 3, L4 (§11 L4-1, L4-2; ADR-0078 §5): the plan is the
+  // user's explicit choice, so key presence is irrelevant and a missing session is a NAMED result
+  // from the adapter — never the demo brain, a key or a local model standing in.
+  it("mode 'chatgpt' names the plan for every provider and key presence — the arm sits before every provider/key check", () => {
+    for (const provider of ['mock', 'anthropic', 'openai'] as const) {
+      for (const hasKey of [true, false]) {
+        expect(adapterKindFor({ mode: 'chatgpt', provider, hasKey }), `provider=${provider} hasKey=${String(hasKey)}`).toBe('chatgpt');
+      }
+    }
+    expect(constructedKind({ mode: 'chatgpt', provider: 'openai', key: 'sk-test', model: 'gpt-6.1-sol' })).toBe('chatgpt');
+    expect(constructedKind({ mode: 'chatgpt', provider: 'mock', model: 'gpt-6.1-sol' })).toBe('chatgpt');
+  });
+
+  it("a 'chatgpt' adapter with NO model anywhere answers a named HOST_ERROR result — never a throw, never another adapter", async () => {
+    const adapter = createTurnAdapter({ mode: 'chatgpt', provider: 'openai', key: 'sk-test' }, 'app') as { __kind?: string; complete: (r: unknown) => Promise<unknown> };
+    expect(adapter.__kind).toBeUndefined();
+    const result = await adapter.complete({ system: 's', messages: [{ role: 'user', content: 'hi' }] });
+    expect(result).toMatchObject({ ok: false, code: 'HOST_ERROR' });
+    expect((result as { message?: string }).message ?? '').toContain('no ChatGPT model is chosen');
   });
 });

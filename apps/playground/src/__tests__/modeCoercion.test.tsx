@@ -122,6 +122,125 @@ describe('hydrateSettings — subscription coercion on capability-less platforms
   });
 });
 
+// TASK-20261023-siwc-chatgpt-plan Gate 3, L4 (AC1; plan §11 L4-10; ADR-0078 §1): a roaming file
+// whose stored mode is `chatgpt` opened where the platform carries NO custody seat (web, the host
+// kit, a desktop build without it) is coerced exactly like subscription — the best available mode,
+// the note raised, the stored row untouched. Where the seat IS present the mode is simply chatgpt.
+// Before the fix a stored 'chatgpt' fails `isMode` and is silently IGNORED (modeStore stays byok,
+// no note) — the first three rows are red on the note; the seat row is red on the mode.
+describe('hydrateSettings — a stored chatgpt mode (TASK-20261023-siwc-chatgpt-plan, L4-10)', () => {
+  /** The ChatGPT-plan custody seat, inert — presence is all `availableModes()` / the coercion read. */
+  const seat = (): NonNullable<SnugPlatform['chatgptPlan']> => ({
+    sessionStore: { read: () => Promise.resolve(undefined), write: () => Promise.resolve(), clear: () => Promise.resolve() },
+    loopback: { begin: (path) => Promise.resolve({ redirectUri: `http://127.0.0.1:1455${path}` }), onCallback: () => () => undefined, cancel: () => Promise.resolve() },
+    openExternal: () => Promise.resolve(),
+  });
+
+  it('a desktop WITHOUT the seat: coerced to byok (no Ollama), the note raised, the stored row untouched', async () => {
+    const harness = await fresh(desktopPlatform());
+    harness.db.setSetting('mode', 'chatgpt');
+
+    harness.mode.hydrateSettings(harness.db);
+    await new Promise((resolve) => setTimeout(resolve, 10)); // any illegal write-through would have landed
+
+    expect(harness.mode.modeStore.get()).toBe('byok');
+    expect(harness.mode.modeCoercedStore.get()).toBe(true);
+    expect(harness.db.getSetting('mode'), 'the stored value must survive untouched').toBe('chatgpt');
+  });
+
+  it('coerces to local when the Ollama probe found a running install', async () => {
+    const harness = await fresh(desktopPlatform({ probeOllama: () => Promise.resolve({ running: true, models: ['llama3.2'] }) }));
+    harness.db.setSetting('mode', 'chatgpt');
+    await harness.ollama.refreshOllama();
+
+    harness.mode.hydrateSettings(harness.db);
+
+    expect(harness.mode.modeStore.get()).toBe('local');
+    expect(harness.mode.modeCoercedStore.get()).toBe(true);
+    expect(harness.db.getSetting('mode')).toBe('chatgpt');
+  });
+
+  it('the web build (subscription offered, no seat) coerces too — never "subscription", never chatgpt', async () => {
+    const harness = await fresh();
+    harness.db.setSetting('mode', 'chatgpt');
+
+    harness.mode.hydrateSettings(harness.db);
+
+    expect(harness.mode.modeStore.get()).toBe('byok');
+    expect(harness.mode.modeCoercedStore.get()).toBe(true);
+    expect(harness.db.getSetting('mode')).toBe('chatgpt');
+  });
+
+  it('a desktop WITH the seat: the mode is chatgpt and there is nothing to note', async () => {
+    const harness = await fresh(desktopPlatform({ chatgptPlan: seat() }));
+    harness.db.setSetting('mode', 'chatgpt');
+
+    harness.mode.hydrateSettings(harness.db);
+
+    expect(harness.mode.modeStore.get()).toBe('chatgpt');
+    expect(harness.mode.modeCoercedStore.get()).toBe(false);
+  });
+});
+
+// TASK-20261023-siwc-chatgpt-plan L4 (plan §12 L5-2): `modeCoercedStore` stays the boolean the
+// note shows on; `coercedFromModeStore` says WHICH stored mode was coerced, so the note (L5) can
+// branch its copy — the subscription sentence, or the "your file asked for your ChatGPT plan"
+// one. Set in BOTH coercion branches, cleared with the note, untouched by a clean hydrate.
+describe('hydrateSettings — coercedFromModeStore names the stored mode that was coerced (L5-2)', () => {
+  it('a stored chatgpt mode without the seat → "chatgpt"', async () => {
+    const harness = await fresh(desktopPlatform());
+    harness.db.setSetting('mode', 'chatgpt');
+    harness.mode.hydrateSettings(harness.db);
+    expect(harness.mode.modeCoercedStore.get()).toBe(true);
+    expect(harness.mode.coercedFromModeStore.get()).toBe('chatgpt');
+  });
+
+  it('a stored subscription mode without the capability → "subscription"', async () => {
+    const harness = await fresh(desktopPlatform());
+    harness.db.setSetting('mode', 'subscription');
+    harness.mode.hydrateSettings(harness.db);
+    expect(harness.mode.modeCoercedStore.get()).toBe(true);
+    expect(harness.mode.coercedFromModeStore.get()).toBe('subscription');
+  });
+
+  it('a clean hydrate leaves it undefined; dismissing the note clears both stores', async () => {
+    const harness = await fresh(desktopPlatform());
+    harness.db.setSetting('mode', 'local');
+    harness.mode.hydrateSettings(harness.db);
+    expect(harness.mode.coercedFromModeStore.get()).toBeUndefined();
+
+    harness.db.setSetting('mode', 'chatgpt');
+    harness.mode.hydrateSettings(harness.db);
+    expect(harness.mode.coercedFromModeStore.get()).toBe('chatgpt');
+    harness.mode.dismissModeCoercionNote();
+    expect(harness.mode.modeCoercedStore.get()).toBe(false);
+    expect(harness.mode.coercedFromModeStore.get()).toBeUndefined();
+  });
+
+  it('a NON-coerced hydrate after a coerced one clears BOTH stores — an import that replaced the chatgpt file stops saying the plan was set aside (G5-C14)', async () => {
+    const harness = await fresh(desktopPlatform());
+    harness.db.setSetting('mode', 'chatgpt');
+    harness.mode.hydrateSettings(harness.db);
+    expect(harness.mode.modeCoercedStore.get()).toBe(true);
+    expect(harness.mode.coercedFromModeStore.get()).toBe('chatgpt');
+
+    harness.db.setSetting('mode', 'byok');
+    harness.mode.hydrateSettings(harness.db);
+    expect(harness.mode.modeStore.get()).toBe('byok');
+    expect(harness.mode.modeCoercedStore.get()).toBe(false);
+    expect(harness.mode.coercedFromModeStore.get()).toBeUndefined();
+
+    // A file with no mode row at all is not coerced either.
+    harness.db.setSetting('mode', 'chatgpt');
+    harness.mode.hydrateSettings(harness.db);
+    expect(harness.mode.modeCoercedStore.get()).toBe(true);
+    harness.db.deleteSetting('mode');
+    harness.mode.hydrateSettings(harness.db);
+    expect(harness.mode.modeCoercedStore.get()).toBe(false);
+    expect(harness.mode.coercedFromModeStore.get()).toBeUndefined();
+  });
+});
+
 describe('ModeCoercionNote — the small dismissible surface', () => {
   async function mount(harness: Harness): Promise<void> {
     container = document.createElement('div');
@@ -162,5 +281,84 @@ describe('ModeCoercionNote — the small dismissible surface', () => {
     expect(container?.querySelector('[data-testid="mode-coercion-note"]')).toBeNull();
     // Dismissal is session-local — the stored file is not touched by it either.
     expect(harness.db.getSetting('mode')).toBe('subscription');
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// TASK-20261023-siwc-chatgpt-plan Gate 3, L5 — the note says WHICH mode the file asked for (plan
+// §12 L5-2). `modeCoercedStore` stays a boolean; `coercedFromModeStore` (L4) names the stored mode
+// that was coerced, and the note branches its copy on it. A file that asked for the ChatGPT plan
+// must not be told it asked for a hub subscription (the mutation: one hard-coded sentence).
+// RED until `coercedFromModeStore` exists and the note branches.
+// ---------------------------------------------------------------------------------------------
+
+describe('ModeCoercionNote — the copy names the mode the file asked for (L5-2)', () => {
+  const CHATGPT_NOTE =
+    "This computer uses its own AI settings — your file asked for your ChatGPT plan, which this app can't sign in to here. Pick how apps think in settings.";
+  const SUBSCRIPTION_NOTE =
+    "This computer uses its own AI settings — your file asked for a hub subscription, which isn't part of the desktop app. Pick how apps think in settings.";
+  const collapse = (s: string | null | undefined): string => (s ?? '').replace(/\s+/g, ' ').trim();
+
+  async function mountNote(harness: Harness): Promise<void> {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    await act(async () => {
+      root!.render(
+        <MemoryRouter>
+          <harness.note.ModeCoercionNote />
+        </MemoryRouter>,
+      );
+    });
+  }
+
+  it('a stored chatgpt mode on a seatless desktop: coercedFromModeStore is "chatgpt" and the note reads the ChatGPT sentence VERBATIM — never the hub one', async () => {
+    const harness = await fresh(desktopPlatform());
+    harness.db.setSetting('mode', 'chatgpt');
+    harness.mode.hydrateSettings(harness.db);
+    expect(harness.mode.coercedFromModeStore.get()).toBe('chatgpt');
+
+    await mountNote(harness);
+    const text = collapse(container?.querySelector('[data-testid="mode-coercion-note"]')?.textContent);
+    expect(text).toContain(CHATGPT_NOTE);
+    expect(text).not.toContain('hub subscription');
+    expect(container?.querySelector('a[href*="settings"]'), 'the note still links to Settings').toBeTruthy();
+  });
+
+  it('a stored subscription mode: coercedFromModeStore is "subscription" and today’s sentence is unchanged', async () => {
+    const harness = await fresh(desktopPlatform());
+    harness.db.setSetting('mode', 'subscription');
+    harness.mode.hydrateSettings(harness.db);
+    expect(harness.mode.coercedFromModeStore.get()).toBe('subscription');
+
+    await mountNote(harness);
+    const text = collapse(container?.querySelector('[data-testid="mode-coercion-note"]')?.textContent);
+    expect(text).toContain(SUBSCRIPTION_NOTE);
+    expect(text).not.toContain('ChatGPT');
+  });
+
+  it('no coercion → coercedFromModeStore is undefined', async () => {
+    const harness = await fresh(desktopPlatform());
+    harness.db.setSetting('mode', 'byok');
+    harness.mode.hydrateSettings(harness.db);
+    expect(harness.mode.coercedFromModeStore.get()).toBeUndefined();
+  });
+
+  it('"got it" clears BOTH stores — the boolean and the named mode — and the stored row is untouched', async () => {
+    const harness = await fresh(desktopPlatform());
+    harness.db.setSetting('mode', 'chatgpt');
+    harness.mode.hydrateSettings(harness.db);
+    await mountNote(harness);
+
+    const dismiss = [...(container?.querySelectorAll('button') ?? [])].find((b) => /got it/i.test(b.textContent ?? ''));
+    expect(dismiss).toBeDefined();
+    await act(async () => {
+      dismiss!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(container?.querySelector('[data-testid="mode-coercion-note"]')).toBeNull();
+    expect(harness.mode.modeCoercedStore.get()).toBe(false);
+    expect(harness.mode.coercedFromModeStore.get()).toBeUndefined();
+    expect(harness.db.getSetting('mode')).toBe('chatgpt');
   });
 });

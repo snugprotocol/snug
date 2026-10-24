@@ -1,6 +1,6 @@
 # 0036 — Per-app model selection
 
-- **Status:** accepted (2026-08-18, ships with TASK-20260817-per-app-model-selector); **amended by ADR-0046 (2026-08-21)** — the per-app pick now stores provider AND model, and the "Settings default" tail of the precedence is per-PROVIDER in byok mode (local/subscription keep the global `model`)
+- **Status:** accepted (2026-08-18, ships with TASK-20260817-per-app-model-selector); **amended by ADR-0046 (2026-08-21)** — the per-app pick now stores provider AND model, and the "Settings default" tail of the precedence is per-PROVIDER in byok mode (local/subscription keep the global `model`) — **amended by [ADR-0078](0078-chatgpt-plan-mode.md)** (2026-10-23): a pin routes only in the mode family that made it — a chatgpt pin in chatgpt, a provider pin in byok, a provider-less pin (unscoped: local's shape and every pre-ADR-0046 BYOK pin) in byok and local; a pin from another family is shown, never routed (wording as amended at implementation, 2026-10-24)
 - **Date:** 2026-08-18
 - **Task:** TASK-20260817-per-app-model-selector
 - **Relates to:** ADR-0007 (single portable user DB) · ADR-0012 (prompt-caching scope) · ADR-0015 (webllm brain override) · ADR-0018 (runtime prompt contract — deliberately NOT the storage site). No existing ADR is amended.

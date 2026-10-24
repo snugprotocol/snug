@@ -12,7 +12,7 @@ import { ERROR_CODES, parseAppRequest, type RuntimeContract } from '@snugprotoco
 import type { AgentTransport } from '@snugprotocol/runner';
 
 import { getPlatform } from '../platform/platform.js';
-import { appProviderPinFor, resolveModelForApp } from '../state/appModel.js';
+import { byokProviderPinFor, resolveModelForApp } from '../state/appModel.js';
 import {
   endpointsNeedConfirm,
   getByokKey,
@@ -21,6 +21,7 @@ import {
   type ByokProvider,
   type PlaygroundMode,
 } from '../state/mode.js';
+import { chatgptEffortFor } from '../state/chatgptPlan.js';
 import { getUserDb } from '../state/userdb.js';
 import { currentBrain } from '../state/webllm.js';
 import { createTurnAdapter, type DirectMode } from './adapter.js';
@@ -86,6 +87,37 @@ export interface DirectTransportOptions {
   appId?: string;
   /** Injectable for tests; default reads the contract from the user DB per send. */
   getRuntimeContract?: (appId: string) => Promise<RuntimeContract | undefined>;
+  /**
+   * Nobody is watching this turn (a scheduled step — TASK-20261023-siwc-chatgpt-plan, ADR-0078
+   * §8): on the ChatGPT plan it runs on the model's DEFAULT thinking level instead of the stored
+   * interactive one. The other arms carry no level and ignore it.
+   */
+  unattended?: boolean;
+}
+
+/**
+ * What `createAppTransport` / `resolveAppTransport` take beyond the mode and provider — ONE options
+ * object (Gate 5 ST10), so a new seam is a named field and never another trailing positional.
+ */
+export interface AppTransportOptions {
+  /** The in-app turn's LLM feed — see `DirectTransportOptions.onLlmEvent`. Subscription ignores it. */
+  onLlmEvent?: (event: AgentTurnEvent) => void;
+  /** The installed app this transport serves — see `DirectTransportOptions.appId`. */
+  appId?: string;
+  /**
+   * Fired when an APP's turn begins — the same seam `useBuilderChat` gives the builder
+   * (TASK-20260813, owner repro 2026-08-13).
+   *
+   * Without it the inspector was reset by builder turns ONLY, so an app's own turns
+   * (a Chess move) appended forever. Since `agent-turn.ts` numbers round trips from 0
+   * per turn, those accumulated entries collided on index with every later turn, and a
+   * stale `pending` entry could keep its timer ticking under finished calls. The
+   * reducer now settles pending-first as a backstop; this closes the accumulation that
+   * made collisions likely in the first place.
+   */
+  onTurnStart?: () => void;
+  /** Nobody is watching this turn — see `DirectTransportOptions.unattended`. */
+  unattended?: boolean;
 }
 
 /**
@@ -151,12 +183,15 @@ export function createDirectAppTransport(options: DirectTransportOptions): Agent
       }
       const outbound = guarded.wire;
       // local talks to an unauthenticated endpoint; webllm runs IN the page; the host
-      // brain is the host's own — none reads a provider key (webllm and host must not
-      // touch snug_secrets at all).
+      // brain is the host's own; the ChatGPT plan is a signed-in session the keeper holds —
+      // none reads a provider key (webllm, host and chatgpt must not touch snug_secrets at all).
       const key =
-        options.mode === 'local' || options.mode === 'webllm' || options.mode === 'host'
+        options.mode === 'local' || options.mode === 'webllm' || options.mode === 'host' || options.mode === 'chatgpt'
           ? undefined
           : await readKey(options.provider);
+      // The plan's thinking level, PER SEND like the model (a level changed mid-session reaches
+      // the next turn); unattended turns take the model's default (ADR-0078 §8).
+      const effort = options.mode === 'chatgpt' ? chatgptEffortFor(options.model, options.unattended === true) : undefined;
       const adapter = createTurnAdapter(
         {
           mode: options.mode,
@@ -164,6 +199,7 @@ export function createDirectAppTransport(options: DirectTransportOptions): Agent
           ...(key !== undefined ? { key } : {}),
           ...(options.model !== undefined ? { model: options.model } : {}),
           ...(options.localUrl !== undefined ? { localUrl: options.localUrl } : {}),
+          ...(effort !== undefined ? { effort } : {}),
         },
         'app',
       );
@@ -224,31 +260,14 @@ export function createDirectAppTransport(options: DirectTransportOptions): Agent
  * useBuilderChat stale-discriminator bug this task already fixed once: when a
  * behavior is conditional, evaluate the condition where the CALL happens.
  */
-export function createAppTransport(
-  mode: PlaygroundMode,
-  provider: ByokProvider,
-  onLlmEvent?: (event: AgentTurnEvent) => void,
-  appId?: string,
-  /**
-   * Fired when an APP's turn begins — the same seam `useBuilderChat` gives the builder
-   * (TASK-20260813, owner repro 2026-08-13).
-   *
-   * Without it the inspector was reset by builder turns ONLY, so an app's own turns
-   * (a Chess move) appended forever. Since `agent-turn.ts` numbers round trips from 0
-   * per turn, those accumulated entries collided on index with every later turn, and a
-   * stale `pending` entry could keep its timer ticking under finished calls. The
-   * reducer now settles pending-first as a backstop; this closes the accumulation that
-   * made collisions likely in the first place.
-   */
-  onTurnStart?: () => void,
-): AgentTransport {
+export function createAppTransport(mode: PlaygroundMode, provider: ByokProvider, transportOptions: AppTransportOptions = {}): AgentTransport {
   return {
     send(wire, options) {
-      onTurnStart?.();
+      transportOptions.onTurnStart?.();
       // The R-9 egress scrub deliberately does NOT live here: it guards inside BOTH leaf
       // producers (`createDirectAppTransport`, `createServerAppTransport`), so a caller
       // reaching a lower export is bound too (Gate-5 review, altitude finding 5).
-      return resolveAppTransport(mode, provider, onLlmEvent, appId).send(wire, options);
+      return resolveAppTransport(mode, provider, transportOptions).send(wire, options);
     },
   };
 }
@@ -257,12 +276,8 @@ export function createAppTransport(
  * The brain/settings decision, evaluated per send (see createAppTransport).
  * Exported for the consumer-altitude tests only.
  */
-export function resolveAppTransport(
-  mode: PlaygroundMode,
-  provider: ByokProvider,
-  onLlmEvent?: (event: AgentTurnEvent) => void,
-  appId?: string,
-): AgentTransport {
+export function resolveAppTransport(mode: PlaygroundMode, provider: ByokProvider, transportOptions: AppTransportOptions = {}): AgentTransport {
+  const { onLlmEvent, appId } = transportOptions;
   // AL-07: the experimental webllm brain OVERRIDES the configured mode entirely —
   // including subscription. `'webllm'` runs the in-page engine; `'demo'` is the
   // graceful no-WebGPU fallback (the shell banner explains it). `'settings'` is the
@@ -304,10 +319,11 @@ export function resolveAppTransport(
   // to the other provider made mid-session would otherwise route on the old provider
   // with the old key until a remount. The pin overrides only in byok mode and only when
   // an app id exists — the demo/webllm arms above and every explicit test construction
-  // keep the provider they were handed.
+  // keep the provider they were handed. A chatgpt pin is another family's and never a
+  // provider here (`byokProviderPinFor`, ADR-0078 §6).
   const model = resolveModelForApp(appId);
   if (mode === 'subscription') return createServerAppTransport(model, appId);
-  const pinnedProvider = mode === 'byok' && provider !== 'mock' && appId !== undefined ? appProviderPinFor(appId) : undefined;
+  const pinnedProvider = mode === 'byok' && provider !== 'mock' && appId !== undefined ? byokProviderPinFor(appId) : undefined;
   return createDirectAppTransport({
     mode,
     provider: pinnedProvider ?? provider,
@@ -315,5 +331,6 @@ export function resolveAppTransport(
     ...(model !== undefined ? { model } : {}),
     localUrl: localUrlStore.get(),
     ...(onLlmEvent !== undefined ? { onLlmEvent } : {}),
+    ...(transportOptions.unattended === true ? { unattended: true } : {}),
   });
 }

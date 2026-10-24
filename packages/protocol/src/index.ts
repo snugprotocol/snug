@@ -256,6 +256,8 @@ export {
   isCredentialKeyName,
   scanForCredentialValues,
   stripCredentialHeaders,
+  JWT_SHAPE_SOURCE,
+  jwtShapeInText,
   type CredentialFinding,
   type CredentialScan,
 } from './security.js';

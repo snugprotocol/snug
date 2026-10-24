@@ -662,16 +662,26 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
     // is ignored here (onInstall transferred it). Keyed on `builderPick`, so a pick made
     // mid-session rebuilds this memo.
     const freshPick = attachedAppId === undefined ? builderPick : undefined;
+    // A pick routes only a thread of its OWN family (ADR-0078 §6, as a pin does): a BYOK pick
+    // under byok — never under the mock default — and a chatgpt pick under chatgpt. Any other
+    // pairing is ignored here exactly as the send path ignores a cross-family pin.
+    const pickProvider = freshPick?.provider;
+    const byokPick =
+      mode === 'byok' && provider !== 'mock' && freshPick !== undefined && pickProvider !== undefined && pickProvider !== 'chatgpt'
+        ? { provider: pickProvider, model: freshPick.model }
+        : undefined;
+    const chatgptPick = mode === 'chatgpt' && freshPick !== undefined && pickProvider === 'chatgpt' ? freshPick : undefined;
+    const pickedModel = byokPick?.model ?? chatgptPick?.model;
     return mode === 'subscription'
       ? // Subscription mode resolves at CALL time (the value rides the /invoke body), so
         // it takes the resolved model rather than the id.
         createServerBuilder(threadId, undefined, freshPick?.model ?? resolveModelForApp(attachedAppId))
       : createDirectBuilder({
           mode,
-          provider: mode === 'byok' && provider !== 'mock' && freshPick !== undefined ? freshPick.provider : provider,
+          provider: byokPick?.provider ?? provider,
           sink,
           ...(attachedAppId !== undefined ? { appId: attachedAppId } : {}),
-          ...(mode === 'byok' && provider !== 'mock' && freshPick !== undefined ? { model: freshPick.model } : {}),
+          ...(pickedModel !== undefined ? { model: pickedModel } : {}),
           localUrl,
         });
   }, [brain, mode, provider, model, localUrl, threadId, sink, attachedAppId, builderPick]);

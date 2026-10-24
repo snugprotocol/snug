@@ -21,6 +21,7 @@ import {
   LEGAL_UPDATED,
   LICENSE_URL,
   MIT_DISCLAIMER,
+  OPENAI_NON_AFFILIATION,
   PRIVACY_PATH,
   SECURITY_POLICY_URL,
   SITE_OPERATOR,
@@ -61,8 +62,9 @@ export const TERMS: LegalDocument = {
           ' distributes, and the relationship between you and us when you use them.',
         ),
         p(
-          'Nothing is sold here. There is no account, no subscription, no payment and no plan. Where Snug connects to a model provider or another service, you bring your own key or account and pay that provider directly under their terms.',
+          'Nothing is sold here. There is no account, no subscription, no payment and no plan of Snug\'s own. Where Snug connects to a model provider or another service — or runs on your ChatGPT plan — you bring your own key or account and pay that provider directly under their terms.',
         ),
+        p(OPENAI_NON_AFFILIATION),
       ],
     },
     {

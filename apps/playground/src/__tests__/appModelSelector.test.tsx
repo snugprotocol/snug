@@ -20,7 +20,7 @@
 
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ModelSelect } from '../run/ModelSelect.js';
 import {
@@ -48,6 +48,9 @@ declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean | undefined;
 }
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+
+/** The L4 keeper, imported by a NON-literal specifier in the chatgpt blocks so Vite's import analysis cannot fail this whole file (and its existing tests) while `state/chatgptPlan.ts` does not exist yet. */
+const KEEPER_MODULE = '../state/chatgptPlan.js';
 
 const APP = 'app-model-select';
 const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
@@ -297,5 +300,149 @@ describe('AC13 (TASK-20260821) — both keyed providers render as labelled group
     expect(select()?.value).toBe('openai:gpt-4o-mini');
     const groups = Array.from(container?.querySelectorAll('optgroup') ?? []).map((g) => g.label);
     expect(groups).toContain('OpenAI (key missing)');
+  });
+});
+
+// =============================================================================================
+// TASK-20261023-siwc-chatgpt-plan Gate 3, L5 — the selector on the ChatGPT plan (AC8; plan §1 D6,
+// §11 L4-4 + amendment, §3 L5; ADR-0078 §6 — pins are scoped to the mode family that made them).
+//
+// Rules 1–3 above, applied to the third mode:
+//   - chatgpt mode lists the ACCOUNT's models (the keeper's list, server order, display names) —
+//     never a hardcoded catalogue, never the BYOK groups;
+//   - a pick writes `setAppPin(appId, { provider: 'chatgpt', model })` (BOTH rows); inherit clears both;
+//   - Rule 3: a chatgpt pin the plan no longer lists stays SHOWN and SELECTED, "<id> (not on your plan)";
+//   - a pin from ANOTHER family is ignored for routing (L4) and SAID (`appPinFamily`): in chatgpt
+//     mode a BYOK pin reads "pinned for bring your own key — not used here"; in byok mode a chatgpt
+//     pin reads "pinned for my ChatGPT plan — not used here" — and the select shows what actually
+//     routes (the inherited default), never the foreign pin as if it applied.
+// The byok/local/subscription rows above run unchanged (they are the "behaviour unchanged" proof).
+// Fresh module graph on the seat platform, LAST in the file; the keeper booted on a fake READY session.
+// RED until `state/chatgptPlan.ts` and ModelSelect's chatgpt branch exist.
+// =============================================================================================
+
+describe('ModelSelect on the ChatGPT plan (AC8, L5)', () => {
+  interface Graph {
+    appModel: typeof import('../state/appModel.js');
+    mode: typeof import('../state/mode.js');
+    Select: typeof import('../run/ModelSelect.js')['ModelSelect'];
+  }
+
+  async function graph(): Promise<Graph> {
+    vi.resetModules();
+    const helperModule = await import('./chatgptPlanTestHelper.js');
+    const platformModule = await import('../platform/platform.js');
+    platformModule.setPlatform(helperModule.chatgptDesktopPlatform());
+    const dbHelper = await import('./userdbTestHelper.js');
+    await dbHelper.installTestUserDb();
+    const mode = await import('../state/mode.js');
+    const appModel = await import('../state/appModel.js');
+    const keeper = (await import(/* @vite-ignore */ KEEPER_MODULE)) as typeof import('../state/chatgptPlan.js');
+    keeper.resetChatgptPlanForTests();
+    await keeper.bootChatgptPlan(helperModule.recordingFactory(helperModule.fakeChatgptSession(helperModule.READY)).create);
+    const view = await import('../run/ModelSelect.js');
+    return { appModel, mode, Select: view.ModelSelect };
+  }
+
+  async function renderIn(g: Graph): Promise<void> {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    await act(async () => {
+      root!.render(<g.Select appId={APP} />);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+  }
+
+  const pick = async (label: string): Promise<void> => {
+    const el = select();
+    const option = Array.from(el?.options ?? []).find((o) => o.textContent === label);
+    if (el === null || option === undefined) throw new Error(`no option labelled ${label}`);
+    await act(async () => {
+      el.value = option.value;
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await flush();
+  };
+
+  it('lists the account’s models in server order by display name — no BYOK group, no hardcoded catalogue', async () => {
+    const g = await graph();
+    g.mode.setMode('chatgpt');
+    await renderIn(g);
+    expect(select()).not.toBeNull();
+    const listed = Array.from(select()!.options).filter((o) => o.value !== '');
+    expect(listed.map((o) => o.textContent)).toEqual(['GPT-6.1 Sol', 'GPT-6.1 mini']);
+    expect(container?.querySelectorAll('optgroup')).toHaveLength(0);
+  });
+
+  it('a pick writes setAppPin(appId, { provider: "chatgpt", model }); inherit clears both rows', async () => {
+    const g = await graph();
+    g.mode.setMode('chatgpt');
+    await renderIn(g);
+
+    await pick('GPT-6.1 mini');
+    expect(g.appModel.appModelStore.get()[APP]).toBe('gpt-6.1-mini');
+    expect(g.appModel.appProviderStore.get()[APP]).toBe('chatgpt');
+
+    const inherit = Array.from(select()!.options).find((o) => o.value === '');
+    expect(inherit, 'inheriting is a visible, labelled option (Rule 1)').toBeDefined();
+    await pick(inherit!.textContent ?? '');
+    expect(g.appModel.appModelStore.get()[APP]).toBeUndefined();
+    expect(g.appModel.appProviderStore.get()[APP]).toBeUndefined();
+  });
+
+  it('a chatgpt pin the plan does not list stays visible and selected, labelled "<id> (not on your plan)"', async () => {
+    const g = await graph();
+    g.mode.setMode('chatgpt');
+    g.appModel.setAppPin(APP, { provider: 'chatgpt', model: 'gpt-5-retired' });
+    await flush();
+    await renderIn(g);
+    expect(select()!.selectedOptions[0]?.textContent).toBe('gpt-5-retired (not on your plan)');
+  });
+
+  it('chatgpt mode, a BYOK pin: "pinned for bring your own key — not used here", and the select shows the inherited default', async () => {
+    const g = await graph();
+    g.mode.setMode('chatgpt');
+    g.appModel.setAppPin(APP, { provider: 'anthropic', model: 'claude-opus-5' });
+    await flush();
+    await renderIn(g);
+    expect(container?.textContent).toContain('pinned for bring your own key — not used here');
+    expect(select()!.value).toBe('');
+    expect(Array.from(select()!.options).some((o) => (o.textContent ?? '').includes('claude-opus-5')), 'the foreign pin is not offered as a plan model').toBe(false);
+  });
+
+  it('byok mode, a chatgpt pin: "pinned for my ChatGPT plan — not used here", and the select shows the inherited default', async () => {
+    const g = await graph();
+    g.mode.setMode('byok');
+    g.mode.byokKeyPresenceStore.set({ anthropic: true, openai: false });
+    g.mode.providerStore.set('anthropic');
+    g.appModel.setAppPin(APP, { provider: 'chatgpt', model: 'gpt-6.1-mini' });
+    await flush();
+    await renderIn(g);
+    expect(container?.textContent).toContain('pinned for my ChatGPT plan — not used here');
+    expect(select()!.value).toBe('');
+    expect(Array.from(select()!.options).some((o) => (o.textContent ?? '').includes('gpt-6.1-mini')), 'never shown as an Anthropic "(not listed)" pin').toBe(false);
+  });
+
+  it('chatgpt mode, an UNSCOPED pin (no provider row — a legacy or local pin): "pinned for another mode — not used here", never "pinned for local model" (G5-C10)', async () => {
+    const g = await graph();
+    g.mode.setMode('chatgpt');
+    g.appModel.setAppModel(APP, 'llama3.2');
+    await flush();
+    await renderIn(g);
+    expect(container?.textContent).toContain('pinned for another mode — not used here');
+    expect(container?.textContent).not.toContain('pinned for local model');
+    expect(select()!.value).toBe('');
+    expect(Array.from(select()!.options).some((o) => (o.textContent ?? '').includes('llama3.2'))).toBe(false);
+  });
+
+  it('every selector on the plan says the ONE default label — "default (<name>)" — like the chip and Settings (ST2)', async () => {
+    const g = await graph();
+    g.mode.setMode('chatgpt');
+    await flush();
+    await renderIn(g);
+    expect(select()!.options[0]?.textContent).toBe('default (GPT-6.1 Sol)');
   });
 });

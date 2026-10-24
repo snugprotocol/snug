@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { ReactElement, ReactNode } from 'react';
 import { Link } from 'react-router';
 
+import { CHATGPT_ERROR_CODES } from '@snugprotocol/adapters';
 import type { ChatFetchFact } from '@snugprotocol/protocol';
 
 import { AccessCard, type ResolveAccessCard } from '../access/AccessCard.js';
@@ -22,6 +23,7 @@ import { useStore } from '../state/store.js';
 import { useBrain } from '../state/webllm.js';
 import { Button } from '../ui/Button.js';
 import { Card } from '../ui/Card.js';
+import { UsageLimitMessage } from '../ui/UsageLimitMessage.js';
 import { AuthChoiceCard } from './AuthChoiceCard.js';
 import { ReportErrorLink } from '../feedback/ReportErrorLink.js';
 import { StatusLine, type StatusPhase } from './StatusLine.js';
@@ -166,11 +168,17 @@ export function ChatLog({
               {message.displayText}
             </span>
             {message.error !== undefined ? (
-              <div className="error-note" role="alert">
-                {message.error.message}
-                {message.error.retryable ? ' — try again.' : ''}{' '}
-                <ReportErrorLink context={{ surface: 'build', errorText: message.error.message }} />
-              </div>
+              message.error.code === CHATGPT_ERROR_CODES.USAGE_LIMIT ? (
+                // The plan's usage limit is not a bug and not retryable (TASK-20261023 AC7, L5-8): its one
+                // remedy is Manage usage, so the generic note's "try again" / bug report would mislead.
+                <UsageLimitMessage />
+              ) : (
+                <div className="error-note" role="alert">
+                  {message.error.message}
+                  {message.error.retryable ? ' — try again.' : ''}{' '}
+                  <ReportErrorLink context={{ surface: 'build', errorText: message.error.message }} />
+                </div>
+              )
             ) : null}
             {message.directiveNote !== undefined ? <div className="hint">{message.directiveNote}</div> : null}
             {/* TASK-20261010-host-broker PR-5 (D-PR5-20; G5-17): what *fetch new data first* came to — the host's words, from the facts, on the person's own message. */}

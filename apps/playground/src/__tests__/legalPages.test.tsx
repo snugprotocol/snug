@@ -105,6 +105,22 @@ describe('/terms and /privacy render from the shared content (AC1)', () => {
     expect(page?.textContent).toContain('github.com');
   });
 
+  // TASK-20261023-siwc-chatgpt-plan Gate 3, L5 (L5-5, D9): the rendered pages carry the plan's row
+  // and the non-affiliation sentence — the same pages the website renders. RED until legal/*.ts change.
+  it('/privacy renders the ChatGPT-plan row and the non-affiliation sentence; /terms carries the sentence too', async () => {
+    const NON_AFFILIATION = 'ChatGPT is a trademark of OpenAI. Snug is independently developed and not affiliated with, endorsed by, or sponsored by OpenAI.';
+    await renderAt(PRIVACY_PATH);
+    const privacyPage = q('[data-testid="legal-page-privacy"]');
+    const rowTexts = [...(privacyPage?.querySelectorAll('table tbody tr') ?? [])].map((tr) => tr.textContent ?? '');
+    expect(rowTexts.some((text) => text.includes('OpenAI (your ChatGPT plan)'))).toBe(true);
+    expect(privacyPage?.textContent?.replace(/\s+/g, ' ')).toContain(NON_AFFILIATION);
+
+    act(() => root?.unmount());
+    container?.remove();
+    await renderAt(TERMS_PATH);
+    expect(q('[data-testid="legal-page-terms"]')?.textContent?.replace(/\s+/g, ' ')).toContain(NON_AFFILIATION);
+  });
+
   it('external links open in a new tab; internal ones stay in the router', async () => {
     await renderAt(TERMS_PATH);
     const page = q('[data-testid="legal-page-terms"]')!;

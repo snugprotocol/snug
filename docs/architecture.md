@@ -254,7 +254,9 @@ differs from the playground is the OUTPUT and what the platform carries:
   `order:'post'`, after Vite's own generateBundle — any other emitted file, any leftover
   `./assets/` reference), and the build stamp `<version> <sha>[-dirty]`. Two modules are
   swapped by RESOLVED path (`swap-resolved`, a dead swap fails the build): the starter
-  source and the sql.js locator. WebLLM is aliased to a stub. The prompt files no code reads
+  source and the sql.js locator (seventeen since — the chat's data lane, the scheduled agent,
+  the cross-app card and, since TASK-20261023-siwc-chatgpt-plan, the ChatGPT plan's seven
+  modules, all listed under *Dependency graph* below). WebLLM is aliased to a stub. The prompt files no code reads
   (`skills/` and the store README) are filtered out of the knowledge content module by
   `drop-prompt-files` (a dead rule fails the build; TASK-20261010-host-broker PR-3, −253 KB). Measured 2,219,519 B
   (2026-09-05); 3,255,702 B without the starter swap; sha-identical across clean builds.
@@ -544,7 +546,8 @@ the single-brain shape) and never enters the user file.
 ## Desktop shell (TASK-20260812-desktop-hub-scaffold, ADR-0021)
 
 `apps/desktop` wraps the SAME playground source (vite alias, `HashRouter`, desktop entry)
-in a Tauri 2 shell — BYOK/local only, no subscription surface. The playground gained ONE
+in a Tauri 2 shell — BYOK, local AND the user's own ChatGPT plan (Sign in with ChatGPT,
+ADR-0078 — the third brain mode; see *The ChatGPT plan* below), no subscription surface. The playground gained ONE
 seam: `src/platform/platform.ts` (`SnugPlatform`, set-once before boot; web default =
 prior behavior byte-for-byte). Desktop supplies: native fetch (`tauri-plugin-http`,
 CORS-free) through the connected-fetch `fetchImpl` seam AND the LLM adapters; a `'file'`
@@ -661,6 +664,90 @@ column). The platform seam gained TWO seats, and their asymmetry is the guard:
 `connectedFetchDepsFor` threads `lanFetch` alone, so a request-time path to
 accept-and-capture does not exist. Threat surface:
 `docs/security/threat-model-delta-desktop-auth.md`.
+
+### The ChatGPT plan — the desktop's third brain mode (TASK-20261023-siwc-chatgpt-plan, ADR-0078)
+
+Beside a key (BYOK) and a local model, the desktop runs apps on **the user's own ChatGPT
+plan** through OpenAI's *Sign in with ChatGPT* (its open-source / locally-run track: a
+public PKCE client registered dynamically on first sign-in, no secret, no partner key).
+`PlaygroundMode` gains `'chatgpt'`; `availableModes()` offers it only where the platform
+carries the custody seat (`SnugPlatform.chatgptPlan` — static on the desktop, absent on
+web and in the host kit), and a roaming file that asks for it elsewhere is coerced with the
+divergence note (`coercedFromModeStore` picks the copy), the stored row untouched.
+
+**One derivation, every seat.** The mode rides the one routing derivation and each of its
+copies: `adapterKindFor` (`agent/adapter.ts`) answers `'chatgpt'` after the host/webllm arms
+and BEFORE any provider or key check; `resolveActiveBrainFrom`, `appBrainKind`
+(`schedule/editorModel.ts`), `readerBrainRoute`/`chatDoorOpen` (`access/egress.ts` — a real
+brain with the data lane, its egress line the data-use sentence), `decideWire`
+(`agent/inferrerAdapter.ts`), the scheduled gate and `appAgent.configFrom` do the same, and
+none reads a `byok:` key (a behavioural matrix with a live key spy pins it,
+`chatgptRouting.test.ts`). `createTurnAdapter`'s chatgpt arm builds
+`openaiResponsesAdapter` (`packages/adapters/src/openai-responses.ts` + `responses-wire.ts`)
+behind `runAgentTurn` over a `BearerSource` (`get` / `refresh(stale)` / `redact`) — never a
+key, never a `TurnAdapterConfig` field. A signed-out, ungranted or limited plan is a NAMED
+result (`CHATGPT_SIGN_IN_NEEDED`, `CHATGPT_PLAN_NOT_GRANTED`, `CHATGPT_USAGE_LIMIT`,
+`CHATGPT_USAGE_UNAVAILABLE`, one sentence each), never a reroute to a key, a local model or
+the demo brain — unlike BYOK's keyless → demo fall-through, because the user chose this
+brain as the mode. The chip reads *ChatGPT plan*; its popover and Settings say *Using
+ChatGPT plan* with **Manage usage**; the usage-limit message's primary action is Manage
+usage wherever it renders (`ui/UsageLimitMessage.tsx`).
+
+**The keeper and its custody.** The session is a rotating, per-host credential, so it lives
+BESIDE the user file, not in `snug_secrets` (a scoped ADR-0014 exception — portability is
+its defect): `~/Snug/.chatgpt-plan/session.json`, `0600` in a `0700` dot-directory that
+`userfile.rs`'s `valid_name` cannot name, written by three Rust commands
+(`src-tauri/src/chatgpt_session.rs` — `chatgpt_session_read | write | clear`, temp
+`create_new` → rename → dir fsync, ≤ 64 KiB opaque bytes, no serde, nothing logged). The
+protocol runs in the page: `packages/auth/src/chatgpt-plan.ts` (`createChatgptPlanSession`
+— PKCE + signed state, dynamic registration persisted only after the exchange and `aud`
+agree, RS256 ID-token checks in `jwks.ts`, ONE serial mutation queue with a session epoch,
+single-flight refresh persisted before re-verification, best-effort revocation, the model
+list from `/v1/models` in OpenAI's own words). It holds no token between uses — every use
+reads the file inside the queue (its types and total file parser live in
+`chatgpt-plan-types.ts`, its wire constants and pure helpers in `chatgpt-plan-wire.ts`). The page has ONE keeper (`apps/playground/src/state/chatgptPlan.ts`,
+built at boot from the seat; `'unknown'` means WAIT — bounded: every chain awaits
+`chatgptPlanReadyBounded()`, 3 s at most, and a failed first read settles the keeper as
+signed out, so no session-file failure can stall the desktop), and the desktop's close-requested
+flush awaits `chatgptPlanFlush()` — the keeper's `flush()` (an in-flight refresh between its
+POST and its write, a sign-in's persist) and the seat's `flush?()` (the shell's own IPC) —
+inside its 2 s budget. Every post-POST persist and every clear compare-and-swaps on the
+refresh token the POST spent, so a re-consent landing mid-refresh, or a second shell on the
+same file, is never overwritten or wiped; a 401 that survives refresh-and-retry reaches the
+keeper (`BearerSource.invalidate?` → `reportRejected`), which clears the tokens and keeps the
+registration. The sign-in has its OWN loopback transport (`apps/desktop/src/chatgpt-plan.ts`,
+redirect `http://127.0.0.1:<port>/auth/callback`) over a port-filtered listener
+(`apps/desktop/src/oauth.ts`), so it never consumes a connection wizard's callback; its
+`?error=` callbacks end the flow because it passes an `onError` handler.
+
+**Models and pins.** Models and thinking levels come from the account
+(`visibility:'list'` entries, server order, `supported_reasoning_levels`), never a
+hardcoded catalogue; the defaults are settings rows `providerModel:chatgpt` and
+`providerEffort:chatgpt` (a person's preference travels with the file; the list and the
+credential stay per machine). Per-app pins are scoped to the mode family that made them
+(`pinFamilyApplies`, `state/appModel.ts`): a chatgpt pin (`appProvider:<appId> =
+'chatgpt'`) routes only in chatgpt mode, a provider pin only in byok, a provider-less pin
+(today's local shape, and every BYOK pin from before ADR-0046) in byok and local; a pin
+from another family is shown as "pinned for <mode> — not used here", never routed. The
+model choice has one home (`chatgptModelView` in `state/chatgptPlan.ts`, rendered by
+`ui/ChatgptModelOptions.tsx` in every select), and a level is sent only when the resolved
+model offers it.
+
+**The scheduler.** A signed-in, granted plan is a real brain for *Ask [app]'s AI* steps
+(the owner's call): every unattended path runs on the resolved model's DEFAULT level; a
+live `CHATGPT_USAGE_LIMIT` refuses the step by name and is not retried; `…_UNAVAILABLE`
+gets one bounded retry — one policy for the tool-free and agent paths
+(`schedule/chatgptOutcome.ts`), and a keeper refusal that never left the page is not charged
+as an AI call; a signed-out or ungranted plan refuses by name; a *remembered*
+limit never refuses at the gate (the live result decides); and every `initScheduler()`
+chain awaits `chatgptPlanReadyBounded()` so a launch catch-up never reads a loading session as
+signed out. A step's limit message keys on the single-homed sentence — `StepResult` has no
+`code` (C3). The remembered limit is a page-side overlay (`chatgptLimitStore`, set by
+`withChatgptLimitObserver` on the chatgpt arm from a turn's `CHATGPT_USAGE_LIMIT` /
+`…_UNAVAILABLE`, cleared by the next ok result) that the chip's *limit reached* and the
+Settings card read; **Manage usage** is one component (`ui/ManageUsageLink.tsx`), primary
+while a limit stands. In the host kit the plan's modules are kit-dead stubs (below). Threat
+surface: `docs/security/threat-model-delta-chatgpt-plan.md` (R-124 … R-134).
 
 ## Linked-device helpers and the host live pump (ADR-0032 / ADR-0034)
 
@@ -898,17 +985,17 @@ Until 2026-09-03 every piece of a builder turn — messages, busy flag, step tim
 - `playground/src/schedule/` (the scheduler, ADR-0074) consumes `protocol` (the shapes) + `db` (the accessors, `getFileId`); `desktop` and `host` inherit it through the source alias — change the engine, the shapes or the accessors → run `playground`, `desktop` and `host`. Since TASK-20261010-host-broker PR-4 it also reaches, through `schedule/appAgent.ts` and the `agent/` modules it composes, `adapters` (`runAgentTurn`), `knowledge` (`buildHostSystemPrompt({ scheduledAgent })` and three prompt files: `system/50-scheduled-agent.md`, `tools/fetch-connection.md`, `tools/data-propose-write-scheduled.md`) and `auth` (`fetch_connection` over `createConnectedFetch`), and the own-write engine in `access/writeBroker.ts` over `db`'s capture seat and own journal (`brokered-write.ts`, `userdb/own-undo.ts`) and `protocol`'s `own-undo.ts` — the package arrows below already hold; the host kit swaps `schedule/appAgent.ts` for a stub, so a change there also runs `host` (`kitDeadLanes.test.ts`); since PR-5 those three prompt files are also dropped from the kit page (`kitDeadPrompts.test.ts`). Since PR-5 `executors.ts` also reaches `access/fetchFirst.ts` (lazily) for a step's *fetch new data first*, and `protocol`'s `schedule.ts` carries its internal `refreshFirst` and `fetched` seats.
 - `playground/src/access/` (access between apps, ADR-0075) consumes `protocol` (the frames, the records, `record-guards.ts`; since PR-5 the internal `chat-cards.ts` and `app-provenance.ts`), `db` (the accessors, `exportAppRuntime`/`describeAppData`, the pure `scopedScratchRead` its worker bundles; since PR-5 `extractAccessWants` for the preview, `appProvenanceKey` + `readAppProvenance` for the provenance line, and the `getAccessWants`/`listAccessWants` accessors; `agent/dataTools.ts` takes `renameDmlTarget` from `db` beside it, and `state/sync.ts` the loop's history carry) and `runner` (the `AccessHandler` seat); `desktop` and `host` inherit it through the source alias, and the kit's boot imports its `canConstructWorker`. Cross-package impact as TASK-20261010 states it: `protocol` → everything rebuilds; `runner` → playground, server, host, desktop; `sdk` → knowledge's KB≡SDK suites; `db` → sdk, playground, host, host-mcp; playground source → desktop + host (+ the kit e2e on the rebuilt page); the website derives from the spec draft, the schemas, product-vision and `packages/sdk/src/types.ts`. TASK-20261010-host-broker PR-5 adds no published schema byte — its protocol shapes are internal (`chat-cards.ts`, `app-provenance.ts`, `schedule.ts`'s seats) — but its db seams (`access-wants.ts`, `userdb/app-provenance.ts`, `userdb/history-carry.ts`, `sync/loop.ts`, `brokered-write.ts` `renameDmlTarget`, the import's card drops) run `db` → playground, host, desktop, and its kit swaps run `host` (`kitDeadLanes.test.ts`, `check-host-kit`).
 - `knowledge` ← `server`, `playground`, `desktop`; `sdk` dev-depends on it (the KB≡SDK sync suite)
-- `adapters` ← `server`, `playground` (browser-direct byok/local)
+- `adapters` ← `server`, `playground`, `desktop`, `host` (browser-direct byok/local, and since TASK-20261023-siwc-chatgpt-plan the Responses route on the user's ChatGPT plan; `desktop` and `host` carry the playground source that constructs them) — change `adapters` → run all four
 - `runner` ← `playground`, `server`; `adapters`/`db`/`sdk` dev-depend on it (their suites exercise it)
 - `auth` depends on `protocol` + `db` (CredentialStore seats on the user DB); `playground` now consumes it (AL-03 wires the connected-fetch executor into the runner's NetHandler seam) — change `auth` → run `auth` + `playground`. `runner` does NOT depend on `auth` (value-blind by lint, R4).
 - `desktop` (apps/desktop) consumes the playground SOURCE (vite alias) + ALL seven @snugprotocol packages (protocol/runner/sdk/db/knowledge/adapters/auth per its package.json) — change any of those → run `desktop` too (`pnpm --filter desktop test`, plus `test:rust` and the `gate` script for shell-level changes).
 - `host-mcp` (apps/host-mcp, TASK-20260907-binding-b-plugin-host) consumes `@snugprotocol/auth` (DEEP-imported: `dist/net-guards.js` + `dist/scrub.js`, because the barrel reaches `db` and drags in sql.js and the provider registry — 4,368 B against 329,902 B measured) and `@snugprotocol/protocol` (the bundle parser). It serves `apps/host`'s ONE page (`snug-host.html`, ADR-0072 §1) — turbo runs `host-mcp#test` after `host#build` → change either package, or the kit page, and run `host-mcp` too (`pnpm --filter host-mcp test`, then `pnpm --filter host-mcp build`); root `check-host-mcp` sweeps the release bundle for the `SNUG_MCP_TEST_` prefix, builds the plugin tree and starts it.
-- `host` (apps/host, TASK-20260905-host-kit) consumes the playground SOURCE (vite alias; ten modules swapped by resolved path since TASK-20261010-host-broker PR-5 — the starter source, the sql.js locator, the chat's data lane (five modules, PR-2), the scheduled agent (PR-4) and the chat's cross-app card (two modules, PR-5) — and the knowledge content module rewritten without the prompt files nothing shipped reads: `skills/` and the store's README (PR-3), and the scheduled agent's three (PR-5)) + ALL seven @snugprotocol packages, like `desktop` — change any of those, or playground source, → run `host` too (`pnpm --filter host test`, then `pnpm --filter host build` + `test:e2e` on the built page); root `check-host-kit` rebuilds the page twice and reads the runner's built `dist/csp.js` in the e2e.
+- `host` (apps/host, TASK-20260905-host-kit) consumes the playground SOURCE (vite alias; seventeen modules swapped by resolved path — the starter source, the sql.js locator, the chat's data lane (five modules, PR-2), the scheduled agent (PR-4) and the chat's cross-app card (two modules, PR-5), and since TASK-20261023-siwc-chatgpt-plan (Gate 5 G5-1) the ChatGPT plan's seven: the keeper `state/chatgptPlan`, `views/ChatgptPlanRows`, `views/ChatgptPlanNotice`, `desktop/ChatgptButton` (with OpenAI's two SVGs), `desktop/ChatgptSignInWait`, `ui/UsageLimitMessage`, and the adapters package's `dist/openai-responses.js` — dead for a different reason than the lanes: no kit platform carries the custody seat, so the mode is never offered there (ADR-0078 §1) and the stubs give the no-seat answers inertly rather than throwing, since boot and the scheduler do reach the keeper; `kitDeadLanes.test.ts` pins all seventeen; a kit size claim is measured with `pnpm --filter host build`, because turbo's host inputs do not cover `apps/playground/src` and a root build can replay a stale page — and the knowledge content module rewritten without the prompt files nothing shipped reads: `skills/` and the store's README (PR-3), and the scheduled agent's three (PR-5)) + ALL seven @snugprotocol packages, like `desktop` — change any of those, or playground source, → run `host` too (`pnpm --filter host test`, then `pnpm --filter host build` + `test:e2e` on the built page); root `check-host-kit` rebuilds the page twice and reads the runner's built `dist/csp.js` in the e2e.
 - `share-relay` (apps/share-relay, ADR-0064) is a standalone Worker with NO workspace dependencies — plain `.mjs`, tested with `node:test`; its only contract with the playground is the HTTP shape in `handler.mjs` and the id/key grammar restated in `apps/playground/src/share/relayClient.ts` (a change to either → run both).
 - `website` (apps/website, ADR-0048) is the public marketing + docs/spec site — a static Astro build OUTSIDE the runtime product. It reads the playground source read-only via the same `@playground` alias (`releaseChannel.ts` constants, theme tokens) and derives its docs pages from `docs/spec-drafts/` + `packages/protocol/schemas/` + the whitepaper; drift is gated by root `check-website-sync` (manifest `apps/website/docs-sync.json`, remedy `/sync-website`). Change `releaseChannel.ts`, the spec draft, the schemas, `docs/product-vision.md`, or the whitepaper → the gate names the website pages owed an update. Both the website and the playground deploy to Cloudflare Pages as static direct uploads via `scripts/deploy-web.mjs` (ADR-0054; runbook `docs/runbooks/deploy-web.md`) — production only from merged `main`, hosted-posture invariants (ADR-0013) enforced by the script. **Live since 2026-08-24**: `snugprotocol.org` (project `snug-website`, whose `pages.dev` subdomain is `snug-website-c7z.pages.dev` — Cloudflare suffixed it) and `playground.snugprotocol.org` (project `snug-playground`). The zone's script-injecting features are OFF and read back from the API, which is how ADR-0013's no-telemetry claim is actually falsified — the `cdn-cgi` response grep alone does not prove it.
 
 ## External dependencies
-LLM providers: Anthropic + OpenAI via `adapters` — browser-direct in byok mode (CORS opt-in header), any OpenAI-compatible localhost endpoint in local mode (Ollama), hub-side in subscription mode. Experimental: `@mlc-ai/web-llm` (pinned, playground-only, code-split) runs a small model in-page on WebGPU behind the `?webllm=1` flag — same AgentAdapter contract via a brain OVERRIDE of the configured mode, tool-free fenced-HTML build path, demo-brain fallback when WebGPU is absent (ADR-0015; GA at 1.2). sql.js (WASM SQLite), OPFS (browser). Hub server: better-sqlite3 stores, openid-client (Google OIDC), @fastify/{cookie,static,cors}. Dropbox HTTP API (example personal sync origin, PKCE public client). No cloud services required for OSS usage.
+LLM providers: Anthropic + OpenAI via `adapters` — browser-direct in byok mode (CORS opt-in header), any OpenAI-compatible localhost endpoint in local mode (Ollama), hub-side in subscription mode, and — desktop only — OpenAI's Responses route on the user's own ChatGPT plan (`POST https://api.openai.com/v1/responses`, `store:false`, `stream:true`, a bearer from OpenAI's *Sign in with ChatGPT* at `auth.openai.com`, never `backend-api`; ADR-0078). Experimental: `@mlc-ai/web-llm` (pinned, playground-only, code-split) runs a small model in-page on WebGPU behind the `?webllm=1` flag — same AgentAdapter contract via a brain OVERRIDE of the configured mode, tool-free fenced-HTML build path, demo-brain fallback when WebGPU is absent (ADR-0015; GA at 1.2). sql.js (WASM SQLite), OPFS (browser). Hub server: better-sqlite3 stores, openid-client (Google OIDC), @fastify/{cookie,static,cors}. Dropbox HTTP API (example personal sync origin, PKCE public client). No cloud services required for OSS usage.
 
 ## North-star (aspirational, clearly not current)
 Multi-implementation protocol (non-JS SDKs), true network-offline app runtime (vendored-runtime template — apps currently load React from the CDN allowlist), desktop local hub, OneDrive/Drive/S3 SyncProviders, CRDT multi-device merge, KeyProvider/KMS for cryptographic host-blindness, CI-enforced spec-sync.

@@ -76,6 +76,56 @@ describe('the scheduler seat (TASK-20261009 H3 + H1; ADR-0074 §7)', () => {
   });
 });
 
+// TASK-20261023-siwc-chatgpt-plan AC1 / D10 (ADR-0078 §1): presence of `chatgptPlan` IS the third
+// mode — `availableModes()` offers `chatgpt` only where the platform carries the seat. On the
+// desktop it must be STATIC: if presence were derived from a store read (a getter, or a seat
+// set only after a successful boot read), a failed read at launch would make the mode vanish and
+// the W2b coercion would rewrite a `chatgpt` user's mode out from under them.
+describe('the ChatGPT-plan seat (TASK-20261023-siwc-chatgpt-plan AC1, D10)', () => {
+  it('createDesktopPlatform() carries chatgptPlan with its four parts — the store, the loopback, the opener and flush() (Gate 5 G5-C2 / ST8)', async () => {
+    const { createDesktopPlatform } = await import('../platform-desktop.js');
+    const { chatgptPlan } = createDesktopPlatform();
+    expect(chatgptPlan, 'a deleted `chatgptPlan` line would silently drop the desktop to two modes').toBeDefined();
+    // `flush` is what the close-requested flush awaits beside the keeper's own: a seat without
+    // it would let a rotated refresh token's write be cut off at the window close.
+    expect(Object.keys(chatgptPlan ?? {}).sort()).toEqual(['flush', 'loopback', 'openExternal', 'sessionStore']);
+  });
+
+  it('is a plain data property — present on the object, not reached through a getter', async () => {
+    const { createDesktopPlatform } = await import('../platform-desktop.js');
+    const platform = createDesktopPlatform();
+    const descriptor = Object.getOwnPropertyDescriptor(platform, 'chatgptPlan');
+    expect(descriptor, 'an own property of the platform object').toBeDefined();
+    expect(descriptor?.get).toBeUndefined();
+    expect('value' in (descriptor ?? {})).toBe(true);
+  });
+
+  it('is present even when every invoke fails, and building the platform reads no session', async () => {
+    const { invoke } = await import('@tauri-apps/api/core');
+    const mocked = vi.mocked(invoke);
+    mocked.mockClear();
+    mocked.mockImplementation(async () => {
+      throw new Error('ipc unavailable');
+    });
+    try {
+      const { createDesktopPlatform } = await import('../platform-desktop.js');
+      const platform = createDesktopPlatform();
+      expect(platform.chatgptPlan).toBeDefined();
+      expect(
+        mocked.mock.calls.filter(([cmd]) => String(cmd).startsWith('chatgpt_session_')),
+        'presence must never wait on (or be decided by) a session read',
+      ).toEqual([]);
+    } finally {
+      mocked.mockImplementation(async () => ({}));
+    }
+  });
+
+  it('leaves what the desktop offers unchanged — the plan is a brain, not an app need', async () => {
+    const { createDesktopPlatform } = await import('../platform-desktop.js');
+    expect(offersOf(createDesktopPlatform())).toEqual(EVERYTHING);
+  });
+});
+
 describe('access between apps (TASK-20261010-cross-app-access AC23; ADR-0075)', () => {
   it('the desktop INHERITS access through absence-means-enabled: no `access` key on its capabilities, and allows("access") is true through the playground’s reader', async () => {
     vi.resetModules();

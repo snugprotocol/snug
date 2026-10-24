@@ -12,9 +12,30 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+// The Tauri core module is not loadable outside a shell. Every decide* test below is pure; only
+// the ChatGPT-session effect-sensor test at the end drives `runIpcChecks` and programs this fake.
+const core = vi.hoisted(() => ({
+  invoke: vi.fn(async (_cmd: string, _args?: unknown): Promise<unknown> => {
+    throw new Error('not in a shell');
+  }),
+}));
+vi.mock('@tauri-apps/api/core', () => ({ invoke: core.invoke }));
 
 import {
+  CHATGPT_SESSION_CLEAR_COMMAND,
+  CHATGPT_SESSION_READ_COMMAND,
+  CHATGPT_SESSION_WRITE_COMMAND,
+  GATE_CHATGPT_SESSION_STAT_COMMAND,
+  GATE_CHATGPT_SESSION_MARKER_COMMAND,
+  GATE_HOME_MARKER_NAME,
+  decideChatgptSessionGateHome,
+  decideChatgptSessionClearDispatchable,
+  decideChatgptSessionReadDispatchable,
+  decideChatgptSessionRefused,
+  decideChatgptSessionWriteDispatchable,
+  runIpcChecks,
   decideDispatchable,
   decideInvokeRefused,
   decideLanFetchRefused,
@@ -51,6 +72,9 @@ const reachable = {
   relaunchCallbackFired: false,
   helperInstallCallbackFired: false,
   notificationCallbackFired: false,
+  chatgptSessionReadCallbackFired: false,
+  chatgptSessionWriteCallbackFired: false,
+  chatgptSessionClearCallbackFired: false,
 };
 
 describe('decideInvokeRefused — the sentinel is the sensor', () => {
@@ -573,5 +597,411 @@ describe('decideNotificationDispatchable — the POSITIVE twin, over is_permissi
       expect(result.pass, detail).toBe(false);
       expect(result.detail).toContain('vouching for nothing');
     }
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// The ChatGPT-plan custody commands (TASK-20261023-siwc-chatgpt-plan AC13, D2, folds F3/S6).
+//
+// `chatgpt_session_read` RETURNS the user's ChatGPT tokens; `_write` can plant a session (an
+// attacker's account) and `_clear` signs the user out. Capabilities do not scope custom commands
+// (no AppManifest), so the wall is the invoke key — exactly as for `read_user_file` — and these
+// rows prove it per command (amendment 16): a keyless invoke of each from a sandboxed frame
+// resolves no callback, each reading its OWN slot.
+//
+// The positive twins are EFFECT SENSORS, not reach probes, and they run in the gate's throwaway
+// HOME (run-gate.mjs launches the shell with `HOME: fakeHome`, and `userfile::snug_dir()` reads
+// HOME — so `~/Snug/.chatgpt-plan` is a temp dir, never the developer's real session): a write
+// must leave a `0600` file in a `0700` directory (observed through the debug-only
+// `gate_chatgpt_session_stat`, which answers modes and existence — never bytes), a read must
+// resolve, a clear must leave no file. A body or payload NEVER lands in the results JSON.
+// ---------------------------------------------------------------------------------------------
+
+const SESSION_IDS = {
+  read: { refused: 'ipc-chatgpt-session-read-refused', dispatchable: 'ipc-chatgpt-session-read-dispatchable' },
+  write: { refused: 'ipc-chatgpt-session-write-refused', dispatchable: 'ipc-chatgpt-session-write-dispatchable' },
+  clear: { refused: 'ipc-chatgpt-session-clear-refused', dispatchable: 'ipc-chatgpt-session-clear-dispatchable' },
+} as const;
+
+const SLOT = {
+  read: 'chatgptSessionReadCallbackFired',
+  write: 'chatgptSessionWriteCallbackFired',
+  clear: 'chatgptSessionClearCallbackFired',
+} as const;
+
+const COMMAND = {
+  read: CHATGPT_SESSION_READ_COMMAND,
+  write: CHATGPT_SESSION_WRITE_COMMAND,
+  clear: CHATGPT_SESSION_CLEAR_COMMAND,
+} as const;
+
+const WHICH = ['read', 'write', 'clear'] as const;
+
+/** The G5-A10 row: the throwaway HOME must carry the driver's marker before any sensor acts. */
+const GATE_HOME_ID = 'ipc-chatgpt-session-gate-home';
+
+const UNREGISTERED = (cmd: string): string[] => [
+  `Command ${cmd} not found`,
+  `${cmd} not allowed. Permissions associated with this command: none`,
+  `unknown command ${cmd}`,
+];
+
+describe('the ChatGPT-session commands: names, ids, declarations', () => {
+  it('the command names are the ones lib.rs registers (chatgpt_session.rs pins the handler lists)', () => {
+    expect(CHATGPT_SESSION_READ_COMMAND).toBe('chatgpt_session_read');
+    expect(CHATGPT_SESSION_WRITE_COMMAND).toBe('chatgpt_session_write');
+    expect(CHATGPT_SESSION_CLEAR_COMMAND).toBe('chatgpt_session_clear');
+    expect(GATE_CHATGPT_SESSION_STAT_COMMAND).toBe('gate_chatgpt_session_stat');
+    expect(GATE_CHATGPT_SESSION_MARKER_COMMAND).toBe('gate_chatgpt_session_marker_present');
+    expect(GATE_HOME_MARKER_NAME).toBe('.snug-shell-gate-home');
+  });
+
+  it('the gate-home row is REQUIRED too (G5-A10) — the effect sensors never run without it', () => {
+    expect(IPC_CHECK_IDS).toContain(GATE_HOME_ID);
+  });
+
+  it('all six ids are REQUIRED — the derive-based driver expects them, and a missing verdict is a fail', () => {
+    for (const which of WHICH) {
+      expect(IPC_CHECK_IDS).toContain(SESSION_IDS[which].refused);
+      expect(IPC_CHECK_IDS).toContain(SESSION_IDS[which].dispatchable);
+    }
+  });
+
+  it('the sandboxed probe POSTS a keyless invoke of each command, each with its own report slot', () => {
+    // A refusal row whose command the probe never sends passes vacuously — the declaration is
+    // the only place that can be seen from a test.
+    const source = readFileSync(path.resolve(__dirname, '../gate/ipc.ts'), 'utf8');
+    for (const name of ['CHATGPT_SESSION_READ_COMMAND', 'CHATGPT_SESSION_WRITE_COMMAND', 'CHATGPT_SESSION_CLEAR_COMMAND']) {
+      expect(source, `the probe must post cmd: '\${${name}}'`).toContain(`cmd: '\${${name}}'`);
+    }
+    for (const slot of Object.values(SLOT)) {
+      expect(source.match(new RegExp(`${slot}: ${slot}`, 'g')), `the probe reports ${slot}`).toHaveLength(1);
+    }
+  });
+});
+
+describe('decideChatgptSessionRefused — per command, each reading its OWN slot', () => {
+  for (const which of WHICH) {
+    describe(`chatgpt_session_${which}`, () => {
+      it('FAILS when its own keyless invoke resolved a callback into the subframe — and names the command', () => {
+        const result = decideChatgptSessionRefused(which, { ...reachable, [SLOT[which]]: true }, false);
+        expect(result.id).toBe(SESSION_IDS[which].refused);
+        expect(result.pass).toBe(false);
+        expect(result.detail).toContain(COMMAND[which]);
+        expect(result.detail).toContain('STRUCTURAL BREAKAGE');
+      });
+
+      it('cannot vouch for refusal while the invoke key is reachable', () => {
+        const result = decideChatgptSessionRefused(which, reachable, true);
+        expect(result.pass).toBe(false);
+        expect(result.detail).toContain('cannot vouch');
+      });
+
+      it('FAILS when the probe never reported — an unanswerable sensor is not a pass', () => {
+        expect(decideChatgptSessionRefused(which, undefined, false).pass).toBe(false);
+      });
+
+      it('passes only with its own slot silent AND an unreachable key', () => {
+        const result = decideChatgptSessionRefused(which, reachable, false);
+        expect(result.pass).toBe(true);
+        expect(result.detail).toContain('key-gated per command');
+      });
+
+      it('a reach proven for a SIBLING is never credited to (or charged against) this row', () => {
+        for (const other of WHICH.filter((w) => w !== which)) {
+          expect(decideChatgptSessionRefused(which, { ...reachable, [SLOT[other]]: true }, false).pass, `${other} fired`).toBe(true);
+        }
+        // …nor any other command's slot (write_user_file's own `callbackFired` included).
+        expect(decideChatgptSessionRefused(which, { ...reachable, callbackFired: true, lanCallbackFired: true }, false).pass).toBe(true);
+      });
+    });
+  }
+});
+
+describe('decideChatgptSessionReadDispatchable — the read twin records ONLY that it resolved', () => {
+  it('passes when the main-frame read resolves, naming the command', () => {
+    const result = decideChatgptSessionReadDispatchable({ resolved: true, detail: 'resolved' });
+    expect(result).toMatchObject({ id: SESSION_IDS.read.dispatchable, pass: true });
+    expect(result.detail).toContain(CHATGPT_SESSION_READ_COMMAND);
+  });
+
+  it('NEVER echoes what the caller saw on success — a session body must not reach the results JSON', () => {
+    const body = '{"v":1,"hostId":"urn:uuid:BODY-MARKER","tokens":{"accessToken":"eyJhbGciOi.BODY.MARKER"}}';
+    const result = decideChatgptSessionReadDispatchable({ resolved: true, detail: body });
+    expect(result.detail).not.toContain('BODY-MARKER');
+    expect(result.detail).not.toContain('eyJ');
+    expect(Object.keys(result).sort()).toEqual(['detail', 'id', 'pass']);
+  });
+
+  it('FAILS on the unregistered/uncapable shapes', () => {
+    for (const detail of UNREGISTERED(CHATGPT_SESSION_READ_COMMAND)) {
+      expect(decideChatgptSessionReadDispatchable({ resolved: false, detail }).pass, detail).toBe(false);
+    }
+  });
+
+  it('FAILS when the body errors — in the throwaway HOME a read must resolve (it is an effect sensor, not a reach probe)', () => {
+    expect(decideChatgptSessionReadDispatchable({ resolved: false, detail: 'read session.json: Permission denied' }).pass).toBe(false);
+  });
+});
+
+describe('decideChatgptSessionWriteDispatchable — the write twin asserts the ON-DISK effect', () => {
+  const ok = { resolved: true, detail: 'resolved' };
+  const good = { exists: true, fileMode: 0o600, dirMode: 0o700 };
+
+  it('passes on a resolved write that left a 0600 file in a 0700 directory', () => {
+    const result = decideChatgptSessionWriteDispatchable(ok, good);
+    expect(result).toMatchObject({ id: SESSION_IDS.write.dispatchable, pass: true });
+    expect(result.detail).toContain(CHATGPT_SESSION_WRITE_COMMAND);
+  });
+
+  it('reads permission bits only — a full st_mode (type bits included) still passes', () => {
+    expect(decideChatgptSessionWriteDispatchable(ok, { exists: true, fileMode: 0o100600, dirMode: 0o40700 }).pass).toBe(true);
+  });
+
+  it('FAILS on a 0644 file (the umask default) — and says what it found', () => {
+    const result = decideChatgptSessionWriteDispatchable(ok, { ...good, fileMode: 0o644 });
+    expect(result.pass).toBe(false);
+    expect(result.detail).toMatch(/644/);
+  });
+
+  it('FAILS on a 0755 directory', () => {
+    const result = decideChatgptSessionWriteDispatchable(ok, { ...good, dirMode: 0o755 });
+    expect(result.pass).toBe(false);
+    expect(result.detail).toMatch(/755/);
+  });
+
+  it('FAILS when the write resolved but no file exists — a no-op body is not custody', () => {
+    expect(decideChatgptSessionWriteDispatchable(ok, { exists: false, fileMode: null, dirMode: null }).pass).toBe(false);
+  });
+
+  it('FAILS when the stat probe is unavailable — never vouches on a dead sensor', () => {
+    const result = decideChatgptSessionWriteDispatchable(ok, { error: 'Command gate_chatgpt_session_stat not found' });
+    expect(result.pass).toBe(false);
+    expect(result.detail).toContain('cannot vouch');
+  });
+
+  it('FAILS when the write did not resolve — body errors and unregistered shapes alike', () => {
+    expect(decideChatgptSessionWriteDispatchable({ resolved: false, detail: 'payload exceeds 65536 bytes' }, good).pass).toBe(false);
+    for (const detail of UNREGISTERED(CHATGPT_SESSION_WRITE_COMMAND)) {
+      expect(decideChatgptSessionWriteDispatchable({ resolved: false, detail }, good).pass, detail).toBe(false);
+    }
+  });
+
+  it('NEVER echoes what the caller passed on success — the payload must not reach the results JSON', () => {
+    const result = decideChatgptSessionWriteDispatchable({ resolved: true, detail: 'PAYLOAD-MARKER eyJ.x.y' }, good);
+    expect(result.detail).not.toContain('PAYLOAD-MARKER');
+    expect(Object.keys(result).sort()).toEqual(['detail', 'id', 'pass']);
+  });
+});
+
+describe('decideChatgptSessionClearDispatchable — the clear twin asserts the file is GONE', () => {
+  const ok = { resolved: true, detail: 'resolved' };
+
+  it('passes on a resolved clear that left no file', () => {
+    const result = decideChatgptSessionClearDispatchable(ok, { exists: false, fileMode: null, dirMode: 0o700 });
+    expect(result).toMatchObject({ id: SESSION_IDS.clear.dispatchable, pass: true });
+    expect(result.detail).toContain(CHATGPT_SESSION_CLEAR_COMMAND);
+  });
+
+  it('FAILS when the file is still on disk — a sign-out that leaves the tokens behind', () => {
+    expect(decideChatgptSessionClearDispatchable(ok, { exists: true, fileMode: 0o600, dirMode: 0o700 }).pass).toBe(false);
+  });
+
+  it('FAILS when the stat probe is unavailable', () => {
+    expect(decideChatgptSessionClearDispatchable(ok, { error: 'boom' }).pass).toBe(false);
+  });
+
+  it('FAILS when the clear did not resolve — body errors and unregistered shapes alike', () => {
+    const gone = { exists: false, fileMode: null, dirMode: null };
+    expect(decideChatgptSessionClearDispatchable({ resolved: false, detail: 'remove session.json: busy' }, gone).pass).toBe(false);
+    for (const detail of UNREGISTERED(CHATGPT_SESSION_CLEAR_COMMAND)) {
+      expect(decideChatgptSessionClearDispatchable({ resolved: false, detail }, gone).pass, detail).toBe(false);
+    }
+  });
+});
+
+// G5-A10. The effect sensors WRITE over, then CLEAR, whatever `~/Snug/.chatgpt-plan/session.json`
+// the shell's HOME resolves to. `run-gate.mjs` points HOME at a throwaway directory — but
+// `SNUG_SHELL_GATE=1` + `SNUG_SHELL_GATE_OUT` on a plain `tauri dev` would run the same sensors
+// over the developer's REAL home and delete their tokens and registration. So the driver drops a
+// marker file into every HOME it creates, the debug-only `gate_chatgpt_session_marker_present`
+// answers whether `<home>/.snug-shell-gate-home` exists, and the harness refuses to seed, read or
+// clear anything without it — recording the three twins as skipped rows that FAIL the gate.
+describe('decideChatgptSessionGateHome — the sensors require the driver’s marker in HOME (G5-A10)', () => {
+  it('passes when the marker is present, naming the marker file', () => {
+    const result = decideChatgptSessionGateHome(true);
+    expect(result).toMatchObject({ id: GATE_HOME_ID, pass: true });
+    expect(result.detail).toContain(GATE_HOME_MARKER_NAME);
+  });
+
+  it('FAILS when the marker is absent — and says the sensors were skipped, not run', () => {
+    const result = decideChatgptSessionGateHome(false);
+    expect(result).toMatchObject({ id: GATE_HOME_ID, pass: false });
+    expect(result.detail).toContain('no gate-home marker');
+    expect(result.detail).toContain(GATE_HOME_MARKER_NAME);
+  });
+
+  it('FAILS when the marker command is unavailable — a shell without it cannot vouch for its HOME', () => {
+    const result = decideChatgptSessionGateHome({ error: `Command ${GATE_CHATGPT_SESSION_MARKER_COMMAND} not found` });
+    expect(result.pass).toBe(false);
+    expect(result.detail).toContain('cannot vouch');
+  });
+});
+
+describe('runIpcChecks drives the ChatGPT-session effect sensors from the main frame', () => {
+  /**
+   * A fake shell over a fake throwaway HOME: the three commands act on one in-memory file and
+   * `gate_chatgpt_session_stat` reports it. jsdom never runs the srcdoc probe, so the subframe
+   * rows time out as "never reported" — irrelevant here; the subject is the main-frame twins.
+   * The gate-home marker is PRESENT unless a test says otherwise (G5-A10).
+   */
+  async function runAgainstFakeShell(opts: { fileModeAfterWrite?: number; marker?: boolean | 'unregistered' } = {}) {
+    const READ_BODY = '{"v":1,"hostId":"urn:uuid:GATE-READ-BODY-MARKER","tokens":{"accessToken":"eyJGATE.READ.BODY"}}';
+    const disk = { exists: false };
+    const log = { readWhileExists: false, statCalls: 0, writes: [] as string[], reads: 0, clears: 0 };
+    core.invoke.mockImplementation(async (cmd: string, args?: unknown) => {
+      switch (cmd) {
+        case 'gate_ipc_sentinel_exists':
+          return false;
+        case GATE_CHATGPT_SESSION_MARKER_COMMAND:
+          if (opts.marker === 'unregistered') throw new Error(`Command ${GATE_CHATGPT_SESSION_MARKER_COMMAND} not found`);
+          return opts.marker ?? true;
+        case CHATGPT_SESSION_WRITE_COMMAND: {
+          const payload = (args as { payload?: unknown } | undefined)?.payload;
+          if (typeof payload !== 'string') throw new Error('missing payload');
+          log.writes.push(payload);
+          disk.exists = true;
+          return null;
+        }
+        case CHATGPT_SESSION_READ_COMMAND:
+          log.reads += 1;
+          if (disk.exists) log.readWhileExists = true;
+          return disk.exists ? READ_BODY : null;
+        case CHATGPT_SESSION_CLEAR_COMMAND:
+          log.clears += 1;
+          disk.exists = false;
+          return null;
+        case GATE_CHATGPT_SESSION_STAT_COMMAND:
+          log.statCalls += 1;
+          return disk.exists
+            ? { exists: true, fileMode: opts.fileModeAfterWrite ?? 0o600, dirMode: 0o700 }
+            : { exists: false, fileMode: null, dirMode: 0o700 };
+        default:
+          throw new Error('the helper is not running');
+      }
+    });
+    vi.useFakeTimers();
+    try {
+      const running = runIpcChecks();
+      await vi.advanceTimersByTimeAsync(15_000);
+      const results = await running;
+      return { results, disk, log, READ_BODY };
+    } finally {
+      vi.useRealTimers();
+      core.invoke.mockImplementation(async () => {
+        throw new Error('not in a shell');
+      });
+    }
+  }
+
+  it('all three twins PASS against a shell whose commands behave', async () => {
+    const { results } = await runAgainstFakeShell();
+    for (const which of WHICH) {
+      const row = results.find((r) => r.id === SESSION_IDS[which].dispatchable);
+      expect(row, SESSION_IDS[which].dispatchable).toBeDefined();
+      expect(row!.pass, `${row!.id}: ${row!.detail}`).toBe(true);
+    }
+  });
+
+  it('a read runs while a session file EXISTS (the fixture is seeded), and the gate leaves no session behind', async () => {
+    const { log, disk } = await runAgainstFakeShell();
+    expect(log.writes.length, 'the main frame writes a marker session').toBeGreaterThan(0);
+    expect(log.readWhileExists, 'a read of an empty HOME proves nothing about the body path').toBe(true);
+    expect(log.statCalls, 'the on-disk effect is observed after the write AND after the clear').toBeGreaterThanOrEqual(2);
+    expect(disk.exists, 'the last act is the clear — the throwaway HOME ends signed out').toBe(false);
+  });
+
+  it('NO session body or written payload lands anywhere in the results', async () => {
+    const { results, log, READ_BODY } = await runAgainstFakeShell();
+    const json = JSON.stringify(results);
+    expect(json).not.toContain('GATE-READ-BODY-MARKER');
+    expect(json).not.toContain(READ_BODY);
+    expect(json).not.toContain('eyJ');
+    for (const payload of log.writes) expect(json).not.toContain(payload);
+    for (const which of WHICH) {
+      for (const id of [SESSION_IDS[which].refused, SESSION_IDS[which].dispatchable]) {
+        const row = results.find((r) => r.id === id)!;
+        expect(Object.keys(row).sort(), `${id} records no body/payload field`).toEqual(['detail', 'id', 'pass']);
+      }
+    }
+  });
+
+  it('a write that lands a 0644 file FAILS the write twin end to end', async () => {
+    const { results } = await runAgainstFakeShell({ fileModeAfterWrite: 0o644 });
+    expect(results.find((r) => r.id === SESSION_IDS.write.dispatchable)!.pass).toBe(false);
+  });
+
+  it('with the marker present, the gate-home row PASSES (G5-A10)', async () => {
+    const { results } = await runAgainstFakeShell();
+    const row = results.find((r) => r.id === GATE_HOME_ID);
+    expect(row, GATE_HOME_ID).toBeDefined();
+    expect(row!.pass, row!.detail).toBe(true);
+  });
+
+  it('WITHOUT the marker, no write, read or clear is sent — the three twins are recorded skipped and FAIL, and so does the gate-home row (G5-A10)', async () => {
+    // The HOME is somebody's real one for all the harness knows: SNUG_SHELL_GATE=1 on a plain
+    // `tauri dev` must never delete a real session.
+    const { results, log, disk } = await runAgainstFakeShell({ marker: false });
+    expect(log.writes, 'no seed written over the real file').toEqual([]);
+    expect(log.reads, 'no read of the real file').toBe(0);
+    expect(log.clears, 'no clear of the real file').toBe(0);
+    expect(disk.exists).toBe(false);
+    expect(results.find((r) => r.id === GATE_HOME_ID)!.pass).toBe(false);
+    for (const which of WHICH) {
+      const row = results.find((r) => r.id === SESSION_IDS[which].dispatchable)!;
+      expect(row.pass, row.id).toBe(false);
+      expect(row.detail, row.id).toContain('skipped: no gate-home marker');
+    }
+    // The refusal rows are untouched by the marker: they read the subframe's report, not HOME.
+    for (const which of WHICH) {
+      expect(results.find((r) => r.id === SESSION_IDS[which].refused)!.detail).not.toContain('gate-home');
+    }
+  });
+
+  it('a shell WITHOUT the marker command (built before it, or a release-shaped handler list) is treated as no marker — nothing is sent', async () => {
+    const { results, log } = await runAgainstFakeShell({ marker: 'unregistered' });
+    expect(log.writes).toEqual([]);
+    expect(log.reads).toBe(0);
+    expect(log.clears).toBe(0);
+    expect(results.find((r) => r.id === GATE_HOME_ID)!.pass).toBe(false);
+    expect(results.find((r) => r.id === SESSION_IDS.write.dispatchable)!.pass).toBe(false);
+  });
+
+  it('the marker is asked for BEFORE the seed is written — the order is the protection', async () => {
+    const order: string[] = [];
+    core.invoke.mockImplementation(async (cmd: string) => {
+      order.push(cmd);
+      if (cmd === GATE_CHATGPT_SESSION_MARKER_COMMAND) return true;
+      if (cmd === GATE_CHATGPT_SESSION_STAT_COMMAND) return { exists: false, fileMode: null, dirMode: null };
+      if (cmd === 'gate_ipc_sentinel_exists') return false;
+      if (cmd.startsWith('chatgpt_session_')) return null;
+      throw new Error('not here');
+    });
+    vi.useFakeTimers();
+    try {
+      const running = runIpcChecks();
+      await vi.advanceTimersByTimeAsync(15_000);
+      await running;
+    } finally {
+      vi.useRealTimers();
+      core.invoke.mockImplementation(async () => {
+        throw new Error('not in a shell');
+      });
+    }
+    const marker = order.indexOf(GATE_CHATGPT_SESSION_MARKER_COMMAND);
+    const seed = order.indexOf(CHATGPT_SESSION_WRITE_COMMAND);
+    expect(marker, 'the marker command runs').toBeGreaterThanOrEqual(0);
+    expect(seed, 'the seed runs when the marker is present').toBeGreaterThanOrEqual(0);
+    expect(marker).toBeLessThan(seed);
   });
 });

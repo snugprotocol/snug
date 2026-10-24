@@ -3267,3 +3267,37 @@ img.identity-avatar {
 .shared-link-view {
   padding: var(--space-4);
 }
+
+/* ---------------------------------------------------------------------------------------------
+   The ChatGPT plan (TASK-20261023-siwc-chatgpt-plan L5): OpenAI's button format — text beside a
+   decorative logo — on the house surface; the logo FILE follows the theme (black on light, white on
+   dark — ChatgptButton.tsx), so the button itself only needs the house surface and border. The
+   one-time notice rides the connection-note shape with the shell's gutter.
+   --------------------------------------------------------------------------------------------- */
+.chatgpt-button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  background: var(--surface);
+  color: var(--fg);
+  border: 1px solid var(--border-strong);
+}
+
+.chatgpt-button:hover {
+  background: var(--surface-2);
+}
+
+.chatgpt-button img {
+  width: 20px;
+  height: 20px;
+  flex: none;
+}
+
+.chatgpt-plan-notice {
+  margin: var(--space-3) var(--space-3) 0;
+}
+
+.app-model-pin-note {
+  display: block;
+  margin-top: var(--space-1);
+}

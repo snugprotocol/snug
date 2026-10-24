@@ -77,8 +77,10 @@ import { AI_CEILING_CODE, gatedAdapter } from '../agent/gatedAdapter.js';
 import { oneLine } from '../agent/sharedDdl.js';
 import { ENDPOINTS_UNCONFIRMED, promptPlatform } from '../agent/transport.js';
 import { resolveModelForApp } from '../state/appModel.js';
+import { chatgptEffortFor } from '../state/chatgptPlan.js';
 import { SECRET_KEY_PREFIX, endpointsNeedConfirm, localUrlStore } from '../state/mode.js';
 import { CANCELLED_SUMMARY, keylessBrainGate, renderThinkContext, runContextQueries, sawOf, type AppThinkStep } from './appThink.js';
+import { chatgptStepOutcome, planSendTracking, retryUnavailableOnce } from './chatgptOutcome.js';
 import { appMissing, capped, ranOutOfTime, ranOutOfTurns } from './copy.js';
 import type { StepContext, StepOutcome } from './engine-types.js';
 import { ZERO_CALLS, countersSoFar, type Calls } from './protection.js';
@@ -90,13 +92,19 @@ const NO_DIRECT_BRAIN = 'the brain in Settings can’t look things up for a sche
 /**
  * The adapter config for the route the chat's own derivation takes for `appId` (`chatBrainRoute`,
  * which the executors gated on): the provider after the per-app pin, the key read from the FILE,
- * the per-app model, the local endpoint. Only a route with a data lane reaches here — a keyed BYOK
- * or a local brain (`chatDoorOpen`).
+ * the per-app model, the local endpoint. Only a route with a data lane reaches here — a keyed BYOK,
+ * a local brain or the ChatGPT plan (`chatDoorOpen`).
  */
 function configFrom(db: UserDb, appId: string, route: ReaderBrainRoute): TurnAdapterConfig {
   const model = resolveModelForApp(appId);
   const modelSeat = model !== undefined ? { model } : {};
   if (route.kind === 'local') return { mode: 'local', provider: route.provider, ...modelSeat, localUrl: localUrlStore.get() };
+  if (route.kind === 'chatgpt') {
+    // NO secret read (L4-8): the plan's adapter takes its bearer from the keeper per attempt; a
+    // `byok:` row is another route's credential. Unattended, so the model's default level (ADR-0078 §8).
+    const effort = chatgptEffortFor(model, true);
+    return { mode: 'chatgpt', provider: route.provider, ...modelSeat, ...(effort !== undefined ? { effort } : {}) };
+  }
   const key = db.getSecret(`${SECRET_KEY_PREFIX}${route.provider}`);
   return { mode: 'byok', provider: route.provider, ...(key !== undefined ? { key } : {}), ...modelSeat };
 }
@@ -109,7 +117,8 @@ function configFrom(db: UserDb, appId: string, route: ReaderBrainRoute): TurnAda
  */
 function directBrain(db: UserDb, appId: string): { config: TurnAdapterConfig } | { refused: StepOutcome } {
   const route = chatBrainRoute(db, appId);
-  const keyless = keylessBrainGate(db, appId, route);
+  // The executors already waited (bounded) for the keeper's first read: a status still unknown here is refused by name (G5-C1).
+  const keyless = keylessBrainGate(db, appId, route, { unknown: 'refuse' });
   if (keyless !== undefined) return { refused: keyless };
   if (!chatDoorOpen(route)) return { refused: { status: 'refused', summary: NO_DIRECT_BRAIN, calls: { ...ZERO_CALLS }, tools: { unavailable: 'brain' } } };
   // F15: the file's endpoints are re-confirmed before ANY direct turn.
@@ -145,7 +154,14 @@ function connectionsBlock(db: UserDb, appId: string): string {
   return ['Connections fetch_connection can reach (by slot):', ...connections.map(({ slot, name }) => `- ${slot} — ${name}`)].join('\n');
 }
 
-export async function executeAppAgent(step: AppThinkStep, ctx: StepContext): Promise<StepOutcome> {
+export interface AppAgentDeps {
+  /** The pause before the plan's one `CHATGPT_USAGE_UNAVAILABLE` retry (L4-7) — a real wait in production, a recorder in tests. */
+  wait?(ms: number): Promise<void>;
+}
+
+const realWait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+export async function executeAppAgent(step: AppThinkStep, ctx: StepContext, deps: AppAgentDeps = {}): Promise<StepOutcome> {
   if (ctx.signal.aborted) return { status: 'failed', summary: CANCELLED_SUMMARY, calls: { ...ZERO_CALLS } };
   const app = ctx.db.getApp(step.appId);
   if (app === undefined) return { status: 'blocked', summary: appMissing.text, calls: { ...ZERO_CALLS } };
@@ -155,7 +171,13 @@ export async function executeAppAgent(step: AppThinkStep, ctx: StepContext): Pro
   const brain = directBrain(ctx.db, step.appId);
   if ('refused' in brain) return brain.refused;
   const soFar: Calls = { ...ZERO_CALLS };
-  const adapter = stopsWhenAborted(gatedAdapter(createTurnAdapter(brain.config, 'app'), { db: ctx.db, spent: ctx.spent, soFar, now: ctx.now }));
+  // Innermost: the plan's pre-send failures remembered, so the gate leaves them uncharged (G5-C11);
+  // then the day's ceiling at every call; then the plan's one retry of an unavailable route (L4-7,
+  // the same policy as the tool-free step's — `chatgptOutcome.ts`); the abort check outermost.
+  const tracked = planSendTracking(createTurnAdapter(brain.config, 'app'));
+  const adapter = stopsWhenAborted(
+    retryUnavailableOnce(gatedAdapter(tracked.adapter, { db: ctx.db, spent: ctx.spent, soFar, now: ctx.now, uncharged: tracked.preSend }), deps.wait ?? realWait),
+  );
 
   // The turn's own signal: the queue's, and the step's deadline before the queue's bound.
   const controller = new AbortController();
@@ -294,6 +316,10 @@ export async function executeAppAgent(step: AppThinkStep, ctx: StepContext): Pro
     if (result.code === AI_CEILING_CODE) return { status: 'refused', summary: capped('AI call'), ...facts, capped: 'ai' };
     if (result.code === ERROR_CODES.CONSENT_REQUIRED) return { status: 'refused', summary: result.message, ...facts };
     if (result.code === ERROR_CODES.CANCELLED) return { status: 'failed', summary: CANCELLED_SUMMARY, ...facts };
+    // The plan's four codes have ONE policy, shared with the tool-free step (AC14, L4-7; G5-C11): a limit
+    // is a refusal by name, so the queue never sees a failure to retry.
+    const plan = chatgptStepOutcome(result, facts.calls);
+    if (plan !== undefined) return { ...plan, ...facts, calls: plan.calls };
     if (roundTrips >= APP_AGENT_MAX_ROUND_TRIPS && lastAskedForTools) return { status: 'failed', summary: ranOutOfTurns(appName, used), ...facts };
     return { status: 'failed', summary: result.message, ...facts };
   } finally {

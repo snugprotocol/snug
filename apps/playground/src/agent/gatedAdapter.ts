@@ -17,7 +17,7 @@
  * its fetch tool's network counting; it is read fresh at every call, never captured.
  */
 
-import type { AgentAdapter } from '@snugprotocol/adapters';
+import type { AdapterResult, AgentAdapter } from '@snugprotocol/adapters';
 import { ERROR_CODES } from '@snugprotocol/protocol';
 
 import { capped } from '../schedule/copy.js';
@@ -36,6 +36,12 @@ export interface AiCallAdmission {
   soFar: Calls;
   /** The step's clock — the day is its UTC date, never the wall clock's. */
   now: () => Date;
+  /**
+   * A delegated call whose failure never left the page (Gate 5 G5-C11): the ChatGPT-plan keeper
+   * refusing a bearer BEFORE any request was made is not an AI call, like F15's `CONSENT_REQUIRED`.
+   * The caller knows (it wrapped the adapter); the wrapper asks and un-counts.
+   */
+  uncharged?: (result: AdapterResult) => boolean;
 }
 
 /** `inner`, asking the day's AI ceiling before every call it passes on. */
@@ -48,7 +54,7 @@ export function gatedAdapter(inner: AgentAdapter, admit: AiCallAdmission): Agent
       }
       admit.soFar.ai += 1;
       const result = await inner.complete(request);
-      if (!result.ok && result.code === ERROR_CODES.CONSENT_REQUIRED) admit.soFar.ai -= 1;
+      if (!result.ok && (result.code === ERROR_CODES.CONSENT_REQUIRED || admit.uncharged?.(result) === true)) admit.soFar.ai -= 1;
       return result;
     },
   };

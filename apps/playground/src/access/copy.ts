@@ -393,6 +393,19 @@ export function excludedFooter(excluded: ReadonlyArray<{ displayName: string; re
 // "Where Budget can send what it reads" (AC15; ADR-0075 §8) — composed by egress.ts
 // ---------------------------------------------------------------------------------------------
 
+/**
+ * The D9 data-use sentence (TASK-20261023-siwc-chatgpt-plan; ADR-0078 §9), the ONE non-legal home:
+ * the egress line above, the Settings consent band and the Welcome read it from here (the legal
+ * modules restate it literally — they may import nothing from the app). Settled by the security
+ * review: OpenAI's documents never say which policy covers plan traffic, so this says exactly that
+ * and never the two claims D9 forbids about training or retention (the copy pins walk every source).
+ */
+export const CHATGPT_DATA_USE =
+  "In this mode your requests go to OpenAI under your ChatGPT account. OpenAI's documents don't say which data policy covers them, so assume your ChatGPT data controls ('Improve the model for everyone') apply. Snug and the app can't see your ChatGPT conversations or memories.";
+
+/** Where a person manages the plan's usage — OpenAI's required indicator links here everywhere it renders (AC7, D5). */
+export const CHATGPT_MANAGE_USAGE_URL = 'https://chatgpt.com/settings/usage';
+
 export const EGRESS = {
   keyed: (brainName: string, providerName: string): string => `its AI — ${brainName} (${providerName}), with your key`,
   keyMissing: (brainName: string): string => `its AI — ${brainName} (key missing)`,
@@ -401,6 +414,12 @@ export const EGRESS = {
   local: (address: string): string => `its AI — your own model at ${address}`,
   host: (label: string): string => `its AI — ${label}, the AI this host provides`,
   subscription: 'its AI — through your Snug hub',
+  /**
+   * The ChatGPT plan (TASK-20261023-siwc-chatgpt-plan D9, ADR-0078 §9): the data-use sentence
+   * VERBATIM, settled by the security review — OpenAI's documents never say which policy covers
+   * plan traffic, so this says exactly that — and never the two claims D9 forbids about training or retention.
+   */
+  chatgpt: `its AI — your ChatGPT plan (OpenAI). ${CHATGPT_DATA_USE}`,
   approved: (providerName: string, host: string): string => `${providerName} (${host}) — a connection you approved`,
   declared: (providerName: string, host: string): string => `${providerName} (${host}) — declared, not connected yet`,
   helper: 'the WhatsApp helper on this Mac',
@@ -421,10 +440,11 @@ export const EGRESS = {
     `the copy is made here, on this device; ${sourceName} keeps a history of its reads${canChange ? ' and changes' : ''}`,
 } as const;
 
-/** The keyed providers' names on the brain line: "Claude (Anthropic)". */
-export const BRAIN_NAMES: Readonly<Record<'anthropic' | 'openai', { brain: string; provider: string }>> = {
+/** The keyed providers' names on the brain line: "Claude (Anthropic)" — and the plan's, in the same shape. */
+export const BRAIN_NAMES: Readonly<Record<'anthropic' | 'openai' | 'chatgpt', { brain: string; provider: string }>> = {
   anthropic: { brain: 'Claude', provider: 'Anthropic' },
   openai: { brain: 'GPT', provider: 'OpenAI' },
+  chatgpt: { brain: 'ChatGPT plan', provider: 'OpenAI' },
 };
 
 // ---------------------------------------------------------------------------------------------

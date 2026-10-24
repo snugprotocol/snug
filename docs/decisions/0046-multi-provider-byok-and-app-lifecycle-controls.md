@@ -1,6 +1,6 @@
 # 0046 — Multi-provider BYOK defaults, per-app provider pins, and the app-lifecycle controls (rename, version delete, deep delete)
 
-- **Status:** accepted (owner pre-approved run-through, 2026-08-21 interview)
+- **Status:** accepted (owner pre-approved run-through, 2026-08-21 interview) — **amended by [ADR-0078](0078-chatgpt-plan-mode.md)** (2026-10-23): a third mode `chatgpt` with its own `providerModel:chatgpt` row; per-app pins store `appProvider:<appId> = 'chatgpt'` and are scoped to their mode family
 - **Date:** 2026-08-21
 - **Task:** TASK-20260821-ui-polish
 

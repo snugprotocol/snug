@@ -19,6 +19,7 @@ import { resetAccessSession } from '../access/grants.js';
 import { abortAllRefreshes, unlatchRefreshSwap } from '../access/refreshRuns.js';
 import { resetThreadSessions } from '../agent/threadSessions.js';
 import { initScheduler } from '../schedule/scheduler.js';
+import { chatgptPlanReadyBounded } from './chatgptPlan.js';
 
 /** Arm the access doorbell on an opened file — best-effort: a failure is warned, never thrown into the open's chain. */
 function armDoorbellQuietly(db: UserDb): void {
@@ -244,7 +245,11 @@ export async function restoreUserDbFromBytes(bytes: Uint8Array): Promise<void> {
     attemptOpen();
   });
   // The restored file gets its own scheduler (TASK-20261009 E1, ADR-0074 §5): the reset above
-  // dropped the engine of the file being replaced; this is the re-init, after the open succeeded.
+  // dropped the engine of the file being replaced; this is the re-init, after the open succeeded —
+  // and after the ChatGPT-plan keeper's first read, as every chain that starts the scheduler is
+  // (TASK-20261023 L4-6: a catch-up gating on `'unknown'` would refuse a valid session) — bounded, so a
+  // read that never answers cannot leave the restored file without a scheduler (G5-C1).
+  await chatgptPlanReadyBounded();
   void initScheduler();
 }
 

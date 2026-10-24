@@ -36,6 +36,9 @@ declare global {
 }
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
+/** The L4 keeper, imported by a NON-literal specifier in the chatgpt blocks so Vite's import analysis cannot fail this whole file (and its existing tests) while `state/chatgptPlan.ts` does not exist yet. */
+const KEEPER_MODULE = '../state/chatgptPlan.js';
+
 let container: HTMLDivElement | undefined;
 let root: Root | undefined;
 
@@ -919,5 +922,203 @@ describe('the brain switcher — a host that carries brainSwitch (B6, B8)', () =
       expect(document.querySelector('[data-testid="brain-switch-auto"]')).toBeNull();
       expect(document.querySelector('[data-testid="brain-recheck"]')).toBeNull();
     });
+  });
+});
+
+// =============================================================================================
+// TASK-20261023-siwc-chatgpt-plan Gate 3, L5 — the chip on the user's ChatGPT plan (AC4, AC6, AC7,
+// AC8; plan §1 D5/D6; ADR-0078 §5–§6; OpenAI's required indicator "Using ChatGPT plan" +
+// "Manage usage").
+//
+// The desktop has no `brainSwitch` seat, so the plan rides the StatusChip branch (D6: never the
+// host `BrainSwitchSeat`). Pinned, each with the mutation it catches:
+//   - `data-brain="chatgpt"`, label *ChatGPT plan* — never "demo brain" (ADR-0059);
+//   - the sub-line names the state a person must act on: *sign in needed* (signed out), *plan not
+//     allowed* (granted without the plan scope), *limit reached* (a remembered limit) — and
+//     nothing when ready;
+//   - the popover headline is byte-pinned *Using ChatGPT plan · <email>*, with a Manage usage link
+//     to chatgpt.com/settings/usage;
+//   - the model select lists the ACCOUNT's models (display names), writes `setChatgptModel`, and
+//     keeps a stored id the plan no longer lists, labelled "(not on your plan)" — never silently
+//     "default";
+//   - the level control (`brain-menu-effort`, the LevelPicker) renders ONLY when the resolved
+//     model has levels (ADR-0070's Haiku rule) and writes `setChatgptEffort`;
+//   - "Sign out of ChatGPT" reaches `signOutOfChatgpt()`.
+// A fresh module graph on the seat platform (the platform is set once per graph), so this block
+// runs LAST in the file and leaves the static graph above untouched.
+// RED until `state/chatgptPlan.ts`, the chatgpt accessors and the chatgpt chip states exist.
+// =============================================================================================
+
+describe('the chip on the ChatGPT plan (AC4, D5, D6)', () => {
+  interface ChipHarness {
+    mode: typeof import('../state/mode.js');
+    keeper: typeof import('../state/chatgptPlan.js');
+    Chip: typeof import('../views/BrainChip.js')['BrainChip'];
+  }
+
+  async function chatgptChip(status: import('@snugprotocol/auth').ChatgptPlanStatus, before?: (h: ChipHarness) => void): Promise<{ harness: ChipHarness; session: import('./chatgptPlanTestHelper.js').FakeChatgptSession }> {
+    vi.resetModules();
+    const helperModule = await import('./chatgptPlanTestHelper.js');
+    const platformModule = await import('../platform/platform.js');
+    platformModule.setPlatform(helperModule.chatgptDesktopPlatform());
+    const dbHelper = await import('./userdbTestHelper.js');
+    await dbHelper.installTestUserDb();
+    const modeModule = await import('../state/mode.js');
+    const keeper = (await import(/* @vite-ignore */ KEEPER_MODULE)) as typeof import('../state/chatgptPlan.js');
+    keeper.resetChatgptPlanForTests();
+    const session = helperModule.fakeChatgptSession(status);
+    await keeper.bootChatgptPlan(helperModule.recordingFactory(session).create);
+    modeModule.setMode('chatgpt');
+    const view = await import('../views/BrainChip.js');
+    const harness: ChipHarness = { mode: modeModule, keeper, Chip: view.BrainChip };
+    before?.(harness);
+    render(<harness.Chip />);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    });
+    return { harness, session };
+  }
+
+  const openMenu = async (): Promise<HTMLElement> => {
+    await act(async () => chip().click());
+    const opened = menu();
+    if (opened === null) throw new Error('the brain menu did not open');
+    return opened;
+  };
+
+  const choose = async (select: HTMLSelectElement, value: string): Promise<void> => {
+    await act(async () => {
+      select.value = value;
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+  };
+
+  it('ready: data-brain is "chatgpt", the label reads "ChatGPT plan", and no state sub-line', async () => {
+    await chatgptChip({ signedIn: true, planGranted: true, email: 'ada@example.com', models: [] });
+    expect(chip().dataset.brain).toBe('chatgpt');
+    expect(chip().textContent).toContain('ChatGPT plan');
+    expect(chip().textContent).not.toContain('demo');
+    expect(chip().getAttribute('aria-label')).toContain('ChatGPT plan');
+    for (const sub of ['sign in needed', 'plan not allowed', 'limit reached']) expect(chip().textContent).not.toContain(sub);
+  });
+
+  it.each([
+    ['signed out', { signedIn: false, registered: true } as const, 'sign in needed'],
+    ['plan not granted', { signedIn: true, planGranted: false, email: 'ada@example.com', models: [] } as const, 'plan not allowed'],
+    [
+      'a remembered usage limit',
+      { signedIn: true, planGranted: true, email: 'ada@example.com', models: [], limit: { at: Date.parse('2026-10-23T08:00:00.000Z'), code: 'usage_limit' } } as const,
+      'limit reached',
+    ],
+  ])('%s: the chip stays "ChatGPT plan" (never a reroute) and names the state in its sub-line', async (_name, status, sub) => {
+    await chatgptChip(status);
+    expect(chip().dataset.brain).toBe('chatgpt');
+    expect(chip().textContent).toContain('ChatGPT plan');
+    expect(chip().textContent).toContain(sub);
+  });
+
+  it('the popover: headline byte-pinned "Using ChatGPT plan · <email>", and a Manage usage link to chatgpt.com/settings/usage', async () => {
+    await chatgptChip({ signedIn: true, planGranted: true, email: 'ada@example.com', models: [] });
+    const opened = await openMenu();
+    expect(opened.querySelector('.identity-menu-label')?.textContent).toBe('Using ChatGPT plan · ada@example.com');
+    const manage = [...opened.querySelectorAll<HTMLAnchorElement>('a')].find((a) => a.textContent === 'Manage usage');
+    expect(manage?.getAttribute('href')).toBe('https://chatgpt.com/settings/usage');
+  });
+
+  it('the model select lists the account’s models by display name and writes setChatgptModel', async () => {
+    const { harness } = await chatgptChip({
+      signedIn: true,
+      planGranted: true,
+      email: 'ada@example.com',
+      models: [
+        { id: 'gpt-6.1-sol', name: 'GPT-6.1 Sol', efforts: ['low', 'medium', 'high', 'ultra'], defaultEffort: 'medium' },
+        { id: 'gpt-6.1-mini', name: 'GPT-6.1 mini', efforts: [] },
+      ],
+    });
+    const opened = await openMenu();
+    const select = opened.querySelector<HTMLSelectElement>('[data-testid="brain-menu-model-select"]');
+    expect(select).not.toBeNull();
+    const listed = [...select!.options].filter((o) => o.value !== '');
+    expect(listed.map((o) => o.textContent)).toEqual(['GPT-6.1 Sol', 'GPT-6.1 mini']);
+    expect(listed.map((o) => o.value)).toEqual(['gpt-6.1-sol', 'gpt-6.1-mini']);
+
+    await choose(select!, 'gpt-6.1-mini');
+    expect(harness.mode.chatgptModelStore.get()).toBe('gpt-6.1-mini');
+  });
+
+  it('a stored model the plan no longer lists stays visible and selected, labelled "(not on your plan)"', async () => {
+    await chatgptChip(
+      { signedIn: true, planGranted: true, email: 'ada@example.com', models: [{ id: 'gpt-6.1-sol', name: 'GPT-6.1 Sol', efforts: [] }] },
+      (h) => h.mode.setChatgptModel('gpt-5-retired'),
+    );
+    const opened = await openMenu();
+    const select = opened.querySelector<HTMLSelectElement>('[data-testid="brain-menu-model-select"]')!;
+    expect(select.value).toBe('gpt-5-retired');
+    expect(select.selectedOptions[0]?.textContent).toBe('gpt-5-retired (not on your plan)');
+  });
+
+  it('the level control renders ONLY when the resolved model has levels, and writes setChatgptEffort', async () => {
+    const { harness } = await chatgptChip(
+      {
+        signedIn: true,
+        planGranted: true,
+        email: 'ada@example.com',
+        models: [
+          { id: 'gpt-6.1-sol', name: 'GPT-6.1 Sol', efforts: ['low', 'medium', 'high', 'ultra'], defaultEffort: 'medium' },
+          { id: 'gpt-6.1-mini', name: 'GPT-6.1 mini', efforts: [] },
+        ],
+      },
+      (h) => h.mode.setChatgptModel('gpt-6.1-sol'),
+    );
+    const opened = await openMenu();
+    const effort = opened.querySelector<HTMLSelectElement>('[data-testid="brain-menu-effort"]');
+    expect(effort, 'GPT-6.1 Sol has levels').not.toBeNull();
+    expect([...effort!.options].filter((o) => o.value !== '').map((o) => o.value)).toEqual(['low', 'medium', 'high', 'ultra']);
+    await choose(effort!, 'high');
+    expect(harness.mode.chatgptEffortStore.get()).toBe('high');
+
+    await choose(opened.querySelector<HTMLSelectElement>('[data-testid="brain-menu-model-select"]')!, 'gpt-6.1-mini');
+    expect(menu()?.querySelector('[data-testid="brain-menu-effort"]'), 'no levels → no control').toBeNull();
+  });
+
+  it('"Sign out of ChatGPT" in the popover calls signOutOfChatgpt()', async () => {
+    const { session } = await chatgptChip({ signedIn: true, planGranted: true, email: 'ada@example.com', models: [] });
+    const opened = await openMenu();
+    const signOut = [...opened.querySelectorAll('button')].find((b) => b.textContent === 'Sign out of ChatGPT');
+    expect(signOut).toBeDefined();
+    await act(async () => {
+      signOut!.click();
+    });
+    expect(session.calls.signOut).toBe(1);
+  });
+
+  // Gate 5 — the limit the page REMEMBERS (G5-C3) reaches the chip, and its one remedy is primary there (verifier R3).
+  it('a limit remembered by the page (chatgptLimitStore) shows "limit reached" and the popover’s Manage usage is the PRIMARY act', async () => {
+    const { harness } = await chatgptChip({ signedIn: true, planGranted: true, email: 'ada@example.com', models: [] }, (h) =>
+      h.keeper.chatgptLimitStore.set({ at: Date.parse('2026-10-23T08:00:00.000Z'), code: 'usage_limit' }),
+    );
+    expect(chip().textContent).toContain('limit reached');
+    const opened = await openMenu();
+    const { CHATGPT_ERROR_CODES, CHATGPT_ERROR_SENTENCES } = await import('@snugprotocol/adapters');
+    expect(opened.textContent).toContain(CHATGPT_ERROR_SENTENCES[CHATGPT_ERROR_CODES.USAGE_LIMIT]);
+    const manage = opened.querySelector<HTMLAnchorElement>('[data-testid="brain-menu-manage-usage"]');
+    expect(manage?.getAttribute('href')).toBe('https://chatgpt.com/settings/usage');
+    expect(manage?.classList.contains('btn-primary'), 'the limit’s one remedy is primary wherever it renders (AC7)').toBe(true);
+    // Cleared by the next ok result: the sub-line goes.
+    await act(async () => harness.keeper.chatgptLimitStore.set(undefined));
+    expect(chip().textContent).not.toContain('limit reached');
+  });
+
+  it('plan not granted: the popover body is the adapters’ own PLAN_NOT_GRANTED sentence — imported, never retyped (ST7)', async () => {
+    await chatgptChip({ signedIn: true, planGranted: false, email: 'ada@example.com', models: [] });
+    const opened = await openMenu();
+    const { CHATGPT_ERROR_CODES, CHATGPT_ERROR_SENTENCES } = await import('@snugprotocol/adapters');
+    expect(opened.querySelector('.brain-menu-body')?.textContent).toBe(CHATGPT_ERROR_SENTENCES[CHATGPT_ERROR_CODES.PLAN_NOT_GRANTED]);
+  });
+
+  it('the chip’s label is the ONE brain name (access/copy.ts BRAIN_NAMES.chatgpt.brain), typed once', async () => {
+    await chatgptChip({ signedIn: true, planGranted: true, email: 'ada@example.com', models: [] });
+    const { BRAIN_NAMES } = await import('../access/copy.js');
+    expect(chip().querySelector('.brain-chip-label')?.textContent).toBe(BRAIN_NAMES.chatgpt.brain);
   });
 });

@@ -193,7 +193,7 @@ describe('the app transport scrubs sidecar-connected apps at the shared seam (AC
   it('the adapter receives the scrubbed wire, never the raw one', async () => {
     await seedSidecarApp();
     const { trips, onLlmEvent } = collectTrips();
-    const transport = createAppTransport('byok', 'mock', onLlmEvent, APP);
+    const transport = createAppTransport('byok', 'mock', { onLlmEvent, appId: APP });
 
     const result = await transport.send(wireWithName(), { signal: new AbortController().signal });
 
@@ -206,7 +206,7 @@ describe('the app transport scrubs sidecar-connected apps at the shared seam (AC
 
   it('an app with NO sidecar connection is delivered byte-identical (AC6 — scope negative)', async () => {
     const { trips, onLlmEvent } = collectTrips();
-    const transport = createAppTransport('byok', 'mock', onLlmEvent, 'app-plain');
+    const transport = createAppTransport('byok', 'mock', { onLlmEvent, appId: 'app-plain' });
     const db = await getUserDb();
     db.setSetting(SIDECAR_IDENTITY_DIRECTORY_SETTING_KEY, DIRECTORY);
 
@@ -228,7 +228,7 @@ describe('the app transport scrubs sidecar-connected apps at the shared seam (AC
   it('a connection approved AFTER the transport was created is scrubbed on the next send (AC8b)', async () => {
     const { trips, onLlmEvent } = collectTrips();
     // Created FIRST — the stale-capture defect class transport.ts documents twice.
-    const transport = createAppTransport('byok', 'mock', onLlmEvent, APP);
+    const transport = createAppTransport('byok', 'mock', { onLlmEvent, appId: APP });
 
     await transport.send(wireWithName(), { signal: new AbortController().signal });
     expect(JSON.stringify(trips[0]?.request.messages ?? [])).toContain('Priya Sharma');
@@ -249,7 +249,7 @@ describe('the app transport scrubs sidecar-connected apps at the shared seam (AC
       }),
     );
 
-    const transport = createAppTransport('subscription', 'mock', undefined, APP);
+    const transport = createAppTransport('subscription', 'mock', { appId: APP });
     await transport.send(wireWithName(), { signal: new AbortController().signal });
 
     expect(bodies.length, 'the /invoke POST must have been attempted').toBeGreaterThan(0);
@@ -258,7 +258,7 @@ describe('the app transport scrubs sidecar-connected apps at the shared seam (AC
 
   it('the model reply returns to the app verbatim — no host de-anonymisation (AC11)', async () => {
     await seedSidecarApp();
-    const transport = createAppTransport('byok', 'mock', undefined, APP);
+    const transport = createAppTransport('byok', 'mock', { appId: APP });
     const result = await transport.send(wireWithName(), { signal: new AbortController().signal });
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -313,7 +313,7 @@ describe('review fold — a DECLARED sidecar row still scrubs (cross-file findin
     db.setSetting(SIDECAR_IDENTITY_DIRECTORY_SETTING_KEY, [...DIRECTORY]);
 
     const { trips, onLlmEvent } = collectTrips();
-    const transport = createAppTransport('byok', 'mock', onLlmEvent, APP);
+    const transport = createAppTransport('byok', 'mock', { onLlmEvent, appId: APP });
     await transport.send(wireWithName(), { signal: new AbortController().signal });
 
     const sent = JSON.stringify(trips[0]?.request.messages ?? []);
@@ -385,7 +385,7 @@ describe('review fold — the guard resolves the app from the wire when the tran
     await seedSidecarApp();
     const { trips, onLlmEvent } = collectTrips();
     // The uninstalled-starter mode: no appId threaded to the transport.
-    const transport = createAppTransport('byok', 'mock', onLlmEvent, undefined);
+    const transport = createAppTransport('byok', 'mock', { onLlmEvent });
 
     await transport.send(wireWithName(), { signal: new AbortController().signal });
 

@@ -26,7 +26,55 @@ export interface CredentialScan {
   warnings: CredentialFinding[];
 }
 
-const JWT_SHAPE = /^eyJ[\w-]{8,}\.[\w-]{8,}\.[\w-]{8,}$/;
+/**
+ * The JWT shape, ONE home (TASK-20261023-siwc-chatgpt-plan AC10, lesson L191): three base64url
+ * segments of at least 8 characters each, the first a JSON header (`eyJ`). `jwtShapeInText`
+ * finds it inside prose for the redaction seats (the Responses adapter's error-body backstop,
+ * the inspector's display mode) — a ChatGPT-plan access token is a JWT, and a provider 401
+ * echoes the bearer it was sent. The scanner below judges a WHOLE value by the same shape
+ * through `isWholeJwtValue`, without the bound (see there).
+ */
+export const JWT_SHAPE_SOURCE = String.raw`eyJ[\w-]{8,4093}\.[\w-]{8,4096}\.[\w-]{8,4096}`;
+// Each segment of the IN-TEXT matcher is BOUNDED (4 096 characters, the `eyJ` prefix counted): the
+// unbounded form made the prose matcher overflow V8's regex stack on an 8 MiB unbroken `eyJ…` run
+// (measured 2026-10-24, TASK-20261023-siwc-chatgpt-plan §12 L5-7). A real JWT segment is a few
+// kilobytes; a megabyte run is not a token, and every consumer — the Responses adapter's backstop,
+// the inspector's display redaction — must stay linear on multi-megabyte payloads.
+/** A FRESH global, word-bounded matcher per call — a shared `g` regex would carry `lastIndex` between callers. */
+export function jwtShapeInText(): RegExp {
+  return new RegExp(String.raw`\b${JWT_SHAPE_SOURCE}`, 'g');
+}
+
+const JWT_SEGMENT_MIN = 8;
+
+/** `[\w-]` as a character walk — linear, no regex engine, no length limit. */
+function isBase64UrlRun(segment: string): boolean {
+  for (let i = 0; i < segment.length; i++) {
+    const c = segment.charCodeAt(i);
+    const ok = (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c === 95 || c === 45;
+    if (!ok) return false;
+  }
+  return true;
+}
+
+/**
+ * The ANCHORED whole-value rule the scanner rejects on, kept UNBOUNDED on purpose (Gate 5 S7):
+ * built from the bounded source above, a JWT whose payload ran past 4 096 characters sailed
+ * through the C1 scanner — measured. A whole value is a token when it splits on `.` into
+ * exactly three `[\w-]` segments of at least 8 characters, the first starting `eyJ`. A split
+ * and a charset walk per segment: linear in the value's length, so the 8 MiB payload that
+ * motivated the bound still completes here.
+ */
+function isWholeJwtValue(value: string): boolean {
+  const parts = value.split('.');
+  if (parts.length !== 3) return false;
+  const [head, payload, signature] = parts as [string, string, string];
+  if (!head.startsWith('eyJ')) return false;
+  for (const segment of [head, payload, signature]) {
+    if (segment.length < JWT_SEGMENT_MIN || !isBase64UrlRun(segment)) return false;
+  }
+  return true;
+}
 const BEARER_PREFIX = /^bearer\s+\S+/i;
 /** Well-known provider secret prefixes (OpenAI/Anthropic sk-, GitHub ghp_/gho_, Slack xox, AWS AKIA, Stripe rk_/sk_live). */
 const KNOWN_KEY_PREFIX = /^(sk-[\w-]{16,}|sk_(live|test)_[\w]{16,}|rk_(live|test)_[\w]{16,}|ghp_[\w]{20,}|gho_[\w]{20,}|xox[abps]-[\w-]{10,}|AKIA[A-Z0-9]{16})/;
@@ -63,7 +111,7 @@ export function scanForCredentialValues(input: unknown): CredentialScan {
     if (typeof value === 'string') {
       const credentialishKey = keyName !== undefined && isCredentialKeyName(keyName);
       if (BEARER_PREFIX.test(value)) rejects.push({ path, reason: 'bearer-prefix' });
-      else if (JWT_SHAPE.test(value)) rejects.push({ path, reason: 'jwt-shape' });
+      else if (isWholeJwtValue(value)) rejects.push({ path, reason: 'jwt-shape' });
       else if (KNOWN_KEY_PREFIX.test(value)) rejects.push({ path, reason: 'known-key-prefix' });
       else if (isHighEntropySecret(value)) {
         (credentialishKey ? rejects : warnings).push({ path, reason: 'high-entropy' });

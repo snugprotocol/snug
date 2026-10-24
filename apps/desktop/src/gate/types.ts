@@ -28,6 +28,18 @@ export interface GateEnvReport {
   userAgent: string;
 }
 
+/**
+ * `gate_chatgpt_session_stat`'s answer (gate.rs; TASK-20261023-siwc-chatgpt-plan AC13):
+ * existence and permission bits of the ChatGPT-plan session file and its directory — never
+ * bytes, so a session body cannot reach the results through this seam. Modes are `null` when
+ * the path does not exist; the harness masks them to the low nine bits before comparing.
+ */
+export interface ChatgptSessionStat {
+  exists: boolean;
+  fileMode: number | null;
+  dirMode: number | null;
+}
+
 export interface GateResults {
   env: GateEnvReport;
   checks: CheckResult[];

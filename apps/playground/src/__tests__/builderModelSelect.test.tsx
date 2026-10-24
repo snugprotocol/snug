@@ -39,6 +39,9 @@ declare global {
 }
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
+/** The L4 keeper, imported by a NON-literal specifier in the chatgpt blocks so Vite's import analysis cannot fail this whole file (and its existing tests) while `state/chatgptPlan.ts` does not exist yet. */
+const KEEPER_MODULE = '../state/chatgptPlan.js';
+
 const APP_HTML = '<!DOCTYPE html><html><head><title>Haiku Machine</title></head><body></body></html>';
 const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -190,5 +193,49 @@ describe('the transfer on install (through the real build path)', () => {
     expect(db.getSetting(`appModel:${appId}`)).toBe('claude-opus-5');
     expect(db.getSetting(`appProvider:${appId}`)).toBe('anthropic');
     expect(builderPickStore.get()).toBeUndefined();
+  });
+});
+
+// =============================================================================================
+// TASK-20261023-siwc-chatgpt-plan Gate 3, L5 — a fresh build thread on the ChatGPT plan (AC8; plan
+// §3 L5; ADR-0078 §6). The pending pick lists the ACCOUNT's models (server order, display names)
+// and writes `setBuilderPick({ provider: 'chatgpt', model })`, which `applyBuilderPickToApp` turns
+// into a chatgpt-family pin on install (L4's `BuilderPick` provider type).
+//
+// SUPERSEDES L4-13's interim pin: `chatgptCompileForced.test.tsx` ("BuilderModelSelect (a fresh
+// thread) renders nothing in chatgpt mode — today's byok-only guard") holds only "until L5" (plan
+// §11 L4-13); this block is the L5 behaviour that replaces it. Flagged to the conductor.
+// Fresh module graph on the seat platform, LAST in the file. RED until the chatgpt branch exists.
+// =============================================================================================
+
+describe('BuilderModelSelect on the ChatGPT plan (AC8, L5)', () => {
+  it('lists the account’s models and a pick writes setBuilderPick({ provider: "chatgpt", model })', async () => {
+    vi.resetModules();
+    const helperModule = await import('./chatgptPlanTestHelper.js');
+    const platformModule = await import('../platform/platform.js');
+    platformModule.setPlatform(helperModule.chatgptDesktopPlatform());
+    const dbHelper = await import('./userdbTestHelper.js');
+    await dbHelper.installTestUserDb();
+    const mode = await import('../state/mode.js');
+    const builderModel = await import('../state/builderModel.js');
+    const keeper = (await import(/* @vite-ignore */ KEEPER_MODULE)) as typeof import('../state/chatgptPlan.js');
+    keeper.resetChatgptPlanForTests();
+    await keeper.bootChatgptPlan(helperModule.recordingFactory(helperModule.fakeChatgptSession(helperModule.READY)).create);
+    mode.setMode('chatgpt');
+    const view = await import('../run/BuilderModelSelect.js');
+
+    await mount(<view.BuilderModelSelect />);
+    const el = builderSelect();
+    expect(el, 'a fresh thread on the plan gets its model choice too').not.toBeNull();
+    const listed = Array.from(el!.options).filter((o) => o.value !== '');
+    expect(listed.map((o) => o.textContent)).toEqual(['GPT-6.1 Sol', 'GPT-6.1 mini']);
+    expect(Array.from(container?.querySelectorAll('optgroup') ?? []).map((g) => g.label).filter((l) => /Anthropic|OpenAI/.test(l))).toEqual([]);
+
+    const mini = listed.find((o) => o.textContent === 'GPT-6.1 mini')!;
+    await act(async () => {
+      el!.value = mini.value;
+      el!.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    expect(builderModel.builderPickStore.get()).toEqual({ provider: 'chatgpt', model: 'gpt-6.1-mini' });
   });
 });

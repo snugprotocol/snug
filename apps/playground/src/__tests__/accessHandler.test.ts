@@ -85,6 +85,22 @@ import { beginDelegatedRun, clearTouchedGeneration, endDelegatedRun } from '../s
 import { installTestUserDb, locateWasm } from './userdbTestHelper.js';
 
 const T0 = Date.parse('2026-10-10T09:00:00.000Z');
+
+/**
+ * ONE clock for the test and the DB (TASK-20261023-siwc-chatgpt-plan, Gate 6 — the 2026-10-18 time
+ * bomb): these tests injected `clock` into the access deps but the user DB reads `Date.now()` for
+ * the undo journal's liveness, so entries planted at T0 + 7 days read as `gone` once the real
+ * calendar passed 2026-10-18 and 14 tests went red on `main`. `Date` is now faked at T0 for the
+ * whole file and `clock` is a VIEW onto it: `clock.now += DAY` moves the DB's clock too.
+ */
+const systemClock = (): { now: number } => ({
+  get now() {
+    return Date.now();
+  },
+  set now(value: number) {
+    vi.setSystemTime(value);
+  },
+});
 const DAY = 86_400_000;
 const UNKNOWN_ID = '00000000-0000-4000-8000-000000000000';
 
@@ -222,7 +238,9 @@ beforeEach(async () => {
   resetAccessSession();
   resetScopedReadForTests();
   localStorage.removeItem(NO_ACCESS_ASKS_KEY);
-  clock = { now: T0 };
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(T0);
+  clock = systemClock();
   rings = [];
   unregister = [];
   db = await installTestUserDb();
@@ -240,6 +258,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   for (const off of unregister) off();
   resetAccessSession();
   resetScopedReadForTests();

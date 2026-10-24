@@ -1,6 +1,6 @@
 # 0059 — The active brain is always disclosed, and scripted output carries its provenance
 
-- **Status:** accepted (2026-08-26 — the owner approved TASK-20260826-demo-brain-clarity's
+- **Status:** accepted (2026-08-26 — the owner approved TASK-20260826-demo-brain-clarity's — **amended by [ADR-0078](0078-chatgpt-plan-mode.md)** (2026-10-23): the ChatGPT-plan brain joins `adapterKindFor` and the chip's label map; a signed-out plan is a named result from the adapter, never the demo brain standing in
   plan, which this ADR was drafted into)
 - **Date:** 2026-08-26
 - **Task:** TASK-20260826-demo-brain-clarity

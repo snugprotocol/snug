@@ -62,3 +62,19 @@ describe('findCredentialShapes — the share scan', () => {
     expect(offenders).toEqual([]);
   });
 });
+
+// TASK-20261023-siwc-chatgpt-plan Gate 3, L5 (AC10; plan §12 L5-7): the JWT shape added for the
+// inspector is DISPLAY-ONLY — the share scan is unchanged, so a starter's sample JWT (or a doc
+// explaining one) never blocks a share. A scheme-carried token is flagged exactly as before.
+describe('findCredentialShapes — a bare JWT is not a share-scan hit (L5-7)', () => {
+  const JWT = 'eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyLTEyMyJ9.c2lnbmF0dXJlLXZhbHVl';
+
+  it('a bare JWT in html or a doc is not flagged', () => {
+    expect(findCredentialShapes(`<script>const sample = "${JWT}";</script>`)).toEqual([]);
+    expect(findCredentialShapes(`# Tokens\n\nA JWT looks like ${JWT}.\n`)).toEqual([]);
+  });
+
+  it('the scheme-carried form is flagged as before (unchanged behaviour, not a new JWT rule)', () => {
+    expect(findCredentialShapes(`Authorization: Bearer ${JWT}`)).toEqual([expect.objectContaining({ family: 'a scheme-carried token' })]);
+  });
+});

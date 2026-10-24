@@ -52,3 +52,31 @@ export {
 } from './agent-turn.js';
 
 export { STREAM_DROPPED_CODE } from './errors.js';
+
+// The ChatGPT-plan seam (TASK-20261023-siwc-chatgpt-plan, ADR-0078 §3/§5, plan §2): the
+// Responses adapter is built against `BearerSource`, never a key — adapters cannot depend on
+// auth, so the keeper is adapted to this shape in the playground; the four host-level codes
+// are the named results apps classify as HOST_ERROR honouring `retryable` (R5). `isModelId`
+// lives here rather than in the host runner so the playground's settings boundary can
+// validate a model id (C5) without a Node-only import.
+export {
+  CHATGPT_ERROR_CODES,
+  type BearerFailureCode,
+  type BearerResult,
+  type BearerSource,
+  type ChatgptErrorCode,
+} from './bearer-source.js';
+
+export { MODEL_ID_PATTERN, isModelId } from './model-id.js';
+
+// The Responses adapter on the ChatGPT plan (TASK-20261023-siwc-chatgpt-plan D3): built against
+// `BearerSource`, base pinned, a stream decided by status, named results with fixed sentences,
+// and a client-side output ceiling because the route rejects `max_output_tokens`.
+export {
+  RESPONSES_DEFAULT_BASE_URL,
+  RESPONSES_DEFAULT_MAX_TOKENS,
+  openaiResponsesAdapter,
+  type OpenAiResponsesAdapterOptions,
+} from './openai-responses.js';
+
+export { CHATGPT_ERROR_SENTENCES, ERROR_DETAIL_CAP, redactThenCap } from './errors.js';

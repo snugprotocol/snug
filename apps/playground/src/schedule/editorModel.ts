@@ -691,6 +691,8 @@ export function appBrainKind({ brain, mode, provider, pinned, keys }: AppBrainIn
   if (brain.kind === 'webllm') return 'webllm';
   if (brain.kind === 'demo') return 'demo';
   if (mode === 'subscription') return 'subscription';
+  // The plan, whatever the pin says (TASK-20261023 L4-1), is `adapterKindFor`'s own arm below — no
+  // copy here to drift (Gate 5 ST5). A chatgpt pin is NOT a provider (ADR-0078 §6): it falls to the default.
   const effective: ByokProvider = pinned === 'anthropic' || pinned === 'openai' || pinned === 'mock' ? pinned : provider;
   const hasKey = effective === 'anthropic' || effective === 'openai' ? keys[effective] : false;
   return adapterKindFor({ mode, provider: effective, hasKey });

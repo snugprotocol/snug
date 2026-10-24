@@ -9,7 +9,7 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'r
 import type { CSSProperties, KeyboardEvent, ReactElement } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 
-import type { AgentTurnEvent } from '@snugprotocol/adapters';
+import { CHATGPT_ERROR_CODES, type AgentTurnEvent } from '@snugprotocol/adapters';
 import { createDbDriver, createMemoryBackend, starterVersionSettingKey, type SnugDbDriver } from '@snugprotocol/db';
 import { FRAME_TYPES, type Frame } from '@snugprotocol/protocol';
 import { SnugAppFrame, type FrameDirection, type RunnerHost } from '@snugprotocol/runner';
@@ -60,6 +60,7 @@ import { AgentUpdateControls } from './AgentUpdateControls.js';
 import { StarterUpdateControls } from './StarterUpdateControls.js';
 import { Button } from '../ui/Button.js';
 import { EmptyState } from '../ui/EmptyState.js';
+import { UsageLimitMessage } from '../ui/UsageLimitMessage.js';
 import { Rail } from '../ui/Rail.js';
 import { RailDivider } from '../ui/RailDivider.js';
 import { Skeleton } from '../ui/Skeleton.js';
@@ -236,7 +237,17 @@ export default function RunView(): ReactElement {
   // inspectable on return) — the panel below merges the two for display. The chat's
   // turn start still resets this reducer, as it always did.
   const [frameInspector, dispatchRoundTrip] = useReducer(llmInspectorReduce, initialLlmInspectorState as LlmInspectorState);
-  const onLlmEvent = useCallback((event: AgentTurnEvent): void => dispatchRoundTrip(event), []);
+  // TASK-20261023-siwc-chatgpt-plan L5-8 (AC7): an app's own think that hit the plan's usage limit.
+  // The app renders the envelope error as it sees fit; the HOST says what the person can do (the
+  // `net-auth-cta` precedent — a calm note, Manage usage primary, a dismiss). Fed by the very round
+  // trips the inspector records, so the banner can never disagree with them.
+  const [usageLimitHit, setUsageLimitHit] = useState(false);
+  const onLlmEvent = useCallback((event: AgentTurnEvent): void => {
+    dispatchRoundTrip(event);
+    if (event.type === 'round_trip' && !event.response.ok && event.response.code === CHATGPT_ERROR_CODES.USAGE_LIMIT) {
+      setUsageLimitHit(true);
+    }
+  }, []);
   const onTurnStart = useCallback((): void => dispatchRoundTrip('reset'), []);
   const chat = useBuilderChat(threadId, {
     ...(isUnownedId(id) ? {} : { pinnedAppId: id }),
@@ -958,6 +969,7 @@ export default function RunView(): ReactElement {
           onDismiss={() => setHelperWanted(false)}
         />
       ) : null}
+      {usageLimitHit ? <UsageLimitMessage testId="chatgpt-usage-limit-banner" onDismiss={() => setUsageLimitHit(false)} /> : null}
       {netAuthError !== null ? (
         // AC10: "this app wants to connect" is ORDINARY, not a failure — it was
         // arriving in the same alarm red as a rejected credential. Calm surface, ember

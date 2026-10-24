@@ -121,7 +121,8 @@ describe('composeAppRuntime — the seams RunView used to compose inline', () =>
     transportSpy.mockReturnValue({ send });
     const runtime = composeAppRuntime({ appId: 'app-1', mode: 'byok', provider: 'mock', onLlmEvent, onTurnStart, driver: db.driver, attended: true, generation: 0 });
     expect(transportSpy).toHaveBeenCalledTimes(1);
-    expect(transportSpy).toHaveBeenCalledWith('byok', 'mock', onLlmEvent, 'app-1', onTurnStart);
+    // ONE options object (Gate 5 ST10) — a seam is a named field, never a trailing positional.
+    expect(transportSpy).toHaveBeenCalledWith('byok', 'mock', { appId: 'app-1', onLlmEvent, onTurnStart });
     // BEHAVIOURAL, not identity (contract v2: the attended transport is the counting wrapper over the
     // app's own): a send reaches the app's own transport with the same wire and the options WHOLE —
     // the open app streams, so `signal` and `onDelta` must arrive untouched.

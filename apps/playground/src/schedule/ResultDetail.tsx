@@ -59,6 +59,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import type { ReactElement } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 
+import { CHATGPT_ERROR_CODES, CHATGPT_ERROR_SENTENCES } from '@snugprotocol/adapters';
 import { OWN_UNDO_APPROVAL_BUCKET, type UserDb } from '@snugprotocol/db';
 import {
   ACCESS_UNDO_TTL_MS,
@@ -71,6 +72,7 @@ import {
   type StepResult,
 } from '@snugprotocol/protocol';
 
+import { ManageUsageLink } from '../ui/ManageUsageLink.js';
 import { OwnUndoAct } from '../access/OwnUndoAct.js';
 import type { UndoOutcome } from '../access/writeBroker.js';
 import { sanitizeCardText } from '../agent/cards.js';
@@ -395,8 +397,14 @@ export function ResultDetail(): ReactElement {
   const noHandlerAt = run.steps.findIndex((step) => step.status === 'no-handler');
   const noHandlerApp = appOfStep(task, noHandlerAt === -1 ? task.steps.findIndex((step) => step.kind !== 'notify') : noHandlerAt);
   const noHandlerCopy = noHandler(noHandlerApp === undefined ? task.title : (appNameOf(noHandlerApp, apps) ?? 'this app'));
-  // No brain may answer here (the demo, or a key not set): its own state — never *needs your OK*.
-  const brainBlockedHere = run.steps.some((step) => step.blockedBy === 'brain');
+  // No brain may answer here (the demo, a key not set — or the ChatGPT plan signed out / not allowed):
+  // its own state — never *needs your OK*. The card says the FIRST blocked step's own sentence (the
+  // plan's refusal names the plan; TASK-20261023 L5-4), falling back to the keyless one when a step
+  // carries none; *open Settings* is the right act for every one of them.
+  const brainBlockedStep = run.steps.find((step) => step.blockedBy === 'brain');
+  const brainBlockedHere = brainBlockedStep !== undefined;
+  const brainBlockedText =
+    brainBlockedStep?.summary !== undefined && brainBlockedStep.summary !== '' ? sanitizeCardText(brainBlockedStep.summary) : brainBlocked.text;
 
   // Making changes on its own: the schedule's state, what this run made, and the one *stop*.
   const onItsOwn = task.writeAuthority !== undefined;
@@ -457,7 +465,7 @@ export function ResultDetail(): ReactElement {
 
       {brainBlockedHere ? (
         <StateCard
-          text={brainBlocked.text}
+          text={brainBlockedText}
           testId="schedule-result-brain"
           action={
             <Link to={SETTINGS_HREF} className="btn btn-primary">
@@ -680,6 +688,13 @@ function StepRow({ task, index, result, apps, connections }: { task: ScheduledTa
     <li className="schedule-result-step" data-testid="schedule-result-step">
       <div className="schedule-result-step-head">
         <span className="schedule-result-step-label">{label}</span>
+        {/* TASK-20261023 L5-3: `stepResultSchema` carries no code (a C3 change, queued), so the plan's usage-limit
+            refusal is known by its summary being EXACTLY the single-homed sentence — compared, never retyped —
+            and its one remedy, Manage usage, is the row's primary act and comes FIRST, before the app link
+            (AC7; §12's rule; Gate 5 verifier R3). Not a brain-missing state. */}
+        {result.status === 'refused' && result.summary === CHATGPT_ERROR_SENTENCES[CHATGPT_ERROR_CODES.USAGE_LIMIT] ? (
+          <ManageUsageLink className="btn btn-primary" testId="schedule-result-manage-usage" />
+        ) : null}
         {appId !== undefined ? (
           <Link to={`/run/${encodeURIComponent(appId)}`} className="schedule-result-step-app">
             {openApp(appName ?? 'this app')}

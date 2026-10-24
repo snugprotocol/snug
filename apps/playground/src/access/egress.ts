@@ -26,7 +26,7 @@
 //                     — one derivation, pinned against the REAL `createDirectBuilder` send path
 //                     in accessEgress.test.ts, not rewired (the chooser's memo is synchronous
 //                     and has no db at hand). The chat DOOR exists only where the data lane
-//                     runs — a keyed BYOK or a local route (`chatDoorOpen`), never the host,
+//                     runs — a keyed BYOK, a local or a ChatGPT-plan route (`chatDoorOpen`), never the host,
 //                     subscription, webllm or demo brains — and the line sits right after the
 //                     brain line for an owned reader exactly there.
 //   links           — ALWAYS for an owned reader: open-url is bound to every owned app's
@@ -49,7 +49,7 @@ import type { UserDb } from '@snugprotocol/db';
 import { adapterKindFor, type AdapterKind } from '../agent/adapter.js';
 import { appMayReachNetwork } from '../run/appCapabilityRules.js';
 import { isUnownedId } from '../share/sharedInbox.js';
-import { appProviderPinFor } from '../state/appModel.js';
+import { byokProviderPinFor } from '../state/appModel.js';
 import { SECRET_KEY_PREFIX, localUrlStore, modeStore, providerStore, type ByokProvider } from '../state/mode.js';
 import { currentBrain } from '../state/webllm.js';
 import { BRAIN_NAMES, EGRESS } from './copy.js';
@@ -111,7 +111,10 @@ function readerBrainRoute(appId: string, hasKey: (provider: 'anthropic' | 'opena
 
   const mode = modeStore.get();
   if (mode === 'subscription') return { kind: 'subscription', provider, keyMissing: false };
-  const pinned = mode === 'byok' && provider !== 'mock' ? appProviderPinFor(appId) : undefined;
+  // The ChatGPT plan is a real brain with the data lane and no key to miss (TASK-20261023 L4-5): it
+  // falls through to `adapterKindFor`'s own arm with no pin and no key read — whatever the keeper says,
+  // the turn is routed to it, a missing session being its named result (Gate 5 ST5: no copied arm).
+  const pinned = mode === 'byok' && provider !== 'mock' ? byokProviderPinFor(appId) : undefined;
   const effective = pinned ?? provider;
   // local talks to an unauthenticated endpoint and never reads a key (createDirectAppTransport).
   const keyed = mode === 'byok' && isKeyed(effective);
@@ -132,9 +135,9 @@ export function chatBrainRoute(db: UserDb, appId: string): ReaderBrainRoute {
   return readerBrainRoute(appId, fileHasKey(db));
 }
 
-/** Whether the chat door exists on this route: only where the data lane runs — a keyed BYOK or a local route. */
+/** Whether the chat door exists on this route: only where the data lane runs — a keyed BYOK, a local or a ChatGPT-plan route. */
 export function chatDoorOpen(route: ReaderBrainRoute): boolean {
-  return route.kind === 'anthropic' || route.kind === 'openai' || route.kind === 'local';
+  return route.kind === 'anthropic' || route.kind === 'openai' || route.kind === 'local' || route.kind === 'chatgpt';
 }
 
 /** "localhost:11434" from the local endpoint the user set; the raw text when it does not parse. */
@@ -163,6 +166,8 @@ function brainLine(route: ReaderBrainRoute): EgressLine {
         return EGRESS.host(route.hostLabel ?? '');
       case 'subscription':
         return EGRESS.subscription;
+      case 'chatgpt':
+        return EGRESS.chatgpt;
       default: {
         const never: never = route.kind;
         return never;

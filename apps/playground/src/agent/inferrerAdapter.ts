@@ -23,6 +23,7 @@ import { type RequirementInferrerComplete } from '@snugprotocol/auth';
 import { resolveModelForApp, resolveProviderForApp } from '../state/appModel.js';
 import { getByokKey, localUrlStore, modeStore, providerStore, type ByokProvider } from '../state/mode.js';
 import { currentBrain } from '../state/webllm.js';
+import { chatgptEffortFor } from '../state/chatgptPlan.js';
 import { createTurnAdapter, type DirectMode } from './adapter.js';
 
 /**
@@ -49,6 +50,8 @@ type WireDecision =
   // names something the local adapter never reads.
   | { kind: 'local'; localUrl: string }
   | { kind: 'byok'; provider: ByokProvider; viaSubscription: boolean }
+  /** The user's ChatGPT plan (TASK-20261023-siwc-chatgpt-plan): the keeper's session, no key, no provider. */
+  | { kind: 'chatgpt' }
   | { kind: 'unavailable' };
 
 async function decideWire(appId?: string): Promise<WireDecision> {
@@ -57,6 +60,10 @@ async function decideWire(appId?: string): Promise<WireDecision> {
   if (brain.kind === 'webllm') return { kind: 'webllm' };
   if (brain.kind === 'demo') return { kind: 'unavailable' }; // the demo brain cannot read docs
   const mode = modeStore.get();
+  // The plan BEFORE any key read (plan §11 L4-9): a BYOK OpenAI key sitting in the file is a
+  // different credential for a different route, and reading it here would send the pasted docs
+  // on it while the user chose their plan. A missing session is the adapter's named result.
+  if (mode === 'chatgpt') return { kind: 'chatgpt' };
   // The app's provider pin routes THIS lane too (TASK-20260821, review finding 8):
   // without it, an app pinned to the other provider would get that provider's model id
   // sent to the GLOBAL provider's adapter with the global provider's key — a guaranteed
@@ -87,6 +94,8 @@ export async function inferenceWireCopy(): Promise<string> {
       return 'pasted text stays in this browser (local WebLLM model)';
     case 'local':
       return `pasted text goes to your local model at ${wire.localUrl}`;
+    case 'chatgpt':
+      return 'pasted text goes to OpenAI on your ChatGPT plan';
     case 'byok':
       return wire.viaSubscription
         ? `even in subscription mode, pasted text goes directly from this browser to ${wire.provider} using your saved key`
@@ -121,6 +130,18 @@ export async function liveInferenceAdapter(appId?: string): Promise<LiveAdapterR
     return { ok: true, adapter: createTurnAdapter({ mode: 'webllm', provider: providerStore.get() }, 'chat') };
   }
   const model = resolveModelForApp(appId);
+  if (wire.kind === 'chatgpt') {
+    // No key on this route (D2): the adapter asks the keeper for a bearer per attempt. An
+    // inference is the user's own act, so it runs on the stored interactive level.
+    const effort = chatgptEffortFor(model, false);
+    return {
+      ok: true,
+      adapter: createTurnAdapter(
+        { mode: 'chatgpt', provider: providerStore.get(), ...(model !== undefined ? { model } : {}), ...(effort !== undefined ? { effort } : {}) },
+        'chat',
+      ),
+    };
+  }
   if (wire.kind === 'local') {
     return {
       ok: true,

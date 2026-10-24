@@ -9,7 +9,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { utf8ToBase64Url } from '../base64url.js';
-import type { CallbackDelivery } from '../oauth-service.js';
+import type { CallbackDelivery, CallbackErrorDelivery } from '../oauth-service.js';
 import {
   DESKTOP_FLOW_TTL_MS,
   SNUG_DESKTOP_OAUTH_PORT,
@@ -322,5 +322,158 @@ describe('cancel', () => {
     expect(fake.handles[0]?.stopped).toBe(true);
     await expect(async () => transport.redirectUriProvider.redirectUri(APP)).rejects.toThrow();
     await transport.cancel(); // second cancel: no throw, no second stop target
+  });
+});
+
+// ------------------------------------------------------------------------------------------
+// TASK-20261023-siwc-chatgpt-plan D10 — the ChatGPT-plan sign-in's needs from the core, each
+// ADDED behind an opt-in so every test above (the wizard's transport) stays byte-for-byte:
+//   - a redirect PATH on beginFlow (`/auth/callback` exactly; the default stays `/callback`);
+//   - the callback's `client_id` delivered as `CallbackDelivery.clientId` (OpenAI's dynamic
+//     registration returns the issued `oaiapp_…` on the first callback, omits it on re-auth);
+//   - OPT-IN error delivery by the PRESENCE of an `onError` handler: `?error=access_denied&state=…`
+//     (no code) ends the flow by name instead of waiting out the TTL; without a handler it is
+//     dropped and the listener keeps listening, exactly as today.
+// ------------------------------------------------------------------------------------------
+
+describe('TASK-20261023 D10 — redirect path, client_id delivery, opt-in error delivery', () => {
+  /** `buildLoopbackRedirectUri` gains an optional `path` (L1). Called through a widened type so
+   *  this file compiles before the signature lands; the red is the runtime value. */
+  const buildWithPath = buildLoopbackRedirectUri as (port: number, path?: string) => string;
+
+  function authCallbackUrl(port: number, params: Record<string, string>): string {
+    return `http://127.0.0.1:${port}/auth/callback?${new URLSearchParams(params).toString()}`;
+  }
+
+  function makeErrorTransport(opts: { clock?: () => number } = {}) {
+    const fake = makeListener();
+    const deliveries: CallbackDelivery[] = [];
+    const errors: CallbackErrorDelivery[] = [];
+    const transport = createDesktopOAuthTransport({
+      listener: fake.listener,
+      onDelivery: (d) => deliveries.push(d),
+      onError: (e) => errors.push(e),
+      ...(opts.clock !== undefined ? { clock: opts.clock } : {}),
+    });
+    return { transport, deliveries, errors, fake };
+  }
+
+  it("beginFlow({ path: '/auth/callback' }) answers http://127.0.0.1:<bound port>/auth/callback", async () => {
+    const { transport } = makeTransport();
+    const { redirectUri } = await transport.beginFlow({ posture: 'loopback', appId: 'chatgpt-plan', path: '/auth/callback' });
+    expect(redirectUri).toBe('http://127.0.0.1:49152/auth/callback');
+  });
+
+  it('the path is reflected in the RECORDED redirectUriProvider string too (authorize and exchange read the same bytes)', async () => {
+    const { transport } = makeTransport();
+    const { redirectUri } = await transport.beginFlow({ posture: 'loopback', appId: 'chatgpt-plan', path: '/auth/callback' });
+    expect(await transport.redirectUriProvider.redirectUri('chatgpt-plan')).toBe(redirectUri);
+    expect(redirectUri.endsWith('/auth/callback')).toBe(true);
+  });
+
+  it('the default path stays /callback — and a path flow leaves no trace on the next default flow', async () => {
+    const { transport } = makeTransport();
+    await transport.beginFlow({ posture: 'loopback', appId: APP, path: '/auth/callback' });
+    const { redirectUri } = await transport.beginFlow({ posture: 'loopback', appId: APP });
+    expect(redirectUri).toBe('http://127.0.0.1:49153/callback');
+  });
+
+  it('buildLoopbackRedirectUri(port, path) builds the 127.0.0.1 literal with that path; no path → /callback', () => {
+    expect(buildWithPath(1455, '/auth/callback')).toBe('http://127.0.0.1:1455/auth/callback');
+    expect(buildWithPath(1455)).toBe('http://127.0.0.1:1455/callback');
+    expect(buildLoopbackRedirectUri(1455)).toBe('http://127.0.0.1:1455/callback');
+    expect(buildWithPath(1455, '/auth/callback').includes('localhost')).toBe(false);
+  });
+
+  it('a callback carrying client_id delivers it as clientId', async () => {
+    const { transport, deliveries } = makeTransport();
+    await transport.beginFlow({ posture: 'loopback', appId: 'chatgpt-plan', path: '/auth/callback' });
+    const state = makeState({ appId: 'chatgpt-plan', flowId: FLOW });
+    transport.handleCallbackUrl(
+      authCallbackUrl(49152, { client_id: 'oaiapp_issued_1', code: 'auth-code-1', scope: 'openid', state }),
+    );
+    expect(deliveries).toHaveLength(1);
+    expect(deliveries[0]).toMatchObject({ appId: 'chatgpt-plan', flowId: FLOW, code: 'auth-code-1', state });
+    expect(deliveries[0]!.clientId).toBe('oaiapp_issued_1');
+  });
+
+  it('a callback without client_id (re-auth, every other provider) delivers clientId undefined', async () => {
+    const { transport, deliveries } = makeTransport();
+    await transport.beginFlow({ posture: 'loopback', appId: 'chatgpt-plan', path: '/auth/callback' });
+    const state = makeState({ appId: 'chatgpt-plan', flowId: FLOW });
+    transport.handleCallbackUrl(authCallbackUrl(49152, { code: 'auth-code-2', scope: 'openid', state }));
+    expect(deliveries).toHaveLength(1);
+    expect(deliveries[0]!.clientId).toBeUndefined();
+  });
+
+  it('WITH onError: ?error=access_denied&state=… is delivered as a CallbackErrorDelivery and the listener is torn down', async () => {
+    const { transport, deliveries, errors, fake } = makeErrorTransport();
+    await transport.beginFlow({ posture: 'loopback', appId: 'chatgpt-plan', path: '/auth/callback' });
+    const state = makeState({ appId: 'chatgpt-plan', flowId: FLOW });
+    transport.handleCallbackUrl(
+      authCallbackUrl(49152, { error: 'access_denied', error_description: 'The user declined.', state }),
+    );
+    expect(errors).toEqual([
+      { appId: 'chatgpt-plan', flowId: FLOW, state, error: 'access_denied', errorDescription: 'The user declined.' },
+    ]);
+    expect(deliveries).toHaveLength(0);
+    expect(fake.handles[0]?.stopped).toBe(true);
+    // One-shot: a late code for the ended flow is not delivered.
+    transport.handleCallbackUrl(authCallbackUrl(49152, { code: 'late', state }));
+    expect(deliveries).toHaveLength(0);
+  });
+
+  it('WITH onError: an error with no description delivers errorDescription undefined', async () => {
+    const { transport, errors } = makeErrorTransport();
+    await transport.beginFlow({ posture: 'loopback', appId: 'chatgpt-plan', path: '/auth/callback' });
+    const state = makeState({ appId: 'chatgpt-plan', flowId: FLOW });
+    transport.handleCallbackUrl(authCallbackUrl(49152, { error: 'access_denied', state }));
+    expect(errors).toHaveLength(1);
+    expect(errors[0]!.error).toBe('access_denied');
+    expect(errors[0]!.errorDescription).toBeUndefined();
+  });
+
+  it('WITH onError: an error callback with no state or an unpeekable state is dropped and the listener keeps listening', async () => {
+    const { transport, deliveries, errors, fake } = makeErrorTransport();
+    await transport.beginFlow({ posture: 'loopback', appId: 'chatgpt-plan', path: '/auth/callback' });
+    transport.handleCallbackUrl(authCallbackUrl(49152, { error: 'access_denied' }));
+    transport.handleCallbackUrl(authCallbackUrl(49152, { error: 'access_denied', state: 'not-base64-json.sig' }));
+    expect(errors).toHaveLength(0);
+    expect(fake.handles[0]?.stopped).toBe(false);
+    const state = makeState({ appId: 'chatgpt-plan', flowId: FLOW });
+    transport.handleCallbackUrl(authCallbackUrl(49152, { code: 'auth-code-1', state }));
+    expect(deliveries).toHaveLength(1);
+  });
+
+  it('WITH onError: an error for a flow older than the TTL is not delivered (auto-cancel, like a code)', async () => {
+    let now = 1_000_000;
+    const { transport, errors, fake } = makeErrorTransport({ clock: () => now });
+    await transport.beginFlow({ posture: 'loopback', appId: 'chatgpt-plan', path: '/auth/callback' });
+    now += DESKTOP_FLOW_TTL_MS + 1;
+    const state = makeState({ appId: 'chatgpt-plan', flowId: FLOW });
+    transport.handleCallbackUrl(authCallbackUrl(49152, { error: 'access_denied', state }));
+    expect(errors).toHaveLength(0);
+    expect(fake.handles[0]?.stopped).toBe(true);
+  });
+
+  it('WITH onError: a normal code callback still goes to onDelivery, never onError', async () => {
+    const { transport, deliveries, errors } = makeErrorTransport();
+    await transport.beginFlow({ posture: 'loopback', appId: 'chatgpt-plan', path: '/auth/callback' });
+    const state = makeState({ appId: 'chatgpt-plan', flowId: FLOW });
+    transport.handleCallbackUrl(authCallbackUrl(49152, { code: 'auth-code-1', state }));
+    expect(deliveries).toHaveLength(1);
+    expect(errors).toHaveLength(0);
+  });
+
+  it('WITHOUT onError (the wizard): an error callback is dropped and the listener stays active — today’s behaviour', async () => {
+    const { transport, deliveries, fake } = makeTransport();
+    await transport.beginFlow({ posture: 'loopback-fixed-port', appId: APP });
+    const state = makeState({ appId: APP, flowId: FLOW });
+    transport.handleCallbackUrl(callbackUrl(SNUG_DESKTOP_OAUTH_PORT, { error: 'access_denied', state }));
+    expect(deliveries).toHaveLength(0);
+    expect(fake.handles[0]?.stopped).toBe(false);
+    // Still listening: the real code that follows is delivered.
+    transport.handleCallbackUrl(callbackUrl(SNUG_DESKTOP_OAUTH_PORT, { code: 'auth-code-1', state }));
+    expect(deliveries).toEqual([{ appId: APP, flowId: FLOW, code: 'auth-code-1', state }]);
   });
 });

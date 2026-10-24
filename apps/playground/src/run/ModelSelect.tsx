@@ -19,17 +19,28 @@
 //    by routing, so the screen must say so (appModel.ts states the honesty rationale).
 //
 // VALUE ENCODING: byok options carry `provider:model` (model ids contain no colon in
-// either catalog); local and subscription keep bare model ids — local has no provider
-// concept, and subscription's provider lives hub-side, so neither writes a provider row.
+// either catalog); local, subscription and the ChatGPT plan keep bare model ids — local has
+// no provider concept, subscription's provider lives hub-side, and the plan has one provider,
+// written as the pin's family (`provider: 'chatgpt'`).
+//
+// A PIN HAS A FAMILY (TASK-20261023-siwc-chatgpt-plan, ADR-0078 §6): a pin routes only in a mode
+// of the family that made it (appModel.ts states the rule once). A pin from another family is
+// ignored for routing and SAID here — "pinned for <mode> — not used here" — while the select
+// shows what actually routes, the inherited default, and never offers the foreign pin as if it
+// applied (Rule 3 kept honest in the other direction).
 
 import type { ReactElement } from 'react';
 
 import { ANTHROPIC_DEFAULT_MODEL, OPENAI_DEFAULT_MODEL, popularModelsFor } from '@snugprotocol/adapters';
 
-import { setAppModel, setAppPin, useAppModel, useAppProvider } from '../state/appModel.js';
+import { appPinFamily, pinFamilyApplies, setAppModel, setAppPin, useAppModel, useAppProvider } from '../state/appModel.js';
+import { chatgptModelView, useChatgptPlan } from '../state/chatgptPlan.js';
+import { CHATGPT_DEFAULT_CHOICE, ChatgptModelOptions } from '../ui/ChatgptModelOptions.js';
 import {
   KEYED_PROVIDERS,
+  MODE_LABELS,
   useByokKeyPresence,
+  useChatgptModel,
   useMode,
   useModel,
   useProvider,
@@ -68,15 +79,53 @@ export function ModelSelect({ appId }: ModelSelectProps): ReactElement | null {
   const provider = useProvider();
   const globalModel = useModel();
   const ollama = useOllama();
-  const pinnedModel = useAppModel(appId);
+  const storedModel = useAppModel(appId);
   const pinnedProvider = useAppProvider(appId);
   const keys = useByokKeyPresence();
   const providerModels = useProviderModels();
+  const plan = useChatgptPlan();
+  const planDefault = useChatgptModel();
 
   // Rule 2. `brain.kind === 'settings'` is the only state where the configured
   // mode/provider actually decide the model (webllm and demo both override it).
   if (brain.kind !== 'settings') return null;
   if (mode === 'byok' && provider === 'mock') return null;
+
+  // The pin's family against the mode (ADR-0078 §6; the stores this reads are the ones subscribed
+  // above). A foreign pin is not THIS mode's pin: the arms below see no pin and say why.
+  const family = appPinFamily(appId);
+  const foreign = family !== undefined && !pinFamilyApplies(family, mode) ? family : undefined;
+  const pinnedModel = foreign === undefined ? storedModel : undefined;
+  // The UNSCOPED family (a pin with no provider row — a legacy BYOK pin, or a local one) belongs to no
+  // one mode, so it is not called "local" here (G5-C10): the note names it neutrally.
+  const foreignNote =
+    foreign !== undefined ? (
+      <span className="hint app-model-pin-note" data-testid="app-model-pin-note">
+        {foreign === 'local' ? 'pinned for another mode — not used here' : `pinned for ${MODE_LABELS[foreign]} — not used here`}
+      </span>
+    ) : null;
+
+  // ---- CHATGPT PLAN: the ACCOUNT's models, server order, display names (D6) — the one option list (ST2). ----
+  if (mode === 'chatgpt') {
+    const view = chatgptModelView(plan, planDefault, pinnedModel);
+    return (
+      <label className="app-model-select">
+        <span className="visually-hidden">model for this app</span>
+        <select
+          data-testid="app-model-select"
+          value={pinnedModel ?? CHATGPT_DEFAULT_CHOICE}
+          title="which model this app thinks with on your ChatGPT plan — remembered for this app"
+          onChange={(event) => {
+            const value = event.target.value;
+            setAppPin(appId, value === CHATGPT_DEFAULT_CHOICE ? undefined : { provider: 'chatgpt', model: value });
+          }}
+        >
+          <ChatgptModelOptions view={view} value={pinnedModel ?? CHATGPT_DEFAULT_CHOICE} />
+        </select>
+        {foreignNote}
+      </label>
+    );
+  }
 
   // ---- LOCAL: the Ollama list, bare values, model row only (unchanged behavior). ----
   if (mode === 'local') {
@@ -88,9 +137,12 @@ export function ModelSelect({ appId }: ModelSelectProps): ReactElement | null {
         : detected.map((id) => ({ id, label: id }));
     if (shown.length === 0) {
       return (
-        <span className="hint" data-testid="app-model-empty">
-          no local models — try <code>ollama pull llama3.2</code>
-        </span>
+        <>
+          <span className="hint" data-testid="app-model-empty">
+            no local models — try <code>ollama pull llama3.2</code>
+          </span>
+          {foreignNote}
+        </>
       );
     }
     const inheritLabel = globalModel === undefined ? 'default (endpoint’s choice)' : `default (${globalModel})`;
@@ -113,6 +165,7 @@ export function ModelSelect({ appId }: ModelSelectProps): ReactElement | null {
             </option>
           ))}
         </select>
+        {foreignNote}
       </label>
     );
   }
@@ -146,6 +199,7 @@ export function ModelSelect({ appId }: ModelSelectProps): ReactElement | null {
             </option>
           ))}
         </select>
+        {foreignNote}
       </label>
     );
   }
@@ -202,6 +256,7 @@ export function ModelSelect({ appId }: ModelSelectProps): ReactElement | null {
           </optgroup>
         ))}
       </select>
+      {foreignNote}
     </label>
   );
 }

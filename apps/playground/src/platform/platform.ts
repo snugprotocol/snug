@@ -5,7 +5,7 @@
 // state/): it is imported before React boot, ahead of any store.
 
 import type { AdapterMessage, AgentAdapter } from '@snugprotocol/adapters';
-import type { DesktopRedirectPosture } from '@snugprotocol/auth';
+import type { ChatgptLoopbackSeat, ChatgptSessionStore, DesktopRedirectPosture } from '@snugprotocol/auth';
 import type { PersistenceBackend } from '@snugprotocol/db';
 import { webSchedulerSeat } from './webNotify.js';
 
@@ -246,6 +246,30 @@ export interface SchedulerSeat {
 }
 
 /**
+ * THE CHATGPT-PLAN SEAT (TASK-20261023-siwc-chatgpt-plan D2/D10, ADR-0078 §1–§2). Presence IS
+ * the capability: `availableModes()` offers `chatgpt` only where a platform carries it, so the
+ * hosted playground, the web kit and the local-host kit never do; on the desktop it is STATIC
+ * (set at boot, never derived from a store read — a failed boot read must never trigger the
+ * W2b coercion). `sessionStore` is the shell's custody (`chatgpt_session_read|write|clear` over
+ * a `0600` file beside the user file — never `snug_secrets`, so never an export, a sync push
+ * or a share); `loopback` is the sign-in's OWN transport, never the wizard's `oauth` seat, so a
+ * sign-in cannot cancel a connect flow; `openExternal` is the https-guarded system-browser
+ * opener (`openExternalUrl`'s primitive — lesson L190).
+ */
+export interface ChatgptPlanSeat {
+  sessionStore: ChatgptSessionStore;
+  loopback: ChatgptLoopbackSeat;
+  openExternal(url: string): Promise<void>;
+  /**
+   * Resolves when no session-file write or clear the SEAT started is still in flight (Gate 5
+   * G5-C2 / ST8): the desktop's close-requested flush awaits this beside the keeper's own
+   * `flush()`, so a rotated refresh token is never lost between the token POST and the write.
+   * Optional — a seat that cannot track its IPC has nothing to await.
+   */
+  flush?(): Promise<void>;
+}
+
+/**
  * The surfaces a host may switch off; `allows()` is the ONE reader. `appExport` (T4 AC6)
  * is the per-app bundle download — the share sheet's download-only mode; `share` gates the
  * LINK acts. The kit keeps `appExport` on while `share` is off, so a kit-edited app can be
@@ -416,6 +440,8 @@ export interface SnugPlatform {
    * Web: undefined → window.open(url, '_blank', 'noopener,noreferrer').
    */
   openExternalUrl?(url: string): Promise<void>;
+  /** The ChatGPT-plan custody + sign-in seat — see `ChatgptPlanSeat`. Desktop only; absent → no third mode (AC1). */
+  chatgptPlan?: ChatgptPlanSeat;
   /** Save bytes with a native dialog. Web: undefined → downloadBlob anchor. */
   saveFile?(bytes: Uint8Array, suggestedName: string): Promise<void>;
   /** Probe local Ollama. Web: undefined → no probe. */

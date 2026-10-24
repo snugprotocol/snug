@@ -289,6 +289,41 @@ describe('AC7 — the memory bound survives the no-truncation rule', () => {
   });
 });
 
+// TASK-20261023-siwc-chatgpt-plan Gate 3, L5 (AC10; plan §12 L5-7) — the display-only JWT shape on
+// the inspector's LARGE payloads. The protocol's `jwtShapeInText()` is a bounded-repetition match
+// (`eyJ[\w-]{8,}\.…`); MEASURED on Node 22 while writing these: run naively over an unbroken
+// 8 MiB run that starts with `eyJ` it throws "Maximum call stack size exceeded" (the very failure
+// the long-run shape's `proseOnly` flag exists to avoid — see credentialShapes.ts). So the display
+// redaction must complete on the inspector's worst inputs, and a payload with many tokens must come
+// out with none left. "Linear" is pinned the way this file pins it: it completes, no stack overflow.
+describe('AC10 (L5-7) — the JWT display mask on large payloads', () => {
+  const JWT = 'eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyLTEyMyJ9.c2lnbmF0dXJlLXZhbHVl';
+
+  it('a ~1 MB payload carrying 1 000 JWTs is redacted completely', () => {
+    const line = `${JWT} ${'x'.repeat(940)}\n`;
+    const payload = line.repeat(1000);
+    expect(payload.length).toBeGreaterThanOrEqual(1_000_000);
+    const state = feed([{ type: 'round_trip', ...trip({ request: { system: payload, messages: [] } }) }]);
+    const system = state.entries[0]?.system ?? '';
+    expect(system).not.toContain('eyJhbGciOiJSUzI1NiJ9.');
+    expect(system.split('«redacted»').length - 1).toBe(1000);
+  });
+
+  it('an unbroken 16 MiB run that STARTS like a JWT completes (no stack overflow) and is kept as a record', () => {
+    const monster = `eyJ${'q'.repeat(LLM_INSPECTOR_MAX_BYTES * 2)}`;
+    const state = feed([{ type: 'round_trip', ...trip({ request: { system: monster, messages: [] } }) }]);
+    expect(state.entries).toHaveLength(1);
+    expect(state.totalBytes).toBeLessThanOrEqual(LLM_INSPECTOR_MAX_BYTES);
+  });
+
+  it('an 8 MiB two-part run (eyJ… . …) completes too — the case that overflows a naive match', () => {
+    const half = 4 * 1024 * 1024;
+    const payload = `eyJ${'A'.repeat(half)}.${'B'.repeat(half)}`;
+    const state = feed([{ type: 'round_trip', ...trip({ response: { ok: false, code: 'HOST_ERROR', message: payload, retryable: false } }) }]);
+    expect(state.entries).toHaveLength(1);
+  });
+});
+
 describe('AC13 — cache reporting is absent, not zero, when the provider said nothing', () => {
   it('exposes cache tokens when the provider reported them', () => {
     const state = feed([

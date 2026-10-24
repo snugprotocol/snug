@@ -6,6 +6,9 @@
 //! system-browser opener. All security policy (C1 credential custody, host
 //! ceilings, C2 sandbox) stays in the TS packages, unchanged.
 
+/// ChatGPT-plan session custody (TASK-20261023-siwc-chatgpt-plan D2, ADR-0078 §2): three
+/// commands over `~/Snug/.chatgpt-plan/session.json`, `0600` in a `0700` dot-directory.
+mod chatgpt_session;
 mod exportfile;
 /// In-shell hard-gate commands (P4). Debug builds only — a release binary
 /// carries neither the commands nor their strings (P0 amendment 4).
@@ -154,11 +157,19 @@ pub fn run() {
         // (signature, content pin, admission, caps) are Rust-side and unconditional.
         helper_install::helper_status,
         helper_install::helper_install,
+        // ADR-0078 §2: ChatGPT-plan session custody. Registered in BOTH lists — the wall is
+        // the invoke key (as for read_user_file), proven per command by the gate rows (AC13).
+        chatgpt_session::chatgpt_session_read,
+        chatgpt_session::chatgpt_session_write,
+        chatgpt_session::chatgpt_session_clear,
         pending_opened_files,
         close_flush_done,
         gate::shell_gate_config,
         gate::write_gate_results,
         gate::gate_ipc_sentinel_exists,
+        gate::gate_chatgpt_session_stat,
+        // G5-A10: the effect sensors act only in a HOME the gate driver marked as throwaway.
+        gate::gate_chatgpt_session_marker_present,
     ]);
     #[cfg(not(debug_assertions))]
     let builder = builder.invoke_handler(tauri::generate_handler![
@@ -177,6 +188,11 @@ pub fn run() {
         sidecar::sidecar_wizard_fetch,
         helper_install::helper_status,
         helper_install::helper_install,
+        // Ships in RELEASE: custody is a production capability; its guards (the dot-dir,
+        // the modes, the cap) are Rust-side and unconditional (ADR-0078 §2).
+        chatgpt_session::chatgpt_session_read,
+        chatgpt_session::chatgpt_session_write,
+        chatgpt_session::chatgpt_session_clear,
         pending_opened_files,
         close_flush_done,
     ]);

@@ -7,10 +7,11 @@ import { createRoot } from 'react-dom/client';
 import { HashRouter } from 'react-router';
 
 import { setPlatform } from '@playground/platform/platform';
+import { chatgptPlanFlush } from '@playground/state/chatgptPlan.js';
 import { userDbStatusStore, getUserDb } from '@playground/state/userdb.js';
 
 import { createDesktopPlatform } from './platform-desktop.js';
-import { registerCloseFlush } from './close-flush.js';
+import { composeCloseFlush, registerCloseFlush } from './close-flush.js';
 import { installSubtleFallbackIfNeeded } from './subtle-fallback.js';
 
 import { App } from '@playground/App';
@@ -43,11 +44,18 @@ async function boot(): Promise<void> {
   // closes. Guarded on status:'ready' because `getUserDb()` deliberately never
   // resolves while the db is corrupt/load-failed — awaiting it here would hold
   // the close open until the shell's deadline fired, on exactly the boot where
-  // there is nothing to flush anyway.
-  registerCloseFlush(async () => {
-    if (userDbStatusStore.get().state !== 'ready') return;
-    await (await getUserDb()).flush();
-  });
+  // there is nothing to flush anyway. The ChatGPT-plan keeper's persist in flight
+  // is awaited beside it (TASK-20261023 D4): a rotated refresh token must reach
+  // the custody file before the window goes.
+  registerCloseFlush(
+    composeCloseFlush({
+      userDb: async () => {
+        if (userDbStatusStore.get().state !== 'ready') return;
+        await (await getUserDb()).flush();
+      },
+      chatgptPlan: chatgptPlanFlush,
+    }),
+  );
 
   const container = document.getElementById('root');
   if (container === null) throw new Error('missing #root');
