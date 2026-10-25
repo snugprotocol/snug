@@ -1,6 +1,37 @@
 {
   "releases": [
     {
+      "version": "0.1.4",
+      "date": "2026-10-24",
+      "title": "Use your ChatGPT plan, and let your apps work together",
+      "sections": [
+        {
+          "title": "What's new",
+          "items": [
+            "Use your ChatGPT plan (preview). Sign in with the ChatGPT account you already have, from the welcome screen or Settings, and your apps think on your plan. Pick a model and a thinking level from the ones your plan offers.",
+            "Schedule things to happen on their own: a morning forecast, a weekly summary, a check that runs every hour. Ask the chat, accept an app's suggestion, or build one yourself. A scheduled run works whether or not its app is open, and can tell you in Snug or with a Mac notification.",
+            "Apps can read each other's data, only when you allow it. When an app asks, a strip names exactly what it wants to read and for how long: while it's open, for a day, for a week, or until you stop it. Every read is logged, and you can stop it at any moment.",
+            "The chat knows what other apps share with the one you're in, can fetch fresh data before it answers, and can propose a change to another app. That change happens only when you approve it, and it comes with an undo.",
+            "Apps can now reach devices on your home network by their IP address over plain http, such as a Home Assistant hub or a Shelly switch. The rule meant to allow this never matched before; it does now. Secure https connections work on any port."
+          ]
+        },
+        {
+          "title": "Fixed",
+          "items": [
+            "The chat beside an app keeps its message box in view instead of pushing it below the bottom of the window."
+          ]
+        },
+        {
+          "title": "Good to know",
+          "items": [
+            "On your ChatGPT plan, your requests go to OpenAI under your ChatGPT account, so your ChatGPT data controls apply. The sign-in stays on this Mac, outside your file: it never travels with an export, a sync or a share, and Snug and your apps can't see your ChatGPT conversations or memories.",
+            "Schedules run while Snug is open. For a run that came due while Snug was closed, you choose: ask me, run once when it opens, or skip.",
+            "Access between apps is read-only. An app you allow can read another app's data, never change it."
+          ]
+        }
+      ]
+    },
+    {
       "version": "0.1.3",
       "date": "2026-09-05",
       "title": "Share an app by link, straight from your Mac",
